@@ -9,6 +9,12 @@ import { LivePlayers } from './live-players';
 
 const TEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Команда 1: отряд 2 (Leader ★, Mate) и командирский отряд 1 (Cmd ★).
+ * Команда 2: отряд 1 (Zulu, Yankee ★) — командир нарочно идёт в данных вторым
+ * и позже по алфавиту, чтобы порядок в DOM доказывал сортировку, а не порядок
+ * ответа. Только у Leader, Cmd и Yankee есть `player_id`.
+ */
 const ROSTER = {
   polled_at: '2026-07-09T10:00:00.000Z',
   players: [
@@ -21,7 +27,7 @@ const ROSTER = {
       team_id: 1,
       squad_id: 2,
       is_leader: true,
-      role: null,
+      role: 'USA_SL_01',
       first_seen_at: '2026-07-09T09:55:00.000Z',
     },
     {
@@ -33,9 +39,61 @@ const ROSTER = {
       team_id: 1,
       squad_id: 2,
       is_leader: false,
-      role: null,
+      role: 'USA_Rifleman_01',
       first_seen_at: '2026-07-09T09:56:00.000Z',
     },
+    {
+      player_id: '019e2000-0000-7000-8000-0000000000cc',
+      rcon_id: 2,
+      eos_id: 'eos-cmd',
+      steam_id64: '76561198000000003',
+      name: 'Cmd',
+      team_id: 1,
+      squad_id: 1,
+      is_leader: true,
+      role: 'USA_SL_02',
+      first_seen_at: '2026-07-09T09:50:00.000Z',
+    },
+    {
+      player_id: null,
+      rcon_id: 3,
+      eos_id: 'eos-zulu',
+      steam_id64: '76561198000000004',
+      name: 'Zulu',
+      team_id: 2,
+      squad_id: 1,
+      is_leader: false,
+      role: 'RGF_Medic_01',
+      first_seen_at: '2026-07-09T09:57:00.000Z',
+    },
+    {
+      player_id: '019e2000-0000-7000-8000-0000000000bb',
+      rcon_id: 4,
+      eos_id: 'eos-yankee',
+      steam_id64: '76561198000000005',
+      name: 'Yankee',
+      team_id: 2,
+      squad_id: 1,
+      is_leader: true,
+      role: 'RGF_SL_01',
+      first_seen_at: '2026-07-09T09:58:00.000Z',
+    },
+  ],
+  teams: [
+    { team_id: 1, name: 'United States Army' },
+    { team_id: 2, name: 'Russian Ground Forces' },
+  ],
+  squads: [
+    {
+      team_id: 1,
+      squad_id: 1,
+      name: 'Command Squad',
+      size: 1,
+      locked: false,
+      is_command_squad: true,
+    },
+    { team_id: 1, squad_id: 2, name: 'INF', size: 2, locked: true, is_command_squad: false },
+    { team_id: 2, squad_id: 1, name: 'БМП', size: 2, locked: false, is_command_squad: false },
   ],
 };
 
@@ -61,12 +119,13 @@ function stubRosterFetch(
     failed: 0,
     results: [{ player_id: 'x', status: 'applied' }],
   },
+  roster: unknown = ROSTER,
 ) {
   const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
       return Promise.resolve(new Response(JSON.stringify(bulkResult), { status: 200 }));
     }
-    return Promise.resolve(new Response(JSON.stringify(ROSTER), { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify(roster), { status: 200 }));
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -108,7 +167,13 @@ describe('LivePlayers', () => {
     async () => {
       render(<LivePlayers serverId="srv-1" canChat={true} />);
       await screen.findByText('Leader');
-      expect(screen.getByRole('button', { name: /сообщение отряду/i })).toBeInTheDocument();
+      // Один на каждый отряд, у пула «без отряда» кнопки нет.
+      const buttons = screen.getAllByRole('button', { name: /сообщение отряду/i });
+      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Сообщение отряду: Команда 1 · Отряд 1 «Command Squad»',
+        'Сообщение отряду: Команда 1 · Отряд 2 «INF»',
+        'Сообщение отряду: Команда 2 · Отряд 1 «БМП»',
+      ]);
     },
     TEST_TIMEOUT_MS,
   );
@@ -128,10 +193,13 @@ describe('LivePlayers', () => {
     async () => {
       render(<LivePlayers serverId="srv-1" canChat={true} />);
       await screen.findByText('Leader');
-      // Only `Leader` carries a resolved player_id; `Mate` has none and gets no button.
+      // Only resolved rows (Cmd, Leader, Yankee) get a button; `Mate`/`Zulu` have none.
       const buttons = screen.getAllByRole('button', { name: /сообщение игроку/i });
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]).toHaveAttribute('aria-label', 'Сообщение игроку: Leader');
+      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Сообщение игроку: Cmd',
+        'Сообщение игроку: Leader',
+        'Сообщение игроку: Yankee',
+      ]);
     },
     TEST_TIMEOUT_MS,
   );
@@ -204,8 +272,8 @@ describe('LivePlayers', () => {
       render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick', 'mod:ban_perm']} />);
       await screen.findByText('Leader');
       fireEvent.click(screen.getByLabelText('Выделить всех'));
-      // Only `Leader` carries a resolved player_id; `Mate` cannot be targeted.
-      expect(screen.getByText('Выбрано: 1')).toBeInTheDocument();
+      // Only Cmd, Leader and Yankee carry a resolved player_id.
+      expect(screen.getByText('Выбрано: 3')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -219,6 +287,114 @@ describe('LivePlayers', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Массовое действие' }));
       expect(await screen.findByText('Выбрано игроков: 1')).toBeInTheDocument();
       expect(screen.getByLabelText('Действие')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('LivePlayers — колонки команд и порядок в отряде', () => {
+  /** Имена игроков в порядке появления в DOM внутри данного региона. */
+  function namesIn(region: HTMLElement): string[] {
+    return Array.from(region.querySelectorAll('tbody tr'))
+      .map((row) => row.querySelector('td a, td > span > span.truncate')?.textContent?.trim() ?? '')
+      .filter((name) => name.length > 0);
+  }
+
+  it(
+    'renders one column per team, titled by faction, with counts',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const usa = screen.getByRole('region', { name: 'United States Army' });
+      const rgf = screen.getByRole('region', { name: 'Russian Ground Forces' });
+      expect(usa).toHaveTextContent('3 игрока · 2 отряда');
+      expect(rgf).toHaveTextContent('2 игрока · 1 отряд');
+      expect(namesIn(usa)).toEqual(['Cmd', 'Leader', 'Mate']);
+      expect(namesIn(rgf)).toEqual(['Yankee', 'Zulu']);
+      // Идентификаторы ушли из колонок, но остались в подсказке имени.
+      expect(screen.queryByText('76561198000000001')).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Leader' })).toHaveAttribute(
+        'title',
+        expect.stringContaining('SteamID64: 76561198000000001'),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'puts the squad leader first even when the roster lists them last',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const rgf = screen.getByRole('region', { name: 'Russian Ground Forces' });
+      expect(namesIn(rgf)).toEqual(['Yankee', 'Zulu']);
+      const yankeeRow = screen.getByRole('link', { name: 'Yankee' }).closest('tr');
+      expect(yankeeRow).toHaveTextContent('★');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows squad names, the lock badge, occupancy and the kit from the snapshot',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const usa = screen.getByRole('region', { name: 'United States Army' });
+      const squadHeaders = Array.from(usa.querySelectorAll('th[scope="colgroup"]')).map((header) =>
+        header.textContent?.replace(/\s+/g, ' ').trim(),
+      );
+      // Командирский отряд первым, хотя у него не наименьший номер во всех фикстурах.
+      expect(squadHeaders).toEqual(['1Command Squad1/9', '2INFзакрыт2/9']);
+      expect(screen.getByTitle('Отряд закрыт для входа')).toBeInTheDocument();
+      expect(screen.getByText('Rifleman')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'falls back to «Команда N» / «Отряд N» and still renders both columns without the snapshot',
+    async () => {
+      stubRosterFetch(undefined, {
+        polled_at: ROSTER.polled_at,
+        players: ROSTER.players.filter((player) => player.team_id === 1),
+      });
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      expect(screen.getByRole('region', { name: 'Команда 1' })).toHaveTextContent('Отряд 2');
+      const empty = screen.getByRole('region', { name: 'Команда 2' });
+      expect(empty).toHaveTextContent('0 игроков');
+      expect(empty).toHaveTextContent('В этой команде пока никого нет');
+      expect(screen.queryByText('закрыт')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps players without a team in their own block instead of dropping them',
+    async () => {
+      stubRosterFetch(undefined, {
+        ...ROSTER,
+        players: [
+          ...ROSTER.players,
+          {
+            player_id: null,
+            rcon_id: 9,
+            eos_id: 'eos-ghost',
+            steam_id64: null,
+            name: 'Ghost',
+            team_id: null,
+            squad_id: null,
+            is_leader: false,
+            role: null,
+            first_seen_at: null,
+          },
+        ],
+      });
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const block = screen.getByRole('region', { name: 'Без команды' });
+      expect(namesIn(block)).toEqual(['Ghost']);
+      expect(block).toHaveTextContent('1 игрок');
     },
     TEST_TIMEOUT_MS,
   );

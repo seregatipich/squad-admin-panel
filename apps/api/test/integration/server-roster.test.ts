@@ -102,7 +102,76 @@ describeIfDb('GET /api/v1/servers/:id/roster', () => {
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
-    expect(resp.json()).toEqual({ polled_at: null, players: [] });
+    expect(resp.json()).toEqual({ polled_at: null, players: [], teams: [], squads: [] });
+  });
+
+  it('returns team names and squad metadata from the squads snapshot next to the players', async () => {
+    const cookie = await loginAsOwner(h);
+    const serverId = uuidv7();
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId));
+    await h.redis.set(
+      `rcon:squads:${serverId}`,
+      JSON.stringify({
+        server_id: serverId,
+        polled_at: '2026-07-05T10:00:00.000Z',
+        squads: [
+          {
+            team_id: 1,
+            team_name: 'United States Army',
+            squad_id: 2,
+            name: 'INF',
+            size: 2,
+            locked: true,
+            creator_name: 'LinkedPlayer',
+            creator_eos_id: LINKED_EOS,
+            creator_steam_id64: LINKED_STEAM,
+            is_command_squad: false,
+          },
+          {
+            team_id: 2,
+            team_name: 'Russian Ground Forces',
+            squad_id: 1,
+            name: 'Command Squad',
+            size: 1,
+            locked: false,
+            creator_name: 'Someone',
+            creator_eos_id: null,
+            creator_steam_id64: null,
+            is_command_squad: true,
+          },
+        ],
+      }),
+    );
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/roster`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{
+      players: unknown[];
+      teams: Array<{ team_id: number; name: string }>;
+      squads: Array<Record<string, unknown>>;
+    }>();
+    expect(body.players).toHaveLength(3);
+    expect(body.teams).toEqual([
+      { team_id: 1, name: 'United States Army' },
+      { team_id: 2, name: 'Russian Ground Forces' },
+    ]);
+    expect(body.squads).toEqual([
+      { team_id: 1, squad_id: 2, name: 'INF', size: 2, locked: true, is_command_squad: false },
+      {
+        team_id: 2,
+        squad_id: 1,
+        name: 'Command Squad',
+        size: 1,
+        locked: false,
+        is_command_squad: true,
+      },
+    ]);
+    // The creator's identity stays in Redis: the roster rows already say who leads.
+    expect(JSON.stringify(body.squads)).not.toContain(LINKED_EOS);
   });
 
   it('resolves player_id for known players and keeps EOS-only entries', async () => {
@@ -125,10 +194,15 @@ describeIfDb('GET /api/v1/servers/:id/roster', () => {
         steam_id64: string | null;
         name: string;
       }>;
+      teams: unknown[];
+      squads: unknown[];
     }>();
 
     expect(body.polled_at).toBe('2026-07-05T10:00:00.000Z');
     expect(body.players).toHaveLength(3);
+    // No squads snapshot yet: the roster still comes back, metadata is just empty.
+    expect(body.teams).toEqual([]);
+    expect(body.squads).toEqual([]);
 
     const linked = body.players[0];
     expect(linked?.player_id).toBe(linkedId);

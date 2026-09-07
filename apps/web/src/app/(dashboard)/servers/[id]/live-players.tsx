@@ -7,6 +7,7 @@ import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import {
   AlertDialog,
+  Badge,
   Button,
   ButtonLink,
   Card,
@@ -31,13 +32,15 @@ import {
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   formatTimeOnServer,
-  groupRosterBySquad,
+  groupRosterByTeam,
+  kitLabel,
   type RosterPlayer,
   type RosterResponse,
+  SQUAD_MAX_SIZE,
   type SquadGroup,
-  shortEos,
   sortRoster,
   squadLabel,
+  type TeamColumn,
   teamLabel,
 } from './roster-format';
 
@@ -187,7 +190,10 @@ export function LivePlayers({
   useLiveSubscription('rcon.roster', onRoster);
 
   const players = roster ? sortRoster(roster.players) : [];
-  const groups = groupRosterBySquad(players);
+  const { teams, unaffiliated } = groupRosterByTeam(players, {
+    teams: roster?.teams,
+    squads: roster?.squads,
+  });
   // Only roster entries resolved to a panel player can be bulk-targeted —
   // the API takes player uuids, not roster slots.
   const selectable: BulkModerationTarget[] = players.flatMap((player) =>
@@ -197,12 +203,39 @@ export function LivePlayers({
   const allSelected = selectable.length > 0 && bulkTargets.length === selectable.length;
   const abilities = quickAbilities(modPermissions);
 
+  const rowProps = {
+    now,
+    serverId,
+    canChat,
+    canBan,
+    canBulk,
+    abilities,
+    selected,
+    onToggleSelected: toggleSelected,
+    onSelectGroup: setSelected,
+    onMessageSquad: setSquadTarget,
+    onQuickAction: setQuick,
+  };
+
   return (
     <Card padding="none" as="section">
       <CardHeader
         title="Игроки онлайн"
         count={roster ? players.length : undefined}
-        description="Список обновляется каждые 30 секунд"
+        description="По колонке на команду, командир — первым в отряде. Список обновляется каждые 30 секунд"
+        actions={
+          canBulk && selectable.length > 0 ? (
+            <Checkbox
+              label="Выделить всех"
+              checked={allSelected}
+              onChange={() =>
+                setSelected(
+                  allSelected ? new Set() : new Set(selectable.map((target) => target.playerId)),
+                )
+              }
+            />
+          ) : null
+        }
       />
 
       {canBulk && bulkTargets.length > 0 ? (
@@ -247,54 +280,37 @@ export function LivePlayers({
       ) : null}
 
       {players.length > 0 ? (
-        <Table ariaLabel="Игроки онлайн">
-          <TableHead>
-            <TableRow>
-              {canBulk ? (
-                <Th className="w-8">
-                  <Checkbox
-                    className="normal-case"
-                    label={<span className="sr-only">Выделить всех</span>}
-                    checked={allSelected}
-                    onChange={() =>
-                      setSelected(
-                        allSelected
-                          ? new Set()
-                          : new Set(selectable.map((target) => target.playerId)),
-                      )
-                    }
-                  />
-                </Th>
-              ) : null}
-              <Th>Игрок</Th>
-              <Th>SteamID64</Th>
-              <Th>EOS ID</Th>
-              <Th align="right">Команда</Th>
-              <Th align="right">Отряд</Th>
-              <Th align="right">На сервере</Th>
-              <Th align="right">Действия</Th>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {groups.map((group) => (
-              <SquadGroupRows
-                key={`${group.team_id}:${group.squad_id}`}
-                group={group}
-                now={now}
-                serverId={serverId}
-                canChat={canChat}
-                canBan={canBan}
-                canBulk={canBulk}
-                abilities={abilities}
-                selected={selected}
-                onToggleSelected={toggleSelected}
-                onSelectGroup={setSelected}
-                onMessageSquad={setSquadTarget}
-                onQuickAction={setQuick}
+        // Две колонки — по одной на команду, как на экране отрядов в игре.
+        // Ниже `xl` строка с действиями не помещается в половину ширины, и
+        // команды встают друг под другом.
+        <CardBody className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {teams.map((team) => (
+            <TeamRoster key={team.team_id} team={team} {...rowProps} />
+          ))}
+          {unaffiliated.length > 0 ? (
+            <div className="xl:col-span-2">
+              <TeamRoster
+                team={{
+                  team_id: null,
+                  name: null,
+                  squads: [
+                    {
+                      team_id: null,
+                      squad_id: null,
+                      players: unaffiliated,
+                      leader: null,
+                      name: null,
+                      locked: false,
+                      is_command_squad: false,
+                    },
+                  ],
+                  player_count: unaffiliated.length,
+                }}
+                {...rowProps}
               />
-            ))}
-          </TableBody>
-        </Table>
+            </div>
+          ) : null}
+        </CardBody>
       ) : null}
 
       <SquadMessageModal
@@ -470,6 +486,99 @@ function QuickModerationDialog({
   );
 }
 
+interface RosterRowsProps {
+  now: number;
+  serverId: string;
+  canChat: boolean;
+  canBan: boolean;
+  canBulk: boolean;
+  abilities: ReturnType<typeof quickAbilities>;
+  selected: ReadonlySet<string>;
+  onToggleSelected: (playerId: string) => void;
+  onSelectGroup: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void;
+  onMessageSquad: (target: SquadMessageTarget) => void;
+  onQuickAction: (request: QuickRequest) => void;
+}
+
+/** Колонка одной команды: шапка с фракцией и таблица её отрядов. */
+function TeamRoster({
+  team,
+  ...rowProps
+}: RosterRowsProps & {
+  /** `team_id: null` — блок игроков, у которых команда ещё не определена. */
+  team: Omit<TeamColumn, 'team_id'> & { team_id: number | null };
+}) {
+  const headingId = useId();
+  const title =
+    team.team_id == null
+      ? 'Без команды'
+      : team.name
+        ? `${team.name}`
+        : `Команда ${teamLabel(team.team_id)}`;
+  const subtitle = team.team_id != null && team.name ? `Команда ${teamLabel(team.team_id)}` : null;
+  const squadCount = team.squads.filter((group) => group.squad_id != null).length;
+
+  return (
+    <section aria-labelledby={headingId} className="min-w-0 rounded-card border border-line">
+      <header className="flex items-center justify-between gap-3 border-b border-line bg-raised px-3 py-2">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h3 id={headingId} className="truncate text-[13px] font-semibold text-ink">
+            {title}
+          </h3>
+          {subtitle ? <span className="shrink-0 text-xs text-ink-3">{subtitle}</span> : null}
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-ink-3">
+          {team.player_count} {pluralPlayers(team.player_count)}
+          {team.team_id != null ? ` · ${squadCount} ${pluralSquads(squadCount)}` : ''}
+        </span>
+      </header>
+      {team.squads.length === 0 ? (
+        <p className="px-3 py-4 text-center text-xs text-ink-3">В этой команде пока никого нет</p>
+      ) : (
+        <Table ariaLabel={`Игроки: ${title}`}>
+          <TableHead>
+            <TableRow>
+              {rowProps.canBulk ? (
+                <Th className="w-8">
+                  <span className="sr-only">Выбор</span>
+                </Th>
+              ) : null}
+              <Th>Игрок</Th>
+              <Th align="right">На сервере</Th>
+              <Th align="right">Действия</Th>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {team.squads.map((group) => (
+              <SquadGroupRows
+                key={`${group.team_id}:${group.squad_id}`}
+                group={group}
+                {...rowProps}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </section>
+  );
+}
+
+function pluralPlayers(count: number): string {
+  return pluralize(count, ['игрок', 'игрока', 'игроков']);
+}
+
+function pluralSquads(count: number): string {
+  return pluralize(count, ['отряд', 'отряда', 'отрядов']);
+}
+
+function pluralize(count: number, forms: readonly [string, string, string]): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return forms[1];
+  return forms[2];
+}
+
 function SquadGroupRows({
   group,
   now,
@@ -483,26 +592,23 @@ function SquadGroupRows({
   onSelectGroup,
   onMessageSquad,
   onQuickAction,
-}: {
-  group: SquadGroup;
-  now: number;
-  serverId: string;
-  canChat: boolean;
-  canBan: boolean;
-  canBulk: boolean;
-  abilities: ReturnType<typeof quickAbilities>;
-  selected: ReadonlySet<string>;
-  onToggleSelected: (playerId: string) => void;
-  onSelectGroup: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void;
-  onMessageSquad: (target: SquadMessageTarget) => void;
-  onQuickAction: (request: QuickRequest) => void;
-}) {
+}: RosterRowsProps & { group: SquadGroup }) {
   const messageable = canChat && group.team_id != null && group.squad_id != null;
+  const squadTitle =
+    group.squad_id == null
+      ? 'Без отряда'
+      : group.name
+        ? group.name
+        : `Отряд ${squadLabel(group.squad_id)}`;
+  // Полное имя цели для окна сообщения и подписей — с командой, потому что
+  // отряды нумеруются в каждой команде заново.
   const label =
     group.squad_id != null
-      ? `Команда ${teamLabel(group.team_id)} · Отряд ${squadLabel(group.squad_id)}`
+      ? `Команда ${teamLabel(group.team_id)} · Отряд ${squadLabel(group.squad_id)}${
+          group.name ? ` «${group.name}»` : ''
+        }`
       : `Команда ${teamLabel(group.team_id)} · Без отряда`;
-  const colSpan = 7 + (canBulk ? 1 : 0);
+  const colSpan = 3 + (canBulk ? 1 : 0);
   const groupSelectable = group.players
     .map((player) => player.player_id)
     .filter((id): id is string => id !== null);
@@ -520,7 +626,7 @@ function SquadGroupRows({
           className="px-3 py-1.5 text-left text-xs font-semibold text-ink-2"
         >
           <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
+            <span className="flex min-w-0 items-center gap-2">
               {canBulk && groupSelectable.length > 0 ? (
                 <Checkbox
                   label={<span className="sr-only">{`Выделить отряд: ${label}`}</span>}
@@ -537,7 +643,25 @@ function SquadGroupRows({
                   }
                 />
               ) : null}
-              {label} <span className="font-normal text-ink-3">· {group.players.length}</span>
+              {group.squad_id != null ? (
+                <span
+                  className="w-5 shrink-0 text-center tabular-nums text-ink-3"
+                  title="Номер отряда"
+                >
+                  {squadLabel(group.squad_id)}
+                </span>
+              ) : null}
+              <span className="truncate">{squadTitle}</span>
+              {group.locked ? (
+                <Badge size="sm" tone="warn" title="Отряд закрыт для входа">
+                  закрыт
+                </Badge>
+              ) : null}
+              <span className="shrink-0 font-normal tabular-nums text-ink-3">
+                {group.squad_id != null
+                  ? `${group.players.length}/${SQUAD_MAX_SIZE}`
+                  : group.players.length}
+              </span>
             </span>
             {messageable ? (
               <IconButton
@@ -607,6 +731,15 @@ function RosterRow({
   const target: BulkModerationTarget | null = player.player_id
     ? { playerId: player.player_id, name: player.name }
     : null;
+  const kit = kitLabel(player.role);
+  // Колонок SteamID64/EOS в половине ширины нет — идентификаторы остаются в
+  // подсказке имени и в досье.
+  const identity = [
+    player.steam_id64 ? `SteamID64: ${player.steam_id64}` : null,
+    `EOS: ${player.eos_id}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return (
     <TableRow interactive selected={checked}>
@@ -624,28 +757,35 @@ function RosterRow({
         </Td>
       ) : null}
       <Td>
-        <span className="flex items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-1.5">
           {player.is_leader ? (
-            <span className="text-warn" title="Командир отряда">
+            <span className="shrink-0 text-warn" title="Командир отряда">
               ★
             </span>
           ) : null}
           {player.player_id ? (
-            <Link href={`/all-players/${player.player_id}`} className="text-accent">
+            <Link
+              href={`/all-players/${player.player_id}`}
+              className="truncate text-accent"
+              title={identity}
+            >
               {player.name}
             </Link>
           ) : (
-            <span>{player.name}</span>
+            <span className="truncate" title={identity}>
+              {player.name}
+            </span>
           )}
+          {kit ? (
+            <span className="shrink-0 text-2xs text-ink-3" title={player.role ?? undefined}>
+              {kit}
+            </span>
+          ) : null}
         </span>
       </Td>
-      <Td className="font-mono text-ink-2">{player.steam_id64 ?? '—'}</Td>
-      <Td className="font-mono text-ink-3">
-        <span title={player.eos_id}>{shortEos(player.eos_id)}</span>
+      <Td numeric className="whitespace-nowrap">
+        {formatTimeOnServer(player.first_seen_at, now)}
       </Td>
-      <Td numeric>{teamLabel(player.team_id)}</Td>
-      <Td numeric>{squadLabel(player.squad_id)}</Td>
-      <Td numeric>{formatTimeOnServer(player.first_seen_at, now)}</Td>
       <Td align="right">
         <div className="flex items-center justify-end gap-0.5">
           {target && abilities.warn ? (
@@ -673,18 +813,17 @@ function RosterRow({
               onClick={() => onQuickAction({ action: 'ban', target })}
             />
           ) : null}
+          {/* Иконки, а не подписи: в половине ширины шесть текстовых кнопок
+              не помещаются в строку, а подпись каждой остаётся в `aria-label`
+              и всплывающей подсказке. */}
           <DirectMessageButton
             playerId={player.player_id}
             name={player.name}
             canChat={canChat}
             serverId={serverId}
-            className="h-6 rounded-ctl px-1.5 text-2xs text-ink-2 transition-colors hover:bg-raised hover:text-ink"
+            variant="icon"
           />
-          <BanNickButton
-            nick={player.name}
-            canBan={canBan}
-            className="h-6 rounded-ctl px-1.5 text-2xs text-ink-2 transition-colors hover:bg-crit/15 hover:text-crit"
-          />
+          <BanNickButton nick={player.name} canBan={canBan} variant="icon" />
           {player.player_id ? (
             <ButtonLink
               href={`/all-players/${player.player_id}`}
