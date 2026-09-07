@@ -1,5 +1,11 @@
 # Changelog — worker-rcon
 
+## 2026-09-07 — Squad's broken probe reply no longer mis-frames the stream
+
+### Fixed
+
+- Squad answers the empty "probe" packet twice; the second answer claims size 10 but carries 7 extra bytes (`00 00 00 01 00 00 00`). The decoder read them as a size-256 header, so every later response was mis-framed: `invalid RCON packet size: N` decode errors, `rcon exec timeout: ListSquads/ListPlayers/ShowServerInfo`, and a teardown/reconnect loop every ~90 s — visible on tk104's own container and on the first external server. `RconPacketStream` now drops the broken frame whether it arrives whole or split, mirroring SquadJS's `core/rcon.js`. Regression tests replay the byte sequence captured from a live server.
+
 ## 2026-07-07 — RCON-1 command coverage
 
 ### Added
