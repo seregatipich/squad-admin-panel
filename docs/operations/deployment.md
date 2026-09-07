@@ -265,6 +265,37 @@ either mistake.
   the default branch (`master`) — merging it into `dev` alone does not arm the
   trigger.
 
+### Fast developer deploy (`scripts/dev-deploy-tk104.sh`)
+
+Both jobs above cost a full CI run plus a queue on a runner group with one
+machine in it — 30–40 minutes before a one-line UI change is visible on
+tk104. For the inner loop, [`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh)
+does the same two steps the workflow does (rsync the tree to
+`~/apps/squad-admin-panel/`, rebuild one service of the same
+`compose.tk104.yml` project) straight from a developer workstation over SSH,
+with no GitHub Actions involved. The deploy target is still tk104; only the
+courier changes.
+
+```bash
+scripts/dev-deploy-tk104.sh          # rebuild web only (default)
+scripts/dev-deploy-tk104.sh api      # rebuild api only, no migrator
+CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
+```
+
+It ships the **working tree**, uncommitted changes included, so what tk104
+serves afterwards is not a released revision: the stamp it sets is
+`dev-<short sha>` (plus `-dirty`), which `/health` reports where a released
+deploy reports a 40-hex commit SHA — that difference is how you tell the two
+apart. `.env*`, `data/` and build output are excluded exactly as in the
+workflow, so host secrets and state survive. The `full` target runs
+`scripts/deploy-tk104.sh`, which applies migrations from unreviewed code to the
+production database, and therefore refuses to start without
+`CONFIRM_FULL_DEPLOY=deploy`.
+
+This is a preview path, not a release path: land the change through
+`dev` → `master` as usual, and the next `master` deploy overwrites the preview.
+Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`).
+
 GitHub Free for organizations currently includes 2,000 hosted Linux minutes per
 month. If the quota is exhausted, do not weaken the gate or redirect verification to
 the production host: batch accepted changes, restore the dedicated verification
