@@ -77,7 +77,21 @@ ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "$SSH_TARGET" \
 
 # `/health` is served by the api container, so it keeps reporting whatever the
 # api was built from — a web-only deploy deliberately does not change it.
+#
+# Retry rather than probe once: a rebuilt api answers 502 through Caddy for a
+# few seconds while it boots, and a single-shot probe would fail the deploy it
+# exists to verify. Same reasoning (and cadence) as deploy-tk104.sh's own wait.
 echo "==> External health probe (reports the api's revision)"
-curl -fsS https://tk104.duckdns.org/health --max-time 20
+probe_status=0
+for _ in $(seq 1 20); do
+  probe_status=0
+  curl -fsS https://tk104.duckdns.org/health --max-time 20 || probe_status=$?
+  [[ "$probe_status" -eq 0 ]] && break
+  sleep 3
+done
 echo
+if [[ "$probe_status" -ne 0 ]]; then
+  echo "fatal: https://tk104.duckdns.org/health never recovered (curl exit $probe_status)" >&2
+  exit "$probe_status"
+fi
 echo "==> Done. tk104 runs ${version} in '${TARGET}' — not a released revision."

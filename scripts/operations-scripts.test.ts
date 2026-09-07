@@ -561,7 +561,20 @@ describe('fast developer deploy to tk104', () => {
     const log = path.join(root, 'commands.log');
     loggingShim(shims, 'rsync', `exit "\${RSYNC_EXIT:-0}"`);
     loggingShim(shims, 'ssh', `exit "\${SSH_EXIT:-0}"`);
-    loggingShim(shims, 'curl');
+    // CURL_FAIL_TIMES models a rebuilt api answering 502 through Caddy while
+    // it boots: the first N probes fail, every later one succeeds.
+    loggingShim(
+      shims,
+      'curl',
+      [
+        `attempts_file="\${OPS_LOG:?}.dev-curl-attempts"`,
+        'attempts=$(( $(cat "$attempts_file" 2>/dev/null || echo 0) + 1 ))',
+        'printf "%s" "$attempts" > "$attempts_file"',
+        `if [[ -n "\${CURL_FAIL_TIMES:-}" && "$attempts" -le "$CURL_FAIL_TIMES" ]]; then exit "\${CURL_EXIT:-22}"; fi`,
+        `exit "\${CURL_PERSISTENT_EXIT:-0}"`,
+      ].join('\n'),
+    );
+    loggingShim(shims, 'sleep');
     // `git` decides the version stamp; the shim keeps it deterministic and
     // lets a test flip the tree to dirty.
     loggingShim(
@@ -670,6 +683,26 @@ describe('fast developer deploy to tk104', () => {
       logLines(fixture.log).filter((line) => line.startsWith('ssh|')),
       [],
     );
+  });
+
+  it('retries the health probe while the rebuilt api is still booting, then reports success', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'api'], {
+      env: { ...fixture.env, CURL_FAIL_TIMES: '3' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Done\./);
+    assert.equal(logLines(fixture.log).filter((line) => line.startsWith('curl|')).length, 4);
+  });
+
+  it('fails closed, preserving the curl exit code, when health never recovers', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'api'], {
+      env: { ...fixture.env, CURL_PERSISTENT_EXIT: '22' },
+    });
+    assert.equal(result.status, 22);
+    assert.match(result.stderr, /never recovered/);
+    assert.doesNotMatch(result.stdout, /Done\./);
   });
 
   it('fails when the remote rebuild fails, without announcing success', () => {
