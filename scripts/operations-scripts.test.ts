@@ -21,6 +21,7 @@ const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
   'scripts/configure-bss-sso-env.sh',
   'scripts/deploy-tk104.sh',
+  'scripts/dev-deploy-tk104.sh',
   'scripts/install-host-bridge.sh',
   'scripts/rebuild.sh',
   'scripts/uninstall.sh',
@@ -545,6 +546,137 @@ describe('tk104 deployment command and health boundaries', () => {
         ?.endsWith('|ps'),
       false,
     );
+  });
+});
+
+describe('fast developer deploy to tk104', () => {
+  function devDeployFixture(): {
+    root: string;
+    script: string;
+    log: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const { root, script } = copyScript('scripts/dev-deploy-tk104.sh');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    loggingShim(shims, 'rsync', `exit "\${RSYNC_EXIT:-0}"`);
+    loggingShim(shims, 'ssh', `exit "\${SSH_EXIT:-0}"`);
+    loggingShim(shims, 'curl');
+    // `git` decides the version stamp; the shim keeps it deterministic and
+    // lets a test flip the tree to dirty.
+    loggingShim(
+      shims,
+      'git',
+      [
+        `if [[ "$*" == *'rev-parse'* ]]; then printf '%s\\n' "\${GIT_SHA:-abc1234}"; fi`,
+        `if [[ "$*" == *'status --porcelain'* ]]; then printf '%s' "\${GIT_DIRTY:-}"; fi`,
+        'exit 0',
+      ].join('\n'),
+    );
+    return {
+      root,
+      script,
+      log,
+      env: { OPS_LOG: log, SOURCE_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
+    };
+  }
+
+  function sshPayload(log: string): string {
+    return logLines(log)
+      .filter((line) => line.startsWith('ssh|'))
+      .map((line) => line.split('|').at(-1) ?? '')
+      .join('\n');
+  }
+
+  it('defaults to the web service and rebuilds it on the host after the sync', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal(result.status, 0, result.stderr);
+    const commands = logLines(fixture.log);
+    const rsyncIndex = commands.findIndex((line) => line.startsWith('rsync|'));
+    const sshIndex = commands.findIndex((line) => line.startsWith('ssh|'));
+    assert.ok(rsyncIndex >= 0 && sshIndex > rsyncIndex, commands.join('\n'));
+    assert.match(sshPayload(fixture.log), /bash scripts\/deploy-tk104-web\.sh/);
+    // Nothing that could touch the schema or other containers.
+    assert.doesNotMatch(sshPayload(fixture.log), /deploy-tk104\.sh|migrator|--remove-orphans/);
+  });
+
+  it('never ships host secrets, state, or build output', () => {
+    const fixture = devDeployFixture();
+    run('/bin/bash', [fixture.script], { env: fixture.env });
+    const rsync = logLines(fixture.log).find((line) => line.startsWith('rsync|')) ?? '';
+    for (const excluded of ['.git', 'node_modules', '.next', 'data', 'dist', '.env', '.env.*']) {
+      assert.ok(rsync.includes(`|--exclude|${excluded}`), `${excluded} is not excluded: ${rsync}`);
+    }
+    assert.ok(rsync.includes('|--delete'), rsync);
+    assert.match(rsync, /\|seregatipich@tk104\.duckdns\.org:apps\/squad-admin-panel\/$/);
+  });
+
+  it('stamps a version that can never be mistaken for a released commit SHA', () => {
+    const fixture = devDeployFixture();
+    run('/bin/bash', [fixture.script], { env: { ...fixture.env, GIT_SHA: 'deadbee' } });
+    assert.match(sshPayload(fixture.log), /APP_VERSION='dev-deadbee'/);
+
+    const dirty = devDeployFixture();
+    run('/bin/bash', [dirty.script], {
+      env: { ...dirty.env, GIT_SHA: 'deadbee', GIT_DIRTY: ' M apps/web/src/page.tsx' },
+    });
+    assert.match(sshPayload(dirty.log), /APP_VERSION='dev-deadbee-dirty'/);
+  });
+
+  it('rebuilds only the api container, without the migrator, for the api target', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
+    assert.equal(result.status, 0, result.stderr);
+    const payload = sshPayload(fixture.log);
+    assert.match(payload, /build api/);
+    assert.match(payload, /up -d --no-deps api/);
+    assert.doesNotMatch(payload, /migrator|--remove-orphans/);
+  });
+
+  it('refuses the full deploy without the explicit confirmation, before any sync', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /migrations from the working tree/);
+    assert.deepEqual(logLines(fixture.log), []);
+  });
+
+  it('runs the full deploy script once the confirmation is exact', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'full'], {
+      env: { ...fixture.env, CONFIRM_FULL_DEPLOY: 'deploy' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(sshPayload(fixture.log), /bash scripts\/deploy-tk104\.sh/);
+  });
+
+  it('rejects an unknown target before touching the production host', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'workers'], { env: fixture.env });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|full\]/);
+    assert.deepEqual(logLines(fixture.log), []);
+  });
+
+  it('stops at a failed sync instead of rebuilding a half-copied tree', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      ...{},
+      env: { ...fixture.env, RSYNC_EXIT: '23' },
+    });
+    assert.equal(result.status, 23);
+    assert.deepEqual(
+      logLines(fixture.log).filter((line) => line.startsWith('ssh|')),
+      [],
+    );
+  });
+
+  it('fails when the remote rebuild fails, without announcing success', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script], { env: { ...fixture.env, SSH_EXIT: '7' } });
+    assert.equal(result.status, 7);
+    assert.doesNotMatch(result.stdout, /Done\./);
   });
 });
 
