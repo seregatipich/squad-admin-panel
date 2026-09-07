@@ -3,7 +3,12 @@ import { inArray, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { buildRosterResponse, collectRosterLookups, parseStoredRoster } from '../lib/roster.js';
+import {
+  buildRosterResponse,
+  collectRosterLookups,
+  parseStoredRoster,
+  parseStoredSquads,
+} from '../lib/roster.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -17,9 +22,14 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req) => {
-      const stored = parseStoredRoster(await app.redis.get(`rcon:roster:${req.params.id}`));
+      const [rawRoster, rawSquads] = await app.redis.mget(
+        `rcon:roster:${req.params.id}`,
+        `rcon:squads:${req.params.id}`,
+      );
+      const stored = parseStoredRoster(rawRoster ?? null);
+      const storedSquads = parseStoredSquads(rawSquads ?? null);
       if (!stored || stored.players.length === 0) {
-        return buildRosterResponse(stored, []);
+        return buildRosterResponse(stored, [], storedSquads);
       }
 
       const { eosIds, steamIds } = collectRosterLookups(stored.players);
@@ -39,7 +49,7 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
               .where(matchClauses.length === 1 ? matchClauses[0] : or(...matchClauses))
           : [];
 
-      return buildRosterResponse(stored, identities);
+      return buildRosterResponse(stored, identities, storedSquads);
     },
   );
 };

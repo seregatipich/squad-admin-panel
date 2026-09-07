@@ -120,6 +120,20 @@ describe('DirectMessageButton', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders the icon variant with the same accessible name and opens the modal', () => {
+    render(
+      <DirectMessageButton playerId={PLAYER_ID} name="TargetNick" canChat={true} variant="icon" />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Сообщение игроку: TargetNick' });
+    // Подпись ушла в aria-label/title — видимого текста «Сообщение» нет.
+    expect(trigger).not.toHaveTextContent('Сообщение');
+    expect(trigger).toHaveAttribute('title', 'Сообщение игроку: TargetNick');
+    fireEvent.click(trigger);
+    expect(
+      screen.getByRole('dialog', { name: 'Сообщение игроку «TargetNick»' }),
+    ).toBeInTheDocument();
+  });
+
   it('opens the modal from the trigger, whoever styles the trigger', () => {
     render(
       <DirectMessageButton

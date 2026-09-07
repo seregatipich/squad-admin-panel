@@ -5,6 +5,7 @@ import {
   Button,
   Checkbox,
   FieldRow,
+  IconButton,
   InlineBanner,
   Modal,
   Select,
@@ -249,30 +250,45 @@ export function DirectMessageButton({
   canChat,
   serverId = null,
   className,
+  variant = 'text',
 }: {
   playerId: string | null;
   name: string;
   canChat: boolean;
   serverId?: string | null;
   className?: string;
+  /**
+   * `icon` — значок-конверт для плотных строк (ростер): подпись живёт в
+   * `aria-label` и подсказке. `className` в этом варианте не применяется.
+   */
+  variant?: 'text' | 'icon';
 }) {
   const [open, setOpen] = useState(false);
 
   if (!canChat || !playerId) return null;
 
+  const label = `Сообщение игроку: ${name}`;
+
   return (
     <>
-      {className ? (
+      {variant === 'icon' ? (
+        <IconButton
+          size="sm"
+          icon={<span aria-hidden="true">✉</span>}
+          label={label}
+          onClick={() => setOpen(true)}
+        />
+      ) : className ? (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label={`Сообщение игроку: ${name}`}
+          aria-label={label}
           className={className}
         >
           Сообщение
         </button>
       ) : (
-        <Button size="sm" onClick={() => setOpen(true)} aria-label={`Сообщение игроку: ${name}`}>
+        <Button size="sm" onClick={() => setOpen(true)} aria-label={label}>
           Сообщение
         </Button>
       )}
