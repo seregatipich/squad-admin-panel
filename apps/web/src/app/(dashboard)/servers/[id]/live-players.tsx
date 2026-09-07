@@ -518,6 +518,10 @@ function TeamRoster({
   const subtitle = team.team_id != null && team.name ? `Команда ${teamLabel(team.team_id)}` : null;
   const squadCount = team.squads.filter((group) => group.squad_id != null).length;
 
+  // Таблица в фиксированной раскладке: в авто-режиме длинный ник без пробелов
+  // задаёт минимальную ширину колонки, таблица вырастает шире своей половины и
+  // уезжает под соседнюю. С фиксированными колонками остаток получает имя, и
+  // оно обрезается многоточием.
   return (
     <section aria-labelledby={headingId} className="min-w-0 rounded-card border border-line">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-raised px-3 py-2">
@@ -535,7 +539,7 @@ function TeamRoster({
       {team.squads.length === 0 ? (
         <p className="px-3 py-4 text-center text-xs text-ink-3">В этой команде пока никого нет</p>
       ) : (
-        <Table ariaLabel={`Игроки: ${title}`}>
+        <Table ariaLabel={`Игроки: ${title}`} layout="fixed">
           <TableHead>
             <TableRow>
               {rowProps.canBulk ? (
@@ -544,8 +548,12 @@ function TeamRoster({
                 </Th>
               ) : null}
               <Th>Игрок</Th>
-              <Th align="right">На сервере</Th>
-              <Th align="right">Действия</Th>
+              <Th align="right" className="w-20">
+                На сервере
+              </Th>
+              <Th align="right" className="w-52">
+                Действия
+              </Th>
             </TableRow>
           </TableHead>
           <TableBody>
