@@ -1,11 +1,12 @@
 import { BridgeClient } from '@squad/bridge-client';
-import { createDatabaseClient, serverSettings, servers } from '@squad/db';
+import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
   createGracefulShutdownController,
   redisSinkStream,
   startHeartbeat,
 } from '@squad/shared-config';
+import { logSourceStatusKey } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
@@ -17,11 +18,12 @@ import { handleChatCommand } from './chat/commands.js';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
+import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
 import { dropCutoverServers } from './cutover.js';
 import { persistEventEnvelope } from './event-store.js';
 import { ExternalBanCache } from './external-ban/cache.js';
 import { handleExternalBanConnect } from './external-ban/store.js';
-import { TailManager } from './manager.js';
+import { TailManager, type TailWanted } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
 import { LogIngestor } from './parser/ingest.js';
@@ -29,6 +31,7 @@ import { handlePlayerConnected } from './player-identity/store.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
 import { scheduleLogRetentionSweep } from './retention.js';
+import { tailSshLog } from './ssh-tail.js';
 import { tailContainerLogs } from './tail.js';
 import { handleVipExpiryWarnConnect } from './vip-expiry/warn.js';
 import { handleVote } from './vote/store.js';
@@ -64,6 +67,15 @@ async function main() {
   });
 
   const diag = createDiag({ redis, log });
+  // SSH log sources carry a private key encrypted with APP_ENCRYPTION_KEY.
+  // Without the key the worker still tails every panel-hosted container; the
+  // external rows are skipped with one warning instead of a crash loop.
+  let encryptionKey: Buffer | null = null;
+  if (process.env.APP_ENCRYPTION_KEY) {
+    encryptionKey = loadEncryptionKey(process.env.APP_ENCRYPTION_KEY);
+  } else {
+    log.warn('APP_ENCRYPTION_KEY is not set — SSH log sources of external servers are disabled');
+  }
   const stopLogRetentionSweep = scheduleLogRetentionSweep({
     bridge,
     diag,
@@ -87,8 +99,9 @@ async function main() {
   const bannedNameCache = new BannedNameRuleCache(db);
   const externalBanCache = new ExternalBanCache(db, redis);
 
-  const manager = new TailManager((serverId, beaconPort) => {
-    log.info({ serverId, beaconPort }, 'attaching log tail');
+  const manager = new TailManager((wanted) => {
+    const { serverId, beaconPort } = wanted;
+    log.info({ serverId, beaconPort, source: wanted.source.kind }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
     let voteChain: Promise<void> = Promise.resolve();
     let combatChain: Promise<void> = Promise.resolve();
@@ -189,51 +202,133 @@ async function main() {
           );
       },
     });
+    const onLine = (line: string) => {
+      const events = ingestor.ingest(line);
+      for (const e of events) {
+        persistEventEnvelope(db, e).catch((err) =>
+          log.error({ err: (err as Error).message, type: e.type }, 'event persist failed'),
+        );
+        publish(redis, e).catch((err) =>
+          log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
+        );
+        if (e.type === 'player.connected') {
+          // Upsert the canonical identity first (PLAYER-1, #22) so the player
+          // row exists before the ban handlers below read it — otherwise a
+          // first-time connector is invisible to alt/external-ban enforcement
+          // until the next RCON poll.
+          handlePlayerConnected(db, e)
+            .catch((err) =>
+              log.error({ err: (err as Error).message }, 'player identity handling failed'),
+            )
+            .finally(() => {
+              handleAltBanConnect(db, redis, e).catch((err) =>
+                log.error({ err: (err as Error).message }, 'alt-ban handling failed'),
+              );
+              handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch(
+                (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
+              );
+              handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
+                (err) => log.error({ err: (err as Error).message }, 'external-ban handling failed'),
+              );
+              handleVipExpiryWarnConnect(db, redis, { serverId, event: e }).catch((err) =>
+                log.error({ err: (err as Error).message }, 'vip-expiry warn handling failed'),
+              );
+            });
+        }
+        if (e.type === 'player.name_changed') {
+          handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch((err) =>
+            log.error({ err: (err as Error).message }, 'banname handling failed'),
+          );
+        }
+      }
+    };
+    if (wanted.source.kind === 'ssh') {
+      const src = wanted.source;
+      const statusKey = logSourceStatusKey(serverId);
+      let lines = 0;
+      let lastLineAt: string | null = null;
+      let lastStatus: { state: string; error: string | null; hostKeyFingerprint: string | null } = {
+        state: 'connecting',
+        error: null,
+        hostKeyFingerprint: src.hostKeyFingerprint,
+      };
+      let lastWriteAt = 0;
+      const writeStatus = () => {
+        lastWriteAt = Date.now();
+        redis
+          .set(
+            statusKey,
+            JSON.stringify({
+              state: lastStatus.state,
+              ts: new Date().toISOString(),
+              error: lastStatus.error,
+              host_key_fingerprint: lastStatus.hostKeyFingerprint,
+              lines,
+              last_line_at: lastLineAt,
+            }),
+            'EX',
+            600,
+          )
+          .catch((err) =>
+            log.warn({ err: (err as Error).message }, 'log-source status write failed'),
+          );
+      };
+      const abort = tailSshLog({
+        serverId,
+        host: src.host,
+        port: src.port,
+        username: src.username,
+        privateKey: src.privateKey,
+        logPath: src.logPath,
+        expectedHostKeyFingerprint: src.hostKeyFingerprint,
+        log,
+        onLine: (line) => {
+          lines += 1;
+          lastLineAt = new Date().toISOString();
+          onLine(line);
+          if (Date.now() - lastWriteAt > 30_000) writeStatus();
+        },
+        onStatus: (status) => {
+          lastStatus = status;
+          writeStatus();
+          diag
+            .emit({
+              component: 'worker-log-ingest',
+              kind: status.state === 'connected' ? 'tail.started' : 'tail.stopped',
+              severity: status.state === 'error' ? 'warn' : 'info',
+              serverId,
+              message: `ssh tail ${status.state} for ${src.username}@${src.host}:${src.port}${status.error ? ` (${status.error})` : ''}`,
+              payload: {
+                source: 'ssh',
+                host: src.host,
+                port: src.port,
+                ...(status.error ? { error: status.error } : {}),
+              },
+            })
+            .catch(() => undefined);
+        },
+        onHostKey: (fingerprint) => {
+          // Trust on first use: pin the fingerprint so a later host-key change is refused.
+          db.update(serverLogSources)
+            .set({ hostKeyFingerprint: fingerprint, updatedAt: new Date() })
+            .where(eq(serverLogSources.serverId, serverId))
+            .catch((err) =>
+              log.warn({ err: (err as Error).message, serverId }, 'host key pin failed'),
+            );
+        },
+      });
+      return {
+        abort: () => {
+          abort();
+          redis.del(statusKey).catch(() => undefined);
+        },
+      };
+    }
     const abort = tailContainerLogs({
       bridge,
       log,
       name: `squad-${serverId}`,
-      onLine(line) {
-        const events = ingestor.ingest(line);
-        for (const e of events) {
-          persistEventEnvelope(db, e).catch((err) =>
-            log.error({ err: (err as Error).message, type: e.type }, 'event persist failed'),
-          );
-          publish(redis, e).catch((err) =>
-            log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
-          );
-          if (e.type === 'player.connected') {
-            // Upsert the canonical identity first (PLAYER-1, #22) so the player
-            // row exists before the ban handlers below read it — otherwise a
-            // first-time connector is invisible to alt/external-ban enforcement
-            // until the next RCON poll.
-            handlePlayerConnected(db, e)
-              .catch((err) =>
-                log.error({ err: (err as Error).message }, 'player identity handling failed'),
-              )
-              .finally(() => {
-                handleAltBanConnect(db, redis, e).catch((err) =>
-                  log.error({ err: (err as Error).message }, 'alt-ban handling failed'),
-                );
-                handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch(
-                  (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
-                );
-                handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
-                  (err) =>
-                    log.error({ err: (err as Error).message }, 'external-ban handling failed'),
-                );
-                handleVipExpiryWarnConnect(db, redis, { serverId, event: e }).catch((err) =>
-                  log.error({ err: (err as Error).message }, 'vip-expiry warn handling failed'),
-                );
-              });
-          }
-          if (e.type === 'player.name_changed') {
-            handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch((err) =>
-              log.error({ err: (err as Error).message }, 'banname handling failed'),
-            );
-          }
-        }
-      },
+      onLine,
       onStarted: () => {
         diag
           .emit({
@@ -267,8 +362,9 @@ async function main() {
   }, diag);
 
   async function reconcile() {
-    // External servers (runtime='external') have no `squad-<id>` container on
-    // this host; their logs are not reachable from here.
+    // Panel-hosted containers are tailed through the bridge; external
+    // servers (runtime='external') only when an enabled SSH log source is
+    // configured for them — their SquadGame.log lives on another host.
     const rows = await db
       .select({
         id: servers.id,
@@ -278,9 +374,61 @@ async function main() {
       .from(servers)
       .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId))
       .where(eq(servers.runtime, 'container'));
-    const wanted = rows
+    const wanted: TailWanted[] = rows
       .filter((r) => r.status === 'running' || r.status === 'starting')
-      .map((r) => ({ serverId: r.id, beaconPort: r.beaconPort }));
+      .map((r) => ({ serverId: r.id, beaconPort: r.beaconPort, source: { kind: 'container' } }));
+    if (encryptionKey) {
+      const sshRows = await db
+        .select({
+          id: servers.id,
+          beaconPort: serverSettings.beaconPort,
+          host: serverLogSources.sshHost,
+          port: serverLogSources.sshPort,
+          username: serverLogSources.sshUser,
+          blob: serverLogSources.sshPrivateKeyEncrypted,
+          logPath: serverLogSources.logPath,
+          hostKeyFingerprint: serverLogSources.hostKeyFingerprint,
+          keyVersion: serverLogSources.keyVersion,
+        })
+        .from(serverLogSources)
+        .innerJoin(servers, eq(servers.id, serverLogSources.serverId))
+        .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId))
+        .where(
+          and(
+            eq(servers.runtime, 'external'),
+            isNull(servers.deletedAt),
+            eq(serverLogSources.enabled, true),
+            eq(serverLogSources.kind, 'ssh'),
+          ),
+        );
+      for (const r of sshRows) {
+        try {
+          const privateKey = decrypt(
+            encryptionKey,
+            deserialize(Buffer.from(r.blob as unknown as Buffer)),
+          );
+          wanted.push({
+            serverId: r.id,
+            beaconPort: r.beaconPort,
+            source: {
+              kind: 'ssh',
+              host: r.host,
+              port: r.port,
+              username: r.username,
+              privateKey,
+              logPath: r.logPath,
+              hostKeyFingerprint: r.hostKeyFingerprint,
+              keyVersion: r.keyVersion,
+            },
+          });
+        } catch (err) {
+          log.error(
+            { err: (err as Error).message, serverId: r.id },
+            'log source key decrypt failed',
+          );
+        }
+      }
+    }
     const active = await dropCutoverServers(redis, wanted);
     manager.reconcile(active);
   }

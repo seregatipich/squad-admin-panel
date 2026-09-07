@@ -74,6 +74,7 @@ export * from './seed-schedule.js';
 export * from './seed-subscriptions.js';
 export * from './server-credentials.js';
 export * from './server-daily-stats.js';
+export * from './server-log-sources.js';
 export * from './server-settings.js';
 export * from './servers.js';
 export * from './sessions.js';

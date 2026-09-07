@@ -65,6 +65,29 @@ function stubFetch(runtime: 'external' | 'container') {
       if (url === '/api/v1/servers/srv-ext/rnsquadjs') {
         return new Response(JSON.stringify({ error: 'external_server' }), { status: 409 });
       }
+      if (url === '/api/v1/servers/srv-ext/log-source' && !init?.method) {
+        return new Response(JSON.stringify({ configured: false, status: null }), { status: 200 });
+      }
+      if (url === '/api/v1/servers/srv-ext/log-source' && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            configured: true,
+            kind: 'ssh',
+            ssh_host: body.ssh_host,
+            ssh_port: body.ssh_port,
+            ssh_user: body.ssh_user,
+            log_path: body.log_path,
+            enabled: body.enabled,
+            public_key: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@tk104',
+            host_key_fingerprint: null,
+            key_version: 1,
+            updated_at: '2026-09-07T10:00:00.000Z',
+            status: null,
+          }),
+          { status: 200 },
+        );
+      }
       if (url === '/api/v1/servers/srv-ext/external-connection' && init?.method === 'PUT') {
         return new Response(
           JSON.stringify({
@@ -140,5 +163,56 @@ describe('SettingsPage — внешний сервер', () => {
     await screen.findByText('Сеть');
     expect(screen.queryByText('RCON-подключение')).not.toBeInTheDocument();
     expect(screen.getByText('Ресурсы')).toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — источник логов внешнего сервера', () => {
+  it('создаёт SSH-источник, отправляет PUT /log-source и показывает публичный ключ', async () => {
+    const calls = stubFetch('external');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Источник логов (SSH)');
+    expect(screen.queryByLabelText('Публичный ключ панели')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Хост SSH'), { target: { value: '80.242.59.123' } });
+    fireEvent.change(screen.getByLabelText(/^Путь к SquadGame.log/), {
+      target: { value: '/opt/squad1/SquadGame/Saved/Logs/SquadGame.log' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать источник и ключ' }));
+
+    await waitFor(() =>
+      expect(
+        calls.find(
+          (c) => c.url === '/api/v1/servers/srv-ext/log-source' && c.init?.method === 'PUT',
+        ),
+      ).toBeDefined(),
+    );
+    const put = calls.find(
+      (c) => c.url === '/api/v1/servers/srv-ext/log-source' && c.init?.method === 'PUT',
+    );
+    expect(JSON.parse(String(put?.init?.body))).toEqual({
+      ssh_host: '80.242.59.123',
+      ssh_port: 22,
+      ssh_user: 'squad',
+      log_path: '/opt/squad1/SquadGame/Saved/Logs/SquadGame.log',
+      enabled: true,
+      regenerate_key: false,
+    });
+    expect(await screen.findByLabelText('Публичный ключ панели')).toHaveValue(
+      'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@tk104',
+    );
+    expect(screen.getByRole('button', { name: 'Перевыпустить ключ' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Удалить источник' })).toBeInTheDocument();
+  });
+
+  it('у контейнерного сервера секция источника логов не запрашивается', async () => {
+    const calls = stubFetch('container');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Сеть');
+    expect(screen.queryByText('Источник логов (SSH)')).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url.endsWith('/log-source'))).toBe(false);
   });
 });

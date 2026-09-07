@@ -12,7 +12,12 @@ vi.mock('@squad/db', () => ({
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
-        innerJoin: vi.fn().mockResolvedValue([]),
+        // Both reconcile queries chain .innerJoin(...) (twice for log
+        // sources) before .where(...); keep every link chainable.
+        innerJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+          innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        }),
       }),
     }),
   })),
@@ -20,7 +25,19 @@ vi.mock('@squad/db', () => ({
   moderationActions: { playerId: 'playerId', actionType: 'actionType', revertedAt: 'revertedAt' },
   players: { id: 'id', steamId64: 'steamId64', eosId: 'eosId' },
   raiseAltBanAlert: vi.fn().mockResolvedValue(0),
-  servers: { id: 'id', status: 'status' },
+  servers: { id: 'id', status: 'status', runtime: 'runtime', deletedAt: 'deletedAt' },
+  serverLogSources: {
+    serverId: 'serverId',
+    sshHost: 'sshHost',
+    sshPort: 'sshPort',
+    sshUser: 'sshUser',
+    sshPrivateKeyEncrypted: 'sshPrivateKeyEncrypted',
+    logPath: 'logPath',
+    hostKeyFingerprint: 'hostKeyFingerprint',
+    keyVersion: 'keyVersion',
+    enabled: 'enabled',
+    kind: 'kind',
+  },
   serverSettings: { serverId: 'serverId', logsEnabled: 'logsEnabled' },
 }));
 vi.mock('@squad/bridge-client', () => ({

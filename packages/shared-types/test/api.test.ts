@@ -6,8 +6,11 @@ import {
   externalServerCreateInput,
   hostInfo,
   hostMetrics,
+  logSourceStatusKey,
+  logSourceUpsertInput,
   paginated,
   playerRow,
+  remoteLogPath,
   serverCreateInput,
   serverRow,
   serverRuntime,
@@ -498,5 +501,47 @@ describe('externalServerConnectionUpdate', () => {
 
   it('rejects unknown fields', () => {
     expect(externalServerConnectionUpdate.safeParse({ slug: 'x' }).success).toBe(false);
+  });
+});
+
+describe('logSourceUpsertInput / remoteLogPath', () => {
+  const minimal = {
+    ssh_host: '203.0.113.10',
+    ssh_user: 'squad',
+    log_path: '/opt/squad1/SquadGame/Saved/Logs/SquadGame.log',
+  };
+
+  it('accepts a minimal input and applies defaults', () => {
+    const parsed = logSourceUpsertInput.parse(minimal);
+    expect(parsed.ssh_port).toBe(22);
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.regenerate_key).toBe(false);
+  });
+
+  it('refuses paths that could escape the exec argument or the directory', () => {
+    for (const log_path of [
+      'relative/SquadGame.log',
+      "/opt/squad1/'; rm -rf /; '",
+      '/opt/squad1/../../etc/shadow',
+      '/opt/squad 1/SquadGame.log',
+      '/opt/squad1/SquadGame.log;id',
+    ]) {
+      expect(remoteLogPath.safeParse(log_path).success, log_path).toBe(false);
+      expect(logSourceUpsertInput.safeParse({ ...minimal, log_path }).success, log_path).toBe(
+        false,
+      );
+    }
+    expect(remoteLogPath.safeParse('/home/squad/logs/squad/1/SquadGame_2.log').success).toBe(true);
+  });
+
+  it('rejects a user name with shell characters and unknown fields', () => {
+    expect(logSourceUpsertInput.safeParse({ ...minimal, ssh_user: 'squad;id' }).success).toBe(
+      false,
+    );
+    expect(logSourceUpsertInput.safeParse({ ...minimal, private_key: 'x' }).success).toBe(false);
+  });
+
+  it('derives the status key from the server id', () => {
+    expect(logSourceStatusKey('srv-1')).toBe('log-source:status:srv-1');
   });
 });

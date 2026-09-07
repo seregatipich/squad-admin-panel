@@ -4,6 +4,8 @@
 
 Tails `docker logs -f squad-{uuid}` for every running Squad container via the host bridge, regex-parses `SquadGame.log` lines, and publishes structured `EventEnvelope` entries to per-server Redis Streams.
 
+For an external server (`servers.runtime='external'`) with an enabled `server_log_sources` row it instead opens an SSH session to the game host with the stored key and runs `tail -n 200 -F -- '<log_path>'`, feeding the same parser — this is the panel's equivalent of a bot attached to the server's `screen` console. The session reconnects with exponential backoff (1 s → 60 s), pins the host key on first use (a later change is refused and reported), and publishes `log-source:status:<id>` to Redis (`state`, `lines`, `last_line_at`, `error`, TTL 600 s) for the settings page. Requires `APP_ENCRYPTION_KEY` in the worker environment; without it external sources are skipped with a warning. Chat is **not** in `SquadGame.log` — it only arrives over RCON.
+
 ## Responsibilities
 
 - Reconcile the set of active log tails against live DB rows every 15 s. Only `runtime='container'` rows qualify — an external server (`runtime='external'`) has no `squad-<id>` container on this host and is never tailed.
