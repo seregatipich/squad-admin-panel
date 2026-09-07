@@ -1,7 +1,7 @@
 import { serverLogSources, servers } from '@squad/db/schema';
 import { logSourceStatusKey } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
-import { utils as sshUtils } from 'ssh2';
+import ssh2 from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { generateSshKeyPair } from '../../src/routes/server-log-source.js';
@@ -12,6 +12,8 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+const sshUtils = ssh2.utils;
 
 const OWNER_STEAM_ID = 76561198000000778n;
 

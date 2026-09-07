@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Logger } from 'pino';
-import { Client, type ClientChannel } from 'ssh2';
+import ssh2, { type ClientChannel, type Client as SshClient } from 'ssh2';
+
+// Same CommonJS caveat as the API route: take the default export and
+// destructure, so the built worker never depends on cjs-module-lexer.
+const { Client } = ssh2;
 
 export type SshTailState = 'connecting' | 'connected' | 'error';
 
@@ -73,7 +77,7 @@ export function tailSshLog(params: SshTailParams): () => void {
 
   let aborted = false;
   let attempt = 0;
-  let conn: Client | null = null;
+  let conn: SshClient | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let expectedFingerprint = params.expectedHostKeyFingerprint;
   let lastFingerprint: string | null = null;
