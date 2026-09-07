@@ -169,3 +169,79 @@ describe('RconClient', () => {
     }
   });
 });
+
+/**
+ * A fixture that answers exactly like a live Squad server (captured
+ * 2026-09-07): the real response, one empty echo of the probe, then the
+ * broken 21-byte second echo. Before the decoder fix the second exec on the
+ * same socket timed out because the junk mis-framed everything after it.
+ */
+function makeSquadLikeServer(): Promise<{ server: Server; port: number; commands: string[] }> {
+  const commands: string[] = [];
+  return new Promise((resolve) => {
+    const server = createServer((sock: Socket) => {
+      const stream = new RconPacketStream();
+      const write = (buf: Buffer) => {
+        if (!sock.destroyed) sock.write(buf);
+      };
+      sock.on('error', () => undefined);
+      sock.on('data', (chunk) => {
+        for (const packet of stream.push(chunk)) {
+          if (packet.type === SERVERDATA_AUTH) {
+            write(encodePacket({ id: packet.id, type: SERVERDATA_RESPONSE_VALUE, body: '' }));
+            write(encodePacket({ id: packet.id, type: SERVERDATA_AUTH_RESPONSE, body: '' }));
+            continue;
+          }
+          if (packet.type !== SERVERDATA_EXECCOMMAND) continue;
+          if (packet.body === '') {
+            const probeId = Buffer.alloc(4);
+            probeId.writeInt32LE(packet.id, 0);
+            // Legitimate echo …
+            write(encodePacket({ id: packet.id, type: SERVERDATA_RESPONSE_VALUE, body: '' }));
+            // … then the broken one: size 10 header, id, type 0, \\0\\0 and 7 junk bytes.
+            write(
+              Buffer.concat([
+                Buffer.from('0a000000', 'hex'),
+                probeId,
+                Buffer.from('00000000', 'hex'),
+                Buffer.from('0000', 'hex'),
+                Buffer.from('00010000000000', 'hex'),
+              ]),
+            );
+            continue;
+          }
+          commands.push(packet.body);
+          write(
+            encodePacket({
+              id: packet.id,
+              type: SERVERDATA_RESPONSE_VALUE,
+              body: `result:${packet.body}`,
+            }),
+          );
+        }
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      resolve({ server, port: (server.address() as AddressInfo).port, commands });
+    });
+  });
+}
+
+describe("RconClient against Squad's broken probe reply", () => {
+  it('keeps executing commands on one socket after the junk bytes', async () => {
+    const { server, port, commands } = await makeSquadLikeServer();
+    const log = makeLogger();
+    const client = new RconClient(makeOpts({ port, log, commandTimeoutMs: 1500 }));
+    try {
+      await client.connect();
+      expect(await client.exec('ListPlayers')).toBe('result:ListPlayers');
+      expect(await client.exec('ListSquads')).toBe('result:ListSquads');
+      expect(await client.exec('ShowServerInfo')).toBe('result:ShowServerInfo');
+      expect(commands).toEqual(['ListPlayers', 'ListSquads', 'ShowServerInfo']);
+      expect((log as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await closeServer(server);
+    }
+  });
+});
