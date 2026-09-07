@@ -27,6 +27,35 @@ afterAll(async () => {
 });
 
 describeIfDb('migration regressions', () => {
+  it('server_log_sources exists with the ssh-only kind check (0113)', async () => {
+    const cols = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'server_log_sources'
+      ORDER BY column_name;
+    `);
+    const names = (cols as Array<{ column_name: string }>).map((c) => c.column_name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'server_id',
+        'kind',
+        'ssh_host',
+        'ssh_port',
+        'ssh_user',
+        'ssh_private_key_encrypted',
+        'ssh_public_key',
+        'host_key_fingerprint',
+        'log_path',
+        'enabled',
+        'key_version',
+      ]),
+    );
+    const definition = await db.execute(sql`
+      SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conname = 'server_log_sources_kind_chk';
+    `);
+    expect(String((definition as Array<{ def: string }>)[0]?.def ?? '')).toContain("'ssh'");
+  });
+
   it("servers_runtime_enum accepts 'external' and still rejects unknown runtimes (0112)", async () => {
     const definition = await db.execute(sql`
       SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint

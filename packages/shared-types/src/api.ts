@@ -142,6 +142,59 @@ export const externalServerConnectionUpdate = z
   });
 export type ExternalServerConnectionUpdate = z.infer<typeof externalServerConnectionUpdate>;
 
+/**
+ * Absolute POSIX path of a `SquadGame.log` on the game host. It ends up in
+ * `tail -F -- '<path>'` inside an SSH exec, so the character set is closed
+ * (no quotes, spaces or shell metacharacters) and `..` segments are refused.
+ */
+export const remoteLogPath = z
+  .string()
+  .min(2)
+  .max(512)
+  .regex(/^\/[A-Za-z0-9._/-]+$/, 'log_path must be an absolute path of [A-Za-z0-9._/-]')
+  .refine((p) => !p.split('/').includes('..'), { message: 'log_path must not contain ..' });
+
+/**
+ * Body of `PUT /api/v1/servers/:id/log-source` (external servers only). The
+ * panel generates the SSH key pair itself on the first PUT and keeps it on
+ * later updates unless `regenerate_key` is set; the operator installs the
+ * returned public key on the game host.
+ */
+export const logSourceUpsertInput = z
+  .object({
+    ssh_host: rconHostString,
+    ssh_port: z.number().int().min(1).max(65_535).default(22),
+    ssh_user: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z_][A-Za-z0-9._-]*$/, 'ssh_user must be a POSIX user name'),
+    log_path: remoteLogPath,
+    enabled: z.boolean().default(true),
+    regenerate_key: z.boolean().default(false),
+  })
+  .strict();
+export type LogSourceUpsertInput = z.infer<typeof logSourceUpsertInput>;
+
+/** Live state worker-log-ingest publishes to Redis `log-source:status:<server id>`. */
+export const logSourceStatus = z
+  .object({
+    state: z.enum(['connecting', 'connected', 'error']),
+    ts: z.string(),
+    last_line_at: z.string().nullable().optional(),
+    lines: z.number().int().nonnegative().optional(),
+    error: z.string().nullable().optional(),
+    host_key_fingerprint: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type LogSourceStatus = z.infer<typeof logSourceStatus>;
+
+/** Redis key carrying {@link logSourceStatus} for one server. */
+export function logSourceStatusKey(serverId: string): string {
+  return `log-source:status:${serverId}`;
+}
+
 export const serverRow = z
   .object({
     id: uuidString,

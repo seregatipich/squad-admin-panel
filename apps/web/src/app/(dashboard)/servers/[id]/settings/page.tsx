@@ -81,6 +81,49 @@ interface ServerInfo {
   connection: { rcon_host: string | null; rcon_port: number | null } | null;
 }
 
+/** Источник логов внешнего сервера: SSH-хвост SquadGame.log на игровом хосте. */
+interface LogSourceView {
+  configured: boolean;
+  ssh_host?: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  log_path?: string;
+  enabled?: boolean;
+  public_key?: string;
+  host_key_fingerprint?: string | null;
+  key_version?: number;
+  status: {
+    state: 'connecting' | 'connected' | 'error';
+    ts: string;
+    lines?: number;
+    last_line_at?: string | null;
+    error?: string | null;
+  } | null;
+}
+
+interface LogSourceDraft {
+  ssh_host: string;
+  ssh_port: number;
+  ssh_user: string;
+  log_path: string;
+  enabled: boolean;
+}
+
+const LOG_SOURCE_DEFAULTS: LogSourceDraft = {
+  ssh_host: '',
+  ssh_port: 22,
+  ssh_user: 'squad',
+  log_path: '/opt/squad1/SquadGame/Saved/Logs/SquadGame.log',
+  enabled: true,
+};
+
+/** Состояние SSH-хвоста словами; тон дублирует подпись (§5). */
+const LOG_SOURCE_STATE: Record<string, { tone: BadgeTone; label: string }> = {
+  connected: { tone: 'good', label: 'читается' },
+  connecting: { tone: 'warn', label: 'подключение' },
+  error: { tone: 'crit', label: 'ошибка' },
+};
+
 /** Черновик правок RCON-подключения внешнего сервера; пустой пароль = не менять. */
 interface ConnectionDraft {
   rcon_host?: string;
@@ -128,6 +171,12 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [connectionBusy, setConnectionBusy] = useState(false);
   const [connectionSaved, setConnectionSaved] = useState(false);
   const [connectionErr, setConnectionErr] = useState<string | null>(null);
+  const [logSource, setLogSource] = useState<LogSourceView | null>(null);
+  const [logSourceDraft, setLogSourceDraft] = useState<LogSourceDraft>(LOG_SOURCE_DEFAULTS);
+  const [logSourceDirty, setLogSourceDirty] = useState(false);
+  const [logSourceBusy, setLogSourceBusy] = useState(false);
+  const [logSourceErr, setLogSourceErr] = useState<string | null>(null);
+  const [logSourceSaved, setLogSourceSaved] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -160,6 +209,90 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Источник логов есть только у внешнего сервера; для контейнерного API
+  // отвечает 409, и секция не показывается вовсе.
+  const isExternalServer = serverInfo?.runtime === 'external';
+  useEffect(() => {
+    if (!isExternalServer) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/v1/servers/${id}/log-source`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as LogSourceView;
+        if (cancelled) return;
+        setLogSource(data);
+        if (data.configured) {
+          setLogSourceDraft({
+            ssh_host: data.ssh_host ?? '',
+            ssh_port: data.ssh_port ?? 22,
+            ssh_user: data.ssh_user ?? 'squad',
+            log_path: data.log_path ?? LOG_SOURCE_DEFAULTS.log_path,
+            enabled: data.enabled ?? true,
+          });
+        }
+      } catch {
+        // best-effort: the section shows the empty form
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, isExternalServer]);
+
+  async function saveLogSource(regenerateKey = false) {
+    setLogSourceBusy(true);
+    setLogSourceErr(null);
+    try {
+      const res = await fetch(`/api/v1/servers/${id}/log-source`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...logSourceDraft, regenerate_key: regenerateKey }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      setLogSource((await res.json()) as LogSourceView);
+      setLogSourceDirty(false);
+      setLogSourceSaved(true);
+      setTimeout(() => setLogSourceSaved(false), 2000);
+    } catch (e) {
+      setLogSourceErr((e as Error).message);
+    } finally {
+      setLogSourceBusy(false);
+    }
+  }
+
+  async function removeLogSource() {
+    setLogSourceBusy(true);
+    setLogSourceErr(null);
+    try {
+      const res = await fetch(`/api/v1/servers/${id}/log-source`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+      setLogSource({ configured: false, status: null });
+      setLogSourceDraft(LOG_SOURCE_DEFAULTS);
+      setLogSourceDirty(false);
+    } catch (e) {
+      setLogSourceErr((e as Error).message);
+    } finally {
+      setLogSourceBusy(false);
+    }
+  }
+
+  function setLogSourceField<K extends keyof LogSourceDraft>(key: K, value: LogSourceDraft[K]) {
+    setLogSourceDraft((prev) => ({ ...prev, [key]: value }));
+    setLogSourceDirty(true);
+    setLogSourceSaved(false);
+  }
 
   // The "Пороги сидинга" section is gated on the `manageserver` squad
   // permission (not `server:edit_settings`, which governs the rest of this
@@ -529,6 +662,131 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               onClick={saveConnection}
             >
               Сохранить подключение
+            </Button>
+          </div>
+
+          {logSourceErr ? <InlineBanner tone="crit" title={logSourceErr} /> : null}
+          {logSourceSaved ? <InlineBanner tone="good" title="Источник логов сохранён" /> : null}
+          <GroupedList
+            title="Источник логов (SSH)"
+            footnote="worker-log-ingest подключается к игровому хосту по SSH и читает SquadGame.log командой tail -F — так же, как бот соперника читает консоль в screen. Бой, ранения, коннекты и матчи появятся после того, как публичный ключ панели добавят в ~/.ssh/authorized_keys пользователя на хосте."
+          >
+            {logSource?.configured ? (
+              <GroupedRow
+                label="Состояние"
+                description={
+                  logSource.status?.error
+                    ? logSource.status.error
+                    : logSource.status?.last_line_at
+                      ? `Последняя строка: ${new Date(logSource.status.last_line_at).toLocaleString('ru-RU')}`
+                      : 'worker-log-ingest ещё не отчитался'
+                }
+                control={
+                  <Badge tone={LOG_SOURCE_STATE[logSource.status?.state ?? '']?.tone ?? 'neutral'}>
+                    {LOG_SOURCE_STATE[logSource.status?.state ?? '']?.label ?? 'нет данных'}
+                  </Badge>
+                }
+              />
+            ) : null}
+            <GroupedRow
+              label="Хост SSH"
+              description="Имя хоста или IP игрового сервера"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    aria-label="Хост SSH"
+                    value={logSourceDraft.ssh_host}
+                    onChange={(e) => setLogSourceField('ssh_host', e.target.value.trim())}
+                    autoComplete="off"
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Порт SSH"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Порт SSH"
+                    value={logSourceDraft.ssh_port}
+                    onChange={(e) => setLogSourceField('ssh_port', Number(e.target.value))}
+                    min={1}
+                    max={65535}
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Пользователь SSH"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    aria-label="Пользователь SSH"
+                    value={logSourceDraft.ssh_user}
+                    onChange={(e) => setLogSourceField('ssh_user', e.target.value.trim())}
+                    autoComplete="off"
+                  />
+                </div>
+              }
+            />
+            <div className="px-4 py-3">
+              <FieldRow
+                label="Путь к SquadGame.log"
+                hint="Абсолютный путь на игровом хосте; допустимы латиница, цифры, точка, дефис, подчёркивание."
+              >
+                <TextInput
+                  value={logSourceDraft.log_path}
+                  onChange={(e) => setLogSourceField('log_path', e.target.value.trim())}
+                  placeholder="/opt/squad1/SquadGame/Saved/Logs/SquadGame.log"
+                />
+              </FieldRow>
+            </div>
+            <GroupedRow
+              label="Читать логи"
+              description="Выключите, чтобы остановить хвост, не удаляя настройки"
+              control={
+                <Switch
+                  checked={logSourceDraft.enabled}
+                  onChange={(next) => setLogSourceField('enabled', next)}
+                  label="Читать логи"
+                />
+              }
+            />
+            {logSource?.configured && logSource.public_key ? (
+              <div className="px-4 py-3">
+                <FieldRow
+                  label="Публичный ключ панели"
+                  hint={`Добавьте эту строку в ~/.ssh/authorized_keys пользователя ${logSourceDraft.ssh_user || 'squad'} на игровом хосте. Ключ №${logSource.key_version ?? 1}${logSource.host_key_fingerprint ? `, отпечаток хоста ${logSource.host_key_fingerprint}` : ''}.`}
+                >
+                  <Textarea
+                    value={logSource.public_key}
+                    readOnly
+                    rows={3}
+                    aria-label="Публичный ключ панели"
+                  />
+                </FieldRow>
+              </div>
+            ) : null}
+          </GroupedList>
+          <div className="flex justify-end gap-2">
+            {logSource?.configured ? (
+              <>
+                <Button disabled={logSourceBusy} onClick={removeLogSource}>
+                  Удалить источник
+                </Button>
+                <Button disabled={logSourceBusy} onClick={() => saveLogSource(true)}>
+                  Перевыпустить ключ
+                </Button>
+              </>
+            ) : null}
+            <Button
+              variant="primary"
+              disabled={!logSourceDirty && !!logSource?.configured}
+              loading={logSourceBusy}
+              onClick={() => saveLogSource(false)}
+            >
+              {logSource?.configured ? 'Сохранить источник' : 'Создать источник и ключ'}
             </Button>
           </div>
         </div>

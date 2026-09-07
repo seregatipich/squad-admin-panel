@@ -80,6 +80,7 @@ import serverConfigRoutes from './server-configs.js';
 import forceStopRoutes from './server-force-stop.js';
 import serverInstallRoutes from './server-install.js';
 import serverLogFilesRoutes from './server-log-files.js';
+import serverLogSourceRoutes from './server-log-source.js';
 import serverLogsRoutes from './server-logs.js';
 import serverMapRoutes from './server-map.js';
 import serverMapVoteRoutes from './server-map-vote.js';
@@ -130,6 +131,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(serverChatCommandsRoutes);
   await app.register(serverSeedNotificationRoutes);
   await app.register(serverSettingsRoutes);
+  await app.register(serverLogSourceRoutes);
   await app.register(serverUpdateRoutes);
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);

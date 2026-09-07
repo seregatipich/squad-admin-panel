@@ -4,6 +4,16 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-07
+
+### Remote log sources — `server_log_sources` (migration 0113)
+
+**Files:** `packages/db/drizzle/0113_server_log_sources.sql`, `packages/db/src/schema/server-log-sources.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/migrations.regression.test.ts`
+
+One row per external server describing where worker-log-ingest tails `SquadGame.log`: `kind` (`ssh` only, CHECK `server_log_sources_kind_chk`), `ssh_host`, `ssh_port`, `ssh_user`, `ssh_private_key_encrypted` (AES-GCM blob, same format as `server_credentials`), `ssh_public_key` (the `authorized_keys` line), `host_key_fingerprint` (trust-on-first-use pin, NULL until the first connect), `log_path`, `enabled`, `key_version`. `ON DELETE CASCADE` from `servers`.
+
+---
+
 ## 2026-09-05
 
 ### External servers — `servers_runtime_enum` widened (migration 0112)
