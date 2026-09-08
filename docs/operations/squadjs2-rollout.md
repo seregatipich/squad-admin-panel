@@ -20,6 +20,8 @@
 
 ## 0.1. Известный стоп-фактор: `player.disconnected` на пине
 
+Ишью: [#307](https://github.com/breaking-squad/squad-admin-panel/issues/307).
+
 На пине `258440d0` правило `squad-server/log-parser/player-disconnected.js`
 требует в строке лога `Name: EOSIpNetConnection_<N>, Driver: GameNetDriver EOSNetDriver_<N>`.
 Squad на боевых серверах пишет `Name: RedpointEOSIpNetConnection_<N>, Driver: Name:GameNetDriver Def:GameNetDriver RedpointEOSNetDriver_<N>`

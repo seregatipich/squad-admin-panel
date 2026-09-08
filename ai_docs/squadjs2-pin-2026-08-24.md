@@ -54,6 +54,8 @@ gh api /repos/breaking-squad/squadjs2/actions/jobs/101639765535/logs | grep -E '
 
 ## Стоп-фактор пина: `PLAYER_DISCONNECTED` не срабатывает
 
+Отслеживается в [#307](https://github.com/breaking-squad/squad-admin-panel/issues/307).
+
 `squad-server/log-parser/player-disconnected.js` на пине требует в строке
 `UChannel::Close: Sending CloseBunch` подстроки
 `Name: EOSIpNetConnection_<N>, Driver: GameNetDriver EOSNetDriver_<N>`.
