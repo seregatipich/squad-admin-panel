@@ -664,11 +664,21 @@ describe('fast developer deploy to tk104', () => {
     assert.match(sshPayload(fixture.log), /bash scripts\/deploy-tk104\.sh/);
   });
 
+  it('rebuilds a single worker container by name, on the same no-deps path', () => {
+    const fixture = devDeployFixture();
+    const result = run('/bin/bash', [fixture.script, 'worker-rcon'], { env: fixture.env });
+    assert.equal(result.status, 0, result.stderr);
+    const payload = sshPayload(fixture.log);
+    assert.match(payload, /build worker-rcon/);
+    assert.match(payload, /up -d --no-deps worker-rcon/);
+    assert.doesNotMatch(payload, /migrator|--remove-orphans/);
+  });
+
   it('rejects an unknown target before touching the production host', () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'workers'], { env: fixture.env });
+    const result = run('/bin/bash', [fixture.script, 'postgres'], { env: fixture.env });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|full\]/);
+    assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|worker-<name>\|full\]/);
     assert.deepEqual(logLines(fixture.log), []);
   });
 

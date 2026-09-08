@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
@@ -28,7 +28,7 @@ import {
   Th,
   WarningIcon,
 } from '@/components/ui';
-import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useLiveBusState, useLiveSubscription } from '@/lib/use-live-bus';
 import {
   formatTimeOnServer,
   groupRosterByTeam,
@@ -42,14 +42,6 @@ import {
   type TeamColumn,
   teamLabel,
 } from './roster-format';
-
-/**
- * Запасной опрос. Основной путь — событие `rcon.roster` из шины: воркер
- * публикует его сразу после успешного опроса сервера, и список перерисовывается
- * в тот же момент. Таймер нужен только на случай, когда сокет шины оборвался, —
- * поэтому интервал короткий, а не «раз в полминуты».
- */
-const ROSTER_POLL_MS = 10_000;
 
 const BULK_KEYS = ['mod:warn', 'mod:kick', 'mod:ban_temp', 'mod:ban_perm'] as const;
 
@@ -165,18 +157,29 @@ export function LivePlayers({
     }
   }, [serverId]);
 
+  // Никакого опроса по таймеру: список ведёт шина. worker-rcon публикует
+  // `rcon.roster` сразу после каждого обновления состава, и строка появляется
+  // ровно тогда, когда игрок зашёл, а не на следующем тике часов.
+  //
+  // Событий достаточно, пока сокет жив, поэтому единственное, что здесь
+  // остаётся, — перечитать список после обрыва: за время, пока шина
+  // переподключалась, события потерялись. То же самое при возврате на вкладку,
+  // которую браузер усыпил вместе с сокетом.
   useEffect(() => {
     void load();
-    const timer = setInterval(load, ROSTER_POLL_MS);
     const onVisibility = () => {
       if (document.visibilityState === 'visible') void load();
     };
     document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [load]);
+
+  const busState = useLiveBusState();
+  const previousBusState = useRef(busState);
+  useEffect(() => {
+    if (previousBusState.current !== 'open' && busState === 'open') void load();
+    previousBusState.current = busState;
+  }, [busState, load]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);

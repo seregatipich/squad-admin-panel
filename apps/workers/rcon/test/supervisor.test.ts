@@ -208,6 +208,101 @@ describe('RconSupervisor polling', () => {
   }, 5000);
 });
 
+describe('RconSupervisor roster refresh', () => {
+  it('refreshes the roster on its own fast cadence, without the full poll or the database', async () => {
+    // Полный опрос отодвинут за горизонт теста: всё, что произойдёт ниже, —
+    // работа быстрого обновления состава. `makeDb()` возвращает пустой
+    // объект, поэтому любое обращение к базе из этого пути упало бы здесь.
+    const { server, port, commands } = await makePollingRconServer();
+    const redis = makeRedis() as unknown as {
+      set: ReturnType<typeof vi.fn>;
+      publish: ReturnType<typeof vi.fn>;
+    };
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 600_000,
+      rosterIntervalMs: 25,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-roster',
+      port,
+      queryPort: port + 1000,
+    };
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+
+      const deadline = Date.now() + 3000;
+      let rosterWrites = 0;
+      let rosterEvents = 0;
+      while (Date.now() < deadline && (rosterWrites < 2 || rosterEvents < 2)) {
+        await sleep(25);
+        rosterWrites = redis.set.mock.calls.filter(
+          ([key]) => key === 'rcon:roster:srv-roster',
+        ).length;
+        rosterEvents = redis.publish.mock.calls.filter(
+          ([channel, payload]) =>
+            channel === 'live-bus' && String(payload).includes('"rcon.roster"'),
+        ).length;
+      }
+
+      // Несколько обновлений за три секунды — это и есть «без задержек».
+      expect(rosterWrites).toBeGreaterThanOrEqual(2);
+      expect(rosterEvents).toBeGreaterThanOrEqual(2);
+      expect(
+        redis.set.mock.calls.filter(([key]) => key === 'rcon:squads:srv-roster').length,
+      ).toBeGreaterThanOrEqual(2);
+
+      // Тяжёлая часть тика (карта, тикрейт, очередь, A2S, запись игроков в
+      // базу) на этой частоте не выполняется.
+      expect(commands).toEqual(expect.arrayContaining(['ListPlayers', 'ListSquads']));
+      expect(commands).not.toContain('ShowServerInfo');
+      expect(commands).not.toContain('ShowNextMap');
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 5000);
+
+  it('stops the refresh with the supervisor', async () => {
+    const { server, port } = await makePollingRconServer();
+    const redis = makeRedis() as unknown as { set: ReturnType<typeof vi.fn> };
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 600_000,
+      rosterIntervalMs: 25,
+    });
+
+    try {
+      await supervisor.reconcile([
+        { ...target, serverId: 'srv-stop', port, queryPort: port + 1000 },
+      ]);
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        redis.set.mock.calls.filter(([key]) => key === 'rcon:roster:srv-stop').length === 0
+      ) {
+        await sleep(25);
+      }
+      await supervisor.stop();
+      const afterStop = redis.set.mock.calls.filter(
+        ([key]) => key === 'rcon:roster:srv-stop',
+      ).length;
+      await sleep(120);
+      expect(redis.set.mock.calls.filter(([key]) => key === 'rcon:roster:srv-stop').length).toBe(
+        afterStop,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  }, 5000);
+});
+
 /**
  * Fake RCON server for seeding-transition tests: unlike
  * `makePollingRconServer`, `ListPlayers` reflects a mutable player count
