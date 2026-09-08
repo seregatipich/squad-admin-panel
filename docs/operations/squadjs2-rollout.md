@@ -5,6 +5,12 @@
 Пин образа и чек-лист бампа: [`../../ai_docs/squadjs2-pin-2026-08-24.md`](../../ai_docs/squadjs2-pin-2026-08-24.md).
 Трекинг: эпик [#308](https://github.com/breaking-squad/squad-admin-panel/issues/308) — по одному issue на фазу, номера проставлены в заголовках фаз ниже.
 
+> **Стоп-блокеры, найденные ресерчем 2026-09-08 — прочитать до начала работ.**
+>
+> - [#319](https://github.com/breaking-squad/squad-admin-panel/issues/319): бридж монтирует сайдкару `<saved>/<id>/SquadGame/Saved/Logs`, а игра пишет в `<saved>/<id>/Logs`. Docker создаст пустой каталог, entrypoint выйдет с кодом 69, `--restart unless-stopped` даст crash-loop. **Фазы P2.3, P3 и P4 без фикса не проходят.**
+> - [#320](https://github.com/breaking-squad/squad-admin-panel/issues/320): панельный лог-парсер не совпадает с боевым форматом Squad и **уже сейчас** не публикует `player.connected`/`player.disconnected` ни на одном сервере. Следствие: parity-гейт `G3` в §7 в исходной формулировке невыполним (исправный сайдкар провалит его как `extras-exceeded`), а cutover в §8 не «сохраняет», а впервые включает эти типы.
+> - Канарейка `01a014ad-…` за всё время не видела ни одного входа игрока (0 строк `Join succeeded` в 111 МБ лога), а единственный сервер с игроками — `external`, ему `/sidecar` отвечает `409`. Как закрывать P3 без сервера с людьми — открытый вопрос, предложение в [#315](https://github.com/breaking-squad/squad-admin-panel/issues/315).
+
 ---
 
 ## §1. Состояние на 2026-09-08
@@ -33,6 +39,8 @@
 | Шаги сборки образа в `ci.yml` под `if: false` | нет доступа к GHCR у раннера | §4 P0.5 |
 | `PLAYER_DISCONNECTED` не эмитится на пине | дефект правила в апстриме; PR [breaking-squad/squadjs2#264](https://github.com/breaking-squad/squadjs2/pull/264) открыт и зелёный, но не смёржен | §4 P0.2–P0.4 |
 | Ни один сервер не переключён | `squadjs2:engine-servers` пусто — так и задумано до выката | §7 P3 |
+| Сайдкар не видит лог сервера | неверный путь bind-mount в обоих раннерах, [#319](https://github.com/breaking-squad/squad-admin-panel/issues/319) | §6 P2.3, §7 P3 |
+| Не с чем сравнивать в shadow | панель не публикует `player.*` на боевом формате, [#320](https://github.com/breaking-squad/squad-admin-panel/issues/320) | §7 гейт G3 |
 
 ### 1.3. Фактическое состояние прод-контура tk104 (снято 2026-09-08)
 
