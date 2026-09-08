@@ -158,6 +158,8 @@ func (d *Dispatcher) Handle(
 		return d.containerRun(ctx, req)
 	case "container_run_rnsquadjs":
 		return d.containerRunRnsquadjs(ctx, req)
+	case "container_run_squadjs2":
+		return d.containerRunSquadjs2(ctx, req)
 	case "container_start":
 		return d.containerStart(ctx, req)
 	case "container_stop":
@@ -475,7 +477,12 @@ func validateDeletableDir(p string) (string, error) {
 	if cleaned, err := validate.PanelSavedServerRoot(p); err == nil {
 		return cleaned, nil
 	}
-	return "", fmt.Errorf("%w: directory_delete only allows %s/{uuid} or %s/{uuid}", validate.ErrForbidden, validate.PanelConfigsRoot, validate.PanelSavedRoot)
+	// Sidecar config dirs hold the rendered config.json with the server's
+	// plaintext RCON password, so deleting a server must be able to remove them.
+	if cleaned, err := validate.SidecarServerRoot(p); err == nil {
+		return cleaned, nil
+	}
+	return "", fmt.Errorf("%w: directory_delete only allows {uuid} dirs under %s, %s, %s or %s", validate.ErrForbidden, validate.PanelConfigsRoot, validate.PanelSavedRoot, validate.PanelSocketRoot, validate.PanelSquadJS2Root)
 }
 
 // listSquadContainers returns the names of every container matching
@@ -929,6 +936,31 @@ func (d *Dispatcher) containerRunRnsquadjs(ctx context.Context, req *rpc.Request
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
 	id, err := d.Docker.RunRNSquadJS(ctx, runner.RNSquadJSRunSpec{
+		ServerID: p.ServerID,
+		Env:      p.Env,
+	})
+	if err != nil {
+		code := rpc.CodeRuntimeError
+		if isForbidden(err) {
+			code = rpc.CodeForbidden
+		}
+		return rpc.NewErrorResponse(req.ID, code, err.Error())
+	}
+	body, _ := json.Marshal(map[string]string{"container_id": id, "status": "started"})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+type containerRunSquadjs2Params struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+func (d *Dispatcher) containerRunSquadjs2(ctx context.Context, req *rpc.Request) rpc.Response {
+	var p containerRunSquadjs2Params
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	id, err := d.Docker.RunSquadJS2(ctx, runner.SquadJS2RunSpec{
 		ServerID: p.ServerID,
 		Env:      p.Env,
 	})
