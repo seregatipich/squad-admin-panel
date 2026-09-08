@@ -7,7 +7,6 @@ import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import {
   AlertDialog,
-  Badge,
   Button,
   ButtonLink,
   Card,
@@ -18,6 +17,7 @@ import {
   FieldRow,
   IconButton,
   InlineBanner,
+  LockIcon,
   Select,
   SkeletonTable,
   Table,
@@ -661,9 +661,12 @@ function SquadGroupRows({
               ) : null}
               <span className="truncate">{squadTitle}</span>
               {group.locked ? (
-                <Badge size="sm" tone="warn" title="Отряд закрыт для входа">
-                  закрыт
-                </Badge>
+                // Значок сам по себе ничего не сообщает и цветом тоже: подпись
+                // уходит в текст для скринридера и во всплывающую подсказку.
+                <span className="shrink-0 text-crit" title="Отряд закрыт для входа">
+                  <LockIcon className="size-3.5" />
+                  <span className="sr-only">Отряд закрыт для входа</span>
+                </span>
               ) : null}
               <span className="shrink-0 font-normal tabular-nums text-ink-3">
                 {group.squad_id != null

@@ -335,7 +335,7 @@ describe('LivePlayers — колонки команд и порядок в от�
   );
 
   it(
-    'shows squad names, the lock badge, occupancy and the kit from the snapshot',
+    'shows squad names, the lock icon, occupancy and the kit from the snapshot',
     async () => {
       render(<LivePlayers serverId="srv-1" />);
       await screen.findByText('Leader');
@@ -344,8 +344,11 @@ describe('LivePlayers — колонки команд и порядок в от�
         header.textContent?.replace(/\s+/g, ' ').trim(),
       );
       // Командирский отряд первым, хотя у него не наименьший номер во всех фикстурах.
-      expect(squadHeaders).toEqual(['1Command Squad1/9', '2INFзакрыт2/9']);
-      expect(screen.getByTitle('Отряд закрыт для входа')).toBeInTheDocument();
+      expect(squadHeaders).toEqual(['1Command Squad1/9', '2INFОтряд закрыт для входа2/9']);
+      // Замок несёт подпись для скринридера и подсказку — не только цвет.
+      const lock = screen.getByTitle('Отряд закрыт для входа');
+      expect(lock).toHaveTextContent('Отряд закрыт для входа');
+      expect(lock.querySelector('svg')).not.toBeNull();
       expect(screen.getByText('Rifleman')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,

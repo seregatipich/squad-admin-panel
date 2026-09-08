@@ -2,10 +2,10 @@
  * Hand-rolled standard 5-field cron matcher (`minute hour day-of-month month
  * day-of-week`), evaluated in UTC. No `cron-parser` dependency: this single
  * pure module is shared by the seed-schedule API validation
- * (`apps/api/src/routes/server-seed-schedule.ts`), the scheduler worker tick
- * (`apps/workers/scheduler/src/seed-schedule-tick.ts`), and the web calendar
- * (`apps/web/src/app/(dashboard)/servers/[id]/seed-calendar/helpers.ts`) so
- * all three agree on identical semantics — see SEED-3 (#142).
+ * (`apps/api/src/routes/server-seed-schedule.ts`) and the scheduler worker
+ * tick (`apps/workers/scheduler/src/seed-schedule-tick.ts`) so both agree on
+ * identical semantics — see SEED-3 (#142). The web calendar that was the
+ * third consumer is gone; the schedule itself is still applied by the tick.
  *
  * Supported syntax per field: `*`, a single integer, a comma-separated list
  * of integers, and a step (`star-slash-n` or `start-slash-n`). Ranges (`a-b`) and
