@@ -3,7 +3,18 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
+/**
+ * Подписка на шину — основной путь обновления списка, поэтому тест забирает
+ * обработчик и вызывает его сам вместо ожидания таймера.
+ */
+let rosterEventHandler: ((event: { data: { server_id: string } }) => void) | null = null;
+vi.mock('@/lib/use-live-bus', () => ({
+  useLiveSubscription: vi.fn(
+    (kind: string, handler: (event: { data: { server_id: string } }) => void) => {
+      if (kind === 'rcon.roster') rosterEventHandler = handler;
+    },
+  ),
+}));
 
 import { LivePlayers } from './live-players';
 
@@ -138,6 +149,7 @@ function bulkPosts(fetchMock: ReturnType<typeof stubRosterFetch>) {
 }
 
 beforeEach(() => {
+  rosterEventHandler = null;
   stubRosterFetch();
 });
 
@@ -232,7 +244,6 @@ describe('LivePlayers', () => {
     async () => {
       render(<LivePlayers serverId="srv-1" modPermissions={[]} />);
       await screen.findByText('Leader');
-      expect(screen.queryByLabelText('Выделить всех')).not.toBeInTheDocument();
       expect(screen.queryByLabelText('Выбрать игрока: Leader')).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
@@ -267,13 +278,16 @@ describe('LivePlayers', () => {
   );
 
   it(
-    'selects every selectable player at once',
+    'selects a whole squad from its header',
     async () => {
       render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick', 'mod:ban_perm']} />);
       await screen.findByText('Leader');
-      fireEvent.click(screen.getByLabelText('Выделить всех'));
-      // Only Cmd, Leader and Yankee carry a resolved player_id.
-      expect(screen.getByText('Выбрано: 3')).toBeInTheDocument();
+      // Глобального «Выделить всех» в шапке больше нет — выделение живёт в
+      // отряде, где оно и осмысленно.
+      expect(screen.queryByLabelText('Выделить всех')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText(/Выделить отряд: Команда 1 · Отряд 2/));
+      // В отряде 2 сопоставлен с профилем только Leader.
+      expect(screen.getByText('Выбрано: 1')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -368,6 +382,39 @@ describe('LivePlayers — колонки команд и порядок в от�
       expect(empty).toHaveTextContent('0 игроков');
       expect(empty).toHaveTextContent('В этой команде пока никого нет');
       expect(screen.queryByText('закрыт')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reloads the roster the moment a live event arrives, without waiting for the timer',
+    async () => {
+      const fetchMock = stubRosterFetch();
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const callsAfterLoad = fetchMock.mock.calls.length;
+
+      // Событие другого сервера трогать список не должно.
+      await act(async () => {
+        rosterEventHandler?.({ data: { server_id: 'srv-other' } });
+      });
+      expect(fetchMock.mock.calls.length).toBe(callsAfterLoad);
+
+      await act(async () => {
+        rosterEventHandler?.({ data: { server_id: 'srv-1' } });
+      });
+      await waitFor(() => expect(fetchMock.mock.calls.length).toBe(callsAfterLoad + 1));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'replaces the «каждые 30 секунд» note with the age of the last poll',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      expect(screen.queryByText(/каждые 30 секунд/)).not.toBeInTheDocument();
+      expect(screen.getByText(/обновлено .* назад/)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

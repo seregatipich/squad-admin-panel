@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import {
   AlertDialog,
@@ -44,7 +45,13 @@ import {
   teamLabel,
 } from './roster-format';
 
-const ROSTER_POLL_MS = 30_000;
+/**
+ * Запасной опрос. Основной путь — событие `rcon.roster` из шины: воркер
+ * публикует его сразу после успешного опроса сервера, и список перерисовывается
+ * в тот же момент. Таймер нужен только на случай, когда сокет шины оборвался, —
+ * поэтому интервал короткий, а не «раз в полминуты».
+ */
+const ROSTER_POLL_MS = 10_000;
 
 const BULK_KEYS = ['mod:warn', 'mod:kick', 'mod:ban_temp', 'mod:ban_perm'] as const;
 
@@ -200,8 +207,11 @@ export function LivePlayers({
     player.player_id ? [{ playerId: player.player_id, name: player.name }] : [],
   );
   const bulkTargets = selectable.filter((target) => selected.has(target.playerId));
-  const allSelected = selectable.length > 0 && bulkTargets.length === selectable.length;
   const abilities = quickAbilities(modPermissions);
+  const polledAt = roster?.polled_at ? new Date(roster.polled_at).getTime() : null;
+  const liveTitle = roster?.polled_at
+    ? `последний опрос сервера ${new Date(roster.polled_at).toLocaleTimeString('ru-RU')}`
+    : 'опрос ещё не выполнялся';
 
   const rowProps = {
     now,
@@ -222,20 +232,7 @@ export function LivePlayers({
       <CardHeader
         title="Игроки онлайн"
         count={roster ? players.length : undefined}
-        description="По колонке на команду, командир — первым в отряде. Список обновляется каждые 30 секунд"
-        actions={
-          canBulk && selectable.length > 0 ? (
-            <Checkbox
-              label="Выделить всех"
-              checked={allSelected}
-              onChange={() =>
-                setSelected(
-                  allSelected ? new Set() : new Set(selectable.map((target) => target.playerId)),
-                )
-              }
-            />
-          ) : null
-        }
+        actions={<LiveIndicator lastUpdate={polledAt} title={liveTitle} />}
       />
 
       {canBulk && bulkTargets.length > 0 ? (
