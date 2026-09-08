@@ -15,8 +15,9 @@
 # `dev-<sha>` (plus `-dirty`) instead of a 40-character commit SHA. The next
 # `master` deploy overwrites it. Land the change through dev → master as usual.
 #
-#   scripts/dev-deploy-tk104.sh          # web only (default)
-#   scripts/dev-deploy-tk104.sh api      # api only, no migrations
+#   scripts/dev-deploy-tk104.sh              # web only (default)
+#   scripts/dev-deploy-tk104.sh api          # api only, no migrations
+#   scripts/dev-deploy-tk104.sh worker-rcon  # one worker only
 #   CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
 #
 # `full` runs `scripts/deploy-tk104.sh`, which applies database migrations from
@@ -34,16 +35,19 @@ case "$TARGET" in
   web)
     REMOTE_CMD="bash scripts/deploy-tk104-web.sh"
     ;;
-  api)
-    # No migrator, no --remove-orphans: only the api container is replaced, so
+  api | worker-*)
+    # No migrator, no --remove-orphans: exactly one container is replaced, so
     # a half-finished schema change cannot reach the production database here.
-    REMOTE_CMD="$COMPOSE build api && $COMPOSE up -d --no-deps api"
+    # `worker-*` is matched by shape rather than listed service by service —
+    # the compose file gains workers regularly, and a list here would go stale
+    # silently, refusing to deploy the one worker somebody is iterating on.
+    REMOTE_CMD="$COMPOSE build ${TARGET} && $COMPOSE up -d --no-deps ${TARGET}"
     ;;
   full)
     REMOTE_CMD="bash scripts/deploy-tk104.sh"
     ;;
   *)
-    echo "usage: ${BASH_SOURCE[0]##*/} [web|api|full]" >&2
+    echo "usage: ${BASH_SOURCE[0]##*/} [web|api|worker-<name>|full]" >&2
     exit 2
     ;;
 esac

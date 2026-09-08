@@ -46,6 +46,12 @@ export interface SupervisorOptions {
   log: Logger;
   diag?: Diag;
   pollIntervalMs?: number;
+  /**
+   * Cadence of the light roster refresh (`ListPlayers` + `ListSquads` only).
+   * Defaults to 5s: the panel's live roster is redrawn from the event this
+   * refresh publishes, so it is what "the list is live" actually costs.
+   */
+  rosterIntervalMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   geoLookup?: GeoLookup | null;
@@ -130,6 +136,13 @@ class PerServerSupervisor {
   private client?: RconClient;
   private stopped = false;
   private pollTimer?: NodeJS.Timeout;
+  private rosterTimer?: NodeJS.Timeout;
+  /**
+   * Set while either timer holds the RCON client, so the two never queue
+   * commands on top of each other: the client serialises `exec`, and a
+   * roster refresh waiting behind a full poll would fire late and pointlessly.
+   */
+  private pollInFlight = false;
   private backoffMs: number;
   private onDisconnect?: () => void;
   private consecutivePollFails = 0;
@@ -182,7 +195,7 @@ class PerServerSupervisor {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.clearTimers();
     await this.stopCommandQueue();
     await this.client?.close();
     this.client = undefined;
@@ -510,6 +523,7 @@ class PerServerSupervisor {
         await this.writeStatus('connected');
         await this.startCommandQueue();
         this.schedulePoll();
+        this.scheduleRosterRefresh();
         await Promise.race([
           disconnected,
           new Promise<void>((resolve) => {
@@ -548,7 +562,7 @@ class PerServerSupervisor {
         }
         lastDisconnectReason = msg;
       } finally {
-        if (this.pollTimer) clearInterval(this.pollTimer);
+        this.clearTimers();
         await this.stopCommandQueue();
         await this.client?.close().catch(() => undefined);
         this.client = undefined;
@@ -622,10 +636,54 @@ class PerServerSupervisor {
     await queue?.stop();
   }
 
+  private clearTimers(): void {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = undefined;
+    if (this.rosterTimer) clearInterval(this.rosterTimer);
+    this.rosterTimer = undefined;
+  }
+
+  /**
+   * Refreshes only who is on the server and in which squad, every
+   * `rosterIntervalMs`, and publishes `rcon.roster` — the event the panel's
+   * live roster redraws on. It deliberately does NOT touch the database, kit
+   * time, seeding, A2S or the server-info status: those belong to the full
+   * poll, and running them six times as often would multiply the write load
+   * for data that changes once a match, not once a squad join.
+   */
+  private scheduleRosterRefresh(): void {
+    const interval = this.opts.rosterIntervalMs ?? 5_000;
+    this.rosterTimer = setInterval(async () => {
+      if (!this.client || this.pollInFlight) return;
+      this.pollInFlight = true;
+      try {
+        const rawPlayers = await this.client.exec('ListPlayers');
+        const rawSquads = await this.client.exec('ListSquads');
+        const players = parseListPlayers(rawPlayers);
+        const squads = parseListSquads(rawSquads);
+        const polledAt = new Date().toISOString();
+        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+        this.rosterFirstSeen = firstSeen;
+        await this.writeRoster(entries, polledAt);
+        await this.writeSquads(squads, polledAt);
+      } catch (err) {
+        // The full poll owns failure handling (teardown after three strikes);
+        // a missed refresh only costs one frame of freshness.
+        this.opts.log.debug(
+          { err: (err as Error).message, serverId: this.target.serverId },
+          'roster refresh failed',
+        );
+      } finally {
+        this.pollInFlight = false;
+      }
+    }, interval);
+  }
+
   private schedulePoll(): void {
     const interval = this.opts.pollIntervalMs ?? 30_000;
     this.pollTimer = setInterval(async () => {
-      if (!this.client) return;
+      if (!this.client || this.pollInFlight) return;
+      this.pollInFlight = true;
       try {
         const start = Date.now();
         const rawPlayers = await this.client.exec('ListPlayers');
@@ -744,6 +802,10 @@ class PerServerSupervisor {
           this.client = undefined;
           this.onDisconnect?.();
         }
+      } finally {
+        // The A2S probe below needs no RCON client, so the roster refresh may
+        // resume as soon as the RCON part of the tick is done.
+        this.pollInFlight = false;
       }
 
       // A2S query — best-effort, does not affect RCON polling

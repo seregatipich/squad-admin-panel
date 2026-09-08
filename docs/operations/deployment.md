@@ -277,8 +277,9 @@ with no GitHub Actions involved. The deploy target is still tk104; only the
 courier changes.
 
 ```bash
-scripts/dev-deploy-tk104.sh          # rebuild web only (default)
-scripts/dev-deploy-tk104.sh api      # rebuild api only, no migrator
+scripts/dev-deploy-tk104.sh              # rebuild web only (default)
+scripts/dev-deploy-tk104.sh api          # rebuild api only, no migrator
+scripts/dev-deploy-tk104.sh worker-rcon  # rebuild one worker container
 CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
 ```
 

@@ -8,12 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * обработчик и вызывает его сам вместо ожидания таймера.
  */
 let rosterEventHandler: ((event: { data: { server_id: string } }) => void) | null = null;
+let busState: 'connecting' | 'open' | 'closed' = 'open';
 vi.mock('@/lib/use-live-bus', () => ({
   useLiveSubscription: vi.fn(
     (kind: string, handler: (event: { data: { server_id: string } }) => void) => {
       if (kind === 'rcon.roster') rosterEventHandler = handler;
     },
   ),
+  useLiveBusState: vi.fn(() => busState),
 }));
 
 import { LivePlayers } from './live-players';
@@ -150,6 +152,7 @@ function bulkPosts(fetchMock: ReturnType<typeof stubRosterFetch>) {
 
 beforeEach(() => {
   rosterEventHandler = null;
+  busState = 'open';
   stubRosterFetch();
 });
 
@@ -376,6 +379,46 @@ describe('LivePlayers — колонки команд и порядок в от�
   );
 
   it(
+    'never polls on a timer — the list is driven by the bus alone',
+    async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = stubRosterFetch();
+        render(<LivePlayers serverId="srv-1" />);
+        // Первая загрузка — не таймер, а монтирование.
+        await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBe(1));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(fetchMock.mock.calls.length).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    're-reads the roster once the bus comes back, because events were lost while it was down',
+    async () => {
+      busState = 'closed';
+      const fetchMock = stubRosterFetch();
+      const view = render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const callsWhileDown = fetchMock.mock.calls.length;
+
+      busState = 'open';
+      view.rerender(<LivePlayers serverId="srv-1" />);
+      await waitFor(() => expect(fetchMock.mock.calls.length).toBe(callsWhileDown + 1));
+
+      // Повторный рендер без смены состояния шины ничего не перечитывает.
+      view.rerender(<LivePlayers serverId="srv-1" />);
+      expect(fetchMock.mock.calls.length).toBe(callsWhileDown + 1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'reloads the roster the moment a live event arrives, without waiting for the timer',
     async () => {
       const fetchMock = stubRosterFetch();
@@ -403,6 +446,7 @@ describe('LivePlayers — колонки команд и порядок в от�
       render(<LivePlayers serverId="srv-1" />);
       await screen.findByText('Leader');
       expect(screen.queryByText(/каждые 30 секунд/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/обновляется каждые/)).not.toBeInTheDocument();
       expect(screen.getByText(/обновлено .* назад/)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
