@@ -14,6 +14,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
+import { resolveSidecarRedisUrl } from '../lib/sidecar-config.js';
 import { buildSquadjs2Env, writeSquadjs2Config } from '../lib/squadjs2.js';
 import { CUTOVER_TICK_MS } from './server-rnsquadjs.js';
 
@@ -82,7 +83,14 @@ const serverSidecarRoutes: FastifyPluginAsync = async (app) => {
     );
   };
 
-  /** Removes the config directory of the engine a server is moving away from. */
+  /**
+   * Removes the config directory of the engine a server is moving away from.
+   *
+   * Only ever called once that engine's container is gone: its config.json is
+   * bound read-only, and docker recreates a *directory* at a missing bind source
+   * when `--restart unless-stopped` brings the container back — which would then
+   * make a later rollback's atomic rename fail with EISDIR.
+   */
   const purgeOtherEngineDir = async (engine: SidecarEngine, serverId: string): Promise<void> => {
     const other: SidecarEngine = engine === 'squadjs2' ? 'rnsquadjs' : 'squadjs2';
     await app.bridge
@@ -98,6 +106,7 @@ const serverSidecarRoutes: FastifyPluginAsync = async (app) => {
     if (engine === 'squadjs2') {
       await writeSquadjs2Config(app, serverId, mode);
       await removeBothSidecars(serverId);
+      await purgeOtherEngineDir(engine, serverId);
       const run = await app.bridge.containerRunSquadjs2({
         server_id: serverId,
         env: { ...buildSquadjs2Env(serverId) },
@@ -106,9 +115,10 @@ const serverSidecarRoutes: FastifyPluginAsync = async (app) => {
     }
     await writeSidecarConfig(app, serverId);
     await removeBothSidecars(serverId);
+    await purgeOtherEngineDir(engine, serverId);
     const run = await app.bridge.containerRunRnsquadjs({
       server_id: serverId,
-      env: { ...buildSidecarEnv(serverId, mode, process.env.SIDECAR_REDIS_URL) },
+      env: { ...buildSidecarEnv(serverId, mode, resolveSidecarRedisUrl()) },
     });
     return run.container_id;
   };
@@ -192,10 +202,6 @@ const serverSidecarRoutes: FastifyPluginAsync = async (app) => {
       } else {
         await app.redis.srem(SQUADJS2_ENGINE_SET, serverId);
       }
-      // The abandoned engine's config dir holds a rendered config with the
-      // server's plaintext RCON password; it must not outlive the switch.
-      await purgeOtherEngineDir(engine, serverId);
-
       if (mode === 'production') {
         const log = req.log;
         await app.redis.sadd(RNSQUADJS_CUTOVER_SET, serverId);

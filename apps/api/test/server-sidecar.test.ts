@@ -270,6 +270,20 @@ describe('POST /servers/:id/sidecar — engine switch', () => {
     await app.close();
   });
 
+  // Ordering matters: the old container binds its config.json read-only, and
+  // docker recreates a *directory* at a missing bind source when
+  // `--restart unless-stopped` brings it back — which a later rollback's atomic
+  // rename would then hit as EISDIR.
+  it('purges the abandoned config dir only after both containers are gone', async () => {
+    const { app, bridge } = await buildApp({});
+
+    await post(app, { engine: 'squadjs2', mode: 'shadow' });
+
+    const lastRm = Math.max(...bridge.containerRm.mock.invocationCallOrder);
+    expect(bridge.directoryDelete.mock.invocationCallOrder[0]).toBeGreaterThan(lastRm);
+    await app.close();
+  });
+
   it('tolerates a failing directory purge', async () => {
     const bridge = makeBridge({ directoryDelete: vi.fn().mockRejectedValue(new Error('nope')) });
     const { app } = await buildApp({ bridge });
