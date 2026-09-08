@@ -38,7 +38,7 @@ while IFS= read -r manifest; do
   *"--filter $name "*) ;;
   *) missing+=("$name") ;;
   esac
-done < <(find apps packages -maxdepth 3 -name package.json -not -path '*/node_modules/*' | sort)
+done < <(find apps packages docker -maxdepth 4 -name package.json -not -path '*/node_modules/*' | sort)
 
 if [ "$checked" -eq 0 ]; then
   echo "test-cov-complete: found no vitest packages — the scan is broken" >&2

@@ -350,3 +350,27 @@ The in-house SquadGame.log parser is the most fragile part of the pipeline (rege
 
 - **Full worker-rcon replacement (April spec §3.6)** — rejected for now: two more months of in-house rcon features would need porting into the plugin, ballooning scope and risk.
 - **Loopback HTTP config endpoint (April spec §3.5)** — impossible from a host-network sidecar against a loopback guard; file-based config via bind mount (D1).
+
+## 2026-09-08 — SquadJS2 replaces RNSquadJS as the sidecar engine
+
+- The per-server sidecar engine moves from the third-party fork `lACTEPUKCl/RNSquadJS` to our own `breaking-squad/squadjs2` (a fork of SquadJS 4.1.0). The panel-facing contract is unchanged: same `EventEnvelope`, same `events:server:{id}[:shadow]` streams, same `rnsquadjs:cutover-servers` semantics in `worker-log-ingest`.
+- The image is *derived*, not rebuilt: `FROM ghcr.io/breaking-squad/squadjs@sha256:<digest>` plus a `COPY` of the `PanelBridge` plugin. SquadJS2 auto-discovers `squad-server/plugins/*.js`, so no upstream patch is needed (RNSquadJS required one — deviation D6).
+- Which engine serves a server is desired state in the Redis set `squadjs2:engine-servers`; `GET/POST /api/v1/servers/:id/sidecar` reports and switches it. The old `/rnsquadjs` routes stay as deprecated aliases until cleanup.
+- Status and heartbeat move to engine-neutral keys `sidecar:status:{id}[:shadow]` and `worker:heartbeat:sidecar:{id}`; the route dual-reads the legacy `rnsquadjs:status:*` keys during the migration.
+- The production event set grows to five types: `player.name_changed` joins it, derived by the plugin from `UPDATED_PLAYER_INFORMATION` polling. RNSquadJS never produced the type at all, so banned-name-on-rename enforcement was silently dead on cutover servers.
+
+### Rationale
+
+RNSquadJS is someone else's fork pinned to a commit, and every bump needs a manual compatibility review. SquadJS2 is our code with its own CI, verified-release pipeline and digest pinning, and the org's standalone instances (`squad1/2/3/6`) already run it — one codebase instead of two diverging forks.
+
+### Consequences
+
+- The Unix-socket RCON server in the old plugin is **not** carried over: it was dead code (`app.rcon` had no callers). The SquadJS2 container therefore has no writable mount at all, and its env allowlist shrinks to `{SERVER_ID, LOG_FILE}` — mode, Redis URL and server id travel in the rendered config, keeping them out of `docker inspect`.
+- `directory_delete` now accepts `/run/squad-panel/{rnsquadjs,squadjs2}/{uuid}`, and deleting a server removes both. Before this the rendered config — which carries the server's plaintext RCON password — outlived the server forever.
+- Payloads get richer rather than byte-identical: RNSquadJS forwarded raw `squad-logs` events, so `player.connected` carried no `name`, `player.revived` was empty, and `player.disconnected` had no `steam_id64`. SquadJS2 resolves players first, so these fields are populated. The parity gate compares types and timestamps, not payload bytes.
+- **Rollout blocker at the starting pin (`258440d0`)** ([#307](https://github.com/breaking-squad/squad-admin-panel/issues/307)): SquadJS2's `player-disconnected` log rule matches `Name: EOSIpNetConnection_…, Driver: GameNetDriver EOSNetDriver_…`, while current Squad writes `RedpointEOSIpNetConnection` / `Name:GameNetDriver Def:GameNetDriver RedpointEOSNetDriver`. Zero matches across every production log, so `PLAYER_DISCONNECTED` never fires. Shadow soaks are safe (the parity gate catches it); a production cutover would silently drop disconnects and must wait for an upstream fix and a pin bump.
+
+### Alternatives considered
+
+- **Installing the plugin deps with `yarn add -W` into `/app/node_modules`** — rejected: it re-resolves upstream's whole dependency graph inside the derived image, so the result is no longer the verified build. The deps go to `squad-server/plugins/node_modules`, which Node resolves for the plugin and nothing else.
+- **Keeping payload parity byte-for-byte** — rejected: it would mean deliberately discarding fields SquadJS2 resolves (player names on connect, revive participants). The contract that matters is the type set and key names.

@@ -11,7 +11,6 @@ import {
   DEPOT_VOLUME_NAME,
   PANEL_CONFIGS_ROOT,
   PANEL_SAVED_ROOT,
-  RNSQUADJS_CUTOVER_SET,
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -21,8 +20,8 @@ import { z } from 'zod';
 import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
-import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
+import { relaunchSidecarForEngine } from '../lib/sidecar-lifecycle.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
@@ -320,7 +319,8 @@ async function runInstall(
     payload: { container_id: res.container_id },
   });
 
-  // Launch the RNSquadJS sidecar. A shadow sidecar is not load-bearing for
+  // Launch the per-server sidecar in whichever engine the server is assigned
+  // to. A shadow sidecar is not load-bearing for
   // the install, so any failure here is logged to the progress stream and
   // swallowed — the server is already running and the install must succeed.
   try {
@@ -330,16 +330,10 @@ async function runInstall(
       path: `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs/.keep`,
       content: '',
     });
-    await writeSidecarConfig(app, serverId);
-    const mode =
-      (await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) === 1 ? 'production' : 'shadow';
-    const sidecar = await app.bridge.containerRunRnsquadjs({
-      server_id: serverId,
-      env: { ...buildSidecarEnv(serverId, mode, process.env.RNSQUADJS_REDIS_URL) },
-    });
-    emit('rnsquadjs', `sidecar ${sidecar.container_id} started (${mode})`);
+    const sidecar = await relaunchSidecarForEngine(app, serverId);
+    emit('sidecar', `${sidecar.engine} sidecar ${sidecar.containerId} started (${sidecar.mode})`);
   } catch (err) {
-    emit('rnsquadjs', `sidecar launch failed (non-fatal): ${(err as Error).message}`, 'stderr');
+    emit('sidecar', `sidecar launch failed (non-fatal): ${(err as Error).message}`, 'stderr');
   }
 }
 

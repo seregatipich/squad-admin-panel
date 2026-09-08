@@ -1,0 +1,424 @@
+[
+  {
+    "event": "NEW_GAME",
+    "data": {
+      "raw": "[2026.09.08-00.01.06:851][  0]LogWorld: Bringing World /Game/Maps/Sumari/Gameplay_Layers/Sumari_Seed_v1.Sumari_Seed_v1",
+      "time": "2026-09-08T00:01:06.851Z",
+      "chainID": 0,
+      "dlc": "Game",
+      "mapClassname": "Sumari",
+      "layerClassname": "Sumari_Seed_v1",
+      "layer": {
+        "classname": "Sumari_Seed_v1",
+        "name": "Sumari_Seed_v1",
+        "layerid": "test"
+      }
+    }
+  },
+  {
+    "event": "ADMIN_BROADCAST",
+    "data": {
+      "raw": "[2026.09.08-00.01.30:215][448]LogSquad: ADMIN COMMAND: Message broadcasted <Panel test broadcast> from RCON",
+      "time": "2026-09-08T00:01:30.215Z",
+      "chainID": 448,
+      "message": "Panel test broadcast",
+      "from": "RCON"
+    }
+  },
+  {
+    "event": "PLAYER_CONNECTED",
+    "data": {
+      "raw": "[2026.09.08-02.43.10:203][204]LogNet: Join succeeded: PanelAlpha",
+      "time": "2026-09-08T02:43:10.203Z",
+      "chainID": 204,
+      "playercontroller": "BP_PlayerController_C_2147480001",
+      "ip": "10.0.0.11",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "PLAYER_CONNECTED",
+    "data": {
+      "raw": "[2026.09.08-02.43.11:203][205]LogNet: Join succeeded: PanelBravo",
+      "time": "2026-09-08T02:43:11.203Z",
+      "chainID": 205,
+      "playercontroller": "BP_PlayerController_C_2147480002",
+      "ip": "10.0.0.12",
+      "player": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      }
+    }
+  },
+  {
+    "event": "TICK_RATE",
+    "data": {
+      "raw": "[2026.09.08-02.43.20:283][848]LogSquad: USQGameState: Server Tick Rate: 63.79",
+      "time": "2026-09-08T02:43:20.283Z",
+      "chainID": 848,
+      "tickRate": 63.79
+    }
+  },
+  {
+    "event": "PLAYER_POSSESS",
+    "data": {
+      "raw": "[2026.09.08-02.46.20:767][359]LogSquadTrace: [DedicatedServer]OnPossess(): PC=PanelAlpha (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001) Pawn=BP_Soldier_INS_Rifleman5_C",
+      "time": "2026-09-08T02:46:20.767Z",
+      "chainID": 359,
+      "possessClassname": "BP_Soldier_INS_Rifleman5",
+      "playerEOSID": "0002aaaa000000000000000000000001",
+      "playerSteamID": "76561199000000001",
+      "pawn": "76561199000000001",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "PLAYER_DAMAGED",
+    "data": {
+      "raw": "[2026.09.08-02.56.20:888][637]LogSquad: Player: PanelBravo ActualDamage=57.211990 from  PanelAlpha (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001 | Player Controller ID: BP_PlayerController_C_2147480001)caused by BP_Soldier_INS_Rifleman1_C",
+      "time": "2026-09-08T02:56:20.888Z",
+      "chainID": 637,
+      "damage": 57.21199,
+      "attackerController": "BP_PlayerController_C_2147480001",
+      "weapon": "BP_Soldier_INS_Rifleman1",
+      "attackerEOSID": "0002aaaa000000000000000000000001",
+      "attackerSteamID": "76561199000000001",
+      "victim": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      },
+      "attacker": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      },
+      "teamkill": false
+    }
+  },
+  {
+    "event": "PLAYER_REVIVED",
+    "data": {
+      "raw": "[2026.09.08-03.05.00:000][500]LogSquad: PanelAlpha (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001) has revived PanelBravo (Online IDs: EOS: 0002bbbb000000000000000000000002 steam: 76561199000000002).",
+      "time": "2026-09-08T03:05:00.000Z",
+      "chainID": 500,
+      "reviverEOSID": "0002aaaa000000000000000000000001",
+      "reviverSteamID": "76561199000000001",
+      "victimEOSID": "0002bbbb000000000000000000000002",
+      "victimSteamID": "76561199000000002",
+      "victim": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      },
+      "attacker": null,
+      "reviver": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "DEPLOYABLE_DAMAGED",
+    "data": {
+      "raw": "[2026.09.08-03.13.19:487][607]LogSquadTrace: [DedicatedServer]TakeDamage(): WPMC_Hab_Desert_C_2147482123: 97.00 damage attempt by causer BP_Projectile_7_62mm_C_2147400801 instigator PanelAlpha with damage type BP_SmallArms_DamageType_C health remaining 500.00",
+      "time": "2026-09-08T03:13:19.487Z",
+      "chainID": 607,
+      "deployable": "WPMC_Hab_Desert",
+      "damage": 97,
+      "weapon": "BP_Projectile_7_62mm",
+      "damageType": "BP_SmallArms_DamageType",
+      "healthRemaining": "500.00",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "PLAYER_DIED",
+    "data": {
+      "raw": "[2026.09.08-03.19.53:398][730]LogSquadTrace: [DedicatedServer]Die(): Player: PanelBravo KillingDamage=65.235222 from BP_PlayerController_C_2147480001 (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001 | Contoller ID: BP_PlayerController_C_2147480001) caused by BP_Soldier_INS_Rifleman1_C",
+      "time": "2026-09-08T03:19:53.398Z",
+      "chainID": 730,
+      "damage": 65.235222,
+      "attackerController": "BP_PlayerController_C_2147480001",
+      "weapon": "BP_Soldier_INS_Rifleman1",
+      "attackerEOSID": "0002aaaa000000000000000000000001",
+      "attackerSteamID": "76561199000000001",
+      "victim": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      },
+      "attacker": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      },
+      "teamkill": false,
+      "woundTime": "2026-09-08T03:19:53.398Z",
+      "attackerPlayerController": "BP_PlayerController_C_2147480001"
+    }
+  },
+  {
+    "event": "PLAYER_DISCONNECTED",
+    "data": {
+      "raw": "[2026.09.08-03.19.54:401][731]LogNet: UChannel::Close: Sending CloseBunch. ChIndex == 5. Name: [UChannel] ChIndex: 5, Closing: 1 [UNetConnection] RemoteAddr: 10.0.0.12:55368, Name: EOSIpNetConnection_2147473396, Driver: GameNetDriver EOSNetDriver_2147482319, IsServer: YES, PC: BP_PlayerController_C_2147480002, Owner: BP_PlayerController_C_2147480002, UniqueId: RedpointEOS:0002bbbb000000000000000000000002",
+      "time": "2026-09-08T03:19:54.401Z",
+      "chainID": 731,
+      "ip": "10.0.0.12",
+      "playerController": "BP_PlayerController_C_2147480002",
+      "player": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      }
+    }
+  },
+  {
+    "event": "PLAYER_UNPOSSESS",
+    "data": {
+      "raw": "[2026.09.08-03.20.00:790][781]LogSquadTrace: [DedicatedServer]OnUnPossess(): PC=PanelAlpha (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001)",
+      "time": "2026-09-08T03:20:00.790Z",
+      "chainID": 781,
+      "playerEOSID": "0002aaaa000000000000000000000001",
+      "playerSteamID": "76561199000000001",
+      "switchPossess": false,
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "PLAYER_WOUNDED",
+    "data": {
+      "raw": "[2026.09.08-03.47.36:852][830]LogSquadTrace: [DedicatedServer]Wound(): Player:PanelBravo KillingDamage=186.000015 from BP_PlayerController_C_2147480001 (Online IDs: EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001 | Controller ID: BP_PlayerController_C_2147480001) caused by BP_M16_Wormpool_T800_C",
+      "time": "2026-09-08T03:47:36.852Z",
+      "chainID": 830,
+      "damage": 186.000015,
+      "attackerPlayerController": "BP_PlayerController_C_2147480001",
+      "weapon": "BP_M16_Wormpool_T800",
+      "attackerEOSID": "0002aaaa000000000000000000000001",
+      "attackerSteamID": "76561199000000001",
+      "victim": {
+        "playerID": "2",
+        "name": "PanelBravo",
+        "eosID": "0002bbbb000000000000000000000002",
+        "steamID": "76561199000000002",
+        "teamID": "2",
+        "squadID": null,
+        "isLeader": false,
+        "playercontroller": "BP_PlayerController_C_2147480002",
+        "suffix": "PanelBravo"
+      },
+      "attacker": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      },
+      "teamkill": false
+    }
+  },
+  {
+    "event": "ROUND_ENDED",
+    "data": {
+      "winner": null,
+      "loser": null,
+      "time": "2026-09-08T06:30:00.000Z"
+    }
+  },
+  {
+    "event": "CHAT_MESSAGE",
+    "data": {
+      "raw": "[ChatAll] [Online IDs:EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001] PanelAlpha : hello panel",
+      "chat": "ChatAll",
+      "name": "PanelAlpha",
+      "message": "hello panel",
+      "time": "2026-09-08T08:02:36.470Z",
+      "eosID": "0002aaaa000000000000000000000001",
+      "steamID": "76561199000000001",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "POSSESSED_ADMIN_CAMERA",
+    "data": {
+      "raw": "[Online Ids:EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001] PanelAlpha has possessed admin camera.",
+      "name": "PanelAlpha",
+      "time": "2026-09-08T08:02:36.496Z",
+      "eosID": "0002aaaa000000000000000000000001",
+      "steamID": "76561199000000001",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "UNPOSSESSED_ADMIN_CAMERA",
+    "data": {
+      "raw": "[Online IDs:EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001] PanelAlpha has unpossessed admin camera.",
+      "name": "PanelAlpha",
+      "time": "2026-09-08T08:02:36.522Z",
+      "eosID": "0002aaaa000000000000000000000001",
+      "steamID": "76561199000000001",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      },
+      "duration": 26
+    }
+  },
+  {
+    "event": "SQUAD_CREATED",
+    "data": {
+      "time": "2026-09-08T08:02:36.547Z",
+      "squadID": "1",
+      "squadName": "Panel Squad",
+      "teamName": "Western Private Military Contractors",
+      "player": {
+        "playerID": "1",
+        "name": "PanelAlpha",
+        "eosID": "0002aaaa000000000000000000000001",
+        "steamID": "76561199000000001",
+        "teamID": "1",
+        "squadID": "1",
+        "isLeader": true,
+        "playercontroller": "BP_PlayerController_C_2147480001",
+        "suffix": "PanelAlpha",
+        "possessClassname": "BP_Soldier_INS_Rifleman5"
+      }
+    }
+  },
+  {
+    "event": "UPDATED_PLAYER_INFORMATION",
+    "data": null
+  }
+]

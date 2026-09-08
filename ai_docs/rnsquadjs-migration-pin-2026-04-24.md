@@ -1,5 +1,11 @@
 # RNSquadJS upstream pin — 2026-04-24
 
+> **Superseded (2026-09-08).** Движок сайдкара мигрирует на SquadJS2 —
+> см. [`squadjs2-pin-2026-08-24.md`](squadjs2-pin-2026-08-24.md) и ADR
+> «SquadJS2 replaces RNSquadJS as the sidecar engine». Этот документ остаётся
+> историческим свидетельством прежнего пина и действует, пока RNSquadJS
+> сохраняется как путь отката.
+
 **Pinned SHA:** `d76fb4a84bc64ae09b654d4dc17ab06ef308d295`
 **Upstream commit date:** 2026-04-06T19:56:27Z
 **Pinned in:** `docker/rnsquadjs.Dockerfile` (`ARG RNSQUADJS_SHA`)

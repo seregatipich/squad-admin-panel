@@ -4,8 +4,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { buildSidecarEnv, sidecarContainerName, writeSidecarConfig } from '../lib/rnsquadjs.js';
+import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
+import { resolveSidecarRedisUrl } from '../lib/sidecar-config.js';
+import { removeAllSidecars } from '../lib/sidecar-lifecycle.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const bodySchema = z.object({ mode: z.enum(['production', 'shadow']) });
@@ -135,7 +137,7 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const serverId = s.id;
-      const redisUrl = process.env.RNSQUADJS_REDIS_URL;
+      const redisUrl = resolveSidecarRedisUrl();
 
       if (req.body.mode === 'production') {
         const log = req.log;
@@ -150,9 +152,9 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
           // so we skip the redundant config/rm churn entirely.
           if ((await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) !== 1) return;
           await writeSidecarConfig(app, serverId);
-          await app.bridge
-            .containerRm({ name: sidecarContainerName(serverId) })
-            .catch(() => undefined);
+          // Both engines, not just this one: a server already switched to
+          // SquadJS2 would otherwise end up with two writers on one stream.
+          await removeAllSidecars(app.bridge, serverId);
           // Re-confirm membership immediately before launch (no await between
           // this check and the run): never start a production-mode sidecar once
           // a rollback has SREM'd, or the resumed legacy tailer and the sidecar
@@ -179,9 +181,7 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
       // acceptable; overlapping publishers (duplicates) are not.
       try {
         await writeSidecarConfig(app, serverId);
-        await app.bridge
-          .containerRm({ name: sidecarContainerName(serverId) })
-          .catch(() => undefined);
+        await removeAllSidecars(app.bridge, serverId);
         const sidecar = await app.bridge.containerRunRnsquadjs({
           server_id: serverId,
           env: { ...buildSidecarEnv(serverId, 'shadow', redisUrl) },

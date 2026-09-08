@@ -22,6 +22,9 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
+	// SquadJS2Root overrides the squadjs2 per-server config root (production
+	// default validate.PanelSquadJS2Root). Tests point it at a temp dir.
+	SquadJS2Root string
 	// ComposeDir is the panel deploy directory that holds docker-compose.yml,
 	// .env and scripts/restore.sh. The backup RPCs run `docker compose` (and the
 	// restore script) from here so they inherit RESTIC_PASSWORD/POSTGRES_PASSWORD
@@ -232,6 +235,15 @@ var allowedSidecarEnv = map[string]struct{}{
 	"REDIS_URL":           {},
 }
 
+// allowedSquadJS2Env is the exhaustive env allowlist of the SquadJS2 sidecar.
+// It is deliberately narrower than allowedSidecarEnv: SquadJS2 takes the panel
+// options (mode, redisUrl, serverId) from the rendered config, so nothing but
+// the two values the entrypoint itself needs may cross the boundary.
+var allowedSquadJS2Env = map[string]struct{}{
+	"SERVER_ID": {},
+	"LOG_FILE":  {},
+}
+
 // RNSquadJSRunSpec describes a per-server rnsquadjs sidecar launch.
 type RNSquadJSRunSpec struct {
 	ServerID string            `json:"server_id"`
@@ -242,11 +254,17 @@ type RNSquadJSRunSpec struct {
 // that could break out of a single `-e KEY=VALUE` docker token. '=' is barred
 // in keys only; values legitimately carry ':' '/' '@' (e.g. a redis URL).
 func validateSidecarEnv(env map[string]string) error {
+	return validateSidecarEnvAgainst(env, allowedSidecarEnv)
+}
+
+// validateSidecarEnvAgainst is validateSidecarEnv parameterised by allowlist so
+// each engine keeps its own, minimal set.
+func validateSidecarEnvAgainst(env map[string]string, allowed map[string]struct{}) error {
 	for key, value := range env {
 		if key == "" {
 			return fmt.Errorf("%w: empty sidecar env key", validate.ErrForbidden)
 		}
-		if _, ok := allowedSidecarEnv[key]; !ok {
+		if _, ok := allowed[key]; !ok {
 			return fmt.Errorf("%w: sidecar env key %q not in allowlist", validate.ErrForbidden, key)
 		}
 		if strings.ContainsAny(key, "=\x00\n\r") {
@@ -429,6 +447,123 @@ func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) 
 	}
 	if exit != 0 {
 		return strings.TrimSpace(string(so)), fmt.Errorf("docker run rnsquadjs exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	return strings.TrimSpace(string(so)), nil
+}
+
+// SquadJS2RunSpec describes a per-server squadjs2 sidecar launch.
+type SquadJS2RunSpec struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+// squadJS2Root returns the configured squadjs2 config root, defaulting to the
+// production constant when SquadJS2Root is unset.
+func (d *DockerRunner) squadJS2Root() string {
+	if d.SquadJS2Root != "" {
+		return d.SquadJS2Root
+	}
+	return validate.PanelSquadJS2Root
+}
+
+// composeSquadJS2Args builds the docker run argv for a SquadJS2 sidecar.
+//
+// The container is strictly narrower than the rnsquadjs one: there is no
+// sidecar-writable mount at all, because the Unix-socket RCON server the
+// rnsquadjs bridge exposed was dead code and is not carried over. Only two
+// read-only binds cross the boundary — the Squad log directory and the
+// rendered config.
+func (d *DockerRunner) composeSquadJS2Args(spec SquadJS2RunSpec) ([]string, error) {
+	if err := validate.ServerUUID(spec.ServerID); err != nil {
+		return nil, err
+	}
+	name := "squadjs2-" + spec.ServerID
+	if err := validate.ContainerName(name); err != nil {
+		return nil, err
+	}
+	if err := validateSidecarEnvAgainst(spec.Env, allowedSquadJS2Env); err != nil {
+		return nil, err
+	}
+	serverDir := d.squadJS2Root() + "/" + spec.ServerID
+	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	configBind := fmt.Sprintf("%s/config.json:/app/panel-config.json:ro", serverDir)
+
+	args := []string{
+		"run", "-d",
+		"--pull", "never",
+		"--name", name,
+		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.kind=squadjs2",
+		"--network", "host",
+		"--user", "1001:1001",
+		"--read-only",
+		"--restart", "unless-stopped",
+		"-v", logsBind,
+		"-v", configBind,
+	}
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, spec.Env[k]))
+	}
+	args = append(args, validate.SquadJS2Image)
+	return args, nil
+}
+
+// ensureSquadJS2Dir builds the single per-server directory the SquadJS2 sidecar
+// needs:
+//
+//	{root}/{id}/  0o0750, root-owned  — holds the host-authored config.json
+//
+// There is no sidecar-writable level: with the Unix-socket RCON server gone the
+// container needs nothing writable, so the directory stays root-owned and the
+// config is bound :ro. The fd-anchored creation is the same as
+// ensureSidecarDir — see its comment for why every mutation is anchored to a
+// verified descriptor rather than a path string.
+func (d *DockerRunner) ensureSquadJS2Dir(serverID string) error {
+	root := d.squadJS2Root()
+	if d.SquadJS2Root == "" {
+		if _, err := validate.Path(root+"/"+serverID, validate.PanelSquadJS2Root); err != nil {
+			return err
+		}
+	}
+	rootFd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return forbidNonDir("squadjs2 sidecar root", root, err)
+	}
+	defer syscall.Close(rootFd)
+
+	idFd, err := openVerifiedSidecarDir(rootFd, serverID, sidecarServerDirModeRaw, false)
+	if err != nil {
+		return err
+	}
+	return syscall.Close(idFd)
+}
+
+// RunSquadJS2 launches the SquadJS2 sidecar for one server.
+func (d *DockerRunner) RunSquadJS2(ctx context.Context, spec SquadJS2RunSpec) (string, error) {
+	args, err := d.composeSquadJS2Args(spec)
+	if err != nil {
+		return "", err
+	}
+	if err := d.ensureSquadJS2Dir(spec.ServerID); err != nil {
+		return "", err
+	}
+	// Same guard as RunRNSquadJS: without a rendered config.json docker (root)
+	// silently creates a DIRECTORY at the :ro bind source, so fail loudly first.
+	configPath := d.squadJS2Root() + "/" + spec.ServerID + "/config.json"
+	if info, err := os.Lstat(configPath); err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("config.json not rendered for %s", spec.ServerID)
+	}
+	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
+	if err != nil {
+		return strings.TrimSpace(string(so)), err
+	}
+	if exit != 0 {
+		return strings.TrimSpace(string(so)), fmt.Errorf("docker run squadjs2 exit %d: %s", exit, strings.TrimSpace(string(se)))
 	}
 	return strings.TrimSpace(string(so)), nil
 }

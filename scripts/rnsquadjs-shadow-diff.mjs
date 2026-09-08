@@ -10,6 +10,9 @@
 //   - insufficient-data: prod event count below the minEvents floor
 //   - extras-exceeded:   shadow has more than max(5, 1% of prod) unmatched extras
 //   - parity-failed:     parity < 99% or a prod event type is missing in shadow
+//   - name-changed-count-mismatch: the polled-derivation type player.name_changed
+//     differs by more than max(2, 10% of prod) between the streams, or is absent
+//     from shadow while prod has it
 // Malformed stream records (missing/invalid envelope fields or unparseable JSON) are skipped and
 // counted. Any skipped record fails the gate so a corrupt stream cannot produce a false pass.
 //
@@ -112,14 +115,36 @@ const SIDE_TYPES = new Set([
   'match.ended',
 ]);
 
+// player.name_changed is not parsed from a log line: the SquadJS2 sidecar derives
+// it by diffing consecutive ListPlayers snapshots, so its timestamp is the poll
+// tick, not the rename. The poll cadence (30s) exceeds compareStreams' ±5s skew
+// window, which would make every real rename look like a parity miss. This type
+// is therefore excluded from pairwise matching and gated on counts instead.
+const POLL_DERIVED_TYPES = new Set(['player.name_changed']);
+const NAME_CHANGED_ABS_TOLERANCE = 2;
+const NAME_CHANGED_REL_TOLERANCE = 0.1;
+
 let exitCode = 1;
 try {
-  const prod = (await readStream(`events:server:${serverId}`)).filter((e) =>
+  const prodAll = (await readStream(`events:server:${serverId}`)).filter((e) =>
     SIDE_TYPES.has(e.type),
   );
-  const shadow = (await readStream(`events:server:${serverId}:shadow`)).filter((e) =>
+  const shadowAll = (await readStream(`events:server:${serverId}:shadow`)).filter((e) =>
     SIDE_TYPES.has(e.type),
   );
+  const prod = prodAll.filter((e) => !POLL_DERIVED_TYPES.has(e.type));
+  const shadow = shadowAll.filter((e) => !POLL_DERIVED_TYPES.has(e.type));
+  const prodNameChanged = prodAll.length - prod.length;
+  const shadowNameChanged = shadowAll.length - shadow.length;
+  const nameChangedAllowed = Math.max(
+    NAME_CHANGED_ABS_TOLERANCE,
+    prodNameChanged * NAME_CHANGED_REL_TOLERANCE,
+  );
+  // A type present in prod and entirely absent from shadow is a failure even
+  // when the absolute tolerance would cover it: it means the derivation never ran.
+  const nameChangedMismatch =
+    (prodNameChanged > 0 && shadowNameChanged === 0) ||
+    Math.abs(prodNameChanged - shadowNameChanged) > nameChangedAllowed;
   const r = compareStreams(prod, shadow);
   const extraAllowed = Math.max(5, prod.length * 0.01);
 
@@ -134,6 +159,8 @@ try {
     gate = 'extras-exceeded';
   } else if (r.parityPct < 99 || r.missingTypes.length > 0) {
     gate = 'parity-failed';
+  } else if (nameChangedMismatch) {
+    gate = 'name-changed-count-mismatch';
   }
   const verdict = gate === 'pass' ? 'pass' : 'fail';
   exitCode = gate === 'pass' ? 0 : 1;
@@ -149,6 +176,9 @@ try {
         shadow: shadow.length,
         badRecords,
         extraAllowed,
+        prodNameChanged,
+        shadowNameChanged,
+        nameChangedAllowed,
         gate,
         verdict,
         ...r,

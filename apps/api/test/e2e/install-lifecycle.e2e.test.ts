@@ -166,6 +166,53 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     expect(shadowLen, 'events:server:{id}:shadow stream empty after 30s').toBeGreaterThan(0);
   });
 
+  // Engine switch, gated separately: it needs `squad-panel/squadjs2:latest`
+  // present on the host, which requires GHCR access to the private SquadJS2 base
+  // image. Opt in with PANEL_TEST_SQUADJS2=1 once the image is built.
+  it.skipIf(process.env.PANEL_TEST_SQUADJS2 !== '1')(
+    'POST /sidecar switches the engine to SquadJS2 and leaves exactly one sidecar',
+    async () => {
+      const res = await api.fetch(`/api/v1/servers/${serverId}/sidecar`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ engine: 'squadjs2', mode: 'shadow' }),
+      });
+      expect(res.status).toBe(200);
+
+      const squadjs2 = await pollUntil(async () => {
+        const r = await bridge.containerInspect({ name: `squadjs2-${serverId}` });
+        return r.running ? r : null;
+      }, 30_000);
+      expect(squadjs2?.running, 'squadjs2 sidecar not running within 30s').toBe(true);
+
+      // Single-writer invariant: the RNSquadJS sidecar must be gone, or the
+      // `:shadow` stream would carry duplicates from two publishers.
+      const rnsquadjs = await bridge
+        .containerInspect({ name: `rnsquadjs-${serverId}` })
+        .catch(() => null);
+      expect(rnsquadjs?.running ?? false).toBe(false);
+
+      const heartbeatTtl = await pollUntil(async () => {
+        const ttl = await redis.ttl(`worker:heartbeat:sidecar:${serverId}`);
+        return ttl > 0 ? ttl : null;
+      }, 30_000);
+      expect(heartbeatTtl, 'sidecar heartbeat TTL not > 0 within 30s').toBeGreaterThan(0);
+
+      const status = await api.json<{ engine: string; mode: string }>(
+        `/api/v1/servers/${serverId}/sidecar`,
+      );
+      expect(status.engine).toBe('squadjs2');
+
+      // Roll back so the rest of the lifecycle runs on the engine it started on.
+      const rollback = await api.fetch(`/api/v1/servers/${serverId}/sidecar`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ engine: 'rnsquadjs', mode: 'shadow' }),
+      });
+      expect(rollback.status).toBe(200);
+    },
+  );
+
   it('GET /configs lists 19 Squad cfg files', async () => {
     const r = await api.json<{ items: ConfigItem[] }>(`/api/v1/servers/${serverId}/configs`);
     expect(r.items).toHaveLength(19);
@@ -257,6 +304,17 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
 
     const archive = await api.json<{ items: Array<{ id: string }> }>('/api/v1/servers/archive');
     expect(archive.items.some((s) => s.id === serverId)).toBe(true);
+
+    // Both engines' sidecar config dirs go with the server: each holds a
+    // rendered config carrying the server's plaintext RCON password. The bridge
+    // has no read RPC for /run, so assert on directory_delete being idempotent:
+    // a second delete of an already-removed dir reports removed=false.
+    for (const engine of ['rnsquadjs', 'squadjs2']) {
+      const again = await bridge.directoryDelete({
+        path: `/run/squad-panel/${engine}/${serverId}`,
+      });
+      expect(again.removed, `${engine} sidecar config dir survived deletion`).toBe(false);
+    }
 
     serverId = ''; // signal afterAll to skip cleanup
   });

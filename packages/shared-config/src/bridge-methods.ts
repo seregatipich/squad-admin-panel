@@ -13,6 +13,7 @@ export const BRIDGE_METHODS = [
   'process_info',
   'container_run',
   'container_run_rnsquadjs',
+  'container_run_squadjs2',
   'container_start',
   'container_stop',
   'container_rm',

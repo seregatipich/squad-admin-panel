@@ -266,7 +266,12 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
 
         expect(sismember).toHaveBeenCalledTimes(2);
         expect(writeSidecarConfig).toHaveBeenCalledTimes(1);
-        expect(containerRm).toHaveBeenCalledTimes(1);
+        // Both engines are removed before a launch, so a server already switched
+        // to SquadJS2 cannot end up with two writers on the same stream.
+        expect(containerRm.mock.calls.map((call) => call[0].name).sort()).toEqual([
+          `rnsquadjs-${SERVER_ID}`,
+          `squadjs2-${SERVER_ID}`,
+        ]);
         expect(containerRunRnsquadjs).not.toHaveBeenCalled();
         // Pre-launch supersession abort — not a failure, so no auto-rollback.
         expect(srem).not.toHaveBeenCalled();

@@ -191,8 +191,8 @@ printf '%s\n' "$docker_block" | grep -Fq 'id: buildx' ||
 printf '%s\n' "$docker_block" | grep -Fq 'cleanup: true' ||
   fail 'docker job does not remove its isolated builder cache'
 buildx_count=$(printf '%s\n' "$docker_block" | grep -Fc 'docker buildx build --builder "${{ steps.buildx.outputs.name }}" --load')
-[ "$buildx_count" -eq 5 ] ||
-  fail "docker job has $buildx_count isolated builds instead of 5"
+[ "$buildx_count" -eq 6 ] ||
+  fail "docker job has $buildx_count isolated builds instead of 6"
 printf '%s\n' "$docker_block" | grep -Fq 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
   fail 'backup round-trip does not receive the isolated builder name'
 if printf '%s\n' "$docker_block" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
@@ -206,13 +206,14 @@ printf '%s\n' "$docker_block" | grep -Fq 'docker image rm --force' ||
   fail 'docker job does not remove its exact images'
 cleanup_block=$(printf '%s\n' "$docker_block" | sed -n '/name: remove exact CI images/,$p')
 cleanup_tag_count=$(printf '%s\n' "$cleanup_block" | grep -Fc ':${CI_IMAGE_TAG}"')
-[ "$cleanup_tag_count" -eq 5 ] ||
-  fail "docker cleanup has $cleanup_tag_count run-scoped tags instead of 5"
+[ "$cleanup_tag_count" -eq 6 ] ||
+  fail "docker cleanup has $cleanup_tag_count run-scoped tags instead of 6"
 for image in \
   squad-admin-panel/api \
   squad-admin-panel/worker-log-ingest \
   squad-admin-panel/worker-rcon \
   squad-panel/rnsquadjs \
+  squad-panel/squadjs2 \
   squad-admin-panel/web
 do
   printf '%s\n' "$cleanup_block" | grep -Fq "\"${image}:\${CI_IMAGE_TAG}\"" ||

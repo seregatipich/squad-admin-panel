@@ -2,10 +2,11 @@ import { chown, mkdir, rename, writeFile } from 'node:fs/promises';
 import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import { serverCredentials } from '@squad/db/schema';
-import { PANEL_CONFIGS_ROOT, RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
+import { RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type Redis from 'ioredis';
+import { readRconPassword, resolveSidecarRedisUrl } from './sidecar-config.js';
 
 const RNSQUADJS_ROOT = '/run/squad-panel/rnsquadjs';
 const SIDECAR_UID = 1001;
@@ -73,8 +74,6 @@ export interface RnsquadjsServerConfig {
 
 export type RnsquadjsConfig = Record<string, RnsquadjsServerConfig>;
 
-const PASSWORD_RE = /^\s*Password\s*=\s*(.*)$/m;
-
 export async function renderRnsquadjsConfig(
   app: RnsquadjsContext,
   serverId: string,
@@ -86,14 +85,7 @@ export async function renderRnsquadjsConfig(
     throw new Error(`rnsquadjs: no credentials found for server ${serverId}`);
   }
 
-  const { content } = await app.bridge.fileRead({
-    path: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig/Rcon.cfg`,
-  });
-  const match = PASSWORD_RE.exec(content);
-  if (!match) {
-    throw new Error(`rnsquadjs: cannot parse Password from Rcon.cfg for server ${serverId}`);
-  }
-  const password = match[1]?.trim() ?? '';
+  const password = await readRconPassword(app.bridge, serverId, 'rnsquadjs');
 
   return {
     [serverId]: {
@@ -174,7 +166,7 @@ export async function relaunchSidecar(
   await app.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => undefined);
   const run = await app.bridge.containerRunRnsquadjs({
     server_id: serverId,
-    env: { ...buildSidecarEnv(serverId, mode, process.env.RNSQUADJS_REDIS_URL) },
+    env: { ...buildSidecarEnv(serverId, mode, resolveSidecarRedisUrl()) },
   });
   return { containerId: run.container_id, mode };
 }
