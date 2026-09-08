@@ -65,6 +65,29 @@ const PICKS = {
   ],
 };
 
+const VERSIONS = {
+  filename: 'map-vote.json',
+  can_restore: true,
+  versions: [
+    {
+      id: 'v2',
+      sha256: 'b'.repeat(64),
+      parent_version_id: 'v1',
+      author: 'Иван',
+      message: 'изменён пул слоёв (2)',
+      created_at: '2026-07-20T11:00:00.000Z',
+    },
+    {
+      id: 'v1',
+      sha256: 'a'.repeat(64),
+      parent_version_id: null,
+      author: 'Иван',
+      message: 'изменены правила автовыбора карты',
+      created_at: '2026-07-20T10:00:00.000Z',
+    },
+  ],
+};
+
 const LAYERS_POOL = {
   rows: [
     { id: 'l1', name: 'Yehorivka RAAS v11', map: 'Yehorivka', gamemode: 'RAAS', deprecated: false },
@@ -73,33 +96,48 @@ const LAYERS_POOL = {
   ],
 };
 
-function mockFetch(squadPermissions: string[] = ['changemap']) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/me') {
-        return Promise.resolve(
-          new Response(JSON.stringify({ squad_permissions: squadPermissions }), { status: 200 }),
-        );
-      }
-      if (url === '/api/v1/layers') {
-        return Promise.resolve(new Response(JSON.stringify(LAYERS_POOL), { status: 200 }));
-      }
-      if (url.includes('/map-vote/preview')) {
-        return Promise.resolve(new Response(JSON.stringify(PREVIEW), { status: 200 }));
-      }
-      if (url.includes('/map-vote/picks')) {
-        return Promise.resolve(new Response(JSON.stringify(PICKS), { status: 200 }));
-      }
-      if (url.endsWith('/map-vote') && (!init || init.method === undefined)) {
-        return Promise.resolve(new Response(JSON.stringify(STATE), { status: 200 }));
-      }
-      if (init?.method === 'PUT') {
-        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-      }
-      return Promise.resolve(new Response('not found', { status: 404 }));
-    }),
-  );
+function mockFetch(
+  squadPermissions: string[] = ['changemap'],
+  options: { restore?: () => Response; canRestore?: boolean } = {},
+) {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (url === '/api/v1/me') {
+      return Promise.resolve(
+        new Response(JSON.stringify({ squad_permissions: squadPermissions }), { status: 200 }),
+      );
+    }
+    if (url === '/api/v1/layers') {
+      return Promise.resolve(new Response(JSON.stringify(LAYERS_POOL), { status: 200 }));
+    }
+    if (url.includes('/map-vote/preview')) {
+      return Promise.resolve(new Response(JSON.stringify(PREVIEW), { status: 200 }));
+    }
+    if (url.includes('/map-vote/picks')) {
+      return Promise.resolve(new Response(JSON.stringify(PICKS), { status: 200 }));
+    }
+    if (url.includes('/map-vote/versions') && init?.method === 'POST') {
+      return Promise.resolve(
+        options.restore?.() ??
+          new Response(JSON.stringify({ ok: true, count: 2, dropped_layers: [] }), { status: 200 }),
+      );
+    }
+    if (url.includes('/map-vote/versions')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ ...VERSIONS, can_restore: options.canRestore ?? true }), {
+          status: 200,
+        }),
+      );
+    }
+    if (url.endsWith('/map-vote') && (!init || init.method === undefined)) {
+      return Promise.resolve(new Response(JSON.stringify(STATE), { status: 200 }));
+    }
+    if (init?.method === 'PUT') {
+      return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    }
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 beforeEach(() => {
@@ -203,5 +241,71 @@ describe('MapVotePage', () => {
       { layer: 'Gorodok RAAS v1', weight: 1, enabled: true },
       { layer: 'Narva Skirmish v1', weight: 1, enabled: true },
     ]);
+  });
+});
+
+describe('MapVotePage — история изменений', () => {
+  it('показывает версии с автором, сообщением и отпечатком', async () => {
+    await renderPage();
+    const list = screen.getByTestId('versions-list');
+    expect(list).toHaveTextContent('изменён пул слоёв (2)');
+    expect(list).toHaveTextContent('Иван');
+    // Отпечаток сокращён, полный — в подсказке, как в редакторе конфигов.
+    expect(within(list).getByTitle('b'.repeat(64))).toHaveTextContent('bbbbbbbb');
+  });
+
+  it('откатывает к выбранной версии и перечитывает состояние', async () => {
+    const fetchMock = mockFetch();
+    await renderPage();
+    const list = screen.getByTestId('versions-list');
+    await act(async () => {
+      fireEvent.click(within(list).getAllByRole('button', { name: 'Откатить' })[0] as HTMLElement);
+    });
+    await waitFor(() => expect(screen.getByText(/Откат выполнен: 2 слоёв/)).toBeInTheDocument());
+    const restoreCalls = fetchMock.mock.calls.filter(
+      (call) =>
+        String(call[0]).includes('/map-vote/versions/v2/restore') && call[1]?.method === 'POST',
+    );
+    expect(restoreCalls).toHaveLength(1);
+    expect(JSON.parse(String(restoreCalls[0]?.[1]?.body))).toEqual({ drop_unknown_layers: false });
+  });
+
+  it('объясняет пропавшие слои и предлагает откат без них', async () => {
+    let call = 0;
+    const fetchMock = mockFetch(['changemap'], {
+      restore: () => {
+        call += 1;
+        return call === 1
+          ? new Response(
+              JSON.stringify({ error: 'unknown_layers_in_version', layers: ['Narva RAAS v1'] }),
+              { status: 409 },
+            )
+          : new Response(
+              JSON.stringify({ ok: true, count: 1, dropped_layers: ['Narva RAAS v1'] }),
+              {
+                status: 200,
+              },
+            );
+      },
+    });
+    await renderPage();
+    const list = screen.getByTestId('versions-list');
+    await act(async () => {
+      fireEvent.click(within(list).getAllByRole('button', { name: 'Откатить' })[0] as HTMLElement);
+    });
+    expect(await screen.findByText(/Narva RAAS v1/)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Откатить без них' }));
+    });
+    await waitFor(() => expect(screen.getByText(/пропущено 1/)).toBeInTheDocument());
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/restore'))).toHaveLength(2);
+  });
+
+  it('без права changemap историю показывает, а откат — нет', async () => {
+    mockFetch([], { canRestore: false });
+    await renderPage();
+    expect(screen.getByTestId('versions-list')).toHaveTextContent('изменён пул слоёв (2)');
+    expect(screen.queryByRole('button', { name: 'Откатить' })).not.toBeInTheDocument();
   });
 });

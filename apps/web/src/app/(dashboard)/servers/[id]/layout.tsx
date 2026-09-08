@@ -24,7 +24,6 @@ const SECTIONS: ReadonlyArray<{ path: string; label: string }> = [
   { path: '/rotation', label: 'Ротация' },
   { path: '/rotation-calendar', label: 'Календарь ротации' },
   { path: '/map-vote', label: 'Голосование за карту' },
-  { path: '/seed-calendar', label: 'Сид-календарь' },
   { path: '/schedule', label: 'Планировщик' },
   { path: '/events', label: 'События' },
   { path: '/combat-log', label: 'Боевой лог' },
