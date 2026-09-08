@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useState } from 'react';
-import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
@@ -9,7 +8,6 @@ import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMe
 import {
   AlertDialog,
   Button,
-  ButtonLink,
   Card,
   CardBody,
   CardHeader,
@@ -122,14 +120,11 @@ function quickAbilities(permissions: readonly string[]) {
 export function LivePlayers({
   serverId,
   canChat = false,
-  canBan = false,
   modPermissions = [],
 }: {
   serverId: string;
   /** Shows the per-squad "message" button. Hidden without the 'chat' squad permission. */
   canChat?: boolean;
-  /** Shows the per-player «Забанить ник» button. Hidden without the 'ban' squad permission. */
-  canBan?: boolean;
   /**
    * The caller's `mod:*` catalog keys from `GET /api/v1/me` (MOD-4, #61).
    * Multi-select and the bulk action bar stay hidden unless at least one of
@@ -217,7 +212,6 @@ export function LivePlayers({
     now,
     serverId,
     canChat,
-    canBan,
     canBulk,
     abilities,
     selected,
@@ -487,7 +481,6 @@ interface RosterRowsProps {
   now: number;
   serverId: string;
   canChat: boolean;
-  canBan: boolean;
   canBulk: boolean;
   abilities: ReturnType<typeof quickAbilities>;
   selected: ReadonlySet<string>;
@@ -589,7 +582,6 @@ function SquadGroupRows({
   now,
   serverId,
   canChat,
-  canBan,
   canBulk,
   abilities,
   selected,
@@ -699,7 +691,6 @@ function SquadGroupRows({
           now={now}
           serverId={serverId}
           canChat={canChat}
-          canBan={canBan}
           canBulk={canBulk}
           abilities={abilities}
           checked={player.player_id !== null && selected.has(player.player_id)}
@@ -716,7 +707,6 @@ function RosterRow({
   now,
   serverId,
   canChat,
-  canBan,
   canBulk,
   abilities,
   checked,
@@ -727,7 +717,6 @@ function RosterRow({
   now: number;
   serverId: string;
   canChat: boolean;
-  canBan: boolean;
   canBulk: boolean;
   abilities: ReturnType<typeof quickAbilities>;
   checked: boolean;
@@ -821,9 +810,10 @@ function RosterRow({
               onClick={() => onQuickAction({ action: 'ban', target })}
             />
           ) : null}
-          {/* Иконки, а не подписи: в половине ширины шесть текстовых кнопок
-              не помещаются в строку, а подпись каждой остаётся в `aria-label`
-              и всплывающей подсказке. */}
+          {/* Иконки, а не подписи: в половине ширины текстовые кнопки не
+              помещаются в строку, а подпись каждой остаётся в `aria-label` и
+              всплывающей подсказке. Досье кнопки не имеет: карточку игрока
+              открывает его имя в строке — обычной ссылкой. */}
           <DirectMessageButton
             playerId={player.player_id}
             name={player.name}
@@ -831,17 +821,6 @@ function RosterRow({
             serverId={serverId}
             variant="icon"
           />
-          <BanNickButton nick={player.name} canBan={canBan} variant="icon" />
-          {player.player_id ? (
-            <ButtonLink
-              href={`/all-players/${player.player_id}`}
-              variant="ghost"
-              size="sm"
-              aria-label={`Досье: ${player.name}`}
-            >
-              Досье
-            </ButtonLink>
-          ) : null}
         </div>
       </Td>
     </TableRow>

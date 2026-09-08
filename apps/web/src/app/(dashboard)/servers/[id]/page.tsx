@@ -499,12 +499,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           кнопки жизненного цикла — один раз при настройке. Выше него остаются
           только баннеры аварий: предупреждение, уехавшее под список из ста
           строк, никого не предупреждает. */}
-      <LivePlayers
-        serverId={server.id}
-        canChat={canChat}
-        canBan={canBan}
-        modPermissions={modPermissions}
-      />
+      <LivePlayers serverId={server.id} canChat={canChat} modPermissions={modPermissions} />
 
       {/* 2. Состояние и карта — управление матчем, который сейчас идёт. */}
       <Card padding="none" as="section">

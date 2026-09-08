@@ -15,7 +15,6 @@ import {
   Card,
   Checkbox,
   FieldRow,
-  IconButton,
   InlineBanner,
   Modal,
   Select,
@@ -311,52 +310,32 @@ export function BanNickButton({
   canBan,
   className,
   onSaved,
-  variant = 'text',
 }: {
   nick: string;
   canBan: boolean;
   className?: string;
   onSaved?: (rule: BannedNameRule) => void;
-  /**
-   * `icon` — значок для плотных строк (ростер): зачёркнутое «ник» в
-   * разрушительном тоне, подпись в `aria-label` и подсказке. `className` в
-   * этом варианте не применяется.
-   */
-  variant?: 'text' | 'icon';
 }) {
   const [open, setOpen] = useState(false);
 
   if (!canBan) return null;
 
   const label = `Забанить ник «${nick}»`;
-  const trigger =
-    variant === 'icon' ? (
-      <IconButton
-        size="sm"
-        tone="destructive"
-        icon={
-          <span aria-hidden="true" className="text-2xs font-semibold line-through">
-            ник
-          </span>
-        }
-        label={label}
-        onClick={() => setOpen(true)}
-      />
-    ) : className ? (
-      <button
-        type="button"
-        title={label}
-        aria-label={label}
-        onClick={() => setOpen(true)}
-        className={className}
-      >
-        Забанить ник
-      </button>
-    ) : (
-      <Button size="sm" title={label} aria-label={label} onClick={() => setOpen(true)}>
-        Забанить ник
-      </Button>
-    );
+  const trigger = className ? (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={() => setOpen(true)}
+      className={className}
+    >
+      Забанить ник
+    </button>
+  ) : (
+    <Button size="sm" title={label} aria-label={label} onClick={() => setOpen(true)}>
+      Забанить ник
+    </Button>
+  );
 
   return (
     <>
