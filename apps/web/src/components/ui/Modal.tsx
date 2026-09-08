@@ -150,7 +150,14 @@ export function Modal({
       ref={dialogRef}
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
-      className={`w-full ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
+      // `m-auto h-fit` возвращают окну центр. Браузер центрирует модальный
+      // `<dialog>` штатными `inset: 0` + `margin: auto`, но сброс Tailwind
+      // обнуляет поля у всех элементов, а при `inset: 0` и `height: auto`
+      // абсолютно спозиционированный элемент растягивается на всю высоту и
+      // прижимается к левому верхнему углу — окно появлялось в точке (0, 0).
+      // `h-fit` снимает растяжение, после чего автоматические поля снова
+      // делят свободное место поровну по обеим осям.
+      className={`m-auto h-fit max-h-[calc(100dvh-2rem)] w-full ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
     >
       <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">

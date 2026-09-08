@@ -82,6 +82,18 @@ describe('Modal', () => {
     expect(screen.getByText('Сессия будет прервана.')).toBeInTheDocument();
   });
 
+  it('carries the classes that keep the window centred', () => {
+    // Регрессия: без них окно появлялось в левом верхнем углу экрана. Браузер
+    // центрирует модальный `<dialog>` через `inset: 0` + `margin: auto`, но
+    // сброс Tailwind обнуляет поля, а `height: auto` при `inset: 0` растягивает
+    // элемент на всю высоту. jsdom не считает раскладку, поэтому проверяется
+    // сам контракт классов — единственное, что здесь вообще наблюдаемо.
+    renderModal();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('m-auto');
+    expect(dialog.className).toContain('h-fit');
+  });
+
   it('leaves the description wiring out when there is no description', () => {
     const { container } = renderModal();
     expect(dialogIn(container)).not.toHaveAttribute('aria-describedby');
