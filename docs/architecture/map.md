@@ -110,7 +110,7 @@ graph TB
     Z1["Zone 1 — panel-host-bridge<br/>Go, systemd, root + CAP_NET_ADMIN<br/>sole holder of /run/docker.sock"]
     subgraph Z3["Zone 3 — per-server game containers"]
       SQ["squad-{uuid} --network host, uid 1001"]
-      RN["rnsquadjs-{uuid} --read-only, uid 1001"]
+      RN["rnsquadjs-{uuid} / squadjs2-{uuid} --read-only, uid 1001"]
     end
   end
   BR -->|"TLS 443"| CADDY
@@ -123,7 +123,7 @@ graph TB
   Z1 -->|"docker run, allowlisted image+mounts"| SQ
   Z1 --> RN
   WK -->|"RCON TCP 127.0.0.1"| SQ
-  RN -->|"Redis streams + /run/squad-panel/rnsquadjs"| RD
+  RN -->|"Redis streams + /run/squad-panel/{rnsquadjs,squadjs2}"| RD
   SQ -.->|"log files on bind-mounted volume"| WK
 ```
 
@@ -131,8 +131,8 @@ graph TB
 |---|---|---|---|
 | Browser → Zone 2 | HTTPS via Caddy; path split `@api path /api/* /health /ready /metrics` → `api:3000`, everything else → `web:3000` (`docker/Caddyfile:16-27`) | JSON + `__Host-sid` cookie; one WebSocket at `/api/v1/ws/live` | `onRequest` auth hook; global rate limiter keyed on **(ip, playerId)** — `req.user` *is* populated when the key generator runs |
 | Zone 2 → Zone 1 | Unix socket `/run/panel-host-bridge/bridge.sock`, `0660 root:panel`, `PassCredentials=yes` | Exactly 30 JSON-RPC methods, allowlisted args | `SO_PEERCRED` on the **primary GID** — hence `user: "0:${PANEL_GID:-987}"`, never `group_add` (`docker-compose.yml:130-134`). Five services mount it: `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` |
-| Zone 1 → Zone 3 | `docker run` over `/run/docker.sock` | Image allowlisted to `squad-server:latest` / `squad-panel/depot-init:latest`; mounts allowlisted under `/var/lib/squad-panel/{configs,saved}`; the sidecar image is reachable *only* via the dedicated `container_run_rnsquadjs` RPC | `apps/bridge/internal/validate/docker.go`; systemd sandbox (`ProtectSystem=strict`, `SystemCallFilter=@system-service`) |
-| Zone 3 → Zone 2 | Never through the bridge. Log files on the bind-mounted `Saved/` tree read by `worker-log-ingest`; RCON TCP on loopback from `worker-rcon` (`network_mode: host`); the rnsquadjs sidecar writes to Redis and `/run/squad-panel/rnsquadjs` | Game events, chat, roster, RCON responses | Sidecar runs `--read-only --user 1001:1001` with an env allowlist |
+| Zone 1 → Zone 3 | `docker run` over `/run/docker.sock` | Image allowlisted to `squad-server:latest` / `squad-panel/depot-init:latest`; mounts allowlisted under `/var/lib/squad-panel/{configs,saved}`; each sidecar image is reachable *only* via its dedicated `container_run_rnsquadjs` / `container_run_squadjs2` RPC | `apps/bridge/internal/validate/docker.go`; systemd sandbox (`ProtectSystem=strict`, `SystemCallFilter=@system-service`) |
+| Zone 3 → Zone 2 | Never through the bridge. Log files on the bind-mounted `Saved/` tree read by `worker-log-ingest`; RCON TCP on loopback from `worker-rcon` (`network_mode: host`); the sidecar writes to Redis and reads its config from `/run/squad-panel/{rnsquadjs,squadjs2}` | Game events, chat, roster, RCON responses | Sidecar runs `--read-only --user 1001:1001` with an env allowlist |
 
 Note the asymmetry: the privileged path is one-directional and narrow, while the *data* path back from the game servers is deliberately unprivileged — files and sockets the panel already owns.
 
@@ -148,7 +148,7 @@ Note the asymmetry: the privileged path is one-directional and narrow, while the
 | `packages/shared-config` | Permission registry (**51** panel keys + **21** squad keys), `BRIDGE_METHODS`, `normalizePlayerName`, role colors. Browser-safe subpath exports keep `node:stream` out of the client bundle |
 | `packages/shared-types` | Zod schemas + `eventEnvelope`; the only package both `apps/web` and `apps/api` import |
 | `packages/bridge-client`, `packages/diag` | TS RPC client for the bridge; structural-injection diagnostics sink (the cleanest dependency boundary in the repo, `packages/diag/src/index.ts:1`) |
-| `docker/` | `api|web|worker|squad-server|restic|depot-init|rnsquadjs` Dockerfiles + two Caddyfiles. `worker.Dockerfile` is parameterised by `ARG WORKER` |
+| `docker/` | `api|web|worker|squad-server|restic|depot-init|rnsquadjs|squadjs2` Dockerfiles + two Caddyfiles. `worker.Dockerfile` is parameterised by `ARG WORKER` |
 | `scripts/` | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `configure-bss-sso-env.sh`, `deploy-tk104.sh` |
 | `docs/` (238 `.md`) | `architecture/` (incl. `decisions.md` with **9** dated records), `components/`, `development/`, `operations/`. Substantially stale in places — see the documentation chapter |
 | `ai_docs/` | Agent working corpus; `ai_docs/adr/` holds **2** further ADRs (11 total) |
@@ -221,7 +221,7 @@ graph TB
     RCON["<b>worker-rcon</b><br/>network_mode: host"]
     BRIDGE{{"<b>panel-host-bridge</b><br/>systemd, root, 30 RPC methods<br/>/run/panel-host-bridge/bridge.sock"}}
     SQ["squad-&lt;uuid&gt;<br/>--network host, uid 1001"]
-    RN["rnsquadjs-&lt;uuid&gt;<br/>--network host --read-only, uid 1001"]
+    RN["rnsquadjs-&lt;uuid&gt; / squadjs2-&lt;uuid&gt;<br/>--network host --read-only, uid 1001"]
     DEP["squad-depot-init-&lt;ts&gt; --rm<br/>steamcmd app_update 403240"]
     DOCK[("/run/docker.sock")]
     DATA[("DATA_DIR: postgres redis caddy-*<br/>backup-* depot servers/{"configs,saved"}<br/>/var/lib/squad-panel → servers")]
