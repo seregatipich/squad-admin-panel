@@ -157,6 +157,29 @@ describe('DirectMessageButton', () => {
   });
 });
 
+describe('DirectMessageModal — шаблоны', () => {
+  it('подставляет текст заготовки в поле сообщения и переводит туда фокус', async () => {
+    render(<DirectMessageModal target={TARGET} onOpenChange={() => undefined} />);
+    const textarea = (await screen.findByPlaceholderText(
+      /текст сообщения/i,
+    )) as HTMLTextAreaElement;
+    const template = screen.getAllByRole('button', { name: /предупреждение|информация/i })[0];
+    if (!template) throw new Error('в фикстуре нет ни одной заготовки');
+
+    fireEvent.click(template);
+
+    expect(textarea.value.length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it('держит список заготовок в собственной прокрутке, чтобы поле ввода оставалось видимым', async () => {
+    render(<DirectMessageModal target={TARGET} onOpenChange={() => undefined} />);
+    const list = await screen.findByRole('list', { name: 'Шаблоны сообщений' });
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toContain('max-h-56');
+  });
+});
+
 describe('DirectMessageModal', () => {
   it(
     'disables send while the message is shorter than 2 characters',

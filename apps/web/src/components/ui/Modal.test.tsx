@@ -94,6 +94,19 @@ describe('Modal', () => {
     expect(dialog.className).toContain('h-fit');
   });
 
+  it('keeps exactly one scroll area — the body, not the window', () => {
+    // Регрессия: окно и тело ограничивали высоту каждый по-своему, и на
+    // длинном содержимом рядом появлялись две полосы прокрутки.
+    renderModal();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('overflow-hidden');
+    const scrollers = Array.from(dialog.querySelectorAll('div')).filter((node) =>
+      node.className.includes('overflow-y-auto'),
+    );
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0]?.className).toContain('flex-1');
+  });
+
   it('leaves the description wiring out when there is no description', () => {
     const { container } = renderModal();
     expect(dialogIn(container)).not.toHaveAttribute('aria-describedby');
