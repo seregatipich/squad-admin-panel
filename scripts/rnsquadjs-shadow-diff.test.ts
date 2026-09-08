@@ -97,6 +97,9 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       shadow: 2,
       badRecords: 0,
       extraAllowed: 5,
+      prodNameChanged: 0,
+      shadowNameChanged: 0,
+      nameChangedAllowed: 2,
       gate: 'pass',
       verdict: 'pass',
       parityPct: 100,
@@ -132,6 +135,9 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       shadow: 1,
       badRecords: 0,
       extraAllowed: 5,
+      prodNameChanged: 0,
+      shadowNameChanged: 0,
+      nameChangedAllowed: 2,
       gate: 'parity-failed',
       verdict: 'fail',
       parityPct: 0,
@@ -158,6 +164,9 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       shadow: 0,
       badRecords: 2,
       extraAllowed: 5,
+      prodNameChanged: 0,
+      shadowNameChanged: 0,
+      nameChangedAllowed: 2,
       gate: 'corrupt-data',
       verdict: 'fail',
       parityPct: 100,
@@ -213,6 +222,9 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       shadow: 1,
       badRecords: 6,
       extraAllowed: 5,
+      prodNameChanged: 0,
+      shadowNameChanged: 0,
+      nameChangedAllowed: 2,
       gate: 'corrupt-data',
       verdict: 'fail',
       parityPct: 100,
@@ -293,6 +305,114 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       assert.match(result.stderr, new RegExp(`invalid MAX_STREAM_RECORDS: ${limit}`));
       assert.equal(result.stdout, '');
     }
+  });
+
+  // player.name_changed is derived from ListPlayers polling, so its timestamps
+  // land on poll ticks, far outside the ±5s pairwise skew window. It is gated on
+  // counts instead; a real rename must never read as a parity miss.
+  it('passes when name_changed timestamps differ by more than the pairwise skew window', async () => {
+    const base = Date.now();
+    const paired = {
+      type: 'player.connected',
+      ts: new Date(base).toISOString(),
+      payload: { steamId: 'p-1' },
+    };
+    await appendEnvelope(PROD_STREAM, paired);
+    await appendEnvelope(SHADOW_STREAM, paired);
+    const rename = { steam_id64: '76561199000000001', old_name: 'A', new_name: 'B' };
+    await appendEnvelope(PROD_STREAM, {
+      type: 'player.name_changed',
+      ts: new Date(base).toISOString(),
+      payload: rename,
+    });
+    await appendEnvelope(SHADOW_STREAM, {
+      type: 'player.name_changed',
+      // A full poll interval later — far outside the ±5s window.
+      ts: new Date(base + 30_000).toISOString(),
+      payload: rename,
+    });
+
+    const result = runCli([SERVER_ID, '60000', '1']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(verdict(result).gate, 'pass');
+    assert.equal(verdict(result).prodNameChanged, 1);
+    assert.equal(verdict(result).shadowNameChanged, 1);
+    // The pairwise counts exclude the polled type entirely.
+    assert.equal(verdict(result).prod, 1);
+    assert.equal(verdict(result).shadow, 1);
+  });
+
+  it('fails with name-changed-count-mismatch when shadow never derives the type', async () => {
+    const now = new Date().toISOString();
+    const paired = { type: 'player.connected', ts: now, payload: { steamId: 'p-1' } };
+    await appendEnvelope(PROD_STREAM, paired);
+    await appendEnvelope(SHADOW_STREAM, paired);
+    await appendEnvelope(PROD_STREAM, {
+      type: 'player.name_changed',
+      ts: now,
+      payload: { steam_id64: '76561199000000001', old_name: 'A', new_name: 'B' },
+    });
+
+    const result = runCli([SERVER_ID, '60000', '1']);
+
+    assert.equal(result.status, 1);
+    assert.equal(verdict(result).gate, 'name-changed-count-mismatch');
+    assert.equal(verdict(result).shadowNameChanged, 0);
+  });
+
+  it('tolerates a small absolute count drift in the polled type', async () => {
+    const now = new Date().toISOString();
+    const paired = { type: 'player.connected', ts: now, payload: { steamId: 'p-1' } };
+    await appendEnvelope(PROD_STREAM, paired);
+    await appendEnvelope(SHADOW_STREAM, paired);
+    for (let index = 0; index < 3; index += 1) {
+      await appendEnvelope(PROD_STREAM, {
+        type: 'player.name_changed',
+        ts: now,
+        payload: { steam_id64: `7656119900000000${index}`, old_name: 'A', new_name: 'B' },
+      });
+    }
+    // Two of the three renames were observed by the poll — within max(2, 10%).
+    for (let index = 0; index < 2; index += 1) {
+      await appendEnvelope(SHADOW_STREAM, {
+        type: 'player.name_changed',
+        ts: now,
+        payload: { steam_id64: `7656119900000000${index}`, old_name: 'A', new_name: 'B' },
+      });
+    }
+
+    const result = runCli([SERVER_ID, '60000', '1']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(verdict(result).gate, 'pass');
+    assert.equal(verdict(result).nameChangedAllowed, 2);
+  });
+
+  it('fails when the polled type drifts beyond the tolerance', async () => {
+    const now = new Date().toISOString();
+    const paired = { type: 'player.connected', ts: now, payload: { steamId: 'p-1' } };
+    await appendEnvelope(PROD_STREAM, paired);
+    await appendEnvelope(SHADOW_STREAM, paired);
+    for (let index = 0; index < 10; index += 1) {
+      await appendEnvelope(PROD_STREAM, {
+        type: 'player.name_changed',
+        ts: now,
+        payload: { steam_id64: `765611990000000${index}`, old_name: 'A', new_name: 'B' },
+      });
+    }
+    await appendEnvelope(SHADOW_STREAM, {
+      type: 'player.name_changed',
+      ts: now,
+      payload: { steam_id64: '7656119900000000', old_name: 'A', new_name: 'B' },
+    });
+
+    const result = runCli([SERVER_ID, '60000', '1']);
+
+    assert.equal(result.status, 1);
+    assert.equal(verdict(result).gate, 'name-changed-count-mismatch');
+    assert.equal(verdict(result).prodNameChanged, 10);
+    assert.equal(verdict(result).shadowNameChanged, 1);
   });
 
   it('fails closed after a bounded number of records', async () => {
