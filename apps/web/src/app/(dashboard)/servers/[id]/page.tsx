@@ -493,7 +493,20 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         />
       ) : null}
 
-      {/* 1. Состояние и карта — то, ради чего экран открывают во время матча. */}
+      {/* 1. Ростер — то, ради чего экран открывают во время матча: кто сейчас
+          в игре, в каком отряде и что с ним можно сделать. Он стоит выше
+          состояния и карты, потому что читают его постоянно, а адрес, порты и
+          кнопки жизненного цикла — один раз при настройке. Выше него остаются
+          только баннеры аварий: предупреждение, уехавшее под список из ста
+          строк, никого не предупреждает. */}
+      <LivePlayers
+        serverId={server.id}
+        canChat={canChat}
+        canBan={canBan}
+        modPermissions={modPermissions}
+      />
+
+      {/* 2. Состояние и карта — управление матчем, который сейчас идёт. */}
       <Card padding="none" as="section">
         <CardHeader title="Состояние" actions={<LiveIndicator lastUpdate={lastRefreshedAt} />} />
         <CardBody>
@@ -677,17 +690,9 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
-      {/* 2. Ростер и чат — работа с людьми, которые сейчас на сервере. */}
-      <LivePlayers
-        serverId={server.id}
-        canChat={canChat}
-        canBan={canBan}
-        modPermissions={modPermissions}
-      />
-
+      {/* 3. Чат и объявления — то, что оператор отправляет в игру. */}
       <ChatPanel serverId={id} canBan={canBan} />
 
-      {/* 3. Объявление — то, что оператор отправляет в игру. */}
       <BroadcastComposer serverId={server.id} canChat={canChat} />
 
       <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />

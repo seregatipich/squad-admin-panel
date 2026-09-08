@@ -19,7 +19,9 @@ vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/components/LogConsole', () => ({ LogConsole: () => null }));
 vi.mock('@/components/ServerLogFiles', () => ({ ServerLogFiles: () => null }));
 vi.mock('./ChatPanel', () => ({ ChatPanel: () => null }));
-vi.mock('./live-players', () => ({ LivePlayers: () => null }));
+vi.mock('./live-players', () => ({
+  LivePlayers: () => <section aria-label="Игроки онлайн" />,
+}));
 vi.mock('./map-widget', () => ({ MapWidget: () => null }));
 vi.mock('./SeedCallButton', () => ({ SeedCallButton: () => null }));
 vi.mock('./SeedingBadge', () => ({ SeedingBadge: () => null }));
@@ -58,7 +60,7 @@ if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
   };
 }
 
-function serverResponseFixture(status: string) {
+function serverResponseFixture(status: string, extra: Record<string, unknown> = {}) {
   return {
     server: {
       id: SERVER_ID,
@@ -72,11 +74,12 @@ function serverResponseFixture(status: string) {
     rcon_status: { state: 'not_polled' },
     container: null,
     host: null,
+    ...extra,
   };
 }
 
-/** Отдаёт остановленный сервер и пустые права; всё остальное — ошибка теста. */
-function stubServerFetch() {
+/** Отдаёт сервер (по умолчанию остановленный) и пустые права; всё остальное — ошибка теста. */
+function stubServerFetch(status = 'stopped', extra: Record<string, unknown> = {}) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/v1/me') {
       return {
@@ -86,7 +89,7 @@ function stubServerFetch() {
     }
     if (url === `/api/v1/servers/${SERVER_ID}`) {
       if (init?.method === 'DELETE') return { ok: true, text: async () => '' } as Response;
-      return { ok: true, json: async () => serverResponseFixture('stopped') } as Response;
+      return { ok: true, json: async () => serverResponseFixture(status, extra) } as Response;
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -172,6 +175,29 @@ describe('ServerDetailPage', () => {
 
     await screen.findByRole('heading', { name: 'Состояние' });
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('puts the live roster above the state card, below the alert banners', async () => {
+    // Ростер читают постоянно, состояние и порты — один раз при настройке;
+    // баннер аварии при этом обязан остаться выше списка на сто строк.
+    stubServerFetch('running', { crash_loop: true });
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    const roster = await screen.findByRole('region', { name: 'Игроки онлайн' });
+    const state = screen.getByRole('heading', { name: 'Состояние' });
+    const crashBanner = screen.getByText('Сервер в цикле аварий — автоперезапуск отключён');
+
+    expect(roster.compareDocumentPosition(state) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      crashBanner.compareDocumentPosition(roster) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('offers a retry when the server cannot be loaded, and recovers on it', async () => {
