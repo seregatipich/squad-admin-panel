@@ -113,6 +113,39 @@ async function asRoleWithSquadPermissions(
   return loginAsOwner(h);
 }
 
+async function putSettings(
+  cookie: string,
+  overrides: Partial<{
+    enabled: boolean;
+    selection: string;
+    layer_cooldown: number;
+    map_cooldown: number;
+    broadcast_template: string | null;
+  }> = {},
+) {
+  return h.app.inject({
+    method: 'PUT',
+    url: `/api/v1/servers/${SERVER_ID}/map-vote/settings`,
+    headers: { cookie },
+    payload: {
+      enabled: true,
+      selection: 'weighted_random',
+      layer_cooldown: 3,
+      map_cooldown: 2,
+      broadcast_template: null,
+      ...overrides,
+    },
+  });
+}
+
+async function listVersions(cookie: string) {
+  return h.app.inject({
+    method: 'GET',
+    url: `/api/v1/servers/${SERVER_ID}/map-vote/versions`,
+    headers: { cookie },
+  });
+}
+
 async function putCandidates(
   cookie: string,
   candidates: Array<{ layer: string; weight: number; enabled: boolean }>,
@@ -375,5 +408,165 @@ describeIfDb('server map-vote routes', () => {
     });
     expect(viewerGet.statusCode).toBe(200);
     expect(viewerGet.json().can_edit).toBe(false);
+  });
+});
+
+describeIfDb('map-vote history in config_versions', () => {
+  it('versions every save into the same table the config editor uses, and skips no-op saves', async () => {
+    const cookie = await loginAsOwner(h);
+
+    const first = await putCandidates(cookie, [{ layer: LAYER_A, weight: 3, enabled: true }]);
+    expect(first.statusCode).toBe(200);
+    await putSettings(cookie, { layer_cooldown: 5 });
+
+    const listed = await listVersions(cookie);
+    expect(listed.statusCode).toBe(200);
+    const body = listed.json<{
+      filename: string;
+      can_restore: boolean;
+      versions: Array<{
+        id: string;
+        sha256: string;
+        parent_version_id: string | null;
+        message: string | null;
+      }>;
+    }>();
+    expect(body.filename).toBe('map-vote.json');
+    expect(body.can_restore).toBe(true);
+    expect(body.versions).toHaveLength(2);
+    // Newest first, chained to its predecessor exactly like a .cfg history.
+    expect(body.versions[0]?.parent_version_id).toBe(body.versions[1]?.id);
+    expect(body.versions[0]?.message).toMatch(/автовыбор/i);
+    expect(body.versions[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    // The screen posts the whole form on every click; an identical save must
+    // not pad the history with a second, indistinguishable entry.
+    await putSettings(cookie, { layer_cooldown: 5 });
+    const afterNoop = await listVersions(cookie);
+    expect(afterNoop.json().versions).toHaveLength(2);
+
+    // The rows stay out of the config editor's own surface.
+    const configHistory = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/configs/map-vote.json/history`,
+      headers: { cookie },
+    });
+    expect(configHistory.statusCode).not.toBe(200);
+  });
+
+  it('serves one version and restores it, re-versioning the rollback', async () => {
+    const cookie = await loginAsOwner(h);
+    await putCandidates(cookie, [
+      { layer: LAYER_A, weight: 3, enabled: true },
+      { layer: LAYER_B, weight: 1, enabled: true },
+    ]);
+    await putSettings(cookie, { layer_cooldown: 7 });
+    const original = (await listVersions(cookie)).json().versions[0].id;
+
+    await putCandidates(cookie, [{ layer: LAYER_B, weight: 9, enabled: false }]);
+    await putSettings(cookie, { layer_cooldown: 1, enabled: false });
+
+    const one = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${original}`,
+      headers: { cookie },
+    });
+    expect(one.statusCode).toBe(200);
+    expect(one.json().snapshot).toMatchObject({ layer_cooldown: 7, enabled: true });
+    expect(one.json().snapshot.candidates).toHaveLength(2);
+
+    const restored = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${original}/restore`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ ok: true, count: 2, dropped_layers: [] });
+
+    const current = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      headers: { cookie },
+    });
+    const state = current.json();
+    expect(state).toMatchObject({ enabled: true, layer_cooldown: 7 });
+    expect(state.candidates.map((c: { layer: string }) => c.layer).sort()).toEqual(
+      [LAYER_A, LAYER_B].sort(),
+    );
+
+    // The rollback is itself an entry, so the history never loses a step.
+    const after = await listVersions(cookie);
+    expect(after.json().versions[0].message).toMatch(/откат/i);
+    await assertAuditRow(h, {
+      action: 'server.map_vote.restore',
+      resource: 'server',
+      targetId: SERVER_ID,
+    });
+  });
+
+  it('refuses to restore a version whose layer left the catalog until it is dropped explicitly', async () => {
+    const cookie = await loginAsOwner(h);
+    await putCandidates(cookie, [
+      { layer: LAYER_A, weight: 1, enabled: true },
+      { layer: LAYER_B, weight: 1, enabled: true },
+    ]);
+    const versionId = (await listVersions(cookie)).json().versions[0].id;
+
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    await h.db.delete(layers).where(eq(layers.name, LAYER_B));
+
+    const refused = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'unknown_layers_in_version', layers: [LAYER_B] });
+
+    const forced = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      headers: { cookie },
+      payload: { drop_unknown_layers: true },
+    });
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json()).toMatchObject({ count: 1, dropped_layers: [LAYER_B] });
+  });
+
+  it('lets a viewer read the history but not restore it', async () => {
+    const owner = await loginAsOwner(h);
+    await putCandidates(owner, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    const versionId = (await listVersions(owner)).json().versions[0].id;
+
+    const viewer = await asRoleWithSquadPermissions([]);
+    const read = await listVersions(viewer);
+    expect(read.statusCode).toBe(200);
+    expect(read.json().can_restore).toBe(false);
+
+    const denied = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      headers: { cookie: viewer },
+      payload: {},
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({
+      error: 'forbidden',
+      required_squad_permission: 'changemap',
+    });
+  });
+
+  it('404s for a version id that belongs to another server or file', async () => {
+    const cookie = await loginAsOwner(h);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    const missing = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${uuidv7()}`,
+      headers: { cookie },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ error: 'version_not_found' });
   });
 });
