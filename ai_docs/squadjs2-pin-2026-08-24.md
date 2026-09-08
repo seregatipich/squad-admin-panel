@@ -52,6 +52,53 @@ gh api /repos/breaking-squad/squadjs2/actions/jobs/101639765535/logs | grep -E '
 - `UPDATED_PLAYER_INFORMATION` эмитится **без payload** — снимок игроков читается
   из `server.players`.
 
+## Стоп-фактор пина: `PLAYER_DISCONNECTED` не срабатывает
+
+`squad-server/log-parser/player-disconnected.js` на пине требует в строке
+`UChannel::Close: Sending CloseBunch` подстроки
+`Name: EOSIpNetConnection_<N>, Driver: GameNetDriver EOSNetDriver_<N>`.
+Боевой Squad пишет
+`Name: RedpointEOSIpNetConnection_<N>, Driver: Name:GameNetDriver Def:GameNetDriver RedpointEOSNetDriver_<N>`.
+
+Замер на игровом хосте (2026-09-08, все шесть серверов):
+
+```
+grep -c "Name: EOSIpNetConnection_"          /opt/squad*/SquadGame/Saved/Logs/SquadGame.log  →  0 0 0 0 0 0
+grep -c "Name: RedpointEOSIpNetConnection_"  /opt/squad*/SquadGame/Saved/Logs/SquadGame.log  →  120 0 0 0 0 0
+```
+
+Других источников `PLAYER_DISCONNECTED` в SquadJS2 нет (единственный `emit` —
+в этом правиле). История правила: PR #376 расширял регэксп, PR #378 его
+откатил.
+
+Последствия:
+
+- `player.disconnected` — один из пяти производственных типов, поэтому
+  **production-переключение на этом пине запрещено**: cutover-сервер молча
+  перестанет получать события выхода игроков.
+- Shadow-соак безопасен и полезен: parity-гейт
+  (`scripts/rnsquadjs-shadow-diff.mjs`) увидит тип в prod и не увидит в shadow
+  и выдаст `parity-failed` с `missingTypes: ["player.disconnected"]`.
+- Разблокировка: исправить правило в `breaking-squad/squadjs2`, дождаться
+  verified-выпуска, поднять `ARG SQUADJS2_DIGEST`, перепроверить golden-фикстуру
+  (`docker/squadjs2/plugins/panel-bridge/test/fixtures/SquadGame.log` содержит
+  обе формы строки — текущую боевую и ту, которую правило принимает).
+
+## Ещё один факт о контуре RNSquadJS (обнаружен при снятии фикстуры)
+
+Прежняя «parity-фикстура» `docker/rnsquadjs/plugins/panelBridge/test/fixtures/SquadGame.log.parsed.json`
+состоит из 4964 строк простоя (EOS/ODK/ICMP-шум) и **не содержит ни одного
+игрового события**, поэтому ничего в маппинге событий не проверяла. Фикстура
+SquadJS2 собрана заново из реальных форматов строк боевых логов с
+обезличенными идентификаторами.
+
+Прогон боевого контура RNSquadJS (`squad-logs` на пине `d76fb4a8` + shipped
+`eventMap.ts`) по той же фикстуре показал, насколько беднее его payload'ы:
+`player.connected` без `name`, `player.revived` пустой, `player.disconnected`
+без `steam_id64`, `squad.created` без `player`/`team`. SquadJS2 разрешает
+игроков до emit, поэтому эти поля заполняются — контракт типов и ключей тот же,
+значения полнее.
+
 ## Чек-лист совместимости при бампе digest
 
 Выполнять целиком при каждом изменении `ARG SQUADJS2_DIGEST`:
