@@ -37,7 +37,7 @@ const SETTINGS = {
  * Same shape as the router in page.chat-commands.test.tsx: any URL the page
  * requests that is not stubbed here rejects, so an unexpected fetch fails loudly.
  */
-function mockFetch(rnsquadjs: Response | (() => Response)) {
+function mockFetch(sidecar: Response | (() => Response)) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url === '/api/v1/servers/srv-1' && (!init?.method || init.method === 'GET')) {
@@ -56,8 +56,8 @@ function mockFetch(rnsquadjs: Response | (() => Response)) {
         new Response(JSON.stringify({ squad_permissions: [] }), { status: 200 }),
       );
     }
-    if (url === '/api/v1/servers/srv-1/rnsquadjs') {
-      return Promise.resolve(typeof rnsquadjs === 'function' ? rnsquadjs() : rnsquadjs);
+    if (url === '/api/v1/servers/srv-1/sidecar') {
+      return Promise.resolve(typeof sidecar === 'function' ? sidecar() : sidecar);
     }
     return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method ?? 'GET'}`));
   });
@@ -72,13 +72,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
+describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
   it('renders the production mode and a connected heartbeat', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
         statusResponse({
           server_id: 'srv-1',
+          engine: 'squadjs2',
           mode: 'production',
           cutover: true,
           status: { state: 'connected', last_change: '2026-07-27T10:00:00.000Z' },
@@ -87,8 +88,9 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
     );
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
-    expect(await screen.findByText('Интеграция RNSquadJS')).toBeInTheDocument();
+    expect(await screen.findByText('Интеграция SquadJS')).toBeInTheDocument();
     expect(await screen.findByText('Продакшен')).toBeInTheDocument();
+    expect(screen.getByText('SquadJS2')).toBeInTheDocument();
     expect(screen.getByText('RCON подключён')).toBeInTheDocument();
   });
 
@@ -98,6 +100,7 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
       mockFetch(
         statusResponse({
           server_id: 'srv-1',
+          engine: 'rnsquadjs',
           mode: 'shadow',
           cutover: false,
           status: { state: 'disconnected', last_change: '2026-07-27T11:00:00.000Z' },
@@ -107,6 +110,7 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Теневой режим')).toBeInTheDocument();
+    expect(screen.getByText('RNSquadJS (legacy)')).toBeInTheDocument();
     expect(screen.getByText('RCON отключён')).toBeInTheDocument();
   });
 
@@ -114,12 +118,21 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
-        statusResponse({ server_id: 'srv-1', mode: 'legacy', cutover: false, status: null }),
+        statusResponse({
+          server_id: 'srv-1',
+          engine: 'rnsquadjs',
+          mode: 'legacy',
+          cutover: false,
+          status: null,
+        }),
       ),
     );
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Штатный парсер')).toBeInTheDocument();
+    // With no sidecar running, the engine assignment says nothing about what is
+    // actually reading events.
+    expect(screen.getByText('Не запущен')).toBeInTheDocument();
     expect(screen.getByText('Нет сигнала')).toBeInTheDocument();
   });
 
@@ -129,7 +142,7 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
 
     // The page itself has rendered; only the gated section is absent.
     expect(await screen.findByText('Чат-команды')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('Интеграция RNSquadJS')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Интеграция SquadJS')).not.toBeInTheDocument());
   });
 
   it('hides the section when the status fetch rejects outright', async () => {
@@ -142,6 +155,6 @@ describe('SettingsPage RNSquadJS section (STATS-4 #71)', () => {
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Чат-команды')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('Интеграция RNSquadJS')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Интеграция SquadJS')).not.toBeInTheDocument());
   });
 });

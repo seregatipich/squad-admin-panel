@@ -137,7 +137,18 @@ describe('softDeleteServer (orchestrator)', () => {
       path: `/var/lib/squad-panel/saved/${seeded.id}`,
     });
     expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}` });
+    // Both sidecar engines are torn down symmetrically, and their per-server
+    // config dirs go with them — each holds a rendered config carrying the
+    // server's plaintext RCON password.
     expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${seeded.id}` });
+    expect(containerRm).toHaveBeenCalledWith({ name: `squadjs2-${seeded.id}` });
+    expect(directoryDelete).toHaveBeenCalledWith({
+      path: `/run/squad-panel/rnsquadjs/${seeded.id}`,
+    });
+    expect(directoryDelete).toHaveBeenCalledWith({
+      path: `/run/squad-panel/squadjs2/${seeded.id}`,
+    });
+    expect(result.sidecar_dirs_removed).toBe(true);
     expect(ufwRule).toHaveBeenCalledTimes(4);
     for (const call of ufwRule.mock.calls) {
       expect(call[0].action).toBe('remove');

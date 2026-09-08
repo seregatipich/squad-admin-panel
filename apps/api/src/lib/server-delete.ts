@@ -7,7 +7,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type Redis from 'ioredis';
 import { ADMINS_CFG_SYNC_GROUP, ADMINS_CFG_SYNC_STREAM_PREFIX } from './admins-cfg-sync.js';
-import { sidecarContainerName } from './rnsquadjs.js';
+import { purgeSidecarDirs, removeAllSidecars } from './sidecar-lifecycle.js';
 
 // Prefix of the per-server Admins.cfg sync-status key the config-sync worker
 // publishes (mirrors the local const in `routes/admins-cfg.ts`). Dropped on
@@ -21,6 +21,8 @@ export interface DeleteResult {
   container_removed: boolean;
   configs_dir_removed: boolean;
   saved_dir_removed: boolean;
+  /** True when both sidecar engines' per-server config dirs are gone. */
+  sidecar_dirs_removed: boolean;
   ufw_rules_removed: number;
   /** True when the per-server Redis sync queue cleanup ran (requires `redis`). */
   sync_queue_removed: boolean;
@@ -62,6 +64,7 @@ export async function softDeleteServer(
     container_removed: false,
     configs_dir_removed: false,
     saved_dir_removed: false,
+    sidecar_dirs_removed: false,
     ufw_rules_removed: 0,
     sync_queue_removed: false,
     sync_outbox_cancelled: 0,
@@ -164,9 +167,12 @@ export async function softDeleteServer(
       }
     }
 
-    // Tear down the RNSquadJS sidecar symmetrically. It is best-effort: a
+    // Tear down both engines' sidecars symmetrically. It is best-effort: a
     // missing or never-launched sidecar must not block the server deletion.
-    await ctx.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => {});
+    await removeAllSidecars(ctx.bridge, serverId);
+    // Their config dirs hold the rendered config with the server's plaintext
+    // RCON password, so they must not outlive the server.
+    result.sidecar_dirs_removed = await purgeSidecarDirs(ctx.bridge, serverId);
 
     try {
       const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });

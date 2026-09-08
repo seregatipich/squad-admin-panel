@@ -20,6 +20,7 @@ import { adminsCfgSyncOutbox, configVersions, servers } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { relaunchSidecar } from '../src/lib/rnsquadjs.js';
 import { markServerRunningAndEnqueue } from '../src/routes/server-install.js';
 import {
   buildIntegrationApp,
@@ -29,12 +30,15 @@ import {
   makeFakeBridge,
 } from './integration/harness.js';
 
-// writeSidecarConfig performs real fs writes under /run; stub it so install
-// tests never touch the host's runtime dir. buildSidecarEnv / sidecar naming
-// stay real so the env asserted below is the production shape.
+// The relaunch helpers write real files under /run; stub them so install tests
+// never touch the host's runtime dir. Which engine is chosen and what env each
+// one passes is covered by test/lib/{rnsquadjs,squadjs2}.test.ts and
+// test/sidecar-lifecycle.test.ts; here the install-specific behaviour matters:
+// the sidecar is launched at all, and its failure never fails the install.
 vi.mock('../src/lib/rnsquadjs.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lib/rnsquadjs.js')>()),
   writeSidecarConfig: vi.fn().mockResolvedValue(undefined),
+  relaunchSidecar: vi.fn().mockResolvedValue({ containerId: 'rnsquadjs-xyz', mode: 'shadow' }),
 }));
 
 const OWNER_STEAM_ID = 76561198000000999n;
@@ -273,27 +277,17 @@ describe('server install depot seeding', () => {
       h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
-    it('launches the sidecar in shadow mode and seeds the ro Logs bind source', async () => {
-      const runRnsquadjs = vi
-        .fn()
-        .mockResolvedValue({ container_id: 'rnsquadjs-xyz', status: 'started' });
-      bridge.containerRunRnsquadjs = runRnsquadjs;
+    it('launches the sidecar for the assigned engine and seeds the ro Logs bind source', async () => {
+      vi.mocked(relaunchSidecar).mockClear();
 
       const cookie = await loginAs(h);
       const serverId = await createServer(h, cookie);
       await runInstallAndWaitForDone(h, cookie, serverId);
 
-      expect(runRnsquadjs).toHaveBeenCalledTimes(1);
-      const call = runRnsquadjs.mock.calls[0];
-      if (!call) throw new Error('runRnsquadjs.mock.calls[0] is missing');
-      const arg = call[0] as {
-        server_id: string;
-        env: Record<string, string>;
-      };
-      expect(arg.server_id).toBe(serverId);
-      // No cutover flag set for this fresh id → shadow, not production.
-      expect(arg.env.PANEL_BRIDGE_MODE).toBe('shadow');
-      expect(arg.env.SERVER_ID).toBe(serverId);
+      // A fresh id is in neither the engine set nor the cutover set, so install
+      // takes the RNSquadJS path in shadow mode.
+      expect(relaunchSidecar).toHaveBeenCalledTimes(1);
+      expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), serverId);
 
       // The bridge bind-mounts <saved>/<id>/SquadGame/Saved/Logs read-only;
       // install must create that dir (via a .keep file) before the sidecar
@@ -304,9 +298,7 @@ describe('server install depot seeding', () => {
     });
 
     it('completes the install even when the sidecar launch rejects (non-fatal)', async () => {
-      bridge.containerRunRnsquadjs = vi
-        .fn()
-        .mockRejectedValue(new Error('rnsquadjs image missing'));
+      vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));
 
       const cookie = await loginAs(h);
       const serverId = await createServer(h, cookie);

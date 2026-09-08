@@ -23,22 +23,39 @@ export function licenseRestartRequired(
 }
 
 /**
- * STATS-4 (#71): shapes and labels behind the «Интеграция RNSquadJS» section.
- * Mirrors the payload of `GET /api/v1/servers/:id/rnsquadjs` field for field.
+ * STATS-4 (#71): shapes and labels behind the «Интеграция SquadJS» section.
+ * Mirrors the payload of `GET /api/v1/servers/:id/sidecar` field for field.
  */
-export type RnsquadjsMode = 'production' | 'shadow' | 'legacy';
+export type SidecarMode = 'production' | 'shadow' | 'legacy';
 
-export interface RnsquadjsStatus {
+/** Sidecar engine serving the server. */
+export type SidecarEngine = 'squadjs2' | 'rnsquadjs';
+
+export interface SidecarStatus {
   state: 'connected' | 'disconnected';
   last_change: string;
 }
 
-export interface RnsquadjsIntegration {
+export interface SidecarIntegration {
   server_id: string;
-  mode: RnsquadjsMode;
+  engine: SidecarEngine;
+  mode: SidecarMode;
   cutover: boolean;
-  /** null means no sidecar heartbeat within its 300s TTL — not an error. */
-  status: RnsquadjsStatus | null;
+  /** null means no sidecar status within its 300s TTL — not an error. */
+  status: SidecarStatus | null;
+}
+
+/**
+ * Names the sidecar engine serving the server.
+ *
+ * @param engine - Engine reported by the status route.
+ * @param mode - Reported mode; with no sidecar running the engine assignment
+ *   says nothing about what is actually reading events.
+ * @returns The badge text for the engine row.
+ */
+export function sidecarEngineLabel(engine: SidecarEngine, mode: SidecarMode): string {
+  if (mode === 'legacy') return 'Не запущен';
+  return engine === 'squadjs2' ? 'SquadJS2' : 'RNSquadJS (legacy)';
 }
 
 /**
@@ -48,11 +65,11 @@ export interface RnsquadjsIntegration {
  * @returns A short title plus a one-line explanation of what the mode means
  *   for the event pipeline.
  */
-export function rnsquadjsModeLabel(mode: RnsquadjsMode): { title: string; hint: string } {
+export function sidecarModeLabel(mode: SidecarMode): { title: string; hint: string } {
   if (mode === 'production') {
     return {
       title: 'Продакшен',
-      hint: 'События сервера читает сайдкар RNSquadJS; штатный парсер логов для него отключён.',
+      hint: 'События сервера читает сайдкар SquadJS; штатный парсер логов для него отключён.',
     };
   }
   if (mode === 'shadow') {
@@ -68,13 +85,13 @@ export function rnsquadjsModeLabel(mode: RnsquadjsMode): { title: string; hint: 
 }
 
 /**
- * Renders the sidecar heartbeat as a status pill.
+ * Renders the sidecar status as a pill.
  *
- * @param status - Heartbeat from the status route, or null when none arrived
- *   within its 300s TTL.
- * @returns Pill text and tone; a missing heartbeat is neutral, not an error.
+ * @param status - Status from the route, or null when none arrived within its
+ *   300s TTL.
+ * @returns Pill text and tone; a missing status is neutral, not an error.
  */
-export function rnsquadjsStatusPill(status: RnsquadjsStatus | null): {
+export function sidecarStatusPill(status: SidecarStatus | null): {
   text: string;
   tone: 'green' | 'amber' | 'neutral';
 } {

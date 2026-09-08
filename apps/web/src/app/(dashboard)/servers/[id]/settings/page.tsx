@@ -18,9 +18,10 @@ import {
 } from '@/components/ui';
 import {
   licenseRestartRequired,
-  type RnsquadjsIntegration,
-  rnsquadjsModeLabel,
-  rnsquadjsStatusPill,
+  type SidecarIntegration,
+  sidecarEngineLabel,
+  sidecarModeLabel,
+  sidecarStatusPill,
 } from './helpers';
 
 interface Settings {
@@ -49,7 +50,7 @@ interface Settings {
 const RULES_TEXT_MAX = 300;
 
 /** Тон пилюли состояния сайдкара; слово в самой пилюле несёт тот же смысл (§5). */
-const RNSQUADJS_PILL_TONE: Record<'green' | 'amber' | 'neutral', BadgeTone> = {
+const SIDECAR_PILL_TONE: Record<'green' | 'amber' | 'neutral', BadgeTone> = {
   green: 'good',
   amber: 'warn',
   neutral: 'neutral',
@@ -159,7 +160,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   } | null>(null);
 
   const [canManageServer, setCanManageServer] = useState(false);
-  const [rnsquadjs, setRnsquadjs] = useState<RnsquadjsIntegration | null>(null);
+  const [sidecar, setSidecar] = useState<SidecarIntegration | null>(null);
   const [seedingDraft, setSeedingDraft] = useState<{
     seed_live_at?: number;
     seed_hysteresis?: number;
@@ -317,19 +318,19 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
 
   // STATS-4 (#71). Read-only sidecar status, gated on `server:view`; the
   // section self-hides on 403 rather than rendering an error, matching
-  // SeedContributionSection. Cutover/rollback stays on the server detail page's
-  // controls (POST .../rnsquadjs, `server:stop`) — this section only reports.
+  // SeedContributionSection. Switching engine/mode stays on the engine-neutral
+  // POST .../sidecar (`server:stop`) — this section only reports.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/servers/${id}/rnsquadjs`, {
+        const res = await fetch(`/api/v1/servers/${id}/sidecar`, {
           credentials: 'include',
           cache: 'no-store',
         });
         if (!res.ok || cancelled) return;
-        const data = (await res.json()) as RnsquadjsIntegration;
-        if (!cancelled) setRnsquadjs(data);
+        const data = (await res.json()) as SidecarIntegration;
+        if (!cancelled) setSidecar(data);
       } catch {
         // best-effort: the section simply stays hidden
       }
@@ -856,7 +857,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
 
       <GroupedList
         title="Чат-команды"
-        footnote="Игровые команды !stats, !rules, !report выполняются через RCON. Отключите, если RNSquadJS обрабатывает чат-команды сам."
+        footnote="Игровые команды !stats, !rules, !report выполняются через RCON. Отключите, если сайдкар SquadJS обрабатывает чат-команды сам."
       >
         <GroupedRow
           label="Включить игровые чат-команды"
@@ -884,36 +885,38 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         </div>
       </GroupedList>
 
-      {rnsquadjs ? (
+      {sidecar ? (
         <GroupedList
-          title="Интеграция RNSquadJS"
-          footnote="Переключение и откат сайдкара выполняются отдельным правом server:stop; эта секция только показывает состояние."
+          title="Интеграция SquadJS"
+          footnote="Переключение движка и режима выполняется отдельным правом server:stop; эта секция только показывает состояние."
         >
           <GroupedRow
+            label="Движок сайдкара"
+            control={<Badge>{sidecarEngineLabel(sidecar.engine, sidecar.mode)}</Badge>}
+          />
+          <GroupedRow
             label="Источник событий"
-            description={rnsquadjsModeLabel(rnsquadjs.mode).hint}
-            control={<Badge>{rnsquadjsModeLabel(rnsquadjs.mode).title}</Badge>}
+            description={sidecarModeLabel(sidecar.mode).hint}
+            control={<Badge>{sidecarModeLabel(sidecar.mode).title}</Badge>}
           />
           <GroupedRow
             label="Связь сайдкара"
             control={
-              <Badge tone={RNSQUADJS_PILL_TONE[rnsquadjsStatusPill(rnsquadjs.status).tone]}>
-                {rnsquadjsStatusPill(rnsquadjs.status).text}
+              <Badge tone={SIDECAR_PILL_TONE[sidecarStatusPill(sidecar.status).tone]}>
+                {sidecarStatusPill(sidecar.status).text}
               </Badge>
             }
           />
           <GroupedRow
             label="Переключён на сайдкар"
-            control={
-              <span className="text-[13px] text-ink">{rnsquadjs.cutover ? 'Да' : 'Нет'}</span>
-            }
+            control={<span className="text-[13px] text-ink">{sidecar.cutover ? 'Да' : 'Нет'}</span>}
           />
           <GroupedRow
             label="Последнее изменение связи"
             control={
               <span className="text-[13px] tabular-nums text-ink">
-                {rnsquadjs.status
-                  ? new Date(rnsquadjs.status.last_change).toLocaleString('ru-RU')
+                {sidecar.status
+                  ? new Date(sidecar.status.last_change).toLocaleString('ru-RU')
                   : '—'}
               </span>
             }

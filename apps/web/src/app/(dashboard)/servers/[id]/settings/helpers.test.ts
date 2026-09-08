@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { licenseRestartRequired, rnsquadjsModeLabel, rnsquadjsStatusPill } from './helpers';
+import {
+  licenseRestartRequired,
+  sidecarEngineLabel,
+  sidecarModeLabel,
+  sidecarStatusPill,
+} from './helpers';
 
 describe('licenseRestartRequired (SRV-6 #45)', () => {
   it('is false when no license change is on record', () => {
@@ -25,10 +30,10 @@ describe('licenseRestartRequired (SRV-6 #45)', () => {
   });
 });
 
-describe('rnsquadjsModeLabel (STATS-4 #71)', () => {
+describe('sidecarModeLabel (STATS-4 #71)', () => {
   it('names each of the three sidecar modes distinctly', () => {
     const titles = (['production', 'shadow', 'legacy'] as const).map(
-      (m) => rnsquadjsModeLabel(m).title,
+      (m) => sidecarModeLabel(m).title,
     );
     expect(titles).toEqual(['Продакшен', 'Теневой режим', 'Штатный парсер']);
     expect(new Set(titles).size).toBe(3);
@@ -36,25 +41,37 @@ describe('rnsquadjsModeLabel (STATS-4 #71)', () => {
 
   it('gives every mode a non-empty explanation', () => {
     for (const mode of ['production', 'shadow', 'legacy'] as const) {
-      expect(rnsquadjsModeLabel(mode).hint.length).toBeGreaterThan(0);
+      expect(sidecarModeLabel(mode).hint.length).toBeGreaterThan(0);
     }
   });
 });
 
-describe('rnsquadjsStatusPill (STATS-4 #71)', () => {
+describe('sidecarStatusPill (STATS-4 #71)', () => {
   it('reads a missing heartbeat as "no signal", not as an error', () => {
-    expect(rnsquadjsStatusPill(null)).toEqual({ text: 'Нет сигнала', tone: 'neutral' });
+    expect(sidecarStatusPill(null)).toEqual({ text: 'Нет сигнала', tone: 'neutral' });
   });
 
   it('maps a connected heartbeat to the green tone', () => {
     expect(
-      rnsquadjsStatusPill({ state: 'connected', last_change: '2026-07-27T10:00:00.000Z' }),
+      sidecarStatusPill({ state: 'connected', last_change: '2026-07-27T10:00:00.000Z' }),
     ).toEqual({ text: 'RCON подключён', tone: 'green' });
   });
 
   it('maps a disconnected heartbeat to the amber tone', () => {
     expect(
-      rnsquadjsStatusPill({ state: 'disconnected', last_change: '2026-07-27T10:00:00.000Z' }),
+      sidecarStatusPill({ state: 'disconnected', last_change: '2026-07-27T10:00:00.000Z' }),
     ).toEqual({ text: 'RCON отключён', tone: 'amber' });
+  });
+});
+
+describe('sidecarEngineLabel', () => {
+  it('names the engine that is actually running', () => {
+    expect(sidecarEngineLabel('squadjs2', 'production')).toBe('SquadJS2');
+    expect(sidecarEngineLabel('rnsquadjs', 'shadow')).toBe('RNSquadJS (legacy)');
+  });
+
+  it('reports no sidecar in legacy mode regardless of the assigned engine', () => {
+    expect(sidecarEngineLabel('squadjs2', 'legacy')).toBe('Не запущен');
+    expect(sidecarEngineLabel('rnsquadjs', 'legacy')).toBe('Не запущен');
   });
 });
