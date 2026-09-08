@@ -215,17 +215,6 @@ describe('BanNickButton', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders the icon variant with the full label in aria-label and title', async () => {
-    vi.stubGlobal('fetch', mockFetchOk({ id: 'rule-x', pattern: 'Someone' }));
-    render(<BanNickButton nick="Someone" canBan variant="icon" />);
-    const trigger = screen.getByRole('button', { name: 'Забанить ник «Someone»' });
-    expect(trigger).toHaveAttribute('title', 'Забанить ник «Someone»');
-    expect(trigger).not.toHaveTextContent('Забанить ник');
-    fireEvent.click(trigger);
-    const patternInput = (await screen.findByLabelText(/паттерн/i)) as HTMLInputElement;
-    expect(patternInput.value).toBe('Someone');
-  });
-
   it('opens the prefilled modal on click and closes it on save', async () => {
     vi.stubGlobal('fetch', mockFetchOk({ id: 'rule-x', pattern: 'Someone' }));
     render(<BanNickButton nick="Someone" canBan />);

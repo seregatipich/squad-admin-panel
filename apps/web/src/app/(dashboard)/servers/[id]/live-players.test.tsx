@@ -217,24 +217,13 @@ describe('LivePlayers', () => {
   );
 
   it(
-    'hides the per-player «Забанить ник» button without the ban permission',
+    'carries no «Забанить ник» control in the roster row',
     async () => {
-      render(<LivePlayers serverId="srv-1" canBan={false} />);
+      // Бан ника живёт в чате и в архиве чата, где виден сам ник; в строке
+      // ростера он занимал место, которое нужно имени игрока.
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:ban_perm']} />);
       await screen.findByText('Leader');
       expect(screen.queryByRole('button', { name: /забанить ник/i })).not.toBeInTheDocument();
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    'shows a per-player «Забанить ник» button with the ban permission, prefilling the modal with the roster name',
-    async () => {
-      render(<LivePlayers serverId="srv-1" canBan={true} />);
-      await screen.findByText('Leader');
-      const buttons = screen.getAllByRole('button', { name: /забанить ник «leader»/i });
-      fireEvent.click(buttons[0]);
-      const patternInput = (await screen.findByLabelText(/паттерн/i)) as HTMLInputElement;
-      expect(patternInput.value).toBe('Leader');
     },
     TEST_TIMEOUT_MS,
   );
@@ -481,14 +470,16 @@ describe('LivePlayers — быстрые действия над игроком'
   );
 
   it(
-    'links every resolved roster player to their dossier',
+    'opens the dossier from the player name itself, with no separate button',
     async () => {
       render(<LivePlayers serverId="srv-1" />);
       await screen.findByText('Leader');
-      expect(screen.getByRole('link', { name: 'Досье: Leader' })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: 'Leader' })).toHaveAttribute(
         'href',
         '/all-players/019e2000-0000-7000-8000-0000000000aa',
       );
+      expect(screen.queryByRole('link', { name: /досье/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /досье/i })).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
