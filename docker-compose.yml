@@ -574,6 +574,20 @@ services:
     command: ['/bin/true']
     restart: 'no'
 
+  # Производный сайдкар-образ SquadJS2. База — приватный verified-выпуск
+  # ghcr.io/breaking-squad/squadjs, пин по digest в docker/squadjs2.Dockerfile;
+  # сборка требует `docker login ghcr.io`. Контекст — корень репозитория, потому
+  # что Dockerfile COPY'ит `docker/squadjs2/...`. Бридж запускает сайдкар с
+  # `--pull never`, поэтому тег обязан существовать локально.
+  squadjs2-image:
+    build:
+      context: .
+      dockerfile: docker/squadjs2.Dockerfile
+    image: squad-panel/squadjs2:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
+
   # Restic backup of LOGICAL dumps, not the raw data dirs. PRE_COMMANDS run
   # (via the base image, which evals them in bash) before each snapshot:
   # pg_dump writes a custom-format Postgres dump and redis-cli fetches the
