@@ -153,9 +153,29 @@ SquadJS2 собрана заново из реальных форматов ст
    `required` (падение, если значение равно `default`).
 7. **Boot-тест** — повторить прогон из раздела ниже.
 
-## Boot-тест пина (Task 2 плана) — НЕ ВЫПОЛНЕН
+## Boot-тест пина (Task 2 плана) — выполнен частично (из исходников)
 
-**Статус: заблокирован.** Требует `docker pull` приватного пакета
+Часть утверждений проверена прогоном **реального кода пина** без Docker
+(клон `breaking-squad/squadjs2` на `258440d0`, `corepack yarn install --ignore-engines`),
+2026-09-08:
+
+| Проверка | Результат |
+|---|---|
+| Автообнаружение находит плагин в раскладке образа (`squad-server/plugins/panel-bridge.js` + подкаталог `panel-bridge/`) | `Plugins.getPlugins()` → `PanelBridge discovered: true`, всего 48 плагинов |
+| `ioredis`/`uuid` резолвятся из `squad-server/plugins/node_modules`, не из `/app/node_modules` | импорт плагина в скопированной раскладке проходит; `mount()`/`unmount()` отрабатывают, слушателей после `unmount` — 0 |
+| Генерируемый конфиг принимается фабрикой | `SquadServerFactory.buildFromConfig(<конфиг из lib/squadjs2.ts>)` → `plugins: PanelBridge`, `connectors: []` |
+| Пустые коннекторы не поднимают mongoose/sequelize/discord | тот же прогон: список коннекторов пуст |
+| `logger.colors` обязателен | без ключа фабрика падает на `Object.entries(undefined)` — поэтому рендерер всегда его пишет |
+
+**Остаётся непроверенным (нужен Docker и доступ к GHCR):**
+
+- старт под uid 1001 поверх файлов образа с владельцем 1000;
+- поведение `VOLUME /app/data` при `--read-only` (нужен ли `--tmpfs /app/data`);
+- отсутствие слушающих портов в неймспейсе хоста (`ss -tlnp`);
+- реакция на недоступный RCON — ретраи, а не crash-loop;
+- сборка производного образа целиком (`docker/squadjs2.Dockerfile`).
+
+**Статус контейнерной части: заблокирован.** Требует `docker pull` приватного пакета
 `ghcr.io/breaking-squad/squadjs`. На момент реализации:
 
 - у панельного репозитория нет доступа к пакету, секрет `GHCR_PULL_TOKEN` не заведён;
