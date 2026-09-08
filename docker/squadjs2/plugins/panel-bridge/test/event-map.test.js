@@ -11,6 +11,9 @@ const fixture = (name) =>
 
 const rawEvents = fixture('squadjs2-events.json');
 const expectedEnvelopes = fixture('expected-envelopes.json');
+// Envelopes the shipped RNSquadJS mapper produces from the same fixture log,
+// captured by replaying it through squad-logs at pin d76fb4a8.
+const rnsquadjsEnvelopes = fixture('rnsquadjs-envelopes.json');
 
 describe('mapEvent against the SquadJS2 golden fixture', () => {
   it.each(expectedEnvelopes)('maps $event (#$index) to $type', (expected) => {
@@ -91,5 +94,42 @@ describe('mapEvent edge cases', () => {
     // The published bytes are what the contract fixes: an absent classname must
     // not surface as a `vehicle` key in the stream, exactly as under RNSquadJS.
     expect(Object.hasOwn(JSON.parse(JSON.stringify(envelope.payload)), 'vehicle')).toBe(false);
+  });
+});
+
+describe('payload coverage against the RNSquadJS contour', () => {
+  const byType = (envelopes, type) => envelopes.find((e) => e.type === type);
+
+  it('fills identity fields RNSquadJS left absent on connect', () => {
+    // RNSquadJS forwards raw squad-logs events, whose PLAYER_CONNECTED has no
+    // name at all — which is why banned-name enforcement never fired on cutover
+    // servers. SquadJS2 resolves the player first.
+    expect(byType(rnsquadjsEnvelopes, 'player.connected').payload.name).toBeUndefined();
+    expect(byType(expectedEnvelopes, 'player.connected').payload.name).toBe('PanelAlpha');
+  });
+
+  it('fills the steam id RNSquadJS left absent on disconnect', () => {
+    expect(byType(rnsquadjsEnvelopes, 'player.disconnected').payload.steam_id64).toBeUndefined();
+    expect(byType(expectedEnvelopes, 'player.disconnected').payload.steam_id64).toBe(
+      '76561199000000002',
+    );
+  });
+
+  it('fills the revive participants RNSquadJS emitted as an empty payload', () => {
+    expect(byType(rnsquadjsEnvelopes, 'player.revived').payload).toEqual({});
+    const revived = byType(expectedEnvelopes, 'player.revived').payload;
+    expect(revived.reviver).not.toBeNull();
+    expect(revived.revived).not.toBeNull();
+  });
+
+  it('keeps the type set and payload keys of the contract', () => {
+    // Values get richer; the key set is what consumers and the shadow-diff read.
+    for (const rn of rnsquadjsEnvelopes) {
+      const ours = byType(expectedEnvelopes, rn.type);
+      if (!ours) continue;
+      for (const key of Object.keys(rn.payload)) {
+        expect(Object.keys(ours.payload)).toContain(key);
+      }
+    }
   });
 });

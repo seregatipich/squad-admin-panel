@@ -58,6 +58,9 @@ services:
       APP_VERSION: ${APP_VERSION:-dev}
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
+      # Redis the per-server sidecar container reaches. It runs with
+      # --network host, so the compose service name does not resolve there.
+      SIDECAR_REDIS_URL: ${SIDECAR_REDIS_URL:-redis://127.0.0.1:6379}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock

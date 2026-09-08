@@ -99,6 +99,32 @@ SquadJS2 собрана заново из реальных форматов ст
 игроков до emit, поэтому эти поля заполняются — контракт типов и ключей тот же,
 значения полнее.
 
+## Как пересобрать golden-фикстуру при бампе
+
+Фикстура снята прогоном реального кода обоих движков по
+`docker/squadjs2/plugins/panel-bridge/test/fixtures/SquadGame.log` (строки —
+форматы боевых логов с обезличенными идентификаторами). Docker для этого не
+нужен, обе стороны — обычные Node-проекты:
+
+1. **SquadJS2-сырьё.** Склонировать `breaking-squad/squadjs2`, `git checkout <новый пин>`,
+   `corepack yarn install --ignore-engines`. Скриптом в корне клона: создать
+   `new SquadServer({id:1, host:'127.0.0.1', queryPort, rconPort, rconPassword,
+   logReaderMode:'tail', logDir:<каталог фикстуры>, adminLists:[]})`, подменить
+   `getPlayerByEOSID/getPlayerByName/getPlayerByNameSuffix/getPlayerByController/
+   getSquadByID/updateAdmins` и `Layers.getLayerByClassname` на стабы с двумя
+   синтетическими игроками, подписаться на 17 событий + `UPDATED_PLAYER_INFORMATION`,
+   скормить строки через `server.logParser.processLine(line)` и RCON-пакеты из
+   `fixtures/rcon-packets.json` через `server.rcon.processChatPacket({body})`.
+   Результат → `fixtures/squadjs2-events.json`.
+2. **Эталон RNSquadJS.** `npm i github:lACTEPUKCl/squad-logs` (форк форвардит
+   события `squad-logs` на `state.listener` без изменений), прогнать те же
+   строки через `parseLine(line, emitter)` и подать в
+   `docker/rnsquadjs/plugins/panelBridge/src/eventMap.ts`.
+   Результат → `fixtures/rnsquadjs-envelopes.json`.
+3. **Ожидания.** `fixtures/expected-envelopes.json` — контракт из `eventMap.ts`,
+   применённый к сырью SquadJS2; правится вручную при осознанном изменении
+   контракта.
+
 ## Чек-лист совместимости при бампе digest
 
 Выполнять целиком при каждом изменении `ARG SQUADJS2_DIGEST`:

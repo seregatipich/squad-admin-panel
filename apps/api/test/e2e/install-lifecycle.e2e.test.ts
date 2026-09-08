@@ -306,12 +306,14 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     expect(archive.items.some((s) => s.id === serverId)).toBe(true);
 
     // Both engines' sidecar config dirs go with the server: each holds a
-    // rendered config carrying the server's plaintext RCON password.
+    // rendered config carrying the server's plaintext RCON password. The bridge
+    // has no read RPC for /run, so assert on directory_delete being idempotent:
+    // a second delete of an already-removed dir reports removed=false.
     for (const engine of ['rnsquadjs', 'squadjs2']) {
-      const survived = await bridge
-        .fileRead({ path: `/run/squad-panel/${engine}/${serverId}/config.json` })
-        .catch(() => null);
-      expect(survived, `${engine} sidecar config survived deletion`).toBeNull();
+      const again = await bridge.directoryDelete({
+        path: `/run/squad-panel/${engine}/${serverId}`,
+      });
+      expect(again.removed, `${engine} sidecar config dir survived deletion`).toBe(false);
     }
 
     serverId = ''; // signal afterAll to skip cleanup
