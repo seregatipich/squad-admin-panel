@@ -401,6 +401,20 @@ fallback — so a row carrying neither is rejected rather than mis-addressed.
 | GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
 | PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 
+## Map auto-selection (`/map-vote`)
+
+GAME-1 (#80). Panel-side layer auto-selection: no `.cfg` is written anywhere — the scheduler tick applies the pick over RCON with `AdminSetNextLayer`. Settings live in `server_settings.map_vote_*`, the pool in `map_vote_candidates`, the applied picks in `map_vote_picks`. Reads need `panelAccess`; writes need the `changemap` squad permission and are audited.
+
+Every save is additionally versioned into **`config_versions` under the filename `map-vote.json`** — the same table, chain, author columns and sha256 the config editor uses, so a change to the screen is reviewable exactly like a change to a `.cfg`. The filename is deliberately not in `ALLOWED_CONFIG_FILES`, so `/configs` never lists, edits or drift-sweeps it. An unchanged save writes no row.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/servers/:serverId/map-vote/versions` | Version list, newest first (`limit` 1..100, default 20). Returns `{ filename, can_restore, versions[] }` with `id`, `sha256`, `parent_version_id`, `author`, `message`, `created_at`. | `panelAccess` |
+| GET | `/api/v1/servers/:serverId/map-vote/versions/:versionId` | One version: raw `content` plus the parsed `snapshot` (`null` when unreadable). 404 `version_not_found` for another server's or another file's id. | `panelAccess` |
+| POST | `/api/v1/servers/:serverId/map-vote/versions/:versionId/restore` | Restores settings + pool from that version and records the rollback as a new version. 409 `unknown_layers_in_version` (with `layers`) when a candidate left the layer catalog; repeat with `{ drop_unknown_layers: true }` to restore the rest. 422 `version_unreadable`. Audit: `server.map_vote.restore`. | Squad `changemap` |
+
+The screen's own behaviour and what each field changes is documented in [web flows](../web/flows.md#автовыбор-карты-serversidmap-vote).
+
 ## Bulk moderation
 
 MOD-4 (#61) applies one warn/kick/ban to a set of players picked from the live

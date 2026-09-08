@@ -65,6 +65,15 @@ interface PickRow {
   created_at: string;
 }
 
+interface VersionRow {
+  id: string;
+  sha256: string;
+  parent_version_id: string | null;
+  author: string | null;
+  message: string | null;
+  created_at: string;
+}
+
 interface CatalogLayer {
   id: string;
   name: string;
@@ -93,6 +102,9 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   const [candidates, setCandidates] = useState<MapVoteCandidate[]>([]);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [picks, setPicks] = useState<PickRow[]>([]);
+  const [versions, setVersions] = useState<VersionRow[]>([]);
+  const [canRestore, setCanRestore] = useState(false);
+  const [pendingRestore, setPendingRestore] = useState<string | null>(null);
   const [pool, setPool] = useState<CatalogLayer[]>([]);
   const [selectedLayer, setSelectedLayer] = useState('');
   const [confirmDeprecated, setConfirmDeprecated] = useState(false);
@@ -105,7 +117,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [meRes, stateRes, previewRes, picksRes, layersRes] = await Promise.all([
+      const [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes] = await Promise.all([
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
         fetch(`/api/v1/servers/${id}/map-vote`, { credentials: 'include', cache: 'no-store' }),
         fetch(`/api/v1/servers/${id}/map-vote/preview`, {
@@ -117,8 +129,12 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
           cache: 'no-store',
         }),
         fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
+        fetch(`/api/v1/servers/${id}/map-vote/versions?limit=20`, {
+          credentials: 'include',
+          cache: 'no-store',
+        }),
       ]);
-      for (const res of [meRes, stateRes, previewRes, picksRes, layersRes]) {
+      for (const res of [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes]) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }
       const me = (await meRes.json()) as Me;
@@ -126,6 +142,10 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
       const previewBody = (await previewRes.json()) as PreviewResponse;
       const picksBody = (await picksRes.json()) as { picks: PickRow[] };
       const layersBody = (await layersRes.json()) as { rows: CatalogLayer[] };
+      const versionsBody = (await versionsRes.json()) as {
+        can_restore: boolean;
+        versions: VersionRow[];
+      };
 
       setForm({
         enabled: state.enabled,
@@ -138,6 +158,8 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
       setPreview(previewBody);
       setPicks(picksBody.picks);
       setPool(layersBody.rows);
+      setVersions(versionsBody.versions);
+      setCanRestore(versionsBody.can_restore);
       setCanEdit(state.can_edit && me.squad_permissions.includes('changemap'));
     } catch (e) {
       setErr((e as Error).message);
@@ -149,6 +171,47 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Откат к сохранённой версии. Слой мог исчезнуть из каталога с момента
+   * сохранения — API отвечает 409 со списком таких слоёв, и повтор с
+   * `drop_unknown_layers` возвращает остальное.
+   */
+  async function restoreVersion(versionId: string, dropUnknown = false) {
+    setSaving(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/v1/servers/${id}/map-vote/versions/${versionId}/restore`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ drop_unknown_layers: dropUnknown }),
+      });
+      if (res.status === 409) {
+        const body = (await res.json()) as { layers?: string[] };
+        const missing = (body.layers ?? []).join(', ');
+        setErr(
+          `В этой версии есть слои, которых больше нет в каталоге: ${missing}. Нажмите «Откатить без них», чтобы восстановить остальное.`,
+        );
+        setPendingRestore(versionId);
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const body = (await res.json()) as { count: number; dropped_layers: string[] };
+      setPendingRestore(null);
+      setMsg(
+        body.dropped_layers.length > 0
+          ? `Откат выполнен: ${body.count} слоёв, пропущено ${body.dropped_layers.length}`
+          : `Откат выполнен: ${body.count} слоёв`,
+      );
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function saveSettings() {
     const validation = validateSettings(form, candidates.length);
@@ -528,6 +591,70 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
                         <Badge tone="warn">{pick.failure_reason ?? 'не применён'}</Badge>
                       )}
                     </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </Card>
+      <Card padding="none">
+        <CardHeader
+          title="История изменений"
+          count={versions.length}
+          description="Каждое сохранение на этой странице попадает в ту же историю версий, что и правки конфигов: автор, время, отпечаток и откат."
+        />
+        {versions.length === 0 ? (
+          <EmptyState
+            title="Изменений ещё не было"
+            description="Первая запись появится после сохранения правил или пула слоёв."
+          />
+        ) : (
+          <div data-testid="versions-list">
+            <Table ariaLabel="История изменений автовыбора карты">
+              <TableHead sticky={false}>
+                <TableRow>
+                  <Th>Когда</Th>
+                  <Th>Кто</Th>
+                  <Th>Что изменилось</Th>
+                  <Th>Отпечаток</Th>
+                  {canRestore ? <Th align="right">Действия</Th> : null}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {versions.map((version) => (
+                  <TableRow key={version.id}>
+                    <Td>{new Date(version.created_at).toLocaleString('ru-RU')}</Td>
+                    <Td>{version.author ?? '—'}</Td>
+                    <Td>{version.message ?? '—'}</Td>
+                    <Td>
+                      <span className="font-mono text-ink-3" title={version.sha256}>
+                        {version.sha256.slice(0, 8)}
+                      </span>
+                    </Td>
+                    {canRestore ? (
+                      <Td align="right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            disabled={saving}
+                            onClick={() => void restoreVersion(version.id)}
+                          >
+                            Откатить
+                          </Button>
+                          {pendingRestore === version.id ? (
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              disabled={saving}
+                              onClick={() => void restoreVersion(version.id, true)}
+                            >
+                              Откатить без них
+                            </Button>
+                          ) : null}
+                        </div>
+                      </Td>
+                    ) : null}
                   </TableRow>
                 ))}
               </TableBody>
