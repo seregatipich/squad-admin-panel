@@ -228,7 +228,26 @@ describe('EvidenceSection', () => {
       });
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(fetchMock.mock.calls.length).toBe(callsAfterLoad);
+    // Событие своей карточки, отправленное следом, доказывает, что у чужого
+    // была возможность вызвать перезагрузку и он ею не воспользовался: к
+    // моменту, когда счётчик вырос на единицу, оба события уже обработаны.
+    // Ожидание по состоянию, а не сон на 20 мс: под нагрузкой сон истекал
+    // раньше, чем компонент дозагружался, и тест мигал (#306).
+    act(() => {
+      uploadedHandler?.({
+        type: 'media.uploaded',
+        ts: '2026-07-27T00:00:01.000Z',
+        data: {
+          player_id: 'admin-1',
+          media_id: 'media-9',
+          token_id: 'token-9',
+          target_entity_type: 'player',
+          target_entity_id: 'player-1',
+        },
+      });
+    });
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(callsAfterLoad + 1));
+    expect(fetchMock.mock.calls.length).toBe(callsAfterLoad + 1);
   });
 });
