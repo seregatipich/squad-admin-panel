@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertDialog,
   Button,
@@ -59,6 +59,7 @@ export function DirectMessageModal({
   const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const textareaId = useId();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const serverSelectId = useId();
 
   const needsServerPick = target != null && target.serverId === null;
@@ -182,7 +183,13 @@ export function DirectMessageModal({
             <TemplatePicker
               templates={templates}
               context={{ player: target.playerName }}
-              onSelect={(text) => setMessage(text.slice(0, MESSAGE_MAX))}
+              onSelect={(text) => {
+                setMessage(text.slice(0, MESSAGE_MAX));
+                // Текст уезжает в поле ниже: фокус переводит туда и взгляд, и
+                // курсор, чтобы выбранную заготовку сразу можно было
+                // дописать, а не искать, куда она подставилась.
+                textareaRef.current?.focus();
+              }}
             />
           ) : null}
 
@@ -191,6 +198,7 @@ export function DirectMessageModal({
               Текст сообщения
             </label>
             <Textarea
+              ref={textareaRef}
               id={textareaId}
               value={message}
               onChange={(e) => setMessage(e.target.value)}

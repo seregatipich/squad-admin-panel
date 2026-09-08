@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { AlertDialog, Button, InlineBanner, Modal, Textarea } from '@/components/ui';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
@@ -40,6 +40,7 @@ export function SquadMessageModal({
   const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const textareaId = useId();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!target) return;
@@ -126,7 +127,10 @@ export function SquadMessageModal({
             <TemplatePicker
               templates={templates}
               context={{ player: target.leaderName ?? undefined }}
-              onSelect={(text) => setMessage(text.slice(0, MESSAGE_MAX))}
+              onSelect={(text) => {
+                setMessage(text.slice(0, MESSAGE_MAX));
+                textareaRef.current?.focus();
+              }}
             />
           ) : null}
 
@@ -135,6 +139,7 @@ export function SquadMessageModal({
               Текст сообщения
             </label>
             <Textarea
+              ref={textareaRef}
               id={textareaId}
               value={message}
               onChange={(e) => setMessage(e.target.value)}

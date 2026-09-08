@@ -5,6 +5,7 @@ import type {
   InputHTMLAttributes,
   ReactElement,
   ReactNode,
+  Ref,
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
@@ -82,6 +83,12 @@ export function TextInput({
 export type TextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
   invalid?: boolean;
   size?: FieldSize;
+  /**
+   * Ссылка на сам `<textarea>`. В React 19 `ref` — обычный проп, поэтому его
+   * достаточно объявить и передать дальше со всеми остальными: вызывающий код
+   * ставит фокус в поле (например, когда в него подставили заготовку текста).
+   */
+  ref?: Ref<HTMLTextAreaElement>;
 };
 
 /**

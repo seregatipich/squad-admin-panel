@@ -157,9 +157,9 @@ export function Modal({
       // прижимается к левому верхнему углу — окно появлялось в точке (0, 0).
       // `h-fit` снимает растяжение, после чего автоматические поля снова
       // делят свободное место поровну по обеим осям.
-      className={`m-auto h-fit max-h-[calc(100dvh-2rem)] w-full ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
+      className={`m-auto flex h-fit max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
     >
-      <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <h2 id={titleId} className="text-[13px] font-semibold text-ink">
             {title}
@@ -178,10 +178,15 @@ export function Modal({
         />
       </div>
 
-      <div className="max-h-[70vh] overflow-y-auto px-4 py-4">{children}</div>
+      {/* Единственная область прокрутки окна. Раньше тело несло собственный
+          `max-h-[70vh]`, а окно — свою высоту, и на высоком содержимом рядом
+          оказывались две полосы прокрутки: сначала внешняя у диалога, потом
+          внутренняя у тела. Теперь высоту ограничивает сам диалог, а тело
+          забирает остаток колонки и прокручивается одно. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{children}</div>
 
       {footer && (
-        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-4 py-3">
           {footer}
         </div>
       )}

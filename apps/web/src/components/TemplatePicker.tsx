@@ -45,7 +45,14 @@ export function TemplatePicker({
       <p id={hintId} className="text-xs text-ink-3">
         Нажмите шаблон — его текст сразу подставится в поле сообщения.
       </p>
-      <ul className="space-y-1.5" aria-label="Шаблоны сообщений" aria-describedby={hintId}>
+      {/* Список ограничен по высоте и прокручивается сам: иначе десяток
+          шаблонов уводит поле ввода под нижний край окна, и оператор не видит,
+          куда подставился текст, который он только что выбрал. */}
+      <ul
+        className="max-h-56 space-y-1.5 overflow-y-auto pr-1"
+        aria-label="Шаблоны сообщений"
+        aria-describedby={hintId}
+      >
         {pickable.map((template) => {
           const preview = substituteTokens(template.body, context);
           return (
