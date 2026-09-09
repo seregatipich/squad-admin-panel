@@ -1,5 +1,13 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-09
+
+### Fixed
+
+- `handleMatchClose` now applies `filterRosterByPlaySeconds` — the join-grace floor (`DEFAULT_JOIN_GRACE_SECONDS`, 60 s) that had been defined since MATCH-2 but never called. Production opens **two** `matches` rows per round ([#330](https://github.com/breaking-squad/squad-admin-panel/issues/330)): a ~3 ms "ghost" carrying the layer, and the real round with `layer = NULL`. The ghost's window overlaps every open session, so once the RCON presence projection ([#320](https://github.com/breaking-squad/squad-admin-panel/issues/320)) started filling `player_sessions`, the ghost collected a full roster of `play_seconds = 0` rows — doubling `COUNT(DISTINCT matches.id)` in the dossier's «Скилл» tab and polluting every match list. While `player_sessions` was empty this was invisible, because every roster came back empty.
+- The floor also drops genuine connect-and-leaves (a player present for under a minute is no longer counted as having played the round), which is what the constant was defined for.
+- `test/ghost-match-roster.regression.test.ts` pins all three cases: a millisecond ghost writes nothing, the real round still writes its full roster, and a sub-grace player is dropped while the rest are kept.
+
 ## 2026-07-29
 
 ### Fixed

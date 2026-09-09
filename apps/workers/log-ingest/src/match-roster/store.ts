@@ -299,11 +299,20 @@ export async function handleMatchClose(
   const match = await loadClosedMatch(db, command);
   if (!match) return null;
 
-  const roster = await computeMatchRoster(db, {
-    serverId: match.serverId,
-    matchStart: match.startedAt,
-    matchEnd: match.endedAt,
-  });
+  // The join-grace floor is what keeps ghost rounds out of the statistics.
+  // Production opens two `matches` rows per round (#330) — a ~3 ms row carrying
+  // the layer and the real round — and the ghost's window overlaps every open
+  // session, so without this filter it collects a full roster of
+  // `play_seconds = 0` rows and doubles `COUNT(DISTINCT matches.id)` in the
+  // dossier. It also drops genuine connect-and-leaves, which is what
+  // DEFAULT_JOIN_GRACE_SECONDS was defined for.
+  const roster = filterRosterByPlaySeconds(
+    await computeMatchRoster(db, {
+      serverId: match.serverId,
+      matchStart: match.startedAt,
+      matchEnd: match.endedAt,
+    }),
+  );
   if (roster.length === 0) return { written: 0 };
 
   await db
