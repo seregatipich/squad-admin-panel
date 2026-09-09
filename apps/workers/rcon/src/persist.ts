@@ -1,15 +1,18 @@
 import {
   auditLog,
+  type ClosedReason,
   type DatabaseClient,
   type GeoLookup,
   playerKitTime,
   playerNameHistory,
+  playerSessions,
   players,
   recordIpObservation,
   resolveGeo,
+  type SessionMode,
 } from '@squad/db';
 import { normalizePlayerName, normalizeRoleName } from '@squad/shared-config';
-import { eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { RconPlayer } from './parse-list-players.js';
 
@@ -212,4 +215,170 @@ export async function accruePlayerKitTime(
         },
       });
   }
+}
+
+/**
+ * Longest stretch of unobserved time, expressed in poll intervals, that a
+ * newly opened session may be backdated by. The roster's `first_seen_at` is
+ * kept across an RCON reconnect, so without this clamp a reconnect would
+ * credit the whole offline gap as play time.
+ */
+const MAX_BACKDATE_POLL_INTERVALS = 2;
+
+export interface ReconcilePlayerSessionsInput {
+  /** `servers.id` the roster was polled against. */
+  serverId: string;
+  /** Players parsed from the current `ListPlayers` response. */
+  onlinePlayers: RconPlayer[];
+  /** Instant of this poll; the close timestamp for players who have left. */
+  pollAt: Date;
+  /** `eos_id` → roster `first_seen_at` (ISO), from {@link buildRoster}. */
+  firstSeenByEosId?: Map<string, string>;
+  /** Mode to open new sessions in; `seed` while the server is seeding. */
+  mode?: SessionMode;
+  /** Supervisor poll cadence, used to clamp how far a session is backdated. */
+  pollIntervalMs?: number;
+}
+
+export interface ReconcilePlayerSessionsResult {
+  opened: number;
+  closed: number;
+}
+
+/**
+ * Reconciles `player_sessions` for one server against a `ListPlayers`
+ * snapshot: opens a session for every online player that has none, and closes
+ * the open sessions of players who are no longer on the roster.
+ *
+ * The snapshot — not the log stream — is the source of truth for presence:
+ * every poll is a full roster, so a dropped log tail or a missed disconnect
+ * line self-heals at the next poll instead of leaving a session open forever.
+ *
+ * Sessions are opened at the roster's `first_seen_at` when it is known, so a
+ * player who joined between polls is not charged the full poll interval; the
+ * backdate is clamped to {@link MAX_BACKDATE_POLL_INTERVALS} poll intervals so
+ * a stale first-seen entry (kept across an RCON reconnect) cannot credit
+ * offline time.
+ *
+ * @param db - Database client.
+ * @param input - Server, roster snapshot, poll instant, and open mode.
+ * @returns Counts of sessions opened and closed by this reconcile.
+ */
+export async function reconcilePlayerSessions(
+  db: DatabaseClient,
+  input: ReconcilePlayerSessionsInput,
+): Promise<ReconcilePlayerSessionsResult> {
+  const { serverId, onlinePlayers, pollAt } = input;
+  const mode = input.mode ?? 'online';
+  const pollIntervalMs = input.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const onlineIds = await resolvePlayerIds(db, onlinePlayers);
+
+  const closed = await db
+    .update(playerSessions)
+    .set({
+      disconnectedAt: pollAt,
+      durationSeconds: closedDurationSeconds(pollAt),
+      closedReason: 'disconnect',
+    })
+    .where(
+      and(
+        eq(playerSessions.serverId, serverId),
+        isNull(playerSessions.disconnectedAt),
+        onlineIds.size > 0 ? notInArray(playerSessions.playerId, [...onlineIds.keys()]) : undefined,
+      ),
+    )
+    .returning({ id: playerSessions.id });
+
+  if (onlineIds.size === 0) return { opened: 0, closed: closed.length };
+
+  const openRows = await db
+    .select({ playerId: playerSessions.playerId })
+    .from(playerSessions)
+    .where(and(eq(playerSessions.serverId, serverId), isNull(playerSessions.disconnectedAt)));
+  const alreadyOpen = new Set(openRows.map((row) => row.playerId));
+
+  const earliestMs = pollAt.getTime() - MAX_BACKDATE_POLL_INTERVALS * pollIntervalMs;
+  const toOpen = [...onlineIds]
+    .filter(([playerId]) => !alreadyOpen.has(playerId))
+    .map(([playerId, eosId]) => ({
+      playerId,
+      serverId,
+      connectedAt: connectedAtFor(input.firstSeenByEosId?.get(eosId), earliestMs, pollAt),
+      mode,
+    }));
+  if (toOpen.length === 0) return { opened: 0, closed: closed.length };
+
+  await db.insert(playerSessions).values(toOpen);
+  return { opened: toOpen.length, closed: closed.length };
+}
+
+/**
+ * Closes every open session of one server — used when the RCON connection
+ * drops or the supervisor stops, so players are not left "online" forever
+ * while presence queries extrapolate an open session up to `now()`.
+ *
+ * @param db - Database client.
+ * @param serverId - `servers.id` whose sessions are closed.
+ * @param closedAt - Close instant; pass the last successful poll, not `now`,
+ *   so the unobserved gap since that poll is not credited as play time.
+ * @param reason - `closed_reason` to record.
+ * @returns Number of sessions closed.
+ */
+export async function closeServerSessions(
+  db: DatabaseClient,
+  serverId: string,
+  closedAt: Date,
+  reason: ClosedReason = 'disconnect',
+): Promise<number> {
+  const closed = await db
+    .update(playerSessions)
+    .set({
+      disconnectedAt: closedAt,
+      durationSeconds: closedDurationSeconds(closedAt),
+      closedReason: reason,
+    })
+    .where(and(eq(playerSessions.serverId, serverId), isNull(playerSessions.disconnectedAt)))
+    .returning({ id: playerSessions.id });
+  return closed.length;
+}
+
+function closedDurationSeconds(closedAt: Date) {
+  return sql<number>`GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (${closedAt.toISOString()}::timestamptz - ${playerSessions.connectedAt}))))::int`;
+}
+
+function connectedAtFor(firstSeenAt: string | undefined, earliestMs: number, pollAt: Date): Date {
+  const firstSeenMs = firstSeenAt ? Date.parse(firstSeenAt) : Number.NaN;
+  if (!Number.isFinite(firstSeenMs)) return pollAt;
+  return new Date(Math.min(pollAt.getTime(), Math.max(earliestMs, firstSeenMs)));
+}
+
+/** Resolves roster entries to `players.id`, keyed by id → the entry's `eos_id`. */
+async function resolvePlayerIds(
+  db: DatabaseClient,
+  roster: RconPlayer[],
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
+  if (roster.length === 0) return resolved;
+
+  const eosIds = roster.map((p) => p.eos_id);
+  const steamIds = roster.filter((p) => p.steam_id64).map((p) => BigInt(p.steam_id64 as string));
+  const rows = await db
+    .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
+    .from(players)
+    .where(
+      or(
+        inArray(players.eosId, eosIds),
+        steamIds.length > 0 ? inArray(players.steamId64, steamIds) : undefined,
+      ),
+    );
+
+  const byEos = new Map(rows.filter((r) => r.eosId).map((r) => [r.eosId as string, r.id]));
+  const bySteam = new Map(
+    rows.filter((r) => r.steamId64 !== null).map((r) => [String(r.steamId64), r.id]),
+  );
+  for (const p of roster) {
+    const id = byEos.get(p.eos_id) ?? (p.steam_id64 ? bySteam.get(p.steam_id64) : undefined);
+    if (id) resolved.set(id, p.eos_id);
+  }
+  return resolved;
 }
