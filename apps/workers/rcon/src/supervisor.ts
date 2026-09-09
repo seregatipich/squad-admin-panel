@@ -17,11 +17,16 @@ import { v7 as uuidv7 } from 'uuid';
 import { queryA2S } from './a2s.js';
 import { RconClient } from './client.js';
 import { RconCommandQueue } from './commands.js';
-import { parseListPlayers } from './parse-list-players.js';
+import { parseListPlayers, type RconPlayer } from './parse-list-players.js';
 import { parseListSquads, type RconSquad } from './parse-list-squads.js';
 import { parseServerInfo } from './parse-server-info.js';
 import { parseShowNextMap } from './parse-show-next-map.js';
-import { accruePlayerKitTime, upsertPlayers } from './persist.js';
+import {
+  accruePlayerKitTime,
+  closeServerSessions,
+  reconcilePlayerSessions,
+  upsertPlayers,
+} from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
 import { computeSeedingTick, isSeedLayer, type SeedingState } from './seeding.js';
 
@@ -155,6 +160,10 @@ class PerServerSupervisor {
   // Reset to null on every (re)connect so a poll right after reconnecting
   // never accrues kit time across the disconnected gap.
   private lastKitAccrualAt: Date | null = null;
+  // Timestamp of the last successful ListPlayers poll on the *current*
+  // connection. PRESENCE: open player_sessions are closed at this instant when
+  // the connection drops, so the unobserved gap is not credited as play time.
+  private lastSuccessfulPollAt: Date | null = null;
   // Seeding state machine (SEED-1, #140). Loaded from redis on start() so a
   // worker restart mid-seeding does not emit a spurious duplicate `started`.
   private seedingState: SeedingState | null = null;
@@ -199,6 +208,12 @@ class PerServerSupervisor {
     await this.stopCommandQueue();
     await this.client?.close();
     this.client = undefined;
+    // The connect loop's own teardown normally closes the sessions, but a poll
+    // still in flight when stop() was called can reopen them right after it.
+    // Closing again here — after `stopped` has blocked further reconciles —
+    // makes sure a server removed from the targets does not leave sessions
+    // open forever with nothing left to poll them shut.
+    await this.closeOpenSessions();
   }
 
   private async writeStatus(
@@ -566,6 +581,7 @@ class PerServerSupervisor {
         await this.stopCommandQueue();
         await this.client?.close().catch(() => undefined);
         this.client = undefined;
+        await this.closeOpenSessions();
         await this.emitEvent('rcon.disconnected', {});
         await this.emitDiag({
           kind: 'rcon.disconnected',
@@ -709,6 +725,8 @@ class PerServerSupervisor {
         const polledAt = pollAt.toISOString();
         const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
         this.rosterFirstSeen = firstSeen;
+        await this.reconcileSessions(players, firstSeen, pollAt);
+        this.lastSuccessfulPollAt = pollAt;
         await this.writeRoster(entries, polledAt);
         await this.writeSquads(squads, polledAt);
         const pollMs = Date.now() - start;
@@ -848,6 +866,61 @@ class PerServerSupervisor {
         // A2S is best-effort; don't disrupt RCON polling
       }
     }, interval);
+  }
+
+  /**
+   * Reconciles `player_sessions` against this poll's roster (PRESENCE).
+   * Best-effort: a presence write must never count as a poll failure and tear
+   * down an otherwise healthy RCON connection.
+   */
+  private async reconcileSessions(
+    players: RconPlayer[],
+    firstSeen: Map<string, string>,
+    pollAt: Date,
+  ): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await reconcilePlayerSessions(this.opts.db, {
+        serverId: this.target.serverId,
+        onlinePlayers: players,
+        pollAt,
+        firstSeenByEosId: firstSeen,
+        mode: this.seedingState?.state === 'seeding' ? 'seed' : 'online',
+        pollIntervalMs: this.opts.pollIntervalMs ?? 30_000,
+      });
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'player session reconcile failed',
+      );
+    }
+  }
+
+  /**
+   * Closes the server's open sessions when the RCON connection goes away, at
+   * the last successful poll — anything after that instant was never observed.
+   * The roster's first-seen map is dropped with it so a player still online on
+   * reconnect starts a fresh session instead of resuming the stale one.
+   */
+  private async closeOpenSessions(): Promise<void> {
+    const closedAt = this.lastSuccessfulPollAt ?? new Date();
+    this.lastSuccessfulPollAt = null;
+    this.lastKitAccrualAt = null;
+    this.rosterFirstSeen = new Map();
+    try {
+      const closed = await closeServerSessions(this.opts.db, this.target.serverId, closedAt);
+      if (closed > 0) {
+        this.opts.log.info(
+          { serverId: this.target.serverId, closed, closedAt: closedAt.toISOString() },
+          'closed open player sessions after rcon disconnect',
+        );
+      }
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'closing open player sessions failed',
+      );
+    }
   }
 
   private async emitDiag(args: {

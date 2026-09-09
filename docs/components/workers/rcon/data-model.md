@@ -27,6 +27,24 @@ Upserted alongside `players`. Unique on `(player_id, name_normalized)`, so a nam
 | `last_seen_at` | `timestamptz` | Updated on conflict |
 | `observation_count` | `int` | Incremented on conflict |
 
+### `player_sessions`
+
+Reconciled on every full `ListPlayers` poll via `persist.ts:reconcilePlayerSessions` (PRES-1). The roster snapshot — not the log stream — is the source of truth for presence: every poll is a complete roster, so a dropped log tail or a missed disconnect line self-heals at the next poll instead of leaking an open session.
+
+| Column | Type | Notes |
+|---|---|---|
+| `player_id` | `uuid` FK → `players.id` | Resolved from the roster entry's `eos_id`, falling back to `steam_id64` |
+| `server_id` | `uuid` FK → `servers.id` | The polled server |
+| `connected_at` | `timestamptz` | The roster's `first_seen_at` when known, clamped to at most two poll intervals before the poll so an RCON reconnect cannot credit offline time; otherwise the poll instant |
+| `disconnected_at` | `timestamptz` | Set at the first poll where the player is absent from the roster, or at the last successful poll when the RCON connection drops (`persist.ts:closeServerSessions`) |
+| `duration_seconds` | `int` | `disconnected_at - connected_at`, floored at 0 |
+| `closed_reason` | `text` | `disconnect` on both paths |
+| `mode` | `text` | `seed` while the seeding state machine reports `seeding`, else `online`. SEED-1 boundary transitions re-split open sessions (`splitOpenSessionsAtSeedingTransition`) |
+
+Presence is therefore poll-granular: a session shorter than one poll interval (30 s by default) can be missed entirely, and `connected_at` is only as precise as the 5 s roster refresh that recorded `first_seen_at`. A hard worker crash leaves sessions open until the next start, whose first reconcile closes everyone absent at that poll — overcounting by roughly the downtime.
+
+Downstream, `worker-presence-daily` recomputes `player_daily_presence` and `players.total_time_played_seconds` from these rows on its hourly tick.
+
 ## Postgres tables read
 
 ### `servers`
