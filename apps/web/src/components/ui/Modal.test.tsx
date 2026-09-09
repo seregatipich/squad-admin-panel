@@ -94,6 +94,20 @@ describe('Modal', () => {
     expect(dialog.className).toContain('h-fit');
   });
 
+  it('never forces a display on a closed dialog', () => {
+    // Регрессия: безусловный `flex` перебивал браузерное `display: none` у
+    // закрытого `<dialog>`, и каждое смонтированное окно — по одному на строку
+    // таблицы — рисовалось прямо в потоке страницы. Раскладка окна включается
+    // только вместе с ним самим.
+    renderModal({ open: false });
+    const dialog = screen.getByRole('dialog', { hidden: true });
+    expect(dialog).not.toHaveAttribute('open');
+    expect(dialog.className).not.toMatch(/(^|\s)flex(\s|$)/);
+    expect(dialog.className).not.toMatch(/(^|\s)flex-col(\s|$)/);
+    expect(dialog.className).toContain('open:flex');
+    expect(dialog.className).toContain('open:flex-col');
+  });
+
   it('keeps exactly one scroll area — the body, not the window', () => {
     // Регрессия: окно и тело ограничивали высоту каждый по-своему, и на
     // длинном содержимом рядом появлялись две полосы прокрутки.
