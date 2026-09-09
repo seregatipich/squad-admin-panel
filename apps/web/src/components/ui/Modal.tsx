@@ -157,7 +157,12 @@ export function Modal({
       // прижимается к левому верхнему углу — окно появлялось в точке (0, 0).
       // `h-fit` снимает растяжение, после чего автоматические поля снова
       // делят свободное место поровну по обеим осям.
-      className={`m-auto flex h-fit max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
+      // `open:flex`, а не `flex`: браузер прячет закрытый `<dialog>` правилом
+      // `display: none`, и безусловный `display: flex` его перебивает — все
+      // закрытые окна страницы становятся видимыми прямо в потоке, по одному
+      // на каждую строку таблицы, которая их монтирует. Раскладка колонкой
+      // нужна только открытому окну, поэтому она и включается вместе с ним.
+      className={`m-auto h-fit max-h-[calc(100dvh-2rem)] w-full overflow-hidden open:flex open:flex-col ${SIZE[size]} rounded-card border border-line bg-surface p-0 text-ink backdrop:bg-black/50 backdrop:backdrop-blur-sm`}
     >
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
