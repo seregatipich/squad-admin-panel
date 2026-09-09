@@ -57,6 +57,40 @@ describe('parseRconChatLine', () => {
     expect(parsed?.eosId).toBe(EOS);
   });
 
+  it('parses a steam-only sender', () => {
+    const parsed = parseRconChatLine(
+      `[ChatAll] [Online IDs:steam: ${STEAM}] OnlySteam : hi`,
+      '2026-09-09T10:00:00.000Z',
+    );
+    expect(parsed?.steamId64).toBe(STEAM);
+    expect(parsed?.eosId).toBeNull();
+    expect(parsed?.playerName).toBe('OnlySteam');
+  });
+
+  it('reads the ids as unordered pairs, not by position', () => {
+    const parsed = parseRconChatLine(
+      `[ChatAll] [Online IDs:steam: ${STEAM} EOS: ${EOS}] Reversed : hi`,
+      '2026-09-09T10:00:00.000Z',
+    );
+    expect(parsed?.eosId).toBe(EOS);
+    expect(parsed?.steamId64).toBe(STEAM);
+  });
+
+  it('ignores platforms it does not know while keeping the ones it does', () => {
+    const parsed = parseRconChatLine(
+      `[ChatAll] [Online IDs:xbox: ABC123 EOS: ${EOS} steam: ${STEAM}] Extra : hi`,
+      '2026-09-09T10:00:00.000Z',
+    );
+    expect(parsed?.eosId).toBe(EOS);
+    expect(parsed?.steamId64).toBe(STEAM);
+  });
+
+  it('drops a chat line carrying no id the panel can resolve', () => {
+    expect(
+      parseRconChatLine('[ChatAll] [Online IDs:] Nobody : hi', '2026-09-09T10:00:00.000Z'),
+    ).toBeNull();
+  });
+
   it('parses a sender without a steam id', () => {
     const parsed = parseRconChatLine(
       `[ChatAll] [Online IDs:EOS: ${EOS}] NoSteam : hi`,

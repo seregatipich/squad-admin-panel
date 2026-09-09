@@ -156,9 +156,17 @@ async function main() {
           );
       },
       onChat: (chat) => {
-        handleChat(db, redis, { serverId, chat }, chatFlagDetector).catch((err) =>
-          log.error({ err: (err as Error).message }, 'chat handling failed'),
-        );
+        handleChat(
+          db,
+          redis,
+          {
+            serverId,
+            chat,
+            onArchiveError: (err) =>
+              log.warn({ err: err.message, serverId }, 'chat archive insert failed'),
+          },
+          chatFlagDetector,
+        ).catch((err) => log.error({ err: (err as Error).message }, 'chat handling failed'));
         // AUTO-4 (#75): answer in-game `!stats`/`!rules`/`!report` over RCON.
         // Independent of the chat-message record above; `!report` delegates the
         // report record itself to REPORT-1 via the ingestor's onReport path.

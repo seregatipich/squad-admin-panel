@@ -148,16 +148,33 @@ export function buildChatFrame(
  * is required. A sender the panel has never seen (no roster poll yet, no name
  * history) therefore shows up live but is not archived.
  *
+ * A failed insert never breaks the live feed — the frame is already published
+ * by then — but it is reported through `onArchiveError` instead of vanishing:
+ * chat shown live and silently lost from the archive is exactly the kind of
+ * gap this pipeline exists to close.
+ *
  * @param db - Database client used for identity lookup and the insert.
  * @param redis - Live-bus publisher, or null to skip the fan-out.
  * @param source - Which pipeline carried the line; stored on the archive row.
+ * @param onArchiveError - Called when the archive insert fails; the live frame
+ *   has already been published at that point and is still returned.
  * @param detector - Optional profanity/flag matcher (CHATLOG-5).
  * @returns The frame that was published, so callers can reuse it.
  */
 export async function handleChat(
   db: DatabaseClient,
   redis: ChatPublisher | null,
-  { serverId, chat, source = 'log' }: { serverId: string; chat: ChatInput; source?: ChatSource },
+  {
+    serverId,
+    chat,
+    source = 'log',
+    onArchiveError,
+  }: {
+    serverId: string;
+    chat: ChatInput;
+    source?: ChatSource;
+    onArchiveError?: (err: Error) => void;
+  },
   detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
   const playerId = await resolvePlayerId(db, chat);
@@ -174,7 +191,7 @@ export async function handleChat(
       source,
       isFlagged: matchedRuleId !== null,
       matchedRuleId,
-    }).catch(() => undefined);
+    }).catch((err) => onArchiveError?.(err as Error));
   }
   return frame;
 }
