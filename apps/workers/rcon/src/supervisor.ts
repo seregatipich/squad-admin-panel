@@ -208,6 +208,12 @@ class PerServerSupervisor {
     await this.stopCommandQueue();
     await this.client?.close();
     this.client = undefined;
+    // The connect loop's own teardown normally closes the sessions, but a poll
+    // still in flight when stop() was called can reopen them right after it.
+    // Closing again here — after `stopped` has blocked further reconciles —
+    // makes sure a server removed from the targets does not leave sessions
+    // open forever with nothing left to poll them shut.
+    await this.closeOpenSessions();
   }
 
   private async writeStatus(
@@ -872,6 +878,7 @@ class PerServerSupervisor {
     firstSeen: Map<string, string>,
     pollAt: Date,
   ): Promise<void> {
+    if (this.stopped) return;
     try {
       await reconcilePlayerSessions(this.opts.db, {
         serverId: this.target.serverId,
