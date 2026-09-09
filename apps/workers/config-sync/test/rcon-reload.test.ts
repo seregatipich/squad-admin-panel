@@ -107,6 +107,18 @@ describe('confirmAdminsCfgReload', () => {
     ...overrides,
   });
 
+  /**
+   * Budget for the cases that must reach a real verdict rather than time out.
+   *
+   * These resolve on the second poll — the fake Redis hands back `null` once
+   * and the payload next — so the number only has to outlast event-loop
+   * starvation, never a real wait. It used to be 20ms, which the full
+   * parallel suite exceeded often enough to fail the pre-push checklist while
+   * passing in isolation; the poll interval stays at 1ms, so a generous
+   * ceiling costs nothing in runtime.
+   */
+  const SETTLES_BEFORE_TIMEOUT_MS = 30_000;
+
   function result(overrides: Record<string, unknown> = {}) {
     return JSON.stringify({
       ok: true,
@@ -137,7 +149,7 @@ describe('confirmAdminsCfgReload', () => {
         OUTBOX_ID,
         makeLogger(),
         options({
-          timeoutMs: 20,
+          timeoutMs: SETTLES_BEFORE_TIMEOUT_MS,
           pollIntervalMs: 1,
         }),
       ),
@@ -164,7 +176,7 @@ describe('confirmAdminsCfgReload', () => {
         OUTBOX_ID,
         makeLogger(),
         options({
-          timeoutMs: 20,
+          timeoutMs: SETTLES_BEFORE_TIMEOUT_MS,
           pollIntervalMs: 1,
         }),
       ),
@@ -180,7 +192,7 @@ describe('confirmAdminsCfgReload', () => {
         OUTBOX_ID,
         makeLogger(),
         options({
-          timeoutMs: 20,
+          timeoutMs: SETTLES_BEFORE_TIMEOUT_MS,
           pollIntervalMs: 1,
         }),
       ),
@@ -231,7 +243,7 @@ describe('confirmAdminsCfgReload', () => {
 
     await expect(
       confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger(), {
-        timeoutMs: 20,
+        timeoutMs: SETTLES_BEFORE_TIMEOUT_MS,
         pollIntervalMs: 1,
       }),
     ).resolves.toBe('confirmed');
