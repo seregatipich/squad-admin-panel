@@ -16,7 +16,6 @@ import {
   Card,
   CardBody,
   CardFooter,
-  CardGrid,
   CardHeader,
   ChevronDownIcon,
   formatAbsolute,
@@ -28,7 +27,6 @@ import {
   PageContainer,
   Skeleton,
   SkeletonTable,
-  StatTile,
   StatusBadge,
   StatusDot,
   type StatusState,
@@ -445,12 +443,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     return (
       <PageContainer>
         <Skeleton variant="block" label="Загружается состояние сервера" />
-        <CardGrid cols={4}>
-          <Skeleton variant="card" />
-          <Skeleton variant="card" />
-          <Skeleton variant="card" />
-          <Skeleton variant="card" />
-        </CardGrid>
         <SkeletonTable rows={6} cols={6} />
       </PageContainer>
     );
@@ -614,75 +606,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         </CardFooter>
       </Card>
 
-      <CardGrid cols={4}>
-        <StatTile
-          label="Игроки"
-          value={
-            rcon_status.player_count != null
-              ? `${rcon_status.player_count} / ${settings?.max_players ?? '—'}`
-              : '—'
-          }
-          hint={
-            rcon_status.state === 'connected'
-              ? 'Онлайн-счётчик RCON (обновляется каждые 30 с)'
-              : 'Доступно при подключении RCON'
-          }
-        />
-        <StatTile
-          label="Тикрейт"
-          value={
-            rcon_status.tickrate_rt != null
-              ? `${rcon_status.tickrate_rt.toFixed(1)} / ${settings?.tickrate ?? '—'}`
-              : settings?.tickrate != null
-                ? `${settings.tickrate}`
-                : '—'
-          }
-          hint={
-            rcon_status.tickrate_rt != null
-              ? 'Фактический / целевой тикрейт'
-              : 'Целевой тикрейт (фактический появится в ServerInfo)'
-          }
-        />
-        {external ? (
-          <>
-            <StatTile
-              label="RCON"
-              value={
-                data.connection?.rcon_host
-                  ? `${data.connection.rcon_host}:${data.connection.rcon_port ?? '—'}`
-                  : '—'
-              }
-              hint="Адрес внешнего сервера, к которому подключена панель"
-            />
-            <StatTile
-              label="Опрос A2S"
-              value={settings ? `UDP ${settings.query_port}` : '—'}
-              hint="Порт запросов для проверки видимости сервера"
-            />
-          </>
-        ) : (
-          <>
-            <StatTile
-              label="CPU"
-              value={container?.cpu_percent != null ? `${container.cpu_percent.toFixed(1)}%` : '—'}
-              hint="Нагрузка контейнера Squad"
-            />
-            <StatTile
-              label="RAM"
-              value={
-                container?.mem_used_bytes != null
-                  ? formatBytes(container.mem_used_bytes) +
-                    (container.mem_limit_bytes
-                      ? ` / ${formatBytes(container.mem_limit_bytes)}`
-                      : '')
-                  : '—'
-              }
-              hint="Потребление памяти контейнером"
-            />
-          </>
-        )}
-      </CardGrid>
-
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
       {/* 3. Чат и объявления — то, что оператор отправляет в игру. */}
@@ -834,11 +757,4 @@ function formatUptime(ms: number): string {
   if (h > 0) return `${h}ч ${m}м`;
   if (m > 0) return `${m}м ${sec}с`;
   return `${sec}с`;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KiB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GiB`;
 }
