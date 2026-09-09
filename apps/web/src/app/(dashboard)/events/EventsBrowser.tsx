@@ -406,14 +406,14 @@ function FilterPanel({
             </Button>
           ) : null}
         </div>
-        <div className="max-h-56 space-y-1 overflow-y-auto rounded-ctl border border-line p-1">
+        <div className="space-y-1">
           {kinds.map((option) => (
             <Checkbox
               key={option.value}
               label={<span className="truncate">{option.label}</span>}
               checked={filters.kinds.includes(option.value)}
               onChange={() => toggleKind(option.value)}
-              className="px-1.5"
+              className="px-0.5"
             />
           ))}
         </div>
