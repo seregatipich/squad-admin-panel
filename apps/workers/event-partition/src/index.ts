@@ -98,6 +98,41 @@ export async function ensureMonthlyPartitions(sql: postgres.Sql): Promise<void> 
   }
 }
 
+function sessionPartitionName(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  return `player_sessions_${year}_${month}`;
+}
+
+/**
+ * Ensures the current + next month partitions of `player_sessions` exist.
+ *
+ * The initial partitions were created by the PRES-1 migration and run out on a
+ * fixed calendar date; without this rotation the RCON presence projection
+ * (`reconcilePlayerSessions`) starts failing with "no partition of relation
+ * player_sessions found" the moment the window is passed — and with it the
+ * match rosters and the whole dossier that are assembled from those sessions.
+ *
+ * Unlike {@link ensureMonthlyPartitions}, nothing is dropped: sessions are the
+ * source of lifetime playtime and are not subject to the `events` retention
+ * window.
+ */
+export async function ensurePlayerSessionPartitions(sql: postgres.Sql): Promise<void> {
+  // Bounds are computed in UTC, matching ensureMonthlyPartitions above.
+  const now = new Date();
+  for (const offset of [0, 1]) {
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, 1));
+    const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 1));
+    const partname = sessionPartitionName(monthStart);
+    const from = monthStart.toISOString().slice(0, 10);
+    const to = monthEnd.toISOString().slice(0, 10);
+    await sql.unsafe(
+      `CREATE TABLE IF NOT EXISTS ${partname} PARTITION OF player_sessions FOR VALUES FROM ('${from}') TO ('${to}');`,
+    );
+    log.info({ partname }, 'ensured player_sessions partition');
+  }
+}
+
 export interface PartitionTickDeps {
   sql: postgres.Sql;
   diag: Diag;
@@ -110,6 +145,7 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
   const results = await Promise.allSettled([
     ensureMonthlyPartitions(sql),
     ensureDiagPartitions(sql),
+    ensurePlayerSessionPartitions(sql),
   ]);
   for (const r of results) {
     if (r.status === 'rejected') {

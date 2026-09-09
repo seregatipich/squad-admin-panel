@@ -1,5 +1,11 @@
 # Changelog — worker-event-partition
 
+## 2026-09-09
+
+### Added
+
+- `ensurePlayerSessionPartitions(sql)`, wired into `runPartitionTick`: creates the current + next month `player_sessions_YYYY_MM` partitions (UTC bounds), mirroring `ensureMonthlyPartitions`. The PRES-1 migration created partitions only through a fixed calendar month; once worker-rcon began writing presence, an unrotated table would have started rejecting inserts with `no partition of relation "player_sessions" found` the first day past that window — taking match rosters and the whole dossier down with it. Nothing is ever dropped: sessions are lifetime playtime history and are not subject to the `events` retention window.
+
 ## 2026-07-09
 
 ### Added
