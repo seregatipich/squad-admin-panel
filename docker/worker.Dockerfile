@@ -27,6 +27,7 @@ RUN pnpm --filter @squad/bridge-client build
 RUN pnpm --filter @squad/diag build
 RUN pnpm --filter @squad/db build
 RUN pnpm --filter @squad/steam-api build
+RUN pnpm --filter @squad/chat-ingest build
 ARG WORKER
 RUN test -n "$WORKER" && pnpm --filter @squad/worker-$WORKER build
 

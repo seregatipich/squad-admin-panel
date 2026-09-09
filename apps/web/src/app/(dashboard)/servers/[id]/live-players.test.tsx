@@ -328,6 +328,20 @@ describe('LivePlayers — колонки команд и порядок в от�
   );
 
   it(
+    'lets each team column keep its own height instead of stretching to the tallest',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const grid = screen.getByRole('region', { name: 'United States Army' }).parentElement;
+      // Раскладка по умолчанию растягивает элементы грида по высоте самого
+      // высокого: колонка команды с меньшим числом игроков получала пустой
+      // хвост. `items-start` оставляет каждой команде её собственную высоту.
+      expect(grid).toHaveClass('items-start');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'puts the squad leader first even when the roster lists them last',
     async () => {
       render(<LivePlayers serverId="srv-1" />);

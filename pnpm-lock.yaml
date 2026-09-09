@@ -645,6 +645,9 @@ importers:
       '@squad/bridge-client':
         specifier: workspace:*
         version: link:../../../packages/bridge-client
+      '@squad/chat-ingest':
+        specifier: workspace:*
+        version: link:../../../packages/chat-ingest
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db
@@ -802,6 +805,9 @@ importers:
 
   apps/workers/rcon:
     dependencies:
+      '@squad/chat-ingest':
+        specifier: workspace:*
+        version: link:../../../packages/chat-ingest
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db
@@ -1099,6 +1105,31 @@ importers:
       '@types/uuid':
         specifier: ^11.0.0
         version: 11.0.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/chat-ingest:
+    dependencies:
+      '@squad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@squad/shared-config':
+        specifier: workspace:*
+        version: link:../shared-config
+      drizzle-orm:
+        specifier: ^0.45.0
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
+      uuid:
+        specifier: ^14.0.0
+        version: 14.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

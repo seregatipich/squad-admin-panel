@@ -43,7 +43,7 @@ A server hosted elsewhere — another box, another panel — can be attached ove
 2. `POST /api/v1/servers/external` → rows in `servers` (`status='running'`, `runtime='external'`), `server_settings` (remote ports, empty `install_path`) and `server_credentials` (`rcon_host` set, password encrypted). No bridge call.
 3. `worker-rcon` picks the row up on its next 15 s reconcile, dials `rcon_host:rcon_port`, and from then on the server behaves like any other for players/squads/map/queue polling, A2S, chat commands and every RCON-driven admin action (kick, ban, warn, broadcast, layer change).
 4. Everything that needs the host is off for it: the status reconciler skips it (it would otherwise see no container and mark it `stopped`), config sync never pushes `Admins.cfg` to it, and the container/config/rotation/metrics routes answer 409 `external_server`.
-5. Log-derived data (combat events, match history, connect IPs) arrives once an SSH log source is configured (`server_log_sources`, `PUT /api/v1/servers/:id/log-source`): `worker-log-ingest` tails `SquadGame.log` on the game host with the panel's own key. Chat is never in that file — it needs RCON push packets, which worker-rcon does not consume yet.
+5. Log-derived data (combat events, match history, connect IPs) arrives once an SSH log source is configured (`server_log_sources`, `PUT /api/v1/servers/:id/log-source`): `worker-log-ingest` tails `SquadGame.log` on the game host with the panel's own key. Chat is never in that file: Squad pushes it to authenticated RCON clients as unsolicited broadcast packets, which `worker-rcon` parses and stores with `chat_messages.source = 'rcon'` (`apps/workers/rcon/src/chat.ts`). Chat therefore works on any server with RCON, log source or not.
 
 ### Edit a config
 

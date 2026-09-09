@@ -276,8 +276,10 @@ export function LivePlayers({
       {players.length > 0 ? (
         // Две колонки — по одной на команду, как на экране отрядов в игре.
         // Ниже `xl` строка с действиями не помещается в половину ширины, и
-        // команды встают друг под другом.
-        <CardBody className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        // команды встают друг под другом. `items-start` снимает растягивание
+        // по высоте: колонка меньшей команды заканчивается на своём последнем
+        // игроке, а не тянется пустотой до высоты соседней.
+        <CardBody className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           {teams.map((team) => (
             <TeamRoster key={team.team_id} team={team} {...rowProps} />
           ))}

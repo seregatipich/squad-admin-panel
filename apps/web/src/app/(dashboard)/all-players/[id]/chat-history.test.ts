@@ -206,6 +206,7 @@ describe('labels and formatting', () => {
     expect(scopeLabel('admin')).toBe('Админ');
     expect(scopeLabel('unknown')).toBe('unknown');
     expect(sourceLabel('panel')).toBe('Панель');
+    expect(sourceLabel('rcon')).toBe('Игра (RCON)');
   });
 
   it('formats a timestamp and falls back on garbage input', () => {

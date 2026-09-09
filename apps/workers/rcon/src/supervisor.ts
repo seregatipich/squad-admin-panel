@@ -1,3 +1,4 @@
+import { type ChatFlagDetector, handleChat } from '@squad/chat-ingest';
 import {
   type DatabaseClient,
   events,
@@ -15,6 +16,7 @@ import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { queryA2S } from './a2s.js';
+import { parseRconChatLine } from './chat.js';
 import { RconClient } from './client.js';
 import { RconCommandQueue } from './commands.js';
 import { parseListPlayers, type RconPlayer } from './parse-list-players.js';
@@ -60,6 +62,11 @@ export interface SupervisorOptions {
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   geoLookup?: GeoLookup | null;
+  /**
+   * Profanity/flag matcher applied to incoming chat (CHATLOG-5). Shared across
+   * every supervisor so the rule cache is loaded once.
+   */
+  chatFlagDetector?: ChatFlagDetector | null;
 }
 
 /** True when the parameters that pick the TCP/UDP endpoint or the AUTH secret differ. */
@@ -150,6 +157,8 @@ class PerServerSupervisor {
   private pollInFlight = false;
   private backoffMs: number;
   private onDisconnect?: () => void;
+  /** Serialises chat ingestion for this server; see {@link ingestBroadcast}. */
+  private chatQueue: Promise<void> = Promise.resolve();
   private consecutivePollFails = 0;
   private consecutiveA2SFails = 0;
   private consecutiveLowTick = 0;
@@ -495,6 +504,51 @@ class PerServerSupervisor {
     }
   }
 
+  /**
+   * Handle one unsolicited RCON packet.
+   *
+   * Squad delivers in-game chat only this way — it is not in SquadGame.log —
+   * so this is the sole live-chat producer for a running server. Non-chat
+   * broadcasts (admin camera, squad creation, kicks) parse to null and are
+   * ignored.
+   *
+   * Ingestion is queued rather than fired off per packet: each message costs
+   * several identity queries plus an insert, and a chat flood would otherwise
+   * open them all at once and let the archive rows land out of order. The
+   * queue is per server and never awaited by the caller, so a slow database
+   * cannot stall the socket's read loop or the poll timers.
+   */
+  private ingestBroadcast(body: string): void {
+    const chat = parseRconChatLine(body, new Date().toISOString());
+    if (!chat) return;
+    this.chatQueue = this.chatQueue
+      .then(() =>
+        handleChat(
+          this.opts.db,
+          this.opts.redis,
+          {
+            serverId: this.target.serverId,
+            chat,
+            source: 'rcon',
+            onArchiveError: (err) =>
+              this.opts.log.warn(
+                { err: err.message, serverId: this.target.serverId },
+                'rcon chat archive insert failed',
+              ),
+          },
+          this.opts.chatFlagDetector ?? null,
+        ),
+      )
+      .then(
+        () => undefined,
+        (err: Error) =>
+          this.opts.log.warn(
+            { err: err.message, serverId: this.target.serverId },
+            'rcon chat ingest failed',
+          ),
+      );
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       let lastDisconnectReason: string | undefined;
@@ -516,6 +570,7 @@ class PerServerSupervisor {
             lastDisconnectReason = reason;
             this.onDisconnect?.();
           },
+          onBroadcast: (body) => this.ingestBroadcast(body),
         });
         await this.client.connect();
         this.opts.log.info(

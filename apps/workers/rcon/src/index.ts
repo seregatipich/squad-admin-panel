@@ -1,3 +1,4 @@
+import { ChatFlagDetector } from '@squad/chat-ingest';
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import { redisSinkStream, resolveRconHost, startHeartbeat } from '@squad/shared-config';
@@ -65,7 +66,13 @@ async function main() {
   }
 
   const diag = createDiag({ redis, log });
-  const supervisor = new RconSupervisor({ db, redis, log, diag });
+  const supervisor = new RconSupervisor({
+    db,
+    redis,
+    log,
+    diag,
+    chatFlagDetector: new ChatFlagDetector(db),
+  });
 
   async function reconcile() {
     const rows = await db
