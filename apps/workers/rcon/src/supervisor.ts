@@ -1,3 +1,4 @@
+import { type ChatFlagDetector, handleChat } from '@squad/chat-ingest';
 import {
   type DatabaseClient,
   events,
@@ -15,6 +16,7 @@ import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { queryA2S } from './a2s.js';
+import { parseRconChatLine } from './chat.js';
 import { RconClient } from './client.js';
 import { RconCommandQueue } from './commands.js';
 import { parseListPlayers } from './parse-list-players.js';
@@ -55,6 +57,11 @@ export interface SupervisorOptions {
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   geoLookup?: GeoLookup | null;
+  /**
+   * Profanity/flag matcher applied to incoming chat (CHATLOG-5). Shared across
+   * every supervisor so the rule cache is loaded once.
+   */
+  chatFlagDetector?: ChatFlagDetector | null;
 }
 
 /** True when the parameters that pick the TCP/UDP endpoint or the AUTH secret differ. */
@@ -480,6 +487,31 @@ class PerServerSupervisor {
     }
   }
 
+  /**
+   * Handle one unsolicited RCON packet.
+   *
+   * Squad delivers in-game chat only this way — it is not in SquadGame.log —
+   * so this is the sole live-chat producer for a running server. Non-chat
+   * broadcasts (admin camera, squad creation, kicks) parse to null and are
+   * ignored. Fire-and-forget: chat must never stall the poll loop, and a
+   * failed insert must not drop the connection.
+   */
+  private ingestBroadcast(body: string): void {
+    const chat = parseRconChatLine(body, new Date().toISOString());
+    if (!chat) return;
+    handleChat(
+      this.opts.db,
+      this.opts.redis,
+      { serverId: this.target.serverId, chat, source: 'rcon' },
+      this.opts.chatFlagDetector ?? null,
+    ).catch((err) =>
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'rcon chat ingest failed',
+      ),
+    );
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       let lastDisconnectReason: string | undefined;
@@ -501,6 +533,7 @@ class PerServerSupervisor {
             lastDisconnectReason = reason;
             this.onDisconnect?.();
           },
+          onBroadcast: (body) => this.ingestBroadcast(body),
         });
         await this.client.connect();
         this.opts.log.info(

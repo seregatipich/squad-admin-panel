@@ -18,6 +18,8 @@
  * panel-owned chat commands where an RNSquadJS sidecar runs its own
  * `chatCommands` (see the RNSquadJS migration design), avoiding double replies.
  */
+
+import { resolvePlayerId } from '@squad/chat-ingest';
 import {
   type ChatCommandName,
   type ChatCommandResponseSource,
@@ -34,7 +36,6 @@ import {
 import { and, eq, isNull, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedChat } from '../parser/chat.js';
-import { resolvePlayerId } from './store.js';
 
 const RCON_STREAM_MAXLEN = 500;
 /** worker-rcon caps `AdminWarn`/`AdminBroadcast` text (BROADCAST_MAX_CHARS) and rejects CR/LF/NUL. */

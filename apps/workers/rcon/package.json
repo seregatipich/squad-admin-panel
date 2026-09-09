@@ -13,6 +13,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@squad/chat-ingest": "workspace:*",
     "@squad/db": "workspace:*",
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",

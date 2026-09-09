@@ -9,8 +9,25 @@ import {
 import { normalizePlayerName } from '@squad/shared-config';
 import { desc, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import type { ChatChannel, ParsedChat } from '../parser/chat.js';
 import type { ChatFlagDetector } from './flag-rules.js';
+
+/** In-game chat channels, named as Squad names them on the wire. */
+export type ChatChannel = 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';
+
+/**
+ * One chat line, however it reached the panel. Both producers — the log tailer
+ * and the RCON broadcast listener — normalise to this shape so a message is
+ * stored and fanned out identically whatever carried it.
+ */
+export interface ChatInput {
+  /** ISO-8601 timestamp of the message. */
+  ts: string;
+  channel: ChatChannel;
+  eosId: string | null;
+  steamId64: string | null;
+  playerName: string;
+  message: string;
+}
 
 const CHANNEL_SCOPE: Record<ChatChannel, ChatScope> = {
   ChatAll: 'all',
@@ -71,10 +88,7 @@ export interface ChatMessageFrame {
   data: ChatMessageData;
 }
 
-export async function resolvePlayerId(
-  db: DatabaseClient,
-  chat: ParsedChat,
-): Promise<string | null> {
+export async function resolvePlayerId(db: DatabaseClient, chat: ChatInput): Promise<string | null> {
   const filters = [];
   if (chat.eosId) filters.push(eq(players.eosId, chat.eosId));
   if (chat.steamId64) filters.push(eq(players.steamId64, BigInt(chat.steamId64)));
@@ -107,7 +121,7 @@ export async function resolvePlayerId(
 export function buildChatFrame(
   playerId: string | null,
   serverId: string,
-  chat: ParsedChat,
+  chat: ChatInput,
 ): ChatMessageFrame {
   return {
     type: 'chat.message',
@@ -126,10 +140,24 @@ export function buildChatFrame(
   };
 }
 
+/**
+ * Fan one chat line out to the live bus and persist it.
+ *
+ * The frame is published whatever happens; the archive row is written only
+ * when the sender resolves to a known player, because `chat_messages.player_id`
+ * is required. A sender the panel has never seen (no roster poll yet, no name
+ * history) therefore shows up live but is not archived.
+ *
+ * @param db - Database client used for identity lookup and the insert.
+ * @param redis - Live-bus publisher, or null to skip the fan-out.
+ * @param source - Which pipeline carried the line; stored on the archive row.
+ * @param detector - Optional profanity/flag matcher (CHATLOG-5).
+ * @returns The frame that was published, so callers can reuse it.
+ */
 export async function handleChat(
   db: DatabaseClient,
   redis: ChatPublisher | null,
-  { serverId, chat }: { serverId: string; chat: ParsedChat },
+  { serverId, chat, source = 'log' }: { serverId: string; chat: ChatInput; source?: ChatSource },
   detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
   const playerId = await resolvePlayerId(db, chat);
@@ -143,7 +171,7 @@ export async function handleChat(
       sentAt: new Date(chat.ts),
       scope: CHANNEL_SCOPE[chat.channel],
       message: chat.message,
-      source: 'log',
+      source,
       isFlagged: matchedRuleId !== null,
       matchedRuleId,
     }).catch(() => undefined);

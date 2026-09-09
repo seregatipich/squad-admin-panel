@@ -1,4 +1,5 @@
 import { BridgeClient } from '@squad/bridge-client';
+import { ChatFlagDetector, handleChat } from '@squad/chat-ingest';
 import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
@@ -15,8 +16,6 @@ import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
 import { handleChatCommand } from './chat/commands.js';
-import { ChatFlagDetector } from './chat/flag-rules.js';
-import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
 import { dropCutoverServers } from './cutover.js';

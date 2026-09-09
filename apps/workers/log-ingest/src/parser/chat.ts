@@ -1,18 +1,23 @@
 /**
- * Live chat parser (CHAT-1).
+ * Log-file chat parser (CHAT-1).
  *
- * Squad writes every in-game chat line to SquadGame.log under the
- * `LogSquad`/`LogChat` category. Modern builds embed the sender's online
- * identity inline; older builds carry only a display name:
+ * Parses chat lines of the form
  *
  *   [YYYY.MM.DD-HH.MM.SS:mmm][<tick>]LogSquad: ChatMessage: <steam>
  *     [Online IDs: EOS: <eos32> steam: <steam17>] <Name> : <Channel> : <text>
  *
+ * out of SquadGame.log under the `LogSquad`/`LogChat` category.
+ *
+ * NOTE: current Squad builds do **not** write chat to SquadGame.log at all —
+ * chat is delivered only as an RCON broadcast packet, which
+ * `@squad/worker-rcon` parses (see `apps/workers/rcon/src/chat.ts`). This
+ * parser stays for log formats that do carry chat and because `!report`,
+ * votes and `!`-commands are wired to it; on a live server it never matches.
+ * Consolidating both producers onto the RCON feed is tracked separately.
+ *
  * `parseChatFromLogLine` is a pure function so it can be unit-tested without a
  * live server. It returns one structured message per chat line regardless of
- * command (`!report` lines are still chat and are surfaced in the viewer). The
- * exact live wire format is env-gated and mirrors the REPORT-1 parser so both
- * stay in lockstep.
+ * command (`!report` lines are still chat and are surfaced in the viewer).
  */
 import { type LogLine, parseLine } from './patterns.js';
 
