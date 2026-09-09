@@ -19,7 +19,7 @@ import { servers } from './servers.js';
 export const CHAT_SCOPES = ['all', 'team', 'squad', 'admin', 'broadcast', 'direct'] as const;
 export type ChatScope = (typeof CHAT_SCOPES)[number];
 
-export const CHAT_SOURCES = ['log', 'panel'] as const;
+export const CHAT_SOURCES = ['log', 'panel', 'rcon'] as const;
 export type ChatSource = (typeof CHAT_SOURCES)[number];
 
 export const chatMessages = pgTable(
@@ -58,7 +58,7 @@ export const chatMessages = pgTable(
       'chat_messages_scope_chk',
       sql`scope IN ('all','team','squad','admin','broadcast','direct')`,
     ),
-    sourceChk: check('chat_messages_source_chk', sql`source IN ('log','panel')`),
+    sourceChk: check('chat_messages_source_chk', sql`source IN ('log','panel','rcon')`),
   }),
 );
 

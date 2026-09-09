@@ -5,7 +5,8 @@
  *   int32 size   (little-endian, bytes after this field)
  *   int32 id     (echoed back)
  *   int32 type   (SERVERDATA_AUTH=3, SERVERDATA_EXECCOMMAND=2,
- *                 SERVERDATA_RESPONSE_VALUE=0, SERVERDATA_AUTH_RESPONSE=2)
+ *                 SERVERDATA_RESPONSE_VALUE=0, SERVERDATA_AUTH_RESPONSE=2,
+ *                 SERVERDATA_CHAT_VALUE=1)
  *   ASCII body   (null-terminated)
  *   0x00         (trailing null)
  *
@@ -30,6 +31,13 @@ export const SERVERDATA_AUTH = 3;
 export const SERVERDATA_EXECCOMMAND = 2;
 export const SERVERDATA_AUTH_RESPONSE = 2;
 export const SERVERDATA_RESPONSE_VALUE = 0;
+/**
+ * Squad's unsolicited broadcast packet: chat lines, admin-camera notices,
+ * squad creation, kick/warn notices. Not part of the Valve protocol — Squad
+ * pushes these to every authenticated client without a matching request, so
+ * they carry no id this client issued.
+ */
+export const SERVERDATA_CHAT_VALUE = 1;
 
 export interface RconPacket {
   id: number;

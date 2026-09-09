@@ -7,6 +7,7 @@ import {
   RconPacketStream,
   SERVERDATA_AUTH,
   SERVERDATA_AUTH_RESPONSE,
+  SERVERDATA_CHAT_VALUE,
   SERVERDATA_EXECCOMMAND,
   SERVERDATA_RESPONSE_VALUE,
 } from '../src/protocol.js';
@@ -163,6 +164,54 @@ describe('RconClient', () => {
       await expect(first).resolves.toBe('result:FirstCommand');
       await expect(second).resolves.toBe('result:SecondCommand');
       expect(sentBodies).toEqual(['FirstCommand', '', 'SecondCommand', '']);
+    } finally {
+      await client.close().catch(() => undefined);
+      await closeServer(server);
+    }
+  });
+
+  it('delivers broadcast packets interleaved with a multi-chunk response', async () => {
+    const chatBody =
+      '[ChatAll] [Online IDs:EOS: 0002aaaa000000000000000000000001 steam: 76561199000000001] PanelAlpha : hello panel';
+
+    const server = await new Promise<Server>((resolve) => {
+      const fixture = createServer((sock: Socket) => {
+        const stream = new RconPacketStream();
+        const writePacket = (id: number, body: string, type = SERVERDATA_RESPONSE_VALUE) => {
+          if (!sock.destroyed) sock.write(encodePacket({ id, type, body }));
+        };
+
+        sock.on('error', () => undefined);
+        sock.on('data', (chunk) => {
+          for (const packet of stream.push(chunk)) {
+            if (packet.type === SERVERDATA_AUTH) {
+              writePacket(packet.id, '');
+              writePacket(packet.id, '', SERVERDATA_AUTH_RESPONSE);
+              continue;
+            }
+            if (packet.type !== SERVERDATA_EXECCOMMAND) continue;
+            if (packet.body === '') {
+              writePacket(packet.id, '');
+              continue;
+            }
+            // Squad pushes chat between the chunks of a long response.
+            writePacket(packet.id, 'first-half|');
+            writePacket(0, chatBody, SERVERDATA_CHAT_VALUE);
+            writePacket(packet.id, 'second-half');
+          }
+        });
+      });
+      fixture.listen(0, '127.0.0.1', () => resolve(fixture));
+    });
+    const port = (server.address() as AddressInfo).port;
+    const onBroadcast = vi.fn();
+    const client = new RconClient(makeOpts({ port, commandTimeoutMs: 500, onBroadcast }));
+
+    try {
+      await client.connect();
+      await expect(client.exec('ListPlayers')).resolves.toBe('first-half|second-half');
+      expect(onBroadcast).toHaveBeenCalledTimes(1);
+      expect(onBroadcast).toHaveBeenCalledWith(chatBody);
     } finally {
       await client.close().catch(() => undefined);
       await closeServer(server);

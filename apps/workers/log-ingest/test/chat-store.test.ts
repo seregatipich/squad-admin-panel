@@ -1,8 +1,8 @@
+import { handleChat, LIVE_BUS_CHANNEL } from '@squad/chat-ingest';
 import { createDatabaseClient, playerNameHistory, players, servers } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { handleChat, LIVE_BUS_CHANNEL } from '../src/chat/store.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;

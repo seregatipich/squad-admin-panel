@@ -12,7 +12,8 @@ export const CHAT_SCOPE_OPTIONS = [
 export type ChatScope = (typeof CHAT_SCOPE_OPTIONS)[number]['value'];
 
 export const CHAT_SOURCE_OPTIONS = [
-  { value: 'log', label: 'Игра' },
+  { value: 'log', label: 'Игра (лог)' },
+  { value: 'rcon', label: 'Игра (RCON)' },
   { value: 'panel', label: 'Панель' },
 ] as const;
 

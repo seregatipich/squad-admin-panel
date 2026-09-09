@@ -5,6 +5,7 @@ import {
   type RconPacket,
   RconPacketStream,
   SERVERDATA_AUTH,
+  SERVERDATA_CHAT_VALUE,
   SERVERDATA_EXECCOMMAND,
   SERVERDATA_RESPONSE_VALUE,
 } from './protocol.js';
@@ -18,6 +19,13 @@ export interface RconClientOptions {
   commandTimeoutMs?: number;
   keepaliveMs?: number;
   onDisconnect?: (reason: 'remote-close' | 'explicit-close') => void;
+  /**
+   * Called with the raw body of every unsolicited broadcast packet Squad
+   * pushes (chat, admin camera, squad creation, kicks). Interleaved with
+   * command responses, so it must not block; exceptions are logged and
+   * swallowed rather than tearing down the socket.
+   */
+  onBroadcast?: (body: string) => void;
 }
 
 interface PendingCommand {
@@ -166,6 +174,14 @@ export class RconClient {
   private handlePacket(p: RconPacket): void {
     if (this.packetHandler) {
       this.packetHandler(p);
+      return;
+    }
+    if (p.type === SERVERDATA_CHAT_VALUE) {
+      try {
+        this.opts.onBroadcast?.(p.body);
+      } catch (err) {
+        this.opts.log.warn({ err: (err as Error).message }, 'rcon broadcast handler failed');
+      }
       return;
     }
     if (p.type !== SERVERDATA_RESPONSE_VALUE) return;

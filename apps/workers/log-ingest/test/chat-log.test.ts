@@ -1,8 +1,8 @@
+import { handleChat, recordChatMessage } from '@squad/chat-ingest';
 import { type ChatScope, chatMessages, createDatabaseClient, players, servers } from '@squad/db';
 import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { handleChat, recordChatMessage } from '../src/chat/store.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;

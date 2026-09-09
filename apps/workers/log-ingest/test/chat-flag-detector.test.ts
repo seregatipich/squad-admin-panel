@@ -1,9 +1,8 @@
+import { ChatFlagDetector, handleChat } from '@squad/chat-ingest';
 import { chatFlagRules, chatMessages, createDatabaseClient, players, servers } from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ChatFlagDetector } from '../src/chat/flag-rules.js';
-import { handleChat } from '../src/chat/store.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
