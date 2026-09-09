@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ButtonHTMLAttributes, ComponentProps, ReactNode } from 'react';
 
 /** Роль действия. Цвет здесь означает намерение, а не украшение (дизайн-система, §5). */
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive' | 'plain';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive' | 'success' | 'plain';
 
 /** Высота элемента управления: `md` — 32px, `sm` — 28px (дизайн-система, §6). */
 export type ButtonSize = 'sm' | 'md';
@@ -36,6 +36,10 @@ const VARIANT: Record<ButtonVariant, string> = {
   secondary: 'bg-raised text-ink border border-line hover:bg-line-2',
   ghost: 'text-ink-2 hover:bg-raised hover:text-ink',
   destructive: 'bg-crit text-bg hover:brightness-110',
+  // `good` (#30d158) is tuned for text and badges on a dark ground; white on
+  // it reads at 1.9:1. The darker step of the same ramp carries white at
+  // 5.35:1, so the affirmative button stays legible instead of merely green.
+  success: 'bg-green-700 text-white hover:bg-green-600',
   plain: 'text-accent hover:brightness-110',
 };
 
@@ -85,7 +89,9 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
  * примитив не знает про словарь переводов.
  *
  * @param variant Роль действия. `destructive` — только необратимое разрушение
- *   данных; «Отмена» и «Удалить фильтр» — это `secondary` (§5).
+ *   данных; «Отмена» и «Удалить фильтр» — это `secondary` (§5). `success` —
+ *   переход в режим, разрешающий правку: действие утвердительное, но не
+ *   основное действие формы, поэтому оно не занимает `primary`.
  * @param size Высота: `md` (32px) или `sm` (28px).
  * @param loading Пока `true`, кнопка получает `disabled` и `aria-busy`, а
  *   слева появляется индикатор. Содержимое не подменяется — оператор видит,

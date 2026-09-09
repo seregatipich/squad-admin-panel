@@ -182,12 +182,15 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 ## Config editor — Editor tab
 
 1. Admin opens `/servers/:id/configs` (requires `config:view`).
-2. Monaco editor loads lazily. Current file content is fetched from `GET /api/v1/servers/:id/configs/:file`.
-3. User edits content. Dirty-tracking shows an unsaved indicator.
-4. User clicks "Сохранить" (requires `config:write`). Optional commit message field.
-5. `PUT /api/v1/servers/:id/configs/:file` fires with `{content, commit_message}`. CRLF endings are preserved (the model's EOL is pinned to CRLF on load, so `getValue()` round-trips `\r\n`).
-6. If the sha256 is unchanged (no-op write), the API short-circuits: no new config_version row is created and the editor resets dirty state.
-7. On success the editor resets.
+2. Monaco editor loads lazily from `/monaco/vs` — the bundle is vendored same-origin, not fetched from a CDN (see [configuration](./configuration.md)). Current file content is fetched from `GET /api/v1/servers/:id/configs/:file`.
+3. **The file opens read-only.** These files drive a live game server, so the editor does not accept keystrokes until the operator asks for it: a green "Изменить" button sits in the bottom-right corner of the editor. The save bar (commit message, "Отмена", "Сохранить") is hidden in view mode — there is nothing to save yet.
+4. Clicking "Изменить" arms editing for the open file. Dirty-tracking shows an unsaved indicator.
+5. User clicks "Сохранить" (requires `config:write`). Optional commit message field.
+6. `PUT /api/v1/servers/:id/configs/:file` fires with `{content, commit_message}`. CRLF endings are preserved (the model's EOL is pinned to CRLF on load, so `getValue()` round-trips `\r\n`).
+7. If the sha256 is unchanged (no-op write), the API short-circuits: no new config_version row is created and the editor resets dirty state.
+8. On success the editor resets **and returns to view mode**. "Отмена" does the same while discarding uncommitted changes; it stays enabled even with nothing changed, so arming editing by accident is always reversible. Opening another file also starts in view mode.
+
+Files whose whole content is panel-owned (a `LayerRotation.cfg` carrying the managed segment) get no "Изменить" button at all — they are read-only by nature, and the banner points at the screen that does own them.
 
 ### Managed-segment read-only (Admins.cfg)
 

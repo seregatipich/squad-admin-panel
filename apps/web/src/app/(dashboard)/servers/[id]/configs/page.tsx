@@ -36,10 +36,13 @@ const POLL_MS = 8000;
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
 
-// Pin the AMD loader to the exact vendored monaco-editor build (#242) so the
-// browser always fetches the same DOMPurify copy this repo's dependency
-// pins were audited against, instead of whatever "latest" CDN resolves to.
-loader.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.56.0/min/vs' } });
+// Serve the AMD loader from our own origin rather than a public CDN. The
+// pinned `monaco-editor` dependency is vendored into `public/monaco/vs` by
+// `scripts/sync-monaco.mjs` at build time, so the browser still gets the
+// exact build this repo's dependency pins were audited against (#242) — but
+// a client that cannot reach cdn.jsdelivr.net no longer hangs the editor on
+// "Loading..." forever, and the page needs no CDN in its CSP.
+loader.config({ paths: { vs: '/monaco/vs' } });
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 const MonacoDiff = dynamic(
@@ -198,6 +201,11 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [content, setContent] = useState<string>('');
   const [serverContent, setServerContent] = useState<string>('');
   const [dirty, setDirty] = useState(false);
+  // A config file opens read-only: these files run a live game server, and an
+  // editor that accepts keystrokes the moment it loads invites edits nobody
+  // meant to make. Editing is armed explicitly, per file, and disarms again
+  // on save or discard.
+  const [editing, setEditing] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -382,6 +390,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setMsg(null);
       setSelected(name);
       setTab('editor');
+      setEditing(false);
       setExternalChange(null);
       try {
         const r = await fetch(`/api/v1/servers/${id}/configs/${name}`, {
@@ -470,6 +479,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setServerContent(content);
       if (j.sha256) setServerSha(j.sha256);
       setDirty(false);
+      setEditing(false);
       setExternalChange(null);
       setCommitMessage('');
       setMsg(
@@ -492,6 +502,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   function discard() {
     setContent(serverContent);
     setDirty(false);
+    setEditing(false);
     setMsg(null);
   }
 
@@ -996,7 +1007,9 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                     saving={saving}
                     onSave={save}
                     onDiscard={discard}
-                    readOnly={isManagedRotation}
+                    editing={editing}
+                    onStartEditing={() => setEditing(true)}
+                    locked={isManagedRotation}
                     onMount={handleEditorMount}
                   />
                 </>
@@ -1039,6 +1052,19 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   );
 }
 
+/**
+ * Просмотр и правка одного файла конфигурации.
+ *
+ * Файл открывается только для чтения; правка включается кнопкой «Изменить» в
+ * правом нижнем углу редактора. Панель сохранения показывается лишь в режиме
+ * правки — в режиме просмотра сохранять нечего, и пустая строка полей только
+ * отвлекала бы.
+ *
+ * @param editing Правка разрешена оператором для текущего файла.
+ * @param onStartEditing Снять режим только для чтения.
+ * @param locked Файл неизменяем в принципе (managed-сегмент): кнопки
+ *   «Изменить» нет вообще, потому что нажимать её было бы не на что.
+ */
 function EditorView(props: {
   content: string;
   onChange: (v: string) => void;
@@ -1048,49 +1074,63 @@ function EditorView(props: {
   saving: boolean;
   onSave: () => void;
   onDiscard: () => void;
-  readOnly?: boolean;
+  editing: boolean;
+  onStartEditing: () => void;
+  locked?: boolean;
   onMount?: OnMount;
 }) {
+  const readOnly = props.locked || !props.editing;
+
   return (
     <>
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <TextInput
-          value={props.commitMessage}
-          onChange={(e) => props.setCommitMessage(e.target.value)}
-          placeholder="Комментарий к изменению (необязательно)"
-          aria-label="Комментарий к изменению"
-          maxLength={500}
-          disabled={props.readOnly}
-          className="flex-1"
+      {props.editing && !props.locked ? (
+        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+          <TextInput
+            value={props.commitMessage}
+            onChange={(e) => props.setCommitMessage(e.target.value)}
+            placeholder="Комментарий к изменению (необязательно)"
+            aria-label="Комментарий к изменению"
+            maxLength={500}
+            className="flex-1"
+          />
+          <Button onClick={props.onDiscard} disabled={props.saving}>
+            Отмена
+          </Button>
+          <Button
+            variant="primary"
+            onClick={props.onSave}
+            loading={props.saving}
+            disabled={!props.dirty}
+          >
+            Сохранить
+          </Button>
+        </div>
+      ) : null}
+      <div className="relative">
+        <MonacoEditor
+          height="65vh"
+          defaultLanguage="ini"
+          theme="vs-dark"
+          value={props.content}
+          onChange={(v) => props.onChange(v ?? '')}
+          onMount={props.onMount}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            wordWrap: 'on',
+            renderWhitespace: 'boundary',
+            scrollBeyondLastLine: false,
+            readOnly,
+          }}
         />
-        <Button onClick={props.onDiscard} disabled={props.readOnly || !props.dirty || props.saving}>
-          Сбросить
-        </Button>
-        <Button
-          variant="primary"
-          onClick={props.onSave}
-          loading={props.saving}
-          disabled={props.readOnly || !props.dirty}
-        >
-          Сохранить
-        </Button>
+        {readOnly && !props.locked ? (
+          <div className="absolute right-4 bottom-4 z-10">
+            <Button variant="success" size="sm" onClick={props.onStartEditing}>
+              Изменить
+            </Button>
+          </div>
+        ) : null}
       </div>
-      <MonacoEditor
-        height="65vh"
-        defaultLanguage="ini"
-        theme="vs-dark"
-        value={props.content}
-        onChange={(v) => props.onChange(v ?? '')}
-        onMount={props.onMount}
-        options={{
-          minimap: { enabled: false },
-          fontSize: 13,
-          wordWrap: 'on',
-          renderWhitespace: 'boundary',
-          scrollBeyondLastLine: false,
-          readOnly: props.readOnly ?? false,
-        }}
-      />
     </>
   );
 }
