@@ -95,8 +95,9 @@ transaction rolls back the envelope, the `combat_events` row and the aggregate d
 together. `match_id` is written `NULL` (a `bigint` column that log-ingest's `uuid`
 match id cannot fill — a COMBAT-2/DOSSIER-1 schema gap; the aggregates and the
 reconcile guard ignore it). `wound`/`revive` rows are recorded in `combat_events`
-but move no aggregate. A missing production `player_sessions` writer for the live
-flow is tracked separately (PRES-1).
+but move no aggregate. `player_sessions` is written by `worker-rcon` from the
+`ListPlayers` roster snapshot (PRES-1), not from this flow — see
+`docs/components/workers/rcon/data-model.md`.
 
 ## Squad fatal detection patterns
 

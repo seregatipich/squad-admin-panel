@@ -33,13 +33,14 @@ Each `PerServerSupervisor` runs an infinite `connectLoop`:
 
 ## Poll cycle (every 30 s)
 
-1. `exec('ListPlayers')` → `parseListPlayers()` → `upsertPlayers()`.
-2. `exec('ListSquads')` → `parseListSquads()` → write `rcon:squads:{id}`.
-3. `exec('ShowServerInfo')` → `parseServerInfo()`.
-4. `exec('ShowNextMap')` → `parseShowNextMap()`.
-5. Emit `rcon.players_polled` envelope to `events:server:{id}`.
-6. Write `rcon:status:{id}` = `{ state: "connected", player_count, squad_count, last_poll_at, tickrate_rt, next_layer, ... }`.
-7. On 3 consecutive poll failures: close client, trigger reconnect loop.
+1. `exec('ListPlayers')` → `parseListPlayers()` → `upsertPlayers()` → `accruePlayerKitTime()`.
+2. `reconcilePlayerSessions()` — open a `player_sessions` row for every player in the roster that has none, close the rows of players who are no longer in it (PRES-1). Best-effort: a failure here is logged and does not count as a poll failure.
+3. `exec('ListSquads')` → `parseListSquads()` → write `rcon:squads:{id}`.
+4. `exec('ShowServerInfo')` → `parseServerInfo()`.
+5. `exec('ShowNextMap')` → `parseShowNextMap()`.
+6. Emit `rcon.players_polled` envelope to `events:server:{id}`.
+7. Write `rcon:status:{id}` = `{ state: "connected", player_count, squad_count, last_poll_at, tickrate_rt, next_layer, ... }`.
+8. On 3 consecutive poll failures: close client, trigger reconnect loop — which closes the server's open sessions at the last successful poll (`closeServerSessions()`), so the unobserved gap is not credited as play time.
 
 ## Operator command queue
 
