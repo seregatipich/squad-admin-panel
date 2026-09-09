@@ -200,6 +200,24 @@ describe('ServerDetailPage', () => {
     ).toBeTruthy();
   });
 
+  it('не показывает ряд плиток со сводкой (игроки, тикрейт, CPU/RAM)', async () => {
+    // Те же числа читаются в ростере и в карточке состояния — дублирующий ряд убран.
+    stubServerFetch('running');
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    await screen.findByRole('heading', { name: 'Состояние' });
+    expect(screen.queryByText('Тикрейт')).not.toBeInTheDocument();
+    expect(screen.queryByText('CPU')).not.toBeInTheDocument();
+    expect(screen.queryByText('RAM')).not.toBeInTheDocument();
+  });
+
   it('offers a retry when the server cannot be loaded, and recovers on it', async () => {
     let failing = true;
     vi.stubGlobal(
@@ -322,7 +340,7 @@ describe('ServerDetailPage — внешний сервер', () => {
     expect(screen.queryByRole('button', { name: 'Рестарт' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Обновить игру' })).not.toBeInTheDocument();
     expect(screen.queryByText('CPU')).not.toBeInTheDocument();
-    expect(screen.getByText('203.0.113.10:21114')).toBeInTheDocument();
+    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
     expect(screen.queryByText('Порт маяка')).not.toBeInTheDocument();
     expect(wsCtor).not.toHaveBeenCalled();
   });
