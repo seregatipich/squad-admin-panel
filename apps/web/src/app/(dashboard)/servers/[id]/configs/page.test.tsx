@@ -357,6 +357,57 @@ async function openFile(name: string) {
   await act(async () => {});
 }
 
+/** Файловый стенд на два файла: нужен и переключению файлов, и режиму правки. */
+const BODIES: Record<string, string> = {
+  'Server.cfg': '[SquadName]\nServerName="A"\n',
+  'MOTD.cfg': 'добро пожаловать\n',
+};
+
+function installTwoFiles(): FetchCall[] {
+  const calls: FetchCall[] = [];
+  const json = (payload: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      calls.push({ method, url, body: init?.body as string | undefined });
+      if (url.endsWith('/configs/drift')) return json({ items: [] });
+      if (url.endsWith('/api/v1/me')) return json({ permissions: [] });
+      if (url.endsWith('/configs')) {
+        return json({
+          items: Object.entries(BODIES).map(([name, body]) => ({
+            name,
+            size: body.length,
+            sha256: `sha-${name}`,
+            behavior: 'hot_reload',
+            exists: true,
+          })),
+        });
+      }
+      const hit = Object.keys(BODIES).find((name) => url.endsWith(`/configs/${name}`));
+      if (hit) {
+        return json({
+          name: hit,
+          content: BODIES[hit],
+          sha256: `sha-${hit}`,
+          behavior: 'hot_reload',
+        });
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    }),
+  );
+  return calls;
+}
+
+/**
+ * Снять режим только для чтения: файл открывается на просмотр, правка
+ * включается зелёной кнопкой «Изменить» в углу редактора.
+ */
+async function startEditing() {
+  await clickButton('Изменить');
+}
+
 /** Нажать кнопку с этим именем и дать React прогнать эффекты. */
 async function clickButton(name: string) {
   const button = await screen.findByRole('button', { name });
@@ -407,7 +458,7 @@ describe('ConfigsPage', () => {
     );
   });
 
-  it('keeps a plain config file editable with no banner', async () => {
+  it('opens a plain config file read-only with no banner, and «Изменить» makes it editable', async () => {
     mockFetch('Server.cfg', PLAIN_CONFIG_CONTENT, 'requires_restart');
     await renderPage();
     const fileButton = await screen.findByText('Server.cfg');
@@ -415,8 +466,11 @@ describe('ConfigsPage', () => {
       fileButton.click();
     });
     await screen.findByTestId('monaco-stub');
-    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'false');
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
     expect(screen.queryByText(/управляется панелью/)).not.toBeInTheDocument();
+
+    await startEditing();
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'false');
   });
 });
 
@@ -435,7 +489,9 @@ describe('ConfigsPage — Admins.cfg managed segment', () => {
       'href',
       '/settings/groups',
     );
-    // segment-level protection: the file itself remains editable
+    // segment-level protection: the file itself remains editable once the
+    // operator arms editing — the banner is not whole-file read-only.
+    await startEditing();
     expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'false');
   });
 
@@ -574,6 +630,118 @@ describe('ConfigsPage — restart button', () => {
   });
 });
 
+describe('ConfigsPage — режим просмотра и правки', () => {
+  const SAVE = 'Сохранить';
+  const EDIT = 'Изменить';
+  const CANCEL = 'Отмена';
+
+  it('открывает файл на просмотр: редактор только для чтения, панели сохранения нет', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.getByRole('button', { name: EDIT })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SAVE })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Комментарий к изменению')).not.toBeInTheDocument();
+  });
+
+  it('«Изменить» открывает правку: кнопка уходит, появляется панель сохранения', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'false');
+    expect(screen.queryByRole('button', { name: EDIT })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SAVE })).toBeInTheDocument();
+    expect(screen.getByLabelText('Комментарий к изменению')).toBeInTheDocument();
+  });
+
+  it('после успешного сохранения возвращается в просмотр', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+    await act(async () => {
+      editorCapture.onChange?.(`${SERVER_CRLF_CONTENT}\r\nExtra=1`);
+    });
+    await clickButton(SAVE);
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.getByRole('button', { name: EDIT })).toBeInTheDocument();
+  });
+
+  // Без этого оператор, нажавший «Изменить» по ошибке, остался бы в режиме
+  // правки навсегда: «Отмена» раньше блокировалась, пока нет правок.
+  it('«Отмена» возвращает в просмотр даже когда ничего не поменяли', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+    await clickButton(CANCEL);
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.getByRole('button', { name: EDIT })).toBeInTheDocument();
+  });
+
+  it('«Отмена» откатывает несохранённые правки и не шлёт PUT', async () => {
+    const calls = installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+    await act(async () => {
+      editorCapture.onChange?.(`${SERVER_CRLF_CONTENT}\r\nExtra=1`);
+    });
+    await clickButton(CANCEL);
+
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+    expect(screen.queryByText('изменено')).not.toBeInTheDocument();
+  });
+
+  it('файл под управлением панели не получает кнопку «Изменить» вовсе', async () => {
+    mockFetch('LayerRotation.cfg', MANAGED_ROTATION_CONTENT, 'rotation');
+    await renderPage();
+    await openFile('LayerRotation.cfg');
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.queryByRole('button', { name: EDIT })).not.toBeInTheDocument();
+  });
+
+  it('открытие другого файла снова начинается с просмотра', async () => {
+    installTwoFiles();
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'false');
+
+    await openFile('MOTD.cfg');
+
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.getByRole('button', { name: EDIT })).toBeInTheDocument();
+  });
+});
+
 describe('ConfigsPage — CRLF round-trip', () => {
   it('submits CRLF content back to PUT with \\r\\n intact', async () => {
     const calls = installFetch({
@@ -583,6 +751,7 @@ describe('ConfigsPage — CRLF round-trip', () => {
     });
     await renderPage();
     await openFile('Server.cfg');
+    await startEditing();
 
     const edited = `${SERVER_CRLF_CONTENT}\r\nExtra=1`;
     await act(async () => {
@@ -841,48 +1010,6 @@ describe('ConfigsPage — вкладки и история версий', () => 
 });
 
 describe('ConfigsPage — несохранённые правки при переключении файла', () => {
-  const BODIES: Record<string, string> = {
-    'Server.cfg': '[SquadName]\nServerName="A"\n',
-    'MOTD.cfg': 'добро пожаловать\n',
-  };
-
-  function installTwoFiles(): FetchCall[] {
-    const calls: FetchCall[] = [];
-    const json = (payload: unknown) =>
-      Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((url: string, init?: RequestInit) => {
-        const method = (init?.method ?? 'GET').toUpperCase();
-        calls.push({ method, url, body: init?.body as string | undefined });
-        if (url.endsWith('/configs/drift')) return json({ items: [] });
-        if (url.endsWith('/api/v1/me')) return json({ permissions: [] });
-        if (url.endsWith('/configs')) {
-          return json({
-            items: Object.entries(BODIES).map(([name, body]) => ({
-              name,
-              size: body.length,
-              sha256: `sha-${name}`,
-              behavior: 'hot_reload',
-              exists: true,
-            })),
-          });
-        }
-        const hit = Object.keys(BODIES).find((name) => url.endsWith(`/configs/${name}`));
-        if (hit) {
-          return json({
-            name: hit,
-            content: BODIES[hit],
-            sha256: `sha-${hit}`,
-            behavior: 'hot_reload',
-          });
-        }
-        return Promise.resolve(new Response('not found', { status: 404 }));
-      }),
-    );
-    return calls;
-  }
-
   it('спрашивает подтверждение и открывает соседний файл только после согласия', async () => {
     const calls = installTwoFiles();
     await renderPage();
@@ -934,6 +1061,7 @@ describe('ConfigsPage — полоса ошибки', () => {
     });
     await renderPage();
     await openFile('Server.cfg');
+    await startEditing();
 
     await act(async () => {
       editorCapture.onChange?.(`${SERVER_CRLF_CONTENT}\r\nExtra=1`);

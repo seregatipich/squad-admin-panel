@@ -49,18 +49,32 @@ describe('next.config.mjs headers()', () => {
     expect(csp).not.toContain(MONACO_CDN);
   });
 
-  it('widens the /servers/:id/configs route to allow-list cdn.jsdelivr.net for script-src, style-src, and connect-src', async () => {
+  // Monaco is vendored into public/monaco/vs, so the config editor route must
+  // not reach for a CDN either — a client that cannot resolve cdn.jsdelivr.net
+  // is exactly the case that left the editor stuck on "Loading..." forever.
+  it('excludes cdn.jsdelivr.net from the /servers/:id/configs route policy', async () => {
     const entries = await getHeaderEntries();
     const configsEntry = findEntry(entries, CONFIGS_ROUTE);
     const csp = findHeader(configsEntry, 'Content-Security-Policy')?.value ?? '';
 
     expect(configsEntry).toBeDefined();
-    expect(csp).toContain(`script-src 'self' 'unsafe-inline' ${MONACO_CDN}`);
-    expect(csp).toContain(`style-src 'self' 'unsafe-inline' ${MONACO_CDN}`);
-    expect(csp).toContain(`connect-src 'self' ${MONACO_CDN}`);
+    expect(csp).not.toContain(MONACO_CDN);
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("connect-src 'self'");
   });
 
-  it('keeps X-Content-Type-Options and X-Frame-Options on the widened /servers/:id/configs route too', async () => {
+  // Monaco inlines its codicon icon font as a data: URI. Without an explicit
+  // font-src it falls back to default-src 'self', which refuses data: and
+  // leaves every editor icon a blank box.
+  it('allows the data: codicon font and blob: workers monaco needs', async () => {
+    const csp = await cspFor(CONFIGS_ROUTE);
+
+    expect(csp).toContain("font-src 'self' data:");
+    expect(csp).toContain("worker-src 'self' blob:");
+  });
+
+  it('keeps X-Content-Type-Options and X-Frame-Options on the /servers/:id/configs route too', async () => {
     const entries = await getHeaderEntries();
     const configsEntry = findEntry(entries, CONFIGS_ROUTE);
 
@@ -106,7 +120,7 @@ describe('next.config.mjs headers()', () => {
     vi.stubEnv('NODE_ENV', 'production');
 
     expect(await cspFor(CONFIGS_ROUTE)).toBe(
-      `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' ${MONACO_CDN}; style-src 'self' 'unsafe-inline' ${MONACO_CDN}; worker-src 'self' blob:; connect-src 'self' ${MONACO_CDN}`,
+      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'",
     );
   });
 });

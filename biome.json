@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "experimentalScannerIgnores": [".claude", ".playwright-mcp"],
+    "experimentalScannerIgnores": [".claude", ".playwright-mcp", "apps/web/public/monaco"],
     "includes": [
       "**",
       "!**/.claude",
@@ -18,6 +18,7 @@
       "!**/coverage",
       "!**/drizzle",
       "!packages/db/src/drizzle-client.ts",
+      "!apps/web/public/monaco",
       "!apps/web/src/styles"
     ]
   },

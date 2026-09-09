@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "node scripts/sync-monaco.mjs && next dev --port 3000",
     "start": "next start --port 3000",
-    "build": "next build",
+    "build": "node scripts/sync-monaco.mjs && next build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
-    "clean": "rm -rf .next .turbo"
+    "clean": "rm -rf .next .turbo public/monaco"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

@@ -1,5 +1,4 @@
 const apiUrl = process.env.API_URL ?? 'http://api:3000';
-const MONACO_CDN = 'https://cdn.jsdelivr.net';
 
 /**
  * `'unsafe-eval'`, but only outside production.
@@ -22,8 +21,21 @@ function baseCsp() {
   return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'`;
 }
 
+/**
+ * The config editor's policy: same origin only.
+ *
+ * Monaco is vendored into `public/monaco/vs` (see `scripts/sync-monaco.mjs`),
+ * so no CDN is allow-listed here any more. Two directives the base policy
+ * does not need:
+ *
+ * - `font-src 'self' data:` — Monaco inlines its codicon icon font as a
+ *   `data:` URI. Without this it falls back to `default-src 'self'`, which
+ *   refuses `data:` and leaves every editor icon a blank box.
+ * - `worker-src 'self' blob:` — the AMD build starts its language workers
+ *   from blob URLs.
+ */
 function configsCsp() {
-  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' ${MONACO_CDN}${devEval()}; style-src 'self' 'unsafe-inline' ${MONACO_CDN}; worker-src 'self' blob:; connect-src 'self' ${MONACO_CDN}`;
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'`;
 }
 
 /** @type {import('next').NextConfig} */
