@@ -9,7 +9,6 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/audit'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 import AuditPage from './page';
 

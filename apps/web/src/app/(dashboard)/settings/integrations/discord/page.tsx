@@ -1,6 +1,5 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   AlertDialog,
   Button,
@@ -89,7 +88,6 @@ export default function DiscordIntegrationPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestSendOutcome>>({});
   const [banner, setBanner] = useState<Banner>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<WebhookRow | null>(null);
 
@@ -116,7 +114,6 @@ export default function DiscordIntegrationPage() {
         setGuildId(settings.guild_id ?? '');
         setEnabled(settings.enabled);
         setWebhooks(hooks);
-        setLastUpdate(new Date());
       } catch (e) {
         if (!cancelled) setBanner({ kind: 'err', text: (e as Error).message });
       }
@@ -266,7 +263,6 @@ export default function DiscordIntegrationPage() {
       <PageHeader
         title="Discord-интеграция"
         subtitle="Настройте бота и вебхуки для уведомлений о событиях серверов. Токен бота и URL вебхуков хранятся в зашифрованном виде и никогда не показываются целиком — только маска."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
       />
 
       {banner ? (

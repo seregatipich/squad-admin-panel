@@ -10,7 +10,6 @@ vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ replace })),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: () => undefined }));
 
 import { AppealsBrowser } from './AppealsBrowser';

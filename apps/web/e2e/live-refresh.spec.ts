@@ -27,22 +27,6 @@ async function attachOwnerCookie(page: Page) {
   ]);
 }
 
-async function expectIndicatorTicks(page: Page, atMostMs = 12_000) {
-  const indicator = page.locator('text=/обновлено \\d+с назад/').first();
-  await expect(indicator).toBeVisible({ timeout: atMostMs });
-  let sawReset = false;
-  const deadline = Date.now() + atMostMs;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(500);
-    const t = (await indicator.textContent())?.match(/(\d+)с/)?.[1];
-    if (t && Number(t) <= 1) {
-      sawReset = true;
-      break;
-    }
-  }
-  expect(sawReset, 'LiveIndicator never reset to ≤1s — polling appears broken').toBe(true);
-}
-
 function pickServerId(): string {
   return runSql('SELECT id FROM servers LIMIT 1');
 }
@@ -316,26 +300,6 @@ test.describe('live refresh — no F5 needed', () => {
       });
     } finally {
       runSql(`UPDATE players SET canonical_name='${origName}' WHERE steam_id64=${ownerUid}`);
-    }
-  });
-
-  test('i) LiveIndicator ticks on every polling page', async ({ page }) => {
-    await attachOwnerCookie(page);
-    const realId = pickServerId();
-
-    // `/settings/account` в списке не значится: индикатор живости с неё убран —
-    // страница не про наблюдение за меняющимися данными, а её опрос раз в
-    // полминуты проверяет тест (h) выше. С её уходом в списке остались только
-    // страницы с частым опросом, и отдельная ветка ожидания для редкого больше
-    // ни на что не приходится.
-    const pages = ['/dashboard', '/servers', '/audit', '/players'];
-    if (realId) {
-      pages.push(`/servers/${realId}`, `/servers/${realId}/events`, `/servers/${realId}/configs`);
-    }
-
-    for (const url of pages) {
-      await page.goto(url);
-      await expectIndicatorTicks(page, 12_000);
     }
   });
 });

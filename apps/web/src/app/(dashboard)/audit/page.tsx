@@ -1,6 +1,5 @@
 'use client';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   type BadgeTone,
@@ -54,7 +53,6 @@ export default function AuditPage() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyChainResult | null>(null);
   const [verifyErr, setVerifyErr] = useState<string | null>(null);
@@ -89,7 +87,6 @@ export default function AuditPage() {
       const j = (await r.json()) as { items: AuditEntry[] };
       setItems(j.items);
       setErr(null);
-      setLastUpdate(new Date());
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -120,7 +117,6 @@ export default function AuditPage() {
       <PageHeader
         title="Журнал действий"
         subtitle="Последние 200 записей о действиях операторов и системы."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         meta={<span>Записей: {items.length}</span>}
         actions={
           <Button onClick={verifyChain} loading={verifying}>

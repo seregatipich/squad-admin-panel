@@ -1,6 +1,5 @@
 'use client';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   AlertDialog,
   Badge,
@@ -59,7 +58,6 @@ export default function TokensPage() {
   const [pendingRevoke, setPendingRevoke] = useState<ApiToken | null>(null);
   const [justCreated, setJustCreated] = useState<CreateResponse | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const nameInputId = useId();
 
   const sortedPermissions = useMemo(() => (me ? [...me.permissions].sort() : []), [me]);
@@ -74,7 +72,6 @@ export default function TokensPage() {
       if (!tokRes.ok) throw new Error(`HTTP ${tokRes.status}`);
       setMe((await meRes.json()) as Me);
       setTokens((await tokRes.json()) as ApiToken[]);
-      setLastUpdate(new Date());
       // Удачный опрос отменяет ошибку, но не подтверждение действия: «Токен
       // отозван» оператор должен успеть прочитать.
       setMsg((prev) => (prev?.kind === 'err' ? null : prev));
@@ -178,7 +175,6 @@ export default function TokensPage() {
       <PageHeader
         title="API-токены"
         subtitle="Токены позволяют скриптам и интеграциям обращаться к API панели от вашего имени. Скоупы — подмножество ваших прав; если у вас отнимут роль, токен немедленно потеряет соответствующие разрешения. Токен показывается полностью только один раз при создании."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
       />
 
       {msg ? (

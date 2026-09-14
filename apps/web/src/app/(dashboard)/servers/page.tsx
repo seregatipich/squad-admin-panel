@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   Button,
@@ -97,7 +96,6 @@ export default function ServersPage() {
   const [q, setQ] = useState('');
   const [actingId, setActingId] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   /**
    * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
@@ -112,7 +110,6 @@ export default function ServersPage() {
       if (!isStale()) {
         setData(j);
         setErr(null);
-        setLastUpdate(new Date());
       }
     } catch (e) {
       if (!isStale()) setErr((e as Error).message);
@@ -141,7 +138,6 @@ export default function ServersPage() {
       items[idx] = { ...items[idx], status: event.data.status };
       return { ...prev, items };
     });
-    setLastUpdate(new Date());
   }, []);
   useLiveSubscription('server.status', onStatus);
 
@@ -152,7 +148,6 @@ export default function ServersPage() {
       if (items.length === prev.items.length) return prev;
       return { items, total: items.length };
     });
-    setLastUpdate(new Date());
   }, []);
   useLiveSubscription('server.deleted', onDeleted);
 
@@ -171,7 +166,6 @@ export default function ServersPage() {
         };
         return { ...prev, items };
       });
-      setLastUpdate(new Date());
     },
     [],
   );
@@ -205,7 +199,6 @@ export default function ServersPage() {
         };
         return { ...prev, items };
       });
-      setLastUpdate(new Date());
     },
     [],
   );
@@ -288,7 +281,6 @@ export default function ServersPage() {
     <PageContainer>
       <PageHeader
         title="Серверы"
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         actions={
           <ButtonLink href="/servers/new" variant="primary">
             <PlusIcon />

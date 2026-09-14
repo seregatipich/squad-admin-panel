@@ -6,7 +6,6 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => null,
   DiffEditor: () => null,
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 describe('monaco loader origin', () => {
   /**

@@ -59,8 +59,8 @@ PLAYWRIGHT_BASE_URL=https://squad-panel.lan \
 | `users.spec.ts` | Table renders with Owner row; assign-role modal opens/closes and renders a locale-independent date-only expiry plus explained comment. |
 | `player-detail.spec.ts` | Profile section and PanelAccessSection are visible for Owner; the inline role editor uses the same date-only expiry contract. |
 | `auth.spec.ts` | Steam button on login, dashboard → /login redirect. |
-| `live-refresh.spec.ts` | 9 polling surfaces verified without page reload (a–i). |
-| `server-detail-live.spec.ts` | LiveIndicator tick/reset on server detail. |
+| `live-refresh.spec.ts` | 8 polling surfaces verified without page reload (a–h). |
+| `server-detail-live.spec.ts` | Server detail re-polls without reload; no freshness pill rendered. |
 | `server-logs-resilience.spec.ts` | Log WS: live pill, pre-install copy, error-banner retry. |
 | `disk-breakdown.spec.ts` | Dashboard `[data-testid="disk-card"]` click opens `<DiskBreakdownModal>` (`role="dialog"` named «Что занимает панель»), «Всего:» and «По типу» sections render, refresh button («Обновить») drives `cache_age_seconds` to 0 (text «обновлено 0 сек назад»), Escape and backdrop click both close the dialog. |
 

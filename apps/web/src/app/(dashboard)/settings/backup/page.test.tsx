@@ -21,7 +21,6 @@ vi.mock('@/components/RestoreSnapshotButton', () => ({
     </button>
   ),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => <span>live</span> }));
 
 import BackupPage from './page';
 

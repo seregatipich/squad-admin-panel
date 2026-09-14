@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   type BadgeTone,
@@ -108,7 +107,6 @@ export function MatchesBrowser() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -166,7 +164,6 @@ export function MatchesBrowser() {
         if (!current()) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
-        setLastUpdate(new Date());
       })
       .catch((err: unknown) => {
         if (current()) setError((err as Error).message);
@@ -304,7 +301,6 @@ export function MatchesBrowser() {
       .then((data) => {
         if (!data) return;
         setItems((prev) => mergeMatchPage(data.items, prev));
-        setLastUpdate(new Date());
       })
       .catch(() => {});
   }, [filters]);
@@ -346,7 +342,6 @@ export function MatchesBrowser() {
     <PageContainer>
       <PageHeader
         title="Матчи"
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         meta={<span>всего: {total === null ? '…' : total}</span>}
         actions={
           <>

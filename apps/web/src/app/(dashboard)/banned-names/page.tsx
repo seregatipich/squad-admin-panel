@@ -13,7 +13,6 @@ import {
   type BannedNameRuleFormState,
   BannedNameRuleModal,
 } from '@/components/BannedNameRuleModal';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   AlertDialog,
   Badge,
@@ -69,7 +68,6 @@ export default function BannedNamesPage() {
   const [canMutate, setCanMutate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const [search, setSearch] = useState('');
   const [matchTypeFilter, setMatchTypeFilter] = useState<'' | BannedNameMatchType>('');
@@ -105,7 +103,6 @@ export default function BannedNamesPage() {
       setRows(body.items);
       setTotal(body.total);
       setCanMutate(body.can_mutate);
-      setLastUpdate(new Date());
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
@@ -190,7 +187,6 @@ export default function BannedNamesPage() {
       <PageHeader
         title="Забаненные ники"
         subtitle="Чёрный список ников: правила проверяются при подключении игрока. Тип матчинга — точное совпадение, вхождение подстроки или регулярное выражение (регистр игнорируется для точного совпадения и вхождения)."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
       />
 
       {msg?.kind === 'ok' ? (

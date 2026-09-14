@@ -6,7 +6,6 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/issues'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 import IssuesPage from './page';
 

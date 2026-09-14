@@ -9,7 +9,6 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/settings/account'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 // Оба блока статистики ходят в свои маршруты и покрыты собственными тестами;
 // здесь проверяется только то, что страница отдаёт им нужного игрока.

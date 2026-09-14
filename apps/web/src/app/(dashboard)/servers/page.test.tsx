@@ -9,7 +9,6 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/servers'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
 import ServersPage from './page';

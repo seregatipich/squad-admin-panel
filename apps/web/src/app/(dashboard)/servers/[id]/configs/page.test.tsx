@@ -112,7 +112,6 @@ vi.mock('next/dynamic', () => ({
       );
     },
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 /**
  * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.

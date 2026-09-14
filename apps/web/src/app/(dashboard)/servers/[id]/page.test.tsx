@@ -15,7 +15,6 @@ vi.mock('@/components/AdminsCfgDriftBanner', () => ({ AdminsCfgDriftBanner: () =
 vi.mock('@/components/BroadcastComposer', () => ({ BroadcastComposer: () => null }));
 vi.mock('@/components/CrashBadge', () => ({ CrashBadge: () => null }));
 vi.mock('@/components/ForceStopDialog', () => ({ ForceStopDialog: () => null }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/components/LogConsole', () => ({ LogConsole: () => null }));
 vi.mock('@/components/ServerLogFiles', () => ({ ServerLogFiles: () => null }));
 vi.mock('./ChatPanel', () => ({ ChatPanel: () => null }));

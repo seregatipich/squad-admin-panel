@@ -12,7 +12,6 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/banned-names'),
   useSearchParams: vi.fn(() => mockSearchParams),
 }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 import BannedNamesPage from './page';
 
