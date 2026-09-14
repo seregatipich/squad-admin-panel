@@ -8,6 +8,8 @@ vi.mock('react', async () => {
   return { ...actual, use: vi.fn(() => ({ id: 'srv-ext' })) };
 });
 vi.mock('@/components/TagInput', () => ({ TagInput: () => null }));
+vi.mock('next/navigation', () => ({ useRouter: vi.fn(() => ({ push: vi.fn() })) }));
+vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
 import SettingsPage from './page';
 
@@ -129,6 +131,17 @@ describe('SettingsPage — внешний сервер', () => {
     expect(screen.queryByText('Лицензия')).not.toBeInTheDocument();
     // Настройки игры (максимум игроков, чат-команды) остаются — они идут через RCON/БД.
     expect(screen.getByLabelText('Максимум игроков')).toBeInTheDocument();
+  });
+
+  it('держит управление сервером (удаление, старт/стоп) в настройках', async () => {
+    stubFetch('container');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+
+    expect(await screen.findByText('Управление')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Стоп' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Опасная зона/ })).toBeInTheDocument();
   });
 
   it('сохраняет подключение через PUT /external-connection и не шлёт пустой пароль', async () => {

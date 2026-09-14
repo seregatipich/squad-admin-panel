@@ -23,6 +23,7 @@ import {
   sidecarModeLabel,
   sidecarStatusPill,
 } from './helpers';
+import { ServerControls } from './ServerControls';
 
 interface Settings {
   server_id: string;
@@ -518,6 +519,8 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     <PageContainer width="reading">
       {err ? <InlineBanner tone="crit" title={err} /> : null}
       {saved ? <InlineBanner tone="good" title="Сохранено" /> : null}
+
+      <ServerControls serverId={id} />
 
       <GroupedList title="Теги" footnote="Теги помогают фильтровать серверы в списке.">
         <div className="px-4 py-3">
