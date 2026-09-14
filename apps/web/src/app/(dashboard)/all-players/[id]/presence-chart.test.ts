@@ -14,6 +14,7 @@ function point(overrides: Partial<DailyPresencePoint> = {}): DailyPresencePoint 
     online_seconds: 3600,
     boost_seconds: 0,
     queue_seconds: 0,
+    seed_seconds: 0,
     ...overrides,
   };
 }
@@ -63,6 +64,15 @@ describe('buildDailyBars', () => {
       total_seconds: 6000,
     });
     expect(bars[2]).toMatchObject({ day: '2026-07-03', total_seconds: 0 });
+  });
+
+  it('counts time played while seeding in the bar, so a seed-only day is not empty (regression)', () => {
+    const [bar] = buildDailyBars(
+      [point({ day: '2026-07-02', online_seconds: 0, seed_seconds: 7440 })],
+      '2026-07-02',
+      '2026-07-02',
+    );
+    expect(bar).toMatchObject({ online_seconds: 0, seed_seconds: 7440, total_seconds: 7440 });
   });
 });
 

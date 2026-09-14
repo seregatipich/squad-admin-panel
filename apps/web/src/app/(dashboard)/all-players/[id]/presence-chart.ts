@@ -13,6 +13,7 @@ export interface DailyPresencePoint {
   online_seconds: number;
   boost_seconds: number;
   queue_seconds: number;
+  seed_seconds: number;
 }
 
 export interface DailyPresenceLive {
@@ -34,6 +35,7 @@ export interface DailyBar {
   online_seconds: number;
   boost_seconds: number;
   queue_seconds: number;
+  seed_seconds: number;
   total_seconds: number;
 }
 
@@ -61,12 +63,14 @@ export function buildDailyBars(
     const online = point?.online_seconds ?? 0;
     const boost = point?.boost_seconds ?? 0;
     const queue = point?.queue_seconds ?? 0;
+    const seed = point?.seed_seconds ?? 0;
     return {
       day,
       online_seconds: online,
       boost_seconds: boost,
       queue_seconds: queue,
-      total_seconds: online + boost + queue,
+      seed_seconds: seed,
+      total_seconds: online + boost + queue + seed,
     };
   });
 }

@@ -71,7 +71,12 @@ async function loginAs(h: IntegrationHarness, playerId: string): Promise<string>
 }
 
 interface PresenceResponse {
-  totals: { online_seconds: number; boost_seconds: number; queue_seconds: number };
+  totals: {
+    online_seconds: number;
+    boost_seconds: number;
+    queue_seconds: number;
+    seed_seconds: number;
+  };
   bonus: { formula: string; value_seconds: number };
   by_server: Array<{
     server_id: string;
@@ -80,6 +85,7 @@ interface PresenceResponse {
     online_seconds: number;
     boost_seconds: number;
     queue_seconds: number;
+    seed_seconds: number;
     session_count: number;
   }>;
   sessions: Array<{
@@ -196,7 +202,12 @@ describeIfDb('player presence API (PRES-4)', () => {
 
     const body = await presence(player);
 
-    expect(body.totals).toEqual({ online_seconds: 7200, boost_seconds: 1800, queue_seconds: 0 });
+    expect(body.totals).toEqual({
+      online_seconds: 7200,
+      boost_seconds: 1800,
+      queue_seconds: 0,
+      seed_seconds: 0,
+    });
     expect(body.bonus.formula).toBe('online + 2×boost');
     expect(body.bonus.value_seconds).toBe(7200 + 2 * 1800);
 
@@ -211,6 +222,47 @@ describeIfDb('player presence API (PRES-4)', () => {
     const modes = body.sessions.map((s) => s.mode).sort();
     expect(modes).toEqual(['boost', 'online', 'online']);
     expect(body.week).toEqual({ from: '2026-06-29', to: '2026-07-05' });
+  });
+
+  it('reports time played while the server was seeding instead of dropping it (regression)', async () => {
+    // A player who only ever played during seeding has every second in
+    // `seed_seconds`; the response used to omit that column, so the presence
+    // card read 0 online for someone with hours on the server.
+    const server = await seedServer(h.db, 'SeedOnlySrv');
+    const player = await seedPlayer(h.db, { name: 'SeedOnlyPresence' });
+
+    await h.db.insert(playerSessions).values({
+      playerId: player,
+      serverId: server,
+      mode: 'seed',
+      connectedAt: new Date('2026-07-04T18:00:00.000Z'),
+      disconnectedAt: new Date('2026-07-04T20:04:00.000Z'),
+      durationSeconds: 7440,
+    });
+    await h.db.insert(playerDailyPresence).values({
+      playerId: player,
+      serverId: server,
+      day: '2026-07-04',
+      onlineSeconds: 0,
+      boostSeconds: 0,
+      queueSeconds: 0,
+      seedSeconds: 7440,
+      sessionCount: 1,
+    });
+
+    const body = await presence(player);
+
+    expect(body.totals).toEqual({
+      online_seconds: 0,
+      boost_seconds: 0,
+      queue_seconds: 0,
+      seed_seconds: 7440,
+    });
+    expect(body.by_server).toEqual([
+      expect.objectContaining({ server_id: server, seed_seconds: 7440, session_count: 1 }),
+    ]);
+    // Seeding has its own reward track (SEED-2); it must not inflate the online bonus.
+    expect(body.bonus.value_seconds).toBe(0);
   });
 
   it('excludes sessions outside the 7-day calendar window (AC)', async () => {
@@ -278,7 +330,12 @@ describeIfDb('player presence API (PRES-4)', () => {
   it('returns empty aggregates for a player with no presence (AC)', async () => {
     const player = await seedPlayer(h.db, { name: 'FreshPresence' });
     const body = await presence(player);
-    expect(body.totals).toEqual({ online_seconds: 0, boost_seconds: 0, queue_seconds: 0 });
+    expect(body.totals).toEqual({
+      online_seconds: 0,
+      boost_seconds: 0,
+      queue_seconds: 0,
+      seed_seconds: 0,
+    });
     expect(body.by_server).toEqual([]);
     expect(body.sessions).toEqual([]);
     expect(body.bonus.value_seconds).toBe(0);
@@ -296,6 +353,7 @@ interface DailyPresenceResponse {
     online_seconds: number;
     boost_seconds: number;
     queue_seconds: number;
+    seed_seconds: number;
   }>;
 }
 
@@ -374,6 +432,7 @@ describeIfDb('player daily presence API (PRES-3)', () => {
         onlineSeconds: 1800,
         boostSeconds: 0,
         queueSeconds: 600,
+        seedSeconds: 900,
         sessionCount: 1,
       },
       {
@@ -393,8 +452,20 @@ describeIfDb('player daily presence API (PRES-3)', () => {
     expect(body.to).toBe('2026-07-05');
     expect(body.from).toBe('2026-06-06');
     expect(body.series).toEqual([
-      { day: '2026-07-03', online_seconds: 5400, boost_seconds: 1800, queue_seconds: 600 },
-      { day: '2026-07-05', online_seconds: 7200, boost_seconds: 0, queue_seconds: 0 },
+      {
+        day: '2026-07-03',
+        online_seconds: 5400,
+        boost_seconds: 1800,
+        queue_seconds: 600,
+        seed_seconds: 900,
+      },
+      {
+        day: '2026-07-05',
+        online_seconds: 7200,
+        boost_seconds: 0,
+        queue_seconds: 0,
+        seed_seconds: 0,
+      },
     ]);
   });
 

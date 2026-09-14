@@ -14,6 +14,8 @@ export interface PresenceTotals {
   online_seconds: number;
   boost_seconds: number;
   queue_seconds: number;
+  /** Time played while the server was seeding; rewarded separately (SEED-2), not by the bonus formula. */
+  seed_seconds: number;
 }
 
 export interface ServerPresence {
@@ -23,6 +25,7 @@ export interface ServerPresence {
   online_seconds: number;
   boost_seconds: number;
   queue_seconds: number;
+  seed_seconds: number;
   session_count: number;
 }
 
@@ -54,7 +57,9 @@ export const MODE_HEX: Record<SessionMode, string> = {
   seed: '#bf5af2',
 };
 
-export function bonusValueSeconds(totals: PresenceTotals): number {
+export function bonusValueSeconds(
+  totals: Pick<PresenceTotals, 'online_seconds' | 'boost_seconds' | 'queue_seconds'>,
+): number {
   return totals.online_seconds + 2 * totals.boost_seconds;
 }
 

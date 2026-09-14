@@ -107,11 +107,16 @@ export function PresenceSection({ playerId }: { playerId: string }) {
           <Skeleton variant="card" label="Загрузка присутствия" />
         ) : (
           <>
-            <CardGrid cols={2}>
+            <CardGrid cols={3}>
               <StatTile
                 label="Буст"
                 value={fmtDuration(data.totals.boost_seconds)}
                 hint={`${data.totals.boost_seconds.toLocaleString('ru-RU')} сек буст-времени`}
+              />
+              <StatTile
+                label="Сид"
+                value={fmtDuration(data.totals.seed_seconds)}
+                hint={`${data.totals.seed_seconds.toLocaleString('ru-RU')} сек сид-времени`}
               />
               <StatTile
                 label="Бонусы"
@@ -222,6 +227,7 @@ function ServersTab({ servers }: { servers: PresenceResponse['by_server'] }) {
           <Th align="right">Онлайн</Th>
           <Th align="right">Буст</Th>
           <Th align="right">Очередь</Th>
+          <Th align="right">Сид</Th>
           <Th align="right">Сессий</Th>
         </TableRow>
       </TableHead>
@@ -236,6 +242,7 @@ function ServersTab({ servers }: { servers: PresenceResponse['by_server'] }) {
             <Td numeric>{fmtDuration(server.online_seconds)}</Td>
             <Td numeric>{fmtDuration(server.boost_seconds)}</Td>
             <Td numeric>{fmtDuration(server.queue_seconds)}</Td>
+            <Td numeric>{fmtDuration(server.seed_seconds)}</Td>
             <Td numeric>{server.session_count.toLocaleString('ru-RU')}</Td>
           </TableRow>
         ))}

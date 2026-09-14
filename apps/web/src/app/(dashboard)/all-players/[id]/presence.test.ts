@@ -194,6 +194,7 @@ function base(overrides: Partial<ServerPresence>): ServerPresence {
     online_seconds: 0,
     boost_seconds: 0,
     queue_seconds: 0,
+    seed_seconds: 0,
     session_count: 0,
     ...overrides,
   };
