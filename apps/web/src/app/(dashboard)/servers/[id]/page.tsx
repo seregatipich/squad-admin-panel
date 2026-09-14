@@ -1,44 +1,26 @@
 'use client';
-import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { A2SIndicator } from '@/components/A2SIndicator';
 import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
 import { BroadcastComposer } from '@/components/BroadcastComposer';
-import { CrashBadge } from '@/components/CrashBadge';
-import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { ServerLogFiles } from '@/components/ServerLogFiles';
-import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import {
-  AlertDialog,
   Button,
-  Card,
-  CardBody,
-  CardFooter,
-  CardHeader,
-  ChevronDownIcon,
-  formatAbsolute,
   GroupedList,
   GroupedRow,
-  IconButton,
   InlineBanner,
-  Menu,
   PageContainer,
   Skeleton,
   SkeletonTable,
-  StatusBadge,
   StatusDot,
   type StatusState,
 } from '@/components/ui';
-import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
-import type { SeedingSummary } from '../seeding-format';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
 import { MapWidget } from './map-widget';
 import { SeedCallButton } from './SeedCallButton';
-import { SeedingBadge } from './SeedingBadge';
 
 interface ServerRow {
   id: string;
@@ -112,7 +94,6 @@ interface ServerResponse {
   a2s_status?: A2sStatus | null;
   crash_loop?: boolean;
   crash_count?: number;
-  seeding?: SeedingSummary | null;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -148,17 +129,16 @@ function rconView(status: RconStatus): { state: StatusState; label: string } {
  * Операционный экран сервера: то, на что оператор смотрит во время матча.
  *
  * Блоки идут по частоте обращения, а не по истории появления: сначала
- * состояние сервера и карта, затем ростер и чат, затем то, что оператор
- * отправляет игрокам, и только внизу — служебное (адрес, порты, журналы),
- * которое читают один раз при настройке.
+ * ростер и карта, затем чат и то, что оператор отправляет игрокам, и только
+ * внизу — служебное (адрес, порты, журналы), которое читают один раз при
+ * настройке. Кнопки жизненного цикла (старт, стоп, удаление) живут в
+ * «Настройках» — `settings/ServerControls.tsx`.
  *
  * `<h1>` с именем сервера принадлежит `layout.tsx`; здесь только заголовки
  * разделов.
  */
 export default function ServerDetail({ params }: { params: Promise<{ id: string }> }) {
-  const locale = useIntlLocale();
   const { id } = use(params);
-  const router = useRouter();
   const [data, setData] = useState<ServerResponse | null>(null);
   const [canChat, setCanChat] = useState(false);
   const [canManageServer, setCanManageServer] = useState(false);
@@ -167,7 +147,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [canDownloadLogs, setCanDownloadLogs] = useState(false);
   const [modPermissions, setModPermissions] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLive, setLogsLive] = useState(false);
   const [logsError, setLogsError] = useState<{
@@ -175,12 +154,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     reason: string | null;
     retryInMs: number | null;
   } | null>(null);
-  const [forceStopOpen, setForceStopOpen] = useState(false);
-  const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [updateModalOpen, setUpdateModalOpen] = useState(false);
-  const [updateRunning, setUpdateRunning] = useState(false);
-  const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectNowRef = useRef<(() => void) | null>(null);
 
@@ -208,11 +181,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [id]);
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,30 +363,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     };
   }, [id, logsEnabled]);
 
-  async function action(name: 'start' | 'stop' | 'restart' | 'delete') {
-    setActing(name);
-    try {
-      const method = name === 'delete' ? 'DELETE' : 'POST';
-      const r = await fetch(`/api/v1/servers/${id}${name === 'delete' ? '' : `/${name}`}`, {
-        method,
-        credentials: 'include',
-        headers: method === 'POST' ? { 'content-type': 'application/json' } : undefined,
-        body: method === 'POST' ? JSON.stringify({}) : undefined,
-      });
-      if (!r.ok) {
-        const text = await r.text();
-        setErr(`${name} failed: HTTP ${r.status} ${text}`);
-      } else if (name === 'delete') {
-        // У внешнего сервера нет резервной копии конфигов — в архиве смотреть нечего.
-        router.push(isExternal ? '/servers' : `/servers/archive/${id}`);
-        return;
-      }
-      await refresh();
-    } finally {
-      setActing(null);
-    }
-  }
-
   if (err && !data) {
     return (
       <PageContainer>
@@ -444,12 +388,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     );
   }
 
-  const { server, settings, rcon_status, container, host } = data;
+  const { server, settings, rcon_status, host } = data;
   const external = server.runtime === 'external';
-  const canStart = server.status !== 'running' && server.status !== 'starting';
-  const canStop = server.status === 'running' || server.status === 'starting';
-  const startedAt = container?.running ? container.started_at : null;
-  const uptimeMs = startedAt ? Math.max(0, now - new Date(startedAt).getTime()) : null;
   const statusView = STATUS_VIEW[server.status] ?? {
     state: 'idle' as StatusState,
     label: server.status,
@@ -477,131 +417,19 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         <InlineBanner
           tone="crit"
           title="Сервер в цикле аварий — автоперезапуск отключён"
-          description="Проверьте журнал контейнера и запустите сервер вручную."
+          description="Проверьте журнал контейнера и запустите сервер вручную в «Настройках»."
         />
       ) : null}
 
       {/* 1. Ростер — то, ради чего экран открывают во время матча: кто сейчас
           в игре, в каком отряде и что с ним можно сделать. Он стоит выше
-          состояния и карты, потому что читают его постоянно, а адрес, порты и
-          кнопки жизненного цикла — один раз при настройке. Выше него остаются
+          карты, потому что читают его постоянно, а адрес и порты — один раз
+          при настройке. Выше него остаются
           только баннеры аварий: предупреждение, уехавшее под список из ста
           строк, никого не предупреждает. */}
       <LivePlayers serverId={server.id} canChat={canChat} modPermissions={modPermissions} />
 
-      {/* 2. Состояние и карта — управление матчем, который сейчас идёт. */}
-      <Card padding="none" as="section">
-        <CardHeader title="Состояние" />
-        <CardBody>
-          <div className="flex flex-wrap items-center gap-3">
-            <StatusBadge state={statusView.state} label={statusView.label} />
-            <A2SIndicator a2sStatus={data.a2s_status ?? null} serverStatus={server.status} />
-            <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
-            <SeedingBadge serverId={server.id} initial={data.seeding ?? null} />
-            {uptimeMs != null && startedAt ? (
-              <span className="text-xs text-ink-3" title={formatAbsolute(startedAt, locale) ?? ''}>
-                В работе {formatUptime(uptimeMs)}
-              </span>
-            ) : null}
-            {container?.restart_count ? (
-              <span className="text-xs text-ink-3" title="Счётчик авто-перезапусков Docker">
-                Перезапусков: {container.restart_count}
-              </span>
-            ) : null}
-          </div>
-        </CardBody>
-        <CardFooter>
-          {/* Опасное действие отодвинуто в правый край и не соседствует с
-              «Рестартом»: промах мышью не должен стоить сервера. */}
-          {external ? (
-            <p className="mr-auto text-xs text-ink-3">
-              Внешний сервер: запуск и остановка выполняются на его хосте, панель управляет им по
-              RCON.
-            </p>
-          ) : (
-            <div className="mr-auto flex flex-wrap items-center gap-2">
-              <Button
-                variant="primary"
-                onClick={() => action('start')}
-                disabled={!canStart || !!acting}
-                loading={acting === 'start'}
-              >
-                Старт
-              </Button>
-              <div className="flex items-center gap-1">
-                <Button
-                  onClick={() => action('stop')}
-                  disabled={!canStop || !!acting}
-                  loading={acting === 'stop'}
-                >
-                  Стоп
-                </Button>
-                <IconButton
-                  icon={<ChevronDownIcon />}
-                  label="Принудительная остановка"
-                  disabled={!canStop || !!acting}
-                  onClick={() => setForceStopOpen(true)}
-                />
-              </div>
-              <Button
-                onClick={() => action('restart')}
-                disabled={!canStop || !!acting}
-                loading={acting === 'restart'}
-              >
-                Рестарт
-              </Button>
-              {server.status === 'stopped' || updateRunning ? (
-                <Button
-                  onClick={async () => {
-                    if (updateRunning) {
-                      setUpdateModalOpen(true);
-                      return;
-                    }
-                    setActing('update');
-                    try {
-                      const r = await fetch(`/api/v1/servers/${id}/update`, {
-                        method: 'POST',
-                        credentials: 'include',
-                      });
-                      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                      setUpdateRunning(true);
-                      setUpdateModalOpen(true);
-                    } catch (e) {
-                      setErr((e as Error).message);
-                    } finally {
-                      setActing(null);
-                    }
-                  }}
-                  disabled={acting !== null}
-                >
-                  {acting === 'update'
-                    ? 'Запуск обновления...'
-                    : updateRunning
-                      ? 'Обновление... (открыть лог)'
-                      : 'Обновить игру'}
-                </Button>
-              ) : null}
-            </div>
-          )}
-          <Menu
-            trigger={{ label: 'Опасная зона' }}
-            open={dangerMenuOpen}
-            onOpenChange={setDangerMenuOpen}
-            align="end"
-            items={[
-              {
-                kind: 'action',
-                label: 'Удалить сервер',
-                hint: external ? 'Сервер будет убран из панели' : 'Файлы на диске будут стёрты',
-                tone: 'destructive',
-                disabled: !!acting,
-                onSelect: () => setDeleteOpen(true),
-              },
-            ]}
-          />
-        </CardFooter>
-      </Card>
-
+      {/* 2. Карта — управление матчем, который сейчас идёт. */}
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
       {/* 3. Чат и объявления — то, что оператор отправляет в игру. */}
@@ -688,69 +516,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
         </>
       )}
-
-      <UpdateProgressModal
-        open={updateModalOpen}
-        onOpenChange={setUpdateModalOpen}
-        wsUrl="/api/v1/depot/progress/ws"
-        title="Обновление игры"
-        onDone={() => {
-          setUpdateRunning(false);
-          void refresh();
-        }}
-      />
-
-      <ForceStopDialog
-        open={forceStopOpen}
-        onOpenChange={setForceStopOpen}
-        serverName={server.display_name}
-        onConfirm={async () => {
-          const r = await fetch(`/api/v1/servers/${id}/force-stop`, {
-            method: 'POST',
-            credentials: 'include',
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          void refresh();
-        }}
-      />
-
-      {/* Удаление стирает файлы сервера с диска, поэтому здесь стоит ввод
-          точного имени — необратимую операцию нельзя запустить не глядя. */}
-      <AlertDialog
-        open={deleteOpen}
-        onClose={() => setDeleteOpen(false)}
-        title="Удалить сервер"
-        body={
-          external
-            ? 'Сервер будет убран из панели: опрос RCON остановится, история игроков останется. На хосте самого сервера ничего не изменится.'
-            : 'Файлы сервера на диске будут стёрты. Резервная копия .cfg останется в архиве серверов.'
-        }
-        confirmLabel="Удалить сервер"
-        cancelLabel="Отмена"
-        tone="destructive"
-        busy={acting === 'delete'}
-        challenge={{
-          expected: server.display_name,
-          label: 'Введите имя сервера',
-          hint: `Ожидается: ${server.display_name}`,
-        }}
-        onConfirm={async () => {
-          await action('delete');
-          setDeleteOpen(false);
-        }}
-      />
     </PageContainer>
   );
-}
-
-function formatUptime(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (d > 0) return `${d}д ${h}ч`;
-  if (h > 0) return `${h}ч ${m}м`;
-  if (m > 0) return `${m}м ${sec}с`;
-  return `${sec}с`;
 }

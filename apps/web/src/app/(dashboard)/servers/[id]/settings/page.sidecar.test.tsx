@@ -7,6 +7,8 @@ vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react');
   return { ...actual, use: vi.fn(() => ({ id: 'srv-1' })) };
 });
+// Кнопки жизненного цикла проверяются в ServerControls.test.tsx.
+vi.mock('./ServerControls', () => ({ ServerControls: () => null }));
 
 import SettingsPage from './page';
 
