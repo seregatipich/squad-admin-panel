@@ -1,18 +1,16 @@
 /**
- * The server-detail page polls /api/v1/servers/:id every 3 s and surfaces
- * the freshness as "обновлено Xс назад" + a pulsing dot. Before the
- * LiveIndicator addition the only timestamp was rcon_status.ts (worker-
- * published), which barely moved → users thought the page was stale.
+ * The server-detail page keeps its data current on its own: it re-requests
+ * /api/v1/servers/:id without a manual reload. The page shows no
+ * "обновлено Xс назад" freshness pill — the data itself is the signal.
  * This spec pins:
- *   - indicator is rendered,
- *   - counter resets back toward 0 once a new poll lands within the
- *     polling interval.
+ *   - the page re-polls the server endpoint without a reload,
+ *   - no freshness status is rendered.
  */
 import { expect, test } from '@playwright/test';
 import { loginAndAttachCookie, runSql, seedOwner, teardownOwner } from './helpers';
 
-test.describe('server detail live-refresh indicator', () => {
-  test('indicator tick/reset proves the page polls without manual reload', async ({
+test.describe('server detail live refresh', () => {
+  test('re-polls the server without manual reload and shows no freshness pill', async ({
     page,
     context,
   }) => {
@@ -25,21 +23,15 @@ test.describe('server detail live-refresh indicator', () => {
         test.skip(true, 'no server rows — create one first');
         return;
       }
+
+      let polls = 0;
+      page.on('response', (response) => {
+        if (new URL(response.url()).pathname === `/api/v1/servers/${anyServerId}`) polls += 1;
+      });
       await page.goto(`/servers/${anyServerId}`);
 
-      const indicator = page.locator('text=/обновлено \\d+с назад/');
-      await expect(indicator).toBeVisible({ timeout: 10_000 });
-
-      let sawReset = false;
-      for (let i = 0; i < 12; i++) {
-        await page.waitForTimeout(500);
-        const t = (await indicator.textContent())?.match(/(\d+)с/)?.[1];
-        if (t && Number(t) <= 1) {
-          sawReset = true;
-          break;
-        }
-      }
-      expect(sawReset, 'indicator never reset — polling appears broken').toBe(true);
+      await expect.poll(() => polls, { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
+      await expect(page.getByText(/обновлено \d+с назад/)).toHaveCount(0);
 
       // Подключение RCON подписано словом рядом с точкой — на него и опираемся,
       // а не на класс заливки.

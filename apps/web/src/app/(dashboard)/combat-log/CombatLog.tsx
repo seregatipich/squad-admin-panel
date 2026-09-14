@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   type BadgeTone,
@@ -124,7 +123,6 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [damageSort, setDamageSort] = useState<SortDir>('desc');
   const [liveEnabled, setLiveEnabled] = useState(false);
-  const [lastLiveAt, setLastLiveAt] = useState<Date | null>(null);
   /**
    * Номер последнего запроса первой страницы: «Повторить» ходит тем же путём,
    * что и обычная загрузка, а ответ на отменённый запрос в список не попадает.
@@ -241,7 +239,6 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
       if (!liveEnabled) return;
       if (lockedServerId && event.data.server_id !== lockedServerId) return;
       setRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
-      setLastLiveAt(new Date());
     },
     [liveEnabled, lockedServerId],
   );
@@ -266,7 +263,6 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
               value={filters.facet}
               onChange={(facet) => navigate({ facet: facet as CombatFilters['facet'] })}
             />
-            {liveEnabled ? <LiveIndicator lastUpdate={lastLiveAt} label="событие" /> : null}
             <Checkbox
               label="Живая лента"
               checked={liveEnabled}

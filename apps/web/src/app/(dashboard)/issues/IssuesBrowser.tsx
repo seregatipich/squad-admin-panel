@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   Button,
@@ -89,7 +88,6 @@ export function IssuesBrowser() {
   const [labels, setLabels] = useState<IssueLabel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [assigneeName, setAssigneeName] = useState<string | null>(null);
   const idsRef = useRef<Set<string>>(new Set());
@@ -133,7 +131,6 @@ export function IssuesBrowser() {
       idsRef.current = new Set(data.items.map((issue) => issue.id));
       setIssues(data.items);
       setTotal(data.total);
-      setLastUpdate(new Date());
       const assigned = filters.assignee
         ? (data.items.find((issue) => issue.assignee_player_id === filters.assignee)?.assignee ??
           null)
@@ -248,7 +245,6 @@ export function IssuesBrowser() {
       <PageHeader
         title="Тикеты"
         subtitle="Внутренний трекер тикетов о панели: баги, предложения и вопросы. Любой пользователь панели может создать тикет и оставить комментарий."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         actions={
           <Button variant="primary" onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? 'Скрыть форму' : 'Создать тикет'}

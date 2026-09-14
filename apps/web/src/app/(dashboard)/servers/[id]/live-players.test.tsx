@@ -455,13 +455,14 @@ describe('LivePlayers — колонки команд и порядок в от�
   );
 
   it(
-    'replaces the «каждые 30 секунд» note with the age of the last poll',
+    'shows the roster without any poll-freshness status next to the header',
     async () => {
       render(<LivePlayers serverId="srv-1" />);
       await screen.findByText('Leader');
       expect(screen.queryByText(/каждые 30 секунд/)).not.toBeInTheDocument();
       expect(screen.queryByText(/обновляется каждые/)).not.toBeInTheDocument();
-      expect(screen.getByText(/обновлено .* назад/)).toBeInTheDocument();
+      expect(screen.queryByText(/обновлено/)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/последний опрос сервера/)).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

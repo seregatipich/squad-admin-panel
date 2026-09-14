@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   Badge,
@@ -94,7 +93,6 @@ export function SuspectsBrowser() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const [q, setQ] = useState('');
   const [markTypeIds, setMarkTypeIds] = useState<Set<number>>(new Set());
@@ -128,7 +126,6 @@ export function SuspectsBrowser() {
       const body = (await res.json()) as SuspectsResponse;
       setRows(body.items);
       setNextCursor(body.next_cursor);
-      setLastUpdate(new Date());
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -178,7 +175,6 @@ export function SuspectsBrowser() {
       <PageHeader
         title="Метки"
         subtitle="Игроки с активными метками (читерство, гриферство и т.п.): быстрый доступ к подозрительным игрокам для проверки и модерации."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
       />
 
       {error ? (

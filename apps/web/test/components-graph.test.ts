@@ -41,7 +41,6 @@ import { AdminsCfgDriftBanner } from '../src/components/AdminsCfgDriftBanner';
 import { ConnectionBanner } from '../src/components/connection-banner';
 import { DiskBreakdownModal } from '../src/components/DiskBreakdownModal';
 import { DockerPruneButton } from '../src/components/DockerPruneButton';
-import { LiveIndicator } from '../src/components/LiveIndicator';
 import { LogConsole } from '../src/components/LogConsole';
 import { LogList } from '../src/components/LogList';
 import { LogoutButton } from '../src/components/LogoutButton';
@@ -68,10 +67,6 @@ describe('components static import graph', () => {
 
   it('DockerPruneButton is a function', () => {
     expect(typeof DockerPruneButton).toBe('function');
-  });
-
-  it('LiveIndicator is a function', () => {
-    expect(typeof LiveIndicator).toBe('function');
   });
 
   it('LogConsole is a function', () => {

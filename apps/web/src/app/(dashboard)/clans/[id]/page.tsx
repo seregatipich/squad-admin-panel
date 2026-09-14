@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   type BadgeTone,
@@ -186,7 +185,6 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [clan, setClan] = useState<ClanDetail | null>(null);
   const [online, setOnline] = useState<OnlineResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [matchRows, setMatchRows] = useState<ClanMatch[]>([]);
   const [matchCursor, setMatchCursor] = useState<string | null>(null);
@@ -224,7 +222,6 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       });
       if (!res.ok) return;
       setOnline((await res.json()) as OnlineResponse);
-      setLastUpdate(new Date());
     } catch {
       /* keep the previous snapshot on transient failures */
     }
@@ -321,7 +318,6 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         title={clan?.name ?? 'Клан'}
         backHref="/clans"
         backLabel="Все кланы"
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         meta={
           clan ? (
             <>

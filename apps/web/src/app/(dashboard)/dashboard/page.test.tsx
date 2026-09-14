@@ -28,7 +28,6 @@ vi.mock('@/components/DepotUpdateModal', () => ({
 vi.mock('@/components/UpdateProgressModal', () => ({ UpdateProgressModal: () => null }));
 vi.mock('@/components/DiskBreakdownModal', () => ({ DiskBreakdownModal: () => null }));
 vi.mock('@/components/DockerPruneButton', () => ({ DockerPruneButton: () => null }));
-vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/components/MetricHistoryModal', () => ({ MetricHistoryModal: () => null }));
 vi.mock('@/components/RestartBridgeButton', () => ({ RestartBridgeButton: () => null }));
 vi.mock('@/lib/format', () => ({

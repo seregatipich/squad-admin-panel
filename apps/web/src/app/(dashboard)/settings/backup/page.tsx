@@ -1,7 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { BackupTriggerButton } from '@/components/BackupTriggerButton';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { RestoreSnapshotButton } from '@/components/RestoreSnapshotButton';
 import {
   Badge,
@@ -44,7 +43,6 @@ function formatDate(iso: string): string {
 
 export default function BackupPage() {
   const [state, setState] = useState<Load>({ kind: 'loading' });
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -63,7 +61,6 @@ export default function BackupPage() {
       }
       const body = (await res.json()) as { snapshots: Snapshot[] };
       setState({ kind: 'ready', snapshots: body.snapshots });
-      setLastUpdate(new Date());
     } catch (e) {
       setState({ kind: 'error', text: (e as Error).message });
     }
@@ -80,7 +77,6 @@ export default function BackupPage() {
       <PageHeader
         title="Бэкапы"
         subtitle="Резервные копии Postgres и Redis снимаются восстановимыми логическими дампами (pg_dump + RDB) и хранятся в зашифрованном restic-репозитории. Ежедневный снимок делается по расписанию; здесь можно снять внеочередной бэкап или восстановить панель из выбранного снимка."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         actions={
           <BackupTriggerButton
             disabled={state.kind === 'forbidden'}

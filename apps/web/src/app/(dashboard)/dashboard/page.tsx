@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DepotUpdateModal } from '@/components/DepotUpdateModal';
 import { DiskBreakdownModal } from '@/components/DiskBreakdownModal';
 import { DockerPruneButton } from '@/components/DockerPruneButton';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
@@ -239,7 +238,6 @@ export default function DashboardPage() {
   const [recent, setRecent] = useState<AuditRow[]>([]);
   const [ready, setReady] = useState<ReadyCheck | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   // Первый ответ ещё не пришёл: без этого флага пустой список неотличим от
   // загрузки, и оператор видит «Серверов нет» там, где идёт первый запрос (§8).
   const [loaded, setLoaded] = useState(false);
@@ -259,7 +257,6 @@ export default function DashboardPage() {
       fetch('/ready', { cache: 'no-store' }).then((r) => r.json() as Promise<ReadyCheck>),
       fetchJson<{ items: Worker[] }>('/api/v1/health/workers'),
     ]);
-    setLastUpdate(new Date());
     setLoaded(true);
     if (results[0].status === 'fulfilled') setBridge(results[0].value);
     else setBridge({ connected: false, error: (results[0].reason as Error).message });
@@ -408,7 +405,6 @@ export default function DashboardPage() {
             info={info}
             metrics={metrics}
             health={health}
-            lastUpdate={lastUpdate}
             diskBreakdown={diskBreakdown}
             onDiskClick={() => setDiskModalOpen(true)}
           />
@@ -745,7 +741,6 @@ function HostBlock({
   info,
   metrics,
   health,
-  lastUpdate,
   diskBreakdown,
   onDiskClick,
 }: {
@@ -753,7 +748,6 @@ function HostBlock({
   info: HostInfo | null;
   metrics: HostMetrics | null;
   health: ReturnType<typeof computeHostHealth>;
-  lastUpdate: Date | null;
   diskBreakdown: DiskBreakdown | null;
   onDiskClick: () => void;
 }) {
@@ -810,9 +804,6 @@ function HostBlock({
                 ? `Bridge подключён${bridge?.version ? ` (v${bridge.version})` : ''}`
                 : 'Bridge недоступен'
             }
-          />
-          <LiveIndicator
-            lastUpdate={metrics?.sampled_at ? new Date(metrics.sampled_at) : lastUpdate}
           />
           <DockerPruneButton
             disabled={!bridgeConnected}

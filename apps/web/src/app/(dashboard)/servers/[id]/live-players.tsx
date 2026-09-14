@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import {
   AlertDialog,
@@ -206,10 +205,6 @@ export function LivePlayers({
   );
   const bulkTargets = selectable.filter((target) => selected.has(target.playerId));
   const abilities = quickAbilities(modPermissions);
-  const polledAt = roster?.polled_at ? new Date(roster.polled_at).getTime() : null;
-  const liveTitle = roster?.polled_at
-    ? `последний опрос сервера ${new Date(roster.polled_at).toLocaleTimeString('ru-RU')}`
-    : 'опрос ещё не выполнялся';
 
   const rowProps = {
     now,
@@ -226,11 +221,7 @@ export function LivePlayers({
 
   return (
     <Card padding="none" as="section">
-      <CardHeader
-        title="Игроки онлайн"
-        count={roster ? players.length : undefined}
-        actions={<LiveIndicator lastUpdate={polledAt} title={liveTitle} />}
-      />
+      <CardHeader title="Игроки онлайн" count={roster ? players.length : undefined} />
 
       {canBulk && bulkTargets.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-line bg-raised px-4 py-2">

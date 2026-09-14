@@ -5,7 +5,6 @@ import { BEGIN_MARKER } from '@squad/shared-config/admins-config';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   AlertDialog,
   type AlertDialogTone,
@@ -220,8 +219,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [blame, setBlame] = useState<BlameResponse | null>(null);
 
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [serverSha, setServerSha] = useState<string | null>(null);
   const [externalChange, setExternalChange] = useState<{ sha: string; content: string } | null>(
     null,
@@ -272,7 +269,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { items: FileItem[] };
       setFiles(j.items);
-      setLastUpdate(new Date());
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -726,7 +722,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Заголовок страницы — имя сервера в layout раздела; здесь h2. */}
         <h2 className="text-[17px] font-semibold text-ink">Конфигурация сервера</h2>
-        <LiveIndicator lastUpdate={lastUpdate} />
       </div>
 
       {err ? (

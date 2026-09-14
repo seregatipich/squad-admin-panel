@@ -43,8 +43,7 @@ const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
   hourCycle: 'h23',
 };
 
-/* Порог «только что» совпадает с порогом свежести живых данных в
-   `LiveIndicator` (10 с): в панели «сейчас» означает одно и то же везде. */
+/* Порог «только что»: моложе 10 с событие показывается как «сейчас». */
 const JUST_NOW_MS = 10_000;
 
 function toDate(value: string | number | Date): Date | null {

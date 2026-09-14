@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   type BadgeTone,
@@ -96,7 +95,6 @@ export function ChatArchive() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveEnabled, setLiveEnabled] = useState(false);
-  const [lastLiveAt, setLastLiveAt] = useState<Date | null>(null);
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [canBan, setCanBan] = useState(false);
@@ -198,7 +196,6 @@ export function ChatArchive() {
       const row = liveMessageToRow(event.data);
       if (!liveRowMatchesFilters(row, filters)) return;
       setLiveRows((prev) => prependLiveRow(prev, row));
-      setLastLiveAt(new Date());
     },
     [liveOn, filters],
   );
@@ -235,7 +232,6 @@ export function ChatArchive() {
       <PageHeader
         title="Чат"
         subtitle="Глобальный архив внутриигрового чата всех серверов: поиск по игроку и тексту, фильтры по серверам, каналам и дате. Бродкасты админов идут вперемешку с сообщениями игроков."
-        status={liveOn ? <LiveIndicator lastUpdate={lastLiveAt} label="сообщение" /> : undefined}
       />
 
       <Toolbar

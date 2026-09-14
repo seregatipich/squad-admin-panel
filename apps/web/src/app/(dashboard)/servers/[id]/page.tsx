@@ -6,7 +6,6 @@ import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
 import { BroadcastComposer } from '@/components/BroadcastComposer';
 import { CrashBadge } from '@/components/CrashBadge';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { ServerLogFiles } from '@/components/ServerLogFiles';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
@@ -181,7 +180,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateRunning, setUpdateRunning] = useState(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
   const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectNowRef = useRef<(() => void) | null>(null);
@@ -191,7 +189,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as ServerResponse);
-      setLastRefreshedAt(Date.now());
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
@@ -247,7 +244,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       setData((prev) =>
         prev ? { ...prev, server: { ...prev.server, status: event.data.status } } : prev,
       );
-      setLastRefreshedAt(Date.now());
     },
     [id],
   );
@@ -495,7 +491,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
       {/* 2. Состояние и карта — управление матчем, который сейчас идёт. */}
       <Card padding="none" as="section">
-        <CardHeader title="Состояние" actions={<LiveIndicator lastUpdate={lastRefreshedAt} />} />
+        <CardHeader title="Состояние" />
         <CardBody>
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge state={statusView.state} label={statusView.label} />

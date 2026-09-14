@@ -2,7 +2,6 @@
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Button,
   Card,
@@ -130,7 +129,6 @@ export function AppealsBrowser() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   // Какое именно решение сейчас уходит на сервер: индикатор обязан остаться на
   // нажатой кнопке, а не появиться сразу на всех решениях карточки (§8).
   const [busyAction, setBusyAction] = useState<{ id: string; status: AppealStatus } | null>(null);
@@ -165,7 +163,6 @@ export function AppealsBrowser() {
       setForbidden(false);
       setItems(data.items);
       setTotal(data.total);
-      setLastUpdate(new Date());
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -178,7 +175,6 @@ export function AppealsBrowser() {
   }, [load]);
 
   const onAppealChanged = useCallback(() => {
-    setLastUpdate(new Date());
     void load();
   }, [load]);
   useLiveSubscription('appeal.created', onAppealChanged);
@@ -221,7 +217,6 @@ export function AppealsBrowser() {
     <PageHeader
       title="Апелляции"
       subtitle="Публичный портал /appeal: забаненный игрок оставляет апелляцию без входа в панель и следит за решением по своей ссылке. Одобрение снимает бан и убирает игрока из публикуемого банлиста."
-      status={<LiveIndicator lastUpdate={lastUpdate} />}
     />
   );
 

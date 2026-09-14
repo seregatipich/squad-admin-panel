@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   Badge,
   Button,
@@ -140,7 +139,6 @@ export function ReportsBrowser() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [canHandle, setCanHandle] = useState(false);
   const [view, setView] = useState<'queue' | 'analytics'>('queue');
 
@@ -179,7 +177,6 @@ export function ReportsBrowser() {
       const data = (await res.json()) as ReportListResponse;
       setReports(data.items);
       setTotal(data.total);
-      setLastUpdate(new Date());
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -203,7 +200,6 @@ export function ReportsBrowser() {
         // The live event only carries ids; keep the resolved names already on screen.
         return upsertReport(prev, { ...current, ...incoming });
       });
-      setLastUpdate(new Date());
     },
     [filters.page, filters.status],
   );
@@ -227,7 +223,6 @@ export function ReportsBrowser() {
       <PageHeader
         title="Жалобы"
         subtitle="Очередь модерации жалоб игроков, отправленных из игры или через панель."
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         actions={
           <SegmentedControl
             ariaLabel="Представление жалоб"

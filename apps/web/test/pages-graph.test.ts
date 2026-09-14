@@ -41,9 +41,6 @@ vi.mock('@squad/shared-config', () => ({
   SQUAD_PERMISSIONS: [],
   PERMISSION_KEYS: [],
 }));
-vi.mock('../src/components/LiveIndicator', () => ({
-  LiveIndicator: () => null,
-}));
 vi.mock('../src/components/LogConsole', () => ({
   LogConsole: () => null,
 }));

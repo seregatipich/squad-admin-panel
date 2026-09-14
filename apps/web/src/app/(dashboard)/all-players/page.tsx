@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import { PlayerMarkBadge } from '@/components/PlayerMarkBadge';
 import {
   Button,
@@ -99,7 +98,6 @@ export default function PlayersPage() {
   const [sortOnline, setSortOnline] = useState<OnlineSort>('none');
   const [sortState, setSortState] = useState<PlayerSortState>(DEFAULT_SORT_STATE);
   const [onlyNew, setOnlyNew] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [onlineLoaded, setOnlineLoaded] = useState(false);
@@ -159,7 +157,6 @@ export default function PlayersPage() {
         if (!cancelled) {
           setData((await r.json()) as PlayersResponse);
           setErr(null);
-          setLastUpdate(new Date());
         }
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -234,7 +231,6 @@ export default function PlayersPage() {
     <PageContainer>
       <PageHeader
         title="Все игроки"
-        status={<LiveIndicator lastUpdate={lastUpdate} />}
         meta={
           <>
             <span>всего: {data?.total ?? 0}</span>
