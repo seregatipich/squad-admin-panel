@@ -179,6 +179,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
             {active.day} · <span className="text-good">{fmtDuration(active.total_seconds)}</span>
             {active.boost_seconds > 0 ? ` · буст ${fmtDuration(active.boost_seconds)}` : ''}
             {active.queue_seconds > 0 ? ` · очередь ${fmtDuration(active.queue_seconds)}` : ''}
+            {active.seed_seconds > 0 ? ` · сид ${fmtDuration(active.seed_seconds)}` : ''}
           </span>
         ) : (
           <span className="text-ink-3">Наведите на столбец для точных чисел</span>

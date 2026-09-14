@@ -93,6 +93,7 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           online: sql<number>`COALESCE(SUM(${playerDailyPresence.onlineSeconds}), 0)::int`,
           boost: sql<number>`COALESCE(SUM(${playerDailyPresence.boostSeconds}), 0)::int`,
           queue: sql<number>`COALESCE(SUM(${playerDailyPresence.queueSeconds}), 0)::int`,
+          seed: sql<number>`COALESCE(SUM(${playerDailyPresence.seedSeconds}), 0)::int`,
           sessionCount: sql<number>`COALESCE(SUM(${playerDailyPresence.sessionCount}), 0)::int`,
         })
         .from(playerDailyPresence)
@@ -108,6 +109,7 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           online_seconds: row.online,
           boost_seconds: row.boost,
           queue_seconds: row.queue,
+          seed_seconds: row.seed,
           session_count: row.sessionCount,
         }))
         .sort((a, b) => b.online_seconds - a.online_seconds);
@@ -117,8 +119,9 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           online_seconds: acc.online_seconds + row.online_seconds,
           boost_seconds: acc.boost_seconds + row.boost_seconds,
           queue_seconds: acc.queue_seconds + row.queue_seconds,
+          seed_seconds: acc.seed_seconds + row.seed_seconds,
         }),
-        { online_seconds: 0, boost_seconds: 0, queue_seconds: 0 },
+        { online_seconds: 0, boost_seconds: 0, queue_seconds: 0, seed_seconds: 0 },
       );
 
       const sessionRows = await app.db
@@ -185,6 +188,7 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           online: sql<number>`COALESCE(SUM(${playerDailyPresence.onlineSeconds}), 0)::int`,
           boost: sql<number>`COALESCE(SUM(${playerDailyPresence.boostSeconds}), 0)::int`,
           queue: sql<number>`COALESCE(SUM(${playerDailyPresence.queueSeconds}), 0)::int`,
+          seed: sql<number>`COALESCE(SUM(${playerDailyPresence.seedSeconds}), 0)::int`,
         })
         .from(playerDailyPresence)
         .where(
@@ -223,6 +227,7 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           online_seconds: row.online,
           boost_seconds: row.boost,
           queue_seconds: row.queue,
+          seed_seconds: row.seed,
         })),
       };
     },
