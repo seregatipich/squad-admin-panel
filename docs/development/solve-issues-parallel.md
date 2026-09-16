@@ -51,7 +51,7 @@ A `timed-out` or `failed` result means no trustworthy branch was pushed for that
 
 ## Tests
 
-The runner's orchestration logic (CLI parsing, branch naming, prompt building, concurrency pool) is covered by `scripts/solve-issues-parallel.test.ts`, run in CI's `node` job and locally with:
+The runner's orchestration logic (CLI parsing, branch naming, prompt building, concurrency pool) is covered by `scripts/solve-issues-parallel.test.ts`, run in CI's `node-lint` job and locally with:
 
 ```bash
 pnpm solve:issues:test

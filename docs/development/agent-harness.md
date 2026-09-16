@@ -113,15 +113,30 @@ permissions: read repository contents*. Deploy secrets (`TK104_SSH_KEY`,
 `master` branch alone.
 
 `cancel-in-progress: true` discards a superseded SHA so a merge wave does not spend
-runner time on commits that are already replaced. The `node` timeout stays at 45
-minutes because a hosted VM starts without a Turbo cache.
+runner time on commits that are already replaced.
+
+The JavaScript checks run as parallel jobs, and `node` is the single gate over them:
+
+| Job | What it runs |
+|---|---|
+| `node-lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck`, gitleaks |
+| `node-test` (`api`, `web`, `packages`) | one slice of `pnpm test:cov` each via [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh), after building only what that slice loads |
+| `node-scripts` | the full build, migrations, `pnpm test:scripts`, and Stryker — only when `packages/shared-config` changed in the pushed range (always on a manual dispatch or an unresolvable range) |
+| `node` | `needs` all three with `if: always()` and fails unless every one succeeded; it is the required status check and what `deploy-tk104` waits for |
+
+The slices never split one package across jobs, because each package's coverage
+thresholds apply to its whole run; [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
+fails CI if the slices stop adding up to the `test:cov` list exactly. `docker` no longer
+waits for the tests, so the slowest job — not the sum of all jobs — sets the wall time.
+The `node-test` timeout stays at 45 minutes because a hosted VM starts without a Turbo
+cache.
 
 The `go` job runs natively: the hosted image ships a C compiler, so `go test -race`
 needs no container, and `actions/setup-go` caches modules keyed by
 `apps/bridge/go.sum`. `govulncheck` is pinned to `v1.7.0`, and the job fails if the
 bridge binary is not statically linked.
 
-The `node` job's PostgreSQL and Redis service containers keep their data on bounded
+The `node-test` and `node-scripts` PostgreSQL and Redis service containers keep their data on bounded
 `tmpfs` mounts (1 GiB and 128 MiB), so an interrupted job never leaves anonymous
 volumes behind; the exact options are locked in `test-ci-runner-strategy.sh`.
 

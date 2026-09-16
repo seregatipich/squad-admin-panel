@@ -60,16 +60,71 @@ jobs:
         run: bash scripts/test-codeql-default-setup.sh
       - name: Run CI runner-strategy test suite
         run: bash scripts/test-ci-runner-strategy.sh
+      - name: Run CI test-slice suite
+        run: bash scripts/test-ci-test-shard.sh
 
-  node:
+  # The JavaScript checks run as parallel jobs; `node` below is the single gate
+  # that required status checks and the deploy trigger rely on.
+  node-lint:
     runs-on: ubuntu-24.04
-    # A hosted VM starts without a Turbo cache, and the full coverage suite alone
-    # has taken roughly 17 minutes on a cold run; the whole job once exceeded 30.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec biome check .
+      - name: Check every vitest package is in test:cov
+        run: bash scripts/test-cov-complete.sh
+      - name: Run solve-issues runner tests
+        run: pnpm run solve:issues:test
+      - run: pnpm turbo run typecheck --concurrency=4
+      - name: Scan for secrets
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
+
+  node-test:
+    runs-on: ubuntu-24.04
+    # A hosted VM starts without a Turbo cache; the API suite is the longest
+    # single run, so its slice carries the margin.
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `build` builds only what the slice's tests load: the API suite and
+          # the workers' contract tests start built `dist/` entrypoints, while the
+          # web suite needs its dependencies but never the Next.js build.
+          - shard: api
+            build: --filter=@squad/api...
+            forks: "4"
+            concurrency: "1"
+          - shard: web
+            build: --filter=@squad/web^...
+            forks: "4"
+            concurrency: "1"
+          - shard: packages
+            build: --filter=!@squad/web --filter=!@squad/api
+            forks: "2"
+            concurrency: "3"
     services:
-      # Dynamic host ports (Docker assigns a free one) so the job never collides
-      # with anything already bound on the runner's host. The resolved ports are
-      # read back below via the job.services context.
+      # Dynamic host ports (Docker assigns a free one); the resolved ports are
+      # read back below via the job.services context. tmpfs keeps an interrupted
+      # job from leaving anonymous volumes behind.
       postgres:
         image: postgres:16-alpine
         env:
@@ -96,11 +151,87 @@ jobs:
           --health-retries 5
     env:
       POSTGRES_PASSWORD: test_password
-      # The API integration suites share one Postgres database; higher fork counts
-      # have not been measured against it, so parallelism stays bounded and
-      # comparable with the local pre-push gate.
-      VITEST_MAX_FORKS: "2"
-      PNPM_WORKSPACE_CONCURRENCY: "2"
+      VITEST_MAX_FORKS: ${{ matrix.forks }}
+      PNPM_WORKSPACE_CONCURRENCY: ${{ matrix.concurrency }}
+    steps:
+      - name: Resolve service ports
+        # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
+        # while the API integration harness reads TEST_DATABASE_URL/TEST_REDIS_URL
+        # (see AGENTS.md). Without the TEST_* pair the harness falls back to
+        # 127.0.0.1:5432/6379 instead of the dynamic-port service containers. The
+        # harness isolates on redis db 15.
+        run: |
+          PG="postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin"
+          RD="redis://localhost:${{ job.services.redis.ports['6379'] }}"
+          {
+            echo "DATABASE_URL=$PG"
+            echo "TEST_DATABASE_URL=$PG"
+            echo "REDIS_URL=$RD"
+            echo "TEST_REDIS_URL=$RD/15"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build what the slice loads
+        run: pnpm turbo run build --concurrency=4 ${{ matrix.build }}
+      - name: Apply database migrations
+        run: pnpm --filter @squad/db migrate
+      - name: Run tests with coverage
+        run: bash scripts/ci-test-shard.sh ${{ matrix.shard }}
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ github.sha }}-${{ matrix.shard }}
+          path: '**/coverage/lcov.info'
+          if-no-files-found: ignore
+          retention-days: 7
+
+  node-scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      # Dynamic host ports (Docker assigns a free one); the resolved ports are
+      # read back below via the job.services context. tmpfs keeps an interrupted
+      # job from leaving anonymous volumes behind.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: admin
+        ports:
+          - 5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
+          --health-cmd "pg_isready -U admin -d admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379
+        options: >-
+          --tmpfs /data:rw,size=128m
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_PASSWORD: test_password
     steps:
       - name: Resolve service ports
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
@@ -134,36 +265,47 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Run solve-issues runner tests
-        run: pnpm run solve:issues:test
-      - run: pnpm turbo run typecheck --concurrency=2
       - name: Build production artifacts
-        run: pnpm turbo run build --concurrency=2
+        run: pnpm turbo run build --concurrency=4
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
       - name: Run operations and verification script tests
         run: pnpm test:scripts
-      - name: Run panel-bridge plugin tests
-        run: pnpm turbo run test --filter=panel-bridge
-      - name: Run shared-config mutation tests (Stryker)
-        run: pnpm turbo run test:mutation --filter=@squad/shared-config
-      - run: pnpm exec biome check .
-      - name: Check every vitest package is in test:cov
-        run: bash scripts/test-cov-complete.sh
-      - name: Run tests with coverage
-        run: pnpm test:cov
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-${{ github.sha }}
-          path: '**/coverage/lcov.info'
-          if-no-files-found: ignore
-          retention-days: 7
-      - name: Scan for secrets
+      # Stryker takes minutes and only mutates packages/shared-config, so it runs
+      # when that package changed in the pushed range — and always for a manual
+      # dispatch, a new branch, or a range the checkout cannot resolve.
+      - name: Decide whether shared-config changed
+        id: mutation
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
-          ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
+          if [[ "${GITHUB_EVENT_NAME}" != push || -z "${BEFORE}" || "${BEFORE}" =~ ^0+$ ]] ||
+             ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null ||
+             ! git diff --quiet "${BEFORE}" "${GITHUB_SHA}" -- packages/shared-config; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Run shared-config mutation tests (Stryker)
+        if: steps.mutation.outputs.run == 'true'
+        run: pnpm turbo run test:mutation --filter=@squad/shared-config
+
+  node:
+    runs-on: ubuntu-24.04
+    needs: [node-lint, node-test, node-scripts]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Require every JavaScript check
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in ${RESULTS}; do
+            if [[ "${result}" != success ]]; then
+              echo "::error::a JavaScript check finished as ${result}"
+              exit 1
+            fi
+          done
 
   go:
     runs-on: ubuntu-24.04
@@ -201,7 +343,6 @@ jobs:
 
   docker:
     runs-on: ubuntu-24.04
-    needs: [node, go]
     timeout-minutes: 30
     env:
       CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
