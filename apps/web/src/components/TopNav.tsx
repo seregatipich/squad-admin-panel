@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { logout, logoutEverywhere } from '@/components/LogoutButton';
+import { logout } from '@/components/LogoutButton';
 import { SearchIcon } from '@/components/ui/icons';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
 import { useTranslator } from '@/i18n/LocaleProvider';
@@ -227,13 +227,11 @@ function toOverflowItems(entries: BarEntry[], ctx: ItemContext): MenuItem[] {
 export function TopNav({
   permissions,
   displayName,
-  siteUrl,
   groups,
   economyEnabled = false,
 }: {
   permissions: string[];
   displayName: string;
-  siteUrl: string;
   /** Navigation tree; defaults to the panel's own {@link NAV_GROUPS}. */
   groups: NavGroup[];
   /** ECON-5 (#165): items with `requiresEconomy` are hidden while false. */
@@ -387,22 +385,14 @@ export function TopNav({
             </kbd>
           </button>
 
-          <UserMenu displayName={displayName} siteUrl={siteUrl} t={t} />
+          <UserMenu displayName={displayName} t={t} />
         </div>
       </div>
     </nav>
   );
 }
 
-function UserMenu({
-  displayName,
-  siteUrl,
-  t,
-}: {
-  displayName: string;
-  siteUrl: string;
-  t: Translator;
-}) {
+function UserMenu({ displayName, t }: { displayName: string; t: Translator }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -425,32 +415,10 @@ function UserMenu({
         ),
       }}
       items={[
-        {
-          kind: 'link',
-          href: '/settings/account',
-          label: <span className="flex min-h-8 items-center">{t('nav.account')}</span>,
-        },
-        {
-          kind: 'link',
-          href: '/settings/tokens',
-          label: <span className="flex min-h-8 items-center">{t('nav.tokens')}</span>,
-        },
-        {
-          kind: 'link',
-          href: siteUrl,
-          label: <span className="flex min-h-8 items-center">{t('nav.site')}</span>,
-        },
+        { kind: 'link', href: '/settings/account', label: t('nav.account') },
+        { kind: 'link', href: '/settings/tokens', label: t('nav.tokens') },
         { kind: 'separator' },
-        {
-          kind: 'action',
-          label: <span className="flex min-h-8 items-center">{t('nav.logout')}</span>,
-          onSelect: () => void logout(),
-        },
-        {
-          kind: 'action',
-          label: <span className="flex min-h-8 items-center">{t('nav.logoutAll')}</span>,
-          onSelect: () => void logoutEverywhere(),
-        },
+        { kind: 'action', label: t('nav.logout'), onSelect: () => void logout() },
       ]}
     />
   );

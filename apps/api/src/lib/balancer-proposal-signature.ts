@@ -3,18 +3,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 /**
  * HMAC signing for the GAME-2 (#81) inbound balancer-proposal webhook.
  *
- * Byte-for-byte the scheme already proven by the cross-repo VIP lifecycle
- * webhook (`vip-lifecycle-signature.ts`): the producer signs
- * `"<timestamp>.<canonical JSON of the body>"` with a shared secret and sends
- * the digest in `x-balancer-signature` alongside `x-balancer-timestamp`.
+ * The producer signs `"<timestamp>.<canonical JSON of the body>"` with a shared
+ * secret and sends the digest in `x-balancer-signature` alongside `x-balancer-timestamp`.
  * Canonicalisation (recursively sorted object keys, array order preserved)
  * makes the digest independent of the producer's JSON key ordering, and
  * binding the timestamp into the MAC means a captured signature cannot be
  * replayed under a different one.
- *
- * The scheme is duplicated rather than shared because the two webhooks have
- * independent secrets, independent headers and independent producers; a single
- * shared helper would couple their wire formats together.
  */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);

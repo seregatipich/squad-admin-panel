@@ -13,7 +13,7 @@ export interface RequestContext {
 export const als = new AsyncLocalStorage<RequestContext>();
 
 export function shouldDisableSensitiveAuthRequestLogging(request: { url: string }): boolean {
-  return request.url.split('?', 1)[0] === '/api/v1/auth/bss/callback';
+  return request.url.split('?', 1)[0] === '/api/v1/auth/steam/callback';
 }
 
 class LateSink {
@@ -40,8 +40,6 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
       '*.rcon_password',
       '*.license_key',
       '*.APP_ENCRYPTION_KEY',
-      '*.BSS_SSO_CLIENT_SECRET',
-      '*.BSS_SSO_CLIENT_SECRET_NEXT',
     ],
     censor: '[redacted]',
   };

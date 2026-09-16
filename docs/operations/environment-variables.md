@@ -4,21 +4,15 @@
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска, который workflow атомарно записывает перед сборкой и `/health` возвращает для приёмки. | no |
+| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в команду деплоя, а `/health` возвращает для приёмки. | no |
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
-| `PANEL_PUBLIC_URL` | yes | — | api | Точный публичный origin панели. Из него строится единственный callback BSS: `/api/v1/auth/bss/callback`; временно также обслуживает старый Steam OpenID. | no |
-| `BSS_SITE_URL` | yes | `https://bss.games` только в web | api / web | Точный origin сайта. В API задаётся вместе со всем SSO-контрактом; web использует его только для безопасной ссылки назад. | no |
-| `BSS_SSO_CLIENT_ID` | yes | — | api | Должен дословно совпадать с `PANEL_SSO_CLIENT_ID` сайта; штатное значение `squad-admin-panel`. | no |
-| `BSS_SSO_CLIENT_SECRET` | yes | — | api | Текущий общий секрет обмена и взаимного отзыва сессий; от 32 до 512 символов без любых пробельных символов и перевода строки. | yes |
-| `BSS_SSO_CLIENT_SECRET_NEXT` | no | — | api | Второй принимаемый секрет только на окно безопасной ротации; должен отличаться от текущего. | yes |
+| `PANEL_PUBLIC_URL` | yes | — | api | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID; must be an HTTPS origin in production. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
 | `DUCKDNS_TOKEN` | only for tk104 | — | caddy (tk104) | DuckDNS API token for DNS-01 TLS (`compose.tk104.yml` / `docker/Caddyfile.tk104`) when port 80 is not forwarded. | yes |
 | `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
-| `VIP_LIFECYCLE_WEBHOOK_SECRET` | no | — | api | Включает подписанные preflight/lifecycle/status для выдачи VIP сайтом. В tk104 значение детерминированно отделяется HMAC-контекстом `bss-vip-lifecycle-v1` от общего SSO-секрета скриптом `configure-bss-sso-env.sh`; открытое значение не передаётся в журнал. | yes |
-| `VIP_LIFECYCLE_REQUIRE_REVISION` | no | `false` | api | После выпуска producer сайта устанавливается в `true`; обычный повторный deploy сохраняет уже выбранный режим и не ослабляет его. | no |
 | `BALANCER_WEBHOOK_SECRET` | no | — | api | Enables the signed team-balancer endpoint the SquadJS exporter pushes dry-run proposal snapshots to. Leave unset to disable the endpoint (it then returns 503). | yes |
 | `DATABASE_URL` | yes | `postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin` | all | Defaults are fine inside compose. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Defaults are fine inside compose. | no |
@@ -48,7 +42,6 @@
 ```bash
 openssl rand -base64 32     # POSTGRES_PASSWORD, SESSION_SECRET
 openssl rand -base64 32     # APP_ENCRYPTION_KEY (then save offline)
-openssl rand -hex 32        # BSS_SSO_CLIENT_SECRET
 ```
 
 `APP_ENCRYPTION_KEY` rotation:

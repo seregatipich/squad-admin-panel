@@ -1,5 +1,4 @@
-import { GlobalLogoutButton, LogoutButton } from '@/components/LogoutButton';
-import { getBssSiteUrl } from '@/lib/bss-site';
+import { LogoutButton } from '@/components/LogoutButton';
 import { requireSession } from '@/lib/dal';
 
 /**
@@ -19,23 +18,15 @@ import { requireSession } from '@/lib/dal';
  */
 export default async function MeLayout({ children }: { children: React.ReactNode }) {
   const me = await requireSession();
-  const siteUrl = getBssSiteUrl();
 
   return (
     <div className="min-h-screen bg-bg text-ink">
-      <header className="flex min-h-[46px] items-center border-b border-line bg-surface/80 px-3 backdrop-blur-xl sm:px-6">
-        <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center justify-between gap-2 py-1">
+      <header className="flex h-[46px] items-center border-b border-line bg-surface/80 px-6 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between gap-4">
           <span className="text-[13px] font-semibold text-ink">Личный кабинет</span>
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-            <span className="max-w-32 truncate px-2 text-xs text-ink-3">{me.canonical_name}</span>
-            <a
-              href={siteUrl}
-              className="inline-flex min-h-11 items-center px-2 text-xs text-ink-2 no-underline transition-colors hover:text-ink"
-            >
-              Перейти на bss.games
-            </a>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-ink-3">{me.canonical_name}</span>
             <LogoutButton />
-            <GlobalLogoutButton />
           </div>
         </div>
       </header>

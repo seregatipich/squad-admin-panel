@@ -40,7 +40,6 @@ describe('loadConfig', () => {
     expect(cfg.API_PORT).toBe(3000);
     expect(cfg.LOG_LEVEL).toBe('info');
     expect(cfg.BRIDGE_SOCKET).toBe('/run/panel-host-bridge/bridge.sock');
-    expect(cfg.VIP_LIFECYCLE_REQUIRE_REVISION).toBe(false);
   });
 
   it('respects overridden optional fields', async () => {
@@ -114,15 +113,11 @@ describe('loadConfig', () => {
   it('treats a blank optional webhook secret as unset rather than refusing to boot', async () => {
     const loadConfig = await freshLoadConfig();
     for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, VALID_ENV, {
-      BALANCER_WEBHOOK_SECRET: '',
-      VIP_LIFECYCLE_WEBHOOK_SECRET: '',
-    });
+    Object.assign(process.env, VALID_ENV, { BALANCER_WEBHOOK_SECRET: '' });
 
     const config = loadConfig();
 
     expect(config.BALANCER_WEBHOOK_SECRET).toBeUndefined();
-    expect(config.VIP_LIFECYCLE_WEBHOOK_SECRET).toBeUndefined();
   });
 
   it('still rejects a non-empty optional webhook secret that is too short', async () => {
@@ -142,82 +137,25 @@ describe('loadConfig', () => {
     expect(loadConfig().BALANCER_WEBHOOK_SECRET).toBe(secret);
   });
 
-  it.each([
-    ['false', false],
-    ['true', true],
-  ])('parses VIP_LIFECYCLE_REQUIRE_REVISION=%s as %s', async (value, expected) => {
-    const loadConfig = await freshLoadConfig();
-    for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, VALID_ENV, { VIP_LIFECYCLE_REQUIRE_REVISION: value });
-
-    expect(loadConfig().VIP_LIFECYCLE_REQUIRE_REVISION).toBe(expected);
-  });
-
-  it('accepts a complete BSS SSO client and an overlapping rotation secret', async () => {
-    Object.assign(process.env, VALID_ENV, {
-      NODE_ENV: 'production',
-      BSS_SITE_URL: 'https://bss.games',
-      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
-      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
-      BSS_SSO_CLIENT_SECRET_NEXT: 'd'.repeat(32),
-    });
+  it('accepts an HTTPS PANEL_PUBLIC_URL origin in production', async () => {
+    Object.assign(process.env, VALID_ENV, { NODE_ENV: 'production' });
     const loadConfig = await freshLoadConfig();
 
-    const config = loadConfig();
-
-    expect(config.BSS_SITE_URL).toBe('https://bss.games');
-    expect(config.BSS_SSO_CLIENT_ID).toBe('squad-admin-panel');
-    expect(config.BSS_SSO_CLIENT_SECRET_NEXT).toBe('d'.repeat(32));
+    expect(loadConfig().PANEL_PUBLIC_URL).toBe(VALID_ENV.PANEL_PUBLIC_URL);
   });
 
   it.each([
-    { BSS_SITE_URL: 'https://bss.games' },
-    { BSS_SSO_CLIENT_ID: 'squad-admin-panel' },
-    { BSS_SSO_CLIENT_SECRET: 'c'.repeat(32) },
-    { BSS_SSO_CLIENT_SECRET_NEXT: 'd'.repeat(32) },
-  ])('rejects an incomplete BSS SSO configuration: %o', async (partial) => {
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
-      throw new Error('process.exit called');
-    });
-    Object.assign(process.env, VALID_ENV, { NODE_ENV: 'production' }, partial);
-    const loadConfig = await freshLoadConfig();
-
-    expect(() => loadConfig()).toThrow('process.exit called');
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it.each(['http://bss.games', 'https://bss.games/path', 'https://user:pass@bss.games'])(
-    'rejects an unsafe production BSS site origin: %s',
-    async (siteUrl) => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
-        throw new Error('process.exit called');
-      });
-      Object.assign(process.env, VALID_ENV, {
-        NODE_ENV: 'production',
-        BSS_SITE_URL: siteUrl,
-        BSS_SSO_CLIENT_ID: 'squad-admin-panel',
-        BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
-      });
-      const loadConfig = await freshLoadConfig();
-
-      expect(() => loadConfig()).toThrow('process.exit called');
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    },
-  );
-
-  it.each([
-    { PANEL_PUBLIC_URL: 'http://panel.example' },
-    { BSS_SSO_CLIENT_ID: ' squad-admin-panel' },
-  ])('rejects an unsafe production BSS callback setting: %o', async (unsafe) => {
+    'http://panel.example',
+    'https://panel.example/path',
+    'https://user:pass@panel.example',
+    'https://panel.example/?q=1',
+  ])('rejects an unsafe production PANEL_PUBLIC_URL: %s', async (panelPublicUrl) => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
       throw new Error('process.exit called');
     });
     Object.assign(process.env, VALID_ENV, {
       NODE_ENV: 'production',
-      BSS_SITE_URL: 'https://bss.games',
-      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
-      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
-      ...unsafe,
+      PANEL_PUBLIC_URL: panelPublicUrl,
     });
     const loadConfig = await freshLoadConfig();
 
@@ -225,20 +163,10 @@ describe('loadConfig', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('rejects identical current and next BSS SSO secrets', async () => {
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
-      throw new Error('process.exit called');
-    });
-    Object.assign(process.env, VALID_ENV, {
-      NODE_ENV: 'production',
-      BSS_SITE_URL: 'https://bss.games',
-      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
-      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
-      BSS_SSO_CLIENT_SECRET_NEXT: 'c'.repeat(32),
-    });
+  it('allows a plain-HTTP PANEL_PUBLIC_URL outside production', async () => {
+    Object.assign(process.env, VALID_ENV, { PANEL_PUBLIC_URL: 'http://localhost:3000' });
     const loadConfig = await freshLoadConfig();
 
-    expect(() => loadConfig()).toThrow('process.exit called');
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(loadConfig().PANEL_PUBLIC_URL).toBe('http://localhost:3000');
   });
 });

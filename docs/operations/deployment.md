@@ -29,189 +29,44 @@ match the host's `panel` group and the data tree created by `install-host-bridge
 (`curl --fail`). Таймаут API, сетевой сбой и HTTP 4xx/5xx завершают deploy
 ненулевым кодом до сообщения `Deploy complete`.
 
-## Единый вход через bss.games
+## Вход через Steam и выпуск
 
-Панель не подтверждает Steam-личность самостоятельно: штатная страница входа
-переходит на `https://bss.games`, а панель независимо определяет текущие права
-по своему RBAC после возврата пользователя. После боевой приёмки прямые
-Steam-маршруты панели удалены: удостоверение личности выполняет только сайт.
+Панель подтверждает Steam-личность сама через Steam OpenID:
+`/api/v1/auth/steam/login` отправляет пользователя на steamcommunity.com, а
+`/api/v1/auth/steam/callback` проверяет ответ, создаёт сессию и выдаёт права по
+RBAC панели. Realm и адрес возврата строятся из `PANEL_PUBLIC_URL`, поэтому в
+production он обязан быть HTTPS-origin (`https://tk104.duckdns.org`); иначе API
+не стартует. Первый вошедший игрок становится Owner и проходит `/setup`.
 
-В `.env.tk104` обязательны:
-
-```dotenv
-BSS_SITE_URL=https://bss.games
-BSS_SSO_CLIENT_ID=squad-admin-panel
-BSS_SSO_CLIENT_SECRET=<общий секрет из закрытого хранилища>
-BSS_SSO_CLIENT_SECRET_NEXT=
-```
-
-В production общий секрет хранится как Actions secret
-`BSS_SSO_SHARED_SECRET` одновременно в репозиториях панели и сайта. Полный
-выпуск `master` перед сборкой передаёт его на `tk104` только через stdin и
-запускает `scripts/configure-bss-sso-env.sh`. Скрипт атомарно меняет только
-договор SSO, VIP-lifecycle и точный `APP_VERSION=<SHA master>` в `.env.tk104`,
-сохраняет права файла и не печатает значения. `/health.version` после выпуска
-обязан совпасть с этим SHA. Для VIP скрипт получает отдельный ключ через HMAC-контекст
-`bss-vip-lifecycle-v1`, поэтому один открытый ключ не переиспользуется двумя
-протоколами. Повторный выпуск безопасен, не накапливает временные файлы и
-сохраняет уже включённый строгий режим ревизий.
+Полный выпуск `master` передаёт в команду деплоя `APP_VERSION=<SHA master>`;
+`/health.version` после выпуска обязан совпасть с этим SHA, иначе задание
+падает на внешней проверке.
 
 Автоматический полный выпуск запускается только push-событием ветки `master`.
 Для ручного `target=full` выбери `master` и обязательно передай
 `expected_sha=<выбранный SHA>`: несовпадение останавливает задание первым шагом,
 до checkout, SSH и любых изменений production.
 
-Для независимой проверки прав панели сайт использует отдельный API-ключ только
-с областями `user:view` и `role:view`. Его открытое значение хранится как
-Actions secret `PANEL_READ_API_TOKEN` в обоих репозиториях, но не записывается
-в `.env.tk104`: панель сохраняет в PostgreSQL только SHA-256-хеш. Перед
-включением SSO один раз запусти ручной `deploy-tk104` из точного SHA ветки
-`dev` с `target=site-read-token`. Операция требует ровно одного действующего
-пользователя с системной ролью `Owner`, не перезапускает сервисы, повторяется
-идемпотентно и при смене секрета отзывает только прежний ключ назначения
-`bss.games: проверка доступа`. Затем сайт атомарно добавляет открытое значение
-в своё окружение при SSO-активации. В журнале панели остаются только назначение,
-области доступа и число отозванных прежних ключей.
+Оба задания `deploy-tk104` удаляют временный ключ SSH и отдельный файл доверия с
+раннера в `always()`. Каждое задание принимает ключ хоста только из заранее
+сверенного Actions secret `TK104_SSH_KNOWN_HOSTS`, проверяет запись для
+`tk104.duckdns.org` и использует `StrictHostKeyChecking=yes`; runtime
+`ssh-keyscan` и доверие при первом подключении запрещены. При плановой смене
+ключа оператор сначала сверяет новый fingerprint по независимому доверенному
+каналу, затем заменяет secret. Контракт закреплён в
+`scripts/deploy-tk104-workflow.test.ts`.
 
-После первого совместимого production-выпуска один раз запусти ручной
-`deploy-tk104` с `target=sso-cutover` и точным SHA `master`. Задание останавливает
-API, выполняет `revoke-sessions-for-sso-cutover.js --confirm-all-sessions`, а
-затем поднимает API обратно через `trap` при любом исходе и ждёт внешний
-`/health`. Повторный запуск снова отзовёт все текущие сеансы, поэтому это не
-обычная операция выпуска. Все пять заданий `deploy-tk104` удаляют временный ключ
-SSH и отдельный файл доверия с раннера в `always()`. Каждое задание принимает
-ключ хоста только из заранее сверенного Actions secret
-`TK104_SSH_KNOWN_HOSTS`, проверяет запись для `tk104.duckdns.org` и использует
-`StrictHostKeyChecking=yes`; runtime `ssh-keyscan` и доверие при первом
-подключении запрещены. При плановой смене ключа оператор сначала сверяет новый
-fingerprint по независимому доверенному каналу, затем заменяет secret.
+### Интеграция bss.games удалена
 
-## Гарантированная доставка VIP
-
-Первый совместимый выпуск панели передаёт в API
-`VIP_LIFECYCLE_WEBHOOK_SECRET` и оставляет
-`VIP_LIFECYCLE_REQUIRE_REVISION=false`, пока production-сайт ещё может работать
-на прежнем коде. После публикации и проверки точного SHA сайта запусти ручной
-`deploy-tk104` из точного SHA `master` с параметрами:
-
-```text
-target=vip-revision-cutover
-expected_sha=<текущий SHA панели в master>
-site_expected_sha=<фактически опубликованный SHA bss.games>
-vip_revision_mode=true
-```
-
-Задание сначала требует от `https://bss.games/readyz` этот SHA и безопасное
-runtime-состояние `vip_guaranteed_activation_enabled=false`: продажи остаются
-закрыты до доказанного строгого режима. От панели до записи
-оно требует точный `master` в `/health.version`. Скрипт и compose берутся из
-checkout этого SHA и передаются во временный каталог на tk104, поэтому dev-preview
-не может подменить исполняемые файлы. До первой записи задание на самом хосте
-без вывода значений сверяет общий секрет постоянным по времени сравнением,
-производный VIP-секрет, канонические URL/client ID, пустой ротационный секрет и
-`APP_VERSION`. Любое расхождение завершает cutover без изменения `.env.tk104` и
-без перезапуска API. При `vip_revision_mode=true` тот же действующий
-API-контейнер под единым PostgreSQL advisory lock проверяет ownership и в этой
-же транзакции ставит durable-флаг `panel_meta.vip_lifecycle_strict=true`. Аудит
-проверяет только проекции, доказуемо связанные с последним действующим
-`assigned`-событием: marker, игрок, роль, revision, срок, служебный комментарий
-и единственная безопасная активная пара tier↔role должны совпасть. Ручное
-назначение без lifecycle-истории не усыновляется и не считается потерянной
-проекцией; потерянный или конфликтующий marker останавливает cutover. В выводе
-есть только количества, без идентификаторов игроков.
-
-Durable-флаг включает DB-backstop даже для уже работающего старого процесса и
-прямого SQL: обычный writer не может назначить роль из `vip_tiers`, снять или
-заменить внешнюю проекцию без точного нового lifecycle-события той же
-транзакции. Пока есть действующая внешняя проекция, также нельзя удалить или
-изменить её tier mapping либо сделать связанную роль системной/доступной в
-панели. API возвращает безопасный `409`, а bulk-операции откатываются целиком.
-Перед аудитом и при каждом запуске API до HTTP-listen дополнительно сверяется
-точный fingerprint функций и trigger-ов; их удаление, `DISABLE`, перепривязка или дрейф
-тела функции останавливают запуск/cutover fail-closed.
-
-Все writer-пути панели для `Admins.cfg` — доставка outbox, active/force sync,
-редактор, восстановление версии, установка и восстановление сервера — держат
-один PostgreSQL advisory-xact lock на `server_id` от повторной проверки outbox
-до атомарной записи, точного RCON-подтверждения и `applied_at`. Каждая реальная
-попытка RCON получает новый `request_id`. При strict-режиме клиентский или
-архивный файл задаёт только неуправляемые строки: все `Admin=`/`Group=`,
-лишние marker-блоки и orphan-marker удаляются, а единственный канонический блок
-строится из текущей БД перед `//SQSTAT DELIMETER`. Чтение strict-флага держит
-`FOR SHARE` до конца файловой транзакции, поэтому cutover не обгоняет уже
-начатый relaxed writer.
-
-Этот lock действует только внутри панели. Перед открытием продаж оператор
-обязан доказать единственного writer-а тех же путей: периодическую запись
-`Admins.cfg` из `squadbot2`/SQSTAT нужно отключить либо перевести под тот же
-fence. После этого требуется canary не короче одного полного пятиминутного
-цикла внешнего синхронизатора с повторной сверкой файла и статуса доставки.
-Кратковременный успешный write/reload до такого canary не доказывает
-устойчивость выдачи или возврата VIP.
-
-После изменения задание проверяет внутри контейнера точные SHA, режим и
-производный VIP-секрет, затем принимает внешний
-`/health` и закрытую подписанную границу VIP (заведомо неверная подпись должна
-получить ровно `401`, а корректно подписанный lifecycle без `revision` —
-`400 revision_required`). При отказе оно возвращает прежний
-режим и заново поднимает API даже после остановки неудачного кандидата, затем
-повторно принимает его; временные файлы удаляются. Обычные последующие
-выпуски не сбрасывают режим: API с env=`false` отказывается стартовать при
-сохранённом durable-флаге. Для аварийного отката сначала выключи продажи на
-сайте, затем повтори задание с `vip_revision_mode=false`; ветка отката
-останавливает API и только затем снимает DB-флаг отдельной разрешённой
-операцией. Один лишь откат image панели или ошибочная env не ослабляют границу.
-
-На сайте им дословно соответствуют:
-
-```dotenv
-PANEL_SSO_PUBLIC_URL=https://tk104.duckdns.org
-PANEL_SSO_CLIENT_ID=squad-admin-panel
-PANEL_SSO_CLIENT_SECRET=<тот же общий секрет>
-PANEL_SSO_CLIENT_SECRET_NEXT=
-```
-
-Разрешён ровно один callback:
-`https://tk104.duckdns.org/api/v1/auth/bss/callback`. Секреты получает только
-API-контейнер; web получает один несекретный `BSS_SITE_URL`. Неполный набор,
-HTTP-origin в production, путь/query во внешнем URL, короткий секрет или
-совпадающие current/next останавливают API до начала обслуживания запросов.
-
-### Первый выпуск и отзыв старых сессий
-
-Сначала выпустите совместимый сайт и панель с одинаковым контрактом, проверьте
-`/health`, затем один раз отзовите сессии, созданные старым прямым входом.
-Команда должна выполняться при остановленном API: она берёт короткую
-эксклюзивную блокировку таблицы, удаляет только найденные точные
-`session:<id>`/`session-touch:<id>` ключи без `SCAN`, затем удаляет строки
-PostgreSQL и печатает только итоговое число.
-
-```bash
-docker compose --env-file .env.tk104 -f compose.tk104.yml stop api
-docker compose --env-file .env.tk104 -f compose.tk104.yml run --rm --no-deps api \
-  node --enable-source-maps dist/tools/revoke-sessions-for-sso-cutover.js \
-  --confirm-all-sessions
-docker compose --env-file .env.tk104 -f compose.tk104.yml up -d api
-curl -fsk https://tk104.duckdns.org/health
-```
-
-При ошибке команды сначала верните API через `up -d api`, проверьте PostgreSQL
-и Redis и повторите команду: до успешного удаления из Redis строки базы не
-исчезают. Успешный отзыв необратим — откат image не восстановит завершённые
-сессии, пользователи войдут заново. Остальные данные не меняются.
-
-### Ротация общего секрета без перерыва
-
-1. Добавьте новый секрет как `*_SECRET_NEXT` одновременно на сайте и панели.
-2. На панели сделайте новый секрет current, а старый временно next. Сайт ещё
-   отправляет старый, но принимает новый.
-3. На сайте сделайте новый секрет current, а старый временно next.
-4. Проверьте вход и полный выход в обоих направлениях, затем очистите next в
-   обоих приложениях.
-
-Не повторяйте автоматически callback или обмен кода. Только идемпотентный
-полный отзыв делает один повтор с небольшой случайной задержкой при сетевом
-сбое/5xx; `429` не повторяется немедленно.
+До 2026-09-16 вход шёл через SSO bss.games, а магазин сайта выдавал VIP через
+подписанный webhook `/api/v1/integrations/vip/*` со строгим режимом ревизий.
+Миграция `0115_remove_bss_integration` удаляет триггеры и функции этого режима,
+таблицу `vip_lifecycle_events`, столбцы `players.role_lifecycle_event_id` и
+`panel_meta.vip_lifecycle_strict`, отзывает API-токен сайта и деактивирует тир
+`BSS VIP`. Роли и сроки уже купленных VIP остаются у игроков, дальше их снимает
+`worker-role-expirer`. После первого выпуска удалите из `.env.tk104` ключи
+`BSS_*` и `VIP_LIFECYCLE_*`, а из Actions secrets — `BSS_SSO_SHARED_SECRET` и
+`PANEL_READ_API_TOKEN`: их больше ничто не читает.
 
 ## CI/CD runners
 
@@ -366,7 +221,7 @@ git clone git@github.com:seregatipich/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env
-# Fill APP_DOMAIN, PANEL_PUBLIC_URL, BSS_*, POSTGRES_PASSWORD,
+# Fill APP_DOMAIN, PANEL_PUBLIC_URL, POSTGRES_PASSWORD,
 # APP_ENCRYPTION_KEY and SESSION_SECRET
 # Generate secrets: openssl rand -base64 32
 # Save APP_ENCRYPTION_KEY offline — losing it makes RCON passwords unrecoverable.
@@ -381,7 +236,7 @@ docker compose config --quiet
 docker compose up -d --build
 ```
 
-`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login`: вход продолжится через bss.games, а первая подтверждённая учётная запись станет Owner. Затем она перейдёт через `/setup` для начальной настройки.
+`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login` and sign in via Steam — the first login becomes Owner. The first Owner session is then redirected through `/setup` to save the organization name.
 
 ## Staging deployment gate
 
@@ -402,7 +257,7 @@ Expected results:
 - `/health` returns `{"status":"ok", ...}`.
 - `/ready` returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
 - `/api/docs` returns an HTTP 200/30x response from the API docs UI.
-- Новая панель завершает первый Owner-вход через bss.games и начальную настройку.
+- A fresh panel can complete the Steam first-Owner login and organization-name setup.
 - The dashboard loads and the bridge/worker health widgets do not report a persistent outage.
 
 Dokploy can be used to build or restart the compose stack after the host has been prepared, but it is not a complete deployment boundary for this project. The host bridge, `panel` group, systemd socket/service, data tree, and `squad-depot` bind volume must be installed and verified outside Dokploy first.

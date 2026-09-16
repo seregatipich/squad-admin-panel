@@ -49,7 +49,6 @@ function setup(statuses: Array<string | null> = ['running', 'running']) {
   const lockedDb = {} as never;
   const operations: AdminsCfgDeliveryOperations = {
     getOutbox: vi.fn().mockImplementation(async () => row),
-    isSuperseded: vi.fn().mockResolvedValue(false),
     markApplied: vi.fn().mockImplementation(async (_db, _id, outcome) => {
       row = { ...row, appliedAt: new Date(), reloadOutcome: outcome, lastError: null };
       return row;
@@ -244,17 +243,6 @@ describe('correlated Admins.cfg delivery', () => {
 
     expect(t.confirmReload).not.toHaveBeenCalled();
     expect(t.row().reloadOutcome).toBe('server_removed');
-    expect(t.redis.eval).toHaveBeenCalledOnce();
-  });
-
-  it('ACKs and deletes a durable superseded event without touching file or RCON', async () => {
-    const t = setup();
-    vi.mocked(t.operations.isSuperseded).mockResolvedValueOnce(true);
-
-    await handleAdminsCfgSyncEntry(t.ctx, t.entry, t.operations);
-
-    expect(t.sync).not.toHaveBeenCalled();
-    expect(t.confirmReload).not.toHaveBeenCalled();
     expect(t.redis.eval).toHaveBeenCalledOnce();
   });
 

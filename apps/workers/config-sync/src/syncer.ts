@@ -2,8 +2,6 @@ import type { BridgeClient } from '@squad/bridge-client';
 import {
   type AdminsCfgSyncTransaction,
   type DatabaseClient,
-  isVipLifecycleStrict,
-  stripAdminsCfgManagedAuthority,
   withAdminsCfgServerLock,
 } from '@squad/db';
 import type Redis from 'ioredis';
@@ -135,7 +133,6 @@ async function syncServerAdminsCfgLocked(
 
   const snapshot = await snapshotRolesAndAdmins(db);
   const generated = buildManagedSegment(snapshot);
-  const strict = await isVipLifecycleStrict(db);
 
   let original: string;
   try {
@@ -190,12 +187,10 @@ async function syncServerAdminsCfgLocked(
 
   const located = findManagedSegment(original);
   const currentHash = located ? hashSegment(located.segment) : null;
-  const unmanagedContent = strict ? stripAdminsCfgManagedAuthority(original) : original;
-  const newContent = spliceManagedSegment(unmanagedContent, generated.body);
+  const newContent = spliceManagedSegment(original, generated.body);
 
   const hashesMatch = currentHash === generated.hash;
-  const authorityDrift = strict && newContent !== original;
-  const hasDrift = !hashesMatch || authorityDrift;
+  const hasDrift = !hashesMatch;
   const isPassiveCheck =
     opts.mode === 'passive' || (opts.mode === undefined && opts.reason === 'drift_check');
   // Passive sweeps detect drift but do NOT auto-correct — the spec

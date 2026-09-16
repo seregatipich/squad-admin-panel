@@ -1,8 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
 import { panelMeta, players, roles } from '@squad/db/schema';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
-export type ClaimResult = 'claimed' | 'already_claimed' | 'no_owner_role' | 'vip_lifecycle_owned';
+export type ClaimResult = 'claimed' | 'already_claimed' | 'no_owner_role';
 
 export interface SentinelBridge {
   fileRead(args: { path: string }): Promise<unknown>;
@@ -41,17 +41,10 @@ export async function claimFirstOwner(
       return 'already_claimed' as const;
     }
 
-    const [updated] = await tx
+    await tx
       .update(players)
-      .set({
-        roleId: ownerRoleId,
-        roleExpiresAt: null,
-        roleComment: null,
-        roleLifecycleEventId: null,
-      })
-      .where(and(eq(players.id, playerId), isNull(players.roleLifecycleEventId)))
-      .returning({ id: players.id });
-    if (!updated) return 'vip_lifecycle_owned' as const;
+      .set({ roleId: ownerRoleId, roleExpiresAt: null, roleComment: null })
+      .where(eq(players.id, playerId));
     await tx.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
     return 'claimed' as const;
   });

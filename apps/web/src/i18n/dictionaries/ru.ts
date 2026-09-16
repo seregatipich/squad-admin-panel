@@ -61,8 +61,6 @@ export const ru = {
   'nav.geoip': 'GeoIP (MaxMind)',
   'nav.mediaPublishing': 'Публикация медиа',
   'nav.logout': 'Выйти',
-  'nav.logoutAll': 'Выйти везде',
-  'nav.site': 'Перейти на bss.games',
   'nav.group.community': 'Сообщество',
   'nav.servers': 'Все серверы',
   'nav.serversNew': 'Создать сервер',
@@ -126,11 +124,10 @@ export const ru = {
   'nav.lastPoll': 'Последний опрос: {when}',
 
   'login.heading': 'Squad Admin Panel',
-  'login.error.ssoFailed': 'Не удалось войти через bss.games. Повторите вход.',
+  'login.error.authFailed': 'Не удалось проверить вход через Steam. Попробуйте ещё раз.',
   'login.error.notAuthorized':
     'Steam ID {steamId} не имеет доступа к панели. Обратитесь к администратору.',
-  'login.retry': 'Повторить вход',
-  'login.redirecting': 'Переходим на bss.games…',
+  'login.steamButton': 'Войти через Steam',
 
   'connection.unavailable': 'Панель временно недоступна.',
   'connection.retry': 'Повторить',

@@ -31,11 +31,6 @@ vi.mock('@squad/db', () => ({
   markAdminsCfgSyncFailed: vi.fn(),
   relayAdminsCfgSyncOutbox: relayOutboxMock,
   servers: { id: 'id', deletedAt: 'deletedAt' },
-  vipLifecycleEvents: {
-    eventId: 'eventId',
-    action: 'action',
-    supersededByEventId: 'supersededByEventId',
-  },
 }));
 
 const redisMock = vi.hoisted(() => ({

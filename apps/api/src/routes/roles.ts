@@ -1,7 +1,7 @@
 import type { DatabaseClient } from '@squad/db';
 import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -314,29 +314,11 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_referenced_by_vip_tier' };
       }
       try {
-        const deletion = await app.db.transaction(async (tx) => {
-          const locked = await tx
-            .select({ id: players.id, marker: players.roleLifecycleEventId })
-            .from(players)
-            .where(eq(players.roleId, req.params.id))
-            .orderBy(players.id)
-            .for('update');
-          if (locked.some((player) => player.marker !== null)) {
-            return 'vip_lifecycle_owned' as const;
-          }
-          const updated = await tx
+        await app.db.transaction(async (tx) => {
+          await tx
             .update(players)
-            .set({
-              roleId: null,
-              roleExpiresAt: null,
-              roleComment: null,
-              roleLifecycleEventId: null,
-            })
-            .where(and(eq(players.roleId, req.params.id), isNull(players.roleLifecycleEventId)))
-            .returning({ id: players.id });
-          if (updated.length !== locked.length) {
-            throw new Error('role deletion targets changed after lock');
-          }
+            .set({ roleId: null, roleExpiresAt: null, roleComment: null })
+            .where(eq(players.roleId, req.params.id));
           await tx.delete(roles).where(eq(roles.id, req.params.id));
           await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'role.delete',
@@ -344,12 +326,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
-          return 'deleted' as const;
         });
-        if (deletion === 'vip_lifecycle_owned') {
-          reply.code(409);
-          return { error: 'vip_lifecycle_owned' };
-        }
       } catch (err) {
         // Backstop for any other ON DELETE RESTRICT referrer added in future:
         // a foreign-key violation maps to a clean 409, never a 500.

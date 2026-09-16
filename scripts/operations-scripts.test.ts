@@ -19,7 +19,6 @@ import { after, describe, it } from 'node:test';
 const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
-  'scripts/configure-bss-sso-env.sh',
   'scripts/deploy-tk104.sh',
   'scripts/dev-deploy-tk104.sh',
   'scripts/install-host-bridge.sh',
@@ -150,7 +149,7 @@ describe('operation script static contracts', () => {
     const testScripts = packageJson.scripts?.['test:scripts'] ?? '';
     assert.match(testScripts, /--test-concurrency=1/);
     for (const testFile of [
-      'scripts/configure-bss-sso-env.test.ts',
+      'scripts/deploy-tk104-workflow.test.ts',
       'scripts/operations-scripts.test.ts',
       'scripts/rnsquadjs-shadow-diff.test.ts',
       'scripts/verify-audit-chain.test.ts',

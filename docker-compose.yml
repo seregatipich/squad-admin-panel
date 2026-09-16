@@ -78,12 +78,6 @@ services:
       # Squad listener. See apps/api/src/routes/servers.ts and server-configs.ts.
       RCON_HOST_DEFAULT: host.docker.internal
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
-      BSS_SITE_URL: ${BSS_SITE_URL:-}
-      BSS_SSO_CLIENT_ID: ${BSS_SSO_CLIENT_ID:-}
-      BSS_SSO_CLIENT_SECRET: ${BSS_SSO_CLIENT_SECRET:-}
-      BSS_SSO_CLIENT_SECRET_NEXT: ${BSS_SSO_CLIENT_SECRET_NEXT:-}
-      VIP_LIFECYCLE_WEBHOOK_SECRET: ${VIP_LIFECYCLE_WEBHOOK_SECRET:-}
-      VIP_LIFECYCLE_REQUIRE_REVISION: ${VIP_LIFECYCLE_REQUIRE_REVISION:-false}
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
@@ -132,7 +126,6 @@ services:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
       API_URL: http://api:3000
-      BSS_SITE_URL: ${BSS_SITE_URL:-https://bss.games}
     depends_on:
       api:
         condition: service_healthy

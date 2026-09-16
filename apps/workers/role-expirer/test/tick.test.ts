@@ -10,7 +10,6 @@ describe('runRoleExpiryTick', () => {
         roleId: '019e0000-0000-7000-8000-000000000201',
         roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
         roleComment: 'VIP истек',
-        roleLifecycleEventId: 'vip-expired-101',
       },
     ];
     const deps = {
@@ -53,7 +52,7 @@ describe('runRoleExpiryTick', () => {
     );
   });
 
-  it('does not emit side effects when a lifecycle renewal wins after the expiry scan', async () => {
+  it('does not emit side effects when a renewal wins after the expiry scan', async () => {
     const now = new Date('2026-07-06T10:00:00.000Z');
     const scanned = [
       {
@@ -61,13 +60,12 @@ describe('runRoleExpiryTick', () => {
         roleId: '019e0000-0000-7000-8000-000000000202',
         roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
         roleComment: 'VIP purchase purchase-A',
-        roleLifecycleEventId: 'purchase-A-event',
       },
     ];
     const deps = {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(scanned),
-      // The conditional UPDATE observes that lifecycle already renewed the row.
+      // The conditional UPDATE observes that a renewal already moved the expiry.
       clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: [], enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
       invalidatePermissionCache: vi.fn(),

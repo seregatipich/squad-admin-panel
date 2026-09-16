@@ -1,5 +1,5 @@
 import * as schema from '@squad/db/schema';
-import { panelMeta, players, roles, vipLifecycleEvents } from '@squad/db/schema';
+import { panelMeta, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -122,51 +122,6 @@ describeIfDb('claimFirstOwner', () => {
       .from(players)
       .where(eq(players.steamId64, TEST_PLAYER_B));
     expect(playerB[0]?.roleId).toBeNull();
-  });
-
-  it('refuses to overwrite a player whose role is owned by VIP lifecycle', async () => {
-    const viewerRoleId = '019e0000-0000-7000-8000-0000000000f1';
-    await db.insert(roles).values({ id: viewerRoleId, name: 'VIP first-owner fence role' });
-    const targetId = playerId(TEST_PLAYER_A);
-    const eventId = 'vip-first-owner-fence';
-    const expiresAt = new Date('2099-01-01T00:00:00.000Z');
-    await db.insert(vipLifecycleEvents).values({
-      eventId,
-      eventType: 'vip.purchased',
-      playerId: targetId,
-      roleId: viewerRoleId,
-      tier: 'vip2',
-      purchaseId: 'purchase-first-owner-fence',
-      action: 'assigned',
-      payload: { expires_at: expiresAt.toISOString() },
-      appliedAt: new Date(),
-    });
-    await db
-      .update(players)
-      .set({
-        roleId: viewerRoleId,
-        roleExpiresAt: expiresAt,
-        roleComment: 'VIP vip2 purchase purchase-first-owner-fence',
-        roleLifecycleEventId: eventId,
-      })
-      .where(and(eq(players.id, targetId), eq(players.steamId64, TEST_PLAYER_A)));
-    const bridge = fakeBridge(false);
-
-    const result = await claimFirstOwner(db, bridge, targetId, TEST_PLAYER_A);
-
-    expect(result).toBe('vip_lifecycle_owned');
-    expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
-    expect(
-      await db
-        .select({
-          roleId: players.roleId,
-          roleLifecycleEventId: players.roleLifecycleEventId,
-        })
-        .from(players)
-        .where(eq(players.steamId64, TEST_PLAYER_A)),
-    ).toEqual([{ roleId: viewerRoleId, roleLifecycleEventId: eventId }]);
-    const [meta] = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
-    expect(meta?.firstOwnerClaimed).toBe(false);
   });
 
   // regression: stale /var/lib/squad-panel/.first-owner-claimed sentinel blocked claim path

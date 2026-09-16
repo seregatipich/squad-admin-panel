@@ -26,12 +26,20 @@ async function runMigrations(url: string): Promise<void> {
   const sql = postgres(url, { max: 1, onnotice: () => undefined });
   try {
     await sql.unsafe('SET client_min_messages = WARNING');
+    // Several trigger functions pin `search_path = pg_catalog, public`, so
+    // validating their bodies here would resolve `%ROWTYPE` against the shared
+    // public schema instead of this test schema — and fail once a later
+    // migration has dropped that table there. The bodies are validated by the
+    // real migration run; this replay only needs the objects to exist.
+    await sql.unsafe('SET check_function_bodies = off');
     const files = readdirSync(MIGRATIONS_FOLDER)
       .filter((file) => file.endsWith('.sql'))
       .sort();
     for (const file of files) {
+      // Strip both spellings of the schema qualifier: a quoted `"public".` left in
+      // place would point a foreign key at the shared public schema.
       const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8').replace(
-        /\bpublic\./gi,
+        /(?:"public"|\bpublic)\./gi,
         '',
       );
       const statements = contents

@@ -1,5 +1,19 @@
 # `api` — changelog
 
+## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
+
+### Removed
+
+- SSO bss.games: `GET /api/v1/auth/bss/login`, `GET /api/v1/auth/bss/callback`, `POST /api/v1/auth/bss/logout-all`, переменные `BSS_SITE_URL` и `BSS_SSO_CLIENT_*`, утилита `revoke-sessions-for-sso-cutover`.
+- VIP-webhook магазина: `POST /api/v1/integrations/vip/{tier-role,preflight,lifecycle,status}`, `VIP_LIFECYCLE_WEBHOOK_SECRET`, `VIP_LIFECYCLE_REQUIRE_REVISION`, строгий режим ревизий и утилита `audit:vip-lifecycle-ownership`. Маршруты ролей, whitelist и `mint-owner-session` больше не возвращают `409 vip_lifecycle_owned`, а обработчик ошибок — `site_vip_binding_protected`.
+- `GET/POST /api/v1/servers/:id/sidecar` и движок SquadJS2: состояние сайдкара читается и переключается только через `/api/v1/servers/:id/rnsquadjs`.
+
+### Changed
+
+- Вход снова выполняется через Steam OpenID: `GET /api/v1/auth/steam/login` и `GET /api/v1/auth/steam/callback`. Строка запроса callback не попадает в автоматический журнал запросов.
+- `POST /api/v1/auth/logout-all` завершает только сессии панели и возвращает `{ ok: true }`.
+- В production API не стартует, если `PANEL_PUBLIC_URL` не является HTTPS-origin.
+
 ## 2026-09-14 — Время на сиде в присутствии игрока
 
 ### Fixed

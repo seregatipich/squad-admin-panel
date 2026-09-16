@@ -1,7 +1,7 @@
 import { type DatabaseClient, enqueueAdminsCfgSyncForAllServers } from '@squad/db';
 import { auditLog, players, roles, sessions } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
-import { and, asc, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 
 /** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
@@ -12,7 +12,6 @@ export interface ExpiredRoleAssignment {
   roleId: string;
   roleExpiresAt: Date;
   roleComment: string | null;
-  roleLifecycleEventId: string | null;
 }
 
 export interface RoleExpiryAuditEntry {
@@ -160,7 +159,6 @@ export async function findExpiredAssignments(
       roleId: players.roleId,
       roleExpiresAt: players.roleExpiresAt,
       roleComment: players.roleComment,
-      roleLifecycleEventId: players.roleLifecycleEventId,
     })
     .from(players)
     .innerJoin(roles, eq(players.roleId, roles.id))
@@ -168,7 +166,6 @@ export async function findExpiredAssignments(
       and(
         isNotNull(players.roleId),
         isNotNull(players.roleExpiresAt),
-        isNull(players.roleLifecycleEventId),
         lte(players.roleExpiresAt, now),
         sql`NOT (${roles.name} = 'Owner' AND ${roles.isSystemRole} = true)`,
       ),
@@ -184,7 +181,6 @@ export async function findExpiredAssignments(
         roleId: row.roleId,
         roleExpiresAt: row.roleExpiresAt,
         roleComment: row.roleComment ?? null,
-        roleLifecycleEventId: row.roleLifecycleEventId ?? null,
       },
     ];
   });
@@ -206,7 +202,6 @@ export async function clearExpiredAssignments(
           roleId: null,
           roleExpiresAt: null,
           roleComment: null,
-          roleLifecycleEventId: null,
           updatedAt: now,
         })
         .where(
@@ -214,7 +209,6 @@ export async function clearExpiredAssignments(
             eq(players.id, assignment.playerId),
             eq(players.roleId, assignment.roleId),
             eq(players.roleExpiresAt, assignment.roleExpiresAt),
-            isNull(players.roleLifecycleEventId),
           ),
         )
         .returning({ id: players.id });

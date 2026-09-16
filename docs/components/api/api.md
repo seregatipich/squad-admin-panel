@@ -4,10 +4,10 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 ## Conventions
 
-- **Authentication**: браузер входит через единый центр на `bss.games`; панель получает одноразовый код в `GET /api/v1/auth/bss/callback` и устанавливает cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). `POST /api/v1/auth/logout` завершает только текущий сеанс панели, а `POST /api/v1/auth/logout-all` отзывает все сеансы пользователя в панели и на сайте. Для программного доступа остаётся `Authorization: Bearer sqp_…` (токен выпускается через `/api/v1/me/tokens`); cookie имеет приоритет, а маршруты управления токенами (`/api/v1/me/tokens*`) отклоняют Bearer-auth.
+- **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `GET /api/v1/auth/steam/callback`. `POST /api/v1/auth/logout` ends the current panel session; `POST /api/v1/auth/logout-all` ends every panel session of the player. As an alternative for programmatic access, requests may carry `Authorization: Bearer sqp_…` (an API token minted via `/api/v1/me/tokens`) — the cookie path takes precedence when both are present. Token-managing routes (`/api/v1/me/tokens*`) reject Bearer auth.
 - **Identity anchor**: `players.steam_id64` (bigint). There are no email/password accounts. All sessions and permissions are keyed on Steam ID.
 - **Authorisation**: every authed route declares `config.permissions: PermissionKey[]`. Anonymous → 401. Missing permission → 403.
-- **Session scope** (VIPSUB-5): вход пользователя без `panel_access` создаёт сеанс `sessions.scope = 'self_service'`. Такой сеанс действует только на маршрутах с `config.selfService: true`; на остальных [`plugins/auth.ts`](../../../apps/api/src/plugins/auth.ts) удаляет `req.user`/`req.session`, поэтому запрос получает 401. Ограничение снимается автоматически после получения актуального `panel_access`. Маршруты самообслуживания не принимают идентификатор игрока — субъект всегда `req.user.playerId`.
+- **Session scope** (VIPSUB-5): a Steam login whose role has no `panel_access` receives a session with `sessions.scope = 'self_service'`. Such a session is honoured only on routes that declare `config.selfService: true`; on every other route [`plugins/auth.ts`](../../../apps/api/src/plugins/auth.ts) drops `req.user`/`req.session`, so the request is treated as anonymous and answers 401. The gate lifts automatically as soon as the player actually holds `panel_access`. Self-service routes take **no** player id — the subject is always `req.user.playerId`.
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
 
@@ -15,13 +15,12 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/auth/bss/login` | Создаёт одноразовые `state` и PKCE verifier, хранит хеш состояния в Redis 300 секунд и перенаправляет на `bss.games/auth/sso/authorize`. | none |
-| GET | `/api/v1/auth/bss/callback` | Однократно потребляет `state`, обменивает код с PKCE, сопоставляет Steam ID с игроком и независимо перечитывает текущую роль панели. Создаёт `panel`-сеанс при `panel_access` или `self_service`-сеанс без него. Код, состояние и Steam ID не попадают в журнал запросов. | none |
-| POST | `/api/v1/auth/bss/logout-all` | Доверенный вызов сайта: проверяет текущий или следующий общий секрет и идемпотентно отзывает все сеансы указанного Steam ID в панели. | shared secret |
+| GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; issues a `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session for one without (VIPSUB-5 #171). The callback's query string is kept out of the automatic request log. | none |
 | GET | `/api/v1/auth/discord/login` | DISCORD-4 step 1. Generates a random `state` (base64url, 16 bytes), stores it in Redis (`discord-oauth-state:{state}`, TTL 300 s, bound to the caller's `player_id`) and a `__Host-discord-state` cookie, then redirects to `discord.com/oauth2/authorize` with `scope=identify`. 503 `oauth_not_configured` when `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` are unset. | session |
 | GET | `/api/v1/auth/discord/callback` | DISCORD-4 step 2. Requires `state` cookie ↔ query match **and** a Redis record owned by the caller (403 `state_mismatch`); a missing/expired record is 400 `state_expired`; the record is consumed single-use. Exchanges the code (form POST to `discord.com/api/oauth2/token`, HTTP Basic credentials), reads `users/@me`, and inserts `player_discord_links`. 409 `already_linked_self` when the player already has a link, 409 `already_linked_other` when the Discord account belongs to another player, 502 `discord_exchange_failed` when Discord rejects the exchange. On success writes an `integration.discord.link` audit row and redirects to `/players/{playerId}`. | session |
-| POST | `/api/v1/auth/logout` | Отзывает текущий сеанс панели и очищает `__Host-sid`. | session |
-| POST | `/api/v1/auth/logout-all` | Сначала запрашивает отзыв всех сеансов сайта, затем независимо от результата отзывает все локальные сеансы панели и очищает cookie. Возвращает безопасный адрес сайта и признак `remote_ok`; повторяет только сетевой/5xx сбой один раз. | session |
+| POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
+| POST | `/api/v1/auth/logout-all` | Revoke every panel session of the caller and clear `__Host-sid`. Returns `{ ok: true }`. Rate-limited to 5 per minute. | session |
 | GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
 | GET | `/api/v1/me/names` | Own names: `{ canonical_name, persona_name, history: [{ name, first_seen_at, last_seen_at }] }`. History comes from `player_name_history`, newest `last_seen_at` first, capped at 50 rows. Deliberately **not** folded into `/api/v1/me`, which the panel's top nav fetches on every page. Panel-only (no `selfService`). | session |
 | GET | `/api/v1/me/sessions` | List own **unexpired** sessions (`expires_at > now()`); `current: true` on the request's session, which is always returned first, the rest ordered by `last_activity_at` descending. | session |
@@ -60,116 +59,6 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 | POST | `/api/v1/setup/complete` | Owner-only finalization. Body: `{ organization_name }`. Sets `panel_meta.setup_completed=true` and persists the organization name. Returns 410 when setup is already complete, 401 without a session, and 403 when the session is not Owner. | Owner session |
 
 ## Service integrations
-
-### VIP lifecycle
-
-| Method | Path | Purpose | Permissions |
-|---|---|---|---|
-| POST | `/api/v1/integrations/vip/tier-role` | Получение авторитетного `tier_code` по `{ role_id }`; необязательный `tier` проверяет точную пару без игрока и записи. | только HMAC |
-| POST | `/api/v1/integrations/vip/preflight` | Подписанная проверка игрока, VIP-роли, владельца текущего назначения и непустого снимка серверов до покупки. | только HMAC |
-| POST | `/api/v1/integrations/vip/lifecycle` | Подписанное назначение, продление, истечение или возврат VIP-роли от `vip-user-service`. | только HMAC |
-| POST | `/api/v1/integrations/vip/status` | Подписанное агрегированное состояние доставки принятого события по `{ event_id }`. | только HMAC |
-
-Все четыре маршрута выключены без `VIP_LIFECYCLE_WEBHOOK_SECRET` и используют
-одни заголовки:
-
-- `x-vip-timestamp`: ISO 8601 с часовым поясом в окне ±300 секунд от времени
-  API;
-- `x-vip-signature`: `sha256=<hex>` — HMAC-SHA256 от
-  `<x-vip-timestamp>.<canonical-json-body>` с ключом
-  `VIP_LIFECYCLE_WEBHOOK_SECRET`.
-
-Дата вне окна, дата без часового пояса, неверный формат и неверная подпись
-одинаково возвращают `401 { "error": "invalid_signature" }`.
-
-`tier` в строгом контракте — UUID строки `vip_tiers.id`, а не отображаемое имя.
-Read-only `tier-role` принимает `role_id` и необязательный UUID `tier`, затем возвращает точное
-`200 { "ok": true, "tier_code": "<vip_tiers.id>", "role_id": "<roles.id>" }`.
-Пустой подписанный объект разрешает первичную настройку и возвращает единственную активную
-безопасную связку роли и уровня; отсутствие единственности даёт `409 vip_binding_not_unique`.
-Без `tier` маршрут служит подписанным источником авторитетного кода для выпуска
-producer. Неактивная, небезопасная или неоднозначная указанная роль даёт `404 role_not_vip`, а
-переданный несовпавший UUID — `409 tier_role_mismatch`. До cutover preflight и lifecycle
-ещё принимают прежнюю строковую метку, но в ответе и сохранённом событии всегда
-возвращают авторитетный `tier_code`; после durable cutover требуется точный UUID.
-
-Lifecycle принимает:
-
-```json
-{
-  "event_id": "purchase-123",
-  "event_type": "vip.purchased",
-  "player_id": "0190abcd-0000-7000-8000-000000000001",
-  "role_id": "0190abcd-0000-7000-8000-000000000002",
-  "tier": "0190abcd-0000-7000-8000-000000000003",
-  "purchase_id": "purchase-123",
-  "expires_at": "2030-01-02T03:04:05.000Z",
-  "revision": 17
-}
-```
-
-`event_type`: `vip.purchased`, `vip.extended`, `vip.expired` или
-`vip.refunded`. Для покупки и продления нужен будущий `expires_at`; снятие
-разрешено только владельцу текущего внешнего назначения. `discord_id` временно
-допускается подписанной схемой, но панель его не использует. Положительная
-`revision` монотонна для игрока; до завершения перехода она необязательна только
-при `VIP_LIFECYCLE_REQUIRE_REVISION=false`.
-
-Успешный первый приём возвращает `202` с `action` и `enqueued`. Это означает
-«событие и снимок outbox зафиксированы», а не «роль уже доставлена на серверы».
-Тот же `event_id` с тем же телом возвращает идемпотентный `200`, с другим телом
-— `409 event_body_conflict`. Другой `event_id` с уже занятой revision получает
-`409 revision_conflict`. Большая revision помечает прежнее событие как
-`superseded`; поздняя меньшая revision сразу записывается с таким действием и
-не меняет роль или outbox.
-
-Preflight, lifecycle (включая идемпотентный повтор) и status возвращают
-`tier_code`. Это авторитетный UUID `vip_tiers.id`, который producer сохраняет
-в операции доставки; смена внешней конфигурации не должна менять повторяемое
-тело уже созданной операции.
-
-Preflight и lifecycle не перезаписывают ручную роль или активную внутреннюю
-`vip_subscriptions`. Конфликты владельца возвращаются безопасными кодами
-`role_conflict`, `manual_role_conflict` или `vip_subscription_conflict`; пустой
-снимок целей — `no_target_servers`. В снимок входят только контейнерные серверы
-(`runtime='container'`): внешний сервер (`runtime='external'`) не получает
-`Admins.cfg` от панели и в `servers_total` не считается. Панель повторяет эти
-проверки и получает снимок серверов заново внутри lifecycle-транзакции.
-
-Status принимает `{ "event_id": "purchase-123" }`. Неизвестное событие даёт
-`404 event_not_found`; успешный ответ имеет вид:
-
-```json
-{
-  "ok": true,
-  "event_id": "purchase-123",
-  "tier_code": "0190abcd-0000-7000-8000-000000000003",
-  "state": "applying",
-  "action": "assigned",
-  "servers_total": 2,
-  "servers_applied": 1,
-  "servers_pending": 1,
-  "error_codes": ["timeout"]
-}
-```
-
-`state` принимает `accepted`, `applying`, `applied`, `failed` или
-`superseded`. `applied` требует непустой коррелированный снимок и `applied_at`
-у каждой его строки. `unavailable` и `timeout` остаются `applying`, а
-`rejected` и `invalid_result` дают `failed`. Результат `server_removed`
-считается успешно применённой целью. `superseded` имеет приоритет над поздним
-завершением старого outbox и при наличии победителя добавляет
-`superseded_by_event_id`. Событие и агрегат outbox читаются одним снимком
-PostgreSQL, поэтому commit новой revision между отдельными чтениями не может
-дать старому событию ложный терминальный `applied`.
-
-Ответ status содержит только действие, агрегированные счётчики и закрытый
-список кодов. SteamID64, EOS, путь или содержимое файла и сырой ответ RCON не
-возвращаются.
-
-Граница владения: `vip-user-service` отвечает за кошелёк, идемпотентность
-покупки и экономическую компенсацию. Панель отвечает за роль,
-`role_expires_at` и доставку `Admins.cfg`. Discord-роль находится вне этого API.
 
 ### Team balancer proposals
 

@@ -50,28 +50,7 @@ Step-by-step:
    - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
    - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
 5. После файловой операции worker дважды читает `servers.status`. Стабильно неживой сервер получает `file_ready_for_restart`. Для `running|starting` отправляется `AdminReloadServerConfig` с `request_id=admins-cfg-sync:<outbox_id>` и принимается только точный валидный `ok=true` результат. Переход `stopped -> running` включает RCON-ветку, а `running -> stopped` завершается как готовый файл.
-6. Успешный итог сначала сохраняется в PostgreSQL (`applied_at` и allowlisted `reload_outcome`). Затем Lua-скрипт атомарно выполняет `XACK` и точный `XDEL`. Уже applied replay и устойчивый lifecycle `superseded` пропускают файл/RCON и выполняют только очистку. Ошибка сохраняет безопасный код и оставляет запись в PEL без `XDEL`.
-
-### Подтверждение VIP lifecycle
-
-Каждая строка снимка VIP-события хранит `correlation_id=event_id`, время
-`relayed_at`, Redis `stream_id`, устойчивое `applied_at`, безопасный
-`last_error` и нормализованный `reload_outcome`. API создаёт эти строки в той
-же PostgreSQL-транзакции, что роль и lifecycle; Redis relay запускается только
-после commit. Поэтому ответ lifecycle `202` подтверждает приём, но не доставку.
-
-Подписанный `POST /api/v1/integrations/vip/status` агрегирует только эти поля:
-не начавшийся relay — `accepted`, relay/частичный итог/временные
-`unavailable|timeout` — `applying`, полный непустой снимок с `applied_at` —
-`applied`, постоянные `rejected|invalid_result` — `failed`. Терминальный
-`server_removed` входит в число применённых серверов. Если lifecycle уже
-помечен `superseded`, это состояние имеет приоритет над агрегатом outbox:
-позднее подтверждение старой строки не доказывает применение устаревшего
-желания.
-Lifecycle и агрегат читаются одним SQL-снимком, без READ COMMITTED-разрыва
-между отдельными запросами.
-Ни outbox, ни status не сохраняют и не отдают SteamID64, EOS, путь,
-содержимое файла или сырой ответ RCON.
+6. Успешный итог сначала сохраняется в PostgreSQL (`applied_at` и allowlisted `reload_outcome`). Затем Lua-скрипт атомарно выполняет `XACK` и точный `XDEL`. Уже applied replay пропускает файл/RCON и выполняет только очистку. Ошибка сохраняет безопасный код и оставляет запись в PEL без `XDEL`.
 
 ## Drift detection flow (every 5 min)
 

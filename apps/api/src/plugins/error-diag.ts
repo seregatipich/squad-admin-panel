@@ -8,12 +8,6 @@ const MESSAGE_TRUNCATE_LIMIT = 200;
 let unhandledRejectionListenerAttached = false;
 
 const MAX_CAUSE_CHAIN_DEPTH = 5;
-const SITE_VIP_CONSTRAINTS = [
-  'site_vip_binding_safety_guard',
-  'site_vip_binding_duplicate_role_guard',
-  'site_vip_role_safety_guard',
-  'site_vip_role_permissions_guard',
-] as const;
 
 /**
  * drizzle-orm wraps the driver error, so the postgres `23514` raised by the
@@ -40,18 +34,6 @@ export const errorDiagPlugin = fp(
     app.setErrorHandler((err: FastifyError, req, reply) => {
       if (isConstraintViolation(err, 'players_last_owner_guard')) {
         reply.code(409).send({ error: 'cannot_remove_last_owner' });
-        return;
-      }
-      if (isConstraintViolation(err, 'players_vip_lifecycle_owner_guard')) {
-        reply.code(409).send({ error: 'vip_lifecycle_required' });
-        return;
-      }
-      if (isConstraintViolation(err, 'vip_lifecycle_catalog_guard')) {
-        reply.code(409).send({ error: 'vip_lifecycle_owned' });
-        return;
-      }
-      if (SITE_VIP_CONSTRAINTS.some((name) => isConstraintViolation(err, name))) {
-        reply.code(409).send({ error: 'site_vip_binding_protected' });
         return;
       }
       const replyStatus = reply.statusCode && reply.statusCode >= 400 ? reply.statusCode : 0;

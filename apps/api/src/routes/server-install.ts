@@ -1,9 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  type DatabaseClient,
-  protectAdminsCfgManagedSegment,
-  withAdminsCfgServerLock,
-} from '@squad/db';
+import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import {
@@ -141,9 +137,7 @@ async function seedConfigs(
       });
     };
     if (file === 'Admins.cfg') {
-      await withAdminsCfgServerLock(app.db, serverId, async (tx) =>
-        seedFile(tx, await protectAdminsCfgManagedSegment(tx, content)),
-      );
+      await withAdminsCfgServerLock(app.db, serverId, (tx) => seedFile(tx, content));
     } else {
       await seedFile(app.db, content);
     }

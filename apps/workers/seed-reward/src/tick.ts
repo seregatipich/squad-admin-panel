@@ -190,7 +190,6 @@ export async function reconcileSeedRewardAssignments(
         currentRoleId: players.roleId,
         roleExpiresAt: players.roleExpiresAt,
         roleComment: players.roleComment,
-        roleLifecycleEventId: players.roleLifecycleEventId,
         seedSeconds: sql<number>`COALESCE(SUM(${playerDailyPresence.seedSeconds}), 0)::bigint`,
       })
       .from(players)
@@ -207,7 +206,6 @@ export async function reconcileSeedRewardAssignments(
     const changes: SeedRewardChange[] = [];
     for (const state of states) {
       if (ownerRole && state.currentRoleId === ownerRole.id) continue;
-      if (state.roleLifecycleEventId !== null) continue;
       const seedSeconds = Number(state.seedSeconds);
       const qualifies = seedSeconds >= thresholdSeconds;
       const kind: SeedRewardChangeKind | null =
@@ -228,16 +226,9 @@ export async function reconcileSeedRewardAssignments(
           roleId: afterRoleId,
           roleExpiresAt: null,
           roleComment: null,
-          roleLifecycleEventId: null,
           updatedAt: now,
         })
-        .where(
-          and(
-            eq(players.id, state.playerId),
-            currentRolePredicate,
-            isNull(players.roleLifecycleEventId),
-          ),
-        )
+        .where(and(eq(players.id, state.playerId), currentRolePredicate))
         .returning({ id: players.id });
       if (!updated) continue;
 
