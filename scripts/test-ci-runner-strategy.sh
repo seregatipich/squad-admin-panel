@@ -40,7 +40,7 @@ grep -Fq 'branches: [master, dev]' "$ci_workflow" ||
 HOSTED_IMAGE='ubuntu-24.04'
 DEPLOY_RUNNER='[self-hosted, tk104-deploy]'
 
-for job in branch-guard node go docker; do
+for job in branch-guard node-lint node-test node-scripts node go docker; do
   block=$(job_block "$ci_workflow" "$job")
   [ -n "$block" ] || fail "required ci job '$job' is missing"
   printf '%s\n' "$block" | grep -Fxq "    runs-on: ${HOSTED_IMAGE}" ||
@@ -74,9 +74,32 @@ if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*ubuntu-' "$deploy_workflow"; then
   fail 'production deploy must not move to a GitHub-hosted runner'
 fi
 
+node_test_block=$(job_block "$ci_workflow" node-test)
+printf '%s\n' "$node_test_block" | grep -Fq 'timeout-minutes: 45' ||
+  fail 'node-test timeout does not cover a cold hosted full-suite run'
+for shard in api web packages; do
+  printf '%s\n' "$node_test_block" | grep -Fxq "          - shard: ${shard}" ||
+    fail "node-test does not run the '${shard}' test slice"
+done
+printf '%s\n' "$node_test_block" | grep -Fq 'run: bash scripts/ci-test-shard.sh ${{ matrix.shard }}' ||
+  fail 'node-test does not run its slice through ci-test-shard.sh'
+
+# `node` is the required status check and the success signal deploy waits for,
+# so it must fail unless every JavaScript job it stands for succeeded — including
+# when one of them was cancelled or skipped.
 node_block=$(job_block "$ci_workflow" node)
-printf '%s\n' "$node_block" | grep -Fq 'timeout-minutes: 45' ||
-  fail 'node timeout does not cover a cold hosted full-suite run'
+printf '%s\n' "$node_block" | grep -Fxq '    needs: [node-lint, node-test, node-scripts]' ||
+  fail 'the node gate does not wait for every JavaScript job'
+printf '%s\n' "$node_block" | grep -Fxq '    if: always()' ||
+  fail 'the node gate is skipped instead of failing when a JavaScript job fails'
+printf '%s\n' "$node_block" | grep -Fq '"${result}" != success' ||
+  fail 'the node gate does not reject a non-success JavaScript job'
+
+node_scripts_block=$(job_block "$ci_workflow" node-scripts)
+printf '%s\n' "$node_scripts_block" | grep -Fq "if: steps.mutation.outputs.run == 'true'" ||
+  fail 'Stryker is not gated on a shared-config change'
+printf '%s\n' "$node_scripts_block" | grep -Fq -- '-- packages/shared-config' ||
+  fail 'the Stryker gate does not diff packages/shared-config'
 
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
@@ -103,14 +126,16 @@ branch_guard=$(job_block "$ci_workflow" branch-guard)
 printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
   fail 'branch-guard does not execute this regression test'
 
-node_block=$(job_block "$ci_workflow" node)
-printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
-  fail 'Postgres service may leak its image-declared anonymous volume'
-printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /data:rw,size=128m' ||
-  fail 'Redis service may leak its image-declared anonymous volume'
-if printf '%s\n' "$node_block" | grep -Eq 'docker (system|volume|builder) prune'; then
-  fail 'node job contains a broad Docker cleanup'
-fi
+for job in node-test node-scripts; do
+  block=$(job_block "$ci_workflow" "$job")
+  printf '%s\n' "$block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
+    fail "${job}: Postgres service may leak its image-declared anonymous volume"
+  printf '%s\n' "$block" | grep -Fq -- '--tmpfs /data:rw,size=128m' ||
+    fail "${job}: Redis service may leak its image-declared anonymous volume"
+  if printf '%s\n' "$block" | grep -Eq 'docker (system|volume|builder) prune'; then
+    fail "${job} contains a broad Docker cleanup"
+  fi
+done
 
 docker_block=$(job_block "$ci_workflow" docker)
 printf '%s\n' "$docker_block" | grep -Fq 'CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}' ||

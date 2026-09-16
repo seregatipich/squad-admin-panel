@@ -87,11 +87,13 @@ environment, or any workflow selects a runner group.
 
 - **`ci` runs on GitHub-hosted VMs.** The workflow runs only for trusted `dev`/`master`
   pushes and explicit dispatches — never `pull_request`. Superseded runs are cancelled.
-  The `node` job's PostgreSQL/Redis service containers publish to Docker-assigned
-  ports; `Resolve service ports` exports those values through both normal and `TEST_*`
-  variables. The `go` job installs the pinned Go toolchain through SHA-pinned
-  `actions/setup-go` and runs the race detector natively. The `docker` job builds every
-  production image and executes the backup/restore round trip.
+  The JavaScript checks run in parallel (`node-lint`, the `api`/`web`/`packages` slices
+  of `node-test`, `node-scripts`) behind the single `node` gate. Their PostgreSQL/Redis
+  service containers publish to Docker-assigned ports; `Resolve service ports` exports
+  those values through both normal and `TEST_*` variables. The `go` job installs the
+  pinned Go toolchain through SHA-pinned `actions/setup-go` and runs the race detector
+  natively. The `docker` job, running alongside the tests, builds every production
+  image and executes the backup/restore round trip.
 - **`deploy-tk104` runs on the repository's own runner on tk104.** It is registered
   with the label `tk104-deploy`, runs as the unprivileged `gh-runner` account without
   Docker access, and reaches the deploy account over SSH. Every job binds the

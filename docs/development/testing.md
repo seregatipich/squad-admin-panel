@@ -120,7 +120,7 @@ DATABASE_URL=<...> pnpm test:cov
 DATABASE_URL=<...> pnpm --filter @squad/api exec vitest run --coverage
 ```
 
-CI runs `pnpm test:cov` in the `node` job and uploads `**/coverage/lcov.info` as the `coverage-<sha>` artifact (retention: 7 days).
+CI runs `pnpm test:cov` split into the `api`, `web` and `packages` slices of the `node-test` job (`scripts/ci-test-shard.sh`) and uploads each slice's `**/coverage/lcov.info` as the `coverage-<sha>-<slice>` artifact (retention: 7 days).
 
 Threshold values reflect the measured baseline at the time coverage was introduced, minus a 5 pp safety margin. They are intentional floors, not targets — ratchet them upward as new tests are added.
 

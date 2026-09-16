@@ -2,10 +2,11 @@
 # test-cov-complete.sh — fail if a workspace package's vitest suite is not run by
 # `pnpm test:cov`.
 #
-# `test:cov` carries a hand-written `--filter` list, and CI's only JS test step
-# runs it. A package added without being appended to that list therefore never
-# runs in CI: it can be merged with a red suite while `dev` stays green. That is
-# how `worker-scheduler` and `worker-config-sync` sat broken behind a green
+# `test:cov` carries a hand-written `--filter` list, and CI's JS test jobs run
+# exactly that list, split into slices by scripts/ci-test-shard.sh. A package
+# added without being appended to that list therefore never runs in CI: it can
+# be merged with a red suite while `dev` stays green. That is how
+# `worker-scheduler` and `worker-config-sync` sat broken behind a green
 # dashboard (#229) — 16 of 28 suites were invisible.
 #
 # This check keeps the list honest. When it fails, add the named package(s) to
