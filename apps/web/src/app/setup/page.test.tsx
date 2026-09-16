@@ -39,15 +39,14 @@ describe('SetupPage', () => {
   );
 
   it(
-    'offers the BSS sign-in while nobody has claimed ownership',
+    'offers the Steam sign-in while nobody has claimed ownership',
     async () => {
       stubStatus({ setup_completed: false, first_owner_claimed: false });
       render(<SetupPage />);
 
-      const link = await screen.findByRole('link', { name: 'Войти через BSS' });
-      // Полная навигация документа, а не маршрутизатор: это начало SSO-обмена.
-      expect(link).toHaveAttribute('href', '/api/v1/auth/bss/login');
-      expect(link).toHaveClass('h-11');
+      const link = await screen.findByRole('link', { name: 'Войти через Steam' });
+      // Полная навигация документа, а не маршрутизатор: это начало OpenID-обмена.
+      expect(link).toHaveAttribute('href', '/api/v1/auth/steam/login');
       expect(screen.queryByRole('button', { name: 'Завершить настройку' })).toBeNull();
     },
     TEST_TIMEOUT_MS,

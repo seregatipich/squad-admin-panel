@@ -3,16 +3,9 @@ import {
   markAdminsCfgSyncApplied,
   relayAdminsCfgSyncOutbox,
 } from '@squad/db';
-import {
-  adminsCfgSyncOutbox,
-  panelMeta,
-  players,
-  roles,
-  servers,
-  vipLifecycleEvents,
-} from '@squad/db/schema';
+import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { rconCommandResultKey } from '@squad/shared-types';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -301,29 +294,6 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
     expect(await redis.xlen(`rcon:commands:${serverId}`)).toBe(0);
   });
 
-  it('deletes a durable superseded entry without file or RCON work', async () => {
-    const eventId = `evt-${uuidv7()}`;
-    await db.insert(vipLifecycleEvents).values({
-      eventId,
-      eventType: 'vip.expired',
-      action: 'superseded',
-      payload: {},
-    });
-    const { outboxId, entry } = await relayedEntry(eventId);
-    const fakeBridge = bridge();
-
-    await handleAdminsCfgSyncEntry({ db, redis, bridge: fakeBridge, log: logger() }, entry);
-
-    expect(fakeBridge.fileRead).not.toHaveBeenCalled();
-    expect(await redis.xlen(entry.streamName)).toBe(0);
-    expect(await redis.xlen(`rcon:commands:${serverId}`)).toBe(0);
-    const [stored] = await db
-      .select({ appliedAt: adminsCfgSyncOutbox.appliedAt })
-      .from(adminsCfgSyncOutbox)
-      .where(eq(adminsCfgSyncOutbox.id, outboxId));
-    expect(stored?.appliedAt).toBeNull();
-  });
-
   it('serializes concurrent deliveries through the final atomic write per server', async () => {
     await db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, serverId));
     const roleId = uuidv7();
@@ -390,47 +360,5 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
 
     expect(secondWroteBeforeRelease).toBe(false);
     expect(fileContent).not.toContain(eosId);
-  });
-
-  it('removes duplicate markers and authority lines outside the managed segment in strict mode', async () => {
-    await db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, serverId));
-    await db.update(panelMeta).set({ vipLifecycleStrict: true }).where(eq(panelMeta.id, 1));
-    const staleEos = `stale-${uuidv7()}`;
-    const bareEos = `bare-${uuidv7()}`;
-    let fileContent = [
-      '//SQUAD-PANEL BEGIN',
-      `Admin=${staleEos}:VIP`,
-      '//SQUAD-PANEL END',
-      `Admin=${bareEos}:VIP`,
-      'Group=InjectedVip:reserve',
-      '//SQUAD-PANEL BEGIN',
-      `Admin=duplicate-${staleEos}:VIP`,
-      '// orphan marker',
-      'Manual=preserved',
-    ].join('\n');
-    const fakeBridge = {
-      fileRead: vi.fn().mockImplementation(async () => ({ content: fileContent })),
-      fileAtomicWrite: vi.fn().mockImplementation(async ({ content }: { content: string }) => {
-        fileContent = content;
-        return { written: true };
-      }),
-    } as never;
-
-    try {
-      const { entry } = await relayedEntry();
-      await handleAdminsCfgSyncEntry({ db, redis, bridge: fakeBridge, log: logger() }, entry);
-
-      expect(fileContent).toContain('Manual=preserved');
-      expect(fileContent).not.toContain(staleEos);
-      expect(fileContent).not.toContain(bareEos);
-      expect(fileContent).not.toContain('Group=InjectedVip');
-      expect(fileContent.match(/\/\/SQUAD-PANEL BEGIN/g)).toHaveLength(1);
-      expect(fileContent.match(/\/\/SQUAD-PANEL END/g)).toHaveLength(1);
-    } finally {
-      await db.transaction(async (tx) => {
-        await tx.execute(sql`SELECT set_config('squad.vip_lifecycle_fence_rollback', 'on', true)`);
-        await tx.update(panelMeta).set({ vipLifecycleStrict: false }).where(eq(panelMeta.id, 1));
-      });
-    }
   });
 });

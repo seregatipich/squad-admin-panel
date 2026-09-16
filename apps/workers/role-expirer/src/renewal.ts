@@ -2,7 +2,6 @@ import {
   applyVipGrant,
   type DatabaseClient,
   enqueueAdminsCfgSyncForAllServers,
-  isVipLifecycleFenceViolation,
   nextRenewalAfter,
 } from '@squad/db';
 import {
@@ -40,8 +39,6 @@ export interface DueSubscription {
 /** Why a subscription could not be renewed and was therefore ended. */
 export type RenewalFailureReason =
   | 'insufficient_balance'
-  | 'vip_lifecycle_owned'
-  | 'vip_lifecycle_required'
   | 'role_conflict'
   | 'role_permanent'
   | 'player_not_found';
@@ -61,8 +58,6 @@ export interface ChargeRenewalInput {
 export type ChargeRenewalResult =
   | { status: 'ok'; balance: number; roleExpiresAt: Date; enqueued: number }
   | { status: 'insufficient_balance'; balance: number }
-  | { status: 'vip_lifecycle_owned' }
-  | { status: 'vip_lifecycle_required' }
   | { status: 'role_conflict' }
   | { status: 'role_permanent' }
   | { status: 'player_not_found' }
@@ -305,7 +300,6 @@ export async function chargeRenewal(
     return await chargeRenewalTx(db, input);
   } catch (err) {
     if (err instanceof SubscriptionVanishedError) return { status: 'not_active' };
-    if (isVipLifecycleFenceViolation(err)) return { status: 'vip_lifecycle_required' };
     throw err;
   }
 }

@@ -1,34 +1,6 @@
 import type { AdminEntry, ClanPriorityEntry, RoleEntry } from '@squad/shared-config/admins-config';
-import { buildManagedSegmentBody, spliceManagedSegment } from '@squad/shared-config/admins-config';
 import { sql } from 'drizzle-orm';
 import type { DatabaseClient } from './client.js';
-
-const ADMINS_CFG_MARKERS = ['//SQUAD-PANEL BEGIN', '//SQUAD-PANEL END'] as const;
-
-/** Remove every managed block plus any authority line outside a complete block. */
-export function stripAdminsCfgManagedAuthority(content: string): string {
-  const lines = content.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g) ?? [];
-  const kept: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const body = lines[index]?.replace(/[\r\n]+$/, '') ?? '';
-    if (body.includes(ADMINS_CFG_MARKERS[0])) {
-      let completeEnd = -1;
-      for (let candidate = index; candidate < lines.length; candidate += 1) {
-        if (lines[candidate]?.includes(ADMINS_CFG_MARKERS[1])) {
-          completeEnd = candidate;
-          break;
-        }
-      }
-      if (completeEnd >= index) index = completeEnd;
-      continue;
-    }
-    if (body.includes(ADMINS_CFG_MARKERS[1]) || /^\s*(?:Admin|Group)\s*=/i.test(body)) {
-      continue;
-    }
-    kept.push(lines[index] ?? '');
-  }
-  return kept.join('');
-}
 
 export type AdminsCfgSyncTransaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0];
 
@@ -46,22 +18,6 @@ interface AdminSqlRow extends Record<string, unknown> {
 interface ClanPrioritySqlRow extends Record<string, unknown> {
   eos_id: string;
   clan_name: string;
-}
-
-interface VipLifecycleStrictSqlRow extends Record<string, unknown> {
-  strict: boolean;
-}
-
-export async function isVipLifecycleStrict(
-  db: Pick<AdminsCfgSyncTransaction, 'execute'>,
-): Promise<boolean> {
-  const rows = (await db.execute<VipLifecycleStrictSqlRow>(sql`
-    SELECT vip_lifecycle_strict AS strict
-      FROM panel_meta
-     WHERE id = 1
-       FOR SHARE
-  `)) as unknown as VipLifecycleStrictSqlRow[];
-  return rows[0]?.strict === true;
 }
 
 /** Serialize every Panel Admins.cfg writer for one server across processes. */
@@ -131,20 +87,4 @@ export async function snapshotRolesAndAdmins(
       clanName: row.clan_name,
     })),
   };
-}
-
-/**
- * After the durable VIP cutover, the database is the only source for the
- * managed Admins.cfg segment. Editors and restores may still supply the
- * surrounding unmanaged bytes, but never replay an older managed projection.
- */
-export async function protectAdminsCfgManagedSegment(
-  db: AdminsCfgSyncTransaction,
-  proposedContent: string,
-): Promise<string> {
-  if (!(await isVipLifecycleStrict(db))) return proposedContent;
-
-  const snapshot = await snapshotRolesAndAdmins(db);
-  const unmanagedContent = stripAdminsCfgManagedAuthority(proposedContent);
-  return spliceManagedSegment(unmanagedContent, buildManagedSegmentBody(snapshot).body);
 }

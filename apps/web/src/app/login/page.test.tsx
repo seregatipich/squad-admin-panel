@@ -5,28 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import LoginPage from './page';
 
-let hrefSpy: ReturnType<typeof vi.fn>;
-let currentSearch = '';
-
 beforeEach(() => {
   // /api/v1/me returns 401 so the page stays on the login screen.
   vi.stubGlobal(
     'fetch',
     vi.fn(() => Promise.resolve(new Response('unauthorized', { status: 401 }))),
   );
-  hrefSpy = vi.fn();
-  currentSearch = '';
-  Object.defineProperty(window, 'location', {
-    configurable: true,
-    value: {
-      get search() {
-        return currentSearch;
-      },
-      set href(value: string) {
-        hrefSpy(value);
-      },
-    },
-  });
+  window.history.replaceState({}, '', '/login');
 });
 
 afterEach(() => {
@@ -35,32 +20,25 @@ afterEach(() => {
 });
 
 describe('LoginPage', () => {
-  it('automatically begins BSS login once when no local session exists', async () => {
+  it('renders the sign-in call to action in Russian', async () => {
     render(<LoginPage />);
     expect(screen.getByRole('heading', { name: 'Squad Admin Panel' })).toBeInTheDocument();
-    await waitFor(() => expect(hrefSpy).toHaveBeenCalledWith('/api/v1/auth/bss/login'));
-    expect(hrefSpy).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('link', { name: /Steam/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
+    expect(screen.queryByText(/единственный способ входа/i)).not.toBeInTheDocument();
   });
 
-  it('does not loop after an SSO error and offers one manual retry', async () => {
-    currentSearch = '?error=sso_failed';
+  it('localizes the auth_failed error banner', async () => {
+    window.history.replaceState({}, '', '/login?error=auth_failed');
     render(<LoginPage />);
     await waitFor(() =>
       expect(
-        screen.getByText('Не удалось войти через bss.games. Повторите вход.'),
+        screen.getByText('Не удалось проверить вход через Steam. Попробуйте ещё раз.'),
       ).toBeInTheDocument(),
     );
-    expect(hrefSpy).not.toHaveBeenCalled();
-    expect(screen.getByRole('link', { name: 'Повторить вход' })).toHaveAttribute(
-      'href',
-      '/api/v1/auth/bss/login',
-    );
-    expect(screen.queryByRole('link', { name: /Steam/i })).not.toBeInTheDocument();
   });
 
   it('interpolates the Steam ID into the not_authorized error', async () => {
-    currentSearch = '?error=not_authorized&steam_id64=76561198000000001';
+    window.history.replaceState({}, '', '/login?error=not_authorized&steam_id64=76561198000000001');
     render(<LoginPage />);
     await waitFor(() =>
       expect(
@@ -69,16 +47,6 @@ describe('LoginPage', () => {
         ),
       ).toBeInTheDocument(),
     );
-    expect(hrefSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns an already authenticated session to the dashboard', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(new Response('{}', { status: 200 }));
-
-    render(<LoginPage />);
-
-    await waitFor(() => expect(hrefSpy).toHaveBeenCalledWith('/dashboard'));
-    expect(hrefSpy).toHaveBeenCalledTimes(1);
   });
 
   it('does not render a language selector', () => {

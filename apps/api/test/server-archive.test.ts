@@ -4,7 +4,7 @@ import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { softDeleteServer } from '../src/lib/server-delete.js';
-import { setIsolatedTestVipLifecycleStrict, testSteamId } from './helpers/snapshot-restore.js';
+import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
   type FakeBridge,
@@ -232,45 +232,6 @@ describe('POST /api/v1/servers/archive/:id/restore', () => {
 });
 
 describe('POST /api/v1/servers/:newId/restore-configs', () => {
-  it('does not restore archived Admin/Group authority after the durable cutover', async () => {
-    const staleEos = 'archived-stale-eos';
-    const archived = await seedAndSoftDelete(
-      h,
-      'archived-strict-overlay',
-      new Map([
-        [
-          'Admins.cfg',
-          `//SQUAD-PANEL BEGIN\nAdmin=${staleEos}:VIP\n//SQUAD-PANEL END\nGroup=Injected:reserve\nManual=preserved`,
-        ],
-      ]),
-    );
-    const newId = uuidv7();
-    await h.db.insert(servers).values({
-      id: newId,
-      displayName: 'Strict restore target',
-      slug: 'strict-overlay-target',
-      status: 'ready',
-    });
-    await setIsolatedTestVipLifecycleStrict(h.db, true);
-
-    const response = await h.app.inject({
-      method: 'POST',
-      url: `/api/v1/servers/${newId}/restore-configs`,
-      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
-      payload: { from_archive_id: archived.id },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const admins = h.bridge.files
-      .get(`/var/lib/squad-panel/configs/${newId}/ServerConfig/Admins.cfg`)
-      ?.toString();
-    expect(admins).toContain('Manual=preserved');
-    expect(admins).not.toContain(staleEos);
-    expect(admins).not.toContain('Group=Injected');
-    expect(admins?.match(/\/\/SQUAD-PANEL BEGIN/g)).toHaveLength(1);
-    expect(admins?.match(/\/\/SQUAD-PANEL END/g)).toHaveLength(1);
-  });
-
   it('overlays backup configs (skipping Rcon.cfg) and writes new config_versions rows', async () => {
     const archived = await seedAndSoftDelete(h, 'archived-overlay');
 

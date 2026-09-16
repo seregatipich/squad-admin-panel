@@ -44,23 +44,19 @@ async function main() {
   const adminRows = await sql`
     INSERT INTO players (
       steam_id64, canonical_name, canonical_name_normalized,
-      role_id, role_expires_at, role_comment, role_lifecycle_event_id
+      role_id, role_expires_at, role_comment
     )
     VALUES (
       ${ADMIN_STEAM_ID.toString()}, 'Local Test Admin', 'local test admin',
-      ${ownerRoleId}, NULL, NULL, NULL
+      ${ownerRoleId}, NULL, NULL
     )
     ON CONFLICT (steam_id64) DO UPDATE SET
       role_id = ${ownerRoleId},
       role_expires_at = NULL,
-      role_comment = NULL,
-      role_lifecycle_event_id = NULL
-    WHERE players.role_lifecycle_event_id IS NULL
+      role_comment = NULL
     RETURNING id
   `;
-  if (!adminRows[0]) {
-    throw new Error('vip_lifecycle_owned: demo admin role is owned by external VIP lifecycle');
-  }
+  if (!adminRows[0]) throw new Error('admin player upsert returned no row');
   const adminId = adminRows[0].id as string;
 
   await sql`

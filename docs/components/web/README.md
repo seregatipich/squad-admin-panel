@@ -5,7 +5,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 ## Responsibilities
 
 - Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
-- Единый вход через `bss.games`, локальный и глобальный выход; `/me` для самообслуживания игроков без `panel_access`.
+- Auth screens: Steam login button → OpenID redirect, `/me` self-service page for players whose role has no `panel_access`.
 - Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
 
 ## What this component does NOT do
@@ -17,8 +17,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 
 | Route | File | What it does |
 |---|---|---|
-| `/login` | `src/app/login/page.tsx` | Проверяет текущий сеанс и без лишнего клика запускает единый вход через `bss.games`; при ошибке оставляет ручную кнопку повтора без цикла. |
-| `/me` | `src/app/(me)/me/page.tsx` | «Мой VIP» (VIPSUB-5, #171) для пользователя без `panel_access`. Показывает собственный баланс, срок VIP, тарифы, подписку и историю бонусов через `/api/v1/me/*`. Шапка даёт перейти на сайт, выйти только из панели либо завершить все сеансы сайта и панели. |
+| `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. Immediately redirects to `/dashboard` if already authenticated. |
+| `/me` | `src/app/(me)/me/page.tsx` | «Мой VIP» self-service page (VIPSUB-5, #171). Where a successful Steam login lands when the player's role has no `panel_access` — including a player with no role at all: the API issues a `self_service`-scoped session and redirects here instead of into the panel. Shows the player's own bonus balance, VIP expiry, tariff list («Купить разово» / «Подписаться»), active subscription with «Отменить подписку», and a paginated bonus history — all over `/api/v1/me/*`, which take no player id. Lives in the `(me)` route group, whose layout requires a session but no panel access and deliberately renders no top bar or live-bus widgets. |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
@@ -94,7 +94,7 @@ if a locale-less call comes back.
 | `connection-banner.tsx` | Sticky top banner rendered by the dashboard layout. Reads `useLiveBusState()` + `useBridgeState()` from `src/lib/use-live-bus.ts`. Renders nothing when WS is `open` and bridge state is not `down`; renders red "Связь с панелью потеряна — переподключаемся…" when WS is not open; renders amber "Bridge не отвечает — операции с сервером временно недоступны" when the bridge is down. |
 | `LogConsole.tsx` | Per-server live log viewer over `/api/v1/servers/:id/logs/ws`. Auto-scroll, ANSI stripping, error/`done` frames. |
 | `LogList.tsx` | Panel-wide connector-logs client component used by `/logs`. Cursor-paginated against `GET /logs`, filter pills, "live tail" toggle. |
-| `LogoutButton.tsx` | Локальный `POST /auth/logout` с возвратом на `/login` и глобальный `POST /auth/logout-all` с переходом на проверенный адрес сайта. |
+| `LogoutButton.tsx` | `POST /auth/logout`, redirect to `/login`. |
 | `RestartBridgeButton.tsx` | `POST /host/restart`, requires `host:bridge_control`. |
 | `SystemStatus.tsx` | Dashboard system-health card: bridge ping, worker heartbeats, depot status. |
 | `MetricHistoryChart.tsx` | Recharts `AreaChart` rendering 24 h cpu/ram/disk (% axis) or net (KB/s axis, two areas: rx + tx). Lazy-loaded — never imported at module level. Exports `MetricKey` (`'cpu'\|'ram'\|'disk'\|'net'`) and `MetricPoint` types. |
@@ -102,7 +102,7 @@ if a locale-less call comes back.
 | `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config/role-colors` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
 | `RoleExpiryDateField.tsx` | Shared role-expiry calendar trigger for `/users` and the player card. Displays a locale-independent `ДД/ММ/ГГГГ`, opens the native date picker from the full button, supports an explicit reset to a permanent role, and explains the inclusive UTC-day boundary. |
 | `RoleEditor.tsx` | Shared editor used by `/roles/new` and `/roles/[id]`. Loads permission registry from `GET /api/v1/permissions` on mount. Features: name field, 16-color swatch picker, description textarea, permission search bar, permissions grouped by 16 categories in 3-column responsive grid with ⚠️ for `dangerous` and "(в разработке)" for `unimplemented`. Owner read-only mode: amber banner + all inputs disabled. |
-| `TopNav.tsx` | Верхняя навигация над `NAV_GROUPS`: фильтрует пункты по правам, показывает счётчик жалоб, поиск и меню пользователя. В меню находятся переход на `bss.games`, локальный выход и глобальный выход. Монтируется из `(dashboard)/layout.tsx` с правами и именем из `requireSession()`. |
+| `TopNav.tsx` | Client-side global navigation: a sticky 46 px top bar over `NAV_GROUPS`. Each group is one bar entry — «Дашборд» is a direct link, the rest open dropdowns, and a group whose items carry `children` (Инструменты, Настройки) opens a mega-menu anchored to the bar rather than to its trigger. Menus open on click and close on Escape, an outside click, or navigation. Filters items by `permission` / `requiresEconomy`, drops an entry whose items are all gated out, marks the owning entry active via `activeNavGroupLabel()`, and carries the live pending-reports badge — on the «Жалобы» item, or on the closed «Инструменты» trigger. Also hosts the search field (opens the command palette), the user menu and `LogoutButton`. Mounted from `(dashboard)/layout.tsx` with `permissions` + `displayName` + `groups` props derived server-side from `requireSession()`. |
 | `ServerBar.tsx` | Contextual server switcher rendered under `TopNav` on `/dashboard`, `/servers`, `/statistics`, `/matches` and `/chat` only. One chip per server from `GET /api/v1/servers` — status dot, display name, and the RCON poller's last player count (omitted entirely when the server has never been polled, so it never reads as "0 online"). Refreshes on `server.status` / `server.deleted` / `rcon.status` live-bus events. Renders nothing when the panel has no servers or the request fails. |
 
 ## Lib utilities

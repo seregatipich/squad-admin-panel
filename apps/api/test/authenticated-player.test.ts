@@ -8,8 +8,10 @@ import Redis from 'ioredis';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { establishAuthenticatedPlayerSession } from '../src/lib/authenticated-player.js';
-import type { BssIdentity } from '../src/lib/bss-sso.js';
+import {
+  establishAuthenticatedPlayerSession,
+  type PlayerIdentity,
+} from '../src/lib/authenticated-player.js';
 import * as firstOwner from '../src/lib/first-owner.js';
 import { resetSetupState, testSteamId } from './helpers/snapshot-restore.js';
 import { makeFakeBridge, runMigrations } from './integration/harness.js';
@@ -27,7 +29,7 @@ async function buildApp(dbUrl: string) {
   // biome-ignore lint/suspicious/noExplicitAny: isolated integration database
   const db = drizzle(sql, { schema }) as any;
   const redis = new Redis(TEST_REDIS_URL);
-  let identity: BssIdentity = {
+  let identity: PlayerIdentity = {
     steamId64: EXISTING_STEAM_ID,
     canonicalName: 'Patrego',
     avatarUrl: 'https://cdn.example/patrego.jpg',
@@ -49,7 +51,7 @@ async function buildApp(dbUrl: string) {
     app,
     db,
     redis,
-    setIdentity: (next: BssIdentity) => {
+    setIdentity: (next: PlayerIdentity) => {
       identity = next;
     },
     cleanup: async () => {
@@ -81,7 +83,7 @@ describe('establishAuthenticatedPlayerSession', () => {
     await resetSetupState(h.db, { firstOwnerClaimed: true });
     const roleId = uuidv7();
     const playerId = uuidv7();
-    await h.db.insert(roles).values({ id: roleId, name: 'SSO Admin', panelAccess: true });
+    await h.db.insert(roles).values({ id: roleId, name: 'Panel Admin', panelAccess: true });
     await h.db.insert(players).values({
       id: playerId,
       steamId64: EXISTING_STEAM_ID,
@@ -94,7 +96,7 @@ describe('establishAuthenticatedPlayerSession', () => {
     const response = await h.app.inject({
       method: 'GET',
       url: '/establish',
-      headers: { 'user-agent': 'BSS acceptance' },
+      headers: { 'user-agent': 'login acceptance' },
       remoteAddress: '192.0.2.10',
     });
 
@@ -119,7 +121,7 @@ describe('establishAuthenticatedPlayerSession', () => {
     expect(created[0]).toMatchObject({
       scope: 'panel',
       ip: '192.0.2.10',
-      userAgent: 'BSS acceptance',
+      userAgent: 'login acceptance',
     });
   });
 
@@ -127,7 +129,7 @@ describe('establishAuthenticatedPlayerSession', () => {
     await resetSetupState(h.db, { firstOwnerClaimed: true });
     h.setIdentity({
       steamId64: NEW_STEAM_ID,
-      canonicalName: '[BSS] New Player',
+      canonicalName: '[TAG] New Player',
       avatarUrl: null,
     });
 

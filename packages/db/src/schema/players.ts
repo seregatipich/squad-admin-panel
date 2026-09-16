@@ -29,10 +29,6 @@ export const players = pgTable(
     roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
     roleExpiresAt: timestamp('role_expires_at', { withTimezone: true, mode: 'date' }),
     roleComment: text('role_comment'),
-    // Durable proof that the current role projection belongs to an accepted
-    // external lifecycle event. The migration owns the FK to avoid a schema
-    // import cycle between players and vip_lifecycle_events.
-    roleLifecycleEventId: text('role_lifecycle_event_id'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),

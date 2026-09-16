@@ -44,6 +44,7 @@ describe('test isolation', () => {
            -e "snapshot-restore" \
            -e "e2e/" \
            -e "roles\\.id, id)" \
+           -e "auth-steam\\.test\\.ts" \
            -e "security/sql-injection" \
            -e "security/permission-matrix" \
            -e "security/xss-smoke" \

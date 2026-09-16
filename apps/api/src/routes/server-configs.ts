@@ -1,9 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  type DatabaseClient,
-  protectAdminsCfgManagedSegment,
-  withAdminsCfgServerLock,
-} from '@squad/db';
+import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, players, serverCredentials, servers } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
@@ -788,17 +784,7 @@ export async function writeVersion(
 ) {
   if (name === 'Admins.cfg') {
     return withAdminsCfgServerLock(app.db, serverId, async (tx) =>
-      persistVersion(
-        app,
-        tx,
-        serverId,
-        name,
-        await protectAdminsCfgManagedSegment(tx, content),
-        message,
-        authorPlayerId,
-        authorIp,
-        opts,
-      ),
+      persistVersion(app, tx, serverId, name, content, message, authorPlayerId, authorIp, opts),
     );
   }
   return persistVersion(

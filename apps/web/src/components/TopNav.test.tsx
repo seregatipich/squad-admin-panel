@@ -54,13 +54,7 @@ const ALL_PERMISSIONS = [
 function renderNav(props: Partial<Parameters<typeof TopNav>[0]> = {}) {
   return render(
     <LocaleProvider locale="ru">
-      <TopNav
-        permissions={ALL_PERMISSIONS}
-        displayName="Alice"
-        siteUrl="https://bss.games"
-        groups={NAV_GROUPS}
-        {...props}
-      />
+      <TopNav permissions={ALL_PERMISSIONS} displayName="Alice" groups={NAV_GROUPS} {...props} />
     </LocaleProvider>,
   );
 }
@@ -192,7 +186,7 @@ describe('TopNav', () => {
     window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
   });
 
-  it('puts the site, account and both logout scopes behind the user menu', () => {
+  it('puts the account, tokens and logout behind the user menu', () => {
     renderNav({ displayName: 'seregatipich' });
     const trigger = screen.getByRole('button', { name: 'Меню пользователя' });
     expect(trigger).toHaveTextContent('seregatipich');
@@ -207,12 +201,7 @@ describe('TopNav', () => {
       'href',
       '/settings/tokens',
     );
-    expect(screen.getByRole('menuitem', { name: 'Перейти на bss.games' })).toHaveAttribute(
-      'href',
-      'https://bss.games',
-    );
     expect(screen.getByRole('menuitem', { name: 'Выйти' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Выйти везде' })).toBeInTheDocument();
   });
 
   it('walks an open menu with the keyboard and returns focus on Escape', () => {

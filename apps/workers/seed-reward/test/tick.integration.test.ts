@@ -9,7 +9,6 @@ import {
   roles,
   servers,
   sessions,
-  vipLifecycleEvents,
 } from '@squad/db';
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
@@ -31,7 +30,6 @@ const OWNER_PLAYER_STEAM_ID = 76561198914200000n + BigInt(randomInt(1, 1_000_000
 const REWARD_ROLE_ID = uuidv7();
 const SERVER_ID = uuidv7();
 const SESSION_ID = `seed-reward-${PLAYER_ID}`;
-const LIFECYCLE_EVENT_ID = `seed-reward-vip-fence-${PLAYER_ID}`;
 
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 
@@ -122,7 +120,6 @@ afterAll(async () => {
     .update(economySettings)
     .set({ seedRewardThresholdHoursPerMonth: 0, seedRewardRoleId: null })
     .where(eq(economySettings.id, 1));
-  await db.delete(vipLifecycleEvents).where(eq(vipLifecycleEvents.eventId, LIFECYCLE_EVENT_ID));
   await db.delete(players).where(eq(players.steamId64, PLAYER_STEAM_ID));
   // OWNER_PLAYER_STEAM_ID is intentionally never deleted: this suite runs
   // against the shared DATABASE_URL used by test:cov's concurrent packages,
@@ -334,61 +331,5 @@ describeIfDb('seed reward worker integration', () => {
       .from(players)
       .where(eq(players.id, OWNER_PLAYER_ID));
     expect(afterTick?.roleId).toBe(ownerRole.id);
-  });
-
-  it('skips a reward change when the player projection has a lifecycle marker', async () => {
-    if (!db) throw new Error('database not configured');
-    const expiresAt = new Date('2099-07-14T00:00:00.000Z');
-    await db
-      .update(playerDailyPresence)
-      .set({ seedSeconds: 0 })
-      .where(eq(playerDailyPresence.playerId, PLAYER_ID));
-    await db.insert(vipLifecycleEvents).values({
-      eventId: LIFECYCLE_EVENT_ID,
-      eventType: 'vip.purchased',
-      playerId: PLAYER_ID,
-      roleId: REWARD_ROLE_ID,
-      tier: 'seed-vip',
-      purchaseId: 'seed-reward-fence',
-      action: 'assigned',
-      payload: { expires_at: expiresAt.toISOString() },
-      appliedAt: NOW,
-    });
-    await db
-      .update(players)
-      .set({
-        roleId: REWARD_ROLE_ID,
-        roleExpiresAt: expiresAt,
-        roleComment: 'VIP seed-vip purchase seed-reward-fence',
-        roleLifecycleEventId: LIFECYCLE_EVENT_ID,
-      })
-      .where(and(eq(players.id, PLAYER_ID), eq(players.steamId64, PLAYER_STEAM_ID)));
-    const watermark = await auditWatermark();
-    const redis = makeRedis();
-
-    await runSeedRewardTick({
-      ...createSeedRewardDeps(db, redis.redis),
-      now: NOW,
-      diag: { emit: vi.fn().mockResolvedValue(undefined) },
-    });
-
-    expect(
-      (await seedRewardAuditSince(watermark)).filter((row) => row.targetId === PLAYER_ID),
-    ).toEqual([]);
-    const [stored] = await db
-      .select({
-        roleId: players.roleId,
-        roleLifecycleEventId: players.roleLifecycleEventId,
-      })
-      .from(players)
-      .where(eq(players.steamId64, PLAYER_STEAM_ID));
-    expect(stored).toEqual({
-      roleId: REWARD_ROLE_ID,
-      roleLifecycleEventId: LIFECYCLE_EVENT_ID,
-    });
-    expect(redis.del).not.toHaveBeenCalled();
-    expect(revokedFor(redis.publish)).not.toContainEqual(
-      expect.objectContaining({ playerId: PLAYER_ID }),
-    );
   });
 });

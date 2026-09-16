@@ -46,7 +46,7 @@ describe('buildLogger', () => {
     expect(hasWarn).toBe(true);
   });
 
-  it('redacts the BSS client secret when a request body is logged explicitly', () => {
+  it('redacts a client secret when a request body is logged explicitly', () => {
     const chunks: string[] = [];
     const { logger, lateSink } = buildLogger('info');
     lateSink.setInner(
@@ -57,24 +57,26 @@ describe('buildLogger', () => {
         },
       }),
     );
-    logger.info({ req: { body: { client_secret: 'sentinel-bss-secret' } } }, 'request');
+    logger.info({ req: { body: { client_secret: 'sentinel-client-secret' } } }, 'request');
 
-    expect(chunks.join('')).not.toContain('sentinel-bss-secret');
+    expect(chunks.join('')).not.toContain('sentinel-client-secret');
     expect(chunks.join('')).toContain('[redacted]');
   });
 });
 
 describe('sensitive auth request logging', () => {
-  it('disables automatic logs only for the BSS callback path', () => {
+  it('disables automatic logs only for the Steam OpenID callback path', () => {
     expect(
       shouldDisableSensitiveAuthRequestLogging({
-        url: '/api/v1/auth/bss/callback?code=secret&state=secret',
+        url: '/api/v1/auth/steam/callback?n=nonce&openid.sig=secret',
       }),
     ).toBe(true);
     expect(
-      shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/bss/callback-extra' }),
+      shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/steam/callback-extra' }),
     ).toBe(false);
-    expect(shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/bss/login' })).toBe(false);
+    expect(shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/steam/login' })).toBe(
+      false,
+    );
   });
 });
 

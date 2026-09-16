@@ -113,7 +113,7 @@ export default fp(async (app) => {
 
     // VIPSUB-5 (#171) — self-service session scope.
     //
-    // The BSS callback mints a session for a player whose role has no
+    // `auth-steam.ts` mints a session for a player whose role has no
     // `panel_access` so they can manage their own VIP on `/me`. That session is
     // scoped `self_service` and is honoured ONLY on routes that opt in with
     // `config.selfService`; anywhere else the request is downgraded to

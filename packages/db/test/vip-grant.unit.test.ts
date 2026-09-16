@@ -59,20 +59,6 @@ describe('planVipGrant', () => {
     expect(plan).toEqual({ status: 'role_permanent' });
   });
 
-  it('returns vip_lifecycle_owned when the matching role has an external owner', () => {
-    const plan = planVipGrant(
-      state({
-        roleId: VIP_ROLE,
-        roleExpiresAt: new Date(NOW.getTime() + DAY_MS),
-        externalLifecycleOwner: true,
-      }),
-      tier(),
-      NOW,
-    );
-
-    expect(plan).toEqual({ status: 'vip_lifecycle_owned' });
-  });
-
   it('extends from the current expiry when the same role is still active', () => {
     const currentExpiry = new Date(NOW.getTime() + 10 * DAY_MS);
 

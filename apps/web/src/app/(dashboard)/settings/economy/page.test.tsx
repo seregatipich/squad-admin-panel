@@ -395,27 +395,6 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     expect(scope.getByText('Новый тир')).toBeInTheDocument();
   });
 
-  it('explains why the protected site VIP binding cannot become a panel tier', async () => {
-    stubFetch({
-      tiers: [],
-      tierMutationError: { status: 409, body: { error: 'site_vip_binding_protected' } },
-    });
-    render(<EconomySettingsPage />);
-    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
-    const scope = within(section);
-
-    fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'Panel duplicate' } });
-    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
-    fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
-
-    expect(
-      await scope.findByText(
-        'Ошибка сохранения тира: Привязка BSS VIP защищена: её роль и тариф нельзя использовать для другого магазина.',
-      ),
-    ).toBeInTheDocument();
-  });
-
   it('falls back to the raw error code for unknown tier save errors', async () => {
     stubFetch({
       tiers: [],

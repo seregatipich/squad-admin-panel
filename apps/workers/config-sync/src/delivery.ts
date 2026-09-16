@@ -5,7 +5,6 @@ import {
   markAdminsCfgSyncApplied,
   markAdminsCfgSyncFailed,
   servers,
-  vipLifecycleEvents,
 } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
@@ -42,7 +41,6 @@ type ServerState = { status: string; deletedAt: Date | null } | null;
 
 export interface AdminsCfgDeliveryOperations {
   getOutbox(db: AdminsCfgServerLease['db'], id: string): Promise<OutboxState>;
-  isSuperseded(db: AdminsCfgServerLease['db'], row: NonNullable<OutboxState>): Promise<boolean>;
   markApplied(
     db: AdminsCfgServerLease['db'],
     id: string,
@@ -64,18 +62,6 @@ export interface AdminsCfgDeliveryOperations {
 
 const defaultOperations: AdminsCfgDeliveryOperations = {
   getOutbox: getAdminsCfgSyncOutboxState,
-  async isSuperseded(db, row) {
-    if (!row.correlationId) return false;
-    const [event] = await db
-      .select({
-        action: vipLifecycleEvents.action,
-        supersededByEventId: vipLifecycleEvents.supersededByEventId,
-      })
-      .from(vipLifecycleEvents)
-      .where(eq(vipLifecycleEvents.eventId, row.correlationId))
-      .limit(1);
-    return event ? event.action === 'superseded' || event.supersededByEventId !== null : false;
-  },
   markApplied: markAdminsCfgSyncApplied,
   markFailed: markAdminsCfgSyncFailed,
   async readServerState(db, serverId) {
@@ -173,7 +159,7 @@ export async function handleAdminsCfgSyncEntry(
       ctx.log.warn({ serverId: entry.serverId, streamId: entry.streamId }, 'invalid outbox link');
       return 'completed' as const;
     }
-    if (outbox.appliedAt !== null || (await operations.isSuperseded(lease.db, outbox))) {
+    if (outbox.appliedAt !== null) {
       return 'completed' as const;
     }
 

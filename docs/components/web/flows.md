@@ -4,10 +4,10 @@
 
 1. Operator navigates to `https://panel.host/` (or any sub-path).
 2. Root page (`app/page.tsx`) checks for `__Host-sid` cookie; none found → redirects to `/login`.
-3. Страница входа проверяет сеанс и один раз переходит на `GET /api/v1/auth/bss/login`.
-4. Браузер проходит вход на `bss.games`; сайт возвращает одноразовый код с PKCE в `GET /api/v1/auth/bss/callback`.
-5. API панели обменивает код сервер-сервер и независимо перечитывает роль игрока.
-6. API читает `panel_meta.first_owner_claimed`. Если флаг ещё ложный, первая подтверждённая учётная запись получает Owner, записывается информационный sentinel и устанавливается cookie сеанса.
+3. Login page renders. Operator clicks "Войти через Steam".
+4. Browser follows `GET /api/v1/auth/steam/login` → Steam OpenID redirect.
+5. Steam callback hits `GET /api/v1/auth/steam/callback`.
+6. API reads `panel_meta.first_owner_claimed`. If it is still false, the first authenticated Steam user is granted the Owner role, the informational sentinel file is written, and a session cookie is set.
 7. API redirects to `/`; root redirects the fresh session to `/dashboard`.
 8. Dashboard layout calls `GET /api/v1/setup/status`; if `setup_completed=false`, it redirects to `/setup`.
 9. `/setup` asks the Owner for the organization name and calls `POST /api/v1/setup/complete`.
@@ -21,8 +21,8 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 
 1. User opens `/` (or any protected path); root page redirects to `/login`.
 2. Login page fires `GET /api/v1/me` silently; if a valid session already exists (cookie in another tab was set) the page redirects to `/dashboard` immediately.
-3. Иначе страница один раз запускает единый вход через `bss.games`; после ошибки пользователь может повторить его вручную.
-4. На callback API панели обменивает одноразовый код, заново определяет права игрока, устанавливает `__Host-sid` для `panel`-сеанса и перенаправляет на `/`; корневая страница открывает `/dashboard`.
+3. Otherwise user clicks "Войти через Steam"; Steam OpenID flow runs.
+4. On callback the API verifies Steam identity, resolves the player's permissions, sets the `__Host-sid` cookie on a `panel`-scoped session, and redirects to `/`; the root page forwards to `/dashboard`.
 5. If the player's role has no `panel_access` (or there is no role), the session is created with scope `self_service` and the API redirects to `/me`. That scope is honoured only on routes declaring `config.selfService`, so every panel route treats the request as anonymous.
 
 ---

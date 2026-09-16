@@ -9,8 +9,8 @@ All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires
 | Route | File | What it does |
 |---|---|---|
 | `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/login` when absent, to `/me` when the session carries no panel permissions, otherwise to `/dashboard`. |
-| `/login` | `app/login/page.tsx` | Проверяет текущий сеанс: при успехе открывает `/dashboard`, иначе один раз запускает единый вход через `/api/v1/auth/bss/login`. После ошибки показывает ручную кнопку повтора без цикла перенаправлений. |
-| `/setup` | `app/setup/page.tsx` | Первичная настройка панели. До назначения первого Owner предлагает войти через единый вход BSS; после входа Owner запрашивает название организации и вызывает `POST /api/v1/setup/complete`. Настроенная панель перенаправляет на `/`. |
+| `/login` | `app/login/page.tsx` | Steam OpenID sign-in entry point. Redirects to `/dashboard` if already authenticated. Shows errors for `?error=auth_failed` and `?error=not_authorized`. |
+| `/setup` | `app/setup/page.tsx` | First-time panel finalization. Before the first Owner claim it shows the Steam login CTA; after the first Owner login it asks for the organization name and calls `POST /api/v1/setup/complete`. Completed panels redirect back to `/`. |
 
 ### Self-service pages
 
@@ -18,7 +18,7 @@ The `(me)` route group requires a session cookie but **not** panel access — it
 
 | Route | File | What it does |
 |---|---|---|
-| `/me` | `app/(me)/me/page.tsx` | «Мой VIP». Стартовая страница пользователя без `panel_access`: BSS-callback создаёт ограниченный `self_service`-сеанс и направляет сюда. Показывает баланс, срок VIP, подписку, тарифы и историю бонусов; все `/api/v1/me/*` работают только с владельцем сеанса. В шапке доступны переход на `bss.games`, выход из текущей панели и глобальный выход. |
+| `/me` | `app/(me)/me/page.tsx` | «Мой VIP». Landing for a Steam login whose role has no `panel_access` (including a player with no role): the callback issues a `self_service`-scoped session and redirects here. Sections: Баланс (bonus balance + VIP expiry), Подписка (active subscription, «Отменить подписку»), Тарифы («Купить разово» / «Подписаться»), История бонусов (cursor-paginated, «Показать ещё»). Every call goes to `/api/v1/me/*`, which take no player id — the subject is always the session's own player. |
 
 ### Dashboard pages
 
@@ -128,7 +128,7 @@ Fetches log entries from `GET /api/v1/logs` and polls for new entries every 1 s 
 function LogoutButton(): JSX.Element
 ```
 
-`LogoutButton` вызывает `POST /api/v1/auth/logout` и возвращает на `/login`. `GlobalLogoutButton` вызывает `POST /api/v1/auth/logout-all` и переходит по проверенному сервером адресу `bss.games`; при частичном отказе сайт получает только безопасный признак ошибки. Обе команды доступны в меню пользователя, а на `/me` — в шапке самообслуживания.
+Calls `POST /api/v1/auth/logout` then redirects to `/login`. Renders as a text button inside the top bar's user menu.
 
 ### `MetricHistoryChart`
 

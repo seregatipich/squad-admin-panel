@@ -43,7 +43,7 @@ describe('interpolate', () => {
 describe('translator', () => {
   it('resolves keys for the RU dictionary', () => {
     const t = createTranslatorForLocale('ru');
-    expect(t('login.redirecting')).toBe('Переходим на bss.games…');
+    expect(t('login.steamButton')).toBe('Войти через Steam');
   });
 
   it('interpolates params into the resolved string', () => {

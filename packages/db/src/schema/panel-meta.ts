@@ -30,7 +30,6 @@ export const panelMeta = pgTable(
       .notNull()
       .default(false),
     whitelistApplicationDefaultDays: integer('whitelist_application_default_days'),
-    vipLifecycleStrict: boolean('vip_lifecycle_strict').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({

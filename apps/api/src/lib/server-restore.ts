@@ -1,10 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BridgeClient } from '@squad/bridge-client';
-import {
-  type DatabaseClient,
-  protectAdminsCfgManagedSegment,
-  withAdminsCfgServerLock,
-} from '@squad/db';
+import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, asc, eq, isNotNull, like } from 'drizzle-orm';
@@ -93,8 +89,8 @@ export async function restoreConfigsFromArchive(
       };
       const inserted =
         filename === 'Admins.cfg'
-          ? await withAdminsCfgServerLock(ctx.db, newServerId, async (tx) =>
-              restoreFile(tx, await protectAdminsCfgManagedSegment(tx, backup.content)),
+          ? await withAdminsCfgServerLock(ctx.db, newServerId, (tx) =>
+              restoreFile(tx, backup.content),
             )
           : await restoreFile(ctx.db, backup.content);
       if (inserted[0]) {
