@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/rpc"
 )
 
 func TestWriteErrorProducesValidFrame(t *testing.T) {

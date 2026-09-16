@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
 )
 
 func TestUFWRuleAdd(t *testing.T) {

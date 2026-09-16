@@ -80,62 +80,50 @@ scripts/apply-rulesets.sh   # requires gh with admin access
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
-> **Code scanning plan gating (2026-07-29, issue #211):** GitHub's default CodeQL code-scanning setup (the dynamic `github-code-scanning/codeql` workflow, never a repo-committed file) requires **GitHub Advanced Security**, which is not licensed on this private Free-plan repository — `gh api repos/breaking-squad/squad-admin-panel/code-scanning/default-setup` returns HTTP 403, and attempting to disable the workflow via the Actions API (`PUT .../actions/workflows/294697655/disable`) returns HTTP 422 `Unable to disable this workflow`. The dynamic workflow produced zero runs, successful or failed, after 2026-07-16 despite 8+ subsequent `master` pushes through 2026-07-28, so it is already out-of-band disabled and cannot be re-enabled from this repo without GHAS. There is no repo-committed `codeql*.yml`/`codeql*.yaml` workflow — creating one would fail identically. The regression guard [`scripts/test-codeql-default-setup.sh`](../../scripts/test-codeql-default-setup.sh) asserts both facts stay true: no such workflow file exists, and this note is present.
+> **Code scanning plan gating (2026-07-29, issue #211):** GitHub's default CodeQL code-scanning setup (the dynamic `github-code-scanning/codeql` workflow, never a repo-committed file) requires **GitHub Advanced Security**, which was not licensed on the former private Free-plan organization repository — `gh api repos/breaking-squad/squad-admin-panel/code-scanning/default-setup` returned HTTP 403, and attempting to disable the workflow via the Actions API (`PUT .../actions/workflows/294697655/disable`) returns HTTP 422 `Unable to disable this workflow`. The dynamic workflow produced zero runs, successful or failed, after 2026-07-16 despite 8+ subsequent `master` pushes through 2026-07-28, so it is already out-of-band disabled and cannot be re-enabled from this repo without GHAS. There is no repo-committed `codeql*.yml`/`codeql*.yaml` workflow — creating one would fail identically. The regression guard [`scripts/test-codeql-default-setup.sh`](../../scripts/test-codeql-default-setup.sh) asserts both facts stay true: no such workflow file exists, and this note is present.
 
 ## CI and deployment runners
 
-Both workflows run on the organization's own runners, and both select them **by
-group**, never by label:
+The repository is `seregatipich/squad-admin-panel`, a **public repository on a personal
+account**. Two facts follow: GitHub-hosted minutes are free, and there are no runner
+groups (they are an organization feature). The split is therefore:
 
-```yaml
-runs-on:
-  group: selfhost-group-1
-```
+| Workflow | Runner | Why |
+|---|---|---|
+| `ci.yml` (`branch-guard`, `node`, `go`, `docker`) | `runs-on: ubuntu-24.04` | Ephemeral VMs, jobs in parallel, and no verification code ever executes on the production host. |
+| `deploy-tk104.yml` (every job) | `runs-on: [self-hosted, tk104-deploy]` + `environment: production` | The only jobs that need the host. The runner is registered on the repository and runs on tk104 under the unprivileged `gh-runner` account (no sudo, no Docker group); it reaches the deploy account over SSH. |
 
-Label-based selection is switched off for this project so that a GitHub-hosted
-machine can never be picked up by accident. Two consequences follow, and both are
-silent failures rather than errors:
+[`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh) fails
+CI when a `ci` job leaves the hosted image, when a deploy job leaves the labelled runner
+or the `production` environment or loses its `github.repository` guard, or when any
+workflow selects a runner group — a group a personal account does not have would leave
+the job `queued` forever without an error.
 
-- `runs-on: self-hosted` matches nothing. A job declared that way sits in `queued`
-  forever with no diagnostic — this is exactly how `deploy-tk104.yml` was left after
-  label selection was turned off.
-- `runs-on: ubuntu-24.04` quietly succeeds on a GitHub-hosted VM, which defeats the
-  point of owning runners and spends the organization's hosted minutes.
+**Outside code must never reach the tk104 runner.** CI accepts only trusted `push`
+events for `dev`/`master` and explicit dispatches — never `pull_request`.
+[`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) enforces
+that no workflow combines a `pull_request`/`pull_request_target` trigger with a
+self-hosted job, recognising the bare label, inline and block label lists, and runner
+groups, and it checks its own detector against fixtures first (#217, #286). That guard
+only sees workflow files already in the repository: a fork's pull request can bring its
+own workflow file. Two repository settings close that gap and must stay on — Settings →
+Actions → General → *Require approval for all outside collaborators*, and *Workflow
+permissions: read repository contents*. Deploy secrets (`TK104_SSH_KEY`,
+`TK104_SSH_KNOWN_HOSTS`) live only in the `production` environment, which admits the
+`master` branch alone.
 
-[`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh)
-fails CI on either mistake, for `ci.yml` and `deploy-tk104.yml` alike.
+`cancel-in-progress: true` discards a superseded SHA so a merge wave does not spend
+runner time on commits that are already replaced. The `node` timeout stays at 45
+minutes because a hosted VM starts without a Turbo cache.
 
-**Verification and deployment now share one machine.** That is the trade this project
-accepts in exchange for owning its runners, and it is only defensible because the
-repository is private and the branch model is direct-merge: no code from an outside
-fork ever reaches a workflow. The invariant that keeps it true is that CI accepts only
-trusted `push` events for `dev`/`master` and explicit dispatches — never
-`pull_request`. [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh)
-enforces it repository-wide and understands both ways of naming a self-hosted runner,
-the `self-hosted` label and a runner group (#217, #286). `deploy-tk104.yml` writes the
-production SSH deploy key to that machine's disk (#248), so this rule is the boundary
-protecting it.
+The `go` job runs natively: the hosted image ships a C compiler, so `go test -race`
+needs no container, and `actions/setup-go` caches modules keyed by
+`apps/bridge/go.sum`. `govulncheck` is pinned to `v1.7.0`, and the job fails if the
+bridge binary is not statically linked.
 
-`cancel-in-progress: true` discards a superseded SHA — on a group with a single
-machine a merge wave would otherwise queue behind itself. Timeouts stay explicit and
-generous: the runner keeps its Turbo cache between runs, but a lockfile change still
-puts the full coverage suite back at roughly 17 minutes.
-
-The runner is persistent, so disk state accumulates across runs — Docker layers,
-volumes and workspaces are no longer discarded for you. Watch it: the previous
-persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
-this reason, and they were removed when CI moved to disposable VMs (#286).
-
-GitHub Runner удаляет сервисные контейнеры командой `docker rm --force` без
-`--volumes`, поэтому на постоянной машине каждый запуск `node` раньше оставлял
-анонимные тома PostgreSQL и Redis. Теперь оба пути из `VOLUME` образов заранее
-перекрыты ограниченными `tmpfs`: 1 ГиБ для PostgreSQL и 128 МиБ для Redis.
-Docker не создаёт анонимные тома, а временные данные исчезают вместе с
-контейнером даже при ошибке healthcheck или отмене задания. Рабочая копия базы,
-создаваемая `worker-setup.ts` для каждого изолированного файла Vitest, удаляется
-его `afterAll`, поэтому копии не накапливаются до конца всего прогона. Общая
-очистка не применяется; точные параметры закреплены в
-`test-ci-runner-strategy.sh`.
+The `node` job's PostgreSQL and Redis service containers keep their data on bounded
+`tmpfs` mounts (1 GiB and 128 MiB), so an interrupted job never leaves anonymous
+volumes behind; the exact options are locked in `test-ci-runner-strategy.sh`.
 
 Для снижения локальной нагрузки перед `git push` можно задать
 `VITEST_MAX_FORKS=2`. Переменная включена в `globalPassThroughEnv` Turbo: она
@@ -146,41 +134,45 @@ Docker не создаёт анонимные тома, а временные д
 затронутых пакетных тестов; для осознанной локальной настройки служит
 `PREPUSH_TURBO_CONCURRENCY`, значение по умолчанию — `2`.
 
-**Never run a whole job in a container on this runner.** The workspace is shared and
-persistent; a containerised job runs as `root`, so `actions/checkout` inside it writes
-the entire tree as root and the next job — running as the `runner` user — can neither
-delete a file nor create `.git/index.lock`, dying with `EACCES: permission denied,
-unlink …`. Deleting the workspace from inside the container does not help either: the
-container's working directory *is* that path, and every later step fails with
-`chdir to cwd … no such file or directory`. Both failure modes were observed here.
-
-The working arrangement is the reverse: the `go` job runs natively, and only the one
-step that needs a C toolchain goes into `docker run` with the source mounted
-**read-only** and the Go caches redirected inside the container, so nothing root-owned
-can appear in the workspace. `branch-guard` opens the run with a `chown` performed by a
-throwaway container — the runner user cannot repair root-owned files itself, and
-without that step a single bad run leaves the machine broken until someone logs in.
-
-**The machine carries no C toolchain.** `go test -race` needs cgo and therefore a C
-compiler; the GitHub-hosted image had one, this runner does not. The `go` job runs
-inside `golang:1.25.13-bookworm` rather than on the bare machine, so the compiler
-comes with the image and nothing has to be installed on a host that also holds the
-production deploy key. The same container restores filesystem isolation for the bridge
-tests, which exercise absolute paths. Installing `build-essential` on the runner would
-work too, and would let the job run natively again — that is a host decision, not a
-repository one.
-
 ## Runner recovery runbook
 
-If **any** run — CI or deployment — stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries repository runners and, best-effort, the organization-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Every workflow now depends on this result, CI included. The test suite [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) stubs `gh` and covers online, offline, disabled/zero-runner, and organization-endpoint-denied cases.
+`ci` never waits for a self-hosted runner. If a **deployment** run stays `queued`, run
+[`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh): it lists the
+repository's runners with `status`/`busy` and exits non-zero unless at least one is
+`online`. There is no organization endpoint to consult. Its suite,
+[`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh), stubs
+`gh` and covers online, offline, none-registered, and failed-query cases, and fails if
+the script ever queries an organization.
 
-Per [`docs/operations/deployment.md`](../operations/deployment.md#cicd-runner-split), this org has disabled repository-level self-hosted runners, so the repository-level query normally reports zero. The runner used by deployment is organization-level and its status is visible only through the organization endpoint (which needs organization administration access).
+On tk104 the runner is the systemd unit
+`actions.runner.seregatipich-squad-admin-panel.tk104-deploy.service`, installed in
+`/home/gh-runner/actions-runner`:
 
-**Historical incident (issue #215, 2026-07-15 to 2026-07-18):** GitHub reported the two *repository-level* runners `tk104-runner-1` (id 21) and `tk104-runner-2` (id 22) as `offline`. Host-level diagnosis on `tk104` found their registration artifacts (`.runner`, `.credentials`, `.credentials_rsaparams`) missing — both `actions.runner.breaking-squad-squad-admin-panel.tk104-runner-{1,2}.service` units were loaded but `inactive/dead`, failing since 2026-07-09 with `Not configured. Run config.(sh/cmd) to configure the runner.` Per `docs/operations/deployment.md`, `tk104-runner-1`/`-2` are an earlier, now-deprecated repository-level setup that this org's policy no longer routes jobs to — CI runs on the separate org-level runner instead, so their outage did not block `dev`/`master` CI. Restarting the existing systemd units cannot restore them; re-registering them as **org-level** runners (not repository-level, which is disabled) would need an org-admin `admin:org` credential to mint a registration token, then `config.sh --unattended --replace` in each existing runner directory and a service restart — host and org-admin access a repository-scoped session does not have.
+```bash
+ssh -i ~/.ssh/tk104_deploy seregatipich@tk104.duckdns.org \
+  'sudo systemctl status actions.runner.seregatipich-squad-admin-panel.tk104-deploy.service'
+```
 
-**Migration incident (2026-08-12 to 2026-08-13, issue #286):** the organization runner stopped taking the authoritative `dev` CI run, while repository-scoped credentials could neither observe nor restore it. Verification moved back to ephemeral GitHub-hosted VMs at the time.
+If its registration is gone (`Not configured. Run config.(sh/cmd)`), mint a
+repository registration token and re-register in place; a repository admin's `gh`
+token is enough, no organization scope is involved:
 
-**Return to owned runners (2026-08-24):** the project moved every job back onto its own runners, this time addressed by the `selfhost-group-1` group instead of the `self-hosted` label, with label-based selection disabled so GitHub-hosted machines cannot be drawn in. If CI queues indefinitely again, the first check is the same one #286 needed and it now covers CI too — see the runbook above.
+```bash
+gh api -X POST repos/seregatipich/squad-admin-panel/actions/runners/registration-token --jq .token
+# on tk104, as gh-runner, in /home/gh-runner/actions-runner:
+./config.sh --url https://github.com/seregatipich/squad-admin-panel --token <token> \
+  --name tk104-deploy --labels tk104-deploy --unattended --replace
+sudo ./svc.sh install gh-runner && sudo ./svc.sh start
+```
+
+**History.** Verification first ran hosted with a separate self-hosted deploy runner
+(#286), then moved onto the `breaking-squad` organization's `selfhost-group-1` group
+(2026-08-24). Organization runners could only be re-registered with an `admin:org`
+credential, and they failed twice with their registration files gone (#215, 2026-09-07).
+When the organization repository became unavailable (2026-09-16) the project moved to
+`seregatipich/squad-admin-panel`, returned verification to hosted VMs, and registered a
+single repository-level deploy runner on tk104; the old organization runners were
+uninstalled and archived on the host.
 
 ## Completion verification
 

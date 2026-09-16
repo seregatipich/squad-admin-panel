@@ -3,12 +3,11 @@
 # workstation and without GitHub Actions.
 #
 # The `deploy-tk104` workflow is the release path and stays the release path:
-# it deploys reviewed `master` code from the organization runner. But it costs
-# a full CI run plus a queue on a runner group with one machine in it, which is
-# 30–40 minutes before a one-line UI change is visible. This script is the
-# inner loop: rsync the working tree to the same directory and the same compose
-# project the workflow uses, then rebuild ONE service on the host. Typically
-# under three minutes, and the target is still tk104 — nothing runs locally.
+# it deploys reviewed `master` code from the tk104 deploy runner. But it costs
+# a full CI run, which is 30–40 minutes before a one-line UI change is visible.
+# This script is the inner loop: rsync the working tree to the same directory and
+# the same compose project the workflow uses, then rebuild ONE service on the
+# host. Typically under three minutes, and the target is still tk104 — nothing runs locally.
 #
 # Because it ships whatever is in the working tree, including uncommitted work,
 # what tk104 serves afterwards is NOT a released revision: `/health` reports

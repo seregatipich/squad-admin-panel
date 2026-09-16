@@ -215,34 +215,36 @@ curl -fsk https://tk104.duckdns.org/health
 
 ## CI/CD runners
 
-Every job — verification and deployment alike — runs on the organization's own
-runners, addressed **by group**:
+Verification and deployment run on different machines:
 
 ```yaml
-runs-on:
-  group: selfhost-group-1
+# .github/workflows/ci.yml — every job
+runs-on: ubuntu-24.04
+# .github/workflows/deploy-tk104.yml — every job
+runs-on: [self-hosted, tk104-deploy]
+environment: production
 ```
 
-Label-based selection is switched off for this project, so `runs-on: self-hosted`
-matches nothing and such a job queues forever, while `runs-on: ubuntu-*` would quietly
-pull in a GitHub-hosted machine. `scripts/test-ci-runner-strategy.sh` fails CI on
-either mistake.
+The repository is public on a personal account: hosted minutes are free and runner
+groups do not exist. `scripts/test-ci-runner-strategy.sh` fails CI if a `ci` job leaves
+the hosted image, a deploy job leaves the labelled runner or the `production`
+environment, or any workflow selects a runner group.
 
-- **`ci` runs on that group.** The workflow runs only for trusted `dev`/`master`
-  pushes and explicit dispatches — never `pull_request`, which is the boundary that
-  keeps outside code away from a machine holding production credentials. Superseded
-  runs are cancelled so a merge wave does not queue behind itself. The `node` job's
-  PostgreSQL/Redis service containers publish to Docker-assigned ports; `Resolve
-  service ports` exports those values through both normal and `TEST_*` variables. The
-  `go` job installs the pinned Go toolchain through SHA-pinned `actions/setup-go`. The
-  `docker` job builds every production image and executes the backup/restore round
-  trip. The runner is persistent, so Docker layers, volumes and workspaces accumulate
-  between runs and need watching.
-- **`deploy-tk104` runs on the same group.** Repository-level self-hosted runners are
-  disabled by organization policy, and the production host itself is not a runner; the
-  organization runner reaches production over SSH. All referenced actions remain
-  SHA-pinned — that requirement carries more weight now that verification shares the
-  machine on which this workflow writes the production deploy key (#248).
+- **`ci` runs on GitHub-hosted VMs.** The workflow runs only for trusted `dev`/`master`
+  pushes and explicit dispatches — never `pull_request`. Superseded runs are cancelled.
+  The `node` job's PostgreSQL/Redis service containers publish to Docker-assigned
+  ports; `Resolve service ports` exports those values through both normal and `TEST_*`
+  variables. The `go` job installs the pinned Go toolchain through SHA-pinned
+  `actions/setup-go` and runs the race detector natively. The `docker` job builds every
+  production image and executes the backup/restore round trip.
+- **`deploy-tk104` runs on the repository's own runner on tk104.** It is registered
+  with the label `tk104-deploy`, runs as the unprivileged `gh-runner` account without
+  Docker access, and reaches the deploy account over SSH. Every job binds the
+  `production` environment (deploy secrets, `master` only) and is skipped outside
+  `seregatipich/squad-admin-panel`, so a fork never tries to deploy. All referenced
+  actions remain SHA-pinned — this workflow writes the production deploy key to disk
+  (#248). Workflows from outside collaborators require approval (repository setting),
+  because a fork's pull request can carry its own workflow file.
 - **`deploy-tk104` deploys over SSH.** The `deploy` job (triggered
   by a push to `master`) writes the `TK104_SSH_KEY` secret to a deploy key, `rsync`s
   the checkout to `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/`
@@ -267,9 +269,8 @@ either mistake.
 
 ### Fast developer deploy (`scripts/dev-deploy-tk104.sh`)
 
-Both jobs above cost a full CI run plus a queue on a runner group with one
-machine in it — 30–40 minutes before a one-line UI change is visible on
-tk104. For the inner loop, [`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh)
+Both jobs above cost a full CI run — 30–40 minutes before a one-line UI change
+is visible on tk104. For the inner loop, [`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh)
 does the same two steps the workflow does (rsync the tree to
 `~/apps/squad-admin-panel/`, rebuild one service of the same
 `compose.tk104.yml` project) straight from a developer workstation over SSH,
@@ -297,12 +298,6 @@ production database, and therefore refuses to start without
 This is a preview path, not a release path: land the change through
 `dev` → `master` as usual, and the next `master` deploy overwrites the preview.
 Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`).
-
-GitHub Free for organizations currently includes 2,000 hosted Linux minutes per
-month. If the quota is exhausted, do not weaken the gate or redirect verification to
-the production host: batch accepted changes, restore the dedicated verification
-runner, or wait for the allowance reset. The runner split is guarded by
-`scripts/test-ci-runner-strategy.sh`.
 
 ## Container topology
 
@@ -358,7 +353,7 @@ Caddy handles TLS automatically. Set `TLS_ISSUER` in `.env`:
 Preferred path:
 
 ```bash
-git clone git@github.com:breaking-squad/squad-admin-panel.git
+git clone git@github.com:seregatipich/squad-admin-panel.git
 cd squad-admin-panel
 
 sudo ./scripts/bootstrap.sh
@@ -367,7 +362,7 @@ sudo ./scripts/bootstrap.sh
 Manual path:
 
 ```bash
-git clone git@github.com:breaking-squad/squad-admin-panel.git
+git clone git@github.com:seregatipich/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env

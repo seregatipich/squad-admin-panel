@@ -45,13 +45,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Deploys OVER SSH from the org self-hosted runner into the production host
-  # (tk104.duckdns.org). The runner is a separate machine, so we rsync the
-  # checkout to the host and run scripts/deploy-tk104.sh there via SSH.
+  # Deploys OVER SSH from the repository's own runner (label `tk104-deploy`) into
+  # the production host (tk104.duckdns.org). The runner lives on tk104 under an
+  # unprivileged account without Docker access, so it rsyncs the checkout to the
+  # deploy account and runs scripts/deploy-tk104.sh there via SSH. Every job
+  # binds the `production` environment, whose secrets only `master` may read.
   deploy:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'full')
-    runs-on:
-      group: selfhost-group-1
+    if: github.repository == 'seregatipich/squad-admin-panel' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'full'))
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - name: Verify exact master revision
         env:
@@ -168,9 +170,9 @@ jobs:
   # code on the production host between pushes — accepted tradeoff for a
   # fast frontend preview loop; promote dev -> master as usual once ready.
   deploy-web-preview:
-    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'web')
-    runs-on:
-      group: selfhost-group-1
+    if: github.repository == 'seregatipich/squad-admin-panel' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'web'))
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -236,10 +238,11 @@ jobs:
 
   provision-site-read-token:
     if: >-
+      github.repository == 'seregatipich/squad-admin-panel' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'site-read-token'
-    runs-on:
-      group: selfhost-group-1
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - name: Verify exact dev revision
         env:
@@ -306,10 +309,11 @@ jobs:
 
   provision-site-vip-tier:
     if: >-
+      github.repository == 'seregatipich/squad-admin-panel' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'site-vip-tier'
-    runs-on:
-      group: selfhost-group-1
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - name: Verify exact master revision
         env:
@@ -469,10 +473,11 @@ jobs:
 
   revoke-sessions-for-sso-cutover:
     if: >-
+      github.repository == 'seregatipich/squad-admin-panel' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'sso-cutover'
-    runs-on:
-      group: selfhost-group-1
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - name: Verify exact master revision for SSO cutover
         env:
@@ -550,10 +555,11 @@ jobs:
 
   configure-vip-revision-mode:
     if: >-
+      github.repository == 'seregatipich/squad-admin-panel' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'vip-revision-cutover'
-    runs-on:
-      group: selfhost-group-1
+    runs-on: [self-hosted, tk104-deploy]
+    environment: production
     steps:
       - name: Verify exact panel revision
         env:

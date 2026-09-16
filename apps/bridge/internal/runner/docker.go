@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 type DockerRunner struct {

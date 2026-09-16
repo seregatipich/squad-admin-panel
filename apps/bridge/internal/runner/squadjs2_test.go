@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 const squadjs2TestID = "0196f0a2-1111-2222-3333-444444444444"

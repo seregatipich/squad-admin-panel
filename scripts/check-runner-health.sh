@@ -5,20 +5,15 @@
 # docs/development/agent-harness.md "CI and deployment runners"). Hosted CI
 # does not depend on this check.
 #
-# Queries the repository-level runner list first (`gh api
-# repos/<owner>/<repo>/actions/runners`); if that reports zero runners (the
-# observed behavior when repo-level runners are disabled by org policy — see
-# docs/operations/deployment.md "Runner ownership" and issue #215) or fails
-# outright, it falls back best-effort to the org-level endpoint (`gh api
-# orgs/<owner>/actions/runners`), which needs admin:org or the fine-grained
-# runners permission and commonly 403s without it. A runner reported "online"
-# at the repository level or the org level counts as success.
+# Queries the repository-level runner list (`gh api
+# repos/<owner>/<repo>/actions/runners`). The repository belongs to a personal
+# account, so there is no organization-level runner to fall back to: a runner
+# is either registered on the repository or it does not exist.
 #
 # Exit 0 = at least one runner confirmed online.
-# Exit 1 = no runner confirmed online — offline, none registered, or status
-#          could not be determined (e.g. org-level access denied). Do not
-#          expect a self-hosted deployment to execute; see "Runner recovery runbook" in
-#          docs/development/agent-harness.md.
+# Exit 1 = no runner confirmed online — offline, none registered, or the query
+#          failed. Do not expect a self-hosted deployment to execute; see
+#          "Runner recovery runbook" in docs/development/agent-harness.md.
 # Requires: gh (authenticated), jq.
 
 set -u
@@ -35,7 +30,6 @@ if [ -z "$REPO" ]; then
   echo "check-runner-health: 'gh repo view' failed — is gh authenticated? (gh auth status)" >&2
   exit 1
 fi
-ORG=${REPO%%/*}
 
 # Prints "  <name>: status=<status> busy=<busy>" for every runner in $2 and
 # returns 0 if at least one has status "online", 1 otherwise (including when
@@ -60,22 +54,9 @@ if [ $repo_rc -eq 0 ]; then
     exit 0
   fi
 else
-  echo "check-runner-health: repository-level runner query failed (disabled or inaccessible)"
-fi
-
-echo "check-runner-health: falling back to org-level runners ($ORG) — best-effort, requires admin:org"
-org_json=$(gh api "orgs/$ORG/actions/runners" 2>/dev/null)
-org_rc=$?
-if [ $org_rc -eq 0 ]; then
-  echo "check-runner-health: org-level runners ($ORG):"
-  if report_runners "organization" "$org_json"; then
-    echo "check-runner-health: OK — at least one runner is online"
-    exit 0
-  fi
-else
-  echo "check-runner-health: org-level runner query failed (likely 403 — missing admin:org / runners permission)"
+  echo "check-runner-health: repository-level runner query failed (missing access or network error)"
 fi
 
 echo "check-runner-health: FAIL — no self-hosted runner confirmed online for $REPO." >&2
-echo "check-runner-health: ci pushes will queue indefinitely; see 'Runner recovery runbook' in docs/development/agent-harness.md before waiting on a ci run." >&2
+echo "check-runner-health: production deploys will queue indefinitely; see 'Runner recovery runbook' in docs/development/agent-harness.md." >&2
 exit 1

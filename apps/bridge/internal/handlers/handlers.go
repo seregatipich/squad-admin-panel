@@ -25,12 +25,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/fsx"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/metrics"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/fsx"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/metrics"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/sysd"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 // DiagSink is the io.Writer that diagLog writes structured JSON lines to. It

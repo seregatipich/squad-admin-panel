@@ -1,43 +1,30 @@
 name: ci
-# Runs on the organization's own runners, selected by group rather than by label:
-# label-based selection is switched off for this project so that GitHub-hosted
-# runners can never be picked up by accident. Verification therefore shares the
-# machine with `deploy-tk104.yml`; that is acceptable here only because the
-# repository is private and the branch model is direct-merge, so no code from an
-# outside fork ever reaches this workflow. The local pre-push checklist remains
-# the fast first gate, while this workflow is authoritative (AGENTS.md → "CI gate").
+# Verification runs on ephemeral GitHub-hosted Ubuntu VMs: the repository is
+# public, so hosted minutes are free, jobs run in parallel, and no verification
+# code ever executes on the production host. Only `deploy-tk104.yml` uses the
+# repository's own runner on tk104. The local pre-push checklist remains the
+# fast first gate, while this workflow is authoritative (AGENTS.md → "CI gate").
 on:
   push:
     branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
-  # Only the newest SHA of a ref matters. Cancelling superseded work keeps a merge
-  # wave from queueing behind itself on a runner group with one machine in it.
+  # Only the newest SHA of a ref matters; a merge wave should not spend runner
+  # time on commits that are already superseded.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # Enforces the branch model (see AGENTS.md). Full CI remains limited to trusted
   # master/dev pushes and explicit dispatches — draft branches use the local
-  # pre-push gate, preserving the monthly hosted-runner allowance. On push events
-  # this job gives the dev tip SHA the branch-guard result required by the
-  # protect-master ruleset for the fast-forward promotion push.
+  # pre-push gate. On push events this job gives the dev tip SHA the branch-guard
+  # result required by the protect-master ruleset for the fast-forward promotion
+  # push.
   branch-guard:
-    runs-on:
-      group: selfhost-group-1
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # Страховка на постоянном раннере: если какая-то задача оставила в общей
-      # рабочей папке файлы от root, `actions/checkout` дальше падает с
-      # `EACCES … unlink` и `Unable to create index.lock`, и раннер остаётся
-      # сломанным до ручной уборки на машине. Сам раннер чужие файлы не осилит,
-      # поэтому владельца возвращает контейнер от root. Обычно шаг ничего не
-      # находит и стоит копейки.
-      - name: вернуть владельца рабочей папки
-        run: |
-          docker run --rm -v "$RUNNER_WORKSPACE":/w alpine:3.22 \
-            chown -R "$(id -u):$(id -g)" /w || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -75,11 +62,9 @@ jobs:
         run: bash scripts/test-ci-runner-strategy.sh
 
   node:
-    runs-on:
-      group: selfhost-group-1
-    # The margin stays wide even though the group's runner keeps its Turbo cache
-    # between runs: a cache miss after a lockfile change puts the full coverage
-    # suite back at roughly 17 minutes, and the whole job once exceeded 30.
+    runs-on: ubuntu-24.04
+    # A hosted VM starts without a Turbo cache, and the full coverage suite alone
+    # has taken roughly 17 minutes on a cold run; the whole job once exceeded 30.
     timeout-minutes: 45
     services:
       # Dynamic host ports (Docker assigns a free one) so the job never collides
@@ -111,8 +96,9 @@ jobs:
           --health-retries 5
     env:
       POSTGRES_PASSWORD: test_password
-      # Private-repository Ubuntu runners have 2 vCPU; bounded parallelism avoids
-      # CPU thrashing and keeps results comparable with the local pre-push gate.
+      # The API integration suites share one Postgres database; higher fork counts
+      # have not been measured against it, so parallelism stays bounded and
+      # comparable with the local pre-push gate.
       VITEST_MAX_FORKS: "2"
       PNPM_WORKSPACE_CONCURRENCY: "2"
     steps:
@@ -180,127 +166,41 @@ jobs:
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
   go:
-    runs-on:
-      group: selfhost-group-1
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      GOFLAGS: -buildvcs=false -modcacherw
+      GOFLAGS: -buildvcs=false
     defaults:
       run:
         working-directory: apps/bridge
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # setup-go/actions-cache распаковывал архив поверх общей домашней папки
-      # постоянного раннера и на повторном запуске получал сотни
-      # `tar: Cannot open: File exists`. Архив GitHub нельзя переносить между
-      # разными абсолютными путями, поэтому используем один точный каталог
-      # проекта в RUNNER_TEMP, очищая его и до restore, и после save.
-      - name: Очистить и настроить кеши Go
-        run: |
-          if [[ -z "${RUNNER_TEMP:-}" ]]; then
-            echo "RUNNER_TEMP не задан; точная очистка кеша Go невозможна." >&2
-            exit 1
-          fi
-          cache_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"
-          if [[ -e "${cache_root}" || -L "${cache_root}" ]]; then
-            if [[ -d "${cache_root}" && ! -L "${cache_root}" ]]; then
-              find "${cache_root}" -xdev -type d -exec chmod u+w {} +
-            fi
-            find "${cache_root}" -xdev -depth -delete
-          fi
-          mkdir -p "${cache_root}"
-          {
-            echo "GO_CACHE_ROOT=${cache_root}"
-            echo "GOCACHE=${cache_root}/build"
-            echo "GOMODCACHE=${cache_root}/modules"
-            echo "GOPATH=${cache_root}/workspace"
-            echo "GOBIN=${cache_root}/bin"
-          } >> "${GITHUB_ENV}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.13'
-          # Сохранение setup-go выполняется post-шагом уже после нашей точной
-          # локальной очистки. Поэтому встроенный кеш остаётся выключенным, а
-          # раздельные restore/save ниже работают до удаления каталога проекта.
-          cache: false
-      - name: Восстановить кеш Go в очищенный каталог
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: go-cache-restore
-        with:
-          path: ${{ runner.temp }}/squad-admin-panel-go-cache
-          key: squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('apps/bridge/go.sum') }}
+          cache-dependency-path: apps/bridge/go.sum
       - run: go vet ./...
-      # Только этот шаг уходит в контейнер, и только потому, что детектору гонок
-      # нужен cgo, а компилятора C на машине нет. Вся задача в контейнере не
-      # годится: `actions/checkout` внутри него пишет чекаут от root, и соседние
-      # задачи после этого не могут ни удалить файлы, ни создать index.lock.
-      # Монтирование только на чтение гарантирует, что контейнер не оставит в
-      # общей папке ничего; кеши уводятся внутрь контейнера.
-      - name: go test -race
-        run: |
-          docker run --rm \
-            -v "$PWD":/src:ro -w /src \
-            -e CGO_ENABLED=1 \
-            -e GOFLAGS=-buildvcs=false \
-            -e GOCACHE=/tmp/gocache \
-            -e GOMODCACHE=/tmp/gomodcache \
-            golang:1.25.13-bookworm \
-            go test -race -count=1 ./...
+      # The race detector needs cgo; the hosted Ubuntu image ships a C compiler.
+      - run: go test -race -count=1 ./...
       - name: govulncheck
         run: |
-          if [[ ! -x "${GOBIN}/govulncheck" ]] ||
-             ! go version -m "${GOBIN}/govulncheck" | grep -Eq '[[:space:]]mod[[:space:]]+golang.org/x/vuln[[:space:]]+v1\.7\.0'; then
-            go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-          fi
-          go version -m "${GOBIN}/govulncheck" | grep -Eq '[[:space:]]mod[[:space:]]+golang.org/x/vuln[[:space:]]+v1\.7\.0'
-          "${GOBIN}/govulncheck" ./...
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: build static binary
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
           ls -la bin/
-          # Раньше здесь стоял `file`, которого нет в образе `golang`. Заодно он
-          # ничего и не проверял — только печатал. `ldd` на статическом бинарнике
-          # выходит с ошибкой и сообщает, что тот не динамический; успех `ldd`
-          # означает, что бинарник тянет библиотеки за собой и на хост его класть
-          # нельзя.
+          # `ldd` exits non-zero on a static binary; success means the binary
+          # links shared libraries and would not start on a host without them.
           if ldd bin/panel-host-bridge >/dev/null 2>&1; then
-            echo "::error::panel-host-bridge слинкован динамически — на хосте без нужных библиотек он не запустится"
+            echo "::error::panel-host-bridge is dynamically linked — it will not start on a host without the matching libraries"
             ldd bin/panel-host-bridge
             exit 1
           fi
-          echo "panel-host-bridge статический"
-      - name: Сохранить переиспользуемый кеш Go
-        if: success() && steps.go-cache-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/squad-admin-panel-go-cache
-          key: squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('apps/bridge/go.sum') }}
-      - name: Удалить локальный кеш Go
-        if: always()
-        run: |
-          expected_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"
-          if [[ "${GO_CACHE_ROOT}" != "${expected_root}" ||
-                "${GOCACHE}" != "${GO_CACHE_ROOT}/build" ||
-                "${GOMODCACHE}" != "${GO_CACHE_ROOT}/modules" ||
-                "${GOPATH}" != "${GO_CACHE_ROOT}/workspace" ||
-                "${GOBIN}" != "${GO_CACHE_ROOT}/bin" ]]; then
-            echo "Путь кеша Go вышел за точный каталог проекта в RUNNER_TEMP." >&2
-            exit 1
-          fi
-          clean_status=0
-          go clean -cache -modcache || clean_status=$?
-          if [[ -e "${GO_CACHE_ROOT}" || -L "${GO_CACHE_ROOT}" ]]; then
-            if [[ -d "${GO_CACHE_ROOT}" && ! -L "${GO_CACHE_ROOT}" ]]; then
-              find "${GO_CACHE_ROOT}" -xdev -type d -exec chmod u+w {} +
-            fi
-            find "${GO_CACHE_ROOT}" -xdev -depth -delete
-          fi
-          [[ ! -e "${GO_CACHE_ROOT}" ]]
-          exit "${clean_status}"
+          echo "panel-host-bridge is static"
 
   docker:
-    runs-on:
-      group: selfhost-group-1
+    runs-on: ubuntu-24.04
     needs: [node, go]
     timeout-minutes: 30
     env:

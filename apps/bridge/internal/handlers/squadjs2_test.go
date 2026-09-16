@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
 )
 
 const squadjs2HandlerUUID = "0196f0a2-1111-2222-3333-444444444444"
