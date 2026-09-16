@@ -24,12 +24,9 @@ export function licenseRestartRequired(
 
 /**
  * STATS-4 (#71): shapes and labels behind the «Интеграция SquadJS» section.
- * Mirrors the payload of `GET /api/v1/servers/:id/sidecar` field for field.
+ * Mirrors the payload of `GET /api/v1/servers/:id/rnsquadjs` field for field.
  */
 export type SidecarMode = 'production' | 'shadow' | 'legacy';
-
-/** Sidecar engine serving the server. */
-export type SidecarEngine = 'squadjs2' | 'rnsquadjs';
 
 export interface SidecarStatus {
   state: 'connected' | 'disconnected';
@@ -38,7 +35,6 @@ export interface SidecarStatus {
 
 export interface SidecarIntegration {
   server_id: string;
-  engine: SidecarEngine;
   mode: SidecarMode;
   cutover: boolean;
   /** null means no sidecar status within its 300s TTL — not an error. */
@@ -46,16 +42,14 @@ export interface SidecarIntegration {
 }
 
 /**
- * Names the sidecar engine serving the server.
+ * Names the sidecar serving the server.
  *
- * @param engine - Engine reported by the status route.
- * @param mode - Reported mode; with no sidecar running the engine assignment
- *   says nothing about what is actually reading events.
- * @returns The badge text for the engine row.
+ * @param mode - Mode reported by the status route; in legacy mode no sidecar
+ *   runs and the built-in log parser reads events.
+ * @returns The badge text for the sidecar row.
  */
-export function sidecarEngineLabel(engine: SidecarEngine, mode: SidecarMode): string {
-  if (mode === 'legacy') return 'Не запущен';
-  return engine === 'squadjs2' ? 'SquadJS2' : 'RNSquadJS (legacy)';
+export function sidecarEngineLabel(mode: SidecarMode): string {
+  return mode === 'legacy' ? 'Не запущен' : 'RNSquadJS';
 }
 
 /**

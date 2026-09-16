@@ -353,6 +353,9 @@ The in-house SquadGame.log parser is the most fragile part of the pipeline (rege
 
 ## 2026-09-08 — SquadJS2 replaces RNSquadJS as the sidecar engine
 
+> **Superseded (2026-09-16)** by "RNSquadJS is the only sidecar engine" below. SquadJS2 was never built or rolled out; its code was removed.
+
+
 - The per-server sidecar engine moves from the third-party fork `lACTEPUKCl/RNSquadJS` to our own `breaking-squad/squadjs2` (a fork of SquadJS 4.1.0). The panel-facing contract is unchanged: same `EventEnvelope`, same `events:server:{id}[:shadow]` streams, same `rnsquadjs:cutover-servers` semantics in `worker-log-ingest`.
 - The image is *derived*, not rebuilt: `FROM ghcr.io/breaking-squad/squadjs@sha256:<digest>` plus a `COPY` of the `PanelBridge` plugin. SquadJS2 auto-discovers `squad-server/plugins/*.js`, so no upstream patch is needed (RNSquadJS required one — deviation D6).
 - Which engine serves a server is desired state in the Redis set `squadjs2:engine-servers`; `GET/POST /api/v1/servers/:id/sidecar` reports and switches it. The old `/rnsquadjs` routes stay as deprecated aliases until cleanup.
@@ -374,3 +377,19 @@ RNSquadJS is someone else's fork pinned to a commit, and every bump needs a manu
 
 - **Installing the plugin deps with `yarn add -W` into `/app/node_modules`** — rejected: it re-resolves upstream's whole dependency graph inside the derived image, so the result is no longer the verified build. The deps go to `squad-server/plugins/node_modules`, which Node resolves for the plugin and nothing else.
 - **Keeping payload parity byte-for-byte** — rejected: it would mean deliberately discarding fields SquadJS2 resolves (player names on connect, revive participants). The contract that matters is the type set and key names.
+## 2026-09-16 — RNSquadJS is the only sidecar engine
+
+- The per-server sidecar is [`lACTEPUKCl/RNSquadJS`](https://github.com/lACTEPUKCl/RNSquadJS), built from source at a pinned commit in `docker/rnsquadjs.Dockerfile`. The SquadJS2 engine, its image, plugin, bridge RPC (`container_run_squadjs2`), engine-selection set (`squadjs2:engine-servers`) and the `GET/POST /api/v1/servers/:id/sidecar` routes are removed.
+- Status and heartbeat stay on the keys the RNSquadJS plugin writes, `rnsquadjs:status:{id}[:shadow]` and `worker:heartbeat:rnsquadjs:{id}`; `GET/POST /api/v1/servers/:id/rnsquadjs` report and switch the mode, and the settings page reads the same route.
+- `directory_delete` accepts only `/run/squad-panel/rnsquadjs/{uuid}` for sidecar config; deleting a server still removes it.
+- The shadow-diff gate compares `player.name_changed` pairwise again, as it did before SquadJS2 introduced a poll-derived variant.
+
+### Rationale
+
+SquadJS2's base image lived in a private GHCR package of the `breaking-squad` organization, which the project no longer has access to, and the engine never reached production (no image was ever built). Keeping two engines behind a switch cost API, bridge and UI complexity for a path that could not run.
+
+### Consequences
+
+- Upgrading RNSquadJS past the pinned commit is separate work: upstream `master` registers plugins through `src/plugins/registry.ts` and requires numeric config keys, so `docker/rnsquadjs/upstream.patch` and the UUID-keyed config rendered by `apps/api/src/lib/rnsquadjs.ts` must change together with a shadow soak.
+- GHCR is not used anywhere; images are built from this repository.
+

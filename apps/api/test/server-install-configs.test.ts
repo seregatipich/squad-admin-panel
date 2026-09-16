@@ -31,9 +31,8 @@ import {
 } from './integration/harness.js';
 
 // The relaunch helpers write real files under /run; stub them so install tests
-// never touch the host's runtime dir. Which engine is chosen and what env each
-// one passes is covered by test/lib/{rnsquadjs,squadjs2}.test.ts and
-// test/sidecar-lifecycle.test.ts; here the install-specific behaviour matters:
+// never touch the host's runtime dir. What env the sidecar is launched with is
+// covered by test/lib/rnsquadjs.test.ts; here the install-specific behaviour matters:
 // the sidecar is launched at all, and its failure never fails the install.
 vi.mock('../src/lib/rnsquadjs.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lib/rnsquadjs.js')>()),

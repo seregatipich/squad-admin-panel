@@ -65,13 +65,12 @@ describe('sidecarStatusPill (STATS-4 #71)', () => {
 });
 
 describe('sidecarEngineLabel', () => {
-  it('names the engine that is actually running', () => {
-    expect(sidecarEngineLabel('squadjs2', 'production')).toBe('SquadJS2');
-    expect(sidecarEngineLabel('rnsquadjs', 'shadow')).toBe('RNSquadJS (legacy)');
+  it('names RNSquadJS whenever a sidecar runs', () => {
+    expect(sidecarEngineLabel('production')).toBe('RNSquadJS');
+    expect(sidecarEngineLabel('shadow')).toBe('RNSquadJS');
   });
 
-  it('reports no sidecar in legacy mode regardless of the assigned engine', () => {
-    expect(sidecarEngineLabel('squadjs2', 'legacy')).toBe('Не запущен');
-    expect(sidecarEngineLabel('rnsquadjs', 'legacy')).toBe('Не запущен');
+  it('reports no sidecar in legacy mode', () => {
+    expect(sidecarEngineLabel('legacy')).toBe('Не запущен');
   });
 });

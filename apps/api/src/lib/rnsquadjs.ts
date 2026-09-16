@@ -12,8 +12,13 @@ const RNSQUADJS_ROOT = '/run/squad-panel/rnsquadjs';
 const SIDECAR_UID = 1001;
 const SIDECAR_GID = 1001;
 
+/** Host directory holding a server's rendered sidecar config and RCON socket. */
+export function sidecarConfigDir(serverId: string): string {
+  return `${RNSQUADJS_ROOT}/${serverId}`;
+}
+
 export function sidecarConfigPath(serverId: string): string {
-  return `${RNSQUADJS_ROOT}/${serverId}/config.json`;
+  return `${sidecarConfigDir(serverId)}/config.json`;
 }
 
 export function sidecarSocketPath(serverId: string): string {
@@ -124,7 +129,7 @@ export async function writeSidecarConfig(
   const config = await renderRnsquadjsConfig(app, serverId);
   const json = JSON.stringify(config, null, 2);
 
-  const dir = `${RNSQUADJS_ROOT}/${serverId}`;
+  const dir = sidecarConfigDir(serverId);
   const finalPath = sidecarConfigPath(serverId);
   const tmpPath = `${finalPath}.tmp`;
 

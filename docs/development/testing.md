@@ -65,7 +65,7 @@ pnpm --filter @squad/api test
   копиях со всеми host-командами, заменёнными журналирующими подменами;
 - настоящий length-prefixed JSON-протокол `verify-bridge` через временный
   Unix-сокет;
-- ограниченную проверку сайдкарных shadow-потоков через временный Redis (скрипт `scripts/rnsquadjs-shadow-diff.mjs` engine-neutral: `player.name_changed` в нём проверяется по количеству, а не попарно, потому что SquadJS2 выводит его из поллинга);
+- ограниченную проверку сайдкарных shadow-потоков через временный Redis (`scripts/rnsquadjs-shadow-diff.mjs`);
 - `verify-audit-chain.ts` и реальные миграционные триггеры `audit_log` через
   отдельные временные PostgreSQL-БД.
 

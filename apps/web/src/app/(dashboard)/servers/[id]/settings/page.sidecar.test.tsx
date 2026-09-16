@@ -58,7 +58,7 @@ function mockFetch(sidecar: Response | (() => Response)) {
         new Response(JSON.stringify({ squad_permissions: [] }), { status: 200 }),
       );
     }
-    if (url === '/api/v1/servers/srv-1/sidecar') {
+    if (url === '/api/v1/servers/srv-1/rnsquadjs') {
       return Promise.resolve(typeof sidecar === 'function' ? sidecar() : sidecar);
     }
     return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method ?? 'GET'}`));
@@ -81,7 +81,6 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
       mockFetch(
         statusResponse({
           server_id: 'srv-1',
-          engine: 'squadjs2',
           mode: 'production',
           cutover: true,
           status: { state: 'connected', last_change: '2026-07-27T10:00:00.000Z' },
@@ -92,7 +91,7 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
 
     expect(await screen.findByText('Интеграция SquadJS')).toBeInTheDocument();
     expect(await screen.findByText('Продакшен')).toBeInTheDocument();
-    expect(screen.getByText('SquadJS2')).toBeInTheDocument();
+    expect(screen.getByText('RNSquadJS')).toBeInTheDocument();
     expect(screen.getByText('RCON подключён')).toBeInTheDocument();
   });
 
@@ -102,7 +101,6 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
       mockFetch(
         statusResponse({
           server_id: 'srv-1',
-          engine: 'rnsquadjs',
           mode: 'shadow',
           cutover: false,
           status: { state: 'disconnected', last_change: '2026-07-27T11:00:00.000Z' },
@@ -112,7 +110,7 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Теневой режим')).toBeInTheDocument();
-    expect(screen.getByText('RNSquadJS (legacy)')).toBeInTheDocument();
+    expect(screen.getByText('RNSquadJS')).toBeInTheDocument();
     expect(screen.getByText('RCON отключён')).toBeInTheDocument();
   });
 
@@ -122,7 +120,6 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
       mockFetch(
         statusResponse({
           server_id: 'srv-1',
-          engine: 'rnsquadjs',
           mode: 'legacy',
           cutover: false,
           status: null,
@@ -132,8 +129,7 @@ describe('SettingsPage SquadJS sidecar section (STATS-4 #71)', () => {
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Штатный парсер')).toBeInTheDocument();
-    // With no sidecar running, the engine assignment says nothing about what is
-    // actually reading events.
+    // With no sidecar running, the built-in parser reads events.
     expect(screen.getByText('Не запущен')).toBeInTheDocument();
     expect(screen.getByText('Нет сигнала')).toBeInTheDocument();
   });

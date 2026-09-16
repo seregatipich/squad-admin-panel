@@ -15,28 +15,22 @@ const (
 	ServerImage      = "squad-server:latest"
 	DepotInitImage   = "squad-panel/depot-init:latest"
 	RNSquadJSImage   = "squad-panel/rnsquadjs:latest"
-	SquadJS2Image    = "squad-panel/squadjs2:latest"
 	PanelSocketRoot  = "/run/squad-panel/rnsquadjs"
-	// PanelSquadJS2Root is the SquadJS2 sidecar's per-server config root.
-	// The engine gets its own tree so both sidecars can coexist during the
-	// migration and so a rollback never has to reuse the other's directory.
-	PanelSquadJS2Root = "/run/squad-panel/squadjs2"
 )
 
 var (
 	serverContainerRegex    = regexp.MustCompile(`^squad-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 	depotJobRegex           = regexp.MustCompile(`^squad-depot-init-[0-9]{14}$`)
 	rnsquadjsContainerRegex = regexp.MustCompile(`^rnsquadjs-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
-	squadjs2ContainerRegex  = regexp.MustCompile(`^squadjs2-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 	cfgFileRegex            = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}\.cfg$`)
 	// resticSnapshotIDRegex matches a restic snapshot id (an 8-char short id or
 	// the 64-char full id, both lowercase hex). The literal "latest" is accepted
 	// separately by ResticSnapshotID.
 	resticSnapshotIDRegex = regexp.MustCompile(`^[a-f0-9]{8}([a-f0-9]{56})?$`)
 	// allowedImages gates the caller-supplied image of the generic
-	// container_run RPC. RNSquadJSImage and SquadJS2Image are deliberately
-	// absent: a sidecar image is launchable ONLY via its own
-	// container_run_{rnsquadjs,squadjs2} RPC, each of which hardcodes
+	// container_run RPC. RNSquadJSImage is deliberately
+	// absent: the sidecar image is launchable ONLY via its own
+	// container_run_rnsquadjs RPC, which hardcodes
 	// the image and applies sidecar-specific hardening (read-only rootfs,
 	// uid 1001, isolated socket subdir). Allowing it here would let a
 	// compromised API container launch the sidecar image with squad-server
@@ -70,7 +64,7 @@ var (
 
 func ContainerName(name string) error {
 	if !serverContainerRegex.MatchString(name) && !depotJobRegex.MatchString(name) &&
-		!rnsquadjsContainerRegex.MatchString(name) && !squadjs2ContainerRegex.MatchString(name) {
+		!rnsquadjsContainerRegex.MatchString(name) {
 		return fmt.Errorf("%w: container name %q does not match allowed pattern", ErrForbidden, name)
 	}
 	return nil
@@ -173,17 +167,13 @@ func PanelSavedServerRoot(p string) (string, error) {
 	return panelServerRoot(p, PanelSavedRoot, "saved")
 }
 
-// SidecarServerRoot accepts only the exact per-server config directory of a
-// sidecar engine — `<PanelSocketRoot>/{uuid}` or `<PanelSquadJS2Root>/{uuid}`.
+// SidecarServerRoot accepts only the exact per-server config directory of the
+// RNSquadJS sidecar — `<PanelSocketRoot>/{uuid}`.
 // Server deletion needs it: the directory holds the rendered config.json with
 // the server's plaintext RCON password, which used to survive the server it
 // belonged to.
 func SidecarServerRoot(p string) (string, error) {
-	cleaned, err := panelServerRoot(p, PanelSocketRoot, "rnsquadjs sidecar")
-	if err == nil {
-		return cleaned, nil
-	}
-	return panelServerRoot(p, PanelSquadJS2Root, "squadjs2 sidecar")
+	return panelServerRoot(p, PanelSocketRoot, "rnsquadjs sidecar")
 }
 
 func panelServerRoot(p, root, label string) (string, error) {

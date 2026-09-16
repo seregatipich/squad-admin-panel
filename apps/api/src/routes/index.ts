@@ -95,7 +95,6 @@ import serverSeedNotificationRoutes from './server-seed-notifications.js';
 import serverSeedScheduleRoutes from './server-seed-schedule.js';
 import serverSeedingRoutes from './server-seeding.js';
 import serverSettingsRoutes from './server-settings.js';
-import serverSidecarRoutes from './server-sidecar.js';
 import serverUpdateRoutes from './server-update.js';
 import serverRoutes from './servers.js';
 import settingsAltDetectionRoutes from './settings-alt-detection.js';
@@ -137,7 +136,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverRnsquadjsRoutes);
-  await app.register(serverSidecarRoutes);
   await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverLogFilesRoutes);

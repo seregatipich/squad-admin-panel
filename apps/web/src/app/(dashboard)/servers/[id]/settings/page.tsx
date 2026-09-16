@@ -319,13 +319,13 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
 
   // STATS-4 (#71). Read-only sidecar status, gated on `server:view`; the
   // section self-hides on 403 rather than rendering an error, matching
-  // SeedContributionSection. Switching engine/mode stays on the engine-neutral
-  // POST .../sidecar (`server:stop`) — this section only reports.
+  // SeedContributionSection. Switching mode stays on
+  // POST .../rnsquadjs (`server:stop`) — this section only reports.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/servers/${id}/sidecar`, {
+        const res = await fetch(`/api/v1/servers/${id}/rnsquadjs`, {
           credentials: 'include',
           cache: 'no-store',
         });
@@ -891,11 +891,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       {sidecar ? (
         <GroupedList
           title="Интеграция SquadJS"
-          footnote="Переключение движка и режима выполняется отдельным правом server:stop; эта секция только показывает состояние."
+          footnote="Переключение режима выполняется отдельным правом server:stop; эта секция только показывает состояние."
         >
           <GroupedRow
             label="Движок сайдкара"
-            control={<Badge>{sidecarEngineLabel(sidecar.engine, sidecar.mode)}</Badge>}
+            control={<Badge>{sidecarEngineLabel(sidecar.mode)}</Badge>}
           />
           <GroupedRow
             label="Источник событий"

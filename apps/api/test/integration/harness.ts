@@ -112,10 +112,6 @@ export interface FakeBridge {
     server_id: string;
     env: Record<string, string>;
   }) => Promise<{ container_id: string; status: 'started' }>;
-  containerRunSquadjs2: (p: {
-    server_id: string;
-    env: Record<string, string>;
-  }) => Promise<{ container_id: string; status: 'started' }>;
   containerStart: (p: { name: string }) => Promise<{ status: string }>;
   containerStop: (p: { name: string; timeout_sec?: number }) => Promise<{ status: string }>;
   containerRm: (p: { name: string; force?: boolean }) => Promise<{ status: string }>;
@@ -247,7 +243,6 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     }),
     containerRun: async () => ({ container_id: 'fake-container-id', status: 'started' }),
     containerRunRnsquadjs: async () => ({ container_id: 'fake-rnsquadjs-id', status: 'started' }),
-    containerRunSquadjs2: async () => ({ container_id: 'fake-squadjs2-id', status: 'started' }),
     containerStart: async () => ({ status: 'ok' }),
     containerStop: async () => ({ status: 'ok' }),
     containerRm: async () => ({ status: 'ok' }),

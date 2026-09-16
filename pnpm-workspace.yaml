@@ -3,7 +3,6 @@ packages:
   - 'apps/workers/*'
   - 'packages/*'
   - 'docker/rnsquadjs/plugins/*'
-  - 'docker/squadjs2/plugins/*'
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
