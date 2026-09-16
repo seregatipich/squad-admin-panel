@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# test-ci-runner-strategy.sh — держать все задачи на собственных раннерах
-# проекта, выбираемых группой.
+# test-ci-runner-strategy.sh — keep verification on ephemeral GitHub-hosted VMs
+# and the production deploy on the repository's own tk104 runner.
 #
-# Раньше здесь было обратное правило: проверка на эфемерных GitHub-раннерах,
-# а свой раннер — только деплою (#286). Проект вернулся на свои раннеры и
-# отключил выбор по меткам, чтобы GitHub-раннеры не подмешивались; значит
-# `runs-on: self-hosted` больше ни с чем не сопоставляется и объявлять раннер
-# можно только группой. Тест следит, чтобы ни одна задача не уехала обратно на
-# метку или на GitHub-образ.
+# The project first ran verification hosted and deployed from its own runner
+# (#286), then moved everything onto an organization runner group. That group
+# belonged to the `breaking-squad` organization; the repository now lives on a
+# personal account, which has no runner groups at all, and it is public, so
+# hosted minutes are free while any verification job on the production host
+# would widen what outside code can reach. The test fails if a ci job leaves
+# the hosted image, if a deploy job leaves the labelled tk104 runner or its
+# `production` environment, or if any workflow still selects a runner group.
 set -uo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
@@ -35,140 +37,67 @@ job_block() {
 grep -Fq 'branches: [master, dev]' "$ci_workflow" ||
   fail 'ci push trigger is not restricted to trusted integration branches'
 
-RUNNER_GROUP='selfhost-group-1'
+HOSTED_IMAGE='ubuntu-24.04'
+DEPLOY_RUNNER='[self-hosted, tk104-deploy]'
 
 for job in branch-guard node go docker; do
   block=$(job_block "$ci_workflow" "$job")
   [ -n "$block" ] || fail "required ci job '$job' is missing"
-  printf '%s\n' "$block" | grep -Eq "^[[:space:]]*group:[[:space:]]*${RUNNER_GROUP}[[:space:]]*$" ||
-    fail "ci job '$job' does not target the '${RUNNER_GROUP}' runner group"
+  printf '%s\n' "$block" | grep -Fxq "    runs-on: ${HOSTED_IMAGE}" ||
+    fail "ci job '$job' does not use the pinned GitHub-hosted image ${HOSTED_IMAGE}"
 done
+
+if grep -Eq '^[[:space:]]*runs-on:.*self-hosted' "$ci_workflow"; then
+  fail 'ci still contains a job on a self-hosted runner'
+fi
+
+for workflow in "$ci_workflow" "$deploy_workflow"; do
+  # A personal-account repository has no runner groups: a job that selects one
+  # waits in the queue forever without an error.
+  if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*$' "$workflow"; then
+    fail "$(basename "$workflow") still selects a runner group instead of a hosted image or labels"
+  fi
+done
+
+deploy_jobs=$(grep -Ec '^  [a-zA-Z0-9_-]+:$' <(sed -n '/^jobs:$/,$p' "$deploy_workflow"))
+[ "$deploy_jobs" -ge 1 ] || fail 'deploy workflow declares no jobs'
+while IFS= read -r job; do
+  block=$(job_block "$deploy_workflow" "$job")
+  printf '%s\n' "$block" | grep -Fxq "    runs-on: ${DEPLOY_RUNNER}" ||
+    fail "deploy job '$job' does not target the labelled tk104 deploy runner"
+  printf '%s\n' "$block" | grep -Fxq '    environment: production' ||
+    fail "deploy job '$job' can read deploy secrets outside the production environment"
+  printf '%s\n' "$block" | grep -Fq "github.repository == 'seregatipich/squad-admin-panel'" ||
+    fail "deploy job '$job' would also run in a fork"
+done < <(sed -n '/^jobs:$/,$p' "$deploy_workflow" | sed -n 's/^  \([a-zA-Z0-9_-]*\):$/\1/p')
+if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*ubuntu-' "$deploy_workflow"; then
+  fail 'production deploy must not move to a GitHub-hosted runner'
+fi
 
 node_block=$(job_block "$ci_workflow" node)
 printf '%s\n' "$node_block" | grep -Fq 'timeout-minutes: 45' ||
-  fail 'node timeout does not cover a full-suite run after a cache miss'
-
-for workflow in "$ci_workflow" "$deploy_workflow"; do
-  if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*ubuntu-' "$workflow"; then
-    fail "$(basename "$workflow") still pins a GitHub-hosted image"
-  fi
-  # Выбор по меткам в проекте отключён: задача с `runs-on: self-hosted` не
-  # найдёт себе раннер и молча повиснет в очереди.
-  if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*self-hosted[[:space:]]*$' "$workflow"; then
-    fail "$(basename "$workflow") selects a runner by label instead of by group"
-  fi
-done
-
-deploy_groups=$(grep -Ec "^[[:space:]]*group:[[:space:]]*${RUNNER_GROUP}[[:space:]]*$" "$deploy_workflow")
-[ "$deploy_groups" -ge 1 ] ||
-  fail "production deploy no longer targets the '${RUNNER_GROUP}' runner group"
+  fail 'node timeout does not cover a cold hosted full-suite run'
 
 go_block=$(job_block "$ci_workflow" go)
-printf '%s\n' "$go_block" | grep -Fq 'GOFLAGS: -buildvcs=false -modcacherw' ||
-  fail 'host Go commands may recreate read-only module cache directories'
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
   fail 'go job does not install Go through a SHA-pinned setup action'
-printf '%s\n' "$go_block" | grep -Fq 'cache: false' ||
-  fail 'go job still restores an actions/cache archive into a persistent runner directory'
-printf '%s\n' "$go_block" | grep -Fq 'name: Очистить и настроить кеши Go' ||
-  fail 'go job has no runner-side cache reset and path setup step'
-printf '%s\n' "$go_block" | grep -Fq 'cache_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"' ||
-  fail 'go cache root is not bound to the project inside RUNNER_TEMP'
-go_cache_setup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Очистить и настроить кеши Go/,/uses: actions\/setup-go@/p')
-printf '%s\n' "$go_cache_setup_block" | grep -Fq '[[ -z "${RUNNER_TEMP:-}" ]]' ||
-  fail 'go cache pre-clean does not reject an unresolved RUNNER_TEMP'
-printf '%s\n' "$go_cache_setup_block" | grep -Fq 'find "${cache_root}" -xdev -type d -exec chmod u+w {} +' ||
-  fail 'go cache pre-clean cannot recover interrupted read-only module directories'
-printf '%s\n' "$go_cache_setup_block" | grep -Fq 'find "${cache_root}" -xdev -depth -delete' ||
-  fail 'go cache root is not emptied before a remote cache restore'
-if printf '%s\n' "$go_cache_setup_block" | grep -Eq 'rm[[:space:]]+-r'; then
-  fail 'go cache pre-clean uses recursive rm instead of an exact traversal'
+printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path: apps/bridge/go.sum' ||
+  fail 'go cache is not keyed by the bridge module dependency file'
+printf '%s\n' "$go_block" | grep -Fxq '      - run: go test -race -count=1 ./...' ||
+  fail 'go job does not run the race detector directly on the hosted VM'
+if printf '%s\n' "$go_block" | grep -Eq 'docker run|^[[:space:]]+container:'; then
+  fail 'go job still carries the self-hosted container workaround'
 fi
-
-# Go без -modcacherw делает каталоги модулей 0555. Воспроизводим остаток
-# жёстко оборванной задачи и доказываем, что точный рецепт pre-clean удаляет
-# его, не полагаясь на успевший выполниться `go clean -modcache`.
-readonly_fixture_parent=$(mktemp -d)
-readonly_fixture_root="${readonly_fixture_parent}/squad-admin-panel-go-cache"
-cleanup_readonly_fixture() {
-  if [[ -e "${readonly_fixture_root}" || -L "${readonly_fixture_root}" ]]; then
-    if [[ -d "${readonly_fixture_root}" && ! -L "${readonly_fixture_root}" ]]; then
-      find "${readonly_fixture_root}" -xdev -type d -exec chmod u+w {} + 2>/dev/null || true
-    fi
-    find "${readonly_fixture_root}" -xdev -depth -delete 2>/dev/null || true
-  fi
-  rmdir "${readonly_fixture_parent}" 2>/dev/null || true
-}
-trap cleanup_readonly_fixture EXIT
-mkdir -p "${readonly_fixture_root}/modules/example"
-: > "${readonly_fixture_root}/modules/example/go.mod"
-chmod 0444 "${readonly_fixture_root}/modules/example/go.mod"
-chmod 0555 "${readonly_fixture_root}/modules/example" "${readonly_fixture_root}/modules"
-find "${readonly_fixture_root}" -xdev -type d -exec chmod u+w {} + ||
-  fail 'go cache pre-clean cannot make an interrupted module tree removable'
-find "${readonly_fixture_root}" -xdev -depth -delete ||
-  fail 'go cache pre-clean cannot delete an interrupted read-only module tree'
-[[ ! -e "${readonly_fixture_root}" ]] ||
-  fail 'go cache pre-clean left the interrupted module tree behind'
-rmdir "${readonly_fixture_parent}"
-trap - EXIT
-
-for variable in GO_CACHE_ROOT GOCACHE GOMODCACHE GOPATH GOBIN; do
-  printf '%s\n' "$go_block" | grep -Fq "echo \"${variable}=" ||
-    fail "go cache setup does not export ${variable} through GITHUB_ENV"
-done
-printf '%s\n' "$go_block" | grep -Fq '>> "${GITHUB_ENV}"' ||
-  fail 'go cache paths are not passed to setup-go and later steps'
-printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/cache/restore@[0-9a-f]{40}' ||
-  fail 'go job does not restore its reusable cache through a SHA-pinned action'
-printf '%s\n' "$go_block" | grep -Fq 'id: go-cache-restore' ||
-  fail 'go cache restore has no stable id for the cache-hit guard'
-printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/cache/save@[0-9a-f]{40}' ||
-  fail 'go job does not save its reusable cache before local cleanup'
-remote_cache_path='${{ runner.temp }}/squad-admin-panel-go-cache'
-[ "$(printf '%s\n' "$go_block" | grep -Fc "$remote_cache_path")" -eq 2 ] ||
-  fail 'Go cache restore/save paths differ or are not stable between runs'
-cache_key='squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('"'"'apps/bridge/go.sum'"'"') }}'
-[ "$(printf '%s\n' "$go_block" | grep -Fc "$cache_key")" -eq 2 ] ||
-  fail 'Go cache restore/save keys differ or are not bound to tool and dependency versions'
-go_cache_save_block=$(printf '%s\n' "$go_block" | sed -n '/name: Сохранить переиспользуемый кеш Go/,/name: Удалить локальный кеш Go/p')
-printf '%s\n' "$go_cache_save_block" | grep -Fq "if: success() && steps.go-cache-restore.outputs.cache-hit != 'true'" ||
-  fail 'Go cache may be saved after a failed or partial scan'
 printf '%s\n' "$go_block" | grep -Fq 'go install golang.org/x/vuln/cmd/govulncheck@v1.7.0' ||
   fail 'govulncheck is not pinned to the accepted release'
-printf '%s\n' "$go_block" | grep -Fq 'go version -m "${GOBIN}/govulncheck"' ||
-  fail 'a restored govulncheck binary is not verified through embedded Go module metadata'
-printf '%s\n' "$go_block" | grep -Fq 'golang.org/x/vuln[[:space:]]+v1\.7\.0' ||
-  fail 'govulncheck metadata verification does not require the pinned module release'
 if printf '%s\n' "$go_block" | grep -Fq 'govulncheck@latest'; then
   fail 'govulncheck still changes implicitly between CI runs'
 fi
-printf '%s\n' "$go_block" | grep -Fq 'name: Удалить локальный кеш Go' ||
-  fail 'go job has no exact cache cleanup step'
-go_cleanup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Удалить локальный кеш Go/,$p')
-printf '%s\n' "$go_cleanup_block" | grep -Fq 'if: always()' ||
-  fail 'go cache cleanup is skipped after a failed check'
-printf '%s\n' "$go_cleanup_block" | grep -Fq 'go clean -cache -modcache' ||
-  fail 'go job does not clean its exact build and module caches'
-printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GO_CACHE_ROOT}" != "${expected_root}"' ||
-  fail 'go cache cleanup does not validate its exact project-scoped root'
-printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GOPATH}" != "${GO_CACHE_ROOT}/workspace"' ||
-  fail 'go cache cleanup does not validate its isolated GOPATH'
-printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GOBIN}" != "${GO_CACHE_ROOT}/bin"' ||
-  fail 'go cache cleanup does not validate its isolated GOBIN'
-printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -xdev -type d -exec chmod u+w {} +' ||
-  fail 'go cache cleanup cannot recover read-only module directories'
-printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -xdev -depth -delete' ||
-  fail 'go cache cleanup does not remove its exact project-scoped root'
-if printf '%s\n' "$go_cleanup_block" | grep -Eq 'rm[[:space:]]+-r'; then
-  fail 'go cache cleanup uses recursive rm instead of a validated exact traversal'
-fi
-if printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path:'; then
-  fail 'go job still configures the conflicting setup-go dependency cache'
-fi
+printf '%s\n' "$go_block" | grep -Fq 'if ldd bin/panel-host-bridge' ||
+  fail 'go job no longer proves the bridge binary is statically linked'
 
 grep -Fq 'cancel-in-progress: true' "$ci_workflow" ||
-  fail 'superseded ci runs still queue behind each other on a single-machine group'
+  fail 'superseded ci runs are not cancelled'
 
 branch_guard=$(job_block "$ci_workflow" branch-guard)
 printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
@@ -393,4 +322,4 @@ assert_rnsquad_deps_retry 4 1 3 '5,10,'
 cleanup_rnsquad_deps_fixture
 trap - EXIT
 
-echo "test-ci-runner-strategy: OK — every ci and deploy job targets the '${RUNNER_GROUP}' runner group"
+echo "test-ci-runner-strategy: OK — ci runs on ${HOSTED_IMAGE}, every deploy job on ${DEPLOY_RUNNER} in production"

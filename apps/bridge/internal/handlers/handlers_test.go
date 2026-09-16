@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 func TestValidateDeletableDir_AcceptsConfigsAndSavedRoots(t *testing.T) {

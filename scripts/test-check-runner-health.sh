@@ -3,10 +3,9 @@
 #
 # Stubs `gh` via PATH to emit canned `gh repo view` / `gh api .../actions/runners`
 # output, keyed by RH_STUB_MODE, and asserts the script's pass/fail verdict for
-# every runner-status scenario observed or plausible for #215 (repository-level
-# online, repository-level offline, repository-level disabled with an empty
-# org-level fallback, an org-level 403, a failed repository-level query rescued
-# by a healthy org-level fallback, and both levels reporting zero runners).
+# every repository-level runner scenario: one runner online, all offline, none
+# registered, and a failed query. The script must never consult an
+# organization endpoint — the repository belongs to a personal account.
 # Run: `bash scripts/test-check-runner-health.sh`.
 
 set -u
@@ -51,7 +50,7 @@ case "$1 $2" in
   offline)
     echo '{"total_count":2,"runners":[{"name":"tk104-runner-1","status":"offline","busy":false},{"name":"tk104-runner-2","status":"offline","busy":false}]}'
     ;;
-  no-runner-found | 403 | org-online)
+  no-runner-found)
     echo '{"total_count":0,"runners":[]}'
     ;;
   repo-error)
@@ -60,22 +59,9 @@ case "$1 $2" in
     ;;
   esac
   ;;
-"api orgs/"*"/actions/runners")
-  case "${RH_STUB_MODE:-online}" in
-  offline)
-    echo '{"total_count":1,"runners":[{"name":"org-runner","status":"offline","busy":false}]}'
-    ;;
-  no-runner-found)
-    echo '{"total_count":0,"runners":[]}'
-    ;;
-  403)
-    echo '{"message":"You must be an org admin or have the runners and runner groups fine-grained permission.","status":"403"}' >&2
-    exit 1
-    ;;
-  repo-error | org-online)
-    echo '{"total_count":1,"runners":[{"name":"tk104-runner-1","status":"online","busy":false}]}'
-    ;;
-  esac
+"api orgs/"*)
+  echo "unexpected organization query: $*" >&2
+  exit 99
   ;;
 esac
 EOF
@@ -83,11 +69,9 @@ chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
 
 RH_STUB_MODE=online assert pass "repository-level runner is online"
-RH_STUB_MODE=offline assert fail "repository-level runners all offline, org fallback also offline"
-RH_STUB_MODE=no-runner-found assert fail "repository-level runners disabled (0 registered), org query succeeds with 0 runners"
-RH_STUB_MODE=403 assert fail "repository-level runners disabled (0 registered), org query 403s"
-RH_STUB_MODE=org-online assert pass "repository-level runners disabled (0 registered), org fallback reports an online runner"
-RH_STUB_MODE=repo-error assert pass "repository-level query fails outright, org fallback reports an online runner"
+RH_STUB_MODE=offline assert fail "repository-level runners are all offline"
+RH_STUB_MODE=no-runner-found assert fail "no runner is registered on the repository"
+RH_STUB_MODE=repo-error assert fail "repository-level runner query fails outright"
 
 echo
 echo "check-runner-health tests: $PASS passed, $FAIL failed"

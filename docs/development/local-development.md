@@ -10,7 +10,7 @@
 ## First run
 
 ```bash
-git clone git@github.com:breaking-squad/squad-admin-panel.git
+git clone git@github.com:seregatipich/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env

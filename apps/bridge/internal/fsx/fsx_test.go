@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 func TestReadRejectsOutsideRoots(t *testing.T) {

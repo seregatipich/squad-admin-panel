@@ -22,12 +22,12 @@ import (
 	"github.com/coreos/go-systemd/v22/activation"
 	"github.com/coreos/go-systemd/v22/daemon"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/auth"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/handlers"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/metrics"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/auth"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/handlers"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/metrics"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/sysd"
 )
 
 // Version is baked in by the build.

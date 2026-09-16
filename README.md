@@ -7,7 +7,7 @@ Open-source, self-hosted web admin panel for Squad dedicated servers. Install wi
 **Prerequisites**: Docker Engine + Compose v2 ([docs.docker.com/engine/install](https://docs.docker.com/engine/install/)).
 
 ```bash
-git clone https://github.com/breaking-squad/squad-admin-panel.git
+git clone https://github.com/seregatipich/squad-admin-panel.git
 cd squad-admin-panel
 sudo ./scripts/bootstrap.sh
 ```

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 func TestDockerRunComposesCommand(t *testing.T) {

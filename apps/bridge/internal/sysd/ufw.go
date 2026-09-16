@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 // UFW wraps ufw for adding and removing Squad-server firewall rules.

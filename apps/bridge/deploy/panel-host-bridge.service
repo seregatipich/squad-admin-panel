@@ -1,6 +1,6 @@
 [Unit]
 Description=panel-host-bridge privileged daemon (squad-admin-panel)
-Documentation=https://github.com/breaking-squad/squad-admin-panel
+Documentation=https://github.com/seregatipich/squad-admin-panel
 Requires=panel-host-bridge.socket
 After=panel-host-bridge.socket network.target docker.service
 

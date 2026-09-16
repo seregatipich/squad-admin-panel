@@ -1,4 +1,4 @@
-module github.com/breaking-squad/squad-admin-panel/apps/bridge
+module github.com/seregatipich/squad-admin-panel/apps/bridge
 
 go 1.25.13
 
