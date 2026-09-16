@@ -10,11 +10,11 @@ const PASSWORD_RE = /^\s*Password\s*=\s*(.*)$/m;
  * Reads a server's RCON password out of its on-host `Rcon.cfg`.
  *
  * The password is never mirrored into the database — `Rcon.cfg` is the single
- * source of truth — so both sidecar engines render their config from it.
+ * source of truth — so the sidecar renders its config from it.
  *
  * @param bridge - Bridge client used to read the host file.
  * @param serverId - Panel server UUID.
- * @param engineLabel - Prefix for thrown errors, naming the calling engine.
+ * @param engineLabel - Prefix for thrown errors, naming the caller.
  * @returns The password with surrounding whitespace stripped.
  * @throws If `Rcon.cfg` has no parseable `Password=` line.
  */
@@ -36,12 +36,9 @@ export async function readRconPassword(
 /**
  * Resolves the Redis URL the sidecar plugin should connect to.
  *
- * `SIDECAR_REDIS_URL` is the engine-neutral name; `RNSQUADJS_REDIS_URL` stays
- * readable so an existing deployment keeps working across the migration.
- *
- * @param env - Process environment to read.
+ * @param env - Process environment to read (`SIDECAR_REDIS_URL`).
  * @returns The configured URL, or the loopback default.
  */
 export function resolveSidecarRedisUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SIDECAR_REDIS_URL ?? env.RNSQUADJS_REDIS_URL ?? 'redis://127.0.0.1:6379';
+  return env.SIDECAR_REDIS_URL ?? 'redis://127.0.0.1:6379';
 }

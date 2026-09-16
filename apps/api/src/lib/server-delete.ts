@@ -7,7 +7,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type Redis from 'ioredis';
 import { ADMINS_CFG_SYNC_GROUP, ADMINS_CFG_SYNC_STREAM_PREFIX } from './admins-cfg-sync.js';
-import { purgeSidecarDirs, removeAllSidecars } from './sidecar-lifecycle.js';
+import { purgeSidecarDir, removeSidecar } from './sidecar-lifecycle.js';
 
 // Prefix of the per-server Admins.cfg sync-status key the config-sync worker
 // publishes (mirrors the local const in `routes/admins-cfg.ts`). Dropped on
@@ -167,12 +167,12 @@ export async function softDeleteServer(
       }
     }
 
-    // Tear down both engines' sidecars symmetrically. It is best-effort: a
-    // missing or never-launched sidecar must not block the server deletion.
-    await removeAllSidecars(ctx.bridge, serverId);
-    // Their config dirs hold the rendered config with the server's plaintext
-    // RCON password, so they must not outlive the server.
-    result.sidecar_dirs_removed = await purgeSidecarDirs(ctx.bridge, serverId);
+    // Tear down the sidecar. It is best-effort: a missing or never-launched
+    // sidecar must not block the server deletion.
+    await removeSidecar(ctx.bridge, serverId);
+    // Its config dir holds the rendered config with the server's plaintext RCON
+    // password, so it must not outlive the server.
+    result.sidecar_dirs_removed = await purgeSidecarDir(ctx.bridge, serverId);
 
     try {
       const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });

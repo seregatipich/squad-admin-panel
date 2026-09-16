@@ -2,41 +2,22 @@
 
 ## Bridge method allowlist
 
-31 RPC method names in declaration order (from `BRIDGE_METHODS`):
+30 RPC method names in declaration order (from `BRIDGE_METHODS`):
 
 ```
 ping  host_info  host_metrics
 file_read  file_read_tail  file_write
 file_atomic_write  directory_delete  list_panel_dirs
 list_squad_containers  ufw_rule  process_info
-container_run  container_run_rnsquadjs  container_run_squadjs2
-container_start  container_stop  container_rm
-container_inspect  container_stats  container_logs_follow
-depot_update  docker_prune  backup_snapshots
-backup_run  backup_restore  panel_disk_usage
-squad_log_retention_sweep  squad_log_list  file_read_stream
-host_agent_restart
+container_run  container_run_rnsquadjs  container_start
+container_stop  container_rm  container_inspect
+container_stats  container_logs_follow  depot_update
+docker_prune  backup_snapshots  backup_run
+backup_restore  panel_disk_usage  squad_log_retention_sweep
+squad_log_list  file_read_stream  host_agent_restart
 ```
 
 Streaming methods (deliver `BridgeStreamFrame` before the final response): `container_logs_follow`, `depot_update`, `docker_prune`.
-
-## Sidecar keys (`src/sidecar.ts`)
-
-Engine-neutral Redis keys and helpers for the per-server sidecar. Which engine
-serves a server is desired state; whether the sidecar owns that server's log
-pipeline stays a separate question answered by `RNSQUADJS_CUTOVER_SET`.
-
-| Export | Value / shape |
-|---|---|
-| `SQUADJS2_ENGINE_SET` | `squadjs2:engine-servers` — members run SquadJS2, non-members RNSquadJS |
-| `sidecarStatusKey(id, mode)` | `sidecar:status:{id}` / `sidecar:status:{id}:shadow` (`SET … EX 300`) |
-| `legacySidecarStatusKey(id, mode)` | `rnsquadjs:status:{id}[:shadow]` — read-only migration fallback |
-| `sidecarHeartbeatKey(id)` | `worker:heartbeat:sidecar:{id}` (`SET … EX 30`) |
-| `sidecarContainerName(engine, id)` | `squadjs2-{id}` / `rnsquadjs-{id}` |
-| `sidecarConfigDir(engine, id)` | `/run/squad-panel/{engine}/{id}` |
-| `resolveSidecarEngine(redis, id)` | `SISMEMBER` on the engine set → `'squadjs2' \| 'rnsquadjs'` |
-
-None of these collide with `rcon:status:{id}`, which belongs to `worker-rcon` (D4).
 
 ## Permissions registry
 

@@ -22,9 +22,10 @@ import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
+import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
 import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
-import { relaunchSidecarForEngine, stopAllSidecars } from '../lib/sidecar-lifecycle.js';
+import { stopSidecar } from '../lib/sidecar-lifecycle.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -636,7 +637,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         // A manual stop disables docker's restart policy on the sidecar, so a
         // stop→start cycle leaves a cutover server with no log publisher unless
         // we relaunch it here. Non-fatal: the squad container is already up.
-        await relaunchSidecarForEngine(app, s.id).catch((err: unknown) => {
+        await relaunchSidecar(app, s.id).catch((err: unknown) => {
           req.log.warn(
             { err: (err as Error).message, id: s.id },
             'sidecar relaunch on start failed (continuing)',
@@ -879,13 +880,11 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           message: 'container_stop succeeded',
           payload: { ok: containerStopOk, durationMs: Date.now() - containerStopT0 },
         });
-        // Stop both engines' sidecars too. They are not load-bearing for the
-        // server lifecycle, so a failure here must not fail the stop; stopping
-        // both keeps a server that was switched while running from leaving the
-        // abandoned engine's container up.
-        await stopAllSidecars(app.bridge, s.id, (engine, err) => {
+        // Stop the sidecar too. It is not load-bearing for the server
+        // lifecycle, so a failure here must not fail the stop.
+        await stopSidecar(app.bridge, s.id, (err) => {
           req.log.warn(
-            { err: (err as Error).message, id: s.id, engine },
+            { err: (err as Error).message, id: s.id },
             'sidecar stop failed (continuing)',
           );
         });
@@ -952,7 +951,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       // The sidecar was not part of the restart, but a prior manual stop may
       // have left it down; relaunch it so a restarted cutover server keeps its
       // log publisher. Non-fatal: the squad container is already restarting.
-      await relaunchSidecarForEngine(app, s.id).catch((err: unknown) => {
+      await relaunchSidecar(app, s.id).catch((err: unknown) => {
         req.log.warn(
           { err: (err as Error).message, id: s.id },
           'sidecar relaunch on restart failed (continuing)',

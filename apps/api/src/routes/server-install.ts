@@ -20,8 +20,8 @@ import { z } from 'zod';
 import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
+import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
-import { relaunchSidecarForEngine } from '../lib/sidecar-lifecycle.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
@@ -330,8 +330,8 @@ async function runInstall(
       path: `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs/.keep`,
       content: '',
     });
-    const sidecar = await relaunchSidecarForEngine(app, serverId);
-    emit('sidecar', `${sidecar.engine} sidecar ${sidecar.containerId} started (${sidecar.mode})`);
+    const sidecar = await relaunchSidecar(app, serverId);
+    emit('sidecar', `rnsquadjs sidecar ${sidecar.containerId} started (${sidecar.mode})`);
   } catch (err) {
     emit('sidecar', `sidecar launch failed (non-fatal): ${(err as Error).message}`, 'stderr');
   }

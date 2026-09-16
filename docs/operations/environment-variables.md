@@ -22,7 +22,7 @@
 | `BALANCER_WEBHOOK_SECRET` | no | — | api | Enables the signed team-balancer endpoint the SquadJS exporter pushes dry-run proposal snapshots to. Leave unset to disable the endpoint (it then returns 503). | yes |
 | `DATABASE_URL` | yes | `postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin` | all | Defaults are fine inside compose. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Defaults are fine inside compose. | no |
-| `SIDECAR_REDIS_URL` | no | `redis://127.0.0.1:6379` | api | Redis URL written into the per-server sidecar config (`PanelBridge.redisUrl`). The sidecar container runs with `--network host`, so the compose service name `redis` does not resolve there — this must be a host-reachable address. The legacy `RNSQUADJS_REDIS_URL` is still read as a fallback. | no |
+| `SIDECAR_REDIS_URL` | no | `redis://127.0.0.1:6379` | api | Redis URL passed to the per-server RNSquadJS sidecar as `REDIS_URL`. The sidecar container runs with `--network host`, so the compose service name `redis` does not resolve there — this must be a host-reachable address. | no |
 | `BRIDGE_SOCKET` | yes | `/run/panel-host-bridge/bridge.sock` | all | Path to the bridge unix socket inside containers. | no |
 | `PANEL_GID` | yes | `987` | compose / bridge clients | Primary GID used by bridge-consuming containers. Must equal the host `panel` group GID; `scripts/install-host-bridge.sh` and `scripts/bootstrap.sh` update it in `.env`. | no |
 | `DATA_DIR` | yes | `./data` | compose volumes / bridge | Host data tree used by bind-mounted volumes and `PANEL_DEPOT_HOST_PATH`. The host bridge installer provisions this tree, synchronizes `.env`, and must match the `DATA_DIR` in the systemd drop-in. | no |
