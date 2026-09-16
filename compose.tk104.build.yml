@@ -1,0 +1,72 @@
+# Host build override for compose.tk104.yml.
+#
+# Releases never build on tk104: CI builds the api, web, workers and caddy
+# images once, and the deploy loads them (see docs/operations/deployment.md).
+# This override restores the builds for the two cases that still need them:
+# scripts/dev-deploy-tk104.sh previews an unreleased working tree, and an
+# operator can rebuild by hand if a release artifact is unavailable:
+#
+#   PANEL_IMAGE_TAG=<tag> docker compose --env-file .env.tk104 \
+#     -f compose.tk104.yml -f compose.tk104.build.yml build <service>
+#
+# Every worker service builds the same all-workers image; the build cache makes
+# every build after the first one a no-op.
+x-workers-build: &workers-build
+  context: .
+  dockerfile: docker/worker.Dockerfile
+
+services:
+  migrator:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+  caddy:
+    build:
+      context: .
+      dockerfile: docker/caddy-duckdns.Dockerfile
+  worker-log-ingest:
+    build: *workers-build
+  worker-config-sync:
+    build: *workers-build
+  worker-rcon:
+    build: *workers-build
+  worker-audit-archiver:
+    build: *workers-build
+  worker-event-partition:
+    build: *workers-build
+  worker-presence-daily:
+    build: *workers-build
+  worker-role-expirer:
+    build: *workers-build
+  worker-seed-reward:
+    build: *workers-build
+  worker-steam-refresh:
+    build: *workers-build
+  worker-media-publisher:
+    build: *workers-build
+  worker-clan-guard:
+    build: *workers-build
+  worker-automation:
+    build: *workers-build
+  worker-scheduler:
+    build: *workers-build
+  worker-ban-sync:
+    build: *workers-build
+  worker-clan-priority-expirer:
+    build: *workers-build
+  worker-leaderboard-aggregator:
+    build: *workers-build
+  worker-diag-flush:
+    build: *workers-build
+  worker-metrics-sampler:
+    build: *workers-build
+  worker-discord:
+    build: *workers-build

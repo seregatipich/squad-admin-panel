@@ -29,10 +29,13 @@ SSH_TARGET="${TK104_SSH_TARGET:-seregatipich@tk104.duckdns.org}"
 REMOTE_DIR="${TK104_APP_DIR:-apps/squad-admin-panel}"
 SOURCE_DIR="${SOURCE_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE="docker compose --env-file .env.tk104 -f compose.tk104.yml"
+# Releases load images CI built; a preview builds its tag on the host through
+# the build override instead.
+COMPOSE_BUILD="$COMPOSE -f compose.tk104.build.yml"
 
 case "$TARGET" in
   web)
-    REMOTE_CMD="bash scripts/deploy-tk104-web.sh"
+    REMOTE_CMD="DEPLOY_BUILD=1 bash scripts/deploy-tk104-web.sh"
     ;;
   api | worker-*)
     # No migrator, no --remove-orphans: exactly one container is replaced, so
@@ -40,10 +43,10 @@ case "$TARGET" in
     # `worker-*` is matched by shape rather than listed service by service —
     # the compose file gains workers regularly, and a list here would go stale
     # silently, refusing to deploy the one worker somebody is iterating on.
-    REMOTE_CMD="$COMPOSE build ${TARGET} && $COMPOSE up -d --no-deps ${TARGET}"
+    REMOTE_CMD="$COMPOSE_BUILD build ${TARGET} && $COMPOSE up -d --no-deps ${TARGET}"
     ;;
   full)
-    REMOTE_CMD="bash scripts/deploy-tk104.sh"
+    REMOTE_CMD="DEPLOY_BUILD=1 bash scripts/deploy-tk104.sh"
     ;;
   *)
     echo "usage: ${BASH_SOURCE[0]##*/} [web|api|worker-<name>|full]" >&2
@@ -76,7 +79,7 @@ rsync -az --delete \
 
 echo "==> Rebuilding '${TARGET}' on tk104"
 ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "$SSH_TARGET" \
-  "set -euo pipefail; cd '${REMOTE_DIR}'; export APP_VERSION='${version}'; ${REMOTE_CMD}"
+  "set -euo pipefail; cd '${REMOTE_DIR}'; export APP_VERSION='${version}' PANEL_IMAGE_TAG='${version}'; ${REMOTE_CMD}"
 
 # `/health` is served by the api container, so it keeps reporting whatever the
 # api was built from — a web-only deploy deliberately does not change it.

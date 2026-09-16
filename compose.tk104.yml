@@ -42,9 +42,10 @@ services:
     logging: *default-logging
 
   migrator:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
+    image: squad-panel/api:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: 'no'
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -56,9 +57,10 @@ services:
     logging: *default-logging
 
   api:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
+    image: squad-panel/api:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -120,13 +122,13 @@ services:
     logging: *default-logging
 
   worker-log-ingest:
-    build:
-      context: .
-      dockerfile: docker/worker.Dockerfile
-      args:
-        WORKER: log-ingest
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: log-ingest
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -146,13 +148,13 @@ services:
     logging: *default-logging
 
   worker-config-sync:
-    build:
-      context: .
-      dockerfile: docker/worker.Dockerfile
-      args:
-        WORKER: config-sync
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: config-sync
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -169,14 +171,14 @@ services:
     logging: *default-logging
 
   worker-rcon:
-    build:
-      context: .
-      dockerfile: docker/worker.Dockerfile
-      args:
-        WORKER: rcon
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     network_mode: host
     environment:
+      WORKER: rcon
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
       REDIS_URL: redis://127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
@@ -191,9 +193,13 @@ services:
     logging: *default-logging
 
   worker-audit-archiver:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: audit-archiver
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -204,9 +210,13 @@ services:
     logging: *default-logging
 
   worker-event-partition:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: event-partition
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -217,9 +227,13 @@ services:
     logging: *default-logging
 
   worker-presence-daily:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: presence-daily
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -230,9 +244,13 @@ services:
     logging: *default-logging
 
   worker-role-expirer:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: role-expirer
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       ROLE_EXPIRER_INTERVAL_MS: ${ROLE_EXPIRER_INTERVAL_MS:-60000}
@@ -248,9 +266,13 @@ services:
     logging: *default-logging
 
   worker-seed-reward:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: seed-reward
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       SEED_REWARD_INTERVAL_MS: ${SEED_REWARD_INTERVAL_MS:-86400000}
@@ -267,9 +289,13 @@ services:
   # coupling the sweep to API requests or user logins. No key means a safe
   # no-op while heartbeat stays visible.
   worker-steam-refresh:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: steam-refresh
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       STEAM_API_KEY: ${STEAM_API_KEY:-}
@@ -287,9 +313,13 @@ services:
   # destinations are optional — with no credentials the worker simply defers
   # every publication instead of failing it, so it is safe to run unconfigured.
   worker-media-publisher:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: media-publisher
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       MEDIA_STORAGE_DIR: /var/lib/squad-panel/media
@@ -314,9 +344,13 @@ services:
     logging: *default-logging
 
   worker-clan-guard:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: clan-guard
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       CLAN_GUARD_INTERVAL_MS: ${CLAN_GUARD_INTERVAL_MS:-120000}
@@ -332,9 +366,13 @@ services:
   # AUTO-1 (#72): evaluates user-defined trigger rules over the event streams
   # and enqueues RCON actions / records firings. DB + Redis only, no bridge.
   worker-automation:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: automation
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -347,9 +385,13 @@ services:
     logging: *default-logging
 
   worker-scheduler:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: scheduler
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -369,9 +411,13 @@ services:
     logging: *default-logging
 
   worker-ban-sync:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: ban-sync
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
@@ -386,9 +432,13 @@ services:
     logging: *default-logging
 
   worker-clan-priority-expirer:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: clan-priority-expirer
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       CLAN_PRIORITY_EXPIRER_INTERVAL_MS: ${CLAN_PRIORITY_EXPIRER_INTERVAL_MS:-60000}
@@ -402,9 +452,13 @@ services:
     logging: *default-logging
 
   worker-leaderboard-aggregator:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: leaderboard-aggregator
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -415,9 +469,13 @@ services:
     logging: *default-logging
 
   worker-diag-flush:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: diag-flush
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       DIAG_FLUSH_BATCH_SIZE: ${DIAG_FLUSH_BATCH_SIZE:-100}
@@ -438,13 +496,13 @@ services:
     logging: *default-logging
 
   worker-metrics-sampler:
-    build:
-      context: .
-      dockerfile: docker/worker.Dockerfile
-      args:
-        WORKER: metrics-sampler
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: metrics-sampler
       REDIS_URL: redis://redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -457,9 +515,13 @@ services:
     logging: *default-logging
 
   worker-discord:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
+    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
+      WORKER: discord
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
@@ -475,9 +537,10 @@ services:
     logging: *default-logging
 
   web:
-    build:
-      context: .
-      dockerfile: docker/web.Dockerfile
+    image: squad-panel/web:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -489,9 +552,10 @@ services:
     logging: *default-logging
 
   caddy:
-    build:
-      context: .
-      dockerfile: docker/caddy-duckdns.Dockerfile
+    image: squad-panel/caddy-tk104:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
+    # Release images are loaded onto the host, never pulled: a registry
+    # lookup of this name could fetch somebody else's image.
+    pull_policy: never
     init: true
     restart: unless-stopped
     ports:

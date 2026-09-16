@@ -92,8 +92,13 @@ environment, or any workflow selects a runner group.
   service containers publish to Docker-assigned ports; `Resolve service ports` exports
   those values through both normal and `TEST_*` variables. The `go` job installs the
   pinned Go toolchain through SHA-pinned `actions/setup-go` and runs the race detector
-  natively. The `docker` job, running alongside the tests, builds every production
-  image and executes the backup/restore round trip.
+  natively. The `docker` job, running alongside the tests, builds
+  [`docker-bake.hcl`](../../docker-bake.hcl) in parallel with a GitHub Actions layer
+  cache, smoke-tests the api and workers images, executes the backup/restore round
+  trip, and on a `dev` push exports `squad-panel/{api,web,workers,caddy-tk104}:<sha>`
+  as the `release-images-<sha>` artifact (zstd, kept 14 days). On `master` every job
+  except `branch-guard` skips: the commit already passed them on `dev`, and
+  `branch-guard` fails unless that `dev` run succeeded.
 - **`deploy-tk104` runs on the repository's own runner on tk104.** It is registered
   with the label `tk104-deploy`, runs as the unprivileged `gh-runner` account without
   Docker access, and reaches the deploy account over SSH. Every job binds the
@@ -102,37 +107,62 @@ environment, or any workflow selects a runner group.
   actions remain SHA-pinned — this workflow writes the production deploy key to disk
   (#248). Workflows from outside collaborators require approval (repository setting),
   because a fork's pull request can carry its own workflow file.
-- **`deploy-tk104` deploys over SSH.** The `deploy` job (triggered
-  by a push to `master`) writes the `TK104_SSH_KEY` secret to a deploy key, `rsync`s
-  the checkout to `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/`
-  (excluding `.git`, `.env*`, `data`, build output), then runs
-  `scripts/deploy-tk104.sh` on the host over SSH, and gates on the external
-  `https://tk104.duckdns.org/health` probe.
-- **`deploy-web-preview` redeploys only `web`, from `dev`.** Same workflow file,
+- **`deploy-tk104` loads release images; tk104 never builds.** The `deploy` job
+  (a push to `master`) looks up the successful `ci` run of that exact commit on
+  `dev` and refuses to continue without one, downloads its `release-images-<sha>`
+  artifact, pipes it into `docker load` on tk104 over SSH, `rsync`s the checkout to
+  `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/` (excluding `.git`,
+  `.env*`, `data`, build output and the `.release` markers), and runs
+  `PANEL_IMAGE_TAG=<sha> APP_VERSION=<sha> scripts/deploy-tk104.sh`. That script
+  checks the four images are loaded, runs `compose up -d --remove-orphans` (the
+  migrator first), waits for the api and the Caddy probe, records the tag in
+  `.release` (the one before it in `.release.prev`) and in `.env.tk104`, and prunes
+  release images beyond the newest three — never the running or previous tag. The
+  job then gates on the external `https://tk104.duckdns.org/health` reporting that
+  SHA. `compose.tk104.yml` names every panel service `squad-panel/<image>:${PANEL_IMAGE_TAG}`
+  with `pull_policy: never`, so nothing is fetched from a registry.
+- **`deploy-web-preview` restarts only `web`, from `dev`.** Same workflow file,
   triggered by a `workflow_run` event once `ci` finishes green on `dev` (or manually
-  via `workflow_dispatch` with `target: web`). It rsyncs `dev`'s checkout to the same
-  `~/apps/squad-admin-panel/` directory and same `compose.tk104.yml` project as the
-  `deploy` job above, then runs `scripts/deploy-tk104-web.sh`, which only rebuilds
-  and restarts the `web` service (`docker compose ... build web` /
-  `up -d --no-deps web`) — api/workers/postgres/redis keep running whatever `deploy`
-  last shipped from `master`. Both jobs share the `deploy-tk104` concurrency group so
-  they never touch the compose project at the same time, but this still means tk104
-  serves **unpromoted `dev` code on the production frontend** between deploys —
-  accepted tradeoff for a fast preview loop; promote `dev` → `master` as usual once a
-  change is ready to actually ship. Per GitHub's `workflow_run`/`workflow_dispatch`
-  semantics, this second job only activates once the workflow file itself has reached
-  the default branch (`master`) — merging it into `dev` alone does not arm the
-  trigger.
+  via `workflow_dispatch` with `target: web` and `expected_sha=<dev commit>`). It
+  loads that run's images the same way, then runs `scripts/deploy-tk104-web.sh`,
+  which only restarts the `web` service on the preview tag
+  (`up -d --no-deps web`) — api/workers/postgres/redis keep running whatever
+  `deploy` last shipped from `master`. Both jobs share the `deploy-tk104`
+  concurrency group so they never touch the compose project at the same time, but
+  this still means tk104 serves **unpromoted `dev` code on the production
+  frontend** between deploys — accepted tradeoff for a fast preview loop; promote
+  `dev` → `master` as usual once a change is ready to actually ship. Per GitHub's
+  `workflow_run`/`workflow_dispatch` semantics, this second job only activates once
+  the workflow file itself has reached the default branch (`master`) — merging it
+  into `dev` alone does not arm the trigger.
+
+### Rollback
+
+On tk104, from `~/apps/squad-admin-panel`:
+
+```bash
+bash scripts/rollback-tk104.sh                 # the release recorded in .release.prev
+ROLLBACK_TO=<loaded tag> bash scripts/rollback-tk104.sh
+```
+
+It reruns `deploy-tk104.sh` on the previous tag, whose images the host keeps
+loaded, so it takes about as long as a container restart. It does not undo
+migrations — which is why every migration must stay compatible with the release
+before it (AGENTS.md). If a release artifact expired before promotion, re-run the
+`docker` job of that commit's `dev` `ci` run, or build the tag on the host with
+`PANEL_IMAGE_TAG=<sha> DEPLOY_BUILD=1 bash scripts/deploy-tk104.sh` (slow, and it
+competes with the game server for CPU).
 
 ### Fast developer deploy (`scripts/dev-deploy-tk104.sh`)
 
-Both jobs above cost a full CI run — 30–40 minutes before a one-line UI change
-is visible on tk104. For the inner loop, [`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh)
-does the same two steps the workflow does (rsync the tree to
-`~/apps/squad-admin-panel/`, rebuild one service of the same
-`compose.tk104.yml` project) straight from a developer workstation over SSH,
-with no GitHub Actions involved. The deploy target is still tk104; only the
-courier changes.
+Both jobs above wait for a full CI run. For the inner loop,
+[`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh) rsyncs the
+tree to `~/apps/squad-admin-panel/` and builds one service of the same
+`compose.tk104.yml` project on the host, through the
+[`compose.tk104.build.yml`](../../compose.tk104.build.yml) override, tagged
+`dev-<short sha>` — straight from a developer workstation over SSH, with no
+GitHub Actions involved. The deploy target is still tk104; only the courier
+changes, and the build does run on the production host.
 
 ```bash
 scripts/dev-deploy-tk104.sh              # rebuild web only (default)

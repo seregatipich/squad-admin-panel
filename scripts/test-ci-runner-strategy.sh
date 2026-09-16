@@ -90,7 +90,7 @@ printf '%s\n' "$node_test_block" | grep -Fq 'run: bash scripts/ci-test-shard.sh 
 node_block=$(job_block "$ci_workflow" node)
 printf '%s\n' "$node_block" | grep -Fxq '    needs: [node-lint, node-test, node-scripts]' ||
   fail 'the node gate does not wait for every JavaScript job'
-printf '%s\n' "$node_block" | grep -Fxq '    if: always()' ||
+printf '%s\n' "$node_block" | grep -Fxq "    if: always() && github.ref != 'refs/heads/master'" ||
   fail 'the node gate is skipped instead of failing when a JavaScript job fails'
 printf '%s\n' "$node_block" | grep -Fq '"${result}" != success' ||
   fail 'the node gate does not reject a non-success JavaScript job'
@@ -137,44 +137,47 @@ for job in node-test node-scripts; do
   fi
 done
 
-docker_block=$(job_block "$ci_workflow" docker)
-printf '%s\n' "$docker_block" | grep -Fq 'CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}' ||
-  fail 'docker images are not bound to the exact workflow run'
-printf '%s\n' "$docker_block" | grep -Fq 'id: buildx' ||
-  fail 'docker job does not expose its isolated builder name'
-printf '%s\n' "$docker_block" | grep -Fq 'cleanup: true' ||
-  fail 'docker job does not remove its isolated builder cache'
-buildx_count=$(printf '%s\n' "$docker_block" | grep -Fc 'docker buildx build --builder "${{ steps.buildx.outputs.name }}" --load')
-[ "$buildx_count" -eq 5 ] ||
-  fail "docker job has $buildx_count isolated builds instead of 5"
-printf '%s\n' "$docker_block" | grep -Fq 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
-  fail 'backup round-trip does not receive the isolated builder name'
-if printf '%s\n' "$docker_block" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
-  fail 'docker job still writes intermediate cache into the persistent daemon builder'
-fi
-printf '%s\n' "$docker_block" | grep -Fq 'name: remove exact CI images' ||
-  fail 'docker job has no exact image cleanup step'
-printf '%s\n' "$docker_block" | grep -Fq 'if: always()' ||
-  fail 'docker image cleanup is skipped after a failed build'
-printf '%s\n' "$docker_block" | grep -Fq 'docker image rm --force' ||
-  fail 'docker job does not remove its exact images'
-cleanup_block=$(printf '%s\n' "$docker_block" | sed -n '/name: remove exact CI images/,$p')
-cleanup_tag_count=$(printf '%s\n' "$cleanup_block" | grep -Fc ':${CI_IMAGE_TAG}"')
-[ "$cleanup_tag_count" -eq 5 ] ||
-  fail "docker cleanup has $cleanup_tag_count run-scoped tags instead of 5"
-for image in \
-  squad-admin-panel/api \
-  squad-admin-panel/worker-log-ingest \
-  squad-admin-panel/worker-rcon \
-  squad-panel/rnsquadjs \
-  squad-admin-panel/web
-do
-  printf '%s\n' "$cleanup_block" | grep -Fq "\"${image}:\${CI_IMAGE_TAG}\"" ||
-    fail "docker cleanup omits ${image}"
+# master only fast-forwards to a dev commit whose CI already passed, so every
+# job except branch-guard skips there and branch-guard proves the dev run.
+for job in node-lint node-test node-scripts go docker; do
+  job_block "$ci_workflow" "$job" | grep -Fxq "    if: github.ref != 'refs/heads/master'" ||
+    fail "ci job '$job' repeats its checks on master"
 done
-if printf '%s\n' "$docker_block" | grep -Eq 'squad-(admin-panel|panel)/[^:[:space:]]+:ci([[:space:]".]|$)'; then
-  fail 'docker job still uses a shared :ci tag'
+branch_guard_block=$(job_block "$ci_workflow" branch-guard)
+if printf '%s\n' "$branch_guard_block" | grep -Eq '^    if:'; then
+  fail 'branch-guard must run on every push, master included'
 fi
+printf '%s\n' "$branch_guard_block" | grep -Fq 'actions/workflows/ci.yml/runs?branch=dev&head_sha=${GITHUB_SHA}&status=success' ||
+  fail 'branch-guard does not require a green dev run for a master commit'
+
+docker_block=$(job_block "$ci_workflow" docker)
+printf '%s\n' "$docker_block" | grep -Fq 'id: buildx' ||
+  fail 'docker job does not expose its builder name'
+printf '%s\n' "$docker_block" | grep -Eq 'uses:[[:space:]]+docker/bake-action@[0-9a-f]{40}' ||
+  fail 'docker job does not build docker-bake.hcl through the SHA-pinned bake action'
+printf '%s\n' "$docker_block" | grep -Fq 'TAG: ${{ github.sha }}' ||
+  fail 'release images are not tagged with the commit they were built from'
+printf '%s\n' "$docker_block" | grep -Fq 'source: .' ||
+  fail 'bake builds a remote Git context instead of the checked-out tree'
+for target in api web workers caddy-tk104 rnsquadjs; do
+  grep -Fq "target \"${target}\"" "$repo_root/docker-bake.hcl" ||
+    fail "docker-bake.hcl has no '${target}' target"
+  printf '%s\n' "$docker_block" | grep -Fq "${target}.cache-from=type=gha,scope=${target}" ||
+    fail "bake target '${target}' does not reuse its GitHub Actions layer cache"
+done
+printf '%s\n' "$docker_block" | grep -Fq 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
+  fail 'backup round-trip does not receive the builder name'
+if printf '%s\n' "$docker_block" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
+  fail 'docker job builds outside buildx bake'
+fi
+printf '%s\n' "$docker_block" | grep -Fq 'name: release-images-${{ github.sha }}' ||
+  fail 'docker job does not publish the release images the deploy downloads'
+printf '%s\n' "$docker_block" | grep -Fq "if: github.event_name == 'push' && github.ref == 'refs/heads/dev'" ||
+  fail 'release images are not limited to dev pushes'
+for image in api web workers caddy-tk104; do
+  printf '%s\n' "$docker_block" | grep -Fq "\"squad-panel/${image}:\${GITHUB_SHA}\"" ||
+    fail "the release artifact omits squad-panel/${image}"
+done
 
 backup_script="$repo_root/scripts/test-backup-restore.sh"
 grep -Fq 'TOOL_IMG="squad-panel/restic:citest-${SFX}"' "$backup_script" ||
