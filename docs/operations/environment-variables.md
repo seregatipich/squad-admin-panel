@@ -4,7 +4,8 @@
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в команду деплоя, а `/health` возвращает для приёмки. | no |
+| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в `scripts/deploy-tk104.sh`, тот записывает его в `.env.tk104`, а `/health` возвращает для приёмки. | no |
+| `PANEL_IMAGE_TAG` | tk104 | — | compose.tk104.yml | Тег образов `squad-panel/{api,web,workers,caddy-tk104}`, которые запускает `compose.tk104.yml` (обычно SHA выпуска). Deploy-workflow передаёт его в `scripts/deploy-tk104.sh`, после успешного выпуска тот записывает его в `.env.tk104`, чтобы обычные `docker compose --env-file .env.tk104 …` находили образы. Без значения compose останавливается с `PANEL_IMAGE_TAG_is_required`. | no |
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
 | `PANEL_PUBLIC_URL` | yes | — | api | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID; must be an HTTPS origin in production. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |

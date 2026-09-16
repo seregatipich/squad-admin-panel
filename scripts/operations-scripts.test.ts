@@ -20,7 +20,9 @@ const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
   'scripts/deploy-tk104.sh',
+  'scripts/deploy-tk104-web.sh',
   'scripts/dev-deploy-tk104.sh',
+  'scripts/rollback-tk104.sh',
   'scripts/install-host-bridge.sh',
   'scripts/rebuild.sh',
   'scripts/uninstall.sh',
@@ -409,6 +411,7 @@ describe('tk104 deployment command and health boundaries', () => {
       'docker',
       [
         `if [[ "$*" == *'ps --format'* ]]; then printf '%s\\n' "\${DOCKER_HEALTH_OUTPUT:-api healthy}"; fi`,
+        `if [[ "$*" == 'image ls '* ]]; then printf '%s\\n' \${DOCKER_IMAGE_TAGS:-}; fi`,
         `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-41}"; fi`,
         'exit 0',
       ].join('\n'),
@@ -435,9 +438,16 @@ describe('tk104 deployment command and health boundaries', () => {
       root,
       script,
       log,
-      env: { OPS_LOG: log, APP_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
+      env: {
+        OPS_LOG: log,
+        APP_DIR: root,
+        PANEL_IMAGE_TAG: RELEASE_SHA,
+        PATH: `${shims}:/usr/bin:/bin`,
+      },
     };
   }
+
+  const RELEASE_SHA = 'a'.repeat(40);
 
   it('fails before Docker when the deployment environment file is absent', () => {
     const { root, script } = copyScript('scripts/deploy-tk104.sh');
@@ -446,24 +456,134 @@ describe('tk104 deployment command and health boundaries', () => {
     assert.match(result.stderr, /\.env\.tk104 is missing/);
   });
 
-  it('preserves arguments and executes build, up, probe, then status', () => {
+  it('refuses to start without a release image tag, before any Docker call', () => {
+    const fixture = deployFixture();
+    for (const tag of ['', 'bad tag', '-leading-dash']) {
+      const result = run('/bin/bash', [fixture.script], {
+        env: { ...fixture.env, PANEL_IMAGE_TAG: tag },
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /PANEL_IMAGE_TAG must name the release images/);
+    }
+    assert.deepEqual(logLines(fixture.log), []);
+  });
+
+  it('starts the loaded release images without building, then probes and reports status', () => {
     const fixture = deployFixture();
     const result = run('/bin/bash', [fixture.script], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Deploy complete/);
-    const commands = logLines(fixture.log);
-    assert.deepEqual(
-      commands.filter((line) => line.startsWith('docker|')),
-      [
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|build',
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|up|-d|--remove-orphans',
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps|--format|{{.Service}} {{.Health}}',
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps',
-      ],
+    const commands = logLines(fixture.log).filter(
+      (line) => line.startsWith('docker|') && !line.startsWith('docker|image|ls|'),
     );
-    const curlIndex = commands.findIndex((line) => line.startsWith('curl|'));
-    const statusIndex = commands.findLastIndex((line) => line.endsWith('|ps'));
+    assert.deepEqual(commands, [
+      `docker|image|inspect|squad-panel/api:${RELEASE_SHA}`,
+      `docker|image|inspect|squad-panel/web:${RELEASE_SHA}`,
+      `docker|image|inspect|squad-panel/workers:${RELEASE_SHA}`,
+      `docker|image|inspect|squad-panel/caddy-tk104:${RELEASE_SHA}`,
+      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|up|-d|--remove-orphans',
+      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps|--format|{{.Service}} {{.Health}}',
+      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps',
+    ]);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.includes('|build')),
+      false,
+    );
+    const all = logLines(fixture.log);
+    const curlIndex = all.findIndex((line) => line.startsWith('curl|'));
+    const statusIndex = all.findLastIndex((line) => line.endsWith('|ps'));
     assert.ok(curlIndex > 1 && curlIndex < statusIndex);
+  });
+
+  it('fails before starting anything when a release image is not loaded', () => {
+    const fixture = deployFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: {
+        ...fixture.env,
+        FAIL_DOCKER_MATCH: `image inspect squad-panel/workers:${RELEASE_SHA}`,
+        FAIL_CODE: '1',
+      },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /squad-panel\/workers:a{40} is not loaded/);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.includes('|up|')),
+      false,
+    );
+  });
+
+  it('builds the tag on the host through the build override only when asked', () => {
+    const fixture = deployFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, DEPLOY_BUILD: '1', PANEL_IMAGE_TAG: 'dev-abc1234' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const commands = logLines(fixture.log);
+    const build = commands.findIndex(
+      (line) =>
+        line ===
+        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|-f|compose.tk104.build.yml|build',
+    );
+    const up = commands.findIndex((line) => line.includes('|up|-d|--remove-orphans'));
+    assert.ok(build >= 0 && up > build, commands.join('\n'));
+  });
+
+  it('records the release, keeps the previous tag for rollback and pins it in the env file', () => {
+    const fixture = deployFixture();
+    const previous = 'b'.repeat(40);
+    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
+    writeFileSync(
+      path.join(fixture.root, '.env.tk104'),
+      `SAFE_TEST_VALUE=1\nPANEL_IMAGE_TAG=${previous}\nAPP_VERSION=${previous}\n`,
+    );
+    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(path.join(fixture.root, '.release'), 'utf8'), `${RELEASE_SHA}\n`);
+    assert.equal(readFileSync(path.join(fixture.root, '.release.prev'), 'utf8'), `${previous}\n`);
+    assert.equal(
+      readFileSync(path.join(fixture.root, '.env.tk104'), 'utf8'),
+      `SAFE_TEST_VALUE=1\nPANEL_IMAGE_TAG=${RELEASE_SHA}\nAPP_VERSION=${RELEASE_SHA}\n`,
+    );
+  });
+
+  it('leaves the recorded release and env file alone when the deploy fails', () => {
+    const fixture = deployFixture();
+    const previous = 'b'.repeat(40);
+    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, DOCKER_HEALTH_OUTPUT: 'api starting' },
+    });
+    assert.equal(result.status, 1);
+    assert.equal(readFileSync(path.join(fixture.root, '.release'), 'utf8'), `${previous}\n`);
+    assert.equal(existsSync(path.join(fixture.root, '.release.prev')), false);
+    assert.equal(
+      readFileSync(path.join(fixture.root, '.env.tk104'), 'utf8'),
+      'SAFE_TEST_VALUE=1\n',
+    );
+  });
+
+  it('prunes old release images but never the running or previous tag', () => {
+    const fixture = deployFixture();
+    const previous = 'b'.repeat(40);
+    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
+    const result = run('/bin/bash', [fixture.script], {
+      env: {
+        ...fixture.env,
+        // Newest first, as `docker image ls` prints them.
+        DOCKER_IMAGE_TAGS: `${RELEASE_SHA} ${'c'.repeat(40)} ${previous} ${'d'.repeat(40)} <none>`,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const removed = logLines(fixture.log)
+      .filter((line) => line.startsWith('docker|image|rm|'))
+      .map((line) => line.split('|').at(-1));
+    // KEEP_RELEASES=3: running, previous, and the newest other tag survive.
+    assert.deepEqual(removed, [
+      `squad-panel/api:${'d'.repeat(40)}`,
+      `squad-panel/web:${'d'.repeat(40)}`,
+      `squad-panel/workers:${'d'.repeat(40)}`,
+      `squad-panel/caddy-tk104:${'d'.repeat(40)}`,
+    ]);
   });
 
   it('fails closed when the API never becomes healthy', () => {
@@ -517,18 +637,18 @@ describe('tk104 deployment command and health boundaries', () => {
     assert.equal(probes.length, 20, 'expected the retry budget to be exhausted');
   });
 
-  it('propagates build and HTTP-probe failures without announcing success', () => {
-    const buildFixture = deployFixture();
-    const buildFailure = run('/bin/bash', [buildFixture.script], {
+  it('propagates start and HTTP-probe failures without announcing success', () => {
+    const upFixture = deployFixture();
+    const upFailure = run('/bin/bash', [upFixture.script], {
       env: {
-        ...buildFixture.env,
-        FAIL_DOCKER_MATCH: 'compose --env-file .env.tk104 -f compose.tk104.yml build',
+        ...upFixture.env,
+        FAIL_DOCKER_MATCH: 'compose --env-file .env.tk104 -f compose.tk104.yml up',
         FAIL_CODE: '47',
       },
     });
-    assert.equal(buildFailure.status, 47);
+    assert.equal(upFailure.status, 47);
     assert.equal(
-      logLines(buildFixture.log).some((line) => line.includes('|up|-d|')),
+      logLines(upFixture.log).some((line) => line.startsWith('curl|')),
       false,
     );
 
@@ -545,6 +665,138 @@ describe('tk104 deployment command and health boundaries', () => {
         ?.endsWith('|ps'),
       false,
     );
+  });
+});
+
+describe('tk104 web preview and rollback', () => {
+  const RELEASE_SHA = 'a'.repeat(40);
+
+  function hostFixture(relativePath: string): {
+    root: string;
+    script: string;
+    log: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const { root, script } = copyScript(relativePath);
+    writeFileSync(path.join(root, '.env.tk104'), 'SAFE_TEST_VALUE=1\n');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    loggingShim(
+      shims,
+      'docker',
+      [
+        `if [[ "$*" == *'ps --format'* ]]; then printf '%s\\n' 'web running'; fi`,
+        `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit 1; fi`,
+        'exit 0',
+      ].join('\n'),
+    );
+    loggingShim(shims, 'sleep');
+    loggingShim(shims, 'curl');
+    return {
+      root,
+      script,
+      log,
+      env: { OPS_LOG: log, APP_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
+    };
+  }
+
+  it('restarts only the loaded web image for a preview tag', () => {
+    const fixture = hostFixture('scripts/deploy-tk104-web.sh');
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, PANEL_IMAGE_TAG: RELEASE_SHA },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const docker = logLines(fixture.log).filter((line) => line.startsWith('docker|'));
+    assert.equal(docker[0], `docker|image|inspect|squad-panel/web:${RELEASE_SHA}`);
+    assert.ok(
+      docker.includes(
+        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|up|-d|--no-deps|web',
+      ),
+      docker.join('\n'),
+    );
+    assert.equal(
+      docker.some((line) => line.includes('|build') || line.includes('--remove-orphans')),
+      false,
+    );
+  });
+
+  it('refuses a preview without a tag or with a missing image, before restarting web', () => {
+    const untagged = hostFixture('scripts/deploy-tk104-web.sh');
+    const noTag = run('/bin/bash', [untagged.script], { env: untagged.env });
+    assert.equal(noTag.status, 1);
+    assert.match(noTag.stderr, /PANEL_IMAGE_TAG must name the web image/);
+    assert.deepEqual(logLines(untagged.log), []);
+
+    const missing = hostFixture('scripts/deploy-tk104-web.sh');
+    const noImage = run('/bin/bash', [missing.script], {
+      env: {
+        ...missing.env,
+        PANEL_IMAGE_TAG: RELEASE_SHA,
+        FAIL_DOCKER_MATCH: 'image inspect',
+      },
+    });
+    assert.equal(noImage.status, 1);
+    assert.match(noImage.stderr, /is not loaded/);
+    assert.equal(
+      logLines(missing.log).some((line) => line.includes('|up|')),
+      false,
+    );
+  });
+
+  it('builds the preview web image through the override when asked', () => {
+    const fixture = hostFixture('scripts/deploy-tk104-web.sh');
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, PANEL_IMAGE_TAG: 'dev-abc1234', DEPLOY_BUILD: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      logLines(fixture.log)[0],
+      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|-f|compose.tk104.build.yml|build|web',
+    );
+  });
+
+  function rollbackFixture(): {
+    root: string;
+    script: string;
+    log: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const { root, script } = copyScript('scripts/rollback-tk104.sh');
+    const deployScript = path.join(root, 'scripts/deploy-tk104.sh');
+    const log = path.join(root, 'commands.log');
+    // The real deploy script is covered above; here only the hand-off matters.
+    executable(
+      deployScript,
+      `printf 'deploy|%s|%s\\n' "$PANEL_IMAGE_TAG" "$APP_VERSION" >> "\${OPS_LOG:?}"`,
+    );
+    return { root, script, log, env: { OPS_LOG: log, APP_DIR: root } };
+  }
+
+  it('rolls back to the previous release through the normal deploy path', () => {
+    const fixture = rollbackFixture();
+    const previous = 'b'.repeat(40);
+    writeFileSync(path.join(fixture.root, '.release'), `${RELEASE_SHA}\n`);
+    writeFileSync(path.join(fixture.root, '.release.prev'), `${previous}\n`);
+    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(logLines(fixture.log), [`deploy|${previous}|${previous}`]);
+  });
+
+  it('refuses a rollback with no previous release or onto the running one', () => {
+    const empty = rollbackFixture();
+    const none = run('/bin/bash', [empty.script], { env: empty.env });
+    assert.equal(none.status, 1);
+    assert.match(none.stderr, /no previous release recorded/);
+
+    const same = rollbackFixture();
+    writeFileSync(path.join(same.root, '.release'), `${RELEASE_SHA}\n`);
+    const onto = run('/bin/bash', [same.script], {
+      env: { ...same.env, ROLLBACK_TO: RELEASE_SHA },
+    });
+    assert.equal(onto.status, 1);
+    assert.match(onto.stderr, /already the running release/);
+    assert.deepEqual(logLines(empty.log), []);
+    assert.deepEqual(logLines(same.log), []);
   });
 });
 
@@ -608,7 +860,7 @@ describe('fast developer deploy to tk104', () => {
     const rsyncIndex = commands.findIndex((line) => line.startsWith('rsync|'));
     const sshIndex = commands.findIndex((line) => line.startsWith('ssh|'));
     assert.ok(rsyncIndex >= 0 && sshIndex > rsyncIndex, commands.join('\n'));
-    assert.match(sshPayload(fixture.log), /bash scripts\/deploy-tk104-web\.sh/);
+    assert.match(sshPayload(fixture.log), /DEPLOY_BUILD=1 bash scripts\/deploy-tk104-web\.sh/);
     // Nothing that could touch the schema or other containers.
     assert.doesNotMatch(sshPayload(fixture.log), /deploy-tk104\.sh|migrator|--remove-orphans/);
   });
@@ -627,13 +879,19 @@ describe('fast developer deploy to tk104', () => {
   it('stamps a version that can never be mistaken for a released commit SHA', () => {
     const fixture = devDeployFixture();
     run('/bin/bash', [fixture.script], { env: { ...fixture.env, GIT_SHA: 'deadbee' } });
-    assert.match(sshPayload(fixture.log), /APP_VERSION='dev-deadbee'/);
+    assert.match(
+      sshPayload(fixture.log),
+      /APP_VERSION='dev-deadbee' PANEL_IMAGE_TAG='dev-deadbee'/,
+    );
 
     const dirty = devDeployFixture();
     run('/bin/bash', [dirty.script], {
       env: { ...dirty.env, GIT_SHA: 'deadbee', GIT_DIRTY: ' M apps/web/src/page.tsx' },
     });
-    assert.match(sshPayload(dirty.log), /APP_VERSION='dev-deadbee-dirty'/);
+    assert.match(
+      sshPayload(dirty.log),
+      /APP_VERSION='dev-deadbee-dirty' PANEL_IMAGE_TAG='dev-deadbee-dirty'/,
+    );
   });
 
   it('rebuilds only the api container, without the migrator, for the api target', () => {
@@ -641,7 +899,7 @@ describe('fast developer deploy to tk104', () => {
     const result = run('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
-    assert.match(payload, /build api/);
+    assert.match(payload, /-f compose\.tk104\.yml -f compose\.tk104\.build\.yml build api/);
     assert.match(payload, /up -d --no-deps api/);
     assert.doesNotMatch(payload, /migrator|--remove-orphans/);
   });
@@ -660,7 +918,7 @@ describe('fast developer deploy to tk104', () => {
       env: { ...fixture.env, CONFIRM_FULL_DEPLOY: 'deploy' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(sshPayload(fixture.log), /bash scripts\/deploy-tk104\.sh/);
+    assert.match(sshPayload(fixture.log), /DEPLOY_BUILD=1 bash scripts\/deploy-tk104\.sh/);
   });
 
   it('rebuilds a single worker container by name, on the same no-deps path', () => {
@@ -668,7 +926,7 @@ describe('fast developer deploy to tk104', () => {
     const result = run('/bin/bash', [fixture.script, 'worker-rcon'], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
-    assert.match(payload, /build worker-rcon/);
+    assert.match(payload, /-f compose\.tk104\.build\.yml build worker-rcon/);
     assert.match(payload, /up -d --no-deps worker-rcon/);
     assert.doesNotMatch(payload, /migrator|--remove-orphans/);
   });

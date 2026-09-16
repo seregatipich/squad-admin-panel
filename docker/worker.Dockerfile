@@ -28,19 +28,23 @@ RUN pnpm --filter @squad/diag build
 RUN pnpm --filter @squad/db build
 RUN pnpm --filter @squad/steam-api build
 RUN pnpm --filter @squad/chat-ingest build
-ARG WORKER
-RUN test -n "$WORKER" && pnpm --filter @squad/worker-$WORKER build
+# Every worker is built into the one image: production pulls a single
+# `workers` image and each compose service picks its worker with WORKER at
+# run time, so a release carries one worker layer set instead of twenty.
+RUN pnpm --workspace-concurrency=4 --filter "./apps/workers/*" build
 
 FROM base AS runtime
 ENV NODE_ENV=production
-ARG WORKER
-ENV WORKER=$WORKER
-RUN if [ "$WORKER" = "diag-flush" ]; then \
-      apt-get update && \
-      apt-get install -y --no-install-recommends systemd && \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
+# systemd provides journalctl for worker-diag-flush's journald forwarding; it
+# is installed for every worker because they share this image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends systemd && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app /app
 RUN pnpm install --frozen-lockfile --prod
-WORKDIR /app/apps/workers/$WORKER
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+# A build-arg default keeps per-worker builds (docker-compose.yml) working;
+# the shared production image leaves it empty and compose sets WORKER.
+ARG WORKER=
+ENV WORKER=$WORKER
+WORKDIR /app
+CMD ["sh", "-c", "test -n \"$WORKER\" || { echo 'WORKER is not set' >&2; exit 64; }; cd \"/app/apps/workers/$WORKER\" && exec node --enable-source-maps dist/index.js"]

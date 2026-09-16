@@ -131,6 +131,18 @@ waits for the tests, so the slowest job — not the sum of all jobs — sets the
 The `node-test` timeout stays at 45 minutes because a hosted VM starts without a Turbo
 cache.
 
+The `docker` job builds [`docker-bake.hcl`](../../docker-bake.hcl) in one parallel
+`docker/bake-action` run with a per-target GitHub Actions layer cache, tags every image
+with the commit SHA, and on a `dev` push uploads `api`, `web`, `workers` and
+`caddy-tk104` as the `release-images-<sha>` artifact — the exact bytes the deploy
+loads on tk104 (docs/operations/deployment.md). All workers share one image; compose
+selects the worker with `WORKER`, and the job fails if a worker named in
+`compose.tk104.yml` is missing from the image.
+
+On a `master` push every job except `branch-guard` skips: `master` only fast-forwards
+to a `dev` commit, which already passed them. `branch-guard` instead requires a
+successful `ci` run of that SHA on `dev`. `test-ci-runner-strategy.sh` locks both halves.
+
 The `go` job runs natively: the hosted image ships a C compiler, so `go test -race`
 needs no container, and `actions/setup-go` caches modules keyed by
 `apps/bridge/go.sum`. `govulncheck` is pinned to `v1.7.0`, and the job fails if the

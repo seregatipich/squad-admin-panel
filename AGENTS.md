@@ -88,6 +88,7 @@ Run it by hand any time with `bash scripts/pre-push-checklist.sh`. **Not run loc
 - **Bug fixes must include a regression test** that reproduces the bug — failing before the fix, passing after it.
 - **New modules and features must include integration tests** that exercise the module wired into the system end-to-end (API route → service → database, worker → queue, etc.), not only unit tests.
 - Never skip, disable, `.skip`, or weaken existing tests to get CI green. Fix the code or fix the test's legitimate expectation.
+- **Migrations must stay compatible with the previous release** so a rollback can run against the new schema (see "Promotion").
 
 ## Definition of done
 
@@ -156,9 +157,10 @@ Every parallel task agent must also post a **`Feature-branch handoff evidence �
   git fetch origin
   git push origin origin/dev:master
   ```
-  Only commits pushed to `dev` carry green `branch-guard`/`node`/`go`/`docker` checks; a merge commit created locally on `master` has none. The `branch-guard` CI job audits every `master` push and goes red if the SHA is not reachable from `dev` (and once the `protect-master` ruleset is active, GitHub rejects such pushes outright).
+  Only commits pushed to `dev` carry green `branch-guard`/`node`/`go`/`docker` checks; a merge commit created locally on `master` has none. On a `master` push the other CI jobs skip — the commit already passed them on `dev` — and `branch-guard` goes red unless the SHA is reachable from `dev` **and** has a successful `ci` run on `dev` (once the `protect-master` ruleset is active, GitHub rejects such pushes outright).
 - Promote only when the work on `dev` is complete: implemented, tested, documented, committed, pushed, and **`dev` CI is green**.
-- A non-docs push to `master` triggers the `deploy-tk104` workflow and **deploys to production**. Promote deliberately and watch both the `ci` and deploy runs to completion.
+- A non-docs push to `master` triggers the `deploy-tk104` workflow and **deploys to production**. The deploy builds nothing on tk104: it loads the images the commit's `dev` CI run built (artifact `release-images-<sha>`, kept 14 days — re-run that `ci` run's `docker` job if it has expired) and starts them. Promote deliberately and watch both the `ci` and deploy runs to completion.
+- **Rollback** is `bash scripts/rollback-tk104.sh` on tk104: it restarts the previous release's images, which the host keeps loaded, and does not undo migrations. Therefore **every migration must stay compatible with the release before it** — add columns and tables first, drop what the previous release still reads only in a later release.
 
 ## Enforcement harness
 

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Rebuild and restart ONLY the web (frontend) container on tk104 — a preview
-# deploy from `dev` after CI passes, sharing the same compose project as
-# deploy-tk104.sh's full-stack production deploy. api/workers/postgres/redis
-# are left running whatever deploy-tk104.sh last deployed from master; only
-# the `web` service picks up dev's code. Idempotent: safe to re-run. Runs ON
-# tk104 from the app directory, with .env.tk104 present.
+# Restart ONLY the web (frontend) container on tk104 — a preview deploy from
+# `dev` after CI passes, sharing the same compose project as deploy-tk104.sh's
+# full-stack production deploy. api/workers/postgres/redis are left running
+# whatever deploy-tk104.sh last deployed from master; only the `web` service
+# picks up dev's code. Idempotent: safe to re-run. Runs ON tk104 from the app
+# directory, with .env.tk104 present.
+#
+# Environment:
+#   PANEL_IMAGE_TAG  required — tag of the loaded squad-panel/web image
+#   DEPLOY_BUILD=1   build that web image on this host first (dev-deploy-tk104.sh)
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-$HOME/apps/squad-admin-panel}"
 COMPOSE_FILE="compose.tk104.yml"
+BUILD_FILE="compose.tk104.build.yml"
 ENV_FILE=".env.tk104"
 
 cd "$APP_DIR"
@@ -17,9 +22,20 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "fatal: $APP_DIR/$ENV_FILE is missing (copy .env.example, fill the tk104 secrets incl. DUCKDNS_TOKEN)" >&2
   exit 1
 fi
+if [[ ! "${PANEL_IMAGE_TAG:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "fatal: PANEL_IMAGE_TAG must name the web image (got '${PANEL_IMAGE_TAG:-}')" >&2
+  exit 1
+fi
+export PANEL_IMAGE_TAG
 
-echo "==> Building web image (dev preview)"
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build web
+if [[ "${DEPLOY_BUILD:-}" == 1 ]]; then
+  echo "==> Building web image ${PANEL_IMAGE_TAG} (dev preview)"
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" -f "$BUILD_FILE" build web
+fi
+if ! docker image inspect "squad-panel/web:${PANEL_IMAGE_TAG}" >/dev/null 2>&1; then
+  echo "fatal: squad-panel/web:${PANEL_IMAGE_TAG} is not loaded (or set DEPLOY_BUILD=1)" >&2
+  exit 1
+fi
 
 echo "==> Restarting web only — api/workers/postgres/redis are untouched"
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-deps web

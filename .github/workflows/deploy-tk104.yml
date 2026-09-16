@@ -24,9 +24,14 @@ on:
         default: full
         options: [full, web]
       expected_sha:
-        description: 'exact master SHA required for a manual full deploy'
+        description: 'full: the exact master SHA; web: the dev commit to preview'
         type: string
         required: false
+
+permissions:
+  contents: read
+  # Finding the dev CI run of a commit and downloading its release images.
+  actions: read
 
 concurrency:
   # Shared by both jobs below so a full master deploy and a web-only dev
@@ -38,13 +43,15 @@ concurrency:
 jobs:
   # Deploys OVER SSH from the repository's own runner (label `tk104-deploy`) into
   # the production host (tk104.duckdns.org). The runner lives on tk104 under an
-  # unprivileged account without Docker access, so it rsyncs the checkout to the
-  # deploy account and runs scripts/deploy-tk104.sh there via SSH. Every job
-  # binds the `production` environment, whose secrets only `master` may read.
+  # unprivileged account without Docker access: it downloads the images the dev
+  # ci run built, pipes them into `docker load` over SSH, rsyncs the checkout,
+  # and runs scripts/deploy-tk104.sh there. Every job binds the `production`
+  # environment, whose secrets only `master` may read.
   deploy:
     if: github.repository == 'seregatipich/squad-admin-panel' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'full'))
     runs-on: [self-hosted, tk104-deploy]
     environment: production
+    timeout-minutes: 30
     steps:
       - name: Verify exact master revision
         env:
@@ -60,7 +67,42 @@ jobs:
             exit 1
           fi
 
+      # Only a commit whose ci run on dev succeeded may reach tk104, and its
+      # images come from that run: nothing is built on the production host.
+      - name: Find the green dev CI run
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release commit must be a full 40-character SHA (got '${RELEASE_SHA}')." >&2
+            exit 1
+          fi
+          run_id=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&per_page=1" |
+            jq -r '.workflow_runs[0].id // empty')
+          if [[ -z "${run_id}" ]]; then
+            echo "${RELEASE_SHA} has no successful ci run on dev; refusing to deploy it." >&2
+            exit 1
+          fi
+          {
+            echo "sha=${RELEASE_SHA}"
+            echo "run_id=${run_id}"
+          } >> "${GITHUB_OUTPUT}"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+
+      - name: Download the release images
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-images-${{ steps.release.outputs.sha }}
+          run-id: ${{ steps.release.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-images
 
       - name: Configure pinned SSH trust and deploy key
         env:
@@ -89,21 +131,30 @@ jobs:
           printf '%s\n' "${TK104_DEPLOY_KEY}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
+      - name: Load the release images on tk104
+        run: |
+          zstd -dc "${RUNNER_TEMP}/release-images/release-images.tar.zst" |
+            ssh -i ~/.ssh/id_deploy \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
+              -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+              seregatipich@tk104.duckdns.org 'docker load'
+
       - name: Sync repository to tk104
         run: |
           rsync -az --delete \
             --exclude '.git' --exclude 'node_modules' --exclude '.next' \
             --exclude 'data' --exclude 'dist' --exclude '.env' --exclude '.env.*' \
+            --exclude '.release' --exclude '.release.prev' \
             -e "ssh -i ~/.ssh/id_deploy -o UserKnownHostsFile=${RUNNER_TEMP}/tk104_known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=20" \
             ./ seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/
 
-      - name: Build and restart the stack on tk104
+      - name: Start the release on tk104
         run: |
           ssh -i ~/.ssh/id_deploy \
             -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             seregatipich@tk104.duckdns.org \
-            "set -euo pipefail; cd ~/apps/squad-admin-panel; export APP_VERSION='${GITHUB_SHA}'; bash scripts/deploy-tk104.sh"
+            "set -euo pipefail; cd ~/apps/squad-admin-panel; export APP_VERSION='${GITHUB_SHA}' PANEL_IMAGE_TAG='${GITHUB_SHA}'; bash scripts/deploy-tk104.sh"
 
       - name: External health check
         run: |
@@ -120,26 +171,59 @@ jobs:
           echo "external health check did not reach the exact release" >&2
           exit 1
 
-      - name: Remove SSH deploy key
+      - name: Remove SSH deploy key and downloaded images
         if: always()
-        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts"
+        run: rm -rf ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts" "${RUNNER_TEMP}/release-images"
 
-  # Preview deploy: rebuilds and restarts ONLY the web (frontend) container
-  # on the SAME tk104 host/compose project as the job above, once `ci` goes
-  # green on `dev` — so a dev push's frontend is visible on tk104 without
-  # waiting for a dev -> master promotion. api/workers/postgres/redis are
-  # left running whatever the `deploy` job above last deployed from master;
-  # only `web` picks up dev's code. This intentionally serves untested dev
-  # code on the production host between pushes — accepted tradeoff for a
-  # fast frontend preview loop; promote dev -> master as usual once ready.
+  # Preview deploy: restarts ONLY the web (frontend) container on the SAME tk104
+  # host/compose project as the job above, once `ci` goes green on `dev` — so a
+  # dev push's frontend is visible on tk104 without waiting for a dev -> master
+  # promotion. api/workers/postgres/redis keep running whatever `deploy` last
+  # released from master. This intentionally serves unpromoted dev code on the
+  # production host between pushes — accepted tradeoff for a fast frontend
+  # preview loop. A manual `target: web` dispatch previews `expected_sha`.
   deploy-web-preview:
     if: github.repository == 'seregatipich/squad-admin-panel' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'web'))
     runs-on: [self-hosted, tk104-deploy]
     environment: production
+    timeout-minutes: 20
     steps:
+      # Only a commit whose ci run on dev succeeded may reach tk104, and its
+      # images come from that run: nothing is built on the production host.
+      - name: Find the green dev CI run
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || inputs.expected_sha }}
+        run: |
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release commit must be a full 40-character SHA (got '${RELEASE_SHA}')." >&2
+            exit 1
+          fi
+          run_id=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&per_page=1" |
+            jq -r '.workflow_runs[0].id // empty')
+          if [[ -z "${run_id}" ]]; then
+            echo "${RELEASE_SHA} has no successful ci run on dev; refusing to deploy it." >&2
+            exit 1
+          fi
+          {
+            echo "sha=${RELEASE_SHA}"
+            echo "run_id=${run_id}"
+          } >> "${GITHUB_OUTPUT}"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ steps.release.outputs.sha }}
+
+      - name: Download the release images
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-images-${{ steps.release.outputs.sha }}
+          run-id: ${{ steps.release.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-images
 
       - name: Configure pinned SSH trust and deploy key
         env:
@@ -168,21 +252,32 @@ jobs:
           printf '%s\n' "${TK104_DEPLOY_KEY}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
+      - name: Load the release images on tk104
+        run: |
+          zstd -dc "${RUNNER_TEMP}/release-images/release-images.tar.zst" |
+            ssh -i ~/.ssh/id_deploy \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
+              -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+              seregatipich@tk104.duckdns.org 'docker load'
+
       - name: Sync repository to tk104
         run: |
           rsync -az --delete \
             --exclude '.git' --exclude 'node_modules' --exclude '.next' \
             --exclude 'data' --exclude 'dist' --exclude '.env' --exclude '.env.*' \
+            --exclude '.release' --exclude '.release.prev' \
             -e "ssh -i ~/.ssh/id_deploy -o UserKnownHostsFile=${RUNNER_TEMP}/tk104_known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=20" \
             ./ seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/
 
-      - name: Rebuild and restart only web on tk104
+      - name: Restart only web on tk104
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           ssh -i ~/.ssh/id_deploy \
             -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             seregatipich@tk104.duckdns.org \
-            'cd ~/apps/squad-admin-panel && bash scripts/deploy-tk104-web.sh'
+            "set -euo pipefail; cd ~/apps/squad-admin-panel; export PANEL_IMAGE_TAG='${RELEASE_SHA}'; bash scripts/deploy-tk104-web.sh"
 
       - name: External health check
         run: |
@@ -195,6 +290,6 @@ jobs:
           echo "external health check did not reach 200" >&2
           exit 1
 
-      - name: Remove SSH deploy key
+      - name: Remove SSH deploy key and downloaded images
         if: always()
-        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts"
+        run: rm -rf ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts" "${RUNNER_TEMP}/release-images"
