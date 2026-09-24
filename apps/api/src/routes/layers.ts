@@ -37,8 +37,7 @@ function serialize(row: LayerDbRow): LayerRow {
  * current/next-map widget (ROT-3), and the rotation calendar (ROT-4).
  *
  * Read-only for now: rows come from the static fallback dataset applied by
- * migration 0042. The depot-sync upsert/deprecate path is a documented
- * follow-up — see ai_docs/adr/2026-07-09-map-rotation-managed-vs-native.md.
+ * migration 0042. The depot-sync upsert/deprecate path is a follow-up.
  */
 const layersRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();

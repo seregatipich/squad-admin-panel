@@ -38,7 +38,7 @@ const dotenv = readDotenv();
 
 // `.env`'s DATABASE_URL uses the docker-internal host `postgres`, which does not
 // resolve from the host. Rebuild it against 127.0.0.1 from POSTGRES_PASSWORD,
-// matching what AGENTS.md tells contributors to do by hand.
+// matching what CLAUDE.md tells contributors to do by hand.
 if (!process.env.DATABASE_URL) {
   const pw = dotenv.get('POSTGRES_PASSWORD');
   if (pw) process.env.DATABASE_URL = `postgres://admin:${pw}@127.0.0.1:5432/admin`;

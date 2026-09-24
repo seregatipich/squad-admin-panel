@@ -3,7 +3,7 @@ import type { ParsedBan, ParseResult } from './index.js';
 // Matches: optional "[admin prefix] " (anything up to "Banned:"), then
 // "Banned:<17-digit SteamID64>:<unix-expiry>", then an optional
 // "// comment" trailer used as the ban reason. Confirmed by decomposition
-// correction #4 (see AGENTS.md / issue CBAN-2).
+// correction #4 (see CLAUDE.md / issue CBAN-2).
 const LINE_PATTERN =
   /^(?<prefix>.*?)Banned:(?<steamId>\d{17}):(?<expiry>\d+)\s*(?:\/\/\s*(?<comment>.*))?$/;
 

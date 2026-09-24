@@ -149,7 +149,7 @@ ROLLBACK_TO=<loaded tag> bash scripts/rollback-tk104.sh
 It reruns `deploy-tk104.sh` on the previous tag, whose images the host keeps
 loaded, so it takes about as long as a container restart. It does not undo
 migrations — which is why every migration must stay compatible with the release
-before it (AGENTS.md). If a release artifact expired before promotion, re-run the
+before it (CLAUDE.md). If a release artifact expired before promotion, re-run the
 `docker` job of that commit's `dev` `ci` run, or build the tag on the host with
 `PANEL_IMAGE_TAG=<sha> DEPLOY_BUILD=1 bash scripts/deploy-tk104.sh` (slow, and it
 competes with the game server for CPU).

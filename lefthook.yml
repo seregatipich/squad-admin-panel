@@ -15,14 +15,15 @@ pre-commit:
 
 pre-push:
   parallel: false
-  scripts:
-    # Script, not command: commands skip when the current branch has no
-    # unpushed diff (e.g. during a dev→master promotion push).
-    "branch-guard":
-      runner: sh
+  commands:
+    branch-guard:
+      # Reads the native pre-push refspec lines on stdin. It runs on every
+      # push, including the dev→master promotion and file-less branch
+      # deletions — scripts/lefthook-branch-guard.test.ts pushes through this
+      # config to prove it.
       use_stdin: true
       priority: 1
-  commands:
+      run: bash scripts/git-guard.sh check-push origin origin
     checklist:
       # This is a fast local pre-check — the cloud `ci` workflow is the
       # authoritative gate. Runs typecheck, biome, build, secret scan, and

@@ -1,8 +1,0 @@
-#!/bin/sh
-# lefthook pre-push script: enforce the AGENTS.md branch model.
-#
-# A lefthook script (not a command) on purpose: commands are skipped whenever
-# the current branch has no unpushed diff — which is exactly the state during
-# cross-ref pushes like the dev→master promotion. Scripts always run and
-# receive the native pre-push refspec lines on stdin (use_stdin: true).
-exec bash "$(git rev-parse --show-toplevel)/scripts/git-guard.sh" check-push origin origin

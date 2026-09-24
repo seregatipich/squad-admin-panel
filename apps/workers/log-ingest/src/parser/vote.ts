@@ -3,8 +3,7 @@
  *
  * Squad's native vote subsystem (map skip / map change / admin-initiated) writes
  * a start line, one line per ballot, and an end line to SquadGame.log under the
- * `LogSquadVoteSystem` category. The exact wire grammar is pinned in
- * `ai_docs/research/vote-log-format.md`; live capture against a real host is
+ * `LogSquadVoteSystem` category. Live capture against a real host is
  * env-gated, so the three regex constants below are the single place to adjust
  * once validated. Everything downstream (assembler, store, schema) is
  * format-independent.

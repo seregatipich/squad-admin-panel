@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify-done.sh — mechanical completion verification for the AGENTS.md
+# verify-done.sh — mechanical completion verification for the CLAUDE.md
 # "Completion verification" checklist.
 #
 # Verifies the git/CI state a finished task must be in. It does NOT replace
@@ -16,7 +16,7 @@
 # Exit 0 = all checks passed; exit 1 = at least one failed (task is NOT done).
 # Requires: git, gh (authenticated), jq.
 #
-# Used by every coding agent before reporting a task complete; see AGENTS.md
+# Used by every coding agent before reporting a task complete; see CLAUDE.md
 # "Completion verification" and docs/development/agent-harness.md.
 
 set -u
@@ -29,7 +29,7 @@ set -u
 #                      integrate. There is deliberately NO dev-CI check here: the
 #                      branch has not been merged yet. Use this to attest a wave
 #                      task done; the orchestrator runs the default mode after
-#                      merging to dev. See AGENTS.md "Parallel-wave handoff".
+#                      merging to dev. See CLAUDE.md "Parallel-wave handoff".
 MODE=dev
 FEATURE_BRANCH=""
 while [ $# -gt 0 ]; do
@@ -139,7 +139,7 @@ branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 if [ "$branch" = "dev" ]; then
   pass "on integration branch dev"
 else
-  fail "on '$branch', not 'dev' — finished work must be merged into dev (see AGENTS.md workflow)"
+  fail "on '$branch', not 'dev' — finished work must be merged into dev (see CLAUDE.md workflow)"
 fi
 
 head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
@@ -181,7 +181,7 @@ fi
 
 echo
 if [ "$FAIL" -eq 0 ]; then
-  echo "verify-done: PASSED — mechanical state checks hold. Judgment angles (requirements, runtime evidence, diff review, docs) still apply; see AGENTS.md."
+  echo "verify-done: PASSED — mechanical state checks hold. Judgment angles (requirements, runtime evidence, diff review, docs) still apply; see CLAUDE.md."
   exit 0
 fi
 echo "verify-done: FAILED — the task is NOT done. Fix the failures above and re-run."

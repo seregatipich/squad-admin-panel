@@ -75,4 +75,3 @@ curl -X POST -b "__Host-sid=$COOKIE" \
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
 - [changelog.md](./changelog.md)
-- [ADR: `RemoteAdminListHosts.cfg` (pull) vs. push](../../../../ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md) — SYNC-9 evaluation; verdict: stay on push.

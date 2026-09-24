@@ -1,6 +1,6 @@
 # Solving GitHub issues in parallel with Claude Managed Agents
 
-`scripts/solve-issues-parallel.ts` fans the issue backlog out to [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): one cloud-sandbox session per issue, each with this repository mounted and checked out on `dev`. Every session implements its issue on a `feature/issue-<n>-<slug>` branch, runs the local gate, pushes the branch, and publishes a reviewable feature-branch handoff evidence comment on the issue. That pushed branch plus its verified comment is the session's terminal state — the "parallel-wave handoff" defined in `AGENTS.md` — and you (or an orchestrator agent) then merge the branches into `dev` serially and promote as usual.
+`scripts/solve-issues-parallel.ts` fans the issue backlog out to [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): one cloud-sandbox session per issue, each with this repository mounted and checked out on `dev`. Every session implements its issue on a `feature/issue-<n>-<slug>` branch, runs the local gate, pushes the branch, and publishes a reviewable feature-branch handoff evidence comment on the issue. That pushed branch plus its verified comment is the session's terminal state — the "parallel-wave handoff" defined in `CLAUDE.md` — and you (or an orchestrator agent) then merge the branches into `dev` serially and promote as usual.
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ Run `pnpm solve:issues -- --help` for the full flag list (`--timeout-min`, `--re
 
 1. **Issue selection** — explicit numbers or `--label`, fetched via `gh` from the current repository (override with `--repo owner/name`).
 2. **Agent + environment** — a reusable agent (`squad-admin-panel issue solver`, full `agent_toolset_20260401` toolset) and a cloud environment are found by name or created on first run. `--model` applies per session through an `agent_with_overrides` reference, so runs with different models share one agent resource.
-3. **One session per issue** — each session mounts the repo with `checkout: dev`, receives a task prompt encoding the `AGENTS.md` rules (work branch off `dev`, mandatory tests, local gate, conventional commit referencing the issue, `verify-done.sh --feature`, a visible handoff evidence comment, no merges/PRs), and streams events until `session.status_idle`.
+3. **One session per issue** — each session mounts the repo with `checkout: dev`, receives a task prompt encoding the `CLAUDE.md` rules (work branch off `dev`, mandatory tests, local gate, conventional commit referencing the issue, `verify-done.sh --feature`, a visible handoff evidence comment, no merges/PRs), and streams events until `session.status_idle`.
 4. **Concurrency pool** — at most `--concurrency` sessions run at once; each has a `--timeout-min` wall-clock budget (default 45 min), after which the stream is aborted and the session reported as timed out (it keeps its state server-side and can be inspected or resumed in the [Console](https://platform.claude.com)).
 5. **Report** — per-issue status (`solved` / `failed` / `timed-out`), session ID, expected branch name, and the agent's final message. Exit code is non-zero if any session did not finish cleanly.
 
@@ -42,9 +42,9 @@ The runner never merges anything. Integrate the pushed branches the same way as 
 
 1. Review each `feature/issue-<n>-*` branch (diff against `origin/dev`, check the tests the agent added).
 2. Open the handoff evidence URL from each agent's final report and confirm that the published issue comment covers requirements, exact tests and gates, runtime verification, provenance, and all limitations. The comment is explicitly not a final completion claim.
-3. Merge the branches into `dev` one at a time per the `AGENTS.md` workflow, re-running the local gate between merges.
+3. Merge the branches into `dev` one at a time per the `CLAUDE.md` workflow, re-running the local gate between merges.
 4. Watch `dev` CI to green and run `bash scripts/verify-done.sh`.
-5. For each integrated issue, post and verify the final `Completion evidence — 100% verified` issue comment required by `AGENTS.md`. It must identify the current `dev` SHA and CI run; only then may the issue be reported complete or closed.
+5. For each integrated issue, post and verify the final `Completion evidence — 100% verified` issue comment required by `CLAUDE.md`. It must identify the current `dev` SHA and CI run; only then may the issue be reported complete or closed.
 6. Promote when appropriate (`git push origin origin/dev:master`).
 
 A `timed-out` or `failed` result means no trustworthy branch was pushed for that issue — check the session in the Console before assuming anything landed.

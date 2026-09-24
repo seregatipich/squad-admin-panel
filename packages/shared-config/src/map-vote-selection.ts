@@ -1,7 +1,6 @@
 /**
  * GAME-1 (#80) pure map auto-selection rule, shared by the API preview route
- * and the scheduler tick so both always agree on the same decision. See
- * ai_docs/adr/2026-07-09-map-rotation-managed-vs-native.md — "automatic
+ * and the scheduler tick so both always agree on the same decision. "Automatic
  * voting" is panel-driven candidate selection + `AdminSetNextLayer`.
  */
 

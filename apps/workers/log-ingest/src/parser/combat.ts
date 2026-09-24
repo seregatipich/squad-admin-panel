@@ -4,13 +4,12 @@
  * Extends the log-ingest parser with the four player-combat events Squad writes
  * to `SquadGame.log`: damage (`LogSquad ActualDamage`), wound
  * (`LogSquadTrace ASQSoldier::Wound`), death (`LogSquadTrace ASQSoldier::Die`)
- * and revive (`LogSquad … has revived …`). The wire grammar is pinned in
- * `ai_docs/research/combat-log-format.md`, cross-checked against the SquadJS
- * log-parser (`Team-Silver-Sphere/SquadJS`, `squad-server/log-parser/`) — the
- * single verified signature reference. Live tailing against a real host is
- * env-gated, so the regex constants below are the one place to adjust once
- * validated; everything downstream (store, teamkill index) is format
- * independent.
+ * and revive (`LogSquad … has revived …`). The wire grammar is cross-checked
+ * against the SquadJS log-parser (`Team-Silver-Sphere/SquadJS`,
+ * `squad-server/log-parser/`) — the single verified signature reference.
+ * Live tailing against a real host is env-gated, so the regex constants below
+ * are the one place to adjust once validated; everything downstream (store,
+ * teamkill index) is format independent.
  *
  * The pure functions here are deterministic and unit-tested with synthetic
  * fixtures, including suicide (attacker == victim), environmental/no-attacker
