@@ -3115,14 +3115,13 @@ then `pnpm test:cov` under `FULL=1`, else `turbo run test --filter='...[origin/d
 
 `scripts/verify-done.sh` has two modes. Default requires a clean tree on `dev`, `HEAD == origin/dev`, a `git-guard.sh doctor` run with no `WARN`, and a `gh run list --branch dev --workflow ci` entry whose `headSha` equals the current dev tip and concluded `success`. `--feature [branch]` — the parallel-wave handoff mode — requires a work branch (explicitly rejecting `master|main|dev|HEAD`), a clean tree, `HEAD == origin/<branch>`, and a successful `git merge-base origin/dev HEAD`, with **no CI check**, since the branch is unmerged.
 
-### 14.13 Four-layer branch-model enforcement
+### 14.13 Three-layer branch-model enforcement
 
-`scripts/git-guard.sh` (527 lines) is the single source of truth; four thin adapters call it, which is the point — the rules cannot drift between IDE, hook, and server.
+`scripts/git-guard.sh` (527 lines) is the single source of truth; three thin adapters call it, which is the point — the rules cannot drift between IDE, hook, and server.
 
 | Layer | Entry point | Mode |
 |---|---|---|
 | Claude Code | `.claude/settings.json` → `PreToolUse` matcher `Bash` → `scripts/git-guard-hook.sh` | `check-command` |
-| Codex | `.codex/hooks.json` (same hook, resolved via `git rev-parse --show-toplevel`) + `.codex/rules/git-policy.rules` execpolicy | `check-command` / prefix rules |
 | lefthook pre-commit | `lefthook.yml` `branch-guard` | `check-commit` |
 | lefthook pre-push | `.lefthook/pre-push/branch-guard` (a script, `use_stdin: true`) | `check-push` |
 | GitHub | `.github/rulesets/*.json` via `scripts/apply-rulesets.sh` | authoritative backstop |
@@ -3140,9 +3139,7 @@ The rules are identical at every layer: no branch named `main` (create/checkout/
 
 `check_command` is honest about its limits: it splits on `&&`/`||`/`;`/`|`, strips env-var prefixes, tracks `cd`/`pushd` and `git -C <dir>`, and **skips commands targeting other repositories** by comparing `--git-common-dir` — so a scratch clone under `/tmp` is unguarded. Exit 2 with stderr means deny. `doctor` never blocks; it warns on a `core.hooksPath` shadowing lefthook, an existing local or remote `main`, `origin/master` not being an ancestor of `origin/dev`, and a missing `jq`.
 
-The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (deny creation and update on `refs/heads/main`), `protect-dev` (deny deletion and non-fast-forward), and `protect-master` (adds `required_status_checks` for `branch-guard`, `node`, `go`, `docker`). **They are currently dormant** — GitHub requires Pro/Team or a public repo for rulesets on this private repo — which is exactly why the `branch-guard` CI job duplicates the ancestry audit in code. Three of the four layers are client-side and bypassable with `--no-verify`; the only server-side check that actually holds today is that CI job.
-
-A fifth, purely aspirational layer exists: `.sentrux/rules.toml` (144 lines) declares the three-level import layering (L0 `shared-types`/`shared-config`/`diag`; L1 `db`/`bridge-client`; L2 `api`/`web`/`workers`), 18 `forbidden` arrows including app↔app, `packages → apps`, and `apps/web/src → node:child_process|dockerode`. Its header claims "Enforced via `sentrux check_rules` — violations block merges", but `sentrux` appears in zero workflows, hooks, scripts, or package.json entries. `.gitignore:48` even ignores `.sentrux/`; the file survives only because it was force-added. This is documented architecture with no mechanical enforcement whatsoever.
+The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (deny creation and update on `refs/heads/main`), `protect-dev` (deny deletion and non-fast-forward), and `protect-master` (adds `required_status_checks` for `branch-guard`, `node`, `go`, `docker`). **They are currently dormant** — GitHub requires Pro/Team or a public repo for rulesets on this private repo — which is exactly why the `branch-guard` CI job duplicates the ancestry audit in code. Two of the three layers are client-side and bypassable with `--no-verify`; the only server-side check that actually holds today is that CI job.
 
 ### 14.14 Agent orchestration as an in-repo subsystem
 
@@ -3150,7 +3147,7 @@ A fifth, purely aspirational layer exists: `.sentrux/rules.toml` (144 lines) dec
 
 `AGENT_SYSTEM_PROMPT` (`:317`) declares `AGENTS.md` authoritative, and `buildTaskPrompt` (`:220`) restates the branch model, the test policy, the local gate, `bash scripts/verify-done.sh --feature`, and the handoff-comment requirement verbatim — the AGENTS.md contract is compiled into the prompt, so the docs are load-bearing runtime input, not commentary. `solveIssue` (`:364`) never throws, mapping session outcomes to `solved`/`failed`/`timed-out`; `runPool` (`:248`) is a hand-rolled lane pool that preserves input order; the process exits 1 unless every session is `solved`.
 
-Crucially, **the runner cannot push or merge**. It never invokes `git`; its only subprocess is `gh` with read-only subcommands. All pushing happens inside the sandbox, by the agent, on its own branch — the same four-layer guard applies there. And it is itself tested: `pnpm run solve:issues:test` runs `tsx --test scripts/solve-issues-parallel.test.ts` inside the CI `node` job.
+Crucially, **the runner cannot push or merge**. It never invokes `git`; its only subprocess is `gh` with read-only subcommands. All pushing happens inside the sandbox, by the agent, on its own branch — the same three-layer guard applies there. And it is itself tested: `pnpm run solve:issues:test` runs `tsx --test scripts/solve-issues-parallel.test.ts` inside the CI `node` job.
 
 Two neighbouring automation scripts are worth knowing about because they are *not* wired to anything. `scripts/rnsquadjs-shadow-diff.mjs` (114 lines) `XRANGE`s `events:server:<id>` against `events:server:<id>:shadow` and calls `compareStreams` from the plugin's built `dist/shadowDiff.js`, implementing the "≥ 99% event-set parity" cutover criterion — but no workflow or package.json entry references it, and the only automated check on the same data is `apps/api/test/e2e/install-lifecycle.e2e.test.ts:163` asserting `xlen(:shadow) > 0`. `compareStreams` is unit-tested; the wrapper's gate thresholds are not. `scripts/mint-owner-session.mjs` (29 lines) is fully orphaned — zero call sites — and diverges from `apps/web/e2e/helpers.ts` in three ways (raw `pg` vs `docker exec psql`, no Redis session mirror, uuidv7 vs v4). `scripts/verify-audit-chain.ts` is the counterexample done right: it re-uses `apps/api/src/lib/audit-chain.ts#verifyAuditChain`, so the CLI and the `/api/v1/audit/verify-chain` route agree by construction rather than by convention.
 

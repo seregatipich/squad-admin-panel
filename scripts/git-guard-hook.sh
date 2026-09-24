@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # git-guard-hook.sh — PreToolUse adapter for scripts/git-guard.sh.
 #
-# Shared by Claude Code (.claude/settings.json) and Codex (.codex/hooks.json):
-# both agents send a JSON object with `tool_input.command` on stdin and treat
-# exit code 2 + stderr as "deny with reason". Non-git commands pass through.
+# Wired into Claude Code via .claude/settings.json: the agent sends a JSON
+# object with `tool_input.command` on stdin and treats exit code 2 + stderr as
+# "deny with reason". Non-git commands pass through.
 
 set -u
 

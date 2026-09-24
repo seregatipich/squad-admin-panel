@@ -4,7 +4,6 @@
 # Single source of truth for the agent enforcement harness. Every layer is a
 # thin adapter around this script:
 #   - Claude Code PreToolUse hook  -> check-command  (.claude/hooks/git-guard-hook.sh)
-#   - Codex PreToolUse hook        -> check-command  (.codex/hooks/git-guard-hook.sh)
 #   - lefthook pre-commit          -> check-commit
 #   - lefthook pre-push            -> check-push
 #
@@ -17,7 +16,7 @@
 #   - no force-pushes or deletions of `master`/`dev`, no `push --all/--mirror`
 #
 # Exit codes: 0 = allow, 2 = deny (reason on stderr). Compatible with
-# Claude Code hooks, Codex hooks adapters, and native git hooks.
+# Claude Code hooks and native git hooks.
 #
 # Command-string analysis is heuristic (whitespace tokenization, split on
 # `&&`/`||`/`;`/`|`); exotic quoting can slip past it. The GitHub rulesets
@@ -503,7 +502,7 @@ doctor() {
     fi
   fi
   if ! command -v jq >/dev/null 2>&1; then
-    echo "  WARN jq not installed — the Claude/Codex hook adapters fall back to python3 for JSON parsing"
+    echo "  WARN jq not installed — the Claude Code hook adapter falls back to python3 for JSON parsing"
   fi
   [ $ok -eq 1 ] && echo "  OK no branch-model problems detected"
   exit 0
