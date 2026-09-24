@@ -195,4 +195,12 @@ Start at [`docs/README.md`](docs/README.md) for the full index:
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
+
+## History
+
+Squad Admin Panel is created and maintained by Sergei Poluektov. Until 2026-09-16 it was
+developed at `github.com/breaking-squad/squad-admin-panel`; it then moved here, to
+`seregatipich/squad-admin-panel`, with its complete commit history and branches. The
+copyright notice of that earlier home is kept in [LICENSE](LICENSE), as the MIT terms
+require. Every contributor is recorded in `git log`.
