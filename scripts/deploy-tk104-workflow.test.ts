@@ -74,9 +74,11 @@ describe('deploy-tk104 workflow', () => {
       const sync = section.indexOf('name: Sync repository to tk104');
       const restart = section.indexOf(start);
       assert.ok(find >= 0 && download > find && load > download && sync > load && restart > sync);
+      // Only a push run uploads release-images-<sha>; a later manual dispatch of the
+      // same commit is green too but has no images, and picking it fails the download.
       assert.match(
         section,
-        /actions\/workflows\/ci\.yml\/runs\?branch=dev&head_sha=\$\{RELEASE_SHA\}&status=success/,
+        /actions\/workflows\/ci\.yml\/runs\?branch=dev&head_sha=\$\{RELEASE_SHA\}&status=success&event=push&per_page=1/,
       );
       assert.match(section, /has no successful ci run on dev; refusing to deploy it/);
       assert.match(section, /\^\[0-9a-f\]\{40\}\$/);

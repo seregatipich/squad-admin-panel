@@ -69,6 +69,8 @@ jobs:
 
       # Only a commit whose ci run on dev succeeded may reach tk104, and its
       # images come from that run: nothing is built on the production host.
+      # The run must be a push: only push runs upload release-images-<sha>, and a
+      # later manual dispatch of the same commit is green without them.
       - name: Find the green dev CI run
         id: release
         env:
@@ -81,7 +83,7 @@ jobs:
           fi
           run_id=$(curl --fail --silent --show-error \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&per_page=1" |
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&event=push&per_page=1" |
             jq -r '.workflow_runs[0].id // empty')
           if [[ -z "${run_id}" ]]; then
             echo "${RELEASE_SHA} has no successful ci run on dev; refusing to deploy it." >&2
@@ -190,6 +192,8 @@ jobs:
     steps:
       # Only a commit whose ci run on dev succeeded may reach tk104, and its
       # images come from that run: nothing is built on the production host.
+      # The run must be a push: only push runs upload release-images-<sha>, and a
+      # later manual dispatch of the same commit is green without them.
       - name: Find the green dev CI run
         id: release
         env:
@@ -202,7 +206,7 @@ jobs:
           fi
           run_id=$(curl --fail --silent --show-error \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&per_page=1" |
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${RELEASE_SHA}&status=success&event=push&per_page=1" |
             jq -r '.workflow_runs[0].id // empty')
           if [[ -z "${run_id}" ]]; then
             echo "${RELEASE_SHA} has no successful ci run on dev; refusing to deploy it." >&2

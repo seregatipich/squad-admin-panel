@@ -108,8 +108,9 @@ environment, or any workflow selects a runner group.
   (#248). Workflows from outside collaborators require approval (repository setting),
   because a fork's pull request can carry its own workflow file.
 - **`deploy-tk104` loads release images; tk104 never builds.** The `deploy` job
-  (a push to `master`) looks up the successful `ci` run of that exact commit on
-  `dev` and refuses to continue without one, downloads its `release-images-<sha>`
+  (a push to `master`) looks up the successful `ci` **push** run of that exact commit
+  on `dev` and refuses to continue without one — a manual `ci` dispatch of the same
+  commit uploads no images, so it never counts — downloads its `release-images-<sha>`
   artifact, pipes it into `docker load` on tk104 over SSH, `rsync`s the checkout to
   `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/` (excluding `.git`,
   `.env*`, `data`, build output and the `.release` markers), and runs
