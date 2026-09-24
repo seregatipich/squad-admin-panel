@@ -8,7 +8,7 @@ The branch model in [`AGENTS.md`](../../AGENTS.md) — `master` = production fed
 
 | Subcommand | Used by | What it does |
 | --- | --- | --- |
-| `check-command "<shell string>"` | Claude Code / Codex PreToolUse hooks | Parses a proposed shell command and denies branch-model violations before they run |
+| `check-command "<shell string>"` | Claude Code PreToolUse hook | Parses a proposed shell command and denies branch-model violations before they run |
 | `check-commit` | lefthook `pre-commit` | Denies direct commits on `master`, `dev` (except mid-merge conflict resolution), or `main` |
 | `check-push` | lefthook `pre-push` | Reads the native pre-push refspec lines and denies pushes that violate the model |
 | `doctor` | humans | Reports enforcement wiring problems in the current clone (never blocks) |
@@ -32,30 +32,13 @@ Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `
 
 Committed project settings load automatically — no per-user setup.
 
-## Layer 2 — Codex
-
-Two repo-shipped mechanisms, both loaded only when the project is **trusted**:
-
-- [`.codex/rules/git-policy.rules`](../../.codex/rules/git-policy.rules) — execpolicy prefix rules marking the violating commands `forbidden`. Verify any change with:
-  ```bash
-  codex execpolicy check --rules .codex/rules/git-policy.rules -- git push origin master
-  ```
-- [`.codex/hooks.json`](../../.codex/hooks.json) — a `PreToolUse` hook running the same `scripts/git-guard-hook.sh` (Codex uses the same stdin shape and exit-2-denies contract as Claude Code).
-
-One-time per-user setup:
-
-1. Trust the project when Codex prompts (records `trust_level = "trusted"` for this path in `~/.codex/config.toml`).
-2. Review and approve the repo hook with the `/hooks` command in the Codex CLI.
-
-Known limits (upstream): `codex exec` (non-interactive) currently does not dispatch repo hooks ([openai/codex#26383](https://github.com/openai/codex/issues/26383)) — the rules layer and the GitHub rulesets still apply. Prefix rules match argv prefixes, so exotic refspec spellings can slip past them; the hook and the rulesets catch those.
-
-## Layer 3 — git hooks (lefthook)
+## Layer 2 — git hooks (lefthook)
 
 [`lefthook.yml`](../../lefthook.yml) runs `branch-guard` on `pre-commit` (`check-commit`, as a command) and on `pre-push` (`check-push`, as the script [`.lefthook/pre-push/branch-guard`](../../.lefthook/pre-push/branch-guard)). The pre-push guard is a lefthook *script* deliberately: lefthook skips *commands* whenever the current branch has no unpushed diff — which is exactly the state during a cross-ref push such as the dev→master promotion — while scripts always run and receive the refspec lines on stdin. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
 
-## Layer 4 — GitHub rulesets (authoritative)
+## Layer 3 — GitHub rulesets (authoritative)
 
-Client-side layers can be bypassed by a client that doesn't load them (e.g. Codex cloud/web agents). The rulesets bind **every** client, with no bypass actors — including repository admins:
+Client-side layers can be bypassed by a client that doesn't load them (e.g. Codex, Gemini CLI, or cloud/web agents). The rulesets bind **every** client, with no bypass actors — including repository admins:
 
 | Ruleset | Target | Rules |
 | --- | --- | --- |
@@ -227,4 +210,4 @@ Warns when: `core.hooksPath` shadows lefthook without delegating to it, a `main`
 
 - `check-command` polices **only this repository** (worktrees included, identified by the git common dir). Commands targeting other repos — scratch fixtures under `/tmp`, clones, `git -C <elsewhere>` — are allowed, as are segments following a `cd` to a dynamically computed directory.
 - `check-command` tokenizes shell strings heuristically; compound commands, `cd`/`git -C` targets, and env prefixes are handled, but exotic quoting can evade it. That layer exists for fast in-session feedback — the rulesets are the enforcement boundary.
-- Client-side layers only bind clients that load them (trusted project for Codex, project settings for Claude Code, installed hooks for git). New machines should run `doctor` once.
+- Client-side layers only bind clients that load them (project settings for Claude Code, installed hooks for git). New machines should run `doctor` once.

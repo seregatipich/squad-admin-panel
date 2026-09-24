@@ -167,7 +167,6 @@ Every parallel task agent must also post a **`Feature-branch handoff evidence �
 The branch model is **machine-enforced**, not just documented (details, setup, and caveats: `docs/development/agent-harness.md`):
 
 - **Claude Code** — `.claude/settings.json` runs `scripts/git-guard-hook.sh` as a `PreToolUse` hook on every Bash call and denies violating git commands with the reason.
-- **Codex** — `.codex/rules/git-policy.rules` (execpolicy) forbids the violating commands and `.codex/hooks.json` runs the same guard hook. The project must be trusted once and the hook approved via `/hooks`.
 - **git hooks (lefthook)** — `branch-guard` runs `scripts/git-guard.sh` on pre-commit and pre-push.
 - **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted; `master` only accepts CI-green SHAs. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`. *Currently dormant: GitHub requires Pro/Team or a public repo for rulesets on this private repository.* Until then the `branch-guard` CI job audits every `master` push and fails the run if the SHA is not reachable from `dev`.
 
