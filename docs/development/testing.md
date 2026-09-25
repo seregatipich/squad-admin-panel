@@ -120,7 +120,14 @@ DATABASE_URL=<...> pnpm test:cov
 DATABASE_URL=<...> pnpm --filter @squad/api exec vitest run --coverage
 ```
 
-CI runs `pnpm test:cov` split into the `api`, `web` and `packages` slices of the `node-test` job (`scripts/ci-test-shard.sh`) and uploads each slice's `**/coverage/lcov.info` as the `coverage-<sha>-<slice>` artifact (retention: 7 days).
+CI (`ci.yml`, on `master` pushes and dispatches) runs the `test:cov` list through [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh) in three kinds of jobs:
+
+- `test-api` splits the API suite by test file over four VMs (`vitest run --shard=<i>/4`) and `test-web` splits the web suite over two. A shard sees only part of its suite, so it runs with the thresholds switched off and uploads a vitest blob report; the `gate` job merges the blobs with `vitest --merge-reports --coverage`, which enforces the thresholds below on the merged coverage of the whole suite.
+- `test-packages` runs every other package whole under its own thresholds, four at a time, starting the longest suites (`@squad/db`, `worker-log-ingest`, `worker-rcon`) first; one failing package does not stop the others.
+
+No coverage report is uploaded as an artifact. To reproduce one shard locally, run `bash scripts/ci-test-shard.sh api 1 4` with the database variables set; it writes `apps/api/.vitest-reports/blob-1-4.json` (git-ignored), and `pnpm exec vitest run --merge-reports --coverage` inside `apps/api` merges whatever blobs are there.
+
+Merged **branch** percentages are not comparable with an unsharded run of the same suite: on 2026-09-26 the API suite measured 92.7 % merged against 77.0 % unsharded, while lines, statements and functions agreed within 0.3 pp (web: 84.7 % against 84.2 %). Ratchet a branch threshold against an unsharded `pnpm --filter <package> exec vitest run --coverage`.
 
 Threshold values reflect the measured baseline at the time coverage was introduced, minus a 5 pp safety margin. They are intentional floors, not targets — ratchet them upward as new tests are added.
 
