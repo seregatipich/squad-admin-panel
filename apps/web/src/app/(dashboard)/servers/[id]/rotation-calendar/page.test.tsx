@@ -1,45 +1,8 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RotationCalendarPage from './page';
-
-/**
- * jsdom 29 знает элемент `<dialog>` и свойство `open`, но не реализует
- * `showModal()`/`close()`, на которые опирается примитив `Modal`. Полифилл
- * повторяет ровно то поведение, которое нужно этому тесту: атрибут `open`,
- * перевод фокуса внутрь окна и Escape → отменяемое `cancel` → `close`.
- */
-const DIALOG_FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-const dialogEscapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
-
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
-      if (notPrevented) this.close();
-    };
-    dialogEscapeHandlers.set(this, onKeyDown);
-    this.addEventListener('keydown', onKeyDown);
-    this.querySelector<HTMLElement>(DIALOG_FOCUSABLE)?.focus();
-  };
-
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
-    if (value !== undefined) this.returnValue = value;
-    this.removeAttribute('open');
-    const onKeyDown = dialogEscapeHandlers.get(this);
-    if (onKeyDown) {
-      this.removeEventListener('keydown', onKeyDown);
-      dialogEscapeHandlers.delete(this);
-    }
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 beforeEach(() => {
   vi.stubGlobal(

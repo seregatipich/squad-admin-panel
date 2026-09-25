@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -13,42 +12,6 @@ vi.mock('next/link', () => ({
 }));
 
 import { ChatMessageList } from './ChatPanel';
-
-/**
- * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
- * а окно «Забанить ник» построено на примитиве `Modal`. Полифилл повторяет ровно то,
- * на что опирается примитив: атрибут `open`, фокус внутрь окна и цепочку
- * Escape → отменяемое `cancel` → `close`.
- */
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
-
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
-      if (notPrevented) this.close();
-    };
-    escapeHandlers.set(this, onKeyDown);
-    this.addEventListener('keydown', onKeyDown);
-    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-  };
-
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
-    if (value !== undefined) this.returnValue = value;
-    this.removeAttribute('open');
-    const onKeyDown = escapeHandlers.get(this);
-    if (onKeyDown) {
-      this.removeEventListener('keydown', onKeyDown);
-      escapeHandlers.delete(this);
-    }
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 const SERVER = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 

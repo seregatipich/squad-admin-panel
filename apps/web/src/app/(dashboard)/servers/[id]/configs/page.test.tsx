@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { Suspense, useEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,41 +111,6 @@ vi.mock('next/dynamic', () => ({
       );
     },
 }));
-
-/**
- * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.
- * Полифилл живёт только в тестах — `AlertDialog` рассчитан на настоящий
- * браузер. Воспроизводится то, на что опирается `Modal`: атрибут `open`, фокус
- * внутрь окна и цепочка Escape → отменяемое `cancel` → `close`.
- */
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
-
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
-      if (notPrevented) this.close();
-    };
-    escapeHandlers.set(this, onKeyDown);
-    this.addEventListener('keydown', onKeyDown);
-    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-  };
-
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
-    if (value !== undefined) this.returnValue = value;
-    this.removeAttribute('open');
-    const onKeyDown = escapeHandlers.get(this);
-    if (onKeyDown) {
-      this.removeEventListener('keydown', onKeyDown);
-      escapeHandlers.delete(this);
-    }
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 import ConfigsPage from './page';
 

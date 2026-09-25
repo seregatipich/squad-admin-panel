@@ -1,42 +1,7 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiskBreakdownModal } from './DiskBreakdownModal';
-
-/**
- * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.
- * Полифилл живёт только в тестах — компонент рассчитан на настоящий браузер.
- */
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
-
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
-      if (notPrevented) this.close();
-    };
-    escapeHandlers.set(this, onKeyDown);
-    this.addEventListener('keydown', onKeyDown);
-    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-  };
-
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
-    if (value !== undefined) this.returnValue = value;
-    this.removeAttribute('open');
-    const onKeyDown = escapeHandlers.get(this);
-    if (onKeyDown) {
-      this.removeEventListener('keydown', onKeyDown);
-      escapeHandlers.delete(this);
-    }
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 type Usage = NonNullable<Parameters<typeof DiskBreakdownModal>[0]['initialData']>;
 

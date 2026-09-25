@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -43,21 +42,6 @@ vi.mock('@/lib/host-health', () => ({
 }));
 
 import DashboardPage from './page';
-
-/**
- * jsdom знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.
- * Полифилл воспроизводит ровно то, на что опирается `Modal`: атрибут `open` и
- * событие `close`. Тот же приём, что в `src/components/ui/AlertDialog.test.tsx`.
- */
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.removeAttribute('open');
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 const SERVERS = [
   {
