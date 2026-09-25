@@ -35,8 +35,7 @@ export interface ConfirmAdminsCfgReloadOptions {
 /**
  * Ask worker-rcon to run `AdminReloadServerConfig` on a server after the panel
  * has just rewritten its `Admins.cfg` managed segment, so permission changes
- * take effect without a container restart (SYNC-3 correction №1 —
- * `ai_docs/plans/2026-07-04-task-decomposition.md`).
+ * take effect without a container restart (SYNC-3 correction №1).
  *
  * The command is enqueued onto worker-rcon's per-server command stream, mirroring
  * the worker-local `sendRconCommand` helpers in clan-guard / log-ingest /

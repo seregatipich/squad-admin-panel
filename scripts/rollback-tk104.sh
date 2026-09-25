@@ -5,7 +5,7 @@
 # Rollback starts the previous release's images, which deploy-tk104.sh keeps
 # loaded, so nothing is built or downloaded. It does not undo migrations: the
 # previous release runs against the current schema, which is why every
-# migration must stay compatible with the release before it (AGENTS.md).
+# migration must stay compatible with the release before it (CLAUDE.md).
 #
 # Environment:
 #   ROLLBACK_TO  a specific loaded tag instead of the one in .release.prev

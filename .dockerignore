@@ -12,6 +12,5 @@ data
 **/test-results
 **/playwright-report
 **/*.tsbuildinfo
-ai_docs
 docs/screenshots
 *.log

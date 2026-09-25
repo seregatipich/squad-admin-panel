@@ -2,8 +2,8 @@ import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-c
 
 /**
  * Squad's built-in rotation gamemodes. Kept as a plain string column (not a
- * DB enum) so a depot-sync job (see ai_docs/adr/2026-07-09-map-rotation-managed-vs-native.md)
- * can ingest gamemodes Squad adds in future updates without a migration.
+ * DB enum) so a depot-sync job can ingest gamemodes Squad adds in future
+ * updates without a migration.
  */
 export const LAYER_GAMEMODES = [
   'RAAS',

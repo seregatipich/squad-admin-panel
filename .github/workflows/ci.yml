@@ -3,7 +3,7 @@ name: ci
 # public, so hosted minutes are free, jobs run in parallel, and no verification
 # code ever executes on the production host. Only `deploy-tk104.yml` uses the
 # repository's own runner on tk104. The local pre-push checklist remains the
-# fast first gate, while this workflow is authoritative (AGENTS.md → "CI gate").
+# fast first gate, while this workflow is authoritative (CLAUDE.md → "CI gate").
 on:
   push:
     branches: [master, dev]
@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Enforces the branch model (see AGENTS.md). Full CI remains limited to trusted
+  # Enforces the branch model (see CLAUDE.md). Full CI remains limited to trusted
   # master/dev pushes and explicit dispatches — draft branches use the local
   # pre-push gate. On push events this job gives the dev tip SHA the branch-guard
   # result required by the protect-master ruleset for the fast-forward promotion
@@ -40,7 +40,7 @@ jobs:
           if git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
             echo "OK: master tip is contained in dev"
           else
-            echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see AGENTS.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
+            echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see CLAUDE.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
             exit 1
           fi
       # master only ever fast-forwards to a dev commit, so its checks already ran
@@ -53,7 +53,7 @@ jobs:
         run: |
           count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${GITHUB_SHA}&status=success" --jq '.total_count')
           if [[ "${count}" -lt 1 ]]; then
-            echo "::error::master received ${GITHUB_SHA}, which has no successful ci run on dev — promote only a dev commit whose CI is green (AGENTS.md)."
+            echo "::error::master received ${GITHUB_SHA}, which has no successful ci run on dev — promote only a dev commit whose CI is green (CLAUDE.md)."
             exit 1
           fi
           echo "OK: ${GITHUB_SHA} passed ci on dev"
@@ -178,7 +178,7 @@ jobs:
       - name: Resolve service ports
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
         # while the API integration harness reads TEST_DATABASE_URL/TEST_REDIS_URL
-        # (see AGENTS.md). Without the TEST_* pair the harness falls back to
+        # (see CLAUDE.md). Without the TEST_* pair the harness falls back to
         # 127.0.0.1:5432/6379 instead of the dynamic-port service containers. The
         # harness isolates on redis db 15.
         run: |
@@ -258,7 +258,7 @@ jobs:
       - name: Resolve service ports
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
         # while the API integration harness reads TEST_DATABASE_URL/TEST_REDIS_URL
-        # (see AGENTS.md). Without the TEST_* pair the harness falls back to
+        # (see CLAUDE.md). Without the TEST_* pair the harness falls back to
         # 127.0.0.1:5432/6379 instead of the dynamic-port service containers. The
         # harness isolates on redis db 15.
         run: |

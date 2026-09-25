@@ -1,6 +1,6 @@
 # Agent enforcement harness
 
-The branch model in [`AGENTS.md`](../../AGENTS.md) — `master` = production fed only from `dev`, `dev` = integration fed only by work-branch merges, no `main` branch, tests + CI mandatory — is enforced mechanically, in depth, for every coding agent and human contributor. This document describes each layer, how to set it up, and its limits.
+The branch model in [`CLAUDE.md`](../../CLAUDE.md) — `master` = production fed only from `dev`, `dev` = integration fed only by work-branch merges, no `main` branch, tests + CI mandatory — is enforced mechanically, in depth, for every coding agent and human contributor. This document describes each layer, how to set it up, and its limits.
 
 ## The shared guard
 
@@ -22,7 +22,7 @@ Blocked by `check-command`:
 - creating work branches from `master`/`origin/master` (they must come from `dev`);
 - force-pushing or deleting `master`/`dev`, and `git push --all/--mirror`.
 
-Deliberately **not** blocked: `--no-verify`. The pre-push test gate is environment-dependent (DB/Redis/Linux-only bridge tests), and CI is the source of truth per `AGENTS.md`; the agent-layer hooks and GitHub rulesets still check every command and every push regardless.
+Deliberately **not** blocked: `--no-verify`. The pre-push test gate is environment-dependent (DB/Redis/Linux-only bridge tests), and CI is the source of truth per `CLAUDE.md`; the agent-layer hooks and GitHub rulesets still check every command and every push regardless.
 
 Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `git branch --contains …`) are **not** blocked — only create/rename/checkout/push of a `main` ref is. Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 69 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
 
@@ -34,7 +34,7 @@ Committed project settings load automatically — no per-user setup.
 
 ## Layer 2 — git hooks (lefthook)
 
-[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` on `pre-commit` (`check-commit`, as a command) and on `pre-push` (`check-push`, as the script [`.lefthook/pre-push/branch-guard`](../../.lefthook/pre-push/branch-guard)). The pre-push guard is a lefthook *script* deliberately: lefthook skips *commands* whenever the current branch has no unpushed diff — which is exactly the state during a cross-ref push such as the dev→master promotion — while scripts always run and receive the refspec lines on stdin. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
+[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` as a command on `pre-commit` (`check-commit`) and on `pre-push` (`check-push`, with `use_stdin: true` so it receives the native refspec lines). The pre-push guard runs on every push — including cross-ref pushes such as the dev→master promotion and file-less branch deletions; [`scripts/lefthook-branch-guard.test.ts`](../../scripts/lefthook-branch-guard.test.ts) (part of `pnpm test:scripts`) pushes through the real `lefthook.yml` into a throwaway remote to prove it. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
 
 ## Layer 3 — GitHub rulesets (authoritative)
 
@@ -186,7 +186,7 @@ uninstalled and archived on the host.
 
 ## Completion verification
 
-The harness also enforces *how tasks end*: AGENTS.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:
+The harness also enforces *how tasks end*: CLAUDE.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:
 
 ```bash
 bash scripts/verify-done.sh   # exit 0 required before reporting done

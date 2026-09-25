@@ -16,8 +16,7 @@ import { players } from './players.js';
 import { servers } from './servers.js';
 
 /**
- * Selection rules for GAME-1 (#80) panel-driven map auto-selection — see
- * ai_docs/adr/2026-07-09-map-rotation-managed-vs-native.md ("automatic
+ * Selection rules for GAME-1 (#80) panel-driven map auto-selection ("automatic
  * voting" is reframed as candidate selection + `AdminSetNextLayer`).
  */
 export const MAP_VOTE_SELECTIONS = ['weighted_random', 'least_recently_played'] as const;

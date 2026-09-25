@@ -8,7 +8,7 @@
  * out on `dev`. Every session implements the issue on its own
  * `feature/issue-<n>-<slug>` branch, runs the local gate, and pushes the
  * branch and posts reviewable handoff evidence on the issue — the
- * "parallel-wave handoff" terminal state from AGENTS.md. An orchestrator
+ * "parallel-wave handoff" terminal state from CLAUDE.md. An orchestrator
  * (you) then merges the pushed branches into `dev` serially.
  *
  * Usage:
@@ -206,7 +206,7 @@ export function slugify(title: string): string {
   return slug;
 }
 
-/** Builds the AGENTS.md-conformant work branch name for an issue. */
+/** Builds the CLAUDE.md-conformant work branch name for an issue. */
 export function branchNameFor(issue: Pick<IssueInfo, 'number' | 'title'>): string {
   const slug = slugify(issue.title);
   return slug === '' ? `feature/issue-${issue.number}` : `feature/issue-${issue.number}-${slug}`;
@@ -228,15 +228,15 @@ ${issue.url}
 ${issue.body.trim() === '' ? '(no description)' : issue.body}
 --- END ISSUE BODY ---
 
-First read AGENTS.md at the repository root — its rules are mandatory. Then:
+First read CLAUDE.md at the repository root — its rules are mandatory. Then:
 
 1. Create the work branch \`${branch}\` off the current \`dev\` checkout. Never commit to \`dev\` or \`master\`, and never create or target a branch named \`main\`.
 2. Run \`pnpm install --frozen-lockfile\` before anything else (fresh clone).
-3. Implement the issue with tests, per the AGENTS.md testing policy: a regression test that fails before the fix and passes after it for bugs, integration tests for new modules.
+3. Implement the issue with tests, per the CLAUDE.md testing policy: a regression test that fails before the fix and passes after it for bugs, integration tests for new modules.
 4. Run the local gate: \`pnpm turbo run typecheck\`, \`pnpm exec biome check .\`, and the affected packages' tests. If a check cannot run in this sandbox (e.g. Docker-backed suites), say exactly what was skipped and why — never fake or weaken it.
 5. Commit with a conventional message that references #${issue.number}, then push the branch: \`git push -u origin ${branch}\`.
-6. Do NOT merge into \`dev\`, do NOT push \`dev\` or \`master\`, and do NOT open pull requests. Your terminal state is the pushed feature branch (AGENTS.md "Parallel-wave handoff"); verify it with \`bash scripts/verify-done.sh --feature\`.
-7. Post a \`Feature-branch handoff evidence — not yet 100% complete\` comment on issue #${issue.number}, exactly as required by AGENTS.md. It must contain the branch and commit SHA, point-by-point requirement coverage, exact test and gate commands with results, real runtime/functionality verification and the tools used, verification provenance, and all skips or limitations. State explicitly that final completion is pending merge to \`dev\`, full \`dev\` CI, and the integrating agent's completion verification. Re-read the published comment to verify it is visible, and retain its URL.
+6. Do NOT merge into \`dev\`, do NOT push \`dev\` or \`master\`, and do NOT open pull requests. Your terminal state is the pushed feature branch (CLAUDE.md "Parallel-wave handoff"); verify it with \`bash scripts/verify-done.sh --feature\`.
+7. Post a \`Feature-branch handoff evidence — not yet 100% complete\` comment on issue #${issue.number}, exactly as required by CLAUDE.md. It must contain the branch and commit SHA, point-by-point requirement coverage, exact test and gate commands with results, real runtime/functionality verification and the tools used, verification provenance, and all skips or limitations. State explicitly that final completion is pending merge to \`dev\`, full \`dev\` CI, and the integrating agent's completion verification. Re-read the published comment to verify it is visible, and retain its URL.
 
 End with a final report: the branch name, what changed and why, test commands run with their results, anything you had to skip, and the verified GitHub handoff-evidence comment URL.`;
 }
@@ -314,7 +314,7 @@ function fetchIssuesByLabel(repo: string, label: string, limit: number): IssueIn
 }
 
 /** System prompt for the solver agent resource (created once, reused). */
-const AGENT_SYSTEM_PROMPT = `You are an autonomous software engineer solving one GitHub issue per session in the squad-admin-panel repository (TypeScript pnpm/turbo monorepo with a Go bridge). The repository's AGENTS.md is the authoritative rulebook: branch model (work branches off dev, never touch master, never create main), mandatory tests for every change, the local gate (typecheck, biome check, affected tests), conventional commits, and a visible GitHub issue comment containing complete feature-branch handoff evidence. Work autonomously until the issue is solved, the work branch is pushed, and the issue comment is published and verified; be explicit about anything you could not verify in the sandbox.`;
+const AGENT_SYSTEM_PROMPT = `You are an autonomous software engineer solving one GitHub issue per session in the squad-admin-panel repository (TypeScript pnpm/turbo monorepo with a Go bridge). The repository's CLAUDE.md is the authoritative rulebook: branch model (work branches off dev, never touch master, never create main), mandatory tests for every change, the local gate (typecheck, biome check, affected tests), conventional commits, and a visible GitHub issue comment containing complete feature-branch handoff evidence. Work autonomously until the issue is solved, the work branch is pushed, and the issue comment is published and verified; be explicit about anything you could not verify in the sandbox.`;
 
 async function ensureAgent(client: Anthropic, model: string): Promise<string> {
   for await (const agent of client.beta.agents.list()) {
@@ -487,7 +487,7 @@ function printReport(results: IssueResult[]): void {
   }
   const solved = results.filter((r) => r.status === 'solved').length;
   console.log(`\n${solved}/${results.length} sessions finished cleanly.`);
-  console.log('Next: review each pushed branch and merge into dev serially (see AGENTS.md).');
+  console.log('Next: review each pushed branch and merge into dev serially (see CLAUDE.md).');
 }
 
 async function main(): Promise<void> {

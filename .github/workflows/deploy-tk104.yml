@@ -5,7 +5,6 @@ on:
     branches: [master]
     paths-ignore:
       - '**.md'
-      - 'ai_docs/**'
       - 'docs/**'
   # Fires once `ci` finishes on `dev` — used to redeploy only the web
   # container as a preview (see the `deploy-web-preview` job below). Per

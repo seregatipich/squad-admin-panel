@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# git-guard.sh — mechanical enforcement of the AGENTS.md branch model.
+# git-guard.sh — mechanical enforcement of the CLAUDE.md branch model.
 #
 # Single source of truth for the agent enforcement harness. Every layer is a
 # thin adapter around this script:
@@ -7,7 +7,7 @@
 #   - lefthook pre-commit          -> check-commit
 #   - lefthook pre-push            -> check-push
 #
-# Rules enforced (see AGENTS.md "Branch model"):
+# Rules enforced (see CLAUDE.md "Branch model"):
 #   - a branch named `main` must never be created, checked out, or pushed
 #   - no direct commits on `master` or `dev` (`dev` allows commits only while
 #     resolving a merge, i.e. MERGE_HEAD exists)
@@ -27,7 +27,7 @@
 set -u
 set -f # no globbing — command strings are tokenized with plain word splitting
 
-WORKFLOW_HINT="See AGENTS.md: branch off dev (git switch -c feature/<slug> origin/dev), merge --no-ff into dev, promote with git push origin origin/dev:master."
+WORKFLOW_HINT="See CLAUDE.md: branch off dev (git switch -c feature/<slug> origin/dev), merge --no-ff into dev, promote with git push origin origin/dev:master."
 
 deny() {
   echo "git-guard: BLOCKED — $1" >&2

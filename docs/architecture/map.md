@@ -13,7 +13,7 @@ The repo already documents itself well in places — `docs/architecture/data-flo
 | Privilege zones and the constraints they impose | [`architecture/README.md`](README.md) |
 | Install / stop / delete / restore sequence detail | [`architecture/data-flow.md`](data-flow.md) |
 | Per-component depth | [`docs/components/*`](../components/) |
-| Why a choice was made | [`architecture/decisions.md`](decisions.md), [`ai_docs/adr/`](../../ai_docs/adr/) |
+| Why a choice was made | [`architecture/decisions.md`](decisions.md) |
 | How to run and test locally | [`docs/development/`](../development/) |
 | Operator runbooks | [`docs/operations/`](../operations/) |
 
@@ -151,7 +151,6 @@ Note the asymmetry: the privileged path is one-directional and narrow, while the
 | `docker/` | `api|web|worker|squad-server|restic|depot-init|rnsquadjs` Dockerfiles + two Caddyfiles. `worker.Dockerfile` is parameterised by `ARG WORKER` |
 | `scripts/` | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `deploy-tk104.sh` |
 | `docs/` (238 `.md`) | `architecture/` (incl. `decisions.md` with **9** dated records), `components/`, `development/`, `operations/`. Substantially stale in places — see the documentation chapter |
-| `ai_docs/` | Agent working corpus; `ai_docs/adr/` holds **2** further ADRs (11 total) |
 
 ### Sizing
 
@@ -817,7 +816,7 @@ Sorting is always an allow-list enum mapped to a column or SQL fragment, with `i
 
 **Error mapping.** There is no central domain-error→HTTP mapper. Each handler sets `reply.code(...)` and returns `{ error: '<snake_case_code>' }`, with a per-route vocabulary (`port_conflict`, `slug_in_use`, `panel_managed_file`, `no_drift`, `rcon_unavailable`, `rcon_failed`, `cannot_remove_last_owner`, `kick_requires_trusted_source`, …). Bridge failures in particular map inconsistently — `502` in `server-log-files.ts:55`, `host-actions.ts:22`, `host-backup.ts:30` and `servers.ts:821`; `404 file_not_found` in the config reads; silently swallowed to `null`/`false` in `servers.ts:278-282` and `depot.ts:39-43`. The only global handler, `plugins/error-diag.ts:12-35`, is observability-only: it emits an `http.5xx` diag event and re-sends the untouched error.
 
-**The parallel registration hazard.** `AGENTS.md` states the rule bluntly: a new route must be registered in **both** `apps/api/src/server.ts` and `apps/api/test/integration/harness.ts`, because the harness keeps its own parallel list and a route missing from it 404s in integration tests. The rule is followed almost everywhere — but not everywhere. Diffing the two registration lists at commit `28258d7`:
+**The parallel registration hazard.** `CLAUDE.md` states the rule bluntly: a new route must be registered in **both** `apps/api/src/server.ts` and `apps/api/test/integration/harness.ts`, because the harness keeps its own parallel list and a route missing from it 404s in integration tests. The rule is followed almost everywhere — but not everywhere. Diffing the two registration lists at commit `28258d7`:
 
 ```
 $ comm -23 <(grep -oE "app\.register\((\w+)" apps/api/src/server.ts | sed 's/app.register(//' | LC_ALL=C sort -u) \
@@ -2073,7 +2072,7 @@ Read that carefully: **`panel_access = true` implicitly grants all 51 keys** min
 
 #### The single enforcement gate
 
-Authorization is one global **`onRequest`** hook in `apps/api/src/plugins/auth.ts:21` — identity resolution and permission checking in the same callback, the same phase. There is no `preHandler` hook anywhere in `apps/api/src` (`grep` over `addHook('…')` yields 11 `onClose`, 3 `onRequest`, 2 `onResponse`, 2 `onReady`); the `preHandler` wording in `docs/architecture/rbac.md:67`, `docs/components/api/README.md:8`, and `docs/components/rbac/README.md:61,68` is stale, inherited from the original spec in `ai_docs/task.md:2202-2212` which proposed a two-hook design the implementation collapsed.
+Authorization is one global **`onRequest`** hook in `apps/api/src/plugins/auth.ts:21` — identity resolution and permission checking in the same callback, the same phase. There is no `preHandler` hook anywhere in `apps/api/src` (`grep` over `addHook('…')` yields 11 `onClose`, 3 `onRequest`, 2 `onResponse`, 2 `onReady`); the `preHandler` wording in `docs/architecture/rbac.md:67`, `docs/components/api/README.md:8`, and `docs/components/rbac/README.md:61,68` is stale, inherited from the original spec, which proposed a two-hook design the implementation collapsed.
 
 ```ts
 // apps/api/src/plugins/auth.ts:114-125
@@ -2963,7 +2962,7 @@ await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, file
 
 The exported helpers are `makeFakeBridge()`, `buildIntegrationApp()`, `loginAsOwner()` — which mints a **real** session through `src/lib/sessions.ts#createSession` and returns a `__Host-sid=` cookie (632–644) rather than forging one — and `assertAuditRow()`, which polls for up to 1.2 s because the audit `onResponse` hook completes after `inject()` has already resolved (651–680). `harness.test.ts` self-tests the harness, including that `cleanup()` really drops the database.
 
-**The parallel registration list is a genuine architectural liability, and it has already drifted.** `AGENTS.md` instructs contributors to register every new route in both `apps/api/src/server.ts` and the harness. Verified at the pinned commit: `auth-steam` and `server-rnsquadjs` each appear once in `server.ts` and **zero** times in `harness.ts`. Those routes 404 under `buildIntegrationApp` and are covered only by their own `vi.mock`-heavy unit tests (`apps/api/test/auth-steam.test.ts`, `apps/api/test/server-rnsquadjs.test.ts`) — meaning the Steam login callback, the single most security-relevant entry point in the system, has no integration coverage at all.
+**The parallel registration list is a genuine architectural liability, and it has already drifted.** `CLAUDE.md` instructs contributors to register every new route in both `apps/api/src/server.ts` and the harness. Verified at the pinned commit: `auth-steam` and `server-rnsquadjs` each appear once in `server.ts` and **zero** times in `harness.ts`. Those routes 404 under `buildIntegrationApp` and are covered only by their own `vi.mock`-heavy unit tests (`apps/api/test/auth-steam.test.ts`, `apps/api/test/server-rnsquadjs.test.ts`) — meaning the Steam login callback, the single most security-relevant entry point in the system, has no integration coverage at all.
 
 ### 14.3 Database isolation: template cloning
 
@@ -3005,7 +3004,7 @@ Because `reusePublicSchema` suites and worker-cloned suites can both reach a sha
 ```
 — `apps/api/test/test-isolation.regression.test.ts:11-27`
 
-The sanctioned pattern lives in `apps/api/test/helpers/snapshot-restore.ts`: `TEST_STEAM_BASE = 76561197999000000n`, `testSteamId(suffix)`, `isTestSteamId()`, plus `snapshotLiveOwnerState`/`maskLiveOwners`/`restoreLiveOwners` for the first-owner latch and `resetSetupState()` (documented as isolated-schema only, never `public`). The header comment names the original incident: `first-owner.test.ts` stripped the Owner role from real users. Two caveats: the allowlist is broad (`e2e/`, `auth-steam.test.ts`, and three `security/` files are exempt by path), and a single-file `vitest run` never executes the guard — which is why `AGENTS.md` tells you to run it explicitly before pushing.
+The sanctioned pattern lives in `apps/api/test/helpers/snapshot-restore.ts`: `TEST_STEAM_BASE = 76561197999000000n`, `testSteamId(suffix)`, `isTestSteamId()`, plus `snapshotLiveOwnerState`/`maskLiveOwners`/`restoreLiveOwners` for the first-owner latch and `resetSetupState()` (documented as isolated-schema only, never `public`). The header comment names the original incident: `first-owner.test.ts` stripped the Owner role from real users. Two caveats: the allowlist is broad (`e2e/`, `auth-steam.test.ts`, and three `security/` files are exempt by path), and a single-file `vitest run` never executes the guard — which is why `CLAUDE.md` tells you to run it explicitly before pushing.
 
 ### 14.5 What is faked versus exercised for real
 
@@ -3063,7 +3062,7 @@ All packages use `provider: 'v8'`, `reporter: ['text','lcov','json-summary']`, `
 
 First, `typecheck` depends on `^build` because **there are no TypeScript project `references` anywhere** — a grep over every `tsconfig*.json` returns nothing. Cross-package types resolve through emitted `dist/*.d.ts`, so turbo enforces the topological order `tsc -b` would otherwise handle. `tsconfig.base.json` sets `composite: true` (the prerequisite for references) but nothing declares them: dead configuration relative to `tsc -b`, live only for `.tsbuildinfo`.
 
-Second, `test` depends on the package's *own* `build`, so every `turbo run test` is preceded by a full `tsc -p` of that package. This is why `AGENTS.md` steers agents to `pnpm --filter @squad/api exec vitest run <file>` instead.
+Second, `test` depends on the package's *own* `build`, so every `turbo run test` is preceded by a full `tsc -p` of that package. This is why `CLAUDE.md` steers agents to `pnpm --filter @squad/api exec vitest run <file>` instead.
 
 Third, `DATABASE_URL` and `TEST_DATABASE_URL` sit in `globalEnv`. Provisioning a fresh isolated DB changes the global hash and invalidates every cached task — cache hits can never mask a stale DB, but per-agent DB slugs mean near-zero cache reuse across parallel agents.
 
@@ -3095,7 +3094,7 @@ graph LR
 
 ### 14.11 Production delivery: deploy-tk104
 
-`.github/workflows/deploy-tk104.yml` fires on push to `master` with `paths-ignore: ['**.md','ai_docs/**','docs/**']`, concurrency `deploy-tk104` with `cancel-in-progress: false`. It writes `secrets.TK104_SSH_KEY`, `rsync -az --delete` (excluding `.git`, `node_modules`, `.next`, `data`, `dist`, `.env*`) to the production host, SSHes in to run `scripts/deploy-tk104.sh` (which brings up `compose.tk104.yml` with `--env-file .env.tk104`, waits for the api health status, and probes Caddy via `curl --resolve`), then polls `https://tk104.duckdns.org/health` up to 10 × 6 s.
+`.github/workflows/deploy-tk104.yml` fires on push to `master` with `paths-ignore: ['**.md','docs/**']`, concurrency `deploy-tk104` with `cancel-in-progress: false`. It writes `secrets.TK104_SSH_KEY`, `rsync -az --delete` (excluding `.git`, `node_modules`, `.next`, `data`, `dist`, `.env*`) to the production host, SSHes in to run `scripts/deploy-tk104.sh` (which brings up `compose.tk104.yml` with `--env-file .env.tk104`, waits for the api health status, and probes Caddy via `curl --resolve`), then polls `https://tk104.duckdns.org/health` up to 10 × 6 s.
 
 **It is not `needs`-gated on `ci`.** It is a separate workflow starting in parallel with the master CI run, so a red master CI does not stop the production deploy. The only safety net is the external health probe — and the fact that `master` is supposed to receive only dev SHAs that already passed CI. That invariant is the deploy gate, which is exactly why the enforcement harness below is load-bearing rather than decorative.
 
@@ -3123,7 +3122,7 @@ then `pnpm test:cov` under `FULL=1`, else `turbo run test --filter='...[origin/d
 |---|---|---|
 | Claude Code | `.claude/settings.json` → `PreToolUse` matcher `Bash` → `scripts/git-guard-hook.sh` | `check-command` |
 | lefthook pre-commit | `lefthook.yml` `branch-guard` | `check-commit` |
-| lefthook pre-push | `.lefthook/pre-push/branch-guard` (a script, `use_stdin: true`) | `check-push` |
+| lefthook pre-push | `lefthook.yml` `branch-guard` (a command, `use_stdin: true`) | `check-push` |
 | GitHub | `.github/rulesets/*.json` via `scripts/apply-rulesets.sh` | authoritative backstop |
 
 ```bash
@@ -3145,7 +3144,7 @@ The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (de
 
 `scripts/solve-issues-parallel.ts` (570 lines) is a wave runner, not a git tool. It fans the issue backlog out to the Claude Managed Agents API (`client.beta.agents` / `.environments` / `.sessions`), one cloud sandbox per GitHub issue. Issues are selected by explicit number or `--label`/`--limit`, resolved through the `gh` CLI. `branchNameFor` (`:210`) produces `feature/issue-<n>-<slug>`; `slugify` (`:196`) truncates on a word boundary at 40 chars and returns `''` for titles with no ASCII words, so a Cyrillic title degrades to a bare `feature/issue-178` — asserted in `scripts/solve-issues-parallel.test.ts:112`. Each session mounts the repo as a `github_repository` resource checked out on `dev`, with the GitHub token passed as `authorization_token`, never in prompt text.
 
-`AGENT_SYSTEM_PROMPT` (`:317`) declares `AGENTS.md` authoritative, and `buildTaskPrompt` (`:220`) restates the branch model, the test policy, the local gate, `bash scripts/verify-done.sh --feature`, and the handoff-comment requirement verbatim — the AGENTS.md contract is compiled into the prompt, so the docs are load-bearing runtime input, not commentary. `solveIssue` (`:364`) never throws, mapping session outcomes to `solved`/`failed`/`timed-out`; `runPool` (`:248`) is a hand-rolled lane pool that preserves input order; the process exits 1 unless every session is `solved`.
+`AGENT_SYSTEM_PROMPT` (`:317`) declares `CLAUDE.md` authoritative, and `buildTaskPrompt` (`:220`) restates the branch model, the test policy, the local gate, `bash scripts/verify-done.sh --feature`, and the handoff-comment requirement verbatim — the CLAUDE.md contract is compiled into the prompt, so the docs are load-bearing runtime input, not commentary. `solveIssue` (`:364`) never throws, mapping session outcomes to `solved`/`failed`/`timed-out`; `runPool` (`:248`) is a hand-rolled lane pool that preserves input order; the process exits 1 unless every session is `solved`.
 
 Crucially, **the runner cannot push or merge**. It never invokes `git`; its only subprocess is `gh` with read-only subcommands. All pushing happens inside the sandbox, by the agent, on its own branch — the same three-layer guard applies there. And it is itself tested: `pnpm run solve:issues:test` runs `tsx --test scripts/solve-issues-parallel.test.ts` inside the CI `node` job.
 
@@ -3295,7 +3294,7 @@ So a **new key is granted to every panel-access user by default** unless you als
 
 ### 15.B Decision records
 
-Eleven decision documents exist: nine dated records in `docs/architecture/decisions.md` and two ADRs in `ai_docs/adr/`. The two templates differ — the `ai_docs` ADRs carry Status / Options / Measurements / **Reversal conditions** / Follow-up, while the `decisions.md` entries use Context / Decision / Rationale / Consequences / Alternatives considered and carry **no explicit reversal condition**. That split is itself undocumented.
+Nine dated decision records exist, all in `docs/architecture/decisions.md`. They use Context / Decision / Rationale / Consequences / Alternatives considered and carry **no explicit reversal condition**.
 
 | Date | Record | Context → Decision → Consequence |
 |---|---|---|
@@ -3348,7 +3347,7 @@ The same shape appears in authorization: 128 declarative `config.permissions` gu
 
 #### C.3 Parallel registration lists have already drifted
 
-`server.ts` 99 route plugins vs `harness.ts` 97; missing are `serverRnsquadjsRoutes` and — surprisingly — `steamRoutes`, the login flow. No test asserts list equality. `audit-coverage.test.ts` maintains a *third* list of 17. Mitigation: none mechanical; `AGENTS.md` names the hazard in prose.
+`server.ts` 99 route plugins vs `harness.ts` 97; missing are `serverRnsquadjsRoutes` and — surprisingly — `steamRoutes`, the login flow. No test asserts list equality. `audit-coverage.test.ts` maintains a *third* list of 17. Mitigation: none mechanical; `CLAUDE.md` names the hazard in prose.
 
 #### C.4 Single-replica assumptions
 
