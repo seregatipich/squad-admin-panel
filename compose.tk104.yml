@@ -1,3 +1,16 @@
+# The tk104 dev stand. Nothing is built here: the panel services run the images
+# the deploy workflow pushed to ghcr.io, pinned by digest (API_IMAGE, WEB_IMAGE,
+# WORKERS_IMAGE, CADDY_IMAGE). scripts/deploy-tk104.sh records the running
+# release in .release.env, so every compose command on the host reads both env
+# files (Compose 2.17+ merges them; .release.env wins):
+#
+#   docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml ps
+#
+# A fully qualified ghcr.io name pinned by digest can only ever resolve to that
+# one image, so these services may pull (the deploy pulls just the changed
+# ones). The host-built images at the bottom are different: their short names
+# would resolve to somebody else's Docker Hub image, so they are never pulled —
+# the bridge starts them with `--pull never`, and compose has `pull_policy: never`.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -41,11 +54,12 @@ services:
       retries: 5
     logging: *default-logging
 
+  # Not part of `up`: deploy-tk104.sh runs it explicitly (`run --rm migrator`)
+  # after a database backup, and only when packages/db/drizzle changed, so a
+  # failed migration stops the deploy before any app container is replaced.
   migrator:
-    image: squad-panel/api:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${API_IMAGE:?API_IMAGE_is_required}
+    profiles: ['migrate']
     restart: 'no'
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -57,15 +71,15 @@ services:
     logging: *default-logging
 
   api:
-    image: squad-panel/api:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${API_IMAGE:?API_IMAGE_is_required}
     restart: unless-stopped
     environment:
       NODE_ENV: production
       API_HOST: 0.0.0.0
       API_PORT: 3000
+      # From .release.env: the commit that introduced the running api image.
+      # It changes only with that image, so a release that leaves the api
+      # alone does not recreate it just to report a new SHA.
       APP_VERSION: ${APP_VERSION:-dev}
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -111,21 +125,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
+    # A 5 s interval lets the deploy see a recreated api healthy within
+    # seconds of it listening. start_interval would allow a slower steady
+    # state, but Compose refuses it on a Docker Engine older than 25, and
+    # nothing checks the engine before a push reaches the stand.
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/health']
-      interval: 15s
+      interval: 5s
       timeout: 3s
       retries: 3
       start_period: 30s
     logging: *default-logging
 
   worker-log-ingest:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: log-ingest
@@ -143,15 +156,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-config-sync:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: config-sync
@@ -166,15 +174,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-rcon:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     network_mode: host
     environment:
@@ -188,15 +191,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-audit-archiver:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: audit-archiver
@@ -205,15 +203,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-event-partition:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: event-partition
@@ -222,15 +215,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-presence-daily:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: presence-daily
@@ -239,15 +227,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-role-expirer:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: role-expirer
@@ -261,15 +244,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-seed-reward:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: seed-reward
@@ -281,18 +259,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   # INT-1 (#76): gradually enriches stale player records from Steam without
   # coupling the sweep to API requests or user logins. No key means a safe
   # no-op while heartbeat stays visible.
   worker-steam-refresh:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: steam-refresh
@@ -305,18 +278,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   # VIDEO-4 (#160): fans published media out to YouTube/Telegram. Both
   # destinations are optional — with no credentials the worker simply defers
   # every publication instead of failing it, so it is safe to run unconfigured.
   worker-media-publisher:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: media-publisher
@@ -339,15 +307,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-clan-guard:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: clan-guard
@@ -359,17 +322,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   # AUTO-1 (#72): evaluates user-defined trigger rules over the event streams
   # and enqueues RCON actions / records firings. DB + Redis only, no bridge.
   worker-automation:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: automation
@@ -380,15 +338,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-scheduler:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: scheduler
@@ -406,15 +359,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-ban-sync:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: ban-sync
@@ -427,15 +375,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-clan-priority-expirer:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: clan-priority-expirer
@@ -447,15 +390,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-leaderboard-aggregator:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: leaderboard-aggregator
@@ -464,15 +402,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-diag-flush:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: diag-flush
@@ -491,15 +424,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   worker-metrics-sampler:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: metrics-sampler
@@ -515,10 +443,7 @@ services:
     logging: *default-logging
 
   worker-discord:
-    image: squad-panel/workers:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
     environment:
       WORKER: discord
@@ -532,15 +457,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
     logging: *default-logging
 
   web:
-    image: squad-panel/web:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${WEB_IMAGE:?WEB_IMAGE_is_required}
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -549,13 +469,23 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # The runtime image has node but neither wget nor curl. Without a session
+    # the middleware answers /dashboard with a redirect, so the probe proves
+    # Next.js is serving without rendering a page or calling the api.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/dashboard',{redirect:'manual'}).then((r)=>process.exit(r.status<500?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     logging: *default-logging
 
   caddy:
-    image: squad-panel/caddy-tk104:${PANEL_IMAGE_TAG:?PANEL_IMAGE_TAG_is_required}
-    # Release images are loaded onto the host, never pulled: a registry
-    # lookup of this name could fetch somebody else's image.
-    pull_policy: never
+    image: ${CADDY_IMAGE:?CADDY_IMAGE_is_required}
     init: true
     restart: unless-stopped
     ports:
@@ -563,6 +493,10 @@ services:
     environment:
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
       DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
+      # Hash of docker/Caddyfile.tk104, from .release.env. Compose cannot see
+      # a bind-mounted file change, and a single-file mount keeps showing the
+      # replaced inode after rsync, so a Caddyfile edit must recreate caddy.
+      CADDYFILE_SHA: ${CADDYFILE_SHA:-}
     volumes:
       - ./docker/Caddyfile.tk104:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -585,6 +519,7 @@ services:
       context: ./docker
       dockerfile: squad-server.Dockerfile
     image: squad-server:latest
+    pull_policy: never
     profiles: ['images']
     command: ['/bin/true']
     restart: 'no'
@@ -594,6 +529,7 @@ services:
       context: ./docker
       dockerfile: depot-init.Dockerfile
     image: squad-panel/depot-init:latest
+    pull_policy: never
     profiles: ['images']
     command: ['/bin/true']
     restart: 'no'
@@ -606,6 +542,7 @@ services:
       context: .
       dockerfile: docker/rnsquadjs.Dockerfile
     image: squad-panel/rnsquadjs:latest
+    pull_policy: never
     profiles: ['images']
     command: ['/bin/true']
     restart: 'no'
