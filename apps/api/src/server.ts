@@ -25,6 +25,7 @@ import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
 import databasePlugin from './plugins/database.js';
 import dbHealthPlugin from './plugins/db-health.js';
 import errorDiagPlugin from './plugins/error-diag.js';
+import eventsFeedPlugin from './plugins/events-feed.js';
 import healthPlugin from './plugins/health.js';
 import heartbeatWatchPlugin from './plugins/heartbeat-watch.js';
 import installProgressPlugin from './plugins/install-progress.js';
@@ -94,6 +95,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(dbHealthPlugin);
   await app.register(heartbeatWatchPlugin);
   await app.register(liveBusPlugin);
+  await app.register(eventsFeedPlugin, { databaseUrl: config.DATABASE_URL });
   await app.register(bridgePlugin, { config });
   await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);

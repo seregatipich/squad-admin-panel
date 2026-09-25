@@ -24,6 +24,7 @@ Plus any `LiveEvent`:
 {"type": "server.deleted",    "ts": "...", "data": {"server_id": "uuid", "deleted_at": "...",  "by": "steam_id64|null"}}
 {"type": "server.restored",   "ts": "...", "data": {"old_server_id": "uuid", "new_server_id": "uuid"}}
 {"type": "rcon.status",       "ts": "...", "data": {"server_id": "uuid", "state": "connected|connecting|disconnected", "player_count": 42}}
+{"type": "server.events.appended", "ts": "...", "data": {"server_id": "uuid|null", "kinds": ["player.connected"]}}
 {"type": "bridge.connection", "ts": "...", "data": {"state": "up|down", "down_for_s": 12}}
 {"type": "worker.heartbeat",  "ts": "...", "data": {"worker": "rcon",   "healthy": true}}
 ```
@@ -74,6 +75,9 @@ export type LiveEvent =
 | Channel | Direction | Producer | Consumer | Payload |
 |---|---|---|---|---|
 | `live-bus` | API → API replicas | `app.liveBus.publish()` | `live-bus` plugin subscriber | Full `LiveEvent` JSON. |
-| `rcon:status:changed` | worker-rcon → API | `PerServerSupervisor.writeStatus` | `live-bus` plugin subscriber | `{server_id, state, player_count?}`; the plugin wraps it into a `rcon.status` `LiveEvent` with a fresh `ts`. |
+| `rcon:status:changed` | worker-rcon → API | `PerServerSupervisor.writeStatus` | `live-bus` plugin subscriber | `{server_id, state, player_count?}`; the plugin wraps it into a `rcon.status` `LiveEvent` with a fresh `ts`. Published on every state change and whenever a rendered connected-state field changes (player/squad count, map, next layer, mode, queue) — not on every refresh. |
+| `rcon:refresh` | worker-log-ingest → worker-rcon | `publishRconRefreshHint` | worker-rcon hint subscriber | `{server_id, scopes: ("roster"\|"info")[], reason?}` — re-poll that server now. |
+
+`server.events.appended` does not travel over Redis from a worker: every API replica LISTENs on the Postgres channel `events_appended` (trigger `trg_events_notify_appended`, migration 0116) and publishes the frame locally. Frames carry no event rows; clients refetch `GET /api/v1/events`.
 
 The plugin re-publishes its locally-emitted events to `live-bus` so other API instances see them. The local emitter delivery is synchronous and happens BEFORE the Redis publish, so a single API replica never round-trips through Redis to talk to itself.

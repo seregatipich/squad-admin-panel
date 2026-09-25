@@ -217,6 +217,19 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   );
   useLiveSubscription('server.status', onLiveStatus);
 
+  // worker-rcon публикует `rcon.status`, только когда меняется то, что здесь
+  // видно (игроки, карта, следующий слой, очередь), — перечитываем карточку
+  // сразу, не дожидаясь очередного тика опроса.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const onLiveRcon = useCallback(
+    (event: { data: { server_id: string } }) => {
+      if (event.data.server_id === id) void refreshRef.current();
+    },
+    [id],
+  );
+  useLiveSubscription('rcon.status', onLiveRcon);
+
   const currentStatus = data?.server.status ?? null;
   const isExternal = data?.server.runtime === 'external';
   // У внешнего сервера нет контейнера, а значит и потока docker logs.

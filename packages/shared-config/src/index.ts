@@ -7,6 +7,7 @@ export * from './discord-redaction.js';
 export * from './discord-template.js';
 export * from './graceful-shutdown.js';
 export * from './heartbeat.js';
+export * from './live-refresh.js';
 export * from './log-stream.js';
 export * from './log-stream-sink.js';
 export * from './map-vote-selection.js';

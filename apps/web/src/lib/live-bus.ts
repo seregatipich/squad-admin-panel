@@ -20,6 +20,12 @@ export type LiveEvent =
       data: { server_id: string; state: string; player_count?: number };
     }
   | {
+      /** New rows in `events`; the list refetches over REST (no row data here). */
+      type: 'server.events.appended';
+      ts: string;
+      data: { server_id: string | null; kinds: string[] };
+    }
+  | {
       type: 'rcon.roster';
       ts: string;
       data: { server_id: string; player_count: number; polled_at: string };

@@ -31,6 +31,22 @@ Each `PerServerSupervisor` runs an infinite `connectLoop`:
    - Always emit the `rcon.disconnected` envelope to `events:server:{id}` and fire-and-forget diag emit `rcon.disconnected` (severity `warn`, payload `{ host, port, reason }`) where `reason` is the disconnect cause (`remote-close`, `explicit-close`, the auth error string, or `unknown`).
    - Write `state: "connecting"` with `reason: "reconnect-backoff"`, fire-and-forget diag emit `rcon.reconnect_attempt` (severity `warn`, payload `{ host, port, backoffMs }`), then sleep with exponential backoff (initial 1 s, max 60 s) and retry.
 
+## Live refresh (roster every 2 s, server info every 5 s, hints at once)
+
+The panel's live views are fed by two light, RCON-only refreshes that never touch the database:
+
+- **Roster** — `ListPlayers` + `ListSquads` → `rcon:roster:{id}`, `rcon:squads:{id}`, the `rcon.roster` live-bus event, and `player_count`/`squad_count` in `rcon:status:{id}`.
+- **Server info** — `ShowServerInfo` + `ShowNextMap` → `current_map`, `next_level`, `next_layer`, `game_mode`, `public_queue`, `tickrate_rt` in `rcon:status:{id}`.
+
+Each write merges into the fields the other paths already read, so a roster write never blanks the map. `rcon:status:changed` is published only when a rendered field or the state changes (tickrate and timestamps excluded), so frequent refreshes do not make every open panel refetch.
+
+Both run once right after connect, then on their timers, and out of band on a **refresh hint**:
+
+1. worker-log-ingest parses `player.connected`, `player.disconnected`, `match.started` or `match.ended` from the live log.
+2. It `PUBLISH`es `{server_id, scopes, reason}` on `rcon:refresh` (`roster` for joins/leaves, `roster` + `info` for match boundaries).
+3. worker-rcon's subscriber routes it to that server's supervisor; hints within 100 ms share one round-trip, and a busy client makes the hint wait instead of being dropped.
+4. A roster hint is repeated once 1.5 s later, because Squad logs a join slightly before `ListPlayers` lists the player.
+
 ## Poll cycle (every 30 s)
 
 1. `exec('ListPlayers')` → `parseListPlayers()` → `upsertPlayers()` → `accruePlayerKitTime()`.
