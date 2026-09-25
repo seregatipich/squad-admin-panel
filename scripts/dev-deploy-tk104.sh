@@ -80,8 +80,10 @@ else
   # No migrator, no --remove-orphans: exactly one container is replaced, so a
   # half-finished schema change cannot reach the tk104 database from here.
   # The exported image (and, for the api, version) overrides .release.env for
-  # this one service; sed then records it so .release.env keeps describing
-  # what runs.
+  # this one service; sed then records it so the next deploy sees a difference
+  # and puts the pushed image back. For a worker the record names the preview
+  # image for every worker although only this one runs it; that deploy still
+  # recreates just the containers whose image differs.
   image="${IMAGE_REPO}-${image_name}:${version}"
   overrides="${image_key}='${image}'"
   record="-e 's|^${image_key}=.*|${image_key}=${image}|'"

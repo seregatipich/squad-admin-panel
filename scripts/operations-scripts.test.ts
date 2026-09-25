@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -647,6 +648,8 @@ describe('tk104 release deploy', { concurrency: true }, () => {
     assert.equal(dumps.length, 1);
     assert.match(dumps[0] ?? '', /^panel-\d{8}T\d{6}Z-a{12}\.dump$/);
     assert.equal(readFileSync(path.join(fixture.backups, dumps[0] ?? ''), 'utf8'), 'PGDMP');
+    // The dump holds the whole database, so only the deploy account reads it.
+    assert.equal(statSync(path.join(fixture.backups, dumps[0] ?? '')).mode & 0o777, 0o600);
   });
 
   it('exits before any Docker call when a release changes no image and no configuration', async () => {

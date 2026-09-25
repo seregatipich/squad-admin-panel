@@ -74,7 +74,7 @@ docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.ym
    |---|---|
    | nothing — same image digests, migrations, Caddyfile, compose file and `.env.tk104` | records the commit and exits before any Docker call |
    | an image digest | pulls that image, unless the host already has it |
-   | `packages/db/drizzle` | `pg_dump -Fc` into `~/backups/panel-<UTC time>-<12-hex sha>.dump` (the newest 5 are kept), then `compose run --rm migrator`; a failed dump or migration stops the deploy before any app container is replaced |
+   | `packages/db/drizzle` | `pg_dump -Fc` into `~/backups/panel-<UTC time>-<12-hex sha>.dump` (mode `0600`; the newest 5 are kept), then `compose run --rm migrator`; a failed dump or migration stops the deploy before any app container is replaced |
    | `docker/Caddyfile.tk104` | recreates `caddy` (compose sees the file's hash as `CADDYFILE_SHA`) |
    | `compose.tk104.yml`, `.env.tk104` | compose recreates the services whose configuration changed |
 
@@ -110,7 +110,10 @@ gh workflow run deploy-tk104.yml --ref dev -f sha=<40-hex sha on dev>
 
 The workflow refuses a commit that is not on `dev`, reuses its images from GHCR
 (every deployed SHA stays there), and the host deploys that commit's tree and
-images like any push. Migrations are never undone: when the older commit has
+images like any push. The deploy script comes from that commit too, so only
+commits from this deploy model onward can be deployed this way: an older one
+stops before touching a container, leaving its tree in the app directory until
+the next deploy syncs a newer one. Migrations are never undone: when the older commit has
 fewer migrations, its `packages/db/drizzle` differs from the recorded one, so the
 deploy takes a backup and runs the migrator, which applies nothing because the
 database is already ahead. That is why every migration must stay compatible with

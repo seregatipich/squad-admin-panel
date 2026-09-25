@@ -191,7 +191,9 @@ if changed MIGRATIONS_SHA; then
   wait_until_ready postgres
   mkdir -p "$BACKUP_DIR"
   backup="$BACKUP_DIR/panel-$(date -u +%Y%m%dT%H%M%SZ)-${RELEASE_SHA:0:12}.dump"
-  if ! compose exec -T postgres pg_dump -U admin -d admin -Fc > "$backup.partial" ||
+  # A dump holds every row, sessions and encrypted secrets included: only the
+  # deploy account may read it, whatever the umask of the SSH session.
+  if ! (umask 077 && compose exec -T postgres pg_dump -U admin -d admin -Fc > "$backup.partial") ||
     [[ ! -s "$backup.partial" ]]; then
     rm -f "$backup.partial"
     fatal "database backup failed; nothing was migrated or recreated"
