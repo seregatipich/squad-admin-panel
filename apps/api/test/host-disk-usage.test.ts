@@ -1,6 +1,6 @@
-import { players } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { players, roles } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   buildIntegrationApp,
@@ -27,22 +27,38 @@ const SAMPLE_USAGE = {
 };
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
-beforeEach(async () => {
+// One app + database per file. Each test starts with the default fake bridge
+// (tests swap panelDiskUsage in place) and the owner back on Owner after the
+// 403 case strips its role.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerSteamId64) {
-    if (!h.seed.ownerPlayerId)
-      throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-  }
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  Object.assign(h.bridge, makeFakeBridge());
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 describe('GET /api/v1/host/disk-usage', () => {
