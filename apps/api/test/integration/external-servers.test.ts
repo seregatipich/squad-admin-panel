@@ -1,8 +1,9 @@
-import { auditLog, serverCredentials, serverSettings, servers } from '@squad/db/schema';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import { eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
+import { auditLogMark, expectAuditRowSince } from '../helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -93,44 +94,12 @@ beforeEach(async () => {
   h.bridge.files.clear();
   bridgeCalls = [];
   vi.mocked(relaunchSidecar).mockClear();
-  const [latest] = await h.db
-    .select({ id: auditLog.id })
-    .from(auditLog)
-    .orderBy(desc(auditLog.id))
-    .limit(1);
-  auditMark = latest?.id ?? 0n;
+  auditMark = await auditLogMark(h.db);
 });
 
 afterAll(async () => {
   await h?.cleanup();
 });
-
-/**
- * Waits for an audit row this test wrote. Registering an external server
- * audits no target id, so rows from earlier tests in the file are excluded by
- * id instead.
- */
-async function expectAuditRowSinceTestStart(action: string, resource: string): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        (
-          await h.db
-            .select({ id: auditLog.id })
-            .from(auditLog)
-            .where(
-              and(
-                gt(auditLog.id, auditMark),
-                eq(auditLog.actionType, action),
-                eq(auditLog.targetType, resource),
-              ),
-            )
-            .limit(1)
-        ).length,
-      { timeout: 1_200, interval: 50 },
-    )
-    .toBe(1);
-}
 
 async function createExternal(cookie: string, overrides: Partial<typeof externalBody> = {}) {
   const resp = await h.app.inject({
@@ -176,7 +145,10 @@ describe('POST /api/v1/servers/external', () => {
     expect(settings?.maxPlayers).toBe(100);
 
     expect(bridgeCalls).toEqual([]);
-    await expectAuditRowSinceTestStart('server.create_external', 'server');
+    await expectAuditRowSince(h.db, auditMark, {
+      action: 'server.create_external',
+      resource: 'server',
+    });
   });
 
   it('does not collide with a panel-hosted server that uses the same default ports', async () => {

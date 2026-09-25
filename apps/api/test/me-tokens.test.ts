@@ -1,6 +1,7 @@
-import { auditLog, playerApiTokens } from '@squad/db/schema';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { playerApiTokens } from '@squad/db/schema';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -23,43 +24,12 @@ beforeEach(async () => {
   // The list and the 25-active-token cap are per owner, so every case starts
   // with the seeded owner holding no tokens at all.
   await h.db.delete(playerApiTokens);
-  const [latest] = await h.db
-    .select({ id: auditLog.id })
-    .from(auditLog)
-    .orderBy(desc(auditLog.id))
-    .limit(1);
-  auditMark = latest?.id ?? 0n;
+  auditMark = await auditLogMark(h.db);
 });
 
 afterAll(async () => {
   await h?.cleanup();
 });
-
-/**
- * Waits for an audit row this test wrote. Token creation audits no target id,
- * so rows from earlier tests in the file are excluded by id instead.
- */
-async function expectAuditRowSinceTestStart(action: string, resource: string): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        (
-          await h.db
-            .select({ id: auditLog.id })
-            .from(auditLog)
-            .where(
-              and(
-                gt(auditLog.id, auditMark),
-                eq(auditLog.actionType, action),
-                eq(auditLog.targetType, resource),
-              ),
-            )
-            .limit(1)
-        ).length,
-      { timeout: 1_200, interval: 50 },
-    )
-    .toBe(1);
-}
 
 describe('GET /api/v1/me/tokens', () => {
   it('401 without cookie', async () => {
@@ -119,7 +89,10 @@ describe('POST /api/v1/me/tokens', () => {
     expect(stored).toHaveLength(1);
     expect(stored[0]?.tokenHash).not.toBe(body.plaintext);
 
-    await expectAuditRowSinceTestStart('user.api_token.create', 'api_token');
+    await expectAuditRowSince(h.db, auditMark, {
+      action: 'user.api_token.create',
+      resource: 'api_token',
+    });
   });
 
   it('rejects scopes the caller does not have (422 invalid_scopes)', async () => {

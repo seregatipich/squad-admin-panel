@@ -1,8 +1,9 @@
-import { auditLog, chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { auditLogMark, expectAuditRowSince } from '../helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -34,12 +35,7 @@ beforeEach(async () => {
     .update(players)
     .set({ roleId: ownerRoleId })
     .where(eq(players.steamId64, OWNER_STEAM_ID));
-  const [latest] = await h.db
-    .select({ id: auditLog.id })
-    .from(auditLog)
-    .orderBy(desc(auditLog.id))
-    .limit(1);
-  auditMark = latest?.id ?? 0n;
+  auditMark = await auditLogMark(h.db);
 });
 
 afterEach(() => {
@@ -49,32 +45,6 @@ afterEach(() => {
 afterAll(async () => {
   await h?.cleanup();
 });
-
-/**
- * Waits for an audit row this test wrote. A reindex audits no target id, so
- * rows from earlier tests in the file are excluded by id instead.
- */
-async function expectAuditRowSinceTestStart(action: string, resource: string): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        (
-          await h.db
-            .select({ id: auditLog.id })
-            .from(auditLog)
-            .where(
-              and(
-                gt(auditLog.id, auditMark),
-                eq(auditLog.actionType, action),
-                eq(auditLog.targetType, resource),
-              ),
-            )
-            .limit(1)
-        ).length,
-      { timeout: 1_200, interval: 50 },
-    )
-    .toBe(1);
-}
 
 async function asRole(flags: { panelAccess: boolean; canEditRoles: boolean }): Promise<string> {
   const roleId = uuidv7();
@@ -277,7 +247,10 @@ describe('POST /api/v1/settings/chat-flag-rules/reindex', () => {
     expect(secondSummary.changed).toBe(0);
     expect(secondSummary.flagged).toBe(firstSummary.flagged);
 
-    await expectAuditRowSinceTestStart('chat_flag_rule.reindex', 'chat_flag_rule');
+    await expectAuditRowSince(h.db, auditMark, {
+      action: 'chat_flag_rule.reindex',
+      resource: 'chat_flag_rule',
+    });
   });
 
   it('reconciles a message flagged by a since-deleted rule back to unflagged', async () => {
