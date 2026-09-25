@@ -27,7 +27,7 @@ import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import { registerRoutes } from '../../src/routes/index.js';
-import { createIsolatedSchema, hostDbUrl, hostRedisUrl } from './isolated-db.js';
+import { createIsolatedSchema, ensureWorkerDatabase, hostRedisUrl } from './isolated-db.js';
 
 export { createIsolatedSchema };
 export { runMigrations, testDbUrl, testRedisUrl } from './isolated-db.js';
@@ -315,8 +315,10 @@ export interface IntegrationHarness {
 }
 
 export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<IntegrationHarness> {
+  // The worker database behind TEST_DATABASE_URL is cloned on demand, so a
+  // file that only reaches it through this option still gets it provisioned.
   const schemaInfo = opts.reusePublicSchema
-    ? { schema: 'public', url: hostDbUrl(), drop: async () => undefined }
+    ? { schema: 'public', url: await ensureWorkerDatabase(), drop: async () => undefined }
     : await createIsolatedSchema();
 
   // Hand-build the drizzle client with a tighter connection pool so a
