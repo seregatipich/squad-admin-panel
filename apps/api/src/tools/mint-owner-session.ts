@@ -238,18 +238,46 @@ export async function runMintOwnerSessionCli(
   });
 }
 
-async function main(): Promise<void> {
+/** Output sinks for {@link main}; the CLI binds them to the process streams. */
+export interface MintOwnerSessionIo {
+  stdout: (text: string) => void;
+  stderr: (text: string) => void;
+}
+
+const processIo: MintOwnerSessionIo = {
+  stdout: (text) => process.stdout.write(text),
+  stderr: (text) => process.stderr.write(text),
+};
+
+/**
+ * Runs the operator command end to end, exactly as the CLI entry point does:
+ * the token (or the usage text for `--help`) goes to stdout, a single
+ * `mint-owner-session: <reason>` line to stderr on failure. Never throws.
+ *
+ * @param argv - Command-line arguments after the script path.
+ * @param env - Environment that supplies `DATABASE_URL`.
+ * @param io - Destination for the stdout and stderr text.
+ * @returns The exit code: 0 on success or help, 1 on any failure.
+ */
+export async function main(
+  argv: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+  io: MintOwnerSessionIo = processIo,
+): Promise<number> {
   try {
-    const token = await runMintOwnerSessionCli(process.argv.slice(2));
-    process.stdout.write(`${token ?? MINT_OWNER_SESSION_USAGE}\n`);
+    const token = await runMintOwnerSessionCli(argv, env);
+    io.stdout(`${token ?? MINT_OWNER_SESSION_USAGE}\n`);
+    return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
-    process.stderr.write(`mint-owner-session: ${message}\n`);
-    process.exitCode = 1;
+    io.stderr(`mint-owner-session: ${message}\n`);
+    return 1;
   }
 }
 
 const invokedPath = process.argv[1];
 if (invokedPath && import.meta.url === pathToFileURL(path.resolve(invokedPath)).href) {
-  void main();
+  void main().then((exitCode) => {
+    process.exitCode = exitCode;
+  });
 }
