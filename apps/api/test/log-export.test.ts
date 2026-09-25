@@ -1,5 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportBundle } from '../src/lib/log-export.js';
+
+// The per-container log tail waits on a real 1.5 s deadline because a follow
+// stream never ends on its own; fake timers let the deadline fire instantly.
+// Date stays real so the header timestamp and the 24h metrics window do too.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function makeFakeApp(
   overrides: {
@@ -34,26 +45,39 @@ function makeFakeApp(
     },
     makeBridgeClient: vi.fn(() => {
       if (overrides.bridgeClientError) throw overrides.bridgeClientError;
+      // Like the real bridge, a follow stream stays open until its client closes.
+      let endFollow: () => void = () => undefined;
+      const followEnded = new Promise<void>((resolve) => {
+        endFollow = resolve;
+      });
       return {
         containerLogsFollow: vi.fn(
           async (_opts: unknown, cb: (frame: { stream: string; data: string }) => void) => {
             if (overrides.containerLogsText) {
               cb({ stream: 'stdout', data: overrides.containerLogsText });
             }
-            await new Promise((r) => setTimeout(r, 2000));
+            await followEnded;
           },
         ),
-        close: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn(async () => {
+          endFollow();
+        }),
       };
     }),
   };
 }
 
+// Drains the bundle while advancing the fake clock through every tail deadline
+// the export schedules; all other awaits in the export are microtasks.
 async function collectGenerator(gen: AsyncGenerator<string>): Promise<string> {
   const parts: string[] = [];
-  for await (const chunk of gen) {
-    parts.push(chunk);
-  }
+  const drained = (async () => {
+    for await (const chunk of gen) {
+      parts.push(chunk);
+    }
+  })();
+  await vi.runAllTimersAsync();
+  await drained;
   return parts.join('');
 }
 
@@ -125,6 +149,23 @@ describe('exportBundle', () => {
     const output = await collectGenerator(exportBundle(app as never, []));
     expect(output).toContain('===== AUDIT (last 24h) =====');
     expect(output).toContain('user server.create server/srv-1 201');
+  });
+
+  it('tails a game server container until the deadline, then closes its bridge client', async () => {
+    const servers = [{ id: 'srv-1', display_name: 'Server Alpha' }];
+    const app = makeFakeApp({ containerLogsText: 'LogSquad: match started\n' });
+
+    const output = await collectGenerator(exportBundle(app as never, servers));
+
+    const section = output.indexOf('SQUAD GAME LOGS server "Server Alpha" (srv-1)');
+    expect(section).toBeGreaterThanOrEqual(0);
+    expect(output.indexOf('LogSquad: match started\n')).toBeGreaterThan(section);
+    const client = app.makeBridgeClient.mock.results[0]?.value;
+    expect(client.containerLogsFollow).toHaveBeenCalledWith(
+      { name: 'squad-srv-1', tail: 5000 },
+      expect.any(Function),
+    );
+    expect(client.close).toHaveBeenCalledTimes(1);
   });
 
   it('handles bridge client creation error gracefully', async () => {
