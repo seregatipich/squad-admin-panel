@@ -529,10 +529,10 @@ function deploy(
   fixture: DeployFixture,
   env: NodeJS.ProcessEnv = {},
   script = fixture.script,
-): CommandResult {
+): Promise<CommandResult> {
   rmSync(fixture.log, { force: true });
   rmSync(`${fixture.log}.curl-attempts`, { force: true });
-  return run('/bin/bash', [script], { env: { ...fixture.env, ...env } });
+  return runAsync('/bin/bash', [script], { env: { ...fixture.env, ...env } });
 }
 
 function releaseFile(fixture: DeployFixture, name = '.release.env'): Record<string, string> {
@@ -550,15 +550,15 @@ function dockerCommands(log: string): string[] {
 const COMPOSE =
   'docker|compose|--env-file|.env.tk104|--env-file|.release.next.env|-f|compose.tk104.yml';
 
-describe('tk104 release deploy', () => {
-  it('fails before Docker when the deployment environment file is absent', () => {
+describe('tk104 release deploy', { concurrency: true }, () => {
+  it('fails before Docker when the deployment environment file is absent', async () => {
     const { root, script } = copyScript('scripts/deploy-tk104.sh');
-    const result = run('/bin/bash', [script], { env: { APP_DIR: root } });
+    const result = await runAsync('/bin/bash', [script], { env: { APP_DIR: root } });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /\.env\.tk104 is missing/);
   });
 
-  it('refuses a malformed release or image reference before any Docker call', () => {
+  it('refuses a malformed release or image reference before any Docker call', async () => {
     const fixture = deployFixture();
     const cases: Array<[NodeJS.ProcessEnv, RegExp]> = [
       [{ RELEASE_SHA: '' }, /RELEASE_SHA must name the release/],
@@ -571,7 +571,7 @@ describe('tk104 release deploy', () => {
       [{ API_IMAGE: `GHCR.IO/x/api@sha256:${'1'.repeat(64)}` }, /API_IMAGE must be/],
     ];
     for (const [env, message] of cases) {
-      const result = deploy(fixture, env);
+      const result = await deploy(fixture, env);
       assert.equal(result.status, 1, JSON.stringify(env));
       assert.match(result.stderr, message);
       assert.deepEqual(logLines(fixture.log), [], JSON.stringify(env));
@@ -580,10 +580,10 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('refuses a Compose too old to merge both env files, before changing anything', () => {
+  it('refuses a Compose too old to merge both env files, before changing anything', async () => {
     for (const version of ['2.16.0', 'v1.29.2', '']) {
       const fixture = deployFixture();
-      const result = deploy(fixture, { DOCKER_COMPOSE_VERSION: version });
+      const result = await deploy(fixture, { DOCKER_COMPOSE_VERSION: version });
       assert.equal(result.status, 1, version);
       assert.match(result.stderr, /Docker Compose 2\.17\+ is required/);
       assert.deepEqual(logLines(fixture.log), ['docker|compose|version|--short']);
@@ -591,9 +591,9 @@ describe('tk104 release deploy', () => {
     }
   });
 
-  it('first release: pulls every image, backs up and migrates, starts, waits, records', () => {
+  it('first release: pulls every image, backs up and migrates, starts, waits, records', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a2,web w2,caddy c2,worker-rcon k2',
     });
     assert.equal(result.status, 0, result.stderr);
@@ -649,12 +649,12 @@ describe('tk104 release deploy', () => {
     assert.equal(readFileSync(path.join(fixture.backups, dumps[0] ?? ''), 'utf8'), 'PGDMP');
   });
 
-  it('exits before any Docker call when a release changes no image and no configuration', () => {
+  it('exits before any Docker call when a release changes no image and no configuration', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     const first = releaseFile(fixture);
 
-    const result = deploy(fixture, { RELEASE_SHA: NEXT_SHA });
+    const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /changes no image and no configuration: nothing to do/);
     assert.deepEqual(logLines(fixture.log), []);
@@ -663,13 +663,13 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.prev.env')), false);
   });
 
-  it('pulls and recreates only what changed, keeping APP_VERSION while the api image stays', () => {
+  it('pulls and recreates only what changed, keeping APP_VERSION while the api image stays', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     const first = releaseFile(fixture);
     const webImage = imageRef('web', '2');
 
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       RELEASE_SHA: NEXT_SHA,
       WEB_IMAGE: webImage,
       DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a1,web w2,caddy c1,worker-rcon k1',
@@ -694,25 +694,28 @@ describe('tk104 release deploy', () => {
     assert.deepEqual(releaseFile(fixture, '.release.prev.env'), first);
   });
 
-  it('reports the new commit once the api image changes', () => {
+  it('reports the new commit once the api image changes', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
-    const result = deploy(fixture, { RELEASE_SHA: NEXT_SHA, API_IMAGE: imageRef('api', '2') });
+    assert.equal((await deploy(fixture)).status, 0);
+    const result = await deploy(fixture, {
+      RELEASE_SHA: NEXT_SHA,
+      API_IMAGE: imageRef('api', '2'),
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(releaseFile(fixture).APP_VERSION, NEXT_SHA);
     assert.match(result.stdout, new RegExp(`APP_VERSION=${NEXT_SHA}`));
   });
 
-  it('backs up and migrates before the new containers start, only when drizzle changed', () => {
+  it('backs up and migrates before the new containers start, only when drizzle changed', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     mkdirSync(fixture.backups, { recursive: true });
     for (let day = 1; day <= 6; day += 1) {
       writeFileSync(path.join(fixture.backups, `panel-2020010${day}T000000Z-old.dump`), 'PGDMP');
     }
     writeFileSync(path.join(fixture.root, 'packages/db/drizzle/0001_next.sql'), 'ALTER TABLE t;\n');
 
-    const result = deploy(fixture, { RELEASE_SHA: NEXT_SHA });
+    const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
     assert.equal(result.status, 0, result.stderr);
     const commands = dockerCommands(fixture.log);
     const dump = commands.findIndex((line) => line.includes('|pg_dump|'));
@@ -739,13 +742,13 @@ describe('tk104 release deploy', () => {
     );
   });
 
-  it('stops before any app container is replaced when a migration fails', () => {
+  it('stops before any app container is replaced when a migration fails', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     const running = readFileSync(path.join(fixture.root, '.release.env'), 'utf8');
     writeFileSync(path.join(fixture.root, 'packages/db/drizzle/0001_next.sql'), 'ALTER TABLE t;\n');
 
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       RELEASE_SHA: NEXT_SHA,
       API_IMAGE: imageRef('api', '2'),
       FAIL_DOCKER_MATCH: 'run --rm -T migrator',
@@ -767,9 +770,9 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
   });
 
-  it('does not migrate when the pre-migration backup fails', () => {
+  it('does not migrate when the pre-migration backup fails', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, { FAIL_DOCKER_MATCH: 'pg_dump' });
+    const result = await deploy(fixture, { FAIL_DOCKER_MATCH: 'pg_dump' });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /database backup failed; nothing was migrated or recreated/);
     const commands = dockerCommands(fixture.log);
@@ -781,14 +784,14 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('applies a Caddyfile or .env.tk104 edit even when no image changed', () => {
+  it('applies a Caddyfile or .env.tk104 edit even when no image changed', async () => {
     for (const edited of ['docker/Caddyfile.tk104', '.env.tk104']) {
       const fixture = deployFixture();
-      assert.equal(deploy(fixture).status, 0);
+      assert.equal((await deploy(fixture)).status, 0);
       const first = releaseFile(fixture);
       writeFileSync(path.join(fixture.root, edited), '# edited\n', { flag: 'a' });
 
-      const result = deploy(fixture, { RELEASE_SHA: NEXT_SHA });
+      const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
       assert.equal(result.status, 0, result.stderr);
       const commands = dockerCommands(fixture.log);
       assert.ok(commands.includes(`${COMPOSE}|up|-d|--remove-orphans`), edited);
@@ -802,12 +805,12 @@ describe('tk104 release deploy', () => {
     }
   });
 
-  it('fails closed when a recreated service never becomes ready, keeping the recorded release', () => {
+  it('fails closed when a recreated service never becomes ready, keeping the recorded release', async () => {
     const fixture = deployFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     const running = readFileSync(path.join(fixture.root, '.release.env'), 'utf8');
 
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       RELEASE_SHA: NEXT_SHA,
       WEB_IMAGE: imageRef('web', '2'),
       DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a1,web w2,caddy c1,worker-rcon k1',
@@ -831,9 +834,9 @@ describe('tk104 release deploy', () => {
   // probe raced the deploy it verifies. Run 31948383567 went red with curl
   // exit 35 (SSL connect error) 140 ms after caddy started, while the stack
   // was healthy and serving https://tk104.duckdns.org/health with a 200.
-  it('retries the Caddy probe while TLS is still coming up, then reports success', () => {
+  it('retries the Caddy probe while TLS is still coming up, then reports success', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, { CURL_FAIL_TIMES: '3', CURL_EXIT: '35' });
+    const result = await deploy(fixture, { CURL_FAIL_TIMES: '3', CURL_EXIT: '35' });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /is live/);
     const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
@@ -841,9 +844,9 @@ describe('tk104 release deploy', () => {
     assert.ok(probes.every((line) => line.includes('|--resolve|tk104.duckdns.org:443:127.0.0.1|')));
   });
 
-  it('still fails closed, preserving the curl exit code, when the probe never recovers', () => {
+  it('still fails closed, preserving the curl exit code, when the probe never recovers', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, { CURL_EXIT: '35' });
+    const result = await deploy(fixture, { CURL_EXIT: '35' });
     assert.equal(result.status, 35);
     assert.match(
       result.stderr,
@@ -855,9 +858,9 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('fails when /health keeps reporting a version other than the recorded one', () => {
+  it('fails when /health keeps reporting a version other than the recorded one', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, { CURL_VERSION: 'stale' });
+    const result = await deploy(fixture, { CURL_VERSION: 'stale' });
     assert.equal(result.status, 1);
     assert.match(
       result.stderr,
@@ -866,9 +869,9 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('propagates a failed start without probing or recording the release', () => {
+  it('propagates a failed start without probing or recording the release', async () => {
     const fixture = deployFixture();
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       FAIL_DOCKER_MATCH: 'up -d --remove-orphans',
       FAIL_CODE: '47',
     });
@@ -881,10 +884,10 @@ describe('tk104 release deploy', () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
   });
 
-  it('builds the release on the host through the override when asked, never pulling', () => {
+  it('builds the release on the host through the override when asked, never pulling', async () => {
     const fixture = deployFixture();
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = deploy(fixture, {
+      const result = await deploy(fixture, {
         DEPLOY_BUILD: '1',
         RELEASE_SHA: 'dev-abc1234',
         API_IMAGE: undefined,
@@ -910,7 +913,7 @@ describe('tk104 release deploy', () => {
     }
   });
 
-  it('removes panel images other than the running and the previous release', () => {
+  it('removes panel images other than the running and the previous release', async () => {
     const fixture = deployFixture();
     const first = releaseImages('1');
     const second = releaseImages('1', { WEB_IMAGE: imageRef('web', '2') });
@@ -920,9 +923,9 @@ describe('tk104 release deploy', () => {
     const repoIds = [...Object.values(first), second.WEB_IMAGE, staleWeb, staleApi]
       .map((reference) => `id:${reference}`)
       .join(',');
-    assert.equal(deploy(fixture, { DOCKER_PRESENT: present }).status, 0);
+    assert.equal((await deploy(fixture, { DOCKER_PRESENT: present })).status, 0);
 
-    const result = deploy(fixture, {
+    const result = await deploy(fixture, {
       ...second,
       RELEASE_SHA: NEXT_SHA,
       DOCKER_PRESENT: present,
@@ -941,7 +944,7 @@ describe('tk104 release deploy', () => {
   });
 });
 
-describe('tk104 rollback', () => {
+describe('tk104 rollback', { concurrency: true }, () => {
   /** A deploy fixture with the real rollback script next to the real deploy script. */
   function rollbackFixture(): DeployFixture & { rollback: string } {
     const fixture = deployFixture();
@@ -950,17 +953,17 @@ describe('tk104 rollback', () => {
     return { ...fixture, rollback };
   }
 
-  it('redeploys the previous release and swaps the release files, without migrating', () => {
+  it('redeploys the previous release and swaps the release files, without migrating', async () => {
     const fixture = rollbackFixture();
-    assert.equal(deploy(fixture).status, 0);
+    assert.equal((await deploy(fixture)).status, 0);
     const first = releaseFile(fixture);
     const second = releaseImages('2');
-    assert.equal(deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA }).status, 0);
+    assert.equal((await deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA })).status, 0);
     const current = releaseFile(fixture);
     assert.equal(current.APP_VERSION, NEXT_SHA);
 
     // Only the current images are still on the host: the previous ones are pulled.
-    const result = deploy(
+    const result = await deploy(
       fixture,
       { DOCKER_PRESENT: Object.values(second).join(','), RELEASE_SHA: 'ignored' },
       fixture.rollback,
@@ -980,35 +983,35 @@ describe('tk104 rollback', () => {
     );
 
     // A second rollback returns to where it started.
-    assert.equal(deploy(fixture, {}, fixture.rollback).status, 0);
+    assert.equal((await deploy(fixture, {}, fixture.rollback)).status, 0);
     assert.deepEqual(releaseFile(fixture), current);
   });
 
-  it('refuses without a complete previous release, or onto the running one', () => {
+  it('refuses without a complete previous release, or onto the running one', async () => {
     const empty = rollbackFixture();
-    const none = deploy(empty, {}, empty.rollback);
+    const none = await deploy(empty, {}, empty.rollback);
     assert.equal(none.status, 1);
     assert.match(none.stderr, /no previous release recorded/);
     assert.deepEqual(logLines(empty.log), []);
 
     const partial = rollbackFixture();
     writeFileSync(path.join(partial.root, '.release.prev.env'), `RELEASE_SHA=${RELEASE_SHA}\n`);
-    const incomplete = deploy(partial, {}, partial.rollback);
+    const incomplete = await deploy(partial, {}, partial.rollback);
     assert.equal(incomplete.status, 1);
     assert.match(incomplete.stderr, /records no API_IMAGE/);
     assert.deepEqual(logLines(partial.log), []);
 
     const same = rollbackFixture();
-    assert.equal(deploy(same).status, 0);
+    assert.equal((await deploy(same)).status, 0);
     copyFileSync(path.join(same.root, '.release.env'), path.join(same.root, '.release.prev.env'));
-    const onto = deploy(same, {}, same.rollback);
+    const onto = await deploy(same, {}, same.rollback);
     assert.equal(onto.status, 1);
     assert.match(onto.stderr, /already the running release/);
     assert.deepEqual(logLines(same.log), []);
   });
 });
 
-describe('tk104 forced-command deploy entry', () => {
+describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
   const VALID = [
     'deploy',
     RELEASE_SHA,
@@ -1066,7 +1069,7 @@ describe('tk104 forced-command deploy entry', () => {
     };
   }
 
-  it('refuses anything but the exact deploy request, before git, rsync or the deploy', () => {
+  it('refuses anything but the exact deploy request, before git, rsync or the deploy', async () => {
     const fixture = entryFixture();
     const sentinel = path.join(fixture.root, 'pwned');
     const digest = (fill: string) => `sha256:${fill.repeat(64)}`;
@@ -1093,17 +1096,17 @@ describe('tk104 forced-command deploy entry', () => {
       VALID.replace('deploy ', 'rollback '),
     ];
     for (const request of requests) {
-      const result = run('/bin/bash', [fixture.script], {
+      const result = await runAsync('/bin/bash', [fixture.script], {
         env: { ...fixture.env, SSH_ORIGINAL_COMMAND: request },
       });
       assert.equal(result.status, 2, JSON.stringify(request));
       assert.match(result.stderr, /^refused: expected 'deploy <40-hex sha> api=sha256:/);
       assert.deepEqual(logLines(fixture.log), [], JSON.stringify(request));
     }
-    const bare = run('/bin/bash', [fixture.script], { env: fixture.env });
+    const bare = await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
     assert.equal(bare.status, 2);
     // A forced command's request always wins over arguments.
-    const smuggled = run('/bin/bash', [fixture.script, ...VALID.split(' ')], {
+    const smuggled = await runAsync('/bin/bash', [fixture.script, ...VALID.split(' ')], {
       env: { ...fixture.env, SSH_ORIGINAL_COMMAND: 'rollback' },
     });
     assert.equal(smuggled.status, 2);
@@ -1112,9 +1115,9 @@ describe('tk104 forced-command deploy entry', () => {
     assert.equal(existsSync(fixture.src), false);
   });
 
-  it('fetches the commit, syncs it without host state, and hands over to its deploy script', () => {
+  it('fetches the commit, syncs it without host state, and hands over to its deploy script', async () => {
     const fixture = entryFixture();
-    const result = run('/bin/bash', [fixture.script], {
+    const result = await runAsync('/bin/bash', [fixture.script], {
       env: { ...fixture.env, SSH_ORIGINAL_COMMAND: VALID, DEPLOY_BUILD: '1' },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -1154,12 +1157,12 @@ describe('tk104 forced-command deploy entry', () => {
     assert.match(result.stderr, /differs from scripts\/tk104-deploy-entry\.sh .* reinstall it/);
   });
 
-  it('takes the same request as arguments when run by hand, with overridable locations', () => {
+  it('takes the same request as arguments when run by hand, with overridable locations', async () => {
     const fixture = entryFixture();
     mkdirSync(path.join(fixture.src, '.git'), { recursive: true });
     mkdirSync(path.join(fixture.src, 'scripts'), { recursive: true });
     copyFileSync(fixture.script, path.join(fixture.src, 'scripts/tk104-deploy-entry.sh'));
-    const result = run('/bin/bash', [fixture.script, ...VALID.split(' ')], {
+    const result = await runAsync('/bin/bash', [fixture.script, ...VALID.split(' ')], {
       env: {
         ...fixture.env,
         PANEL_REPO_URL: 'https://example.invalid/fork.git',
@@ -1178,9 +1181,9 @@ describe('tk104 forced-command deploy entry', () => {
     assert.doesNotMatch(result.stderr, /reinstall/);
   });
 
-  it('stops before syncing when the commit cannot be fetched or checked out', () => {
+  it('stops before syncing when the commit cannot be fetched or checked out', async () => {
     const unfetchable = entryFixture();
-    const fetchFailure = run('/bin/bash', [unfetchable.script], {
+    const fetchFailure = await runAsync('/bin/bash', [unfetchable.script], {
       env: { ...unfetchable.env, SSH_ORIGINAL_COMMAND: VALID, FAIL_GIT_MATCH: 'fetch' },
     });
     assert.equal(fetchFailure.status, 128);
@@ -1192,7 +1195,7 @@ describe('tk104 forced-command deploy entry', () => {
     );
 
     const elsewhere = entryFixture();
-    const wrongHead = run('/bin/bash', [elsewhere.script], {
+    const wrongHead = await runAsync('/bin/bash', [elsewhere.script], {
       env: { ...elsewhere.env, SSH_ORIGINAL_COMMAND: VALID, GIT_HEAD: 'b'.repeat(40) },
     });
     assert.equal(wrongHead.status, 1);
@@ -1206,7 +1209,7 @@ describe('tk104 forced-command deploy entry', () => {
   });
 });
 
-describe('fast developer deploy to tk104', () => {
+describe('fast developer deploy to tk104', { concurrency: true }, () => {
   function devDeployFixture(): {
     root: string;
     script: string;
@@ -1262,9 +1265,9 @@ describe('fast developer deploy to tk104', () => {
   const COMPOSE_BOTH =
     'docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml';
 
-  it('defaults to the web service: rebuilds it on the host after the sync and records it', () => {
+  it('defaults to the web service: rebuilds it on the host after the sync and records it', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const commands = logLines(fixture.log);
     const rsyncIndex = commands.findIndex((line) => line.startsWith('rsync|'));
@@ -1287,9 +1290,9 @@ describe('fast developer deploy to tk104', () => {
     assert.doesNotMatch(payload, /deploy-tk104|migrator|--remove-orphans|APP_VERSION/);
   });
 
-  it('never ships host secrets, release records, state, or build output', () => {
+  it('never ships host secrets, release records, state, or build output', async () => {
     const fixture = devDeployFixture();
-    run('/bin/bash', [fixture.script], { env: fixture.env });
+    await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
     const rsync = logLines(fixture.log).find((line) => line.startsWith('rsync|')) ?? '';
     for (const excluded of [
       '.git',
@@ -1307,9 +1310,11 @@ describe('fast developer deploy to tk104', () => {
     assert.match(rsync, /\|seregatipich@tk104\.duckdns\.org:apps\/squad-admin-panel\/$/);
   });
 
-  it('stamps a version that can never be mistaken for a pushed commit SHA', () => {
+  it('stamps a version that can never be mistaken for a pushed commit SHA', async () => {
     const fixture = devDeployFixture();
-    run('/bin/bash', [fixture.script, 'api'], { env: { ...fixture.env, GIT_SHA: 'deadbee' } });
+    await runAsync('/bin/bash', [fixture.script, 'api'], {
+      env: { ...fixture.env, GIT_SHA: 'deadbee' },
+    });
     assert.ok(
       sshPayload(fixture.log).includes(
         `export API_IMAGE='${IMAGE_REPO}-api:dev-deadbee' APP_VERSION='dev-deadbee';`,
@@ -1318,15 +1323,15 @@ describe('fast developer deploy to tk104', () => {
     );
 
     const dirty = devDeployFixture();
-    run('/bin/bash', [dirty.script, 'api'], {
+    await runAsync('/bin/bash', [dirty.script, 'api'], {
       env: { ...dirty.env, GIT_SHA: 'deadbee', GIT_DIRTY: ' M apps/web/src/page.tsx' },
     });
     assert.match(sshPayload(dirty.log), /APP_VERSION='dev-deadbee-dirty'/);
   });
 
-  it('rebuilds only the api container, without the migrator, and records its version', () => {
+  it('rebuilds only the api container, without the migrator, and records its version', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
     assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.tk104.build.yml build api;`), payload);
@@ -1340,17 +1345,17 @@ describe('fast developer deploy to tk104', () => {
     assert.doesNotMatch(payload, /migrator|--remove-orphans/);
   });
 
-  it('refuses the full deploy without the explicit confirmation, before any sync', () => {
+  it('refuses the full deploy without the explicit confirmation, before any sync', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /migrations from the working tree/);
     assert.deepEqual(logLines(fixture.log), []);
   });
 
-  it('runs the whole deploy as a host build once the confirmation is exact', () => {
+  it('runs the whole deploy as a host build once the confirmation is exact', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'full'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'full'], {
       env: { ...fixture.env, CONFIRM_FULL_DEPLOY: 'deploy' },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -1360,9 +1365,11 @@ describe('fast developer deploy to tk104', () => {
     );
   });
 
-  it('rebuilds a single worker container by name, on the same no-deps path', () => {
+  it('rebuilds a single worker container by name, on the same no-deps path', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'worker-rcon'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'worker-rcon'], {
+      env: fixture.env,
+    });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
     assert.ok(
@@ -1374,19 +1381,19 @@ describe('fast developer deploy to tk104', () => {
     assert.doesNotMatch(payload, /migrator|--remove-orphans|APP_VERSION/);
   });
 
-  it('rejects an unknown or malformed target before touching tk104', () => {
+  it('rejects an unknown or malformed target before touching tk104', async () => {
     for (const target of ['postgres', 'worker-rcon;touch pwned', 'worker-', 'worker-RCON']) {
       const fixture = devDeployFixture();
-      const result = run('/bin/bash', [fixture.script, target], { env: fixture.env });
+      const result = await runAsync('/bin/bash', [fixture.script, target], { env: fixture.env });
       assert.equal(result.status, 2, target);
       assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|worker-<name>\|full\]/);
       assert.deepEqual(logLines(fixture.log), [], target);
     }
   });
 
-  it('stops at a failed sync instead of rebuilding a half-copied tree', () => {
+  it('stops at a failed sync instead of rebuilding a half-copied tree', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], {
+    const result = await runAsync('/bin/bash', [fixture.script], {
       env: { ...fixture.env, RSYNC_EXIT: '23' },
     });
     assert.equal(result.status, 23);
@@ -1396,9 +1403,9 @@ describe('fast developer deploy to tk104', () => {
     );
   });
 
-  it('retries the health probe while the rebuilt api is still booting, then reports success', () => {
+  it('retries the health probe while the rebuilt api is still booting, then reports success', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
       env: { ...fixture.env, CURL_FAIL_TIMES: '3' },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -1406,9 +1413,9 @@ describe('fast developer deploy to tk104', () => {
     assert.equal(logLines(fixture.log).filter((line) => line.startsWith('curl|')).length, 4);
   });
 
-  it('fails closed, preserving the curl exit code, when health never recovers', () => {
+  it('fails closed, preserving the curl exit code, when health never recovers', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
       env: { ...fixture.env, CURL_PERSISTENT_EXIT: '22' },
     });
     assert.equal(result.status, 22);
@@ -1416,9 +1423,11 @@ describe('fast developer deploy to tk104', () => {
     assert.doesNotMatch(result.stdout, /Done\./);
   });
 
-  it('fails when the remote rebuild fails, without announcing success', () => {
+  it('fails when the remote rebuild fails, without announcing success', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], { env: { ...fixture.env, SSH_EXIT: '7' } });
+    const result = await runAsync('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, SSH_EXIT: '7' },
+    });
     assert.equal(result.status, 7);
     assert.doesNotMatch(result.stdout, /Done\./);
   });
