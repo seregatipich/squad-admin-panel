@@ -6,9 +6,9 @@ import {
   scheduledTasks,
   servers,
 } from '@squad/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -25,18 +25,37 @@ const OWNER_STEAM_ID = testSteamId(173000);
 const CATALOG_LAYER = 'Yehorivka RAAS v11';
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Cases demote the seeded owner, and each creates servers with fixed slugs and
+// ports, which only one active server may hold; undo both. Tasks and their
+// run history cascade with their server.
+afterEach(async () => {
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+  await h.db.delete(servers);
 });
 
 async function login(): Promise<string> {
