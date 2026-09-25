@@ -43,9 +43,8 @@ The runner never merges anything. Integrate the pushed branches the same way as 
 1. Review each `feature/issue-<n>-*` branch (diff against `origin/dev`, check the tests the agent added).
 2. Open the handoff evidence URL from each agent's final report and confirm that the published issue comment covers requirements, exact tests and gates, runtime verification, provenance, and all limitations. The comment is explicitly not a final completion claim.
 3. Merge the branches into `dev` one at a time per the `CLAUDE.md` workflow, re-running the local gate between merges.
-4. Watch `dev` CI to green and run `bash scripts/verify-done.sh`.
-5. For each integrated issue, post and verify the final `Completion evidence — 100% verified` issue comment required by `CLAUDE.md`. It must identify the current `dev` SHA and CI run; only then may the issue be reported complete or closed.
-6. Promote when appropriate (`git push origin origin/dev:master`).
+4. Watch the `deploy-tk104` run for the `dev` tip, promote it (`git push origin origin/dev:master`), watch the `ci` run on `master` to green, and run `bash scripts/verify-done.sh`.
+5. For each integrated issue, post and verify the final `Completion evidence — 100% verified` issue comment required by `CLAUDE.md`. It must identify the current `dev` SHA, its deploy run and the `master` CI run; only then may the issue be reported complete or closed.
 
 A `timed-out` or `failed` result means no trustworthy branch was pushed for that issue — check the session in the Console before assuming anything landed.
 
