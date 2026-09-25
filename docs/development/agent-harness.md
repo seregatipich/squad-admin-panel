@@ -34,7 +34,7 @@ Committed project settings load automatically — no per-user setup.
 
 ## Layer 2 — git hooks (lefthook)
 
-[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` as a command on `pre-commit` (`check-commit`) and on `pre-push` (`check-push`, with `use_stdin: true` so it receives the native refspec lines). The pre-push guard runs on every push — including cross-ref pushes such as the dev→master promotion and file-less branch deletions; [`scripts/lefthook-branch-guard.test.ts`](../../scripts/lefthook-branch-guard.test.ts) (part of `pnpm test:scripts`) pushes through the real `lefthook.yml` into a throwaway remote to prove it. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
+[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` as a command on `pre-commit` (`check-commit`) and on `pre-push` (`check-push`, with `use_stdin: true` so it receives the native refspec lines). The pre-push guard runs on every push — including cross-ref pushes such as the dev→master promotion and file-less branch deletions. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
 
 ## Layer 3 — GitHub rulesets (authoritative)
 

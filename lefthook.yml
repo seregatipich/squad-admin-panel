@@ -19,8 +19,7 @@ pre-push:
     branch-guard:
       # Reads the native pre-push refspec lines on stdin. It runs on every
       # push, including the dev→master promotion and file-less branch
-      # deletions — scripts/lefthook-branch-guard.test.ts pushes through this
-      # config to prove it.
+      # deletions.
       use_stdin: true
       priority: 1
       run: bash scripts/git-guard.sh check-push origin origin
