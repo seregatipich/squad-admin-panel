@@ -10,7 +10,7 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -144,13 +144,17 @@ function fetchAnalytics(query: string, cookie: string) {
 }
 
 let ownerCookie: string;
+const createdAlertRuleIds: string[] = [];
 
-beforeEach(async () => {
+// One app + database per file; the players, roles and servers are seeded once.
+// The analytics aggregate over every report, so each test starts with no
+// reports, reporter stats or moderation actions, and drops the alert rule it
+// created (the migration-seeded rules stay).
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
-  vi.mocked(sendRconCommandViaWorker).mockReset();
   ownerCookie = await loginAsSteam(OWNER_STEAM);
 
   await seedRoleWithPlayer({
@@ -182,9 +186,19 @@ beforeEach(async () => {
   targetBId = await seedPlayer(TARGET_B_STEAM, 'TargetB');
 });
 
-afterEach(async () => {
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  vi.mocked(sendRconCommandViaWorker).mockReset();
+  await h.db.delete(moderationActions);
+  await h.db.delete(playerReports);
+  await h.db.delete(reporterStats);
+  for (const id of createdAlertRuleIds.splice(0)) {
+    await h.db.delete(alertRules).where(eq(alertRules.id, id));
+  }
   invalidateAllPermissionCaches();
-  await h.cleanup();
 });
 
 describeIfDb('GET /api/v1/analytics/reports', () => {
@@ -417,6 +431,7 @@ describeIfDb('reporter stats recompute on report/action mutations (REPORT-5, #11
 
   it('flags spam once 5 reports from one reporter are rejected within the 14-day window and raises the AUTO-3 alert', async () => {
     const ruleId = uuidv7();
+    createdAlertRuleIds.push(ruleId);
     await h.db.insert(alertRules).values({
       id: ruleId,
       name: 'Report spam',
