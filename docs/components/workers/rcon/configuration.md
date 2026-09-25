@@ -9,13 +9,19 @@
 | `APP_ENCRYPTION_KEY` | yes | — | Base64-encoded 32-byte AES key for RCON password blobs | yes |
 | `LOG_LEVEL` | no | `info` | Pino log level (`trace`, `debug`, `info`, `warn`, `error`) | no |
 | `BRIDGE_SOCKET` | no | — | Not used by this worker | — |
+| `RCON_ROSTER_INTERVAL_MS` | no | `2000` | Roster refresh cadence (`ListPlayers` + `ListSquads`). Positive integer; anything else keeps the default | no |
+| `RCON_INFO_INTERVAL_MS` | no | `5000` | Server-info refresh cadence (`ShowServerInfo` + `ShowNextMap`). Positive integer; anything else keeps the default | no |
 
 ## Hard-coded constants
 
 | Constant | Value | Source |
 |---|---|---|
 | Reconcile interval | 15 000 ms | `apps/workers/rcon/src/index.ts` |
-| Poll interval | 30 000 ms | `PerServerSupervisor.schedulePoll` |
+| Poll interval (full, DB-backed) | 30 000 ms | `PerServerSupervisor.schedulePoll` |
+| Roster refresh interval | 2 000 ms (`RCON_ROSTER_INTERVAL_MS`) | `DEFAULT_ROSTER_INTERVAL_MS` |
+| Server-info refresh interval | 5 000 ms (`RCON_INFO_INTERVAL_MS`) | `DEFAULT_INFO_INTERVAL_MS` |
+| Refresh-hint debounce | 100 ms | `DEFAULT_HINT_DEBOUNCE_MS` |
+| Hinted roster follow-up | 1 500 ms | `DEFAULT_HINT_FOLLOW_UP_MS` |
 | Keepalive interval | 90 000 ms | `RconClient.keepalive` |
 | Connect timeout | 5 000 ms | `RconClient.connect` |
 | Auth timeout | 5 000 ms | `RconClient.authenticate` |

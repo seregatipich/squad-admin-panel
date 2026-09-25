@@ -8,6 +8,7 @@ import {
   defaultFilters,
   type EventFilters,
   type EventListItem,
+  eventsBatchAffectsList,
   formatDateTime,
   kindLabel,
   kindOptionsFromEvents,
@@ -180,5 +181,49 @@ describe('events helpers', () => {
     expect(formatDateTime(null)).toBe('—');
     expect(formatDateTime('not-a-date')).toBe('—');
     expect(formatDateTime('2026-07-02T10:00:00.000Z')).not.toBe('—');
+  });
+});
+
+describe('eventsBatchAffectsList', () => {
+  const batch = { server_id: 'srv-1', kinds: ['player.connected', 'combat_damage'] };
+
+  it('refreshes the default newest-first list for any server', () => {
+    expect(eventsBatchAffectsList(batch, defaultFilters())).toBe(true);
+    expect(eventsBatchAffectsList({ server_id: null, kinds: ['x'] }, defaultFilters())).toBe(true);
+  });
+
+  it('on a server page, reacts only to that server', () => {
+    expect(eventsBatchAffectsList(batch, defaultFilters(), 'srv-1')).toBe(true);
+    expect(eventsBatchAffectsList(batch, defaultFilters(), 'srv-2')).toBe(false);
+    expect(eventsBatchAffectsList({ ...batch, server_id: null }, defaultFilters(), 'srv-1')).toBe(
+      false,
+    );
+  });
+
+  it('honours the server filter of the global list', () => {
+    const filters: EventFilters = { ...defaultFilters(), servers: ['srv-2'] };
+    expect(eventsBatchAffectsList(batch, filters)).toBe(false);
+    expect(eventsBatchAffectsList({ ...batch, server_id: null }, filters)).toBe(false);
+    expect(eventsBatchAffectsList(batch, { ...filters, servers: ['srv-2', 'srv-1'] })).toBe(true);
+  });
+
+  it('skips batches whose kinds the list filters out', () => {
+    expect(eventsBatchAffectsList(batch, { ...defaultFilters(), kinds: ['match.ended'] })).toBe(
+      false,
+    );
+    expect(eventsBatchAffectsList(batch, { ...defaultFilters(), kinds: ['combat_damage'] })).toBe(
+      true,
+    );
+  });
+
+  it('leaves oldest-first lists and windows that already ended alone', () => {
+    expect(eventsBatchAffectsList(batch, { ...defaultFilters(), order: 'asc' })).toBe(false);
+    expect(eventsBatchAffectsList(batch, { ...defaultFilters(), preset: 'yesterday' })).toBe(false);
+    expect(
+      eventsBatchAffectsList(batch, { ...defaultFilters(), preset: 'custom', to: '2026-01-01' }),
+    ).toBe(false);
+    expect(
+      eventsBatchAffectsList(batch, { ...defaultFilters(), preset: 'custom', from: '2026-01-01' }),
+    ).toBe(true);
   });
 });

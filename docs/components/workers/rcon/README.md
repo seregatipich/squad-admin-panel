@@ -10,9 +10,10 @@ The dial target is `resolveRconHost(server_credentials.rcon_host)`: `NULL` (pane
 
 - Reconcile the set of RCON targets against live DB rows every 15 s.
 - Open TCP connections and authenticate using the Squad two-packet AUTH quirk, and drop Squad's broken second reply to the empty probe (a size-10 frame carrying 7 extra bytes `00 00 00 01 00 00 00`) so later responses stay framed — see `protocol.ts`.
-- Poll `ListPlayers`, `ListSquads`, `ShowServerInfo`, and `ShowNextMap` every 30 s.
+- Refresh the roster (`ListPlayers` + `ListSquads`) every 2 s and server info (`ShowServerInfo` + `ShowNextMap`) every 5 s, both RCON-only; run the full DB-backed poll (player upserts, kit time, sessions, seeding, A2S) every 30 s.
+- Fill roster and server info immediately after every (re)connect, and re-poll a server at once when a refresh hint arrives on the Redis channel `rcon:refresh` (published by worker-log-ingest on joins, leaves and match boundaries).
 - Consume queued P0 operator commands (`AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`) while the RCON session is connected.
-- Write `rcon:status:{serverId}` Redis key (TTL 300 s) after every poll.
+- Write `rcon:status:{serverId}` Redis key (TTL 300 s) after every refresh; publish `rcon:status:changed` only when a rendered field (player/squad count, map, next layer, mode, queue) or the state changes.
 - Write `rcon:squads:{serverId}` Redis key (TTL 90 s) after every successful poll.
 - Write `rcon:command-result:{requestId}` Redis key (TTL 120 s) after queued operator commands.
 - Publish `rcon.connected`, `rcon.disconnected`, `rcon.players_polled` envelopes to `events:server:{serverId}`.

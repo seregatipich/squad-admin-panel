@@ -38,6 +38,16 @@ export type LiveEvent =
       data: { server_id: string; state: string; player_count?: number };
     }
   | {
+      /**
+       * New rows landed in `events` (see plugins/events-feed.ts). Carries no
+       * row data: open event lists refetch through the permission-checked
+       * REST route. `server_id` is null for global events.
+       */
+      type: 'server.events.appended';
+      ts: string;
+      data: { server_id: string | null; kinds: string[] };
+    }
+  | {
       type: 'rcon.roster';
       ts: string;
       data: { server_id: string; player_count: number; polled_at: string };

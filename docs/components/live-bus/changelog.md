@@ -1,5 +1,12 @@
 # `live-bus` — changelog
 
+## 2026-09-25 — `server.events.appended`: живая лента событий
+
+### Added
+
+- `apps/api/src/plugins/events-feed.ts` слушает Postgres `NOTIFY events_appended` (триггер миграции 0116 срабатывает на каждую вставку в `events`, кто бы её ни сделал), склеивает уведомления за 250 мс по серверу и публикует `server.events.appended` `{ server_id, kinds }`. Кадр не несёт данных событий — список перечитывает первую страницу через `GET /api/v1/events` с обычной проверкой прав.
+- Web: `EventsBrowser` подтягивает новые события сверху (не чаще раза в секунду), если кадр подходит под открытые фильтры; карточка сервера перечитывается сразу по `rcon.status`.
+
 ## 2026-07-09 — COMBAT-6: combat.event reconnect buffer + per-event combat:view gate
 
 ### Added

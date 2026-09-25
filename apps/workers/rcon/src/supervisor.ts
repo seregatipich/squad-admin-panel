@@ -10,6 +10,7 @@ import {
   splitOpenSessionsAtSeedingTransition,
 } from '@squad/db';
 import type { Diag } from '@squad/diag';
+import type { RconRefreshScope } from '@squad/shared-config';
 import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
@@ -36,6 +37,39 @@ import { computeSeedingTick, isSeedLayer, type SeedingState } from './seeding.js
 const DEFAULT_SEED_LIVE_AT = 60;
 const DEFAULT_SEED_HYSTERESIS = 5;
 
+/** Default cadence of the light roster refresh; see {@link SupervisorOptions.rosterIntervalMs}. */
+export const DEFAULT_ROSTER_INTERVAL_MS = 2_000;
+/** Default cadence of the server-info refresh; see {@link SupervisorOptions.infoIntervalMs}. */
+export const DEFAULT_INFO_INTERVAL_MS = 5_000;
+/** Refresh hints arriving within this window are served by one RCON round-trip. */
+const DEFAULT_HINT_DEBOUNCE_MS = 100;
+/**
+ * A hinted roster refresh is repeated once after this delay: Squad logs a join
+ * a moment before `ListPlayers` lists the player, so the first read can miss
+ * them and the second one catches them without waiting for the timer.
+ */
+const DEFAULT_HINT_FOLLOW_UP_MS = 1_500;
+
+/**
+ * The `rcon:status` fields the panel renders. `rcon:status:changed` is
+ * published only when one of these (or the state) changes, so a refresh every
+ * few seconds does not make every open panel re-fetch its server list.
+ * Tickrate and timestamps are deliberately left out: they move on every read.
+ */
+const PUBLISHED_STATUS_FIELDS = [
+  'player_count',
+  'squad_count',
+  'current_map',
+  'next_level',
+  'next_layer',
+  'game_mode',
+  'public_queue',
+] as const;
+
+type ConnectedStatus = Partial<
+  Record<(typeof PUBLISHED_STATUS_FIELDS)[number] | 'last_poll_at' | 'tickrate_rt', unknown>
+>;
+
 export interface Target {
   serverId: string;
   host: string;
@@ -55,10 +89,21 @@ export interface SupervisorOptions {
   pollIntervalMs?: number;
   /**
    * Cadence of the light roster refresh (`ListPlayers` + `ListSquads` only).
-   * Defaults to 5s: the panel's live roster is redrawn from the event this
+   * Defaults to 2s: the panel's live roster is redrawn from the event this
    * refresh publishes, so it is what "the list is live" actually costs.
+   * Joins and leaves arrive faster still, through {@link PerServerSupervisor.requestRefresh}.
    */
   rosterIntervalMs?: number;
+  /**
+   * Cadence of the server-info refresh (`ShowServerInfo` + `ShowNextMap`):
+   * map, next layer, mode, queue and tickrate. Defaults to 5s. It touches
+   * neither the database nor A2S — those stay on the full `pollIntervalMs` tick.
+   */
+  infoIntervalMs?: number;
+  /** Coalescing window for refresh hints; defaults to 100ms. */
+  hintDebounceMs?: number;
+  /** Delay of the single repeat after a hinted roster refresh; defaults to 1.5s. */
+  hintFollowUpMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   geoLookup?: GeoLookup | null;
@@ -142,6 +187,18 @@ export class RconSupervisor {
   size(): number {
     return this.supervisors.size;
   }
+
+  /**
+   * Routes a refresh hint (see `RCON_REFRESH_CHANNEL`) to the server's
+   * supervisor. Returns false when this worker does not poll that server —
+   * it is stopped, or its hint raced a reconcile — and the hint is dropped.
+   */
+  hint(serverId: string, scopes: RconRefreshScope[]): boolean {
+    const sup = this.supervisors.get(serverId);
+    if (!sup) return false;
+    sup.requestRefresh(scopes);
+    return true;
+  }
 }
 
 class PerServerSupervisor {
@@ -149,12 +206,25 @@ class PerServerSupervisor {
   private stopped = false;
   private pollTimer?: NodeJS.Timeout;
   private rosterTimer?: NodeJS.Timeout;
+  private infoTimer?: NodeJS.Timeout;
+  private hintTimer?: NodeJS.Timeout;
+  private followUpTimer?: NodeJS.Timeout;
+  /** Scopes requested by hints and not yet served. */
+  private readonly pendingHints = new Set<RconRefreshScope>();
   /**
-   * Set while either timer holds the RCON client, so the two never queue
+   * Set while any timer or hint holds the RCON client, so they never queue
    * commands on top of each other: the client serialises `exec`, and a
    * roster refresh waiting behind a full poll would fire late and pointlessly.
    */
   private pollInFlight = false;
+  /**
+   * Last known connected-state fields. The roster, info and full-poll paths
+   * each refresh a slice of them; every status write carries the whole set so
+   * a fast roster write never blanks the map the info refresh read.
+   */
+  private connectedStatus: ConnectedStatus = {};
+  /** Signature of the last `rcon:status:changed` publish; see {@link PUBLISHED_STATUS_FIELDS}. */
+  private lastPublishedStatus: string | null = null;
   private backoffMs: number;
   private onDisconnect?: () => void;
   /** Serialises chat ingestion for this server; see {@link ingestBroadcast}. */
@@ -164,6 +234,8 @@ class PerServerSupervisor {
   private consecutiveLowTick = 0;
   private rosterFirstSeen = new Map<string, string>();
   private commandQueue?: RconCommandQueue;
+  /** Dedicated connection for {@link commandQueue}; see {@link startCommandQueue}. */
+  private commandRedis?: Redis;
   // Timestamp of the previous successful ListPlayers poll on the *current*
   // connection, used by accruePlayerKitTime to compute the elapsed interval.
   // Reset to null on every (re)connect so a poll right after reconnecting
@@ -225,21 +297,44 @@ class PerServerSupervisor {
     await this.closeOpenSessions();
   }
 
+  /**
+   * Writes `rcon:status:{id}`. For `connected`, `extra` is a patch merged into
+   * the fields earlier refreshes already read (undefined values keep the old
+   * one), so each refresh path only has to supply what it re-read. Any other
+   * state starts the connected fields over. `rcon:status:changed` goes out on
+   * every non-connected write, and on a connected write only when a field the
+   * panel renders actually changed.
+   */
   private async writeStatus(
     state: 'connected' | 'disconnected' | 'connecting',
     extra: Record<string, unknown> = {},
   ): Promise<void> {
+    let body: Record<string, unknown> = extra;
+    let signature: string | null = null;
+    if (state === 'connected') {
+      for (const [field, value] of Object.entries(extra)) {
+        if (value !== undefined) (this.connectedStatus as Record<string, unknown>)[field] = value;
+      }
+      body = { ...this.connectedStatus };
+      signature = JSON.stringify(
+        PUBLISHED_STATUS_FIELDS.map((field) => this.connectedStatus[field] ?? null),
+      );
+    } else {
+      this.connectedStatus = {};
+    }
     const key = `rcon:status:${this.target.serverId}`;
-    const value = JSON.stringify({ state, ts: new Date().toISOString(), ...extra });
+    const value = JSON.stringify({ state, ts: new Date().toISOString(), ...body });
     try {
       // 5-minute TTL; a worker crash or network cut removes the stale key.
       await this.opts.redis.set(key, value, 'EX', 300);
     } catch {
       // telemetry only; swallow
     }
+    if (signature !== null && signature === this.lastPublishedStatus) return;
+    this.lastPublishedStatus = null;
     try {
       const playerCount =
-        typeof extra.player_count === 'number' ? (extra.player_count as number) : undefined;
+        typeof body.player_count === 'number' ? (body.player_count as number) : undefined;
       await this.opts.redis.publish(
         'rcon:status:changed',
         JSON.stringify({
@@ -248,6 +343,9 @@ class PerServerSupervisor {
           ...(playerCount !== undefined ? { player_count: playerCount } : {}),
         }),
       );
+      // Remembered only once delivered, so a failed publish is retried by the
+      // next write even when nothing changed in between.
+      this.lastPublishedStatus = signature;
     } catch {
       // best-effort fan-out; the SET above is the source of truth
     }
@@ -594,6 +692,10 @@ class PerServerSupervisor {
         await this.startCommandQueue();
         this.schedulePoll();
         this.scheduleRosterRefresh();
+        this.scheduleInfoRefresh();
+        // Fill the roster and server info right away instead of leaving the
+        // panel empty until the first timer tick.
+        this.requestRefresh(['roster', 'info']);
         await Promise.race([
           disconnected,
           new Promise<void>((resolve) => {
@@ -677,8 +779,21 @@ class PerServerSupervisor {
 
   private async startCommandQueue(): Promise<void> {
     if (this.commandQueue || !this.client) return;
+    // The queue parks on `XREADGROUP BLOCK`, which holds its connection for
+    // the whole block window. On the shared connection every status, roster
+    // and live-bus write queued behind it for up to that long, so the panel
+    // saw each change half a second late per server. It gets its own.
+    const connection =
+      typeof this.opts.redis.duplicate === 'function' ? this.opts.redis.duplicate() : null;
+    connection?.on('error', (err: Error) =>
+      this.opts.log.warn(
+        { err: err.message, serverId: this.target.serverId },
+        'rcon command queue redis error',
+      ),
+    );
+    this.commandRedis = connection ?? undefined;
     const queue = new RconCommandQueue({
-      redis: this.opts.redis,
+      redis: connection ?? this.opts.redis,
       log: this.opts.log.child({
         serverId: this.target.serverId,
         component: 'rcon-command-queue',
@@ -698,6 +813,8 @@ class PerServerSupervisor {
         'rcon command queue unavailable',
       );
       await queue.stop().catch(() => undefined);
+      this.commandRedis?.disconnect();
+      this.commandRedis = undefined;
     }
   }
 
@@ -705,6 +822,9 @@ class PerServerSupervisor {
     const queue = this.commandQueue;
     this.commandQueue = undefined;
     await queue?.stop();
+    const connection = this.commandRedis;
+    this.commandRedis = undefined;
+    connection?.disconnect();
   }
 
   private clearTimers(): void {
@@ -712,42 +832,139 @@ class PerServerSupervisor {
     this.pollTimer = undefined;
     if (this.rosterTimer) clearInterval(this.rosterTimer);
     this.rosterTimer = undefined;
+    if (this.infoTimer) clearInterval(this.infoTimer);
+    this.infoTimer = undefined;
+    if (this.hintTimer) clearTimeout(this.hintTimer);
+    this.hintTimer = undefined;
+    if (this.followUpTimer) clearTimeout(this.followUpTimer);
+    this.followUpTimer = undefined;
+    this.pendingHints.clear();
+  }
+
+  /**
+   * Asks for an out-of-band refresh because something just changed — a log
+   * line announced a join, a leave or a new match, or the connection just
+   * came up. Hints inside `hintDebounceMs` share one RCON round-trip; if a
+   * timer holds the client, the hint waits for it rather than being dropped.
+   * A roster hint is repeated once after `hintFollowUpMs` (see
+   * {@link DEFAULT_HINT_FOLLOW_UP_MS}). No-op while disconnected: the connect
+   * path requests a full refresh itself.
+   */
+  requestRefresh(scopes: RconRefreshScope[]): void {
+    if (!this.client || this.stopped) return;
+    for (const scope of scopes) this.pendingHints.add(scope);
+    if (this.hintTimer) return;
+    this.hintTimer = setTimeout(
+      () => void this.drainHints(),
+      this.opts.hintDebounceMs ?? DEFAULT_HINT_DEBOUNCE_MS,
+    );
+  }
+
+  private async drainHints(): Promise<void> {
+    this.hintTimer = undefined;
+    if (!this.client || this.stopped || this.pendingHints.size === 0) return;
+    if (this.pollInFlight) {
+      // Busy with a timer tick; try again shortly instead of losing the hint.
+      this.hintTimer = setTimeout(
+        () => void this.drainHints(),
+        this.opts.hintDebounceMs ?? DEFAULT_HINT_DEBOUNCE_MS,
+      );
+      return;
+    }
+    const scopes = new Set(this.pendingHints);
+    this.pendingHints.clear();
+    if (scopes.has('roster')) {
+      await this.refreshRoster();
+      if (this.followUpTimer) clearTimeout(this.followUpTimer);
+      this.followUpTimer = setTimeout(() => {
+        this.followUpTimer = undefined;
+        void this.refreshRoster();
+      }, this.opts.hintFollowUpMs ?? DEFAULT_HINT_FOLLOW_UP_MS);
+    }
+    if (scopes.has('info')) await this.refreshInfo();
   }
 
   /**
    * Refreshes only who is on the server and in which squad, every
-   * `rosterIntervalMs`, and publishes `rcon.roster` — the event the panel's
-   * live roster redraws on. It deliberately does NOT touch the database, kit
-   * time, seeding, A2S or the server-info status: those belong to the full
-   * poll, and running them six times as often would multiply the write load
-   * for data that changes once a match, not once a squad join.
+   * `rosterIntervalMs` and on every roster hint, publishes `rcon.roster` — the
+   * event the panel's live roster redraws on — and carries the new player and
+   * squad counts into `rcon:status`. It deliberately does NOT touch the
+   * database, kit time, seeding or A2S: those belong to the full poll, and
+   * running them this often would multiply the write load for data that
+   * changes once a match, not once a squad join.
    */
   private scheduleRosterRefresh(): void {
-    const interval = this.opts.rosterIntervalMs ?? 5_000;
-    this.rosterTimer = setInterval(async () => {
-      if (!this.client || this.pollInFlight) return;
-      this.pollInFlight = true;
-      try {
-        const rawPlayers = await this.client.exec('ListPlayers');
-        const rawSquads = await this.client.exec('ListSquads');
-        const players = parseListPlayers(rawPlayers);
-        const squads = parseListSquads(rawSquads);
-        const polledAt = new Date().toISOString();
-        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
-        this.rosterFirstSeen = firstSeen;
-        await this.writeRoster(entries, polledAt);
-        await this.writeSquads(squads, polledAt);
-      } catch (err) {
-        // The full poll owns failure handling (teardown after three strikes);
-        // a missed refresh only costs one frame of freshness.
-        this.opts.log.debug(
-          { err: (err as Error).message, serverId: this.target.serverId },
-          'roster refresh failed',
-        );
-      } finally {
-        this.pollInFlight = false;
+    const interval = this.opts.rosterIntervalMs ?? DEFAULT_ROSTER_INTERVAL_MS;
+    this.rosterTimer = setInterval(() => void this.refreshRoster(), interval);
+  }
+
+  private async refreshRoster(): Promise<void> {
+    if (!this.client || this.pollInFlight) return;
+    this.pollInFlight = true;
+    try {
+      const rawPlayers = await this.client.exec('ListPlayers');
+      const rawSquads = await this.client.exec('ListSquads');
+      const players = parseListPlayers(rawPlayers);
+      const squads = parseListSquads(rawSquads);
+      const polledAt = new Date().toISOString();
+      const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+      this.rosterFirstSeen = firstSeen;
+      await this.writeRoster(entries, polledAt);
+      await this.writeSquads(squads, polledAt);
+      if (this.client && !this.stopped) {
+        await this.writeStatus('connected', {
+          player_count: players.length,
+          squad_count: squads.length,
+        });
       }
-    }, interval);
+    } catch (err) {
+      // The full poll owns failure handling (teardown after three strikes);
+      // a missed refresh only costs one frame of freshness.
+      this.opts.log.debug(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'roster refresh failed',
+      );
+    } finally {
+      this.pollInFlight = false;
+    }
+  }
+
+  /**
+   * Refreshes map, next layer, mode, public queue and tickrate every
+   * `infoIntervalMs` and on every info hint. RCON only — no database, A2S or
+   * seeding; the full poll still owns those.
+   */
+  private scheduleInfoRefresh(): void {
+    const interval = this.opts.infoIntervalMs ?? DEFAULT_INFO_INTERVAL_MS;
+    this.infoTimer = setInterval(() => void this.refreshInfo(), interval);
+  }
+
+  private async refreshInfo(): Promise<void> {
+    if (!this.client || this.pollInFlight) return;
+    this.pollInFlight = true;
+    try {
+      const rawInfo = await this.client.exec('ShowServerInfo');
+      const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
+      const info = rawInfo ? parseServerInfo(rawInfo) : null;
+      const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
+      if (this.client && !this.stopped) {
+        await this.writeStatus('connected', {
+          tickrate_rt: info?.tickrate ?? undefined,
+          current_map: info?.map_name ?? undefined,
+          next_level: nextMap?.level ?? undefined,
+          next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
+          game_mode: info?.game_mode ?? undefined,
+          public_queue: info?.public_queue ?? undefined,
+        });
+      }
+    } catch (err) {
+      this.opts.log.debug(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'server info refresh failed',
+      );
+    } finally {
+      this.pollInFlight = false;
+    }
   }
 
   private schedulePoll(): void {

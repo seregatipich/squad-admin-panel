@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-vi.mock('ioredis', () => ({
-  default: vi.fn(() => ({
+vi.mock('ioredis', () => {
+  const client = () => ({
     on: vi.fn(),
     quit: vi.fn().mockResolvedValue('OK'),
     xadd: vi.fn().mockResolvedValue('id'),
     set: vi.fn().mockResolvedValue('OK'),
     get: vi.fn().mockResolvedValue(null),
     del: vi.fn().mockResolvedValue(1),
-  })),
-}));
+    subscribe: vi.fn().mockResolvedValue(1),
+    duplicate: vi.fn(() => client()),
+  });
+  return { default: vi.fn(client) };
+});
 vi.mock('@squad/db', () => ({
   createDatabaseClient: vi.fn(() => ({
     select: vi.fn().mockReturnValue({
@@ -27,6 +30,8 @@ vi.mock('@squad/shared-config', () => ({
   redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
   resolveRconHost: vi.fn(() => '127.0.0.1'),
   startHeartbeat: vi.fn(() => vi.fn()),
+  parseRconRefreshHint: vi.fn(() => null),
+  RCON_REFRESH_CHANNEL: 'rcon:refresh',
 }));
 vi.mock('@squad/diag', () => ({
   createDiag: vi.fn(() => ({ emit: vi.fn().mockResolvedValue(undefined) })),
