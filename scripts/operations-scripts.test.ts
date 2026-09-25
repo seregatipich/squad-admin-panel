@@ -160,10 +160,21 @@ describe('operation script static contracts', () => {
     }
 
     const workflow = readFileSync(path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'), 'utf8');
-    const migrations = workflow.indexOf('name: Apply database migrations');
-    const scriptTests = workflow.indexOf('name: Run operations and verification script tests');
+    // Scoped to the `scripts` job: other jobs migrate too, and a match there
+    // would hide a scripts job that runs its contracts against an empty schema.
+    const jobStart = workflow.indexOf('\n  scripts:\n');
+    assert.ok(jobStart >= 0, 'ci.yml has no scripts job');
+    const jobEnd = workflow.slice(jobStart + 1).search(/\n {2}[a-z0-9-]+:\n/u);
+    const scriptsJob =
+      jobEnd < 0 ? workflow.slice(jobStart) : workflow.slice(jobStart, jobStart + 1 + jobEnd);
+    const migrations = scriptsJob.indexOf('name: Apply database migrations');
+    const scriptTests = scriptsJob.indexOf('name: Run operations and verification script tests');
     assert.ok(migrations >= 0 && scriptTests > migrations);
-    assert.match(workflow.slice(scriptTests), /run: pnpm test:scripts/);
+    assert.match(scriptsJob.slice(migrations), /\n {8}run: pnpm --filter @squad\/db migrate\n/u);
+    assert.match(scriptsJob.slice(scriptTests), /\n {8}run: pnpm test:scripts\n/u);
+    // test:scripts builds the one package its contracts load; a full Turbo
+    // build here only spends CI minutes.
+    assert.doesNotMatch(scriptsJob, /turbo run build/u);
   });
 
   it('runs script contracts after database setup and before package tests in pre-push', () => {

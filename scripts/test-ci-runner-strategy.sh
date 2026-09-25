@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# test-ci-runner-strategy.sh — keep verification on ephemeral GitHub-hosted VMs
-# and the production deploy on the repository's own tk104 runner.
+# test-ci-runner-strategy.sh — lock the CI/CD job graph: every job on an
+# ephemeral GitHub-hosted VM, verification only for `master`, and the tk104
+# development stand fed straight from `dev`.
 #
-# The project first ran verification hosted and deployed from its own runner
-# (#286), then moved everything onto an organization runner group. That group
-# belonged to the `breaking-squad` organization; the repository now lives on a
-# personal account, which has no runner groups at all, and it is public, so
-# hosted minutes are free while any verification job on the production host
-# would widen what outside code can reach. The test fails if a ci job leaves
-# the hosted image, if a deploy job leaves the labelled tk104 runner or its
-# `production` environment, or if any workflow still selects a runner group.
+# History: verification first ran hosted beside a self-hosted production deploy
+# runner (#286), then on an organization runner group; the repository now lives
+# on a personal account (no runner groups at all) and is public (hosted minutes
+# are free). tk104 is a development stand: a `dev` push builds the images on
+# hosted VMs, pushes them to GHCR, and hands tk104 the commit and digests over a
+# forced-command SSH key, so no job runs on the host and no runner lives there.
+# CI runs only on `master` and on dispatch.
+#
+# The test fails if a job leaves the hosted image, if anything selects a
+# self-hosted runner or a runner group, if a trigger or a gate drifts, or if the
+# test-slice wiring (shards, blob reports, merged coverage) comes apart.
 set -uo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,153 +35,309 @@ job_block() {
   ' "$workflow"
 }
 
+job_names() {
+  sed -n '/^jobs:$/,$p' "$1" | sed -n 's/^  \([a-zA-Z0-9_-]*\):$/\1/p'
+}
+
+# Prints the dedented `run: |` body of the step named $2 in the job block $1.
+step_run() {
+  awk -v name="$2" '
+    $0 == "      - name: " name { in_step = 1; next }
+    in_step && /^      - / { exit }
+    in_step && $0 == "        run: |" { in_run = 1; next }
+    in_run && length($0) > 0 && substr($0, 1, 10) != "          " { exit }
+    in_run { sub(/^          /, ""); print }
+  ' <<<"$1"
+}
+
+has_line() {
+  printf '%s\n' "$1" | grep -Fxq -- "$2"
+}
+
+has_text() {
+  printf '%s\n' "$1" | grep -Fq -- "$2"
+}
+
 [ -f "$ci_workflow" ] || fail 'ci workflow is missing'
 [ -f "$deploy_workflow" ] || fail 'deploy workflow is missing'
-
-grep -Fq 'branches: [master, dev]' "$ci_workflow" ||
-  fail 'ci push trigger is not restricted to trusted integration branches'
+command -v jq >/dev/null 2>&1 || fail 'jq is required'
 
 HOSTED_IMAGE='ubuntu-24.04'
-DEPLOY_RUNNER='[self-hosted, tk104-deploy]'
 
-for job in branch-guard node-lint node-test node-scripts node go docker; do
-  block=$(job_block "$ci_workflow" "$job")
-  [ -n "$block" ] || fail "required ci job '$job' is missing"
-  printf '%s\n' "$block" | grep -Fxq "    runs-on: ${HOSTED_IMAGE}" ||
-    fail "ci job '$job' does not use the pinned GitHub-hosted image ${HOSTED_IMAGE}"
-done
-
-if grep -Eq '^[[:space:]]*runs-on:.*self-hosted' "$ci_workflow"; then
-  fail 'ci still contains a job on a self-hosted runner'
-fi
-
+# --- Runners: hosted everywhere, never self-hosted, never a runner group. ---
 for workflow in "$ci_workflow" "$deploy_workflow"; do
+  name=$(basename "$workflow")
+  if grep -Eq '^[[:space:]]*runs-on:.*self-hosted|^[[:space:]]*-[[:space:]]*self-hosted' "$workflow"; then
+    fail "$name still references a self-hosted runner"
+  fi
   # A personal-account repository has no runner groups: a job that selects one
   # waits in the queue forever without an error.
   if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*$' "$workflow"; then
-    fail "$(basename "$workflow") still selects a runner group instead of a hosted image or labels"
+    fail "$name selects a runner group instead of a hosted image"
+  fi
+  if sed -n '/^on:/,/^[a-z]/p' "$workflow" | grep -Eq '^[[:space:]]+pull_request(_target)?:'; then
+    fail "$name is triggered by pull requests"
+  fi
+  jobs=$(job_names "$workflow")
+  [ -n "$jobs" ] || fail "$name declares no jobs"
+  while IFS= read -r job; do
+    has_line "$(job_block "$workflow" "$job")" "    runs-on: ${HOSTED_IMAGE}" ||
+      fail "$name job '$job' does not use the pinned GitHub-hosted image ${HOSTED_IMAGE}"
+  done <<<"$jobs"
+done
+
+# --- ci.yml: master pushes and dispatches only. ---
+ci_on=$(sed -n '/^on:$/,/^[a-z]/p' "$ci_workflow")
+has_line "$ci_on" '    branches: [master]' || fail 'ci push trigger is not restricted to master'
+has_line "$ci_on" '  workflow_dispatch:' || fail 'ci cannot be dispatched by hand'
+if grep -Eq 'branches: \[[^]]*dev' "$ci_workflow"; then
+  fail 'ci runs on dev again; dev deploys to tk104 without tests'
+fi
+if grep -Fq "github.ref != 'refs/heads/master'" "$ci_workflow"; then
+  fail 'a ci job still skips on master, where ci now runs'
+fi
+grep -Fq 'cancel-in-progress: true' "$ci_workflow" ||
+  fail 'superseded ci runs are not cancelled'
+for gone in 'Require a green dev CI run' 'check-runner-health' 'lcov.info' 'docker save' 'release-images'; do
+  if grep -Fq "$gone" "$ci_workflow"; then
+    fail "ci still contains '$gone'"
   fi
 done
 
-deploy_jobs=$(grep -Ec '^  [a-zA-Z0-9_-]+:$' <(sed -n '/^jobs:$/,$p' "$deploy_workflow"))
-[ "$deploy_jobs" -ge 1 ] || fail 'deploy workflow declares no jobs'
-while IFS= read -r job; do
-  block=$(job_block "$deploy_workflow" "$job")
-  printf '%s\n' "$block" | grep -Fxq "    runs-on: ${DEPLOY_RUNNER}" ||
-    fail "deploy job '$job' does not target the labelled tk104 deploy runner"
-  printf '%s\n' "$block" | grep -Fxq '    environment: production' ||
-    fail "deploy job '$job' can read deploy secrets outside the production environment"
-  printf '%s\n' "$block" | grep -Fq "github.repository == 'seregatipich/squad-admin-panel'" ||
-    fail "deploy job '$job' would also run in a fork"
-done < <(sed -n '/^jobs:$/,$p' "$deploy_workflow" | sed -n 's/^  \([a-zA-Z0-9_-]*\):$/\1/p')
-if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*ubuntu-' "$deploy_workflow"; then
-  fail 'production deploy must not move to a GitHub-hosted runner'
-fi
-
-node_test_block=$(job_block "$ci_workflow" node-test)
-printf '%s\n' "$node_test_block" | grep -Fq 'timeout-minutes: 45' ||
-  fail 'node-test timeout does not cover a cold hosted full-suite run'
-for shard in api web packages; do
-  printf '%s\n' "$node_test_block" | grep -Fxq "          - shard: ${shard}" ||
-    fail "node-test does not run the '${shard}' test slice"
-done
-printf '%s\n' "$node_test_block" | grep -Fq 'run: bash scripts/ci-test-shard.sh ${{ matrix.shard }}' ||
-  fail 'node-test does not run its slice through ci-test-shard.sh'
-
-# `node` is the required status check and the success signal deploy waits for,
-# so it must fail unless every JavaScript job it stands for succeeded — including
-# when one of them was cancelled or skipped.
-node_block=$(job_block "$ci_workflow" node)
-printf '%s\n' "$node_block" | grep -Fxq '    needs: [node-lint, node-test, node-scripts]' ||
-  fail 'the node gate does not wait for every JavaScript job'
-printf '%s\n' "$node_block" | grep -Fxq "    if: always() && github.ref != 'refs/heads/master'" ||
-  fail 'the node gate is skipped instead of failing when a JavaScript job fails'
-printf '%s\n' "$node_block" | grep -Fq '"${result}" != success' ||
-  fail 'the node gate does not reject a non-success JavaScript job'
-
-node_scripts_block=$(job_block "$ci_workflow" node-scripts)
-printf '%s\n' "$node_scripts_block" | grep -Fq "if: steps.mutation.outputs.run == 'true'" ||
-  fail 'Stryker is not gated on a shared-config change'
-printf '%s\n' "$node_scripts_block" | grep -Fq -- '-- packages/shared-config' ||
-  fail 'the Stryker gate does not diff packages/shared-config'
-
-go_block=$(job_block "$ci_workflow" go)
-printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
-  fail 'go job does not install Go through a SHA-pinned setup action'
-printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path: apps/bridge/go.sum' ||
-  fail 'go cache is not keyed by the bridge module dependency file'
-printf '%s\n' "$go_block" | grep -Fxq '      - run: go test -race -count=1 ./...' ||
-  fail 'go job does not run the race detector directly on the hosted VM'
-if printf '%s\n' "$go_block" | grep -Eq 'docker run|^[[:space:]]+container:'; then
-  fail 'go job still carries the self-hosted container workaround'
-fi
-printf '%s\n' "$go_block" | grep -Fq 'go install golang.org/x/vuln/cmd/govulncheck@v1.7.0' ||
-  fail 'govulncheck is not pinned to the accepted release'
-if printf '%s\n' "$go_block" | grep -Fq 'govulncheck@latest'; then
-  fail 'govulncheck still changes implicitly between CI runs'
-fi
-printf '%s\n' "$go_block" | grep -Fq 'if ldd bin/panel-host-bridge' ||
-  fail 'go job no longer proves the bridge binary is statically linked'
-
-grep -Fq 'cancel-in-progress: true' "$ci_workflow" ||
-  fail 'superseded ci runs are not cancelled'
+ci_jobs=$(job_names "$ci_workflow")
+expected_jobs='branch-guard lint test-api test-web test-packages scripts changes mutation go images backup gate'
+[ "$(printf '%s\n' "$ci_jobs" | tr '\n' ' ' | sed 's/ $//')" = "$expected_jobs" ] ||
+  fail "ci jobs are '$(printf '%s\n' "$ci_jobs" | tr '\n' ' ')', expected '$expected_jobs'"
 
 branch_guard=$(job_block "$ci_workflow" branch-guard)
-printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
-  fail 'branch-guard does not execute this regression test'
+if printf '%s\n' "$branch_guard" | grep -Eq '^    if:'; then
+  fail 'branch-guard must run on every ci run'
+fi
+has_text "$branch_guard" "if: github.event_name == 'push' && github.ref == 'refs/heads/master'" ||
+  fail 'branch-guard no longer audits master pushes'
+has_text "$branch_guard" 'git merge-base --is-ancestor "$GITHUB_SHA" origin/dev' ||
+  fail 'branch-guard no longer proves the master tip came from dev'
+for suite in test-git-guard test-verify-done test-pre-push-checklist test-workflow-pins \
+  test-gitignore-patterns test-workflow-security test-codeql-default-setup \
+  test-ci-runner-strategy test-ci-test-shard; do
+  has_text "$branch_guard" "run: bash scripts/${suite}.sh" ||
+    fail "branch-guard does not run scripts/${suite}.sh"
+done
 
-for job in node-test node-scripts; do
+lint=$(job_block "$ci_workflow" lint)
+for command in 'pnpm exec biome check .' 'bash scripts/test-cov-complete.sh' \
+  'pnpm run solve:issues:test' 'pnpm turbo run typecheck --concurrency=4' \
+  './gitleaks detect --config .gitleaks.toml'; do
+  has_text "$lint" "$command" || fail "lint does not run '$command'"
+done
+printf '%s\n' "$lint" | grep -Eq 'uses:[[:space:]]+actions/cache@[0-9a-f]{40}' ||
+  fail 'lint does not restore the Turbo cache through a SHA-pinned actions/cache'
+has_line "$lint" '          path: .turbo/cache' || fail 'lint caches something other than .turbo/cache'
+has_line "$lint" '          key: turbo-lint-${{ github.sha }}' || fail 'lint Turbo cache key is not per job and commit'
+has_line "$lint" '          restore-keys: turbo-lint-' || fail 'lint Turbo cache does not fall back to the last run'
+
+# --- Test slices. ---
+# Postgres/Redis data stays on bounded tmpfs mounts so an interrupted job never
+# leaves anonymous volumes behind; health checks poll every 2 s.
+for job in test-api test-packages scripts; do
   block=$(job_block "$ci_workflow" "$job")
-  printf '%s\n' "$block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
+  has_text "$block" '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
     fail "${job}: Postgres service may leak its image-declared anonymous volume"
-  printf '%s\n' "$block" | grep -Fq -- '--tmpfs /data:rw,size=128m' ||
+  has_text "$block" '--tmpfs /data:rw,size=128m' ||
     fail "${job}: Redis service may leak its image-declared anonymous volume"
+  [ "$(printf '%s\n' "$block" | grep -Fc -- '--health-interval 2s')" -eq 2 ] ||
+    fail "${job}: a service health check does not poll every 2 s"
   if printf '%s\n' "$block" | grep -Eq 'docker (system|volume|builder) prune'; then
     fail "${job} contains a broad Docker cleanup"
   fi
 done
 
-# master only fast-forwards to a dev commit whose CI already passed, so every
-# job except branch-guard skips there and branch-guard proves the dev run.
-for job in node-lint node-test node-scripts go docker; do
-  job_block "$ci_workflow" "$job" | grep -Fxq "    if: github.ref != 'refs/heads/master'" ||
-    fail "ci job '$job' repeats its checks on master"
-done
-branch_guard_block=$(job_block "$ci_workflow" branch-guard)
-if printf '%s\n' "$branch_guard_block" | grep -Eq '^    if:'; then
-  fail 'branch-guard must run on every push, master included'
-fi
-printf '%s\n' "$branch_guard_block" | grep -Fq 'actions/workflows/ci.yml/runs?branch=dev&head_sha=${GITHUB_SHA}&status=success' ||
-  fail 'branch-guard does not require a green dev run for a master commit'
+# A slice's shard count must match its matrix, or a shard is never run.
+check_sharded_slice() {
+  local job=$1 package=$2 dir=$3 count=$4
+  local block
+  block=$(job_block "$ci_workflow" "$job")
+  local shards
+  shards=$(seq 1 "$count" | paste -sd, - | sed 's/,/, /g')
+  has_line "$block" "        shard: [${shards}]" ||
+    fail "${job} matrix is not shards [${shards}]"
+  has_text "$block" "run: bash scripts/ci-test-shard.sh ${package} \${{ matrix.shard }} ${count}" ||
+    fail "${job} does not run its shard of ${count} through ci-test-shard.sh"
+  has_line "$block" "          name: vitest-blob-${package}-\${{ matrix.shard }}" ||
+    fail "${job} does not upload its blob report under the name the gate downloads"
+  has_line "$block" "          path: ${dir}/.vitest-reports/blob-\${{ matrix.shard }}-${count}.json" ||
+    fail "${job} does not upload the exact blob file ci-test-shard.sh writes"
+  has_line "$block" '          include-hidden-files: true' ||
+    fail "${job} would drop the blob report: .vitest-reports is a hidden directory"
+  has_line "$block" '          if-no-files-found: error' ||
+    fail "${job} tolerates a missing blob report"
+  if printf '%s\n' "$block" | grep -Eq 'run: pnpm turbo run build|run: pnpm --filter @squad/db migrate'; then
+    fail "${job} builds or migrates; its suite resolves @squad/* to source and builds its own template database"
+  fi
+}
+check_sharded_slice test-api api apps/api 4
+check_sharded_slice test-web web apps/web 2
 
-docker_block=$(job_block "$ci_workflow" docker)
-printf '%s\n' "$docker_block" | grep -Fq 'id: buildx' ||
-  fail 'docker job does not expose its builder name'
-printf '%s\n' "$docker_block" | grep -Eq 'uses:[[:space:]]+docker/bake-action@[0-9a-f]{40}' ||
-  fail 'docker job does not build docker-bake.hcl through the SHA-pinned bake action'
-printf '%s\n' "$docker_block" | grep -Fq 'TAG: ${{ github.sha }}' ||
-  fail 'release images are not tagged with the commit they were built from'
-printf '%s\n' "$docker_block" | grep -Fq 'source: .' ||
-  fail 'bake builds a remote Git context instead of the checked-out tree'
+test_api=$(job_block "$ci_workflow" test-api)
+has_line "$test_api" '      VITEST_MAX_FORKS: "4"' || fail 'test-api does not use all four hosted vCPUs'
+tune=$(step_run "$test_api" 'Tune Postgres for throwaway test data')
+has_text "$tune" 'docker exec "${PG_CONTAINER}" psql' || fail 'test-api does not tune its Postgres service'
+for setting in 'fsync = off' 'synchronous_commit = off' 'full_page_writes = off'; do
+  has_text "$tune" "-c 'ALTER SYSTEM SET ${setting}'" ||
+    fail "test-api does not set '${setting}' as its own statement"
+done
+has_text "$tune" "-c 'SELECT pg_reload_conf()'" || fail 'test-api does not reload the tuned settings'
+has_text "$test_api" 'PG_CONTAINER: ${{ job.services.postgres.id }}' ||
+  fail 'test-api does not address the Postgres service container'
+
+test_web=$(job_block "$ci_workflow" test-web)
+if has_text "$test_web" 'services:'; then
+  fail 'test-web starts services its jsdom suite never uses'
+fi
+
+test_packages=$(job_block "$ci_workflow" test-packages)
+has_text "$test_packages" "run: pnpm turbo run build --concurrency=4 --filter='./apps/workers/*'" ||
+  fail 'test-packages does not build exactly what the worker contract tests start'
+has_text "$test_packages" 'run: bash scripts/ci-test-shard.sh packages' ||
+  fail 'test-packages does not run the packages slice'
+has_line "$test_packages" '      PNPM_WORKSPACE_CONCURRENCY: "4"' ||
+  fail 'test-packages does not run four packages at a time'
+has_line "$test_packages" '          key: turbo-test-packages-${{ github.sha }}' ||
+  fail 'test-packages does not cache its Turbo build per job and commit'
+if has_text "$test_packages" 'upload-artifact'; then
+  fail 'test-packages still uploads coverage nobody reads'
+fi
+
+scripts_job=$(job_block "$ci_workflow" scripts)
+if has_text "$scripts_job" 'turbo run build'; then
+  fail 'scripts job runs the full build; pnpm test:scripts builds what it needs'
+fi
+
+changes=$(job_block "$ci_workflow" changes)
+has_text "$changes" '-- packages/shared-config' || fail 'the Stryker gate does not diff packages/shared-config'
+has_line "$changes" '          fetch-depth: 0' || fail 'the Stryker gate cannot resolve the pushed range'
+mutation=$(job_block "$ci_workflow" mutation)
+has_line "$mutation" '    needs: changes' || fail 'mutation does not wait for the change detection'
+has_line "$mutation" "    if: needs.changes.outputs.mutation == 'true'" ||
+  fail 'Stryker is not gated on a shared-config change'
+has_text "$mutation" 'pnpm turbo run test:mutation --filter=@squad/shared-config' ||
+  fail 'mutation job does not run Stryker on shared-config'
+
+go_block=$(job_block "$ci_workflow" go)
+printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
+  fail 'go job does not install Go through a SHA-pinned setup action'
+has_text "$go_block" 'cache-dependency-path: apps/bridge/go.sum' ||
+  fail 'go cache is not keyed by the bridge module dependency file'
+has_line "$go_block" '      - run: go test -race -count=1 ./...' ||
+  fail 'go job does not run the race detector directly on the hosted VM'
+if printf '%s\n' "$go_block" | grep -Eq 'docker run|^[[:space:]]+container:'; then
+  fail 'go job still carries the self-hosted container workaround'
+fi
+has_text "$go_block" 'go install golang.org/x/vuln/cmd/govulncheck@v1.7.0' ||
+  fail 'govulncheck is not pinned to the accepted release'
+if has_text "$go_block" 'govulncheck@latest'; then
+  fail 'govulncheck still changes implicitly between CI runs'
+fi
+has_text "$go_block" 'if ldd bin/panel-host-bridge' ||
+  fail 'go job no longer proves the bridge binary is statically linked'
+
+# --- Images: built from docker-bake.hcl, read-only registry cache, smoke-tested. ---
+images=$(job_block "$ci_workflow" images)
+has_text "$images" 'id: buildx' || fail 'images job does not expose its builder name'
+printf '%s\n' "$images" | grep -Eq 'uses:[[:space:]]+docker/bake-action@[0-9a-f]{40}' ||
+  fail 'images job does not build docker-bake.hcl through the SHA-pinned bake action'
+has_text "$images" 'TAG: ${{ github.sha }}' || fail 'images are not tagged with the commit they were built from'
+has_text "$images" 'source: .' || fail 'bake builds a remote Git context instead of the checked-out tree'
+has_line "$images" '          targets: release,rnsquadjs' || fail 'images job does not build the release group and rnsquadjs'
+has_line "$images" '          load: true' || fail 'images are not loaded for the smoke tests'
+has_line "$images" '      packages: read' || fail 'images job cannot read the GHCR layer cache'
+if has_text "$images" 'packages: write' || has_text "$images" 'cache-to=type=registry'; then
+  fail 'ci writes the GHCR cache; only the dev deploy build may'
+fi
 for target in api web workers caddy-tk104 rnsquadjs; do
   grep -Fq "target \"${target}\"" "$repo_root/docker-bake.hcl" ||
     fail "docker-bake.hcl has no '${target}' target"
-  printf '%s\n' "$docker_block" | grep -Fq "${target}.cache-from=type=gha,scope=${target}" ||
-    fail "bake target '${target}' does not reuse its GitHub Actions layer cache"
 done
-printf '%s\n' "$docker_block" | grep -Fq 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
-  fail 'backup round-trip does not receive the builder name'
-if printf '%s\n' "$docker_block" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
-  fail 'docker job builds outside buildx bake'
+for target in api web workers caddy-tk104; do
+  has_text "$images" "${target}.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-${target}:buildcache" ||
+    fail "bake target '${target}' does not reuse the GHCR layer cache the deploy build writes"
+done
+has_text "$images" 'rnsquadjs.cache-from=type=gha,scope=rnsquadjs' ||
+  fail 'rnsquadjs lost its layer cache'
+has_text "$images" "await import('postgres')" || fail 'the api image smoke test is gone'
+has_text "$images" 'compose.tk104.yml' || fail 'the workers image is not checked against compose.tk104.yml'
+has_text "$images" '[[ "${status}" -eq 64 ]]' || fail 'the workers image exit-64 smoke test is gone'
+if has_text "$images" 'upload-artifact' || has_text "$images" 'test-backup-restore'; then
+  fail 'images job exports images or runs the backup round trip'
 fi
-printf '%s\n' "$docker_block" | grep -Fq 'name: release-images-${{ github.sha }}' ||
-  fail 'docker job does not publish the release images the deploy downloads'
-printf '%s\n' "$docker_block" | grep -Fq "if: github.event_name == 'push' && github.ref == 'refs/heads/dev'" ||
-  fail 'release images are not limited to dev pushes'
-for image in api web workers caddy-tk104; do
-  printf '%s\n' "$docker_block" | grep -Fq "\"squad-panel/${image}:\${GITHUB_SHA}\"" ||
-    fail "the release artifact omits squad-panel/${image}"
+if printf '%s\n' "$images" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
+  fail 'images job builds outside buildx bake'
+fi
+
+backup=$(job_block "$ci_workflow" backup)
+has_text "$backup" 'run: bash scripts/test-backup-restore.sh' || fail 'the backup/restore round trip is not run'
+has_text "$backup" 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
+  fail 'backup round-trip does not receive the builder name'
+
+# --- The gate: the single required check. ---
+gate=$(job_block "$ci_workflow" gate)
+has_line "$gate" '    if: always()' || fail 'the gate is skipped instead of failing when a job fails'
+gate_needs=$(printf '%s\n' "$gate" | sed -n 's/^    needs: \[\(.*\)\]$/\1/p' | tr -d ' ' | tr ',' '\n' | sort)
+other_jobs=$(printf '%s\n' "$ci_jobs" | grep -vx gate | sort)
+[ "$gate_needs" = "$other_jobs" ] ||
+  fail "the gate does not wait for every other ci job: $(diff <(printf '%s\n' "$other_jobs") <(printf '%s\n' "$gate_needs") | tr '\n' ' ')"
+
+gate_check=$(step_run "$gate" 'Require every check')
+[ -n "$gate_check" ] || fail 'the gate has no "Require every check" step'
+# The `needs` context for every job succeeding, except the `job=result` pairs in $1.
+needs_json() {
+  printf '%s\n' "$other_jobs" | jq -R -s --arg override "$1" '
+    ($override | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add // {}) as $results
+    | split("\n") | map(select(. != "") | {(.): {result: ($results[.] // "success"), outputs: {}}}) | add'
+}
+gate_accepts() {
+  NEEDS=$(needs_json "$1") bash -eo pipefail -c "$gate_check" >/dev/null 2>&1
+}
+gate_accepts '' || fail 'the gate rejects a run where every job succeeded'
+gate_accepts 'mutation=skipped' || fail 'the gate rejects a run where only Stryker was skipped'
+for verdict in 'mutation=failure' 'mutation=cancelled' 'test-api=skipped' 'test-api=failure' \
+  'lint=cancelled' 'changes=skipped' 'images=failure' 'backup=skipped' 'branch-guard=failure'; do
+  if gate_accepts "$verdict"; then
+    fail "the gate accepts a run where ${verdict/=/ was }"
+  fi
 done
+
+for package in api web; do
+  has_line "$gate" "          pattern: vitest-blob-${package}-*" ||
+    fail "the gate does not download every ${package} shard's blob report"
+  has_line "$gate" "          path: apps/${package}/.vitest-reports" ||
+    fail "the gate does not place the ${package} blobs where --merge-reports reads them"
+  has_line "$gate" "        working-directory: apps/${package}" ||
+    fail "the gate does not merge in apps/${package}, whose vitest.config.ts holds the thresholds"
+done
+[ "$(printf '%s\n' "$gate" | grep -Fxc '        run: pnpm exec vitest run --merge-reports --coverage')" -eq 2 ] ||
+  fail 'the gate does not enforce merged coverage for both sharded suites'
+
+# --- deploy-tk104.yml: dev pushes build on hosted VMs and deploy over SSH. ---
+deploy_on=$(sed -n '/^on:$/,/^[a-z]/p' "$deploy_workflow")
+has_line "$deploy_on" '    branches: [dev]' || fail 'deploy does not follow dev pushes'
+has_line "$deploy_on" '  workflow_dispatch:' || fail 'deploy cannot be dispatched for a redeploy or rollback'
+if grep -Eq 'refs/heads/master|workflow_run|environment: production' "$deploy_workflow"; then
+  fail 'deploy still targets the former master production release'
+fi
+if sed -n '1,/^jobs:$/p' "$deploy_workflow" | grep -Eq '^concurrency:'; then
+  fail 'deploy has workflow-level concurrency; builds and the deploy queue separately'
+fi
+[ "$(job_names "$deploy_workflow" | tr '\n' ' ')" = 'build deploy ' ] ||
+  fail 'deploy workflow is not exactly the build and deploy jobs'
+while IFS= read -r job; do
+  has_text "$(job_block "$deploy_workflow" "$job")" "github.repository == 'seregatipich/squad-admin-panel'" ||
+    fail "deploy job '$job' would also run in a fork"
+done < <(job_names "$deploy_workflow")
+deploy_job=$(job_block "$deploy_workflow" deploy)
+has_line "$deploy_job" '      name: tk104-dev' || fail 'deploy can read the tk104 secrets outside the tk104-dev environment'
+has_line "$deploy_job" '      url: https://tk104.duckdns.org' || fail 'deploy environment does not link the stand'
+has_line "$deploy_job" '    needs: build' || fail 'deploy does not wait for the image builds'
 
 backup_script="$repo_root/scripts/test-backup-restore.sh"
 grep -Fq 'TOOL_IMG="squad-panel/restic:citest-${SFX}"' "$backup_script" ||
@@ -349,4 +509,4 @@ assert_rnsquad_deps_retry 4 1 3 '5,10,'
 cleanup_rnsquad_deps_fixture
 trap - EXIT
 
-echo "test-ci-runner-strategy: OK — ci runs on ${HOSTED_IMAGE}, every deploy job on ${DEPLOY_RUNNER} in production"
+echo "test-ci-runner-strategy: OK — every ci and deploy job runs on ${HOSTED_IMAGE}; ci is master-only, tk104 follows dev"

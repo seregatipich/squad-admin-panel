@@ -1,31 +1,27 @@
 name: ci
-# Verification runs on ephemeral GitHub-hosted Ubuntu VMs: the repository is
-# public, so hosted minutes are free, jobs run in parallel, and no verification
-# code ever executes on the production host. Only `deploy-tk104.yml` uses the
-# repository's own runner on tk104. The local pre-push checklist remains the
-# fast first gate, while this workflow is authoritative (CLAUDE.md → "CI gate").
+# Verification runs on ephemeral GitHub-hosted Ubuntu VMs (the repository is
+# public, so hosted minutes are free) and only for what reaches `master` — a
+# fast-forward promotion of `dev` — or a manual dispatch. `dev` itself deploys
+# straight to the tk104 development stand without tests (deploy-tk104.yml);
+# the local pre-push hook is the fast first check and this workflow is the
+# authoritative one (CLAUDE.md → "CI gate").
 on:
   push:
-    branches: [master, dev]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
-  # branch-guard reads the dev run of a promoted commit.
-  actions: read
 
 concurrency:
-  # Only the newest SHA of a ref matters; a merge wave should not spend runner
-  # time on commits that are already superseded.
+  # Only the newest SHA of a ref matters; nothing deploys from this workflow,
+  # so cancelling a superseded run loses nothing.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Enforces the branch model (see CLAUDE.md). Full CI remains limited to trusted
-  # master/dev pushes and explicit dispatches — draft branches use the local
-  # pre-push gate. On push events this job gives the dev tip SHA the branch-guard
-  # result required by the protect-master ruleset for the fast-forward promotion
-  # push.
+  # Enforces the branch model (see CLAUDE.md) and runs the harness's own
+  # contract suites.
   branch-guard:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -43,20 +39,6 @@ jobs:
             echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see CLAUDE.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
             exit 1
           fi
-      # master only ever fast-forwards to a dev commit, so its checks already ran
-      # on dev; the other jobs skip on master and this step proves that run
-      # passed instead of repeating it.
-      - name: Require a green dev CI run for this commit
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&head_sha=${GITHUB_SHA}&status=success" --jq '.total_count')
-          if [[ "${count}" -lt 1 ]]; then
-            echo "::error::master received ${GITHUB_SHA}, which has no successful ci run on dev — promote only a dev commit whose CI is green (CLAUDE.md)."
-            exit 1
-          fi
-          echo "OK: ${GITHUB_SHA} passed ci on dev"
       - name: Run git-guard test suite
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
@@ -73,8 +55,6 @@ jobs:
         run: bash scripts/test-gitignore-patterns.sh
       - name: Run workflow security test suite
         run: bash scripts/test-workflow-security.sh
-      - name: Run check-runner-health test suite
-        run: bash scripts/test-check-runner-health.sh
       - name: Run codeql-default-setup test suite
         run: bash scripts/test-codeql-default-setup.sh
       - name: Run CI runner-strategy test suite
@@ -82,11 +62,8 @@ jobs:
       - name: Run CI test-slice suite
         run: bash scripts/test-ci-test-shard.sh
 
-  # The JavaScript checks run as parallel jobs; `node` below is the single gate
-  # that required status checks and the deploy trigger rely on.
-  node-lint:
+  lint:
     runs-on: ubuntu-24.04
-    if: github.ref != 'refs/heads/master'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,6 +83,14 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # typecheck builds every dependency first (`^build`); the previous
+      # master run's Turbo cache turns most of that into cache hits.
+      - name: Restore the Turbo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: turbo-lint-${{ github.sha }}
+          restore-keys: turbo-lint-
       - run: pnpm exec biome check .
       - name: Check every vitest package is in test:cov
         run: bash scripts/test-cov-complete.sh
@@ -117,31 +102,17 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
-  node-test:
+  # The API suite is split by test file over four VMs. It needs no build and no
+  # migration step: the harness builds its template database from the SQL
+  # migrations itself, and vitest resolves every @squad/* import to its source
+  # through the packages' `development` export condition.
+  test-api:
     runs-on: ubuntu-24.04
-    if: github.ref != 'refs/heads/master'
-    # A hosted VM starts without a Turbo cache; the API suite is the longest
-    # single run, so its slice carries the margin.
-    timeout-minutes: 45
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # `build` builds only what the slice's tests load: the API suite and
-          # the workers' contract tests start built `dist/` entrypoints, while the
-          # web suite needs its dependencies but never the Next.js build.
-          - shard: api
-            build: --filter=@squad/api...
-            forks: "4"
-            concurrency: "1"
-          - shard: web
-            build: --filter=@squad/web^...
-            forks: "4"
-            concurrency: "1"
-          - shard: packages
-            build: --filter=!@squad/web --filter=!@squad/api
-            forks: "2"
-            concurrency: "3"
+        shard: [1, 2, 3, 4]
     services:
       # Dynamic host ports (Docker assigns a free one); the resolved ports are
       # read back below via the job.services context. tmpfs keeps an interrupted
@@ -157,9 +128,9 @@ jobs:
         options: >-
           --tmpfs /var/lib/postgresql/data:rw,size=1g
           --health-cmd "pg_isready -U admin -d admin"
-          --health-interval 10s
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
       redis:
         image: redis:7-alpine
         ports:
@@ -167,13 +138,12 @@ jobs:
         options: >-
           --tmpfs /data:rw,size=128m
           --health-cmd "redis-cli ping"
-          --health-interval 10s
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
     env:
       POSTGRES_PASSWORD: test_password
-      VITEST_MAX_FORKS: ${{ matrix.forks }}
-      PNPM_WORKSPACE_CONCURRENCY: ${{ matrix.concurrency }}
+      VITEST_MAX_FORKS: "4"
     steps:
       - name: Resolve service ports
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
@@ -190,6 +160,20 @@ jobs:
             echo "REDIS_URL=$RD"
             echo "TEST_REDIS_URL=$RD/15"
           } >> "$GITHUB_ENV"
+      # The data directory is a tmpfs thrown away with the job, so durability
+      # buys nothing. Service containers take no server arguments, hence
+      # ALTER SYSTEM + reload; each statement is its own -c because ALTER
+      # SYSTEM refuses to run inside the implicit transaction of a
+      # multi-statement string.
+      - name: Tune Postgres for throwaway test data
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "${PG_CONTAINER}" psql -U admin -d admin -v ON_ERROR_STOP=1 \
+            -c 'ALTER SYSTEM SET fsync = off' \
+            -c 'ALTER SYSTEM SET synchronous_commit = off' \
+            -c 'ALTER SYSTEM SET full_page_writes = off' \
+            -c 'SELECT pg_reload_conf()'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
       # bootstraps through Node rather than a platform-specific standalone exe.
@@ -205,24 +189,58 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build what the slice loads
-        run: pnpm turbo run build --concurrency=4 ${{ matrix.build }}
-      - name: Apply database migrations
-        run: pnpm --filter @squad/db migrate
-      - name: Run tests with coverage
-        run: bash scripts/ci-test-shard.sh ${{ matrix.shard }}
-      - name: Upload coverage artifacts
-        if: always()
+      - name: Run the API test shard with coverage
+        run: bash scripts/ci-test-shard.sh api ${{ matrix.shard }} 4
+      # The gate job merges all four blobs and enforces the coverage thresholds.
+      - name: Upload the shard's blob report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-${{ github.sha }}-${{ matrix.shard }}
-          path: '**/coverage/lcov.info'
-          if-no-files-found: ignore
-          retention-days: 7
+          name: vitest-blob-api-${{ matrix.shard }}
+          path: apps/api/.vitest-reports/blob-${{ matrix.shard }}-4.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
-  node-scripts:
+  # The web suite runs in jsdom and touches neither Postgres nor Redis, and
+  # resolves @squad/* to source like the API suite: no services, no build.
+  test-web:
     runs-on: ubuntu-24.04
-    if: github.ref != 'refs/heads/master'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run the web test shard with coverage
+        run: bash scripts/ci-test-shard.sh web ${{ matrix.shard }} 2
+      # The gate job merges both blobs and enforces the coverage thresholds.
+      - name: Upload the shard's blob report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vitest-blob-web-${{ matrix.shard }}
+          path: apps/web/.vitest-reports/blob-${{ matrix.shard }}-2.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Every other test:cov package, each whole under its own coverage thresholds.
+  test-packages:
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       # Dynamic host ports (Docker assigns a free one); the resolved ports are
@@ -239,9 +257,9 @@ jobs:
         options: >-
           --tmpfs /var/lib/postgresql/data:rw,size=1g
           --health-cmd "pg_isready -U admin -d admin"
-          --health-interval 10s
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
       redis:
         image: redis:7-alpine
         ports:
@@ -249,11 +267,13 @@ jobs:
         options: >-
           --tmpfs /data:rw,size=128m
           --health-cmd "redis-cli ping"
-          --health-interval 10s
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
     env:
       POSTGRES_PASSWORD: test_password
+      VITEST_MAX_FORKS: "2"
+      PNPM_WORKSPACE_CONCURRENCY: "4"
     steps:
       - name: Resolve service ports
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
@@ -270,9 +290,17 @@ jobs:
             echo "REDIS_URL=$RD"
             echo "TEST_REDIS_URL=$RD/15"
           } >> "$GITHUB_ENV"
+      # Same reasoning as in test-api: the data directory is a throwaway tmpfs.
+      - name: Tune Postgres for throwaway test data
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "${PG_CONTAINER}" psql -U admin -d admin -v ON_ERROR_STOP=1 \
+            -c 'ALTER SYSTEM SET fsync = off' \
+            -c 'ALTER SYSTEM SET synchronous_commit = off' \
+            -c 'ALTER SYSTEM SET full_page_writes = off' \
+            -c 'SELECT pg_reload_conf()'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
       # bootstraps through Node rather than a platform-specific standalone exe.
       # The second setup-node call stays because `cache: pnpm` needs pnpm already
@@ -287,17 +315,102 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build production artifacts
-        run: pnpm turbo run build --concurrency=4
+      - name: Restore the Turbo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: turbo-test-packages-${{ github.sha }}
+          restore-keys: turbo-test-packages-
+      # The worker contract tests start each worker's built dist/index.js under
+      # plain Node, which resolves @squad/* to their built output; every other
+      # suite here resolves to source through vitest.
+      - name: Build the workers the contract tests start
+        run: pnpm turbo run build --concurrency=4 --filter='./apps/workers/*'
+      - name: Apply database migrations
+        run: pnpm --filter @squad/db migrate
+      - name: Run the package tests with coverage
+        run: bash scripts/ci-test-shard.sh packages
+
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      # Dynamic host ports (Docker assigns a free one); the resolved ports are
+      # read back below via the job.services context. tmpfs keeps an interrupted
+      # job from leaving anonymous volumes behind.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: admin
+        ports:
+          - 5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
+          --health-cmd "pg_isready -U admin -d admin"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379
+        options: >-
+          --tmpfs /data:rw,size=128m
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      POSTGRES_PASSWORD: test_password
+    steps:
+      - name: Resolve service ports
+        run: |
+          PG="postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin"
+          RD="redis://localhost:${{ job.services.redis.ports['6379'] }}"
+          {
+            echo "DATABASE_URL=$PG"
+            echo "TEST_DATABASE_URL=$PG"
+            echo "REDIS_URL=$RD"
+            echo "TEST_REDIS_URL=$RD/15"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # `pnpm test:scripts` builds the one package its contracts load
+      # (panel-bridge); nothing else needs a build here.
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
       - name: Run operations and verification script tests
         run: pnpm test:scripts
-      # Stryker takes minutes and only mutates packages/shared-config, so it runs
-      # when that package changed in the pushed range — and always for a manual
-      # dispatch, a new branch, or a range the checkout cannot resolve.
+
+  # Stryker takes minutes and only mutates packages/shared-config, so it runs
+  # when that package changed in the pushed range — and always for a manual
+  # dispatch, a new branch, or a range the checkout cannot resolve.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mutation: ${{ steps.shared-config.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Decide whether shared-config changed
-        id: mutation
+        id: shared-config
         env:
           BEFORE: ${{ github.event.before }}
         run: |
@@ -308,30 +421,33 @@ jobs:
           else
             echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
-      - name: Run shared-config mutation tests (Stryker)
-        if: steps.mutation.outputs.run == 'true'
-        run: pnpm turbo run test:mutation --filter=@squad/shared-config
 
-  node:
+  mutation:
+    needs: changes
+    if: needs.changes.outputs.mutation == 'true'
     runs-on: ubuntu-24.04
-    needs: [node-lint, node-test, node-scripts]
-    if: always() && github.ref != 'refs/heads/master'
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
-      - name: Require every JavaScript check
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          for result in ${RESULTS}; do
-            if [[ "${result}" != success ]]; then
-              echo "::error::a JavaScript check finished as ${result}"
-              exit 1
-            fi
-          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run shared-config mutation tests (Stryker)
+        run: pnpm turbo run test:mutation --filter=@squad/shared-config
 
   go:
     runs-on: ubuntu-24.04
-    if: github.ref != 'refs/heads/master'
     timeout-minutes: 15
     env:
       GOFLAGS: -buildvcs=false
@@ -364,17 +480,27 @@ jobs:
           fi
           echo "panel-host-bridge is static"
 
-  docker:
+  # Builds docker-bake.hcl and smoke-tests the images. The release images
+  # themselves are built and pushed by deploy-tk104.yml when the commit lands
+  # on dev; this job reads their GHCR layer cache (never writes it), so a
+  # promoted commit rebuilds from cache instead of from scratch.
+  images:
     runs-on: ubuntu-24.04
-    if: github.ref != 'refs/heads/master'
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         id: buildx
-      # One parallel build of docker-bake.hcl, tagged with the commit SHA so the
-      # exported images are exactly what tk104 runs. Layers are cached per
-      # target in the GitHub Actions cache.
+      # rnsquadjs is not part of a release, so no deploy pushes a registry
+      # cache for it; it keeps its GitHub Actions layer cache instead.
       - name: build images
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         env:
@@ -383,16 +509,13 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           source: .
           files: docker-bake.hcl
+          targets: release,rnsquadjs
           load: true
           set: |
-            api.cache-from=type=gha,scope=api
-            api.cache-to=type=gha,scope=api,mode=max
-            web.cache-from=type=gha,scope=web
-            web.cache-to=type=gha,scope=web,mode=max
-            workers.cache-from=type=gha,scope=workers
-            workers.cache-to=type=gha,scope=workers,mode=max
-            caddy-tk104.cache-from=type=gha,scope=caddy-tk104
-            caddy-tk104.cache-to=type=gha,scope=caddy-tk104,mode=max
+            api.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-api:buildcache
+            web.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-web:buildcache
+            workers.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-workers:buildcache
+            caddy-tk104.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-caddy-tk104:buildcache
             rnsquadjs.cache-from=type=gha,scope=rnsquadjs
             rnsquadjs.cache-to=type=gha,scope=rnsquadjs,mode=max
       - name: verify api runtime database client
@@ -408,28 +531,73 @@ jobs:
           status=0
           docker run --rm "squad-panel/workers:${GITHUB_SHA}" >/dev/null 2>&1 || status=$?
           [[ "${status}" -eq 64 ]] || { echo "::error::workers image without WORKER exited ${status}, expected 64"; exit 1; }
+
+  # The backup/restore round trip builds only its own toolbox image, so it runs
+  # beside the image build instead of after it.
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
       - name: backup/restore round-trip (INFRA-8)
         env:
           CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
         run: bash scripts/test-backup-restore.sh
-      # A dev commit that passes CI is the only thing a release may deploy, so
-      # its images travel with the run; the deploy downloads them by run id.
-      - name: export release images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+
+  # The single required status check. It fails unless every job succeeded —
+  # including when one was cancelled or skipped; only the mutation job may skip,
+  # when shared-config did not change. It then merges the API and web shards'
+  # blob reports so their coverage thresholds apply to the whole suite, which
+  # no single shard can meet on its own.
+  gate:
+    runs-on: ubuntu-24.04
+    needs: [branch-guard, lint, test-api, test-web, test-packages, scripts, changes, mutation, go, images, backup]
+    if: always()
+    timeout-minutes: 15
+    steps:
+      - name: Require every check
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          docker save \
-            "squad-panel/api:${GITHUB_SHA}" \
-            "squad-panel/web:${GITHUB_SHA}" \
-            "squad-panel/workers:${GITHUB_SHA}" \
-            "squad-panel/caddy-tk104:${GITHUB_SHA}" |
-            zstd -T0 -3 -q -o "${RUNNER_TEMP}/release-images.tar.zst"
-          ls -lh "${RUNNER_TEMP}/release-images.tar.zst"
-      - name: upload release images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          failed=$(jq -r 'to_entries[]
+            | select(.value.result != "success" and (.key != "mutation" or .value.result != "skipped"))
+            | "\(.key)=\(.value.result)"' <<<"${NEEDS}")
+          if [[ -n "${failed}" ]]; then
+            echo "::error::not every check passed: $(tr '\n' ' ' <<<"${failed}")"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          name: release-images-${{ github.sha }}
-          path: ${{ runner.temp }}/release-images.tar.zst
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Download the API blob reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vitest-blob-api-*
+          merge-multiple: true
+          path: apps/api/.vitest-reports
+      - name: Download the web blob reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vitest-blob-web-*
+          merge-multiple: true
+          path: apps/web/.vitest-reports
+      - name: Enforce API coverage on the merged shards
+        working-directory: apps/api
+        run: pnpm exec vitest run --merge-reports --coverage
+      - name: Enforce web coverage on the merged shards
+        working-directory: apps/web
+        run: pnpm exec vitest run --merge-reports --coverage
