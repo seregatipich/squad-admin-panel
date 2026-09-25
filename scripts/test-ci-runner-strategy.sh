@@ -136,6 +136,25 @@ has_line "$lint" '          path: .turbo/cache' || fail 'lint caches something o
 has_line "$lint" '          key: turbo-lint-${{ github.sha }}' || fail 'lint Turbo cache key is not per job and commit'
 has_line "$lint" '          restore-keys: turbo-lint-' || fail 'lint Turbo cache does not fall back to the last run'
 
+# The Turbo caches only hit when a task hash is stable between runs. The
+# service containers get a new host port every run, so connection settings
+# reach the tasks as pass-through variables and never enter the hash.
+turbo_json="$repo_root/turbo.json"
+for variable in DATABASE_URL TEST_DATABASE_URL REDIS_URL TEST_REDIS_URL POSTGRES_PASSWORD \
+  APP_ENCRYPTION_KEY PANEL_BRIDGE_SOCKET; do
+  jq -e --arg name "$variable" '(.globalEnv // []) | index($name) == null' "$turbo_json" >/dev/null ||
+    fail "turbo.json hashes ${variable}, so every CI run misses the Turbo cache"
+  jq -e --arg name "$variable" '(.globalPassThroughEnv // []) | index($name) != null' "$turbo_json" >/dev/null ||
+    fail "turbo.json does not pass ${variable} through to the tasks"
+done
+
+# Dependabot opens its pull requests against dev: master only fast-forwards.
+dependabot="$repo_root/.github/dependabot.yml"
+ecosystems=$(grep -Ec '^  - package-ecosystem:' "$dependabot")
+dev_targets=$(grep -Ec '^    target-branch: "?dev"?$' "$dependabot")
+[ "$ecosystems" -gt 0 ] && [ "$dev_targets" -eq "$ecosystems" ] ||
+  fail "dependabot targets dev for ${dev_targets} of ${ecosystems} ecosystem(s)"
+
 # --- Test slices. ---
 # Postgres/Redis data stays on bounded tmpfs mounts so an interrupted job never
 # leaves anonymous volumes behind; health checks poll every 2 s.
