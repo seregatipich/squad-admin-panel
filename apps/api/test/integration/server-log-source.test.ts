@@ -2,7 +2,7 @@ import { serverLogSources, servers } from '@squad/db/schema';
 import { logSourceStatusKey } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import ssh2 from 'ssh2';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { generateSshKeyPair } from '../../src/routes/server-log-source.js';
 import {
@@ -36,7 +36,7 @@ const sourceBody = {
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
@@ -44,8 +44,14 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Cases create servers with the same slug, which only one active server may
+// hold; dropping them (log sources cascade) gives every case an empty panel.
+afterEach(async () => {
+  await h.db.delete(servers);
 });
 
 async function createExternal(cookie: string, slug = externalBody.slug): Promise<string> {
