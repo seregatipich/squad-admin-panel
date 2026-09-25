@@ -114,20 +114,35 @@ describeIfDb('users list — role_id NOT NULL filter', () => {
 describeIfDb('GET /api/v1/users — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001300n;
   let h: IntegrationHarness;
+  let ownerRoleId: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
+    const [ownerRole] = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
+    if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+    ownerRoleId = ownerRole.id;
   });
 
-  afterEach(async () => {
-    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
-      invalidatePermissionCache(h.seed.ownerPlayerId);
-    }
+  afterAll(async () => {
     await h.cleanup();
+  });
+
+  // Cases demote the seeded owner or stamp role metadata on it; restore the
+  // plain Owner assignment so every case starts from the seeded state.
+  afterEach(async () => {
+    await h.db
+      .update(players)
+      .set({ roleId: ownerRoleId, roleExpiresAt: null, roleComment: null })
+      .where(eq(players.steamId64, OWNER_STEAM));
+    if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
   });
 
   it('returns 401 without authentication', async () => {
