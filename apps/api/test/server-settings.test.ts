@@ -1,24 +1,33 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
+  makeFakeBridge,
 } from './integration/harness.js';
 
 const OWNER_STEAM_ID = 76561198222000001n;
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+beforeEach(async () => {
+  // Port-conflict checks span every live server, and most cases seed the
+  // same default ports; retire earlier cases' servers so each case sees only
+  // its own, and hand it the stock fake bridge.
+  await h.db.update(servers).set({ deletedAt: new Date() }).where(isNull(servers.deletedAt));
+  Object.assign(h.bridge, makeFakeBridge());
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 /** Inserts a server + settings row and returns the server id. */

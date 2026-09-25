@@ -1,7 +1,7 @@
-import { chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { auditLog, chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
+import { and, desc, eq, gt } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -13,15 +13,68 @@ import {
 const OWNER_STEAM_ID = 76561198000044551n;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let auditMark: bigint;
+
+beforeAll(async () => {
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  // asRole() moves the seeded owner onto a narrower custom role; every case
+  // starts back on Owner.
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  const [latest] = await h.db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .orderBy(desc(auditLog.id))
+    .limit(1);
+  auditMark = latest?.id ?? 0n;
 });
 
-afterEach(async () => {
+afterEach(() => {
   if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
 });
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+/**
+ * Waits for an audit row this test wrote. A reindex audits no target id, so
+ * rows from earlier tests in the file are excluded by id instead.
+ */
+async function expectAuditRowSinceTestStart(action: string, resource: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await h.db
+            .select({ id: auditLog.id })
+            .from(auditLog)
+            .where(
+              and(
+                gt(auditLog.id, auditMark),
+                eq(auditLog.actionType, action),
+                eq(auditLog.targetType, resource),
+              ),
+            )
+            .limit(1)
+        ).length,
+      { timeout: 1_200, interval: 50 },
+    )
+    .toBe(1);
+}
 
 async function asRole(flags: { panelAccess: boolean; canEditRoles: boolean }): Promise<string> {
   const roleId = uuidv7();
@@ -36,9 +89,9 @@ async function asRole(flags: { panelAccess: boolean; canEditRoles: boolean }): P
   await h.db
     .update(players)
     .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded in beforeEach
+    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded in beforeAll
     .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeEach
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
@@ -224,7 +277,7 @@ describe('POST /api/v1/settings/chat-flag-rules/reindex', () => {
     expect(secondSummary.changed).toBe(0);
     expect(secondSummary.flagged).toBe(firstSummary.flagged);
 
-    await assertAuditRow(h, { action: 'chat_flag_rule.reindex', resource: 'chat_flag_rule' });
+    await expectAuditRowSinceTestStart('chat_flag_rule.reindex', 'chat_flag_rule');
   });
 
   it('reconciles a message flagged by a since-deleted rule back to unflagged', async () => {
