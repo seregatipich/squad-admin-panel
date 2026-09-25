@@ -8,9 +8,9 @@ import {
   serverSettings,
   servers,
 } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -23,7 +23,6 @@ import {
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = testSteamId(80000);
-const SERVER_ID = '019f8100-0000-7000-8000-000000000001';
 const RUN_TAG = Date.now().toString(36);
 const LAYER_A = `MV1TestLayer_Alpha_${RUN_TAG}`;
 const LAYER_B = `MV1TestLayer_Bravo_${RUN_TAG}`;
@@ -31,57 +30,87 @@ const LAYER_DEPRECATED = `MV1TestLayer_Deprecated_${RUN_TAG}`;
 const LAYER_UNKNOWN = `MV1TestLayer_Unknown_${RUN_TAG}`;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let serverId: string;
+const createdRoleIds: string[] = [];
+
+// One app + database per file. Each test gets its own server, so candidates,
+// settings, matches, picks, config_versions history and audit rows (all keyed
+// by server id) never leak between tests. The owner is put back on Owner after
+// asRoleWithSquadPermissions(), and the catalog layers are re-seeded because
+// one test deletes a layer to simulate it leaving the catalog.
+beforeAll(async () => {
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  serverId = uuidv7();
   await h.db.insert(servers).values({
-    id: SERVER_ID,
+    id: serverId,
     displayName: 'Map Vote Test Server',
-    slug: 'map-vote-test-server',
+    slug: `map-vote-test-${serverId}`,
   });
   await h.db.insert(serverSettings).values({
-    serverId: SERVER_ID,
+    serverId,
     installPath: '/srv/squad/map-vote-test',
     gamePort: 27100,
     queryPort: 27101,
     beaconPort: 27102,
     rconPort: 27103,
   });
-  await h.db.insert(layers).values([
-    {
-      id: uuidv7(),
-      name: LAYER_A,
-      map: 'MV1 Test Map A',
-      gamemode: 'RAAS',
-      version: 'v1',
-      isSeed: false,
-      teams: {},
-    },
-    {
-      id: uuidv7(),
-      name: LAYER_B,
-      map: 'MV1 Test Map B',
-      gamemode: 'AAS',
-      version: 'v1',
-      isSeed: false,
-      teams: {},
-    },
-    {
-      id: uuidv7(),
-      name: LAYER_DEPRECATED,
-      map: 'MV1 Test Map C',
-      gamemode: 'Invasion',
-      version: 'v1',
-      isSeed: false,
-      teams: {},
-      deprecated: true,
-    },
-  ]);
-});
-
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+  await h.db
+    .insert(layers)
+    .values([
+      {
+        id: uuidv7(),
+        name: LAYER_A,
+        map: 'MV1 Test Map A',
+        gamemode: 'RAAS',
+        version: 'v1',
+        isSeed: false,
+        teams: {},
+      },
+      {
+        id: uuidv7(),
+        name: LAYER_B,
+        map: 'MV1 Test Map B',
+        gamemode: 'AAS',
+        version: 'v1',
+        isSeed: false,
+        teams: {},
+      },
+      {
+        id: uuidv7(),
+        name: LAYER_DEPRECATED,
+        map: 'MV1 Test Map C',
+        gamemode: 'Invasion',
+        version: 'v1',
+        isSeed: false,
+        teams: {},
+        deprecated: true,
+      },
+    ])
+    .onConflictDoNothing({ target: layers.name });
 });
 
 async function asRoleWithSquadPermissions(
@@ -89,6 +118,7 @@ async function asRoleWithSquadPermissions(
   opts: { panelAccess?: boolean } = {},
 ): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -125,7 +155,7 @@ async function putSettings(
 ) {
   return h.app.inject({
     method: 'PUT',
-    url: `/api/v1/servers/${SERVER_ID}/map-vote/settings`,
+    url: `/api/v1/servers/${serverId}/map-vote/settings`,
     headers: { cookie },
     payload: {
       enabled: true,
@@ -141,7 +171,7 @@ async function putSettings(
 async function listVersions(cookie: string) {
   return h.app.inject({
     method: 'GET',
-    url: `/api/v1/servers/${SERVER_ID}/map-vote/versions`,
+    url: `/api/v1/servers/${serverId}/map-vote/versions`,
     headers: { cookie },
   });
 }
@@ -153,7 +183,7 @@ async function putCandidates(
 ) {
   return h.app.inject({
     method: 'PUT',
-    url: `/api/v1/servers/${SERVER_ID}/map-vote/candidates`,
+    url: `/api/v1/servers/${serverId}/map-vote/candidates`,
     headers: { cookie },
     payload: { candidates, confirm_deprecated: confirmDeprecated },
   });
@@ -172,7 +202,7 @@ describeIfDb('server map-vote routes', () => {
 
     const resp = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -232,7 +262,7 @@ describeIfDb('server map-vote routes', () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
     const resp = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/settings`,
+      url: `/api/v1/servers/${serverId}/map-vote/settings`,
       headers: { cookie },
       payload: {
         enabled: true,
@@ -247,7 +277,7 @@ describeIfDb('server map-vote routes', () => {
 
     const get = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie },
     });
     expect(get.json()).toMatchObject({
@@ -264,7 +294,7 @@ describeIfDb('server map-vote routes', () => {
 
     await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/settings`,
+      url: `/api/v1/servers/${serverId}/map-vote/settings`,
       headers: { cookie },
       payload: {
         enabled: true,
@@ -277,7 +307,7 @@ describeIfDb('server map-vote routes', () => {
     const settingsAudit = await assertAuditRow(h, {
       action: 'server.map_vote.settings.write',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(settingsAudit.afterSnapshot).toMatchObject({ enabled: true });
 
@@ -285,7 +315,7 @@ describeIfDb('server map-vote routes', () => {
     const candidatesAudit = await assertAuditRow(h, {
       action: 'server.map_vote.candidates.write',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(candidatesAudit.afterSnapshot).toMatchObject({ count: 1 });
   });
@@ -297,7 +327,7 @@ describeIfDb('server map-vote routes', () => {
       { layer: LAYER_B, weight: 3, enabled: true },
     ]);
     await h.db.insert(matches).values({
-      serverId: SERVER_ID,
+      serverId,
       layer: LAYER_A,
       map: 'MV1 Test Map A',
       gameMode: 'RAAS',
@@ -306,7 +336,7 @@ describeIfDb('server map-vote routes', () => {
 
     const first = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/preview`,
+      url: `/api/v1/servers/${serverId}/map-vote/preview`,
       headers: { cookie },
     });
     expect(first.statusCode).toBe(200);
@@ -318,7 +348,7 @@ describeIfDb('server map-vote routes', () => {
 
     const second = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/preview`,
+      url: `/api/v1/servers/${serverId}/map-vote/preview`,
       headers: { cookie },
     });
     expect(second.json()).toEqual(body);
@@ -329,14 +359,14 @@ describeIfDb('server map-vote routes', () => {
     const matchId = uuidv7();
     await h.db.insert(matches).values({
       id: matchId,
-      serverId: SERVER_ID,
+      serverId,
       layer: LAYER_A,
       map: 'MV1 Test Map A',
       gameMode: 'RAAS',
       startedAt: new Date('2026-07-20T10:00:00.000Z'),
     });
     await h.db.insert(mapVotePicks).values({
-      serverId: SERVER_ID,
+      serverId,
       matchId,
       layer: LAYER_B,
       selection: 'weighted_random',
@@ -347,7 +377,7 @@ describeIfDb('server map-vote routes', () => {
 
     const resp = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/picks?limit=5`,
+      url: `/api/v1/servers/${serverId}/map-vote/picks?limit=5`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -365,14 +395,14 @@ describeIfDb('server map-vote routes', () => {
   it('reads require panelAccess; writes require changemap', async () => {
     const unauthGet = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
     });
     expect(unauthGet.statusCode).toBe(401);
 
     const noPanelCookie = await asRoleWithSquadPermissions([], { panelAccess: false });
     const forbiddenGet = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie: noPanelCookie },
     });
     expect(forbiddenGet.statusCode).toBe(403);
@@ -380,7 +410,7 @@ describeIfDb('server map-vote routes', () => {
     const noChangemapCookie = await asRoleWithSquadPermissions([]);
     const forbiddenPut = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/settings`,
+      url: `/api/v1/servers/${serverId}/map-vote/settings`,
       headers: { cookie: noChangemapCookie },
       payload: {
         enabled: false,
@@ -403,7 +433,7 @@ describeIfDb('server map-vote routes', () => {
 
     const viewerGet = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie: noChangemapCookie },
     });
     expect(viewerGet.statusCode).toBe(200);
@@ -448,7 +478,7 @@ describeIfDb('map-vote history in config_versions', () => {
     // The rows stay out of the config editor's own surface.
     const configHistory = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/configs/map-vote.json/history`,
+      url: `/api/v1/servers/${serverId}/configs/map-vote.json/history`,
       headers: { cookie },
     });
     expect(configHistory.statusCode).not.toBe(200);
@@ -468,7 +498,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const one = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${original}`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${original}`,
       headers: { cookie },
     });
     expect(one.statusCode).toBe(200);
@@ -477,7 +507,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const restored = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${original}/restore`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${original}/restore`,
       headers: { cookie },
       payload: {},
     });
@@ -486,7 +516,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const current = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote`,
+      url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie },
     });
     const state = current.json();
@@ -501,7 +531,7 @@ describeIfDb('map-vote history in config_versions', () => {
     await assertAuditRow(h, {
       action: 'server.map_vote.restore',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
   });
 
@@ -518,7 +548,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const refused = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${versionId}/restore`,
       headers: { cookie },
       payload: {},
     });
@@ -527,7 +557,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const forced = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${versionId}/restore`,
       headers: { cookie },
       payload: { drop_unknown_layers: true },
     });
@@ -547,7 +577,7 @@ describeIfDb('map-vote history in config_versions', () => {
 
     const denied = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${versionId}/restore`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${versionId}/restore`,
       headers: { cookie: viewer },
       payload: {},
     });
@@ -563,7 +593,7 @@ describeIfDb('map-vote history in config_versions', () => {
     await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
     const missing = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map-vote/versions/${uuidv7()}`,
+      url: `/api/v1/servers/${serverId}/map-vote/versions/${uuidv7()}`,
       headers: { cookie },
     });
     expect(missing.statusCode).toBe(404);
