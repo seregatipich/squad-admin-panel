@@ -1,7 +1,7 @@
 import { playerSessions, players, roles, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -13,12 +13,15 @@ import {
 } from './harness.js';
 
 const OWNER_STEAM = testSteamId(820001);
-const PLAYER_A_STEAM = testSteamId(820002);
-const PLAYER_B_STEAM = testSteamId(820003);
 const NO_ACCESS_STEAM = testSteamId(820004);
 
 let h: IntegrationHarness;
 let serverId: string;
+// Each case compares its own fresh A/B pair: the file shares one database, so
+// reusing a pair would collide on steam_id64 and mix in earlier sessions.
+let nextPlayerSuffix = 820100;
+let playerASteam: bigint;
+let playerBSteam: bigint;
 
 async function seedPlayer(
   steamId64: bigint,
@@ -80,7 +83,7 @@ interface CompareOnlineResponse {
   };
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
@@ -93,8 +96,13 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
-  if (h) await h.cleanup();
+beforeEach(() => {
+  playerASteam = testSteamId(nextPlayerSuffix++);
+  playerBSteam = testSteamId(nextPlayerSuffix++);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('GET /api/v1/players/:playerId/compare-online', () => {
@@ -125,7 +133,7 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('returns 404 when the target player does not exist', async () => {
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -137,7 +145,7 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('returns 404 when the "other" player does not exist', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -149,7 +157,7 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('rejects comparing a player against itself with 422 same_player', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -161,8 +169,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('rejects from > to with 422 invalid_window', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -174,8 +182,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('accepts an exactly-31-day window', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -186,8 +194,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('rejects a 32-day window with 422 window_too_large', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -199,8 +207,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('defaults to a trailing 7-day window when from/to are omitted', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
       method: 'GET',
@@ -217,8 +225,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('computes a hand-checked overlap for two players with an overlapping session (AC)', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
 
     await h.db.insert(playerSessions).values([
       {
@@ -272,8 +280,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('clamps an open session for the "other" player to now and includes it in the overlap', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     const now = new Date();
     const twoHoursAgo = new Date(now.getTime() - 7_200_000);
     const oneHourAgo = new Date(now.getTime() - 3_600_000);
@@ -300,8 +308,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
   });
 
   it('never leaks IP data in the response payload (regression)', async () => {
-    const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
     await h.db.insert(playerSessions).values([
       {
         playerId: idA,

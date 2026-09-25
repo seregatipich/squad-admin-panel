@@ -1,6 +1,6 @@
-import { messageTemplates, players, roles } from '@squad/db/schema';
-import { eq, isNull } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { auditLog, messageTemplates, players, roles } from '@squad/db/schema';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -13,15 +13,68 @@ const OWNER_STEAM_ID = 76561198000004000n;
 
 let h: IntegrationHarness;
 let cookie: string;
+let ownerRoleId: string;
+let auditMark: bigint;
+
+beforeAll(async () => {
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  // The listing cases assert the lazily seeded defaults are all there is, and
+  // demoteToViewer() drops the owner to Viewer: start each case with an empty
+  // template table and the seeded owner back on Owner.
+  await h.db.delete(messageTemplates);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
   cookie = await loginAsOwner(h);
+  const [latest] = await h.db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .orderBy(desc(auditLog.id))
+    .limit(1);
+  auditMark = latest?.id ?? 0n;
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
+
+/**
+ * Waits for an audit row this test wrote. Template creation audits no target
+ * id, so rows from earlier tests in the file are excluded by id instead.
+ */
+async function expectAuditRowSinceTestStart(action: string, resource: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await h.db
+            .select({ id: auditLog.id })
+            .from(auditLog)
+            .where(
+              and(
+                gt(auditLog.id, auditMark),
+                eq(auditLog.actionType, action),
+                eq(auditLog.targetType, resource),
+              ),
+            )
+            .limit(1)
+        ).length,
+      { timeout: 1_200, interval: 50 },
+    )
+    .toBe(1);
+}
 
 async function demoteToViewer(): Promise<string> {
   const viewerRows = await h.db
@@ -112,10 +165,7 @@ describe('POST /api/v1/message-templates', () => {
       .where(eq(messageTemplates.id, created.id as string));
     expect(stored).toHaveLength(1);
 
-    await assertAuditRow(h, {
-      action: 'message_template.create',
-      resource: 'message_template',
-    });
+    await expectAuditRowSinceTestStart('message_template.create', 'message_template');
   });
 
   it('rejects a body longer than 512 characters (acceptance #2)', async () => {
