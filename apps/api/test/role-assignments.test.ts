@@ -1,6 +1,6 @@
 import { players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -22,12 +22,13 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 describeIfDb('GET /api/v1/role-assignments', () => {
   let h: IntegrationHarness;
   let viewerRoleId: string;
+  let ownerRoleId: string;
 
-  beforeEach(async () => {
-    // Each test gets its own freshly migrated, isolated schema (see
+  beforeAll(async () => {
+    // The file gets its own freshly migrated, isolated database (see
     // buildIntegrationApp), which already seeds the "Viewer" fixture role
     // (helpers/viewer-fixture.ts) — look it up from *this* harness's db,
-    // not a shared connection, since the role id differs per schema.
+    // not a shared connection, since the role id differs per database.
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       seedOwnerGuard: true,
@@ -40,6 +41,13 @@ describeIfDb('GET /api/v1/role-assignments', () => {
       .limit(1);
     if (!viewerRows[0]) throw new Error('Viewer role not found in isolated schema');
     viewerRoleId = viewerRows[0].id;
+    const ownerRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
+    if (!ownerRows[0]) throw new Error('Owner role not found in isolated schema');
+    ownerRoleId = ownerRows[0].id;
 
     // Viewer with a permanent (null expiry) role assignment.
     await h.db.insert(players).values({
@@ -71,9 +79,21 @@ describeIfDb('GET /api/v1/role-assignments', () => {
     });
   });
 
+  beforeEach(async () => {
+    // The 403 case strips the seeded owner's role; every other case reads
+    // the registry as that Owner.
+    await h.db
+      .update(players)
+      .set({ roleId: ownerRoleId })
+      .where(eq(players.steamId64, OWNER_STEAM));
+  });
+
   afterEach(async () => {
     if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-    await h.cleanup();
+  });
+
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   it('returns 401 without authentication', async () => {

@@ -2,12 +2,13 @@ import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import type { DiagEvent } from '@squad/diag';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
+  makeFakeBridge,
 } from './integration/harness.js';
 
 const OWNER_STEAM_ID = testSteamId(920);
@@ -41,17 +42,26 @@ async function seedServer(
 
 let h: IntegrationHarness;
 let captured: DiagEvent[];
+let publishProgress: IntegrationHarness['app']['installProgress']['publish'];
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  publishProgress = h.app.installProgress.publish;
+});
+
+beforeEach(() => {
   captured = [];
   h.app.diag.emit = async (ev) => {
     captured.push(ev);
   };
+  // Tests swap single bridge methods and the install-progress publisher on
+  // the shared app; start every case from the stock fakes again.
+  Object.assign(h.bridge, makeFakeBridge());
+  h.app.installProgress.publish = publishProgress;
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('server lifecycle emits diag events', () => {
