@@ -1,10 +1,17 @@
 import { ChatFlagDetector } from '@squad/chat-ingest';
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
-import { redisSinkStream, resolveRconHost, startHeartbeat } from '@squad/shared-config';
+import {
+  parseRconRefreshHint,
+  RCON_REFRESH_CHANNEL,
+  redisSinkStream,
+  resolveRconHost,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { positiveIntEnv } from './env.js';
 import { RconSupervisor, type Target } from './supervisor.js';
 
 const requiredEnv = (name: string): string => {
@@ -72,6 +79,23 @@ async function main() {
     log,
     diag,
     chatFlagDetector: new ChatFlagDetector(db),
+    rosterIntervalMs: positiveIntEnv(process.env.RCON_ROSTER_INTERVAL_MS),
+    infoIntervalMs: positiveIntEnv(process.env.RCON_INFO_INTERVAL_MS),
+  });
+
+  // Refresh hints (log-ingest saw a join, a leave, a new match) get their own
+  // connection: a subscribed ioredis client cannot issue regular commands.
+  const hints = redis.duplicate();
+  hints.on('error', (err: Error) => log.warn({ err: err.message }, 'hint subscriber error'));
+  hints.on('message', (channel: string, raw: string) => {
+    if (channel !== RCON_REFRESH_CHANNEL) return;
+    const hint = parseRconRefreshHint(raw);
+    if (!hint) return;
+    supervisor.hint(hint.server_id, hint.scopes);
+  });
+  await hints.subscribe(RCON_REFRESH_CHANNEL).catch((err: Error) => {
+    // Hints only speed things up; the poll timers still keep the panel fresh.
+    log.warn({ err: err.message }, 'rcon refresh hint subscribe failed');
   });
 
   async function reconcile() {
@@ -132,6 +156,7 @@ async function main() {
     stopHeartbeat?.();
     if (interval) clearInterval(interval);
     await supervisor.stop().catch(() => undefined);
+    await hints.quit().catch(() => undefined);
     await redis.quit().catch(() => undefined);
     clearTimeout(forceExit);
     process.exit(0);

@@ -344,3 +344,34 @@ export function appendEventPage(
   const additions = incoming.filter((event) => !existingIds.has(event.event_id));
   return [...existing, ...additions];
 }
+
+/** Payload of the `server.events.appended` live frame. */
+export interface EventsAppendedBatch {
+  server_id: string | null;
+  kinds: string[];
+}
+
+/**
+ * Whether new rows announced by `server.events.appended` can show up at the
+ * top of the list the viewer has open. Lists sorted oldest-first, date windows
+ * that already ended, and filters that exclude the server or every announced
+ * kind are left alone, so a busy server does not make unrelated lists refetch.
+ */
+export function eventsBatchAffectsList(
+  batch: EventsAppendedBatch,
+  filters: EventFilters,
+  lockedServerId?: string,
+): boolean {
+  if (filters.order !== 'desc') return false;
+  if (filters.preset === 'yesterday') return false;
+  if (filters.preset === 'custom' && filters.to) return false;
+  if (lockedServerId) {
+    if (batch.server_id !== lockedServerId) return false;
+  } else if (filters.servers.length > 0) {
+    if (!batch.server_id || !filters.servers.includes(batch.server_id)) return false;
+  }
+  if (filters.kinds.length > 0 && !batch.kinds.some((kind) => filters.kinds.includes(kind))) {
+    return false;
+  }
+  return true;
+}

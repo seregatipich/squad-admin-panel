@@ -186,6 +186,8 @@ services:
       REDIS_URL: redis://127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       RCON_HOST_DEFAULT: 127.0.0.1
+      RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
+      RCON_INFO_INTERVAL_MS: ${RCON_INFO_INTERVAL_MS:-5000}
     depends_on:
       postgres:
         condition: service_healthy

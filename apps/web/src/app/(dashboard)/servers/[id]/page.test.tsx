@@ -19,7 +19,12 @@ vi.mock('./live-players', () => ({
 }));
 vi.mock('./map-widget', () => ({ MapWidget: () => null }));
 vi.mock('./SeedCallButton', () => ({ SeedCallButton: () => null }));
-vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
+const liveHandlers = new Map<string, (event: unknown) => void>();
+vi.mock('@/lib/use-live-bus', () => ({
+  useLiveSubscription: (type: string, handler: (event: unknown) => void) => {
+    liveHandlers.set(type, handler);
+  },
+}));
 vi.mock('@/lib/ws-backoff', () => ({ nextBackoffMs: vi.fn(() => 1000) }));
 
 import ServerDetailPage from './page';
@@ -64,6 +69,7 @@ function stubServerFetch(status = 'stopped', extra: Record<string, unknown> = {}
 
 afterEach(() => {
   cleanup();
+  liveHandlers.clear();
   vi.unstubAllGlobals();
 });
 
@@ -254,5 +260,42 @@ describe('ServerDetailPage — внешний сервер', () => {
     expect(screen.queryByText('CPU')).not.toBeInTheDocument();
     expect(screen.queryByText('Порт маяка')).not.toBeInTheDocument();
     expect(wsCtor).not.toHaveBeenCalled();
+  });
+});
+
+describe('ServerDetailPage — живой статус RCON', () => {
+  function serverFetches(fetchMock: ReturnType<typeof stubServerFetch>): number {
+    return fetchMock.mock.calls.filter(([url]) => url === `/api/v1/servers/${SERVER_ID}`).length;
+  }
+
+  it('перечитывает карточку сразу по rcon.status этого сервера, не дожидаясь опроса', async () => {
+    const fetchMock = stubServerFetch('running');
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByRole('region', { name: 'Игроки онлайн' });
+    const before = serverFetches(fetchMock);
+
+    await act(async () => {
+      liveHandlers.get('rcon.status')?.({
+        type: 'rcon.status',
+        ts: '2026-09-25T10:00:00.000Z',
+        data: { server_id: 'another-server', state: 'connected', player_count: 3 },
+      });
+    });
+    expect(serverFetches(fetchMock)).toBe(before);
+
+    await act(async () => {
+      liveHandlers.get('rcon.status')?.({
+        type: 'rcon.status',
+        ts: '2026-09-25T10:00:00.000Z',
+        data: { server_id: SERVER_ID, state: 'connected', player_count: 3 },
+      });
+    });
+    expect(serverFetches(fetchMock)).toBe(before + 1);
   });
 });

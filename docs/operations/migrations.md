@@ -43,6 +43,7 @@ If a migration shipped to production must be reverted, the path is:
 | 0017 | `0017_diagnostic_events` | Adds `diagnostic_events` table — range-partitioned by `ts` (one partition per UTC day), composite PK `(id, ts)`, severity check, FK → `servers.id` ON DELETE SET NULL. Bootstraps 25 day-partitions. Mutable; pruned to 24h by `worker-event-partition`. |
 | 0018 | `0018_diagnostic_events_utc_invariant` | No-op (`SELECT 1`). Documents the UTC-bounds invariant for `diagnostic_events` partitions: production Postgres MUST run with `TimeZone = 'UTC'`. The worker derives partition names/bounds in UTC via `Date.toISOString()`; `0017`'s bootstrap loop used session-TZ-dependent `current_date` and could clash with the worker on non-UTC deployments. Non-UTC bootstrap partitions naturally age out within 24h via the worker's drop-stale sweep. |
 | 0019 | `0019_license_id` | Adds nullable `server_credentials.license_id` for encrypted license-key management. |
+| 0116 | `0116_events_appended_notify` | Adds `events_notify_appended()` and the AFTER INSERT row trigger `trg_events_notify_appended` on `events` (cloned onto every partition): `pg_notify('events_appended', {server_id, kind})`. The API LISTENs to push `server.events.appended` to open event lists. Additive, rollback-safe. |
 | 0020 | `0020_uuid_player_id` | Data-preserving identity migration: gives `players` a UUID primary key, keeps `steam_id64` as a nullable unique external identity, migrates all child FKs to UUID player IDs, and adds setup-wizard metadata. |
 
 ## Adding a migration

@@ -28,6 +28,7 @@ import { handleMatchClose } from './match-roster/store.js';
 import { LogIngestor } from './parser/ingest.js';
 import { handlePlayerConnected } from './player-identity/store.js';
 import { publish } from './publish.js';
+import { publishRconRefreshHint } from './rcon-hint.js';
 import { handleReport } from './report/store.js';
 import { scheduleLogRetentionSweep } from './retention.js';
 import { tailSshLog } from './ssh-tail.js';
@@ -217,6 +218,9 @@ async function main() {
         );
         publish(redis, e).catch((err) =>
           log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
+        );
+        publishRconRefreshHint(redis, e).catch((err) =>
+          log.warn({ err: (err as Error).message, type: e.type }, 'rcon refresh hint failed'),
         );
         if (e.type === 'player.connected') {
           // Upsert the canonical identity first (PLAYER-1, #22) so the player

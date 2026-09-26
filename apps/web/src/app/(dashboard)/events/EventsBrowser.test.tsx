@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 let mockSearchParams = new URLSearchParams();
@@ -9,6 +9,13 @@ vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ replace: replaceMock })),
   usePathname: vi.fn(() => '/events'),
   useSearchParams: vi.fn(() => mockSearchParams),
+}));
+
+const liveHandlers = new Map<string, (event: unknown) => void>();
+vi.mock('@/lib/use-live-bus', () => ({
+  useLiveSubscription: (type: string, handler: (event: unknown) => void) => {
+    liveHandlers.set(type, handler);
+  },
 }));
 
 import { EventsBrowser } from './EventsBrowser';
@@ -35,6 +42,8 @@ function mockFetch() {
 
 afterEach(() => {
   cleanup();
+  liveHandlers.clear();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   replaceMock.mockClear();
   mockSearchParams = new URLSearchParams();
@@ -87,5 +96,114 @@ describe('EventsBrowser — заголовки', () => {
       await screen.findByRole('heading', { level: 2, name: 'Журнал событий' }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+});
+
+function eventItem(id: string, kind = 'player.connected', serverId = 'srv-1') {
+  return {
+    event_id: id,
+    server_id: serverId,
+    server_name: 'Server',
+    server_slug: 'server',
+    occurred_at: '2026-09-25T10:00:00.000Z',
+    kind,
+    version: 1,
+    actor_kind: 'system',
+    actor_id: null,
+    actor_nickname: null,
+    correlation_id: null,
+  };
+}
+
+/** Каждый запрос списка отдаёт следующую страницу из `pages` (последняя — навсегда). */
+function listFetch(pages: ReturnType<typeof eventItem>[][]) {
+  let call = 0;
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.startsWith('/api/v1/events/count')) {
+      return Promise.resolve(new Response(JSON.stringify({ total: 1 }), { status: 200 }));
+    }
+    if (url.startsWith('/api/v1/events')) {
+      const items = pages[Math.min(call, pages.length - 1)];
+      call += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify({ items, next_cursor: null, limit: 50 }), { status: 200 }),
+      );
+    }
+    if (url.startsWith('/api/v1/servers')) {
+      return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    }
+    return Promise.reject(new Error(`unexpected fetch: ${url}`));
+  });
+}
+
+function listCalls(fetchMock: ReturnType<typeof listFetch>): number {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const url = typeof input === 'string' ? input : String(input);
+    return url.startsWith('/api/v1/events?');
+  }).length;
+}
+
+describe('EventsBrowser — живая лента', () => {
+  it('подтягивает новое событие сверху, как только API сообщил о вставке', async () => {
+    const fetchMock = listFetch([
+      [eventItem('evt00001')],
+      [eventItem('evt00002'), eventItem('evt00001')],
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EventsBrowser lockedServerId="srv-1" />);
+    await screen.findByText('evt00001');
+    expect(screen.queryByText('evt00002')).not.toBeInTheDocument();
+
+    await act(async () => {
+      liveHandlers.get('server.events.appended')?.({
+        type: 'server.events.appended',
+        ts: '2026-09-25T10:00:01.000Z',
+        data: { server_id: 'srv-1', kinds: ['player.connected'] },
+      });
+    });
+    expect(await screen.findByText('evt00002', {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByText('evt00001')).toBeInTheDocument();
+    expect(listCalls(fetchMock)).toBe(2);
+  });
+
+  it('не перечитывает список, если событие не с этого сервера', async () => {
+    const fetchMock = listFetch([[eventItem('evt00001')]]);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EventsBrowser lockedServerId="srv-1" />);
+    await waitFor(() => expect(listCalls(fetchMock)).toBe(1));
+
+    await act(async () => {
+      liveHandlers.get('server.events.appended')?.({
+        type: 'server.events.appended',
+        ts: '2026-09-25T10:00:01.000Z',
+        data: { server_id: 'srv-other', kinds: ['player.connected'] },
+      });
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(listCalls(fetchMock)).toBe(1);
+  });
+
+  it('склеивает пачку уведомлений в одно перечитывание', async () => {
+    const fetchMock = listFetch([
+      [eventItem('evt00001')],
+      [eventItem('evt00002'), eventItem('evt00001')],
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EventsBrowser lockedServerId="srv-1" />);
+    await waitFor(() => expect(listCalls(fetchMock)).toBe(1));
+
+    await act(async () => {
+      for (let i = 0; i < 20; i++) {
+        liveHandlers.get('server.events.appended')?.({
+          type: 'server.events.appended',
+          ts: '2026-09-25T10:00:01.000Z',
+          data: { server_id: 'srv-1', kinds: ['combat_damage'] },
+        });
+      }
+    });
+    await waitFor(() => expect(listCalls(fetchMock)).toBe(2), { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(listCalls(fetchMock)).toBe(2);
   });
 });

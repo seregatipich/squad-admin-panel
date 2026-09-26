@@ -25,6 +25,7 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendEventPage,
   buildCountApiQuery,
@@ -36,15 +37,21 @@ import {
   type EventFilters,
   type EventListItem,
   type EventListResponse,
+  type EventsAppendedBatch,
+  eventsBatchAffectsList,
   formatDateTime,
   kindLabel,
   kindOptionsFromEvents,
+  mergeEventPage,
   PAGE_LIMIT,
   parseFilters,
   type ServerOption,
   serverOptionsFromEvents,
   shortServerName,
 } from './helpers';
+
+/** Минимальный промежуток между живыми перечитываниями первой страницы. */
+const LIVE_REFRESH_MS = 1000;
 
 interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
@@ -201,6 +208,66 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore, lockedServerId]);
+
+  // Живая лента: API шлёт `server.events.appended`, как только в `events`
+  // появилась строка, и список подтягивает свежую первую страницу сверху, не
+  // трогая уже догруженный хвост. Кадр не несёт самих событий — они приходят
+  // через тот же REST с проверкой прав. Не чаще раза в LIVE_REFRESH_MS: в
+  // разгар боя строки идут десятками в секунду.
+  const liveRef = useRef({ inFlight: false, again: false, lastAt: 0 });
+  const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshHead = useCallback(async () => {
+    const live = liveRef.current;
+    if (live.inFlight) {
+      live.again = true;
+      return;
+    }
+    live.inFlight = true;
+    live.lastAt = Date.now();
+    try {
+      const res = await fetch(
+        `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`,
+        { credentials: 'include', cache: 'no-store' },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as EventListResponse;
+      setItems((prev) => {
+        const known = new Set(prev.map((event) => event.event_id));
+        const added = data.items.filter((event) => !known.has(event.event_id)).length;
+        if (added > 0) setTotal((current) => (current === null ? current : current + added));
+        return mergeEventPage(data.items, prev);
+      });
+    } catch {
+      // Живое обновление — надбавка; при ошибке список просто ждёт следующего кадра.
+    } finally {
+      live.inFlight = false;
+      if (live.again) {
+        live.again = false;
+        liveTimerRef.current = setTimeout(() => void refreshHead(), LIVE_REFRESH_MS);
+      }
+    }
+  }, [filters, lockedServerId]);
+
+  const onEventsAppended = useCallback(
+    (event: { data: EventsAppendedBatch }) => {
+      if (loading || !eventsBatchAffectsList(event.data, filters, lockedServerId)) return;
+      if (liveTimerRef.current) return;
+      const wait = Math.max(0, liveRef.current.lastAt + LIVE_REFRESH_MS - Date.now());
+      liveTimerRef.current = setTimeout(() => {
+        liveTimerRef.current = null;
+        void refreshHead();
+      }, wait);
+    },
+    [filters, loading, lockedServerId, refreshHead],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
+  useEffect(
+    () => () => {
+      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = null;
+    },
+    [],
+  );
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

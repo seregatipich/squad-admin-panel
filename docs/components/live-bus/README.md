@@ -23,6 +23,7 @@ Process-local `EventEmitter` plus a Redis `PUB`/`SUB` fan-out, exposed to UI cli
 - Producers (server-side):
   - [`apps/api/src/plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) — `server.status` on every reconciled state edge.
   - [`apps/api/src/plugins/bridge-heartbeat.ts`](../../../apps/api/src/plugins/bridge-heartbeat.ts) — `bridge.connection` on `up`↔`down` edges.
+  - [`apps/api/src/plugins/events-feed.ts`](../../../apps/api/src/plugins/events-feed.ts) — `server.events.appended` `{server_id, kinds}` whenever rows land in `events` (Postgres `LISTEN events_appended`, coalesced per server over 250 ms).
 - Producers (worker-side):
   - [`apps/workers/rcon/src/supervisor.ts`](../../../apps/workers/rcon/src/supervisor.ts) — Redis `PUBLISH rcon:status:changed` on every status write; the API plugin re-wraps it as `rcon.status`.
 - Test: [`apps/api/test/live-bus.test.ts`](../../../apps/api/test/live-bus.test.ts)

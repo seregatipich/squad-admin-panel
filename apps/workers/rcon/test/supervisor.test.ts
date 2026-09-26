@@ -224,6 +224,7 @@ describe('RconSupervisor roster refresh', () => {
       log: makeLogger(),
       pollIntervalMs: 600_000,
       rosterIntervalMs: 25,
+      infoIntervalMs: 600_000,
     });
     const liveTarget: Target = {
       ...target,
@@ -256,11 +257,13 @@ describe('RconSupervisor roster refresh', () => {
         redis.set.mock.calls.filter(([key]) => key === 'rcon:squads:srv-roster').length,
       ).toBeGreaterThanOrEqual(2);
 
-      // Тяжёлая часть тика (карта, тикрейт, очередь, A2S, запись игроков в
-      // базу) на этой частоте не выполняется.
+      // Тяжёлая часть тика (A2S, запись игроков в базу) на этой частоте не
+      // выполняется: `makeDb()` — пустой объект, и любое обращение к базе
+      // уронило бы обновление. Карта и тикрейт читаются отдельно (см. тесты
+      // server-info ниже), один раз сразу после подключения.
       expect(commands).toEqual(expect.arrayContaining(['ListPlayers', 'ListSquads']));
-      expect(commands).not.toContain('ShowServerInfo');
-      expect(commands).not.toContain('ShowNextMap');
+      const rosterReads = commands.filter((c) => c === 'ListPlayers').length;
+      expect(commands.filter((c) => c === 'ShowServerInfo').length).toBeLessThan(rosterReads);
     } finally {
       await supervisor.stop();
       await closeServer(server);
