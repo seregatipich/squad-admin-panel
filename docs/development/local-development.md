@@ -44,6 +44,48 @@ docker compose up -d --build
 | `pnpm db:studio` | Drizzle Studio. |
 | `pnpm --silent mint:owner-session -- --steam-id64 <id> --confirm-steam-id64 <id> --name <name>` | Promote a player to Owner and print a six-hour panel session token. Requires `DATABASE_URL`; treat stdout as a secret. |
 
+## Git hooks
+
+`pnpm install` installs the [lefthook](../../lefthook.yml) hooks. Bypass them only in a genuine emergency, with `--no-verify`.
+
+### pre-commit
+
+Runs in parallel on the staged files:
+
+| Command | Runs for | What it does |
+|---|---|---|
+| `branch-guard` | every commit | `scripts/git-guard.sh check-commit` — refuses direct commits on `master`, `dev` (except mid-merge) and `main`. See [agent-harness.md](agent-harness.md). |
+| `biome-check` | staged `*.{ts,tsx,js,jsx,json,css}` | `biome check` on the staged files. |
+| `go-fmt` | staged `apps/bridge/**/*.go` | Fails when `gofmt -l -s` lists a file (fix with `gofmt -w -s apps/bridge`), then runs `go vet ./...` for `GOOS=linux GOARCH=amd64`: the bridge uses Linux-only syscalls, so a native `go vet` fails on macOS. Skipped when `go` is not installed. |
+| `gitleaks` | every commit | `gitleaks protect --staged`; a finding blocks the commit. Skipped when `gitleaks` is not installed. |
+
+### pre-push
+
+`branch-guard` checks the pushed refspecs, then `checklist` runs [`scripts/pre-push-checklist.sh`](../../scripts/pre-push-checklist.sh). A push to `dev` deploys the tk104 stand without tests, so the checklist is the last check before the stand; the full suite runs in `ci` once the tip is promoted to `master`. It therefore checks only what the branch changed, and runs on every push, the dev→master promotion included:
+
+1. `git fetch origin dev` — offline, the local `origin/dev` ref is used as is.
+2. `biome check apps packages scripts docker/rnsquadjs`.
+3. gitleaks over the commits `origin/dev..HEAD` (only if `gitleaks` is installed).
+4. `turbo run typecheck` for the packages changed since `origin/dev` and their dependents.
+5. `turbo run test` for the changed packages only, not their dependents. In `apps/api` only the test files the diff touches run (`vitest run <files>`); a change to API source alone is typechecked and left to `ci`.
+6. `pnpm test:scripts`, only when `scripts/` or `.github/` changed.
+
+"Changed" means changed since the merge base with `origin/dev`, including uncommitted and untracked files, so commits that landed on `dev` after the branch forked never count as the branch's own changes.
+
+Measured on 2026-09-26 for a one-line change in a worker: 25 s with an empty turbo cache and 26 s for the next change on a warm cache; the full sequence the checklist used to run by default took 136 s and 49 s for the same changes, and on a branch two commits behind `dev` it selected the tests of all 32 packages instead of one.
+
+Suites that need Postgres or Redis — `@squad/api`, `@squad/db`, most workers and `test:scripts`; a package counts when its tests, test helpers or `vitest.config` read `DATABASE_URL` or `REDIS_URL` — run against:
+
+- an exported `DATABASE_URL` (`TEST_DATABASE_URL` defaults to it);
+- otherwise, when `.env` exists and Docker runs the local stack, a database of this worktree, `test_prepush_<worktree directory>`, created and migrated by [`scripts/new-test-db.sh`](../../scripts/new-test-db.sh) and kept between pushes so a push applies only new migrations. Drop it after removing the worktree: `docker exec <postgres container> dropdb -U admin test_prepush_<name>`;
+- otherwise a throwaway database on a native Postgres at `127.0.0.1:5432` that accepts the `.env` password.
+
+Without any of them the checklist skips those suites with a warning instead of blocking the push.
+
+`FULL=1 bash scripts/pre-push-checklist.sh` runs the full gate instead: full typecheck, `biome check .`, the production build (skip with `SKIP_BUILD=1`), gitleaks, `test:scripts`, `test:cov` and the mutation suite, and fails when no database is available. Run it before a promotion you want to be confident about. `PREPUSH_TURBO_CONCURRENCY` (default `2`) limits the parallel package tests; `VITEST_MAX_FORKS` limits Vitest workers.
+
+Turbo 2.9 shares one cache between all worktrees of a clone (the main checkout's `.turbo/cache`), so packages another worktree already built or typechecked are cache hits; an exported `TURBO_CACHE_DIR` overrides the location. `@squad/web` tests depend only on its dependencies' builds ([`apps/web/turbo.json`](../../apps/web/turbo.json)), so they never wait for `next build`.
+
 ## pnpm overrides
 
 Root `package.json`'s `pnpm.overrides` block pins specific transitive dependency
@@ -83,8 +125,8 @@ their direct parents independently require the same fixed floors.
 cd apps/bridge
 make build       # static binary at bin/panel-host-bridge
 make test        # `go test -race -count=1 ./...`
-go vet ./...     # also enforced by lefthook pre-commit
-gofmt -l -s .    # nothing should print
+GOOS=linux GOARCH=amd64 go vet ./...   # what the pre-commit hook runs; a native vet fails on macOS
+gofmt -l -s .    # nothing should print; the pre-commit hook fails otherwise
 govulncheck ./...
 ```
 
