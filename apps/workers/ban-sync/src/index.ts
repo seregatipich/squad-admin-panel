@@ -85,6 +85,14 @@ async function main() {
   });
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
+  // The manual-queue read holds its connection for up to MANUAL_BLOCK_MS, so it
+  // gets one of its own: heartbeat and diag writes never queue behind it, and
+  // shutdown can end the read by closing that connection instead of waiting
+  // the block out.
+  const manualRedis = redis.duplicate();
+  manualRedis.on('error', (err: Error) =>
+    log.warn({ err: err.message }, 'manual-queue redis error (will retry)'),
+  );
 
   const diag: Diag = createDiag({ redis, log });
   const syncSourceDeps = createSyncSourceDeps(db, redis, diag, encryptionKey);
@@ -117,6 +125,10 @@ async function main() {
         payload: { sig },
       });
       stopHeartbeat();
+      // Closing the connection ends the blocked read at once. Only a job Redis
+      // hands to that read in the same instant is affected: it stays pending
+      // under this consumer, exactly as when the process is killed mid-read.
+      manualRedis.disconnect();
       await manualLoop;
       await sql.end({ timeout: 5 });
       await redis.quit().catch(() => undefined);
@@ -148,7 +160,7 @@ async function main() {
     while (!stopped) {
       let result: [string, [string, string[]][]][] | null = null;
       try {
-        result = (await redis.xreadgroup(
+        result = (await manualRedis.xreadgroup(
           'GROUP',
           MANUAL_GROUP,
           consumerName,
@@ -159,6 +171,8 @@ async function main() {
           '>',
         )) as [string, [string, string[]][]][] | null;
       } catch (err) {
+        // Shutdown closed the connection under the blocked read.
+        if (stopped) return;
         log.warn({ err: (err as Error).message }, 'manual-queue xreadgroup failed');
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
