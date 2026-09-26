@@ -6,6 +6,8 @@ out/
 .turbo/
 .cache/
 coverage/
+# Blob reports of the sharded CI test runs (scripts/ci-test-shard.sh).
+.vitest-reports/
 *.log
 
 .env

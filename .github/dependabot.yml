@@ -2,5 +2,7 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Work lands on dev and reaches master only by fast-forward promotion.
+    target-branch: "dev"
     schedule:
       interval: "weekly"
