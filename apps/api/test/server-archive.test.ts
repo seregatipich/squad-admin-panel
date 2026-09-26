@@ -2,7 +2,7 @@ import { configVersions, serverCredentials, serverSettings, servers } from '@squ
 import { ALLOWED_CONFIG_FILES } from '@squad/shared-config';
 import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { softDeleteServer } from '../src/lib/server-delete.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -76,13 +76,23 @@ async function seedAndSoftDelete(
 }
 
 let h: IntegrationHarness;
+let originalFileAtomicWrite: FakeBridge['fileAtomicWrite'];
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  originalFileAtomicWrite = h.bridge.fileAtomicWrite;
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
+});
+
+// The archive list asserts the exact set of archived servers and restores copy
+// the archived ports, so every case starts without servers (children cascade)
+// and with the unpatched bridge.
+afterEach(async () => {
+  h.bridge.fileAtomicWrite = originalFileAtomicWrite;
+  await h.db.delete(servers);
 });
 
 describe('GET /api/v1/servers/archive', () => {

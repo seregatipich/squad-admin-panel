@@ -1,7 +1,7 @@
 import { auditLog, playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -14,20 +14,45 @@ import {
 const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let originalFileRead: IntegrationHarness['bridge']['fileRead'];
 
+beforeAll(async () => {
+  h = await buildIntegrationApp({
+    seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
+    bridge: makeFakeBridge(),
+  });
+  originalFileRead = h.bridge.fileRead;
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h.cleanup();
+});
+
+// Cases demote the seeded owner to Viewer or patch the fake bridge; undo both
+// so the next case sees the seeded Owner and the stock bridge.
 afterEach(async () => {
-  if (h) await h.cleanup();
+  h.bridge.fileRead = originalFileRead;
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
 });
 
 describe('GET /api/v1/players + /players/:playerId', () => {
   let testPlayerId: string;
 
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      seedOwnerGuard: true,
-      bridge: makeFakeBridge(),
-    });
+  // The cases only read this player, so it is seeded once.
+  beforeAll(async () => {
     const steamId = 76561198000000001n;
     const [insertedPlayer] = await h.db
       .insert(players)
@@ -174,14 +199,6 @@ describe('GET /api/v1/players + /players/:playerId', () => {
 });
 
 describe('/api/v1/depot', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      seedOwnerGuard: true,
-      bridge: makeFakeBridge(),
-    });
-  });
-
   it('GET /depot reports populated=true when fake bridge returns the marker file', async () => {
     h.bridge.fileRead = async ({ path }) =>
       path.endsWith('SquadGameServer.sh')
@@ -240,14 +257,6 @@ describe('/api/v1/depot', () => {
 });
 
 describe('auth plugin', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      seedOwnerGuard: true,
-      bridge: makeFakeBridge(),
-    });
-  });
-
   it('a garbage cookie does not crash the server and falls through to 401', async () => {
     const resp = await h.app.inject({
       method: 'GET',
@@ -291,12 +300,20 @@ describe('auth plugin', () => {
 });
 
 describe('audit plugin', () => {
-  beforeEach(async () => {
+  // These cases assert on the audit log as a whole, which the other suites'
+  // requests write to asynchronously, so they get a database of their own.
+  let h: IntegrationHarness;
+
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
       seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
   });
 
   it('does not write audit rows for routes with audit: false', async () => {

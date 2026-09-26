@@ -1,7 +1,7 @@
 import { players, roles } from '@squad/db/schema';
 import { encodeLogEntry, PANEL_LOGS_STREAM } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   buildIntegrationApp,
@@ -13,6 +13,7 @@ import {
 const OWNER_STEAM_ID = 76561198000001002n;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
 async function seedLogEntries(redis: IntegrationHarness['redis']) {
   const entries = [
@@ -38,18 +39,35 @@ async function seedLogEntries(redis: IntegrationHarness['redis']) {
   return ids;
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRole.id;
+  // No case writes to the stream, so one seeded set serves every case.
   await seedLogEntries(h.redis);
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Two cases demote the seeded owner to Viewer; put it back on Owner.
+afterEach(async () => {
+  if (!h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) return;
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, h.seed.ownerSteamId64));
+  invalidatePermissionCache(h.seed.ownerPlayerId);
 });
 
 describe('GET /api/v1/logs', () => {

@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { mediaFiles, mediaPublications, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  auditLog,
+  mediaFiles,
+  mediaPublications,
+  mediaPublishSettings,
+  players,
+  roles,
+} from '@squad/db/schema';
+import { and, eq, gt, max } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
@@ -17,10 +24,18 @@ const PLAIN_PANEL_STEAM = testSteamId(993001);
 
 const TELEGRAM_BOT_TOKEN = '1234567:AAHfake-telegram-bot-token-value';
 const YOUTUBE_REFRESH_TOKEN = '1//0f-fake-refresh-token';
+const PUBLISHING_CONFIG_KEYS = [
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'YOUTUBE_CLIENT_ID',
+  'YOUTUBE_CLIENT_SECRET',
+  'YOUTUBE_REFRESH_TOKEN',
+] as const;
 
 let h: IntegrationHarness;
 let ownerCookie: string;
 let plainCookie: string;
+let stockPublishingConfig: Partial<Record<(typeof PUBLISHING_CONFIG_KEYS)[number], string>>;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db
@@ -94,10 +109,13 @@ function withPublishingCredentials(): void {
   config.YOUTUBE_REFRESH_TOKEN = YOUTUBE_REFRESH_TOKEN;
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'MediaPubOwner' },
   });
+  stockPublishingConfig = Object.fromEntries(
+    PUBLISHING_CONFIG_KEYS.map((key) => [key, h.app.config[key]]),
+  );
   ownerCookie = await loginAsOwner(h);
 
   const [plainRole] = await h.db
@@ -119,9 +137,18 @@ beforeEach(async () => {
   plainCookie = await loginAsSteam(PLAIN_PANEL_STEAM);
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Cases set publishing credentials on the shared app config and flip the
+// release-local-file switch; restore both (the settings row exactly as
+// migration 0097 seeds it). Media rows are per-case UUIDs and need no reset.
+afterEach(async () => {
+  Object.assign(h.app.config, stockPublishingConfig);
+  await h.db.delete(mediaPublishSettings);
+  await h.db.insert(mediaPublishSettings).values({ id: 1 });
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
 });
 
 describe('POST /api/v1/media/:id/publications', () => {
@@ -493,6 +520,9 @@ describe('GET /api/v1/integrations/media-publishing', () => {
 
 describe('PATCH /api/v1/integrations/media-publishing', () => {
   it('persists the release-local-file switch and audits the change', async () => {
+    const [latestAudit] = await h.db.select({ id: max(auditLog.id) }).from(auditLog);
+    const auditBaseline = latestAudit?.id ?? 0n;
+
     const res = await h.app.inject({
       method: 'PATCH',
       url: '/api/v1/integrations/media-publishing',
@@ -510,7 +540,18 @@ describe('PATCH /api/v1/integrations/media-publishing', () => {
     });
     expect(readBack.json().release_local_file).toBe(true);
 
-    await assertAuditRow(h, { action: 'media.publish.settings.update' });
+    // Other cases write the same action on this shared harness, so only a row
+    // newer than the case start counts. The route writes it before replying.
+    const auditRows = await h.db
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.actionType, 'media.publish.settings.update'),
+          gt(auditLog.id, auditBaseline),
+        ),
+      );
+    expect(auditRows).toHaveLength(1);
   });
 
   it('can switch the release-local-file behaviour back off', async () => {

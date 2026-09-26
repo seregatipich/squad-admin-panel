@@ -1,9 +1,8 @@
-import { players } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { auditLog, players, roles } from '@squad/db/schema';
+import { and, eq, gt, max } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
-  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
@@ -16,19 +15,76 @@ const OWNER_STEAM_ID = 76561198000000219n;
 const SNAPSHOT_ID = 'a1b2c3d4';
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let stockBridge: Pick<
+  IntegrationHarness['bridge'],
+  'backupSnapshots' | 'backupRun' | 'backupRestore'
+>;
+let auditBaseline = 0n;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const { backupSnapshots, backupRun, backupRestore } = h.bridge;
+  stockBridge = { backupSnapshots, backupRun, backupRestore };
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+afterAll(async () => {
   await h.cleanup();
 });
+
+beforeEach(async () => {
+  const [latest] = await h.db.select({ id: max(auditLog.id) }).from(auditLog);
+  auditBaseline = latest?.id ?? 0n;
+});
+
+// Cases patch the fake bridge's backup methods and demote the seeded owner;
+// undo both so the next case sees the stock bridge and the seeded Owner.
+afterEach(async () => {
+  Object.assign(h.bridge, stockBridge);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+});
+
+/**
+ * Waits for an audit row written during the current case. The audit plugin
+ * records every response of these routes (401/403/502 included) under one
+ * action and target, so on this shared harness `assertAuditRow` could pass on
+ * an earlier case's row.
+ */
+async function expectAuditRowFromThisCase(action: string, resource: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await h.db
+            .select({ id: auditLog.id })
+            .from(auditLog)
+            .where(
+              and(
+                eq(auditLog.actionType, action),
+                eq(auditLog.targetType, resource),
+                gt(auditLog.id, auditBaseline),
+              ),
+            )
+        ).length,
+      { timeout: 1_200, interval: 50 },
+    )
+    .toBeGreaterThan(0);
+}
 
 /** Strip the owner's role so it loses `host:manage` (403 path). */
 async function demoteOwner(): Promise<void> {
@@ -132,7 +188,7 @@ describe('POST /api/v1/host/backups', () => {
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ ok: true, exit_code: 0 });
     expect(calls).toBe(1);
-    await assertAuditRow(h, { action: 'backup.run', resource: 'backup' });
+    await expectAuditRowFromThisCase('backup.run', 'backup');
   });
 
   it('returns 502 when the backup run fails', async () => {
@@ -198,7 +254,7 @@ describe('POST /api/v1/host/backups/:id/restore', () => {
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ ok: true, exit_code: 0 });
     expect(restoredWith).toBe(SNAPSHOT_ID);
-    await assertAuditRow(h, { action: 'backup.restore', resource: 'backup' });
+    await expectAuditRowFromThisCase('backup.restore', 'backup');
   });
 
   it('rejects a missing confirm token with 400 and never touches the bridge', async () => {
