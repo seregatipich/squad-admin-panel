@@ -32,17 +32,20 @@ describeIfDb('isolated package test database recovery', () => {
     if (!BASE_URL) throw new Error('test database was not configured');
 
     const namespace = 'recovery_regression';
+    // Sweeping is about names and locks, not schema: stopping at the first
+    // migration saves replaying the whole chain twice.
+    const options = { throughMigration: '0000_init' };
     const staleName = `sqworker_${randomBytes(6).toString('hex')}_${namespace}`;
     const staleClone = `${staleName}__w1`;
     const admin = postgres(maintenanceUrl(BASE_URL), { max: 1, onnotice: () => undefined });
-    const active = await createIsolatedPackageTestDatabase(BASE_URL, namespace);
+    const active = await createIsolatedPackageTestDatabase(BASE_URL, namespace, options);
     let replacement: IsolatedPackageTestDatabase | undefined;
 
     try {
       const activeClone = await clonePackageTestDatabase(active.url, 'w1');
       await admin.unsafe(`CREATE DATABASE "${staleName}"`);
       await admin.unsafe(`CREATE DATABASE "${staleClone}"`);
-      replacement = await createIsolatedPackageTestDatabase(BASE_URL, namespace);
+      replacement = await createIsolatedPackageTestDatabase(BASE_URL, namespace, options);
 
       const names = [active.name, activeClone.name, staleName, staleClone, replacement.name];
       expect(await existingDatabases(admin, names)).toEqual(
