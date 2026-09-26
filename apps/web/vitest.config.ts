@@ -13,8 +13,12 @@ export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '**/.next/**', 'test/e2e/**'],
     passWithNoTests: true,
-    // jest-dom matchers and the <dialog> polyfill, loaded once per test file
-    // instead of being imported/copied by each file.
+    // Tests run in node unless the file opts into a DOM with
+    // `// @vitest-environment happy-dom`, which sets up several times faster
+    // than jsdom. A file falls back to `jsdom` only where happy-dom behaves
+    // differently, and says why next to the pragma.
+    // jest-dom matchers, the <dialog> polyfill and the unstubbed-fetch guard,
+    // loaded once per test file instead of being imported/copied by each file.
     setupFiles: ['./src/test-setup.ts'],
     coverage: {
       provider: 'v8',

@@ -10,8 +10,10 @@
 import '@testing-library/jest-dom/vitest';
 
 /**
- * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
- * а модальные окна построены на примитивах `Modal`/`AlertDialog`. Полифилл
+ * Ни одна тестовая DOM-среда не ведёт `<dialog>` как браузер: jsdom 29 знает
+ * элемент, но не реализует `showModal()`/`close()`, а happy-dom реализует их
+ * без фокуса внутрь окна и без Escape. Модальные окна построены на примитивах
+ * `Modal`/`AlertDialog`, поэтому полифилл ставится поверх любой реализации и
  * повторяет ровно то, на что они опираются: атрибут `open`, фокус внутрь окна и
  * цепочку Escape → отменяемое `cancel` → `close`. Он живёт только в тестах —
  * сами примитивы рассчитаны на настоящий браузер. В node-окружении
@@ -22,10 +24,7 @@ const FOCUSABLE =
 
 const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
 
-if (
-  typeof HTMLDialogElement !== 'undefined' &&
-  typeof HTMLDialogElement.prototype.showModal !== 'function'
-) {
+if (typeof HTMLDialogElement !== 'undefined') {
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
     this.setAttribute('open', '');
     const onKeyDown = (event: KeyboardEvent) => {
@@ -48,4 +47,21 @@ if (
     }
     this.dispatchEvent(new Event('close'));
   };
+}
+
+/**
+ * happy-dom подменяет `fetch` своим, а тот разрешает относительный URL против
+ * `http://localhost:3000` — порта `next dev` — и уходит в сеть: тест, забывший
+ * застабить `fetch`, при запущенном локальном стеке получал бы ответы живого
+ * сервера. В jsdom-окружении оставался `fetch` Node, который отклоняет
+ * относительный URL сразу; здесь то же поведение задаётся явно. Тесты, как и
+ * прежде, подменяют `fetch` через `vi.stubGlobal`.
+ */
+if ('happyDOM' in globalThis) {
+  globalThis.fetch = ((input: RequestInfo | URL) =>
+    Promise.reject(
+      new TypeError(
+        `fetch не застаблен в этом тесте: ${input instanceof Request ? input.url : String(input)}`,
+      ),
+    )) as typeof fetch;
 }

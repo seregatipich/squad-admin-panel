@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 // LEAD-7 (#178): season management. Mutations are gated on can_edit_roles,
 // which GET /api/v1/me does not expose, so the page self-hides its controls on
 // a 403 instead of reading a capability boolean.
