@@ -553,6 +553,36 @@ describe('local pre-push checklist and git hooks', () => {
     assert.equal(commands.includes('pnpm|test:cov'), false);
   });
 
+  it('runs web tests without waiting for the Next.js production build', () => {
+    const dryRun = run('pnpm', [
+      'exec',
+      'turbo',
+      'run',
+      'test',
+      'build',
+      '--dry=json',
+      '--filter=@squad/web',
+    ]);
+    assert.equal(dryRun.status, 0, dryRun.stderr);
+    const tasks = (
+      JSON.parse(dryRun.stdout) as {
+        tasks: {
+          taskId: string;
+          dependencies: string[];
+          resolvedTaskDefinition: { env: string[]; outputs: string[] };
+        }[];
+      }
+    ).tasks;
+    const webTest = tasks.find((task) => task.taskId === '@squad/web#test');
+    const webBuild = tasks.find((task) => task.taskId === '@squad/web#build');
+    assert.ok(webTest && webBuild);
+    assert.equal(webTest.dependencies.includes('@squad/web#build'), false);
+    assert.ok(webTest.dependencies.includes('@squad/shared-config#build'));
+    // next.config.mjs bakes API_URL into the rewrites, so it must key the build cache.
+    assert.deepEqual(webBuild.resolvedTaskDefinition.env, ['API_URL']);
+    assert.ok(webBuild.resolvedTaskDefinition.outputs.includes('.next/**'));
+  });
+
   describe('pre-commit hook', () => {
     const LEFTHOOK_CLI = path.join(REPOSITORY_ROOT, 'node_modules/lefthook/bin/index.js');
 
