@@ -1,15 +1,27 @@
 import { defineConfig } from 'vitest/config';
 
+// Every worker slot holds its own database clone, Redis database and
+// connection pools, so the slot count is what a run costs the shared servers;
+// CI lowers it through VITEST_MAX_FORKS when several packages run at once.
+const maxForks = Number(process.env.VITEST_MAX_FORKS) || 4;
+
 export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**'],
+    pool: 'forks',
+    poolOptions: { forks: { maxForks, minForks: 1 } },
     testTimeout: 40_000,
-    setupFiles: ['../_test-shared/load-env.ts'],
-    // Several suites here (contract.test.ts's subprocess, plugin-dispatch.test.ts's
-    // real-Redis dispatch loop) share one local Redis instance; running test
-    // files in parallel causes contention that makes contract.test.ts's tight
-    // shutdown-timing assertion flaky (mirrors worker-log-ingest/db configs).
-    fileParallelism: false,
+    // Files run in parallel: the global setup migrates one template per run and
+    // every worker slot gets its own clone of it and its own Redis database, so
+    // the worker `contract.test.ts` spawns never sees the rules, streams, or
+    // consumer groups of `runtime.test.ts` and `plugin-dispatch.test.ts`.
+    globalSetup: ['./test/global-setup.ts'],
+    hookTimeout: 120_000,
+    setupFiles: [
+      '../_test-shared/load-env.ts',
+      '../../../packages/db/test/helpers/clone-per-worker.ts',
+      '../_test-shared/redis-per-worker.ts',
+    ],
     sequence: { concurrent: false },
   },
 });
