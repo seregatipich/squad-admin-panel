@@ -24,12 +24,13 @@ pre-push:
       priority: 1
       run: bash scripts/git-guard.sh check-push origin origin
     checklist:
-      # This is a fast local pre-check — the cloud `ci` workflow is the
-      # authoritative gate. Runs typecheck, biome, build, secret scan, and
-      # the affected test suite (auto-provisioning an isolated DB when
-      # possible). Any failure blocks the push. Skipped automatically on
-      # no-diff pushes (e.g. dev→master promotion). Bypass in an emergency
-      # with `git push --no-verify`.
-      # Knobs: FULL=1 (full coverage suite), SKIP_BUILD=1 (skip build step).
+      # The light local pre-check a dev push gets before it deploys the tk104
+      # stand: biome, gitleaks, typecheck and tests of what changed since
+      # origin/dev (auto-provisioning a test DB when possible; DB-backed suites
+      # are skipped with a warning without one). `ci` on master is the
+      # authoritative gate. Runs on every push, the dev→master promotion
+      # included. Bypass in an emergency with `git push --no-verify`.
+      # Knobs: FULL=1 (the full gate: build, test:cov, mutation tests),
+      # SKIP_BUILD=1 (with FULL=1), PREPUSH_TURBO_CONCURRENCY (default 2).
       priority: 2
       run: bash scripts/pre-push-checklist.sh

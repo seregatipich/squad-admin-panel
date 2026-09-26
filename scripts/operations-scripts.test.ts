@@ -165,34 +165,373 @@ describe('operation script static contracts', () => {
     assert.ok(migrations >= 0 && scriptTests > migrations);
     assert.match(workflow.slice(scriptTests), /run: pnpm test:scripts/);
   });
+});
 
-  it('runs script contracts after database setup and before package tests in pre-push', () => {
+describe('local pre-push checklist and git hooks', () => {
+  const MERGE_BASE = '0123456789abcdef0123456789abcdef01234567';
+
+  interface ChecklistFixture {
+    root: string;
+    script: string;
+    shims: string;
+    log: string;
+    dbEnvLog: string;
+  }
+
+  /**
+   * A copy of the checklist whose git, pnpm, gitleaks and node run as shims:
+   * git answers from the FAKE_* variables runChecklist sets, pnpm logs every
+   * call, prints FAKE_TURBO_LS for `turbo ls` and exits 37 for commands
+   * starting with FAKE_FAIL_ON, and every pnpm `turbo run test` records the
+   * database it would test against in `dbEnvLog`.
+   */
+  function checklistFixture(
+    packages: Record<string, Record<string, string>> = {},
+  ): ChecklistFixture {
     const { root, script } = copyScript('scripts/pre-push-checklist.sh');
     const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    for (const [directory, files] of Object.entries(packages)) {
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(root, directory, file)), { recursive: true });
+        writeFileSync(path.join(root, directory, file), content);
+      }
+    }
+    loggingShim(
+      shims,
+      'git',
+      [
+        'case "$1" in',
+        '  rev-parse) printf \'%s\\n\' "$FIXTURE_ROOT" ;;',
+        '  fetch) exit "$FAKE_FETCH_STATUS" ;;',
+        '  merge-base) [ -n "$FAKE_MERGE_BASE" ] || exit 1; printf \'%s\\n\' "$FAKE_MERGE_BASE" ;;',
+        '  diff) printf \'%s\' "$FAKE_CHANGED_FILES" ;;',
+        '  ls-files) printf \'%s\' "$FAKE_UNTRACKED_FILES" ;;',
+        '  *) exit 1 ;;',
+        'esac',
+      ].join('\n'),
+    );
+    loggingShim(
+      shims,
+      'pnpm',
+      [
+        'case "$*" in',
+        '  "-s turbo ls "*) printf \'%s\\n\' "$FAKE_TURBO_LS"; exit 0 ;;',
+        '  "turbo run test "*) printf \'%s|%s\\n\' "$DATABASE_URL" "$TEST_DATABASE_URL" >> "$DB_ENV_LOG" ;;',
+        'esac',
+        'case "$*" in "$FAKE_FAIL_ON"*) exit 37 ;; esac',
+        'exit 0',
+      ].join('\n'),
     );
     loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
+    executable(path.join(shims, 'node'), `exec ${JSON.stringify(process.execPath)} "$@"`);
+    return {
+      root,
+      script,
+      shims,
+      log: path.join(root, 'commands.log'),
+      dbEnvLog: path.join(root, 'db-env.log'),
+    };
+  }
 
-    const result = run('/bin/bash', [script], {
-      cwd: root,
+  function runChecklist(
+    fixture: ChecklistFixture,
+    options: {
+      changed?: string[];
+      untracked?: string[];
+      packages?: { name: string; path: string }[];
+      env?: NodeJS.ProcessEnv;
+    } = {},
+  ): CommandResult {
+    const items = options.packages ?? [];
+    return run('/bin/bash', [fixture.script], {
+      cwd: fixture.root,
       env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
+        OPS_LOG: fixture.log,
+        DB_ENV_LOG: fixture.dbEnvLog,
+        FIXTURE_ROOT: fixture.root,
+        PATH: `${fixture.shims}:/usr/bin:/bin`,
+        FAKE_FETCH_STATUS: '0',
+        FAKE_MERGE_BASE: MERGE_BASE,
+        FAKE_FAIL_ON: '<never>',
+        FAKE_CHANGED_FILES: (options.changed ?? []).map((file) => `${file}\n`).join(''),
+        FAKE_UNTRACKED_FILES: (options.untracked ?? []).map((file) => `${file}\n`).join(''),
+        FAKE_TURBO_LS: JSON.stringify({
+          packageManager: 'pnpm9',
+          packages: { count: items.length, items },
+        }),
         DATABASE_URL: 'postgres://isolated-test-database',
         TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '1',
-        SKIP_BUILD: '1',
+        FULL: '',
+        SKIP_BUILD: '',
+        PREPUSH_TURBO_CONCURRENCY: '',
+        ...options.env,
       },
+    });
+  }
+
+  /** The checklist's own commands, without the git plumbing it reads state with. */
+  function checklistCommands(fixture: ChecklistFixture): string[] {
+    return logLines(fixture.log).filter(
+      (line) => !/^git\|(rev-parse|merge-base|diff|ls-files)\|/.test(line),
+    );
+  }
+
+  const PLAIN_PACKAGE = { name: '@fixture/plain', path: 'packages/plain' };
+  const DB_PACKAGE = { name: '@fixture/db-worker', path: 'apps/workers/db-worker' };
+  const REDIS_PACKAGE = { name: '@fixture/redis-src', path: 'packages/redis-src' };
+  const API_PACKAGE = { name: '@squad/api', path: 'apps/api' };
+  const FIXTURE_PACKAGES = {
+    'packages/plain': {
+      'test/unit.test.ts': "it('adds', () => expect(1 + 1).toBe(2));\n",
+      // Source that reads the variable does not make the package's tests DB-backed.
+      'src/env.ts': 'export const url = process.env.DATABASE_URL;\n',
+    },
+    'apps/workers/db-worker': {
+      'test/global-setup.ts': 'const base = process.env.TEST_DATABASE_URL;\n',
+    },
+    'packages/redis-src': {
+      'src/queue.test.ts': 'const redis = process.env.REDIS_URL;\n',
+    },
+  };
+
+  it('runs the light default checklist in order, scoped to changes since the merge base', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE, PLAIN_PACKAGE, DB_PACKAGE],
+      changed: [
+        'apps/api/src/routes/players.ts',
+        'apps/api/test/players.test.ts',
+        'apps/api/test/helpers/players.ts',
+        'apps/api/test/e2e/install-lifecycle.e2e.test.ts',
+        'packages/plain/src/index.ts',
+        'apps/workers/db-worker/src/tick.ts',
+        'scripts/pre-push-checklist.sh',
+      ],
+      untracked: ['apps/api/test/integration/new-route.test.ts'],
     });
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(logLines(log), [
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
+      'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
+      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+      `pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`,
+      'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain|--filter=@fixture/db-worker',
+      'pnpm|--filter|@squad/api|exec|vitest|run|--passWithNoTests|test/players.test.ts|test/e2e/install-lifecycle.e2e.test.ts|test/integration/new-route.test.ts',
+      'pnpm|test:scripts',
+    ]);
+    assert.deepEqual(logLines(fixture.dbEnvLog), [
+      'postgres://isolated-test-database|postgres://isolated-test-database',
+    ]);
+  });
+
+  it('honours PREPUSH_TURBO_CONCURRENCY for the package tests', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { PREPUSH_TURBO_CONCURRENCY: '5' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.ok(
+      logLines(fixture.log).includes('pnpm|turbo|run|test|--concurrency=5|--filter=@fixture/plain'),
+    );
+  });
+
+  it('skips DB-backed suites with a warning instead of failing when no database is available', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE, PLAIN_PACKAGE, DB_PACKAGE, REDIS_PACKAGE],
+      changed: ['apps/api/test/players.test.ts', 'scripts/verify-done.sh'],
+      env: { DATABASE_URL: '', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const commands = checklistCommands(fixture);
+    assert.ok(commands.includes('pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain'));
+    assert.equal(
+      commands.some((line) => line.includes('vitest') || line === 'pnpm|test:scripts'),
+      false,
+    );
+    assert.match(
+      result.stdout,
+      /DB-backed package tests — skipped \(no database: @fixture\/db-worker @fixture\/redis-src\)/,
+    );
+    assert.match(result.stdout, /api tests — skipped \(no database: test\/players\.test\.ts\)/);
+    assert.match(
+      result.stdout,
+      /operations and verification script tests — skipped \(no database\)/,
+    );
+    assert.match(result.stdout, /No database for the DB-backed suites/);
+    assert.match(result.stdout, /pre-push checklist passed/);
+  });
+
+  it("provisions the worktree's own database when Docker and .env are available", () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    writeFileSync(path.join(fixture.root, '.env'), 'POSTGRES_PASSWORD=unused\n');
+    loggingShim(fixture.shims, 'docker');
+    executable(
+      path.join(fixture.root, 'scripts/new-test-db.sh'),
+      [
+        'printf \'new-test-db|%s\\n\' "$1" >> "$OPS_LOG"',
+        'echo "→ progress goes to stderr" >&2',
+        'printf "export DATABASE_URL=\'postgres://worktree-db\'\\n"',
+        'printf "export TEST_DATABASE_URL=\'postgres://worktree-db\'\\n"',
+      ].join('\n'),
+    );
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts'],
+      env: { DATABASE_URL: '', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const slug = `prepush_${path.basename(fixture.root).slice(0, 40)}`;
+    const commands = checklistCommands(fixture);
+    assert.deepEqual(commands.slice(commands.indexOf('docker|ps')), [
+      'docker|ps',
+      `new-test-db|${slug}`,
+      'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/db-worker',
+    ]);
+    assert.deepEqual(logLines(fixture.dbEnvLog), ['postgres://worktree-db|postgres://worktree-db']);
+  });
+
+  it('points TEST_DATABASE_URL at an exported DATABASE_URL when only that one is set', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts'],
+      env: { DATABASE_URL: 'postgres://exported', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(logLines(fixture.dbEnvLog), ['postgres://exported|postgres://exported']);
+  });
+
+  it('runs no api tests when the diff touches api source but no api test file', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE],
+      changed: ['apps/api/src/routes/players.ts', 'apps/api/test/helpers/players.ts'],
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const commands = checklistCommands(fixture);
+    assert.ok(commands.includes(`pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`));
+    assert.equal(
+      commands.some((line) => line.startsWith('pnpm|turbo|run|test') || line.includes('vitest')),
+      false,
+    );
+    assert.match(
+      result.stdout,
+      /api tests — skipped \(no api test file changed; ci runs the suite\)/,
+    );
+  });
+
+  it('runs test:scripts only when scripts/ or .github/ changed', () => {
+    const untouched = checklistFixture(FIXTURE_PACKAGES);
+    const packagesOnly = runChecklist(untouched, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts', 'docs/development/testing.md'],
+    });
+    assert.equal(packagesOnly.status, 0, `${packagesOnly.stdout}\n${packagesOnly.stderr}`);
+    assert.equal(logLines(untouched.log).includes('pnpm|test:scripts'), false);
+    assert.match(
+      packagesOnly.stdout,
+      /operations and verification script tests — skipped \(scripts\/ and \.github\/ unchanged\)/,
+    );
+
+    const workflowChanged = checklistFixture(FIXTURE_PACKAGES);
+    const workflowOnly = runChecklist(workflowChanged, {
+      changed: ['.github/workflows/ci.yml'],
+    });
+    assert.equal(workflowOnly.status, 0, `${workflowOnly.stdout}\n${workflowOnly.stderr}`);
+    assert.deepEqual(checklistCommands(workflowChanged).slice(3), [
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+      'pnpm|test:scripts',
+    ]);
+    assert.match(
+      workflowOnly.stdout,
+      /typecheck — skipped \(no package changed since origin\/dev\)/,
+    );
+  });
+
+  it('blocks the push when a changed package fails its tests', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { FAKE_FAIL_ON: 'turbo run test' },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /package tests \(changed since origin\/dev\) FAILED/);
+  });
+
+  it('blocks the push when an operation script contract fails', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      changed: ['scripts/deploy-tk104.sh'],
+      env: { FAKE_FAIL_ON: 'test:scripts' },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /operations and verification script tests.*FAILED/);
+    assert.ok(logLines(fixture.log).includes('pnpm|test:scripts'));
+  });
+
+  it('keeps checking against the local origin/dev when the fetch fails', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { FAKE_FETCH_STATUS: '128' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /could not fetch origin dev/);
+    assert.ok(
+      logLines(fixture.log).includes('pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain'),
+    );
+  });
+
+  it('fails when HEAD shares no history with origin/dev', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, { env: { FAKE_MERGE_BASE: '' } });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /changes since origin\/dev — no merge base with origin\/dev/);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.startsWith('pnpm|turbo')),
+      false,
+    );
+  });
+
+  it('only fetches, lints and scans when nothing changed since origin/dev', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture);
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
+      'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
+      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+    ]);
+  });
+
+  it('FULL=1 keeps the full gate: build, script contracts, coverage and mutation suites', () => {
+    const fixture = checklistFixture();
+    const result = runChecklist(fixture, { env: { FULL: '1' } });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
       'pnpm|turbo|run|typecheck',
       'pnpm|exec|biome|check|.',
+      'pnpm|turbo|run|build',
       'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       'pnpm|test:scripts',
       'pnpm|test:cov',
@@ -200,89 +539,18 @@ describe('operation script static contracts', () => {
     ]);
   });
 
-  it('limits affected package tests to two simultaneous Turbo tasks by default', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '0',
-        SKIP_BUILD: '1',
-      },
-    });
-
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.ok(
-      logLines(log).includes('pnpm|turbo|run|test|--concurrency=2|--filter=...[origin/dev]'),
-    );
-  });
-
-  it('blocks pre-push when an operation script contract fails', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm', `if [[ "$*" == 'test:scripts' ]]; then exit 37; fi; exit 0`);
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '1',
-        SKIP_BUILD: '1',
-      },
-    });
-
-    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /operations and verification script tests.*FAILED/);
-    assert.ok(logLines(log).includes('pnpm|test:scripts'));
-  });
-
-  it('fails closed without a database and does not start DB-backed script contracts', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: '',
-        TEST_DATABASE_URL: '',
-        FULL: '1',
-        SKIP_BUILD: '1',
-      },
+  it('FULL=1 fails closed without a database and starts no DB-backed suite', () => {
+    const fixture = checklistFixture();
+    const result = runChecklist(fixture, {
+      env: { FULL: '1', SKIP_BUILD: '1', DATABASE_URL: '', TEST_DATABASE_URL: '' },
     });
 
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /tests — no DATABASE_URL and could not auto-provision/);
-    assert.equal(logLines(log).includes('pnpm|test:scripts'), false);
+    assert.match(result.stdout, /build — skipped \(SKIP_BUILD=1\)/);
+    const commands = logLines(fixture.log);
+    assert.equal(commands.includes('pnpm|test:scripts'), false);
+    assert.equal(commands.includes('pnpm|test:cov'), false);
   });
 });
 

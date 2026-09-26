@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# test-pre-push-checklist.sh — regression suite for the gitleaks step in
-# scripts/pre-push-checklist.sh.
+# test-pre-push-checklist.sh — regression suite for the local git hooks with
+# real git and gitleaks (scripts/operations-scripts.test.ts covers the rest of
+# scripts/pre-push-checklist.sh with shims).
 #
-# Builds a throwaway git repo where a secret-shaped value lives in history
-# that is already merged into dev (outside the range a later branch would
-# push), and asserts the checklist's real, extracted `gitleaks detect ...`
-# invocation ignores that already-merged historical leak but still catches a
-# new one introduced within the pushed range. Run locally or in CI:
-# `bash scripts/test-pre-push-checklist.sh`. Exits non-zero on any failure.
+#   A/B. The checklist's real, extracted `gitleaks detect ...` invocation
+#        ignores a secret already merged into dev (outside the range a later
+#        branch pushes) but still catches a new one within the pushed range.
+#   C.   The real checklist measures changes from the merge base with
+#        origin/dev: work that landed on dev after the branch forked selects
+#        no tests, the branch's own api test file does.
+#
+# Run locally or in CI: `bash scripts/test-pre-push-checklist.sh`. Exits
+# non-zero on any failure.
 
 set -uo pipefail
 
@@ -52,7 +56,7 @@ REPO="$TMP/repo"
 ORIGIN="$TMP/origin.git"
 git init -q --bare "$ORIGIN"
 git init -q -b master "$REPO"
-cd "$REPO"
+cd "$REPO" || exit 1
 git config user.email guard-test@example.com
 git config user.name "guard test"
 echo one >file && git add file && git_q commit -m "root"
@@ -115,6 +119,74 @@ else
   echo "FAIL: scoped push still catches a secret introduced within the pushed range"
   echo "      expected rc=1 got rc=$rc"
   echo "      command: $gitleaks_cmd"
+  echo "      output:"
+  echo "$out"
+fi
+
+# --- Test C: changes are measured from the merge base with origin/dev -----
+# dev moves on after feature/branch-work forks: it edits a script and an api
+# test file that both exist at the fork point. Measured from the origin/dev tip
+# those edits would count as the branch's changes; measured from the merge
+# base only the branch's own api test file is selected, and test:scripts does
+# not run. pnpm is a logging shim that lists @squad/api as the changed package;
+# git, node and gitleaks are real.
+MB_REPO="$TMP/merge-base"
+MB_ORIGIN="$TMP/merge-base-origin.git"
+SHIMS="$TMP/shims"
+PNPM_LOG="$TMP/pnpm.log"
+mkdir -p "$SHIMS"
+cat >"$SHIMS/pnpm" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$PNPM_LOG"
+case "$*" in
+  "-s turbo ls "*) printf '%s\n' '{"packages":{"count":1,"items":[{"name":"@squad/api","path":"apps/api"}]}}' ;;
+esac
+exit 0
+SH
+chmod +x "$SHIMS/pnpm"
+
+git init -q --bare "$MB_ORIGIN"
+git init -q -b dev "$MB_REPO"
+cd "$MB_REPO" || exit 1
+git config user.email guard-test@example.com
+git config user.name "guard test"
+mkdir -p scripts apps/api/test
+cp "$CHECKLIST" scripts/pre-push-checklist.sh
+cp "$REPO_ROOT/.gitleaks.toml" .gitleaks.toml
+echo "echo shared" >scripts/shared.sh
+echo "it('is shared', () => {});" >apps/api/test/shared.test.ts
+git add -A && git_q commit -m "base"
+git remote add origin "$MB_ORIGIN"
+git_q push origin dev
+merge_base=$(git rev-parse HEAD)
+
+git_q switch -c feature/branch-work
+echo "it('works', () => {});" >apps/api/test/branch.test.ts
+git add -A && git_q commit -m "branch work"
+
+git_q switch dev
+echo "echo changed on dev" >scripts/shared.sh
+echo "it('changed on dev', () => {});" >apps/api/test/shared.test.ts
+git add -A && git_q commit -m "dev moves on"
+git_q push origin dev
+git_q switch feature/branch-work
+
+out=$(PATH="$SHIMS:$PATH" PNPM_LOG="$PNPM_LOG" FULL='' \
+  DATABASE_URL=postgres://merge-base-test TEST_DATABASE_URL=postgres://merge-base-test \
+  bash scripts/pre-push-checklist.sh 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] &&
+  grep -qxF -- "-s turbo ls --filter=[$merge_base] --output=json" "$PNPM_LOG" &&
+  grep -qxF -- "turbo run typecheck --filter=...[$merge_base]" "$PNPM_LOG" &&
+  grep -qxF -- "--filter @squad/api exec vitest run --passWithNoTests test/branch.test.ts" "$PNPM_LOG" &&
+  ! grep -qx "test:scripts" "$PNPM_LOG"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: changes are measured from the merge base with origin/dev"
+  echo "      expected rc=0 got rc=$rc; merge base $merge_base"
+  echo "      pnpm calls:"
+  sed 's/^/        /' "$PNPM_LOG"
   echo "      output:"
   echo "$out"
 fi
