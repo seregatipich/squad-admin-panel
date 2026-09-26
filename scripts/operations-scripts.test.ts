@@ -552,6 +552,147 @@ describe('local pre-push checklist and git hooks', () => {
     assert.equal(commands.includes('pnpm|test:scripts'), false);
     assert.equal(commands.includes('pnpm|test:cov'), false);
   });
+
+  describe('pre-commit hook', () => {
+    const LEFTHOOK_CLI = path.join(REPOSITORY_ROOT, 'node_modules/lefthook/bin/index.js');
+
+    /** A git repo with the real lefthook.yml and `files` staged. */
+    function hookRepository(files: Record<string, string>): string {
+      const repository = path.join(temporaryRoot('squad-lefthook'), 'repo');
+      mkdirSync(repository, { recursive: true });
+      copyFileSync(
+        path.join(REPOSITORY_ROOT, 'lefthook.yml'),
+        path.join(repository, 'lefthook.yml'),
+      );
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+        writeFileSync(path.join(repository, file), content);
+      }
+      for (const args of [
+        ['init', '-q'],
+        ['add', '-A'],
+      ]) {
+        const git = run('git', args, { cwd: repository });
+        assert.equal(git.status, 0, git.stderr);
+      }
+      return repository;
+    }
+
+    function runPreCommit(repository: string, command: string, shims: string): CommandResult {
+      return run(
+        process.execPath,
+        [
+          LEFTHOOK_CLI,
+          'run',
+          'pre-commit',
+          '--commands',
+          command,
+          '--no-auto-install',
+          '--no-tty',
+          '--colors',
+          'off',
+        ],
+        {
+          cwd: repository,
+          env: {
+            OPS_LOG: path.join(repository, '..', 'commands.log'),
+            PATH: `${shims}:/usr/bin:/bin`,
+            LEFTHOOK: '1',
+            LEFTHOOK_EXCLUDE: '',
+          },
+        },
+      );
+    }
+
+    const BRIDGE_SOURCE = { 'apps/bridge/cmd/panel-host-bridge/main.go': 'package main\n' };
+
+    /** The "not installed" cases hide tools behind a PATH of shims plus /usr/bin:/bin. */
+    function onSystemPath(tool: string): string | false {
+      const lookup = run('/bin/sh', ['-c', `PATH=/usr/bin:/bin command -v ${tool}`]);
+      return lookup.status === 0 && `${tool} is installed in /usr/bin or /bin`;
+    }
+
+    it('blocks a commit whose Go files gofmt -s would change', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      // gofmt -l lists the file and still exits 0.
+      loggingShim(shims, 'gofmt', "printf 'cmd/panel-host-bridge/main.go\\n'; exit 0");
+      loggingShim(shims, 'go');
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /not gofmt -s formatted/);
+      assert.match(result.stdout, /cmd\/panel-host-bridge\/main\.go/);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), ['gofmt|-l|-s|.']);
+    });
+
+    it('vets the bridge for linux/amd64 once gofmt is clean', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      loggingShim(shims, 'gofmt');
+      loggingShim(
+        shims,
+        'go',
+        'printf \'env|%s|%s|%s\\n\' "$GOOS" "$GOARCH" "$CGO_ENABLED" >> "$OPS_LOG"',
+      );
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), [
+        'gofmt|-l|-s|.',
+        'go|vet|./...',
+        'env|linux|amd64|0',
+      ]);
+    });
+
+    it('fails the commit when go vet fails', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      loggingShim(shims, 'gofmt');
+      loggingShim(shims, 'go', 'exit 1');
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    });
+
+    it('skips the Go checks when go is not installed', { skip: onSystemPath('go') }, () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+
+      const result = runPreCommit(repository, 'go-fmt', shimDirectory());
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /skipping gofmt and go vet: go is not on PATH/);
+    });
+
+    it('blocks a commit when gitleaks finds a staged secret', () => {
+      const repository = hookRepository({ 'notes.txt': 'harmless\n' });
+      const shims = shimDirectory();
+      loggingShim(shims, 'gitleaks', 'exit 1');
+
+      const result = runPreCommit(repository, 'gitleaks', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), [
+        'gitleaks|protect|--staged|--config|.gitleaks.toml|--no-banner|--redact',
+      ]);
+    });
+
+    it(
+      'skips the staged secret scan when gitleaks is not installed',
+      { skip: onSystemPath('gitleaks') },
+      () => {
+        const repository = hookRepository({ 'notes.txt': 'harmless\n' });
+
+        const result = runPreCommit(repository, 'gitleaks', shimDirectory());
+
+        assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+        assert.match(result.stdout, /skipping the staged secret scan: gitleaks is not installed/);
+      },
+    );
+  });
 });
 
 describe('bootstrap and host-bridge preflight boundaries', () => {

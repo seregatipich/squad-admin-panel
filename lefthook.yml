@@ -7,11 +7,31 @@ pre-commit:
       glob: "*.{ts,tsx,js,jsx,json,css}"
       run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
     go-fmt:
+      # `gofmt -l` lists unformatted files but exits 0 either way, so the list
+      # itself must fail the hook. The bridge only builds for Linux, so vet
+      # targets linux/amd64 like its build script; a plain `go vet` fails on
+      # macOS for the Linux-only syscalls.
       glob: "apps/bridge/**/*.go"
       run: |
-        cd apps/bridge && gofmt -l -s . && go vet ./...
+        if ! command -v go >/dev/null 2>&1; then
+          echo "[go-fmt] skipping gofmt and go vet: go is not on PATH (the ci go job still runs them)"
+          exit 0
+        fi
+        cd apps/bridge || exit 1
+        unformatted="$(gofmt -l -s .)"
+        if [ -n "$unformatted" ]; then
+          echo "[go-fmt] not gofmt -s formatted (fix with: gofmt -w -s apps/bridge):"
+          echo "$unformatted"
+          exit 1
+        fi
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...
     gitleaks:
-      run: gitleaks protect --staged --no-banner --redact || true
+      run: |
+        if ! command -v gitleaks >/dev/null 2>&1; then
+          echo "[gitleaks] skipping the staged secret scan: gitleaks is not installed"
+          exit 0
+        fi
+        gitleaks protect --staged --config .gitleaks.toml --no-banner --redact
 
 pre-push:
   parallel: false

@@ -9,6 +9,8 @@
 #   C.   The real checklist measures changes from the merge base with
 #        origin/dev: work that landed on dev after the branch forked selects
 #        no tests, the branch's own api test file does.
+#   D.   lefthook's pre-commit gitleaks command blocks a staged secret and
+#        passes a clean change.
 #
 # Run locally or in CI: `bash scripts/test-pre-push-checklist.sh`. Exits
 # non-zero on any failure.
@@ -188,6 +190,48 @@ else
   echo "      pnpm calls:"
   sed 's/^/        /' "$PNPM_LOG"
   echo "      output:"
+  echo "$out"
+fi
+
+# --- Test D: pre-commit blocks a staged secret ---------------------------
+protect_cmd=$(grep -o 'gitleaks protect .*' "$REPO_ROOT/lefthook.yml")
+if [ -z "$protect_cmd" ]; then
+  echo "test-pre-push-checklist: could not extract a 'gitleaks protect ...' invocation from lefthook.yml" >&2
+  exit 1
+fi
+PC_REPO="$TMP/pre-commit"
+git init -q "$PC_REPO"
+cd "$PC_REPO" || exit 1
+cp "$REPO_ROOT/.gitleaks.toml" .gitleaks.toml
+# Same split-literal rationale as feature/old-secret's secret.txt above.
+staged_p1="AKIA"
+staged_p2="QRSTUVWXYZABCDEF"
+echo "AWS_KEY=${staged_p1}${staged_p2}" >staged-secret.txt
+git add staged-secret.txt
+out=$(eval "$protect_cmd" 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: pre-commit gitleaks blocks a staged secret"
+  echo "      expected a non-zero rc, got rc=$rc"
+  echo "      command: $protect_cmd"
+  echo "$out"
+fi
+
+git rm -q --cached staged-secret.txt
+echo "nothing secret" >notes.txt
+git add notes.txt
+out=$(eval "$protect_cmd" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: pre-commit gitleaks passes a clean staged change"
+  echo "      expected rc=0 got rc=$rc"
+  echo "      command: $protect_cmd"
   echo "$out"
 fi
 
