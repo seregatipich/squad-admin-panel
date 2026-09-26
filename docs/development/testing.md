@@ -74,10 +74,13 @@ pnpm --filter @squad/api test
 набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
 `pnpm test:scripts`.
 
-Этот же контур входит в `scripts/pre-push-checklist.sh`: локальный
-предохранитель сначала подготавливает изолированную мигрированную БД, затем
-запускает `pnpm test:scripts` и только после него пакетные тесты. Ошибка любого
-эксплуатационного контракта блокирует отправку ветки.
+`scripts/pre-push-checklist.sh` запускает этот контур последним пунктом, после
+тестов изменённых пакетов, и только когда ветка относительно `origin/dev`
+меняет `scripts/` или `.github/`. Контуру нужны PostgreSQL и Redis: без
+доступной БД предохранитель пропускает его с предупреждением, а `FULL=1`
+запускает его всегда и без БД завершается ошибкой. Ошибка любого
+эксплуатационного контракта блокирует отправку ветки. Подробнее — в разделе
+[Git hooks](local-development.md#git-hooks).
 
 ```bash
 DATABASE_URL=<isolated-postgres> \
@@ -222,10 +225,10 @@ To legitimately exclude a file from the guard (e.g. it uses `createIsolatedSchem
 
 ## Linters and type checkers
 
-Treat as part of the test suite. Pre-commit (`lefthook`) and CI both run them.
+Treat as part of the test suite. The pre-commit hook runs Biome on the staged files and `gofmt -s` plus `go vet` on staged bridge files; the pre-push checklist runs Biome over the source tree and typechecks the packages changed since `origin/dev` and their dependents; CI runs all of them in full. See [Git hooks](local-development.md#git-hooks).
 
 ```bash
-pnpm exec biome check .         # lint + format
-pnpm turbo run typecheck        # TS strict + `go build` on the bridge
-cd apps/bridge && go vet ./...  # also enforced by pre-commit
+pnpm exec biome check .                                 # lint + format
+pnpm turbo run typecheck                                # TS strict + `go build` on the bridge
+cd apps/bridge && GOOS=linux GOARCH=amd64 go vet ./...  # also enforced by pre-commit
 ```
