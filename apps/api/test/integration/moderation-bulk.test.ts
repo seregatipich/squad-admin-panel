@@ -9,7 +9,7 @@ import {
 } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -42,6 +42,14 @@ let h: IntegrationHarness;
 let serverId: string;
 /** Five roster-online targets, in seed order. */
 let targetIds: string[];
+/** The targets' EOS ids, in the same order as `targetIds`. */
+let targetEosIds: string[];
+/**
+ * Bumped before every case so each seeds its own targets. The file shares one
+ * database, and the ledger, audit and event assertions are scoped to target
+ * and server ids, so no case may reuse another's.
+ */
+let targetRound = 0;
 
 function okOutcome(overrides: Partial<WorkerRconCommandOutcome> = {}): WorkerRconCommandOutcome {
   return {
@@ -65,20 +73,34 @@ function rejectedOutcome(): WorkerRconCommandOutcome {
   };
 }
 
-async function seedTarget(index: number): Promise<{ id: string; eosId: string }> {
+async function seedTarget(
+  index: number,
+): Promise<{ id: string; eosId: string; steamId64: bigint }> {
   const name = `BulkTarget${index}`;
-  const eosId = `eos-bulk-${index}`;
+  const eosId = `eos-bulk-${targetRound}-${index}`;
+  const steamId64 = testSteamId(TARGET_STEAM_BASE + targetRound * 100 + index);
   const [row] = await h.db
     .insert(players)
     .values({
-      steamId64: testSteamId(TARGET_STEAM_BASE + index),
+      steamId64,
       canonicalName: name,
       canonicalNameNormalized: name.toLowerCase(),
       eosId,
     })
     .returning({ id: players.id });
   if (!row) throw new Error(`failed to seed target ${index}`);
-  return { id: row.id, eosId };
+  return { id: row.id, eosId, steamId64 };
+}
+
+/** Seeds this case's server and `count` roster-online targets on it. */
+async function seedScenario(count: number): Promise<void> {
+  targetRound += 1;
+  serverId = await seedServer();
+  const seeded = [];
+  for (let index = 0; index < count; index++) seeded.push(await seedTarget(index));
+  targetIds = seeded.map((entry) => entry.id);
+  targetEosIds = seeded.map((entry) => entry.eosId);
+  await seedRoster(seeded);
 }
 
 async function seedServer(): Promise<string> {
@@ -186,29 +208,26 @@ async function ledgerRows(playerIds: string[]) {
     .where(inArray(moderationActions.playerId, playerIds));
 }
 
+beforeAll(async () => {
+  h = await buildIntegrationApp({
+    seedOwner: { steamId64: OWNER_STEAM },
+    bridge: makeFakeBridge(),
+  });
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
 describeIfDb('POST /api/v1/moderation-actions/bulk', () => {
   beforeEach(async () => {
     vi.mocked(sendRconCommandViaWorker).mockReset();
     vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM },
-      bridge: makeFakeBridge(),
-    });
-    serverId = await seedServer();
-    const seeded = [];
-    for (let index = 0; index < 5; index++) seeded.push(await seedTarget(index));
-    targetIds = seeded.map((entry) => entry.id);
-    await seedRoster(
-      seeded.map((entry, index) => ({
-        eosId: entry.eosId,
-        steamId64: testSteamId(TARGET_STEAM_BASE + index),
-      })),
-    );
+    await seedScenario(5);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     invalidateAllPermissionCaches();
-    if (h) await h.cleanup();
   });
 
   it('bans every target and writes one ledger row per target under a shared bulk_group', async () => {
@@ -272,9 +291,8 @@ describeIfDb('POST /api/v1/moderation-actions/bulk', () => {
       expect(opts.command).toBe('AdminBan');
       expect(opts.args?.slice(1)).toEqual(['7d', 'Cheating']);
     }
-    expect(new Set(calls.map(([, opts]) => opts.args?.[0]))).toEqual(
-      new Set(['eos-bulk-0', 'eos-bulk-1', 'eos-bulk-2', 'eos-bulk-3', 'eos-bulk-4']),
-    );
+    expect(targetEosIds).toHaveLength(5);
+    expect(new Set(calls.map(([, opts]) => opts.args?.[0]))).toEqual(new Set(targetEosIds));
   });
 
   it('keeps going after a mid-loop RCON failure and leaves no applied target without a ledger row', async () => {
@@ -616,25 +634,11 @@ describeIfDb('POST /api/v1/moderation-actions/bulk — RBAC', () => {
   beforeEach(async () => {
     vi.mocked(sendRconCommandViaWorker).mockReset();
     vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM },
-      bridge: makeFakeBridge(),
-    });
-    serverId = await seedServer();
-    const seeded = [];
-    for (let index = 0; index < 2; index++) seeded.push(await seedTarget(index));
-    targetIds = seeded.map((entry) => entry.id);
-    await seedRoster(
-      seeded.map((entry, index) => ({
-        eosId: entry.eosId,
-        steamId64: testSteamId(TARGET_STEAM_BASE + index),
-      })),
-    );
+    await seedScenario(2);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     invalidateAllPermissionCaches();
-    if (h) await h.cleanup();
   });
 
   it('rejects an unauthenticated request with 401', async () => {

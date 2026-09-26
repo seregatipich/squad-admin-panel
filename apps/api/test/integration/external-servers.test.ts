@@ -1,11 +1,13 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq, isNull } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
+import { auditLogMark, expectAuditRowSince } from '../helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
+  type FakeBridge,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
@@ -47,10 +49,12 @@ const containerBody = {
 };
 
 let h: IntegrationHarness;
-let bridgeCalls: string[];
+let bridgeCalls: string[] = [];
+/** The recording bridge as built, restored before every case. */
+let recordingBridge: FakeBridge;
+let auditMark: bigint;
 
-beforeEach(async () => {
-  bridgeCalls = [];
+beforeAll(async () => {
   const bridge = makeFakeBridge();
   // Record every container/bridge touch so a test can prove an external
   // server never reaches the host bridge.
@@ -72,6 +76,7 @@ beforeEach(async () => {
       return original(...args);
     };
   }
+  recordingBridge = { ...bridge };
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
@@ -80,8 +85,20 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+beforeEach(async () => {
+  // Every case registers the same "raas-1" slug (and some the same local
+  // ports), and the reconciler's interval tick inspects every live container
+  // row: retire earlier cases' servers so neither leaks into this case.
+  await h.db.update(servers).set({ deletedAt: new Date() }).where(isNull(servers.deletedAt));
+  Object.assign(h.bridge, recordingBridge);
+  h.bridge.files.clear();
+  bridgeCalls = [];
+  vi.mocked(relaunchSidecar).mockClear();
+  auditMark = await auditLogMark(h.db);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function createExternal(cookie: string, overrides: Partial<typeof externalBody> = {}) {
@@ -128,7 +145,10 @@ describe('POST /api/v1/servers/external', () => {
     expect(settings?.maxPlayers).toBe(100);
 
     expect(bridgeCalls).toEqual([]);
-    await assertAuditRow(h, { action: 'server.create_external', resource: 'server' });
+    await expectAuditRowSince(h.db, auditMark, {
+      action: 'server.create_external',
+      resource: 'server',
+    });
   });
 
   it('does not collide with a panel-hosted server that uses the same default ports', async () => {

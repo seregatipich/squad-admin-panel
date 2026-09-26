@@ -1,9 +1,9 @@
 import { players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
 import {
-  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
@@ -13,20 +13,43 @@ import {
 const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let auditMark: bigint;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+beforeEach(async () => {
+  // Several cases demote the seeded owner or swap hostAgentRestart; start
+  // each one as a full Owner talking to the stock fake bridge.
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  Object.assign(h.bridge, makeFakeBridge());
+  auditMark = await auditLogMark(h.db);
 });
 
 afterEach(async () => {
   if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
     invalidatePermissionCache(h.seed.ownerPlayerId);
   }
-  await h.cleanup();
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function demoteToNoRole(h: IntegrationHarness): Promise<void> {
@@ -54,7 +77,7 @@ describe('POST /api/v1/host/restart', () => {
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'restarting' });
     expect(calls).toBe(1);
-    await assertAuditRow(h, { action: 'host.bridge.restart', resource: 'host' });
+    await expectAuditRowSince(h.db, auditMark, { action: 'host.bridge.restart', resource: 'host' });
   });
 
   it('viewer without host:manage permission is rejected with 403', async () => {

@@ -1,7 +1,8 @@
 import { messageTemplates, players, roles } from '@squad/db/schema';
-import { eq, isNull } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq, isNull } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -13,14 +14,36 @@ const OWNER_STEAM_ID = 76561198000004000n;
 
 let h: IntegrationHarness;
 let cookie: string;
+let ownerRoleId: string;
+let auditMark: bigint;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
-  cookie = await loginAsOwner(h);
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  await h.cleanup();
+beforeEach(async () => {
+  // The listing cases assert the lazily seeded defaults are all there is, and
+  // demoteToViewer() drops the owner to Viewer: start each case with an empty
+  // template table and the seeded owner back on Owner.
+  await h.db.delete(messageTemplates);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+  cookie = await loginAsOwner(h);
+  auditMark = await auditLogMark(h.db);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function demoteToViewer(): Promise<string> {
@@ -112,7 +135,7 @@ describe('POST /api/v1/message-templates', () => {
       .where(eq(messageTemplates.id, created.id as string));
     expect(stored).toHaveLength(1);
 
-    await assertAuditRow(h, {
+    await expectAuditRowSince(h.db, auditMark, {
       action: 'message_template.create',
       resource: 'message_template',
     });

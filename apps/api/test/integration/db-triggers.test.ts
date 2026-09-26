@@ -1,6 +1,6 @@
 import { auditLog, configVersions } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { desc, eq, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness } from './harness.js';
 
 /**
@@ -26,13 +26,27 @@ async function expectRejectsMatching(promise: Promise<unknown>, re: RegExp): Pro
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp();
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
+
+/**
+ * Empties audit_log with its row-level delete guard switched off, so a test
+ * can observe the chain from its genesis row even though the file's other
+ * tests share this database.
+ */
+async function emptyAuditLog(): Promise<void> {
+  await h.db.execute(sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_del`);
+  try {
+    await h.db.execute(sql`DELETE FROM audit_log`);
+  } finally {
+    await h.db.execute(sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_del`);
+  }
+}
 
 describe('audit_log trigger invariants', () => {
   it('UPDATE raises "audit_log is append-only"', async () => {
@@ -68,6 +82,7 @@ describe('audit_log trigger invariants', () => {
   });
 
   it('row_hash is a 32-byte sha256 digest and chains across inserts', async () => {
+    await emptyAuditLog();
     for (let i = 0; i < 3; i++) {
       await h.db.insert(auditLog).values({
         actorPlayerId: null,

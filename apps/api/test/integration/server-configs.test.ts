@@ -2,8 +2,9 @@ import { createServer as createNetServer, type Socket } from 'node:net';
 import { withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { and, eq, isNull } from 'drizzle-orm';
+import postgres from 'postgres';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -16,15 +17,23 @@ const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
   });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+beforeEach(async () => {
+  // Every case creates the same "cfg-server" slug and ports; retire the
+  // previous case's server so the create succeeds, and drop the fake disk
+  // along with any swapped bridge method.
+  await h.db.update(servers).set({ deletedAt: new Date() }).where(isNull(servers.deletedAt));
+  Object.assign(h.bridge, makeFakeBridge());
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function login(): Promise<string> {
@@ -406,22 +415,57 @@ describe('PUT /api/v1/servers/:id/configs/:name', () => {
     });
     await deliveryLocked;
 
-    const stalePut = h.app.inject({
-      method: 'PUT',
-      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
-      headers: { cookie },
-      payload: { content: 'Manual=editor after delivery' },
-    });
-    const wroteBeforeDeliveryCommit = await Promise.race([
-      apiWriteEntered.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 250)),
-    ]);
-    releaseDelivery();
+    // The app's two pooled connections are now taken by the delivery and the
+    // PUT, so watch the lock table over a connection of our own.
+    const lockObserver = postgres(h.url, { max: 1, onnotice: () => undefined });
+    let finished = false;
+    let lockWatch: Promise<'parked' | 'stopped'> = Promise.resolve('stopped');
+    try {
+      const stalePut = h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+        headers: { cookie },
+        payload: { content: 'Manual=editor after delivery' },
+      });
+      lockWatch = (async () => {
+        while (!finished) {
+          // A bigint advisory key is split into classid (high 32 bits) and
+          // objid (low 32 bits); reassembled, it names this server's fence.
+          const [row] = await lockObserver<{ waiting: number }[]>`
+            SELECT count(*)::int AS waiting
+              FROM pg_locks
+             WHERE locktype = 'advisory'
+               AND NOT granted
+               AND objsubid = 1
+               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+               AND ((classid::bigint << 32) | objid::bigint)
+                   = hashtextextended('admins-cfg-sync:' || ${id}::text, 0)`;
+          if ((row?.waiting ?? 0) > 0) return 'parked';
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return 'stopped';
+      })();
+      // Whichever happens first decides the case, with no timing window: a
+      // fenced PUT parks on the fence the delivery holds, an unfenced one
+      // reaches its disk write, and one that bails out early just finishes.
+      const outcome = await Promise.race([
+        lockWatch,
+        apiWriteEntered.then(() => 'wrote-inside-fence' as const),
+        stalePut.then(() => 'finished-inside-fence' as const),
+      ]);
+      releaseDelivery();
 
-    const [, response] = await Promise.all([delivery, stalePut]);
-    expect(wroteBeforeDeliveryCommit).toBe(false);
-    expect(response.statusCode).toBe(200);
-    expect(h.bridge.files.get(path)?.toString()).toContain('Manual=editor after delivery');
+      const [, response] = await Promise.all([delivery, stalePut]);
+      expect(outcome).toBe('parked');
+      expect(response.statusCode).toBe(200);
+      expect(h.bridge.files.get(path)?.toString()).toContain('Manual=editor after delivery');
+    } finally {
+      finished = true;
+      releaseDelivery();
+      // Let the watcher see `finished` before its connection goes away.
+      await lockWatch;
+      await lockObserver.end({ timeout: 5 });
+    }
   });
 
   it('writes a new version, persists sha, invokes bridge atomic write, writes audit row', async () => {

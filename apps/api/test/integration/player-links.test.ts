@@ -1,6 +1,6 @@
 import { auditLog, playerIpHistory, playerLinks, players } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq, inArray } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -48,7 +48,10 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
   return `__Host-sid=${token}`;
 }
 
-beforeEach(async () => {
+// Every SteamID-bearing player a case may seed besides the owner.
+const TEST_PLAYER_STEAM_IDS = [PLAYER_A, PLAYER_B, PLAYER_C, TEST_PLAYER_LIMITED_VIEWER];
+
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
@@ -56,7 +59,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (h) await h.cleanup();
+  // Cases re-seed the same SteamIDs, and alt candidates match on IPs shared
+  // with any player: drop this case's links, IP history and fixture players.
+  await h.db.delete(playerLinks);
+  await h.db.delete(playerIpHistory);
+  await h.db.delete(players).where(inArray(players.steamId64, TEST_PLAYER_STEAM_IDS));
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('POST /api/v1/players/:playerId/links', () => {

@@ -8,7 +8,7 @@ import {
 } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -162,12 +162,11 @@ async function insertReport(
   return row.id;
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
-  vi.mocked(sendRconCommandViaWorker).mockReset();
 
   await seedRoleWithPlayer({
     roleName: `ReportActionsHandler-${uuidv7()}`,
@@ -197,9 +196,22 @@ beforeEach(async () => {
   targetId = await seedPlayer(TARGET_STEAM, 'Target', 'eos-target');
 });
 
+beforeEach(() => {
+  vi.mocked(sendRconCommandViaWorker).mockReset();
+});
+
 afterEach(async () => {
   invalidateAllPermissionCaches();
-  await h.cleanup();
+  // Every case files its reports against the same reporter/target pair, and
+  // bulk-resolve acts on all of that target's open reports: drop this case's
+  // reports, their ledger rows and the published roster.
+  await h.db.delete(moderationActions);
+  await h.db.delete(playerReports);
+  await h.redis.del(`rcon:roster:${serverId}`);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describeIfDb('POST /api/v1/reports/:id/actions', () => {

@@ -1,6 +1,7 @@
 import { playerApiTokens } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -10,22 +11,27 @@ import {
 
 const OWNER_STEAM_ID = 76561198000001000n;
 
-async function freshOwner(): Promise<{ h: IntegrationHarness; cookie: string }> {
-  const h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
-  const cookie = await loginAsOwner(h);
-  return { h, cookie };
-}
+let h: IntegrationHarness;
+let cookie: string;
+let auditMark: bigint;
+
+beforeAll(async () => {
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  cookie = await loginAsOwner(h);
+});
+
+beforeEach(async () => {
+  // The list and the 25-active-token cap are per owner, so every case starts
+  // with the seeded owner holding no tokens at all.
+  await h.db.delete(playerApiTokens);
+  auditMark = await auditLogMark(h.db);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
 
 describe('GET /api/v1/me/tokens', () => {
-  let h: IntegrationHarness;
-  let cookie: string;
-  beforeEach(async () => {
-    ({ h, cookie } = await freshOwner());
-  });
-  afterEach(async () => {
-    await h.cleanup();
-  });
-
   it('401 without cookie', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/me/tokens' });
     expect(res.statusCode).toBe(401);
@@ -67,15 +73,6 @@ describe('GET /api/v1/me/tokens', () => {
 });
 
 describe('POST /api/v1/me/tokens', () => {
-  let h: IntegrationHarness;
-  let cookie: string;
-  beforeEach(async () => {
-    ({ h, cookie } = await freshOwner());
-  });
-  afterEach(async () => {
-    await h.cleanup();
-  });
-
   it('mints sqp_-prefixed plaintext exactly once and persists hash only', async () => {
     const res = await h.app.inject({
       method: 'POST',
@@ -92,18 +89,13 @@ describe('POST /api/v1/me/tokens', () => {
     expect(stored).toHaveLength(1);
     expect(stored[0]?.tokenHash).not.toBe(body.plaintext);
 
-    await assertAuditRow(h, { action: 'user.api_token.create', resource: 'api_token' });
+    await expectAuditRowSince(h.db, auditMark, {
+      action: 'user.api_token.create',
+      resource: 'api_token',
+    });
   });
 
   it('rejects scopes the caller does not have (422 invalid_scopes)', async () => {
-    // Re-seed but as a Viewer to force a narrow scope set.
-    await h.cleanup();
-    const localOwner = 76561198000001500n;
-    const { h: h2 } = await freshOwner();
-    h = h2;
-    cookie = await loginAsOwner(h);
-    void localOwner;
-
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/me/tokens',
@@ -168,15 +160,6 @@ describe('POST /api/v1/me/tokens', () => {
 });
 
 describe('DELETE /api/v1/me/tokens/:id', () => {
-  let h: IntegrationHarness;
-  let cookie: string;
-  beforeEach(async () => {
-    ({ h, cookie } = await freshOwner());
-  });
-  afterEach(async () => {
-    await h.cleanup();
-  });
-
   it('revokes own token (sets revoked_at, keeps row for audit FK)', async () => {
     const create = await h.app.inject({
       method: 'POST',
@@ -204,7 +187,11 @@ describe('DELETE /api/v1/me/tokens/:id', () => {
       .where(and(eq(playerApiTokens.id, id), isNull(playerApiTokens.revokedAt)));
     expect(stillActive).toHaveLength(0);
 
-    await assertAuditRow(h, { action: 'user.api_token.revoke', resource: 'api_token' });
+    await assertAuditRow(h, {
+      action: 'user.api_token.revoke',
+      resource: 'api_token',
+      targetId: id,
+    });
   });
 
   it('returns 404 for unknown id', async () => {
