@@ -82,29 +82,6 @@ beforeAll(async () => {
     displayName: 'Сервер награды за сид',
     slug: `seed-reward-${SERVER_ID}`,
   });
-  await db.insert(playerDailyPresence).values([
-    {
-      playerId: PLAYER_ID,
-      serverId: SERVER_ID,
-      day: '2026-06-14',
-      seedSeconds: 3600,
-      sessionCount: 1,
-    },
-    {
-      playerId: PLAYER_ID,
-      serverId: SERVER_ID,
-      day: '2026-07-13',
-      seedSeconds: 3600,
-      sessionCount: 1,
-    },
-    {
-      playerId: PLAYER_ID,
-      serverId: SERVER_ID,
-      day: '2026-07-14',
-      seedSeconds: 3600,
-      sessionCount: 1,
-    },
-  ]);
   await db
     .update(economySettings)
     .set({ seedRewardThresholdHoursPerMonth: 2, seedRewardRoleId: REWARD_ROLE_ID })
@@ -178,6 +155,32 @@ async function seedRewardAuditSince(
 describeIfDb('seed reward worker integration', () => {
   it('grants at the rolling threshold, then revokes below it, with system audits', async () => {
     if (!db) throw new Error('database not configured');
+    // The player only qualifies from here on: with this presence in place from
+    // the start, the Owner test's tick would grant the reward first whenever it
+    // ran before this one, leaving no grant and a non-empty outbox to assert on.
+    await db.insert(playerDailyPresence).values([
+      {
+        playerId: PLAYER_ID,
+        serverId: SERVER_ID,
+        day: '2026-06-14',
+        seedSeconds: 3600,
+        sessionCount: 1,
+      },
+      {
+        playerId: PLAYER_ID,
+        serverId: SERVER_ID,
+        day: '2026-07-13',
+        seedSeconds: 3600,
+        sessionCount: 1,
+      },
+      {
+        playerId: PLAYER_ID,
+        serverId: SERVER_ID,
+        day: '2026-07-14',
+        seedSeconds: 3600,
+        sessionCount: 1,
+      },
+    ]);
     await db.insert(sessions).values({
       id: SESSION_ID,
       playerId: PLAYER_ID,

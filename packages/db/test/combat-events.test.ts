@@ -193,22 +193,35 @@ describeIfDb('combat_events foreign keys', () => {
   });
 
   it('inserts and reads back through the drizzle table definition', async () => {
-    const db = (await import('drizzle-orm/postgres-js')).drizzle(sql);
-    const inserted = await db
-      .insert(combatEvents)
-      .values({
-        eventType: 'wound',
-        serverId: SERVER_2,
-        victimPlayerId: VICTIM,
-        attackerPlayerId: ATTACKER,
-        weapon: 'BP_Rifle',
-        damage: '42.5',
-        isTeamkill: true,
-        occurredAt: monthStart,
-      })
-      .returning({ id: combatEvents.id, isTeamkill: combatEvents.isTeamkill });
-    expect(inserted[0].isTeamkill).toBe(true);
-    await sql`DELETE FROM combat_events WHERE id = ${inserted[0].id}`;
+    if (!DATABASE_URL) throw new Error('db test database was not provisioned');
+    // A client of its own: drizzle swaps the date serializers of the client it
+    // wraps for pass-through ones, after which the raw `${monthStart}` Date
+    // parameters of every other test in this file fail to encode.
+    const client = postgres(DATABASE_URL, {
+      max: 1,
+      onnotice: () => undefined,
+      connection: { search_path: 'combat_events_dbtest, public' },
+    });
+    try {
+      const db = (await import('drizzle-orm/postgres-js')).drizzle(client);
+      const inserted = await db
+        .insert(combatEvents)
+        .values({
+          eventType: 'wound',
+          serverId: SERVER_2,
+          victimPlayerId: VICTIM,
+          attackerPlayerId: ATTACKER,
+          weapon: 'BP_Rifle',
+          damage: '42.5',
+          isTeamkill: true,
+          occurredAt: monthStart,
+        })
+        .returning({ id: combatEvents.id, isTeamkill: combatEvents.isTeamkill });
+      expect(inserted[0].isTeamkill).toBe(true);
+      await sql`DELETE FROM combat_events WHERE id = ${inserted[0].id}`;
+    } finally {
+      await client.end();
+    }
   });
 });
 

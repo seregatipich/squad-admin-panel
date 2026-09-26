@@ -4,9 +4,9 @@ import '../../_test-shared/load-env.js';
 import type { TestProject } from 'vitest/node';
 import { setupPackageTemplateDatabase } from '../../../../packages/db/test/helpers/package-template.js';
 
-/** Migrates the clan-guard package's template once; each worker slot gets a clone of it. */
-export default function setupClanGuardTestDatabase(
+/** Migrates the automation package's template once; each worker slot gets a clone of it. */
+export default function setupAutomationTestDatabase(
   project: TestProject,
 ): Promise<() => Promise<void>> {
-  return setupPackageTemplateDatabase(project, 'clan_guard');
+  return setupPackageTemplateDatabase(project, 'automation');
 }

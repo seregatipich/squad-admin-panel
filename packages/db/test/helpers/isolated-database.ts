@@ -3,15 +3,37 @@ import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 
 const ADVISORY_LOCK_NAMESPACE = 0x5351_0000;
+/**
+ * Joins a package database name to a clone's slot label. Namespaces are
+ * single-underscore snake_case, so a double underscore can only ever start a
+ * clone suffix and a sweep can tell a run's clones from another namespace.
+ */
+const CLONE_SEPARATOR = '__';
+const CLONE_SLOT_RE = /^[a-z0-9]+$/;
+const PACKAGE_DATABASE_NAME_RE = /^sqworker_[0-9a-f]{12}_[a-z0-9]+(?:_[a-z0-9]+)*$/;
+// SQLSTATE 42P04: the slot's clone already exists, created by an earlier file
+// that ran in the same Vitest worker slot.
+const DUPLICATE_DATABASE = '42P04';
+// SQLSTATE 55006: another session is connected to the template. PostgreSQL
+// already waits ~5 s for it to leave (and stops autovacuum on the template)
+// before raising this, so a few retries cover a transient connection.
+const OBJECT_IN_USE = '55006';
+const CLONE_ATTEMPTS = 3;
 /** The package's real migration folder, as applied in production. */
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL('../../drizzle/', import.meta.url));
 
 type SqlClient = ReturnType<typeof postgres>;
+
+/** A per-worker copy of a package database, dropped together with its template. */
+export interface PackageTestDatabaseClone {
+  /** `<template name>__<slot>`, recognized by the template's own sweeps. */
+  name: string;
+  /** Connection URL targeting the clone. */
+  url: string;
+}
 
 /** A migrated database owned exclusively by one package test run. */
 export interface IsolatedPackageTestDatabase {
@@ -19,7 +41,7 @@ export interface IsolatedPackageTestDatabase {
   name: string;
   /** Connection URL targeting the isolated database. */
   url: string;
-  /** Drops the database and releases its crash-recovery advisory lock. */
+  /** Drops the database and its clones, then releases its crash-recovery advisory lock. */
   drop(): Promise<void>;
 }
 
@@ -46,8 +68,13 @@ async function releaseLock(sql: SqlClient, keys: readonly [number, number]): Pro
   if (!row?.released) throw new Error('isolated package test database lock was lost');
 }
 
+/**
+ * Removes a crashed run's template and clones. A run's session advisory lock
+ * is held for as long as its template lives, so a lock this sweep can take
+ * belongs to a process that is gone.
+ */
 async function sweepStalePackageDatabases(sql: SqlClient, namespace: string): Promise<void> {
-  const pattern = `^sqworker_([0-9a-f]{12})_${namespace}$`;
+  const pattern = `^sqworker_([0-9a-f]{12})_${namespace}(?:${CLONE_SEPARATOR}[a-z0-9]+)?$`;
   const rows = await sql<{ datname: string; run_id: string }[]>`
     SELECT datname, substring(datname FROM ${pattern}) AS run_id
     FROM pg_database
@@ -100,11 +127,14 @@ async function truncatedMigrationsFolder(
  * A session advisory lock preserves live databases while a later run of the
  * same package removes strict-name leftovers from a crashed process.
  *
+ * The database can serve as the template of {@link clonePackageTestDatabase};
+ * `drop()` then removes its clones as well.
+ *
  * @param baseUrl - Any URL on the target PostgreSQL server.
  * @param namespace - Lowercase snake_case suffix naming the owning test.
  * @param options.throughMigration - Journal tag to stop at instead of applying
  *   every migration, for upgrade tests.
- * @returns The database and a `drop()` that removes it.
+ * @returns The database and a `drop()` that removes it and its clones.
  */
 export async function createIsolatedPackageTestDatabase(
   baseUrl: string,
@@ -138,6 +168,13 @@ export async function createIsolatedPackageTestDatabase(
     await admin.unsafe(`CREATE DATABASE "${name}"`);
 
     const url = databaseUrl(baseUrl, name);
+    // Loaded here, not at module scope: every test file's setup imports this
+    // module for clonePackageTestDatabase(), and drizzle's migrator alone costs
+    // it about 0.3 s per file.
+    const [{ drizzle }, { migrate }] = await Promise.all([
+      import('drizzle-orm/postgres-js'),
+      import('drizzle-orm/postgres-js/migrator'),
+    ]);
     const migrationSql = postgres(url, { max: 1, onnotice: () => undefined });
     const truncated = options.throughMigration
       ? await truncatedMigrationsFolder(options.throughMigration)
@@ -160,6 +197,12 @@ export async function createIsolatedPackageTestDatabase(
         dropped = true;
         const errors: unknown[] = [];
         try {
+          const clones = await admin<{ datname: string }[]>`
+            SELECT datname FROM pg_database
+            WHERE datname ~ ${`^${name}${CLONE_SEPARATOR}[a-z0-9]+$`}`;
+          for (const { datname } of clones) {
+            await admin.unsafe(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`);
+          }
           await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
         } catch (error) {
           errors.push(error);
@@ -183,4 +226,60 @@ export async function createIsolatedPackageTestDatabase(
     await admin.end().catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Gives one Vitest worker slot its own copy of a migrated package database.
+ *
+ * `CREATE DATABASE … TEMPLATE` copies the template at the storage layer in a
+ * fraction of a second, where replaying every migration takes seconds. Files
+ * that run at the same time always occupy different slots, so they never
+ * share rows; files that run one after another in one slot reuse its clone,
+ * exactly as every file of a package used to share one database. The clone is
+ * not dropped here: the template's `drop()` and the crashed-run sweep of
+ * {@link createIsolatedPackageTestDatabase} both remove it.
+ *
+ * Nothing may stay connected to the template, or PostgreSQL refuses the copy.
+ *
+ * @param templateUrl - URL of a database created by
+ *   {@link createIsolatedPackageTestDatabase}.
+ * @param slot - Lowercase alphanumeric label unique among the template's
+ *   concurrently used clones, e.g. `w3` for Vitest pool slot 3.
+ * @returns The slot's clone, created on first use and reused afterwards.
+ * @throws If the template name or slot is malformed, the clone name exceeds
+ *   PostgreSQL's 63-byte limit, or the template stays in use by another session.
+ */
+export async function clonePackageTestDatabase(
+  templateUrl: string,
+  slot: string,
+): Promise<PackageTestDatabaseClone> {
+  const template = decodeURIComponent(new URL(templateUrl).pathname.slice(1));
+  if (!PACKAGE_DATABASE_NAME_RE.test(template)) {
+    throw new Error(`${template} is not an isolated package test database`);
+  }
+  if (!CLONE_SLOT_RE.test(slot)) throw new Error('clone slot must be lowercase alphanumeric');
+  const name = `${template}${CLONE_SEPARATOR}${slot}`;
+  if (name.length > 63) {
+    throw new Error('package test database clone name exceeds PostgreSQL limits');
+  }
+
+  const admin = postgres(databaseUrl(templateUrl, 'postgres'), {
+    max: 1,
+    onnotice: () => undefined,
+  });
+  try {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await admin.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+        break;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === DUPLICATE_DATABASE) break;
+        if (code !== OBJECT_IN_USE || attempt >= CLONE_ATTEMPTS) throw error;
+      }
+    }
+  } finally {
+    await admin.end();
+  }
+  return { name, url: databaseUrl(templateUrl, name) };
 }

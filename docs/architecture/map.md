@@ -3038,7 +3038,7 @@ All packages use `provider: 'v8'`, `reporter: ['text','lcov','json-summary']`, `
 | `worker-rcon` | 12 | 68 | 77 | 12 |
 | `@squad/web` | **1** | 17 | 83 | **1** |
 
-`pnpm test:cov` enumerates exactly **10** packages by `--filter`: api, web, db, shared-config, shared-types, bridge-client, and workers `rcon`, `log-ingest`, `metrics-sampler`, `role-expirer`. Parallelism: the API uses `pool: 'forks'` with `maxForks = Number(process.env.VITEST_MAX_FORKS) || 4` and `sequence.concurrent: false`; `packages/db` and `worker-log-ingest` disable `fileParallelism` entirely.
+`pnpm test:cov` enumerates exactly **10** packages by `--filter`: api, web, db, shared-config, shared-types, bridge-client, and workers `rcon`, `log-ingest`, `metrics-sampler`, `role-expirer`. Parallelism: the API uses `pool: 'forks'` with `maxForks = Number(process.env.VITEST_MAX_FORKS) || 4` and `sequence.concurrent: false`; `packages/db` and the database-heavy workers run their files in parallel under the same `VITEST_MAX_FORKS` bound, each worker slot on its own clone of a once-migrated package template (see `docs/development/testing.md`).
 
 ### 14.8 Thin coverage — the honest read
 

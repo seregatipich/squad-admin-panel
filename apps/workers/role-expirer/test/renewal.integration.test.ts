@@ -137,7 +137,7 @@ afterAll(async () => {
 });
 
 describeIfDb('runSubscriptionRenewalTick against a real database', () => {
-  it('renews the funded subscription and expires the unfunded one in a single pass', async () => {
+  it('renews the funded subscription and expires the unfunded one in a single pass, then does nothing on a second pass', async () => {
     if (!db) return;
     const { redis, publish } = makeRedis();
     const deps = createSubscriptionRenewalDeps(db, redis);
@@ -237,22 +237,22 @@ describeIfDb('runSubscriptionRenewalTick against a real database', () => {
         (f) => f.type === 'alert.triggered' && f.data.event_kind === 'subscription_expired',
       ),
     ).toBe(true);
-  }, 60_000);
 
-  it('is a no-op on a second pass because nothing is due any more', async () => {
-    if (!db) return;
-    const { redis } = makeRedis();
-    const deps = createSubscriptionRenewalDeps(db, redis);
-
-    const result = await runSubscriptionRenewalTick({ ...deps, diag });
-
-    expect(result).toEqual({ renewed: 0, expired: 0, enqueued: 0 });
-    const spends = await db
+    // The second pass belongs to this scenario rather than to a test of its
+    // own: on its own it depended on running after this one, which a shuffled
+    // order does not guarantee. Nothing is due any more, so nothing is charged
+    // twice.
+    const secondPass = await runSubscriptionRenewalTick({
+      ...createSubscriptionRenewalDeps(db, makeRedis().redis),
+      diag,
+    });
+    expect(secondPass).toEqual({ renewed: 0, expired: 0, enqueued: 0 });
+    const spendsAfterSecondPass = await db
       .select()
       .from(bonusTransactions)
       .where(
         and(eq(bonusTransactions.playerId, richPlayerId), eq(bonusTransactions.type, 'spend')),
       );
-    expect(spends).toHaveLength(1);
+    expect(spendsAfterSecondPass).toHaveLength(1);
   }, 60_000);
 });
