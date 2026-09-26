@@ -158,9 +158,13 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 
 ## Test isolation
 
-Tests in `apps/api/test/*.test.ts` run against a **per-worker isolated Postgres database** — each Vitest worker clones a fresh database from a once-migrated template (`worker-setup.ts` overrides `DATABASE_URL`/`TEST_DATABASE_URL`), so a run never mutates the operator's real DB. Test files that share a worker still share that worker's clone, and `test-isolation.regression.test.ts` enforces the scoping rules below — so they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly (i.e. not via the harness's per-test isolated database).
+Tests in `apps/api/test/*.test.ts` run against **isolated Postgres databases** cloned from a once-migrated template, so a run never mutates the operator's real DB. `worker-setup.ts` points `DATABASE_URL`/`TEST_DATABASE_URL` at a database of the test file's own and clones it only when the file's source reads those variables, calls `hostDbUrl()` or builds a `reusePublicSchema` harness; every `buildIntegrationApp()` call clones its own database as well. `test-isolation.regression.test.ts` enforces the scoping rules below — they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly.
 
 Database-heavy package suites use `globalSetup` with `createIsolatedPackageTestDatabase()` to provision one migrated `sqworker_*` database for the whole package run. Both `DATABASE_URL` and `TEST_DATABASE_URL` are replaced before test modules load, and the database is dropped during teardown. Packages whose contract and integration files can sweep the same rows, including `worker-clan-guard`, also disable file parallelism so tests inside that package cannot change each other's cooldown or deduplication state.
+
+### Harness lifetime
+
+Build the integration harness **once per file** — `buildIntegrationApp()` in `beforeAll`, `h.cleanup()` in `afterAll` — never in `beforeEach`. Each build clones a database, registers every route and drops the database again, about half a second per call; when 80 files did it per test, that alone was 73% of the api suite's test time. Keep tests independent with unique fixtures (`testSteamId()`, generated names and ids) and, where a test asserts over a whole table, reset exactly the rows it depends on in a `beforeEach` (for example `h.db.delete(issues)` in the issue filter suite). `harness-per-file.regression.test.ts` fails the suite when a test file builds the harness in `beforeEach`.
 
 ### Why it matters
 
