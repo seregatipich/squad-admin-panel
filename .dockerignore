@@ -12,5 +12,18 @@ data
 **/test-results
 **/playwright-report
 **/*.tsbuildinfo
-docs/screenshots
 *.log
+# Nothing an image builds or runs. Leaving tests and docs out of the context
+# also keeps a test- or docs-only commit from invalidating any image layer, so
+# it rebuilds to the same image and the stand deploy has nothing to change.
+docs
+scripts
+**/*.md
+**/test
+**/e2e
+**/*.test.ts
+**/*.test.tsx
+apps/workers/_test-shared
+# Vendored from the installed monaco-editor during the web build; a stale local
+# copy must not stand in for it.
+apps/web/public/monaco
