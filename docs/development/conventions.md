@@ -133,10 +133,10 @@ Defined in `lefthook.yml`. Run automatically after `pnpm install`.
 | Hook | Trigger | What it does |
 |---|---|---|
 | `biome-check` | `*.ts`, `*.tsx`, `*.js`, `*.json`, `*.css` staged | `biome check` on staged files. Fails on lint or format errors. |
-| `go-fmt` | `apps/bridge/**/*.go` staged | `gofmt -l -s .` + `go vet ./...`. Fails on format violations or vet errors. |
-| `gitleaks` | All staged files | Scans for secrets. Warns only — does not block the commit. |
+| `go-fmt` | `apps/bridge/**/*.go` staged | Fails when `gofmt -l -s` lists a file, then `go vet ./...` for linux/amd64 (the bridge is Linux-only). Skipped when Go is not installed. |
+| `gitleaks` | All staged files | Scans for secrets and blocks the commit on a finding. Skipped when gitleaks is not installed. |
 
-Pre-push hooks run `pnpm turbo run typecheck` and `pnpm turbo run test`. Both must be green before pushing.
+The pre-push hook runs `scripts/pre-push-checklist.sh`: biome, a gitleaks scan, typecheck of the changed packages and their dependents, and the tests of the changed packages — about a minute. It is the only check a `dev` push gets before it deploys the tk104 stand; see `CLAUDE.md` "Local pre-check".
 
 Never bypass hooks with `--no-verify` unless explicitly instructed.
 

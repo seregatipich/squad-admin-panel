@@ -60,4 +60,4 @@ Caddy terminates TLS. `TLS_ISSUER=internal` uses Caddy's internal CA so `admin.l
 - Dependabot alerts are tracked centrally (see #213) and worked down in remediation waves; there is currently no blocking `pnpm audit` step in CI.
 - `govulncheck ./...` on the Go bridge (CI).
 - `systemd-analyze security panel-host-bridge` — must score < 3.0.
-- `gitleaks protect --staged` on every pre-commit (Lefthook hook; warns if the binary is missing).
+- `gitleaks protect --staged` on every pre-commit (Lefthook hook; blocks the commit on a finding, skipped when the binary is missing), and a gitleaks scan of `origin/dev..HEAD` in the pre-push checklist.

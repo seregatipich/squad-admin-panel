@@ -850,7 +850,7 @@ export default {
 };
 ```
 
-The rewrite *is* the BFF layer — there is no server-side API façade of its own. Same-origin also does the security work: the `__Host-sid` cookie rides along on every `fetch` and on the WebSocket upgrade without any CORS or token plumbing. Note that `output: 'standalone'` is dead configuration: `docker/web.Dockerfile:21-27` copies the whole `/app` tree and runs `next start`, and line 19 swallows build failures with `|| echo "web not yet built (Phase 0 static stub)"`, so a broken web build still produces a green image.
+The rewrite *is* the BFF layer — there is no server-side API façade of its own. Same-origin also does the security work: the `__Host-sid` cookie rides along on every `fetch` and on the WebSocket upgrade without any CORS or token plumbing. The image runs `next start` from a runtime stage that holds only the production dependencies and the build output (`docker/web.Dockerfile`), so `output: 'standalone'`, if set, is not what ships; `next build` skips its own type check and lint, which `ci` runs on `master` (`@squad/web`'s `typecheck` is `next typegen && tsc --noEmit`, so page and layout exports are still checked against the generated route types).
 
 ### 5.1 Route groups, layouts, middleware
 
@@ -2912,7 +2912,7 @@ The layering is therefore upheld entirely by what each `package.json` declares. 
 
 ### 13.6 Suspicious edges
 
-1. **Runtime deps declared as `devDependencies` in `apps/api`.** `drizzle-orm` is imported in 116 files under `apps/api/src` and `undici` at `apps/api/src/lib/rcon.ts:2`, yet both sit in `devDependencies`. `docker/api.Dockerfile:38` runs `pnpm install --frozen-lockfile --prod`, which prunes exactly those symlinks.
+1. **Runtime deps must be `dependencies` in `apps/api`.** `drizzle-orm` (imported in 116 files under `apps/api/src`) and `undici` (`apps/api/src/lib/rcon.ts:2`) are runtime imports; the api image installs production dependencies only, so a runtime import left in `devDependencies` fails at start-up. Both are `dependencies`, and `apps/api/test/runtime-dependencies.test.ts` pins that.
 2. **`apps/workers/_test-shared` is a `package.json`-less workspace member** matched by the `apps/workers/*` glob and imported by relative path across package boundaries (`apps/workers/log-ingest/test/contract.test.ts:3` → `'../../_test-shared/contract.js'`, same in `role-expirer`, `seed-reward`, `clan-priority-expirer`). A real cross-package edge invisible to pnpm and to Turbo's affected-package graph.
 3. **`docker/rnsquadjs/plugins/panelBridge` is a workspace member with zero `@squad/*` imports** that hand-copies the envelope with `type: string` (unconstrained) and `server_id: string` (non-nullable) at `src/eventMap.ts:3` — a third, weaker copy of the contract.
 4. **Two unrelated exported types both named `RconClient`/`RconClientOptions`**: `apps/api/src/lib/rcon.ts:4` (HTTP-over-unix-socket via `undici`) and `apps/workers/rcon/src/client.ts:12` (raw Valve RCON TCP over `node:net`). Different transports, same names, neither shared.
@@ -3119,17 +3119,9 @@ The `deploy` job waits for every build, binds the `tk104-dev` environment (the o
 
 ### 14.12 The pre-push checklist
 
-`lefthook.yml` pre-commit runs in parallel: `git-guard check-commit`, staged-file Biome, `gofmt -l -s . && go vet ./...` for bridge Go files, and `gitleaks protect --staged … || true` (non-blocking by design). Pre-push is serial: `branch-guard` at priority 1, then `checklist` at priority 2.
+`lefthook.yml` pre-commit runs in parallel: `git-guard check-commit`, staged-file Biome, a `gofmt -l -s` check that fails on any listed file plus `go vet` for linux/amd64 (skipped without Go), and `gitleaks protect --staged`, which blocks on a finding (skipped without gitleaks). Pre-push is serial: `branch-guard` at priority 1, then `checklist` at priority 2.
 
-`scripts/pre-push-checklist.sh` runs seven steps through a `run_step` wrapper that accumulates passed/failed/skipped and exits non-zero on any failure: (1) `turbo run typecheck`; (2) repo-wide `biome check .`; (3) `turbo run build` (skippable with `SKIP_BUILD=1`); (4) gitleaks, only if installed; (5) operation and verification script contracts after database provisioning; (6) package tests; and (7) shared-config mutation tests. The database-backed steps auto-provision a database first:
-
-```bash
-if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then
-  eval "$(bash scripts/new-test-db.sh prepush 2>/dev/null)" || true
-fi
-```
-
-then `pnpm test:cov` under `FULL=1`, else `turbo run test --filter='...[origin/dev]'`. With neither a DB nor Docker it **fails** rather than skipping. Note the deliberate asymmetry: `branch-guard` is wired as a lefthook *script* with `use_stdin: true` while `checklist` is a *command*, so the checklist auto-skips on no-diff pushes — precisely the dev→master promotion — while the branch guard still runs.
+`scripts/pre-push-checklist.sh` is deliberately light, because a `dev` push deploys the tk104 stand without tests and the full suite runs in `ci` on `master`. Through a `run_step` wrapper that accumulates passed/failed/skipped it runs: (1) `git fetch origin dev`; (2) Biome over the source directories; (3) gitleaks on `origin/dev..HEAD`, only if installed; (4) `turbo run typecheck` for the packages changed since the merge base with `origin/dev` and their dependents; (5) the tests of the changed packages only — in `apps/api` only the changed test files — with suites that read `DATABASE_URL`/`REDIS_URL` skipped with a warning when no database is available (an exported `DATABASE_URL`, or one `scripts/new-test-db.sh` provisions for the worktree); and (6) `pnpm test:scripts`, only when `scripts/` or `.github/` changed. Measuring from the merge base rather than the `origin/dev` tip keeps commits that landed on `dev` after the branch forked from counting as its changes. `FULL=1` runs the old full gate instead (full typecheck, `biome check .`, the production build, `test:scripts`, `test:cov`, mutation tests) and fails without a database.
 
 `scripts/verify-done.sh` has two modes. Default requires a clean tree on `dev`, `HEAD == origin/dev`, a `git-guard.sh doctor` run with no `WARN`, a successful `deploy-tk104` run for the current dev tip, and that tip promoted to `master` with a `ci` run on exactly that SHA concluded `success`. `--feature [branch]` — the parallel-wave handoff mode — requires a work branch (explicitly rejecting `master|main|dev|HEAD`), a clean tree, `HEAD == origin/<branch>`, and a successful `git merge-base origin/dev HEAD`, with **no CI check**, since the branch is unmerged.
 

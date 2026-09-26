@@ -52,7 +52,7 @@ Or from the root:
 pnpm turbo run test:mutation --filter=@squad/shared-config
 ```
 
-This runs Stryker (`stryker.config.json`) against `src/**/*.ts` using the vitest test runner (`vitest.stryker.config.ts`) and writes an HTML report to `packages/shared-config/reports/mutation/mutation.html`. It now runs in three automated places, the same as every other test script in this repo: the `test:mutation` task in the root `turbo.json`, the "Run shared-config mutation tests (Stryker)" step of `.github/workflows/ci.yml`'s `mutation` job (skipped when a `master` push does not change `packages/shared-config`), and the mutation-testing step in `scripts/pre-push-checklist.sh`.
+This runs Stryker (`stryker.config.json`) against `src/**/*.ts` using the vitest test runner (`vitest.stryker.config.ts`) and writes an HTML report to `packages/shared-config/reports/mutation/mutation.html`. It now runs in three automated places, the same as every other test script in this repo: the `test:mutation` task in the root `turbo.json`, the "Run shared-config mutation tests (Stryker)" step of `.github/workflows/ci.yml`'s `mutation` job (skipped when a `master` push does not change `packages/shared-config`), and the mutation-testing step of `FULL=1 bash scripts/pre-push-checklist.sh` (the default pre-push run leaves it out).
 
 `stryker.config.json`'s `thresholds.break` is `0`, so this gate currently only fails on a Stryker crash or a config/dependency error (e.g. in the `ajv`/`fast-uri` chain underneath `@stryker-mutator/core`) — it does not yet fail the build on a low mutation score. The actual mutation score (currently 64.72%) is below the configured `low`/`high` thresholds (75/90); raising `break` to gate on score is a deliberate follow-up, not automatic.
 
