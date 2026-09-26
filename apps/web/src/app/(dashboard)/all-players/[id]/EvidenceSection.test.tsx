@@ -69,6 +69,35 @@ function listOnly(body: unknown, status = 200) {
   return () => new Response(JSON.stringify(body), { status });
 }
 
+const LIST_URL = '/api/v1/players/player-1/media';
+
+/**
+ * Fetch stub for the live-event tests: the evidence list for this card and an
+ * empty publication list for the `MediaPublishControl` each video mounts.
+ */
+function stubListAndPublications() {
+  const fetchMock = vi.fn((url: string) =>
+    Promise.resolve(
+      new Response(JSON.stringify(url === LIST_URL ? EVIDENCE_RESPONSE : { items: [] }), {
+        status: 200,
+      }),
+    ),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+/**
+ * Number of evidence-list loads. Counting every fetch also counted the
+ * publication status request of `MediaPublishControl`: it starts from a passive
+ * effect that React flushes on its own scheduler tick, before or after
+ * `findByText` resolves depending on load, so the baseline was 1 or 2 and the
+ * exact-count assertion failed under load (expected 3 to be 2).
+ */
+function listLoads(fetchMock: ReturnType<typeof stubListAndPublications>): number {
+  return fetchMock.mock.calls.filter(([url]) => url === LIST_URL).length;
+}
+
 beforeEach(() => {
   vi.mocked(useLiveSubscription).mockImplementation((_type, handler) => {
     uploadedHandler = handler as (event: MediaUploadedEvent) => void;
@@ -177,14 +206,11 @@ describe('EvidenceSection', () => {
   });
 
   it('reloads the list when a media.uploaded event arrives for this player', async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(new Response(JSON.stringify(EVIDENCE_RESPONSE), { status: 200 })),
-    );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubListAndPublications();
 
     render(<EvidenceSection playerId="player-1" />);
     await screen.findByText('Аимбот на записи');
-    const callsAfterLoad = fetchMock.mock.calls.length;
+    const loadsBefore = listLoads(fetchMock);
 
     act(() => {
       uploadedHandler?.({
@@ -200,18 +226,15 @@ describe('EvidenceSection', () => {
       });
     });
 
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterLoad));
+    await waitFor(() => expect(listLoads(fetchMock)).toBe(loadsBefore + 1));
   });
 
   it('ignores a media.uploaded event bound to a different player card', async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(new Response(JSON.stringify(EVIDENCE_RESPONSE), { status: 200 })),
-    );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubListAndPublications();
 
     render(<EvidenceSection playerId="player-1" />);
     await screen.findByText('Аимбот на записи');
-    const callsAfterLoad = fetchMock.mock.calls.length;
+    const loadsBefore = listLoads(fetchMock);
 
     act(() => {
       uploadedHandler?.({
@@ -230,8 +253,8 @@ describe('EvidenceSection', () => {
     // Событие своей карточки, отправленное следом, доказывает, что у чужого
     // была возможность вызвать перезагрузку и он ею не воспользовался: к
     // моменту, когда счётчик вырос на единицу, оба события уже обработаны.
-    // Ожидание по состоянию, а не сон на 20 мс: под нагрузкой сон истекал
-    // раньше, чем компонент дозагружался, и тест мигал (#306).
+    // Считаются только загрузки списка (см. `listLoads`): запрос статуса
+    // публикаций приходит в своё время и к событиям не относится.
     act(() => {
       uploadedHandler?.({
         type: 'media.uploaded',
@@ -246,7 +269,7 @@ describe('EvidenceSection', () => {
       });
     });
 
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(callsAfterLoad + 1));
-    expect(fetchMock.mock.calls.length).toBe(callsAfterLoad + 1);
+    await waitFor(() => expect(listLoads(fetchMock)).toBe(loadsBefore + 1));
+    expect(listLoads(fetchMock)).toBe(loadsBefore + 1);
   });
 });
