@@ -1,8 +1,7 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 // LEAD-7 (#178): the period rail's season mode — a picker over real named
 // seasons, replacing the calendar-year placeholder, with closed/finalized
 // seasons offered read-only.
-import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

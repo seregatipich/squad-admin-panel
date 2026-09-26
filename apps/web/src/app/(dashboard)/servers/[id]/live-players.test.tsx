@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -109,21 +108,6 @@ const ROSTER = {
     { team_id: 2, squad_id: 1, name: 'БМП', size: 2, locked: false, is_command_squad: false },
   ],
 };
-
-/**
- * jsdom знает `<dialog>`, но не реализует `showModal()`/`close()`. Быстрые
- * действия строятся на нативном элементе, поэтому тест воспроизводит ровно то,
- * на что примитив опирается.
- */
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.removeAttribute('open');
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 /** Ростер на GET, отчёт «применено» на POST массового действия. */
 function stubRosterFetch(

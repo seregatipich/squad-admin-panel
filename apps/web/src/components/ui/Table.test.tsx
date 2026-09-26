@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// jsdom, not happy-dom: happy-dom computes `width: 12rem` as `192px`, and the
+// width test asserts the value the component writes.
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';

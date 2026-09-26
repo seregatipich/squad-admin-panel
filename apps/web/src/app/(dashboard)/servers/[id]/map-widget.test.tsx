@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -52,21 +51,6 @@ function mockFetch(
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
   });
-}
-
-/**
- * jsdom знает `<dialog>`, но не реализует `showModal()`/`close()`. Выбор слоя и
- * подтверждения построены на нативном элементе, поэтому тест воспроизводит
- * ровно то, на что примитивы опираются.
- */
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.removeAttribute('open');
-    this.dispatchEvent(new Event('close'));
-  };
 }
 
 beforeEach(() => {
