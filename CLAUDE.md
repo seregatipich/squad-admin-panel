@@ -75,14 +75,14 @@ The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-
 
 By default the checklist runs, in order:
 
-1. `git fetch origin dev`, so "changed since `origin/dev`" means the real remote state.
+1. `git fetch origin dev` (offline, the local `origin/dev` ref is used as is). "Changed" below is measured from the merge base with `origin/dev`, like `git diff origin/dev...`, so commits that landed on `dev` after the branch forked never count as this branch's changes.
 2. `biome check` over the source tree — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail it.
 3. gitleaks secret scan of `origin/dev..HEAD` (only if `gitleaks` is installed).
-4. `turbo run typecheck` for the packages affected since `origin/dev` and their dependents.
-5. Tests of the packages changed since `origin/dev` — only those packages, not their dependents; in `apps/api`, only the test files the diff touches. DB-backed suites use an isolated DB (auto-provisioned when possible) and are skipped with a warning when none is available.
-6. `pnpm test:scripts`, only when `scripts/` or `.github/` changed.
+4. `turbo run typecheck` for the changed packages and their dependents.
+5. Tests of the changed packages only, not their dependents; in `apps/api`, only the test files the diff touches. Suites that read `DATABASE_URL` or `REDIS_URL` run against `DATABASE_URL` or a database provisioned for the worktree, and are skipped with a warning when neither is available.
+6. `pnpm test:scripts`, only when `scripts/` or `.github/` changed (it needs the database and Redis too).
 
-`FULL=1 bash scripts/pre-push-checklist.sh` runs the old full gate (full typecheck, build, `test:scripts`, `test:cov`, mutation tests) — use it before a promotion you want to be confident about. All worktrees share one turbo cache (`TURBO_CACHE_DIR`, default `~/.cache/turbo/squad-admin-panel`), so unchanged packages are cache hits. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness").
+`FULL=1 bash scripts/pre-push-checklist.sh` runs the old full gate (full typecheck, build, `test:scripts`, `test:cov`, mutation tests) — use it before a promotion you want to be confident about. Turbo already shares one cache between all worktrees of the clone (the main checkout's `.turbo/cache`), so packages another worktree built or typechecked are cache hits. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness").
 
 ## Testing policy (MANDATORY)
 
