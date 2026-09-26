@@ -1,8 +1,8 @@
 import { players, roles } from '@squad/db/schema';
 import { RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { sidecarStatusKey } from '../../src/routes/server-rnsquadjs.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -32,15 +32,27 @@ const createBody = {
 };
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 let SERVER_ID: string;
 let STATUS_URL: string;
+const createdRoleIds: string[] = [];
 
-beforeEach(async () => {
+// One app, database and server per file: no test changes the server row, only
+// its Redis cutover/heartbeat state (cleared after each test) and the owner's
+// role (restored before each test).
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
   const cookie = await loginAsOwner(h);
   const create = await h.app.inject({
     method: 'POST',
@@ -53,6 +65,22 @@ beforeEach(async () => {
   STATUS_URL = `/api/v1/servers/${SERVER_ID}/rnsquadjs`;
 });
 
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
+});
+
 afterEach(async () => {
   // The cutover set and the status keys are global (not schema-scoped), so this
   // suite must remove its own members/keys from the shared Redis.
@@ -60,13 +88,12 @@ afterEach(async () => {
   await h.redis
     .del(sidecarStatusKey(SERVER_ID, 'production'), sidecarStatusKey(SERVER_ID, 'shadow'))
     .catch(() => undefined);
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
 });
 
 /** Repoints the seeded owner at a fresh role without panel access. */
 async function asRoleWithoutPanelAccess(): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.insert(roles).values({
     id: roleId,
     name: `RnsNoPanel-${roleId}`,

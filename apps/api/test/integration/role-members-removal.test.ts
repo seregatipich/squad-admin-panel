@@ -1,7 +1,7 @@
 import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache, loadUserPermissions } from '../../src/lib/rbac.js';
 import { createSession, resolveSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -35,7 +35,10 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
     ).length;
   }
 
-  beforeEach(async () => {
+  // Built once for the describe. Each test gets fresh roles and a fresh server
+  // (sync tasks are counted per server), and the member is put back on the new
+  // "actual" role with its assignment metadata, since one test removes it.
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
@@ -49,6 +52,26 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
     if (!ownerRole[0]) throw new Error('Owner role missing');
     ownerRoleId = ownerRole[0].id;
 
+    const inserted = await h.db
+      .insert(players)
+      .values({
+        steamId64: MEMBER_STEAM,
+        canonicalName: 'Role removal target',
+        canonicalNameNormalized: 'role removal target',
+      })
+      .returning({ id: players.id });
+    if (!inserted[0]) throw new Error('failed to seed role removal target');
+    memberId = inserted[0].id;
+
+    ownerCookie = await loginAsOwner(h);
+  });
+
+  afterAll(async () => {
+    await h?.cleanup();
+  });
+
+  beforeEach(async () => {
+    const previousRoleIds = [actualRoleId, unrelatedRoleId].filter(Boolean);
     actualRoleId = uuidv7();
     unrelatedRoleId = uuidv7();
     await h.db.insert(roles).values([
@@ -56,19 +79,20 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       { id: unrelatedRoleId, name: `Unrelated-${unrelatedRoleId}`, panelAccess: false },
     ]);
 
-    const inserted = await h.db
-      .insert(players)
-      .values({
-        steamId64: MEMBER_STEAM,
-        canonicalName: 'Role removal target',
-        canonicalNameNormalized: 'role removal target',
+    await h.db
+      .update(players)
+      .set({
         roleId: actualRoleId,
         roleComment: 'keep this assignment',
         roleExpiresAt: new Date(Date.now() + 86_400_000),
       })
-      .returning({ id: players.id });
-    if (!inserted[0]) throw new Error('failed to seed role removal target');
-    memberId = inserted[0].id;
+      .where(eq(players.steamId64, MEMBER_STEAM));
+    for (const id of previousRoleIds) {
+      await h.db.delete(roles).where(eq(roles.id, id));
+    }
+    invalidatePermissionCache(memberId);
+    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     serverId = uuidv7();
     await h.db.insert(servers).values({
@@ -77,14 +101,6 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       slug: `role-removal-${serverId}`,
       status: 'stopped' as 'stopped',
     });
-
-    ownerCookie = await loginAsOwner(h);
-  });
-
-  afterEach(async () => {
-    invalidatePermissionCache(memberId);
-    if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-    await h.cleanup();
   });
 
   it('keeps membership, session, permission cache, and sync unchanged for a non-member', async () => {

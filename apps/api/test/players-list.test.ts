@@ -1,5 +1,5 @@
 import { players } from '@squad/db/schema';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -108,7 +108,8 @@ describe('GET /api/v1/players — sorting and filters', () => {
     return body.items.map((i) => i.canonical_name).filter((n) => FIXTURE_NAMES.has(n));
   }
 
-  beforeEach(async () => {
+  // Every test only reads the list, so the app and fixtures are built once.
+  beforeAll(async () => {
     h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
     ownerCookie = await loginAsOwner(h);
     const now = Date.now();
@@ -124,8 +125,8 @@ describe('GET /api/v1/players — sorting and filters', () => {
     );
   });
 
-  afterEach(async () => {
-    await h.cleanup();
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   it('defaults to last_seen descending when no sort params are supplied', async () => {
