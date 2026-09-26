@@ -76,6 +76,25 @@ function loggingShim(directory: string, name: string, body = 'exit 0'): void {
   );
 }
 
+// Git exports these to its hooks, so under the pre-push checklist they name
+// this repository; a child that runs git in a fixture repository would then
+// operate on this one instead ("this operation must be run in a work tree").
+const GIT_LOCATION_VARIABLES = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_PREFIX',
+];
+
+function childEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const inherited = { ...process.env };
+  for (const name of GIT_LOCATION_VARIABLES) delete inherited[name];
+  return { ...inherited, ...overrides };
+}
+
 function run(
   command: string,
   args: string[],
@@ -83,7 +102,7 @@ function run(
 ): CommandResult {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: { ...process.env, ...options.env },
+    env: childEnvironment(options.env),
     input: options.input,
     encoding: 'utf8',
     timeout: 15_000,
@@ -99,7 +118,7 @@ async function runAsync(
 ): Promise<CommandResult> {
   const child = spawn(command, args, {
     cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: { ...process.env, ...options.env },
+    env: childEnvironment(options.env),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
