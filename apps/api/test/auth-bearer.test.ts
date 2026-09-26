@@ -1,6 +1,6 @@
 import { playerApiTokens } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -8,12 +8,6 @@ import {
 } from './integration/harness.js';
 
 const OWNER_STEAM_ID = 76561198000002000n;
-
-async function freshOwner(): Promise<{ h: IntegrationHarness; cookie: string }> {
-  const h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
-  const cookie = await loginAsOwner(h);
-  return { h, cookie };
-}
 
 async function mintToken(
   h: IntegrationHarness,
@@ -33,10 +27,13 @@ async function mintToken(
 describe('Bearer auth via /api/v1/me', () => {
   let h: IntegrationHarness;
   let cookie: string;
-  beforeEach(async () => {
-    ({ h, cookie } = await freshOwner());
+  // Every test mints and inspects its own token, so one owner and one app
+  // serve the whole file.
+  beforeAll(async () => {
+    h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+    cookie = await loginAsOwner(h);
   });
-  afterEach(async () => {
+  afterAll(async () => {
     await h.cleanup();
   });
 
