@@ -7,10 +7,14 @@ import nextConfig from '../next.config.mjs';
 /**
  * `next build` skips its own type check and lint (next.config.mjs): the web
  * image build sits on the path of every `dev` deploy, and both checks already
- * run as dedicated gates — `turbo run typecheck` runs this package's
- * `tsc --noEmit` and `biome check` lints it, in the local pre-push checklist
- * and in ci on master. The second case keeps the skip honest: without the
- * typecheck script nothing would type-check the web app any more.
+ * run as dedicated gates — `turbo run typecheck` type-checks this package and
+ * `biome check` lints it, in the local pre-push checklist and in ci on master.
+ *
+ * The second case keeps the skip honest. The build's type check also covered
+ * `.next/types/validator.ts`, which checks every page's and layout's exports
+ * against the route types Next generates; a bare `tsc --noEmit` on a clean
+ * checkout has no such file and lets `export default 42` in a page through.
+ * `next typegen` writes it first, so the typecheck script still catches that.
  */
 describe('next build leaves type checking and linting to the dedicated gates', () => {
   it('skips the build-time type check and lint', () => {
@@ -18,8 +22,10 @@ describe('next build leaves type checking and linting to the dedicated gates', (
     expect(nextConfig.eslint?.ignoreDuringBuilds).toBe(true);
   });
 
-  it('keeps tsc --noEmit as the typecheck that replaces them', () => {
+  it('type-checks against the generated route types in their place', () => {
     const manifest = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
-    expect(manifest.scripts.typecheck).toBe('tsc --noEmit');
+    expect(manifest.scripts.typecheck).toBe('next typegen && tsc --noEmit');
+    const tsconfig = JSON.parse(readFileSync(resolve(__dirname, '../tsconfig.json'), 'utf-8'));
+    expect(tsconfig.include).toContain('.next/types/**/*.ts');
   });
 });
