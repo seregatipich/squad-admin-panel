@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -374,8 +374,12 @@ describe('RosterPanel (rendered)', () => {
   });
 
   it('locks the priority checkbox for 3s after a successful toggle, then re-enables it', async () => {
+    // The lock is a 3 s setTimeout; fake timers step over it instead of the
+    // test sleeping. shouldAdvanceTime keeps the fake clock moving with real
+    // time, which Testing Library's waitFor needs to settle.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.stubGlobal('fetch', mockFetch({ priorityOk: true }));
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<RosterPanel clanId="clan-1" />);
 
     const checkbox = await screen.findByRole('checkbox', { name: 'Приоритет в очереди' });
@@ -385,14 +389,14 @@ describe('RosterPanel (rendered)', () => {
     await screen.findByRole('checkbox', { name: 'Приоритет в очереди', checked: true });
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).toBeDisabled();
 
-    await screen.findByRole(
-      'checkbox',
-      { name: 'Приоритет в очереди' },
-      { timeout: 4000, interval: 100 },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 3100));
+    // Two seconds in the row is still locked, and no longer merely busy: the
+    // toggle request finished long ago.
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).toBeDisabled();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeDisabled();
-  }, 10_000);
+  });
 
   it('reverts the checkbox and shows an error banner when the toggle fails', async () => {
     vi.stubGlobal('fetch', mockFetch({ priorityOk: false }));
