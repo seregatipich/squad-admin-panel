@@ -3,8 +3,6 @@ import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 
 const ADVISORY_LOCK_NAMESPACE = 0x5351_0000;
@@ -170,6 +168,13 @@ export async function createIsolatedPackageTestDatabase(
     await admin.unsafe(`CREATE DATABASE "${name}"`);
 
     const url = databaseUrl(baseUrl, name);
+    // Loaded here, not at module scope: every test file's setup imports this
+    // module for clonePackageTestDatabase(), and drizzle's migrator alone costs
+    // it about 0.3 s per file.
+    const [{ drizzle }, { migrate }] = await Promise.all([
+      import('drizzle-orm/postgres-js'),
+      import('drizzle-orm/postgres-js/migrator'),
+    ]);
     const migrationSql = postgres(url, { max: 1, onnotice: () => undefined });
     const truncated = options.throughMigration
       ? await truncatedMigrationsFolder(options.throughMigration)
