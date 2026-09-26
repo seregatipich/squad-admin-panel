@@ -47,10 +47,6 @@ beforeAll(async () => {
     canonicalName: 'Истекающий модератор',
     canonicalNameNormalized: 'истекающий модератор',
   });
-  await db.insert(sessions).values([
-    { id: SESSION_A, playerId: PLAYER_ID, expiresAt: new Date('2026-08-01T00:00:00.000Z') },
-    { id: SESSION_B, playerId: PLAYER_ID, expiresAt: new Date('2026-08-01T00:00:00.000Z') },
-  ]);
 });
 
 afterAll(async () => {
@@ -63,6 +59,12 @@ afterAll(async () => {
 describeIfDb('role-expirer revokeAllSessionsForPlayer', () => {
   it('deletes all sessions and pushes a session.revoked per session to the live bus', async () => {
     if (!db) throw new Error('database not configured');
+    // Created here rather than in beforeAll, so the no-sessions test cannot
+    // revoke them first when the order changes.
+    await db.insert(sessions).values([
+      { id: SESSION_A, playerId: PLAYER_ID, expiresAt: new Date('2026-08-01T00:00:00.000Z') },
+      { id: SESSION_B, playerId: PLAYER_ID, expiresAt: new Date('2026-08-01T00:00:00.000Z') },
+    ]);
     const { redis, del, publish } = makeRedis();
 
     await revokeAllSessionsForPlayer(db, redis, PLAYER_ID);
