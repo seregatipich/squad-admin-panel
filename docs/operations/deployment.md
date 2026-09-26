@@ -12,24 +12,248 @@ Single-host deployment model. The entire panel stack runs via `docker compose up
 
 The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run it before starting the stack. If `.env` already exists, the installer synchronizes `DATA_DIR` and `PANEL_GID` so compose bind mounts and bridge peer checks match the host.
 
-## tk104 production deployment
+## tk104 dev stand
 
-`compose.tk104.yml` (deployed via `scripts/deploy-tk104.sh`, env file `.env.tk104`) is a
-standalone compose file for the tk104 host — it does not extend `docker-compose.yml`. It
-mirrors the same service topology (api/web/caddy + all workers + bridge socket mount on
-`api`/workers that need it), adapted to tk104's Caddy DNS-01 Caddyfile and named-volume
-storage instead of `${DATA_DIR}`-bind-mounted volumes for postgres/redis/caddy. Keep the
+tk104 (https://tk104.duckdns.org) is the development stand, not production:
+every push to `dev` runs there within minutes, **without tests** — `ci` verifies
+the code only once `dev` is fast-forwarded to `master` (see `CLAUDE.md`). A broken
+stand is fixed forward on `dev` or rolled back (below).
+
+[`compose.tk104.yml`](../../compose.tk104.yml) is a standalone compose file for
+the host — it does not extend `docker-compose.yml`. It mirrors the same service
+topology (api/web/caddy + all workers + bridge socket mount on `api`/workers that
+need it), adapted to tk104's Caddy DNS-01 Caddyfile and named-volume storage
+instead of `${DATA_DIR}`-bind-mounted volumes for postgres/redis/caddy. Keep the
 two files in sync by hand when the bridge-facing env/volumes on a worker change in
-`docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
-match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
+`docker-compose.yml`. The host's secrets live in `.env.tk104` (from
+`.env.example`, `chmod 600`), which additionally needs `PANEL_GID` and `DATA_DIR`
+set to match the host's `panel` group and the data tree created by
+`install-host-bridge.sh`.
 
-`scripts/deploy-tk104.sh` считается успешным только после двух обязательных
-проверок: сервис `api` должен получить Compose health `healthy` не позднее 120
-секунд, затем локальный HTTPS-запрос через Caddy должен вернуть успешный HTTP-код
-(`curl --fail`). Таймаут API, сетевой сбой и HTTP 4xx/5xx завершают deploy
-ненулевым кодом до сообщения `Deploy complete`.
+A push builds nothing on tk104. The panel services run the images the deploy
+workflow pushed to GHCR, pinned by digest; `scripts/deploy-tk104.sh`
+records them in `.release.env` next to the compose file (the release before it in
+`.release.prev.env`). Every compose command on the host therefore reads both env
+files, which needs Compose 2.17+ (tk104 runs 2.40; the deploy refuses an older
+one before changing anything):
 
-## Вход через Steam и выпуск
+```bash
+cd ~/apps/squad-admin-panel
+docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml ps
+```
+
+### How a push reaches tk104
+
+1. **Build.** [`deploy-tk104.yml`](../../.github/workflows/deploy-tk104.yml) builds
+   the `api`, `web`, `workers` and `caddy-tk104` targets of
+   [`docker-bake.hcl`](../../docker-bake.hcl) in parallel on GitHub-hosted runners
+   and pushes them as `ghcr.io/seregatipich/squad-panel-<image>:<sha>`, with a
+   registry layer cache in `…:buildcache`. Pushes that only touch Markdown or
+   `docs/` do not deploy.
+2. **Hand-over.** The `deploy` job (environment `tk104-dev`) resolves the four
+   digests and runs one SSH command with a key that can do nothing else:
+
+   ```bash
+   ssh seregatipich@tk104.duckdns.org \
+     "deploy <40-hex sha> api=sha256:<digest> web=sha256:<digest> workers=sha256:<digest> caddy-tk104=sha256:<digest>"
+   ```
+
+3. **Entry.** sshd runs the key's forced command, `~/bin/panel-deploy` — the
+   installed copy of [`scripts/tk104-deploy-entry.sh`](../../scripts/tk104-deploy-entry.sh).
+   It refuses anything but exactly that request (exit 2, before git, rsync or
+   Docker run), fetches the commit from the public repository into
+   `~/apps/squad-admin-panel-src` (`--depth=1`, detached), rsyncs it into
+   `~/apps/squad-admin-panel` — leaving `.env*`, `.release*`, `data`, `.git`,
+   `node_modules`, `.next` and `dist` alone on the host — and runs that commit's
+   `scripts/deploy-tk104.sh` with the images
+   `ghcr.io/seregatipich/squad-panel-<image>@sha256:<digest>`.
+4. **Deploy.** [`scripts/deploy-tk104.sh`](../../scripts/deploy-tk104.sh) compares
+   the release with `.release.env` and touches only what differs:
+
+   | Differs from the running release | What the deploy does |
+   |---|---|
+   | nothing — same image digests, migrations, Caddyfile, compose file and `.env.tk104` | records the commit and exits before any Docker call |
+   | an image digest | pulls that image, unless the host already has it |
+   | `packages/db/drizzle` | `pg_dump -Fc` into `~/backups/panel-<UTC time>-<12-hex sha>.dump` (mode `0600`; the newest 5 are kept), then `compose run --rm migrator`; a failed dump or migration stops the deploy before any app container is replaced |
+   | `docker/Caddyfile.tk104` | recreates `caddy` (compose sees the file's hash as `CADDYFILE_SHA`) |
+   | `compose.tk104.yml`, `.env.tk104` | compose recreates the services whose configuration changed |
+
+   It then runs `compose up -d --remove-orphans`, polls every recreated service
+   each second until it is running and, where it has a healthcheck (`api`, `web`,
+   `postgres`, `redis`), healthy — `HEALTH_TIMEOUT`, default 180 s — probes
+   `https://tk104.duckdns.org/health` through Caddy on `127.0.0.1` until it
+   answers with the expected version, prints which services it recreated, moves
+   `.release.env` to `.release.prev.env` and writes the new one, and removes panel
+   images other than those of the running and the previous release. A deploy that
+   fails at any step keeps `.release.env` untouched, so the next one redoes
+   whatever is missing.
+
+`/health` reports `APP_VERSION`: the commit that introduced the **running api
+image**. A push that leaves the api image alone does not recreate the api just to
+report a new SHA, so `/health` keeps the older commit; the workflow's external
+check therefore only requires `status: "ok"`. The deploy log's last line names
+both the deployed commit and the reported version.
+
+The forced command is the only thing the deploy key can run, and it only accepts
+a commit GitHub serves for the public repository and image digests from the
+`ghcr.io/seregatipich/squad-panel-*` repositories. The deploy script it starts
+comes from that commit, so the key is still a secret of the `tk104-dev`
+environment, whose deployment branch policy admits `dev` alone.
+
+### Rollback
+
+Redeploy an earlier commit from GitHub — the usual way back:
+
+```bash
+gh workflow run deploy-tk104.yml --ref dev -f sha=<40-hex sha on dev>
+```
+
+The workflow refuses a commit that is not on `dev`, reuses its images from GHCR
+(every deployed SHA stays there), and the host deploys that commit's tree and
+images like any push. The deploy script comes from that commit too, so only
+commits from this deploy model onward can be deployed this way: an older one
+stops before touching a container, leaving its tree in the app directory until
+the next deploy syncs a newer one. Migrations are never undone: when the older commit has
+fewer migrations, its `packages/db/drizzle` differs from the recorded one, so the
+deploy takes a backup and runs the migrator, which applies nothing because the
+database is already ahead. That is why every migration must stay compatible with
+the release before it (`CLAUDE.md`).
+
+On the host, without GitHub — the release before the running one:
+
+```bash
+cd ~/apps/squad-admin-panel && bash scripts/rollback-tk104.sh
+```
+
+[`scripts/rollback-tk104.sh`](../../scripts/rollback-tk104.sh) hands the images
+recorded in `.release.prev.env` to `deploy-tk104.sh`, which pulls any the host
+already pruned, recreates only what differs, and swaps the two release files —
+running it twice returns to where you started. The compose file, the Caddyfile
+and the schema stay those of the synced tree, and the next push to `dev`
+replaces the rollback.
+
+Only when a migration itself destroyed data, restore the dump taken before it
+(this overwrites the whole database; stop the api and workers first):
+
+```bash
+docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml \
+  exec -T postgres pg_restore -U admin -d admin --clean --if-exists \
+  < ~/backups/panel-<UTC time>-<12-hex sha>.dump
+```
+
+### One-time setup
+
+**On tk104** (Docker with Compose 2.17+, `git`, `rsync`, `curl`, and
+`~/apps/squad-admin-panel/.env.tk104` in place):
+
+1. Install the forced command from the tip of `dev`. The same checkout is the
+   one every deploy fetches into:
+
+   ```bash
+   git init -q ~/apps/squad-admin-panel-src
+   git -C ~/apps/squad-admin-panel-src fetch -q --depth=1 \
+     https://github.com/seregatipich/squad-admin-panel.git dev
+   git -C ~/apps/squad-admin-panel-src checkout -q --detach FETCH_HEAD
+   install -D -m 0755 ~/apps/squad-admin-panel-src/scripts/tk104-deploy-entry.sh ~/bin/panel-deploy
+   ```
+
+   A deploy never updates the installed copy: the gate changes only when someone
+   reinstalls it. When a deploy warns that `~/bin/panel-deploy` differs from
+   `scripts/tk104-deploy-entry.sh`, review the change and reinstall it with the
+   `install` line above (the checkout then holds the deployed commit).
+
+2. Generate the deploy key on a workstation, not on tk104:
+
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C deploy-tk104 -f ./tk104_deploy
+   ```
+
+   and bind its public half to the forced command with one line in tk104's
+   `~/.ssh/authorized_keys`:
+
+   ```text
+   restrict,command="$HOME/bin/panel-deploy" ssh-ed25519 AAAA… deploy-tk104
+   ```
+
+   `restrict` turns off terminal allocation, `~/.ssh/rc` and port, agent and X11
+   forwarding; `command=`
+   makes sshd run `panel-deploy` whatever the client asked for and pass the
+   request in `SSH_ORIGINAL_COMMAND`. Remove the line of any older, unrestricted
+   deploy key. A shell request must now be refused:
+
+   ```bash
+   ssh -i ./tk104_deploy seregatipich@tk104.duckdns.org uptime   # refused: expected 'deploy <40-hex sha> …', exit 2
+   ```
+
+**On GitHub:**
+
+1. Create the environment `tk104-dev` (Settings → Environments) with the
+   deployment branch policy *Selected branches* → `dev`, and its secrets:
+   - `TK104_SSH_KEY` — the private half, `./tk104_deploy`; delete the local file
+     afterwards.
+   - `TK104_SSH_KNOWN_HOSTS` — the `known_hosts` line(s) for `tk104.duckdns.org`.
+     Compare the fingerprint with one read over an independent trusted channel
+     (for example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host
+     console) before saving it. The workflow never scans host keys at run time and
+     connects with `StrictHostKeyChecking=yes`; when the host key is rotated,
+     verify the new fingerprint the same way, then replace the secret.
+2. Make the four GHCR packages public once the first `build` run has pushed them:
+   for each of `squad-panel-api`, `squad-panel-web`, `squad-panel-workers` and
+   `squad-panel-caddy-tk104`, open the package → *Package settings* → *Change
+   visibility* → *Public*. tk104 pulls anonymously and holds no registry
+   credential, so the very first deploy fails at its pull until then; re-run it
+   afterwards, and check with `docker logout ghcr.io` and a `docker pull` there.
+
+**Moving a host from the image-artifact deploy:** the first new deploy finds no
+`.release.env`, so it pulls all four images, backs up the database, runs the
+migrator (a no-op on an up-to-date schema) and recreates every panel service.
+After it is green, delete `.release`, `.release.prev` and the `PANEL_IMAGE_TAG=` /
+`APP_VERSION=` lines the old deploy appended to `.env.tk104` (nothing reads them;
+`.release.env` wins for `APP_VERSION`), and remove the images it loaded — but
+keep `squad-panel/depot-init` and `squad-panel/rnsquadjs`, which the bridge runs:
+
+```bash
+for image in api web workers caddy-tk104; do
+  docker image ls -q "squad-panel/${image}" | xargs -r docker image rm
+done
+```
+
+The self-hosted `tk104-deploy` runner and the `production` environment are no
+longer used; unregister the runner and delete the environment with its secrets.
+
+### Fast developer deploy (`scripts/dev-deploy-tk104.sh`)
+
+A push to `dev` already reaches tk104 within minutes. For work that is not even
+committed yet, [`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh)
+rsyncs the working tree into `~/apps/squad-admin-panel/` (the same exclusions as
+the entry) over your own SSH login (`TK104_SSH_TARGET`, default
+`seregatipich@tk104.duckdns.org` — not the deploy key), builds one service of the
+same compose project on the host through the
+[`compose.tk104.build.yml`](../../compose.tk104.build.yml) override, and restarts
+only that container (`up -d --no-deps`):
+
+```bash
+scripts/dev-deploy-tk104.sh              # rebuild web only (default)
+scripts/dev-deploy-tk104.sh api          # rebuild api only, no migrator
+scripts/dev-deploy-tk104.sh worker-rcon  # rebuild one worker container
+CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
+```
+
+The image is tagged `ghcr.io/seregatipich/squad-panel-<image>:dev-<short sha>`
+(plus `-dirty` for uncommitted changes) and never pushed; `/health` reports that
+stamp only for the `api` and `full` targets, where a pushed deploy reports a
+40-hex commit SHA. The preview is written into `.release.env`, so the next push
+to `dev` sees the difference and replaces it. It needs a release recorded on the
+host already. The `full` target runs `DEPLOY_BUILD=1 scripts/deploy-tk104.sh`:
+every image is built on the host and migrations from the working tree are
+applied to the tk104 database (after the same backup), so it refuses to start
+without `CONFIRM_FULL_DEPLOY=deploy`. Host builds compete with the game server on
+tk104 for CPU.
+
+Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`) and
+`apps/api/test/compose-tk104-*.test.ts`.
+
+## Вход через Steam
 
 Панель подтверждает Steam-личность сама через Steam OpenID:
 `/api/v1/auth/steam/login` отправляет пользователя на steamcommunity.com, а
@@ -37,24 +261,6 @@ match the host's `panel` group and the data tree created by `install-host-bridge
 RBAC панели. Realm и адрес возврата строятся из `PANEL_PUBLIC_URL`, поэтому в
 production он обязан быть HTTPS-origin (`https://tk104.duckdns.org`); иначе API
 не стартует. Первый вошедший игрок становится Owner и проходит `/setup`.
-
-Полный выпуск `master` передаёт в команду деплоя `APP_VERSION=<SHA master>`;
-`/health.version` после выпуска обязан совпасть с этим SHA, иначе задание
-падает на внешней проверке.
-
-Автоматический полный выпуск запускается только push-событием ветки `master`.
-Для ручного `target=full` выбери `master` и обязательно передай
-`expected_sha=<выбранный SHA>`: несовпадение останавливает задание первым шагом,
-до checkout, SSH и любых изменений production.
-
-Оба задания `deploy-tk104` удаляют временный ключ SSH и отдельный файл доверия с
-раннера в `always()`. Каждое задание принимает ключ хоста только из заранее
-сверенного Actions secret `TK104_SSH_KNOWN_HOSTS`, проверяет запись для
-`tk104.duckdns.org` и использует `StrictHostKeyChecking=yes`; runtime
-`ssh-keyscan` и доверие при первом подключении запрещены. При плановой смене
-ключа оператор сначала сверяет новый fingerprint по независимому доверенному
-каналу, затем заменяет secret. Контракт закреплён в
-`scripts/deploy-tk104-workflow.test.ts`.
 
 ### Интеграция bss.games удалена
 
@@ -70,122 +276,34 @@ production он обязан быть HTTPS-origin (`https://tk104.duckdns.org`)
 
 ## CI/CD runners
 
-Verification and deployment run on different machines:
+Everything runs on GitHub-hosted VMs; there is no self-hosted runner:
 
 ```yaml
 # .github/workflows/ci.yml — every job
 runs-on: ubuntu-24.04
-# .github/workflows/deploy-tk104.yml — every job
-runs-on: [self-hosted, tk104-deploy]
-environment: production
+# .github/workflows/deploy-tk104.yml — every job; the deploy job binds `environment: tk104-dev`
+runs-on: ubuntu-24.04
 ```
 
-The repository is public on a personal account: hosted minutes are free and runner
-groups do not exist. `scripts/test-ci-runner-strategy.sh` fails CI if a `ci` job leaves
-the hosted image, a deploy job leaves the labelled runner or the `production`
-environment, or any workflow selects a runner group.
+- **`ci` verifies `master`.** It runs for pushes to `master` — the fast-forward
+  promotion from `dev` — and explicit dispatches (`gh workflow run ci.yml --ref dev`
+  checks a `dev` commit before promoting it), never for `pull_request`. Superseded
+  runs are cancelled. The jobs and their gates are described in
+  [`ci.yml`](../../.github/workflows/ci.yml) itself.
+- **`deploy-tk104` deploys `dev`.** It runs for pushes to `dev` and dispatches
+  (rollback), builds on hosted runners and reaches tk104 only through the forced
+  command above. The deploy key lives only in the `tk104-dev` environment, whose
+  branch policy admits `dev` alone, and a deploy already in flight is never
+  cancelled. Every job is skipped outside `seregatipich/squad-admin-panel`, so a
+  fork never tries to deploy, and every referenced action is SHA-pinned — this
+  workflow writes the deploy key to disk (#248). Workflows from outside
+  collaborators require approval (repository setting), because a fork's pull
+  request can carry its own workflow file.
 
-- **`ci` runs on GitHub-hosted VMs.** The workflow runs only for trusted `dev`/`master`
-  pushes and explicit dispatches — never `pull_request`. Superseded runs are cancelled.
-  The JavaScript checks run in parallel (`node-lint`, the `api`/`web`/`packages` slices
-  of `node-test`, `node-scripts`) behind the single `node` gate. Their PostgreSQL/Redis
-  service containers publish to Docker-assigned ports; `Resolve service ports` exports
-  those values through both normal and `TEST_*` variables. The `go` job installs the
-  pinned Go toolchain through SHA-pinned `actions/setup-go` and runs the race detector
-  natively. The `docker` job, running alongside the tests, builds
-  [`docker-bake.hcl`](../../docker-bake.hcl) in parallel with a GitHub Actions layer
-  cache, smoke-tests the api and workers images, executes the backup/restore round
-  trip, and on a `dev` push exports `squad-panel/{api,web,workers,caddy-tk104}:<sha>`
-  as the `release-images-<sha>` artifact (zstd, kept 14 days). On `master` every job
-  except `branch-guard` skips: the commit already passed them on `dev`, and
-  `branch-guard` fails unless that `dev` run succeeded.
-- **`deploy-tk104` runs on the repository's own runner on tk104.** It is registered
-  with the label `tk104-deploy`, runs as the unprivileged `gh-runner` account without
-  Docker access, and reaches the deploy account over SSH. Every job binds the
-  `production` environment (deploy secrets, `master` only) and is skipped outside
-  `seregatipich/squad-admin-panel`, so a fork never tries to deploy. All referenced
-  actions remain SHA-pinned — this workflow writes the production deploy key to disk
-  (#248). Workflows from outside collaborators require approval (repository setting),
-  because a fork's pull request can carry its own workflow file.
-- **`deploy-tk104` loads release images; tk104 never builds.** The `deploy` job
-  (a push to `master`) looks up the successful `ci` **push** run of that exact commit
-  on `dev` and refuses to continue without one — a manual `ci` dispatch of the same
-  commit uploads no images, so it never counts — downloads its `release-images-<sha>`
-  artifact, pipes it into `docker load` on tk104 over SSH, `rsync`s the checkout to
-  `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/` (excluding `.git`,
-  `.env*`, `data`, build output and the `.release` markers), and runs
-  `PANEL_IMAGE_TAG=<sha> APP_VERSION=<sha> scripts/deploy-tk104.sh`. That script
-  checks the four images are loaded, runs `compose up -d --remove-orphans` (the
-  migrator first), waits for the api and the Caddy probe, records the tag in
-  `.release` (the one before it in `.release.prev`) and in `.env.tk104`, and prunes
-  release images beyond the newest three — never the running or previous tag. The
-  job then gates on the external `https://tk104.duckdns.org/health` reporting that
-  SHA. `compose.tk104.yml` names every panel service `squad-panel/<image>:${PANEL_IMAGE_TAG}`
-  with `pull_policy: never`, so nothing is fetched from a registry.
-- **`deploy-web-preview` restarts only `web`, from `dev`.** Same workflow file,
-  triggered by a `workflow_run` event once `ci` finishes green on `dev` (or manually
-  via `workflow_dispatch` with `target: web` and `expected_sha=<dev commit>`). It
-  loads that run's images the same way, then runs `scripts/deploy-tk104-web.sh`,
-  which only restarts the `web` service on the preview tag
-  (`up -d --no-deps web`) — api/workers/postgres/redis keep running whatever
-  `deploy` last shipped from `master`. Both jobs share the `deploy-tk104`
-  concurrency group so they never touch the compose project at the same time, but
-  this still means tk104 serves **unpromoted `dev` code on the production
-  frontend** between deploys — accepted tradeoff for a fast preview loop; promote
-  `dev` → `master` as usual once a change is ready to actually ship. Per GitHub's
-  `workflow_run`/`workflow_dispatch` semantics, this second job only activates once
-  the workflow file itself has reached the default branch (`master`) — merging it
-  into `dev` alone does not arm the trigger.
-
-### Rollback
-
-On tk104, from `~/apps/squad-admin-panel`:
-
-```bash
-bash scripts/rollback-tk104.sh                 # the release recorded in .release.prev
-ROLLBACK_TO=<loaded tag> bash scripts/rollback-tk104.sh
-```
-
-It reruns `deploy-tk104.sh` on the previous tag, whose images the host keeps
-loaded, so it takes about as long as a container restart. It does not undo
-migrations — which is why every migration must stay compatible with the release
-before it (CLAUDE.md). If a release artifact expired before promotion, re-run the
-`docker` job of that commit's `dev` `ci` run, or build the tag on the host with
-`PANEL_IMAGE_TAG=<sha> DEPLOY_BUILD=1 bash scripts/deploy-tk104.sh` (slow, and it
-competes with the game server for CPU).
-
-### Fast developer deploy (`scripts/dev-deploy-tk104.sh`)
-
-Both jobs above wait for a full CI run. For the inner loop,
-[`scripts/dev-deploy-tk104.sh`](../../scripts/dev-deploy-tk104.sh) rsyncs the
-tree to `~/apps/squad-admin-panel/` and builds one service of the same
-`compose.tk104.yml` project on the host, through the
-[`compose.tk104.build.yml`](../../compose.tk104.build.yml) override, tagged
-`dev-<short sha>` — straight from a developer workstation over SSH, with no
-GitHub Actions involved. The deploy target is still tk104; only the courier
-changes, and the build does run on the production host.
-
-```bash
-scripts/dev-deploy-tk104.sh              # rebuild web only (default)
-scripts/dev-deploy-tk104.sh api          # rebuild api only, no migrator
-scripts/dev-deploy-tk104.sh worker-rcon  # rebuild one worker container
-CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
-```
-
-It ships the **working tree**, uncommitted changes included, so what tk104
-serves afterwards is not a released revision: the stamp it sets is
-`dev-<short sha>` (plus `-dirty`) where a released deploy stamps a 40-hex
-commit SHA. `/health` is served by the api container and reports that stamp
-only for the `api` and `full` targets — a web-only deploy deliberately leaves
-the api, and therefore `/health`, on the last released revision. `.env*`, `data/` and build output are excluded exactly as in the
-workflow, so host secrets and state survive. The `full` target runs
-`scripts/deploy-tk104.sh`, which applies migrations from unreviewed code to the
-production database, and therefore refuses to start without
-`CONFIRM_FULL_DEPLOY=deploy`.
-
-This is a preview path, not a release path: land the change through
-`dev` → `master` as usual, and the next `master` deploy overwrites the preview.
-Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`).
+The repository is public on a personal account: hosted minutes are free and
+runner groups do not exist. `scripts/test-ci-runner-strategy.sh` fails CI if a job
+leaves the hosted image, the deploy leaves the `tk104-dev` environment, or any
+workflow selects a runner group or a self-hosted runner.
 
 ## Container topology
 
