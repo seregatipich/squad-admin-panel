@@ -1,8 +1,9 @@
 import { events, playerNameHistory, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
@@ -42,26 +43,6 @@ function asArray<T>(value: T | T[] | undefined): T[] {
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
-/**
- * Whether the caller may see player IP addresses (ALT-8, #126). Read from the
- * effective permission set, so an API token only sees IPs when its scopes
- * include `player:view_ips`.
- */
-function canViewIps(req: FastifyRequest): boolean {
-  return req.user?.permissions.permissions.has('player:view_ips') ?? false;
-}
-
-/**
- * Returns the payload with a top-level `ip` field nulled out (#10). The field
- * is carried by `player.connected` (`playerConnectedPayload.ip`); nulling it
- * rather than deleting it keeps the payload valid against that schema.
- */
-function redactPayloadIp(payload: unknown): unknown {
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-  if (!('ip' in payload)) return payload;
-  return { ...payload, ip: null };
 }
 
 interface Cursor {

@@ -584,6 +584,61 @@ describeIfDb('events API (EVT-2)', () => {
       }
     });
 
+    it('redacts player IPs from the live server event stream without player:view_ips', async () => {
+      await h.redis.xadd(
+        `events:server:${serverId}`,
+        '*',
+        'envelope',
+        JSON.stringify({
+          event_id: uuidv7(),
+          version: 1,
+          type: 'player.connected',
+          server_id: serverId,
+          ts: new Date().toISOString(),
+          actor: { kind: 'system', id: null },
+          correlation_id: null,
+          payload: {
+            steam_id64: '76561198000002222',
+            eos_id: null,
+            name: 'IpCarrier',
+            ip: PLAYER_IP,
+          },
+        }),
+      );
+      const url = `/api/v1/servers/${serverId}/events?limit=10`;
+
+      const moderatorRole = await seedRole(h.db, { panelAccess: true, canViewIps: false });
+      const moderator = await seedPlayer(h.db, { roleId: moderatorRole });
+      const hidden = await h.app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: await loginAs(h, moderator) },
+      });
+      expect(hidden.statusCode).toBe(200);
+      expect(hidden.body).toContain('IpCarrier');
+      expect(hidden.body).not.toContain(PLAYER_IP);
+
+      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
+      const serverViewToken = await tokenHeader(h.seed.ownerPlayerId!, ['server:view']);
+      const narrow = await h.app.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: serverViewToken },
+      });
+      expect(narrow.statusCode).toBe(200);
+      expect(narrow.body).not.toContain(PLAYER_IP);
+
+      const ipRole = await seedRole(h.db, { panelAccess: true, canViewIps: true });
+      const ipViewer = await seedPlayer(h.db, { roleId: ipRole });
+      const visible = await h.app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: await loginAs(h, ipViewer) },
+      });
+      expect(visible.statusCode).toBe(200);
+      expect(visible.body).toContain(PLAYER_IP);
+    });
+
     it('lets an events:view token read the journal but redacts IPs unless it also holds player:view_ips', async () => {
       // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
       const ownerId = h.seed.ownerPlayerId!;
