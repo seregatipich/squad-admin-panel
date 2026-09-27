@@ -184,4 +184,37 @@ describe('buildBanlistEntries', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.reason).toBe('second');
   });
+
+  it('output order is deterministic regardless of database row order (#235)', () => {
+    const rows = [
+      row({ playerId: 'p2', steamId64: '76561198000000002', reason: 'second player' }),
+      row({ playerId: 'p1', steamId64: '76561198000000001', reason: 'first player' }),
+      row({ playerId: 'p3', steamId64: '76561198000000003', reason: 'third player' }),
+    ];
+    const forward = buildBanlistEntries(rows, 'all_active', ISSUED_AT);
+    const reversed = buildBanlistEntries([...rows].reverse(), 'all_active', ISSUED_AT);
+    expect(reversed).toEqual(forward);
+    expect(forward.map((entry) => entry.reason)).toEqual([
+      'first player',
+      'second player',
+      'third player',
+    ]);
+  });
+
+  it('picks the same permanent ban regardless of row order when a player has several (#235)', () => {
+    const older = row({
+      playerId: 'p1',
+      reason: 'older',
+      issuedAt: new Date('2025-06-01T00:00:00Z'),
+    });
+    const newer = row({
+      playerId: 'p1',
+      reason: 'newer',
+      issuedAt: new Date('2025-07-01T00:00:00Z'),
+    });
+    const a = buildBanlistEntries([older, newer], 'all_active', ISSUED_AT);
+    const b = buildBanlistEntries([newer, older], 'all_active', ISSUED_AT);
+    expect(a).toEqual(b);
+    expect(a[0]?.reason).toBe('newer');
+  });
 });

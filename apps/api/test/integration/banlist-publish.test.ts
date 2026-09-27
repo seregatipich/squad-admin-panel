@@ -422,6 +422,47 @@ describeIfDb('GET /api/v1/public/banlist payload', () => {
     expect(second.statusCode).toBe(304);
   });
 
+  it('ETag: format=json is stable across requests and honours If-None-Match (#235)', async () => {
+    const first = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=json',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(first.statusCode).toBe(200);
+    const etag = first.headers.etag as string;
+    expect(etag).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const repeat = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=json',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(repeat.headers.etag).toBe(etag);
+
+    const conditional = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=json',
+      headers: { authorization: `Bearer ${token}`, 'if-none-match': etag },
+    });
+    expect(conditional.statusCode).toBe(304);
+  });
+
+  it('ETag: If-None-Match accepts a weak validator inside a list (#235)', async () => {
+    const first = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=squad_cfg',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const etag = first.headers.etag as string;
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=squad_cfg',
+      headers: { authorization: `Bearer ${token}`, 'if-none-match': `"stale", W/${etag}` },
+    });
+    expect(res.statusCode).toBe(304);
+  });
+
   it('revoking the token causes the next request to 401', async () => {
     const revocable = await mintTokenWithId(ownerCookie, ['banlist:read']);
     const check = await h.app.inject({

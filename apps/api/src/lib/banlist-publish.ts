@@ -101,7 +101,10 @@ function toEntry(row: ModerationBanRow): BanlistEntry & { expiresAtMs: number | 
  * - Expired temporary bans (`expiresAt <= now`) are dropped.
  * - `scope === 'permanent_only'` additionally drops every temporary ban.
  * - Multiple ban rows for the same player are deduplicated, keeping the
- *   permanent one if any exists, otherwise the one with the latest expiry.
+ *   permanent one if any exists, otherwise the one with the latest expiry;
+ *   ties go to the most recently issued row.
+ * - The result is ordered by `playerId`, independent of the input row order,
+ *   so identical ban sets always serialize to identical bodies (and ETags).
  */
 export function buildBanlistEntries(
   rows: readonly ModerationBanRow[],
@@ -119,8 +122,11 @@ export function buildBanlistEntries(
   }
 
   const out: BanlistEntry[] = [];
-  for (const playerRows of byPlayer.values()) {
-    const candidates = playerRows
+  const playerIds = [...byPlayer.keys()].sort();
+  for (const playerId of playerIds) {
+    const playerRows = byPlayer.get(playerId) ?? [];
+    const candidates = [...playerRows]
+      .sort((a, b) => b.issuedAt.getTime() - a.issuedAt.getTime())
       .map(toEntry)
       .filter((entry) => entry.expiresAtMs === null || entry.expiresAtMs > nowMs)
       .filter((entry) => scope !== 'permanent_only' || entry.expiresAtMs === null);

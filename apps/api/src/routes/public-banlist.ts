@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { banlistPublicationSettings, moderationActions, players } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -71,6 +71,21 @@ function toJsonEntry(entry: BanlistEntry): JsonBanEntry {
 
 function computeEtag(body: string): string {
   return `"${createHash('sha256').update(body).digest('hex')}"`;
+}
+
+/**
+ * RFC 9110 §13.1.2 `If-None-Match` evaluation: the header is a
+ * comma-separated list (or `*`) and uses weak comparison, so a `W/` prefix
+ * on either side is ignored.
+ */
+function ifNoneMatchHits(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  const strip = (tag: string) => tag.trim().replace(/^W\//, '');
+  const target = strip(etag);
+  return header.split(',').some((candidate) => {
+    const tag = candidate.trim();
+    return tag === '*' || strip(tag) === target;
+  });
 }
 
 /**
@@ -145,8 +160,10 @@ const publicBanlistRoutes: FastifyPluginAsync = async (app) => {
         .from(moderationActions)
         .innerJoin(players, eq(players.id, moderationActions.playerId))
         .leftJoin(author, eq(author.id, moderationActions.authorPlayerId))
-        .where(
-          and(eq(moderationActions.actionType, 'ban'), isNull(moderationActions.revertedAt)),
+        .where(and(eq(moderationActions.actionType, 'ban'), isNull(moderationActions.revertedAt)))
+        .orderBy(
+          asc(moderationActions.createdAt),
+          asc(moderationActions.id),
         )) as unknown as BanRow[];
 
       const banRows = rows.map(toModerationBanRow);
@@ -157,27 +174,25 @@ const publicBanlistRoutes: FastifyPluginAsync = async (app) => {
       const lastModified = new Date(lastModifiedMs).toUTCString();
 
       if (req.query.format === 'json') {
-        const payload = {
-          generated_at: new Date().toISOString(),
-          bans: entries.map(toJsonEntry),
-        };
-        const body = JSON.stringify(payload);
-        const etag = computeEtag(body);
+        const bans = entries.map(toJsonEntry);
+        // The ETag covers only the ban set: `generated_at` changes on every
+        // request and would otherwise make If-None-Match never match.
+        const etag = computeEtag(JSON.stringify(bans));
         void reply.header('etag', etag);
         void reply.header('last-modified', lastModified);
-        if (req.headers['if-none-match'] === etag) {
+        if (ifNoneMatchHits(req.headers['if-none-match'], etag)) {
           reply.code(304);
           return null;
         }
         void reply.header('content-type', 'application/json; charset=utf-8');
-        return body;
+        return JSON.stringify({ generated_at: new Date().toISOString(), bans });
       }
 
       const body = formatSquadBansCfg(entries);
       const etag = computeEtag(body);
       void reply.header('etag', etag);
       void reply.header('last-modified', lastModified);
-      if (req.headers['if-none-match'] === etag) {
+      if (ifNoneMatchHits(req.headers['if-none-match'], etag)) {
         reply.code(304);
         return null;
       }
