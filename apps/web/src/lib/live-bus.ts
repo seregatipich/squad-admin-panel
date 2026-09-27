@@ -120,6 +120,21 @@ export type LiveEvent =
       };
     }
   | {
+      type: 'combat.vehicle';
+      ts: string;
+      data: {
+        server_id: string;
+        match_id: string | null;
+        kind: 'vehicle_destroyed' | 'vehicle_damage';
+        attacker_player_id: string | null;
+        victim_vehicle: string;
+        attacker_vehicle: string | null;
+        weapon: string | null;
+        damage: number | null;
+        occurred_at: string;
+      };
+    }
+  | {
       type: 'vote.ended';
       ts: string;
       data: VoteEndedData;

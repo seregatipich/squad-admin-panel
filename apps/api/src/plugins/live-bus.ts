@@ -178,6 +178,26 @@ export type LiveEvent =
       };
     }
   | {
+      /**
+       * A vehicle was damaged or destroyed; published by log-ingest
+       * (`apps/workers/log-ingest/src/combat/store.ts`). Gated like
+       * `combat.event`: only sockets with combat:view receive it.
+       */
+      type: 'combat.vehicle';
+      ts: string;
+      data: {
+        server_id: string;
+        match_id: string | null;
+        kind: 'vehicle_destroyed' | 'vehicle_damage';
+        attacker_player_id: string | null;
+        victim_vehicle: string;
+        attacker_vehicle: string | null;
+        weapon: string | null;
+        damage: number | null;
+        occurred_at: string;
+      };
+    }
+  | {
       type: 'vote.ended';
       ts: string;
       data: {
@@ -321,6 +341,63 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Which sockets may receive a LiveEvent type over `/api/v1/ws/live`:
+ * `server` needs only the connection's baseline `server:view`, `combat` also
+ * needs combat:view. `satisfies` makes the map list every LiveEvent type and
+ * nothing else, so it is also the allow-list of types accepted from Redis.
+ * `routes/live.ts` applies further per-type filters on top (session,
+ * role-expiry and media frames).
+ */
+export const LIVE_EVENT_AUDIENCE = {
+  'server.status': 'server',
+  'server.deleted': 'server',
+  'server.restored': 'server',
+  'rcon.status': 'server',
+  'server.events.appended': 'server',
+  'rcon.roster': 'server',
+  'server.seeding': 'server',
+  'bridge.connection': 'server',
+  'worker.heartbeat': 'server',
+  'note.created': 'server',
+  'mark_type.changed': 'server',
+  'session.revoked': 'server',
+  'issue.created': 'server',
+  'issue.updated': 'server',
+  'issue.comment.created': 'server',
+  'mark.changed': 'server',
+  'chat.message': 'server',
+  'combat.event': 'combat',
+  'combat.vehicle': 'combat',
+  'vote.ended': 'server',
+  'report.created': 'server',
+  'report.updated': 'server',
+  'appeal.created': 'server',
+  'appeal.updated': 'server',
+  'server.map.changed': 'server',
+  'externalban.matched': 'server',
+  'media.uploaded': 'server',
+  'alert.triggered': 'server',
+} as const satisfies Record<LiveEvent['type'], 'server' | 'combat'>;
+
+function isLiveEventType(type: unknown): type is LiveEvent['type'] {
+  return typeof type === 'string' && Object.hasOwn(LIVE_EVENT_AUDIENCE, type);
+}
+
+/**
+ * Checks the envelope of a frame read from the Redis `live-bus` channel:
+ * workers publish there without the API's types, so a frame is forwarded only
+ * when its `type` is a known LiveEvent type, `ts` is a string and `data` an
+ * object (#37). The per-type payload shape is not validated.
+ */
+function toLiveFrame(frame: unknown): (LiveEvent & { _origin?: string }) | null {
+  if (typeof frame !== 'object' || frame === null) return null;
+  const { type, ts, data } = frame as { type?: unknown; ts?: unknown; data?: unknown };
+  if (!isLiveEventType(type) || typeof ts !== 'string') return null;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+  return frame as LiveEvent & { _origin?: string };
+}
+
 const LIVE_BUS_CHANNEL = 'live-bus';
 const RCON_STATUS_CHANNEL = 'rcon:status:changed';
 
@@ -337,6 +414,9 @@ export default fp(async (app) => {
   const instanceId = randomUUID();
 
   const localEmit = (event: LiveEvent) => emitter.emit('event', event);
+  // Types already reported as dropped, so a worker publishing an unknown type
+  // on every tick logs it once instead of flooding the log.
+  const droppedFrameTypes = new Set<string>();
 
   let subscriber: ReturnType<typeof app.redis.duplicate> | null = null;
   const canDuplicate = typeof app.redis?.duplicate === 'function';
@@ -348,7 +428,21 @@ export default fp(async (app) => {
     subscriber.on('message', (channel: string, raw: string) => {
       if (channel === LIVE_BUS_CHANNEL) {
         try {
-          const { _origin, ...evt } = JSON.parse(raw) as LiveEvent & { _origin?: string };
+          const parsed: unknown = JSON.parse(raw);
+          const frame = toLiveFrame(parsed);
+          if (!frame) {
+            const type = (parsed as { type?: unknown } | null)?.type;
+            const key = typeof type === 'string' ? type : '<malformed>';
+            if (!droppedFrameTypes.has(key)) {
+              droppedFrameTypes.add(key);
+              app.log.warn(
+                { type: key, raw: raw.slice(0, 200) },
+                'live-bus: dropping frame that is not a known LiveEvent (logged once per type)',
+              );
+            }
+            return;
+          }
+          const { _origin, ...evt } = frame;
           if (_origin === instanceId) return;
           emitter.emit('event', evt as LiveEvent);
         } catch (err) {

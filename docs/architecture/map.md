@@ -1912,7 +1912,7 @@ The envelope is a bare `{ type, ts, data }` discriminated union declared **twice
 | Auth (1) | `session.revoked` | `routes/auth.ts:21,101`; `role-expirer/src/tick.ts:233`; `seed-reward/src/tick.ts:294` |
 | Alerts (1) | `alert.triggered` (`data: Record<string, unknown>`) | 6 producers, incl. `ban-sync/src/alerts.ts:55`, `packages/db/src/alt-ban.ts:99`, `packages/db/src/seed-notifications.ts:65` |
 
-The two unions have already drifted. `match.started` / `match.ended` exist **only** in the web union (`apps/web/src/lib/live-bus.ts:90-99`) and are never published. `combat.vehicle` (`combat/store.ts:459`) and `banname.matched` (`banname/store.ts:283`) are published but appear in **neither** union and have no web subscriber. `ban-sync` re-broadcasts whole `EventEnvelope`s onto the bus (`events.ts:94-97`), so arbitrary `bansync.*` types can appear on a channel whose type is nominally closed.
+The two unions have already drifted. `match.started` / `match.ended` exist **only** in the web union (`apps/web/src/lib/live-bus.ts:90-99`) and are never published. `combat.vehicle` (`combat/store.ts:459`) is now in both unions (#37). `banname.matched` (`banname/store.ts:283`) and the `bansync.*` envelopes `ban-sync` re-broadcasts (`events.ts:94-97`) are in neither: the API's live-bus plugin checks every Redis frame against `LIVE_EVENT_AUDIENCE` (known `type`, string `ts`, object `data`) and drops anything else, logging each dropped type once.
 
 #### Authorization on subscribe
 
@@ -1928,7 +1928,7 @@ const unsubscribe = app.liveBus.subscribe((event) => {
 });
 ```
 
-"Can a client subscribe to a server it lacks permission for?" is not an expressible question here: RBAC is **global, not per-server** — `PermissionContext` (`apps/api/src/lib/rbac.ts:12-29`) has no `serverId` field anywhere. The single gate is `server:view` at upgrade time, enforced by the global `onRequest` hook in `apps/api/src/plugins/auth.ts:114-125` reading `req.routeOptions.config.permissions`; both `__Host-sid` cookie sessions and scope-intersected Bearer API tokens authenticate the upgrade. So **any user with `server:view` sees all chat, all rosters, all map changes, all reports, issues, marks and seeding state for every server**, plus every `alert.triggered` payload whose `event_kind` is not one of the three special-cased. `combat.event` is the only permission-gated payload, and its sibling `combat.vehicle` from the same store is not gated — an oversight, not a design.
+"Can a client subscribe to a server it lacks permission for?" is not an expressible question here: RBAC is **global, not per-server** — `PermissionContext` (`apps/api/src/lib/rbac.ts:12-29`) has no `serverId` field anywhere. The single gate is `server:view` at upgrade time, enforced by the global `onRequest` hook in `apps/api/src/plugins/auth.ts:114-125` reading `req.routeOptions.config.permissions`; both `__Host-sid` cookie sessions and scope-intersected Bearer API tokens authenticate the upgrade. So **any user with `server:view` sees all chat, all rosters, all map changes, all reports, issues, marks and seeding state for every server**, plus every `alert.triggered` payload whose `event_kind` is not one of the three special-cased. `combat.event` and `combat.vehicle` are the permission-gated payloads: `LIVE_EVENT_AUDIENCE` marks both `combat`, and `routes/live.ts` withholds every `combat` type from sockets without combat:view (#37).
 
 #### Heartbeat, reconnect, replay, backpressure
 
