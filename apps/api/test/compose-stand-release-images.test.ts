@@ -3,10 +3,9 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * compose.stand.yml runs the images the deploy workflow pushed to ghcr.io,
+ * docker/compose.stand.yml runs the images the deploy workflow pushed to ghcr.io,
  * pinned by digest through the variables scripts/deploy-stand.sh records in
- * .release.env; it must never build on the host. compose.stand.build.yml
- * restores the builds for previews. The checks are line-based like
+ * .release.env; it must never build on the host. The checks are line-based like
  * compose-stand-worker-parity.test.ts, without a YAML dependency.
  */
 
@@ -39,8 +38,7 @@ function serviceBlocks(file: string): Map<string, string[]> {
   return blocks;
 }
 
-const stand = serviceBlocks('compose.stand.yml');
-const buildOverride = serviceBlocks('compose.stand.build.yml');
+const stand = serviceBlocks('docker/compose.stand.yml');
 const releaseServices = [...stand.keys()].filter(
   (name) => ['migrator', 'api', 'web', 'caddy'].includes(name) || name.startsWith('worker-'),
 );
@@ -66,7 +64,7 @@ function healthcheck(service: string): string[] {
   return lines.slice(start + 1, end < 0 ? undefined : end);
 }
 
-describe('compose.stand.yml release images', () => {
+describe('docker/compose.stand.yml release images', () => {
   it('finds the panel services', () => {
     expect(releaseServices).toEqual(expect.arrayContaining(['migrator', 'api', 'web', 'caddy']));
     expect(releaseServices.filter((name) => name.startsWith('worker-')).length).toBeGreaterThan(10);
@@ -101,7 +99,7 @@ describe('compose.stand.yml release images', () => {
   });
 
   it('no longer knows the tag-based image names', () => {
-    expect(read('compose.stand.yml')).not.toMatch(
+    expect(read('docker/compose.stand.yml')).not.toMatch(
       /PANEL_IMAGE_TAG|image: squad-panel\/(api|web|workers|caddy)/,
     );
   });
@@ -112,23 +110,9 @@ describe('compose.stand.yml release images', () => {
       expect(block(service)).toContain(`      WORKER: ${service.slice('worker-'.length)}`);
     },
   );
-
-  it('keeps a host build for every release service in compose.stand.build.yml', () => {
-    expect([...buildOverride.keys()].sort()).toEqual([...releaseServices].sort());
-    for (const [service, lines] of buildOverride) {
-      expect(
-        lines.some((line) => /^ {4}build:/.test(line)),
-        `${service} has no build in the override`,
-      ).toBe(true);
-      expect(
-        lines.some((line) => /^ {4}image:/.test(line)),
-        `${service} must take its image name from compose.stand.yml`,
-      ).toBe(false);
-    }
-  });
 });
 
-describe('compose.stand.yml deploy contract', () => {
+describe('docker/compose.stand.yml deploy contract', () => {
   it('keeps the migrator out of `up`: the deploy runs it explicitly, after a backup', () => {
     expect(block('migrator')).toContain("    profiles: ['migrate']");
     for (const [service, lines] of stand) {
@@ -158,7 +142,7 @@ describe('compose.stand.yml deploy contract', () => {
   });
 
   it('never uses start_interval, which Compose refuses on a Docker Engine older than 25', () => {
-    expect(read('compose.stand.yml')).not.toMatch(/^\s+start_interval:/m);
+    expect(read('docker/compose.stand.yml')).not.toMatch(/^\s+start_interval:/m);
   });
 
   it('recreates every service whose bind-mounted repository file changes', () => {
@@ -167,7 +151,7 @@ describe('compose.stand.yml deploy contract', () => {
     );
     expect(mounting.map(([service]) => service)).toEqual(['caddy']);
     expect(block('caddy')).toContain(`      CADDYFILE_SHA: \${CADDYFILE_SHA:-}`);
-    expect(block('caddy')).toContain('      - ./docker/Caddyfile.stand:/etc/caddy/Caddyfile:ro');
+    expect(block('caddy')).toContain('      - ./Caddyfile.stand:/etc/caddy/Caddyfile:ro');
     // The hash compose sees is the one the deploy computes from that file.
     expect(read('scripts/deploy-stand.sh')).toMatch(
       /caddyfile_sha="\$\(sha256sum < docker\/Caddyfile\.stand/,

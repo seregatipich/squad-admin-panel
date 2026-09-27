@@ -173,10 +173,10 @@ describe('deploy build job', () => {
     );
   });
 
-  it('pushes the SHA and dev tags with a registry layer cache through docker-bake.hcl', () => {
+  it('pushes the SHA and dev tags with a registry layer cache through docker/docker-bake.hcl', () => {
     const bake = step(build, 'Build and push the image');
     assert.match(bake, /uses: docker\/bake-action@[0-9a-f]{40} # v/u);
-    assert.match(bake, /\n {10}source: \.\n {10}files: docker-bake\.hcl\n/u);
+    assert.match(bake, /\n {10}source: \.\n {10}files: docker\/docker-bake\.hcl\n/u);
     assert.match(bake, /\n {10}targets: \$\{\{ matrix\.image \}\}\n {10}push: true\n/u);
     const ref = 'ghcr.io/seregatipich/squad-panel-${{ matrix.image }}';
     for (const line of [

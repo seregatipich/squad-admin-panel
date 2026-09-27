@@ -12,7 +12,7 @@ group "default" {
   targets = ["api", "web", "workers", "caddy", "rnsquadjs"]
 }
 
-# What a the stand host release runs; compose.stand.yml references these names.
+# What a the stand host release runs; docker/compose.stand.yml references these names.
 group "release" {
   targets = ["api", "web", "workers", "caddy"]
 }

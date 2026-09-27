@@ -2751,7 +2751,7 @@ redis-cli config set appendonly yes >/dev/null
 until [ "$(... aof_rewrite_in_progress ...)" = "0" ]; do sleep 0.3; done
 ```
 
-Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `compose.stand.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the stand production stack is unbacked.**
+Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `docker/compose.stand.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the stand production stack is unbacked.**
 
 ---
 
@@ -3105,7 +3105,7 @@ graph LR
 
 **`go`** uses SHA-pinned `actions/setup-go` directly on the disposable VM. Steps: `go vet`, `go test -race -count=1`, `govulncheck` (pinned `v1.7.0`), then a static `CGO_ENABLED=0` build whose dynamic linking fails the job.
 
-**`images`** builds the `release` group and `rnsquadjs` from `docker-bake.hcl`, reading the GHCR layer cache the stand deploy writes (`packages: read`; it never writes the cache), loads them, and smoke-tests them: the api image imports `postgres`, every `WORKER` in `compose.stand.yml` exists in the workers image, and the workers image exits 64 without one. **`backup`** runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip) beside it.
+**`images`** builds the `release` group and `rnsquadjs` from `docker/docker-bake.hcl`, reading the GHCR layer cache the stand deploy writes (`packages: read`; it never writes the cache), loads them, and smoke-tests them: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` exists in the workers image, and the workers image exits 64 without one. **`backup`** runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip) beside it.
 
 **`gate`** `needs` every other job with `if: always()` and fails unless all of them succeeded — only `mutation` may be skipped. It then downloads the API and web blob reports and runs `vitest run --merge-reports --coverage` in `apps/api` and `apps/web`, so each package's `vitest.config.ts` thresholds apply to the merged coverage of its whole suite.
 
@@ -3113,7 +3113,7 @@ graph LR
 
 the stand host is a **development stand**, not production. `.github/workflows/deploy.yml` fires on every push to `dev` with `paths-ignore: ['**.md','docs/**']`, and on a dispatch with an optional 40-hex `sha` for a redeploy or rollback. It runs no tests: what reaches `dev` is reviewed code, verified by `ci` once it is promoted to `master`, and a broken stand is fixed forward or rolled back.
 
-The `build` job is a matrix over `api`, `web`, `workers` and `caddy` on hosted VMs with `packages: write`. Each leg checks out the target SHA, skips the build when `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists, and otherwise builds its `docker-bake.hcl` target and pushes `:<sha>` and `:dev` with a registry layer cache at `:buildcache` (`mode=max`). Its concurrency group `deploy-build-<image>` cancels a superseded build, whose run then skips its deploy.
+The `build` job is a matrix over `api`, `web`, `workers` and `caddy` on hosted VMs with `packages: write`. Each leg checks out the target SHA, skips the build when `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists, and otherwise builds its `docker/docker-bake.hcl` target and pushes `:<sha>` and `:dev` with a registry layer cache at `:buildcache` (`mode=max`). Its concurrency group `deploy-build-<image>` cancels a superseded build, whose run then skips its deploy.
 
 The `deploy` job waits for every build, binds the `stand` environment (the only holder of `STAND_SSH_KEY` and `STAND_SSH_KNOWN_HOSTS`, admitting `dev` alone), and runs one at a time in group `deploy` with `cancel-in-progress: false`. It resolves the four tags to `sha256` digests, pins the host key (`ssh-keygen -F <stand host>`, `StrictHostKeyChecking=yes`), and sends one SSH command, `deploy <sha> api=sha256:… web=sha256:… workers=sha256:… caddy=sha256:…`. On the host the key is bound to a forced command (`~/bin/panel-deploy`, from `scripts/deploy-entry.sh`) that validates that line, fetches the commit into its own checkout, and runs `scripts/deploy-stand.sh` with the images pinned by digest; the job itself gets no shell and copies no files. Finally it polls `$STAND_URL/health` every 2 s for about 90 s, requiring HTTP 200 with `"status":"ok"`, and removes the key in an `always()` step.
 
@@ -3214,7 +3214,7 @@ const interval = setInterval(tick, TICK_INTERVAL_MS);
 // SIGTERM: clearInterval → diag '.stopped' → stopHeartbeat() → sql.end() → redis.quit()
 ```
 
-Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker-compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `compose.stand.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
+Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker-compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `docker/compose.stand.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
 
 **Pitfalls.** `KNOWN_WORKERS` lists only six names (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`) while `apps/workers/` holds 19 packages — 13 workers publish heartbeats nobody watches, so their death is invisible on the dashboard. Also, workers must never import from another `apps/*` package (`docs/development/conventions.md:26`), so shared constants such as the live-bus channel name are **re-declared** per worker rather than shared.
 

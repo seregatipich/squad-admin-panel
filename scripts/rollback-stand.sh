@@ -40,7 +40,7 @@ if [[ "$target" == "$current" ]]; then
 fi
 
 echo "==> Rolling back ${current:-unknown} -> ${target}"
-exec env -u DEPLOY_BUILD \
+exec env \
   APP_DIR="$APP_DIR" \
   RELEASE_SHA="$target" \
   API_IMAGE="$(release_value "$PREVIOUS_FILE" API_IMAGE)" \

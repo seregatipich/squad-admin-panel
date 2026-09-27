@@ -480,7 +480,7 @@ jobs:
           fi
           echo "panel-host-bridge is static"
 
-  # Builds docker-bake.hcl and smoke-tests the images. The release images
+  # Builds docker/docker-bake.hcl and smoke-tests the images. The release images
   # themselves are built and pushed by deploy.yml when the commit lands
   # on dev; this job reads their GHCR layer cache (never writes it), so a
   # promoted commit rebuilds from cache instead of from scratch.
@@ -508,7 +508,7 @@ jobs:
         with:
           builder: ${{ steps.buildx.outputs.name }}
           source: .
-          files: docker-bake.hcl
+          files: docker/docker-bake.hcl
           targets: release,rnsquadjs
           load: true
           set: |
@@ -522,8 +522,8 @@ jobs:
         run: docker run --rm --entrypoint node "squad-panel/api:${GITHUB_SHA}" --input-type=module -e "await import('postgres')"
       - name: verify every production worker is in the workers image
         run: |
-          workers=$(sed -n 's/^      WORKER: \([a-z0-9-]*\)$/\1/p' compose.stand.yml)
-          [[ -n "${workers}" ]] || { echo "::error::no WORKER entries found in compose.stand.yml"; exit 1; }
+          workers=$(sed -n 's/^      WORKER: \([a-z0-9-]*\)$/\1/p' docker/compose.stand.yml)
+          [[ -n "${workers}" ]] || { echo "::error::no WORKER entries found in docker/compose.stand.yml"; exit 1; }
           docker run --rm --entrypoint sh -e WORKERS="${workers}" "squad-panel/workers:${GITHUB_SHA}" -c '
             for worker in $WORKERS; do
               test -f "/app/apps/workers/${worker}/dist/index.js" || { echo "missing worker ${worker}" >&2; exit 1; }

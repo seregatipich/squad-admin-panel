@@ -260,11 +260,11 @@ fi
 has_text "$go_block" 'if ldd bin/panel-host-bridge' ||
   fail 'go job no longer proves the bridge binary is statically linked'
 
-# --- Images: built from docker-bake.hcl, read-only registry cache, smoke-tested. ---
+# --- Images: built from docker/docker-bake.hcl, read-only registry cache, smoke-tested. ---
 images=$(job_block "$ci_workflow" images)
 has_text "$images" 'id: buildx' || fail 'images job does not expose its builder name'
 printf '%s\n' "$images" | grep -Eq 'uses:[[:space:]]+docker/bake-action@[0-9a-f]{40}' ||
-  fail 'images job does not build docker-bake.hcl through the SHA-pinned bake action'
+  fail 'images job does not build docker/docker-bake.hcl through the SHA-pinned bake action'
 has_text "$images" 'TAG: ${{ github.sha }}' || fail 'images are not tagged with the commit they were built from'
 has_text "$images" 'source: .' || fail 'bake builds a remote Git context instead of the checked-out tree'
 has_line "$images" '          targets: release,rnsquadjs' || fail 'images job does not build the release group and rnsquadjs'
@@ -274,8 +274,8 @@ if has_text "$images" 'packages: write' || has_text "$images" 'cache-to=type=reg
   fail 'ci writes the GHCR cache; only the dev deploy build may'
 fi
 for target in api web workers caddy rnsquadjs; do
-  grep -Fq "target \"${target}\"" "$repo_root/docker-bake.hcl" ||
-    fail "docker-bake.hcl has no '${target}' target"
+  grep -Fq "target \"${target}\"" "$repo_root/docker/docker-bake.hcl" ||
+    fail "docker/docker-bake.hcl has no '${target}' target"
 done
 for target in api web workers caddy; do
   has_text "$images" "${target}.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-${target}:buildcache" ||
@@ -284,7 +284,7 @@ done
 has_text "$images" 'rnsquadjs.cache-from=type=gha,scope=rnsquadjs' ||
   fail 'rnsquadjs lost its layer cache'
 has_text "$images" "await import('postgres')" || fail 'the api image smoke test is gone'
-has_text "$images" 'compose.stand.yml' || fail 'the workers image is not checked against compose.stand.yml'
+has_text "$images" 'docker/compose.stand.yml' || fail 'the workers image is not checked against docker/compose.stand.yml'
 has_text "$images" '[[ "${status}" -eq 64 ]]' || fail 'the workers image exit-64 smoke test is gone'
 if has_text "$images" 'upload-artifact' || has_text "$images" 'test-backup-restore'; then
   fail 'images job exports images or runs the backup round trip'

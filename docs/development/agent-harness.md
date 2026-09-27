@@ -106,7 +106,7 @@ branch policy admits `dev` alone.
 - **`build`** — one matrix leg per image (`api`, `web`, `workers`, `caddy`), with
   `packages: write`. A leg skips the build when
   `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists (a redeploy or a
-  rollback); otherwise it builds that target of [`docker-bake.hcl`](../../docker-bake.hcl)
+  rollback); otherwise it builds that target of [`docker/docker-bake.hcl`](../../docker/docker-bake.hcl)
   and pushes `:<sha>` and `:dev`, with a registry layer cache at `:buildcache`
   (`mode=max`). A newer push cancels the same image's older build (concurrency group
   `deploy-build-<image>`), so a merge wave spends minutes only on the commit that will be
@@ -150,7 +150,7 @@ the newest SHA matters and nothing deploys from it.
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
-| `images` | the `release` group and `rnsquadjs` of `docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
+| `images` | the `release` group and `rnsquadjs` of `docker/docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
 | `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
 | `gate` | `needs` every other job with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); then merges the API and web shards' blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite |
 

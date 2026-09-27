@@ -19,7 +19,7 @@ every push to `dev` runs there within minutes, **without tests** — `ci` verifi
 the code only once `dev` is fast-forwarded to `master` (see `CLAUDE.md`). A broken
 stand is fixed forward on `dev` or rolled back (below).
 
-[`compose.stand.yml`](../../compose.stand.yml) is a standalone compose file for
+[`docker/compose.stand.yml`](../../docker/compose.stand.yml) is a standalone compose file for
 the host — it does not extend `docker-compose.yml`. It mirrors the same service
 topology (api/web/caddy + all workers + bridge socket mount on `api`/workers that
 need it), adapted to the stand host's Caddy DNS-01 Caddyfile and named-volume storage
@@ -39,14 +39,14 @@ one before changing anything):
 
 ```bash
 cd ~/apps/squad-admin-panel
-docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml ps
+docker compose --env-file .env.stand --env-file .release.env -f docker/compose.stand.yml ps
 ```
 
 ### How a push reaches the stand host
 
 1. **Build.** [`deploy.yml`](../../.github/workflows/deploy.yml) builds
    the `api`, `web`, `workers` and `caddy` targets of
-   [`docker-bake.hcl`](../../docker-bake.hcl) in parallel on GitHub-hosted runners
+   [`docker/docker-bake.hcl`](../../docker/docker-bake.hcl) in parallel on GitHub-hosted runners
    and pushes them as `ghcr.io/seregatipich/squad-panel-<image>:<sha>`, with a
    registry layer cache in `…:buildcache`. Pushes that only touch Markdown or
    `docs/` do not deploy.
@@ -76,7 +76,7 @@ docker compose --env-file .env.stand --env-file .release.env -f compose.stand.ym
    | an image digest | pulls that image, unless the host already has it |
    | `packages/db/drizzle` | `pg_dump -Fc` into `~/backups/panel-<UTC time>-<12-hex sha>.dump` (mode `0600`; the newest 5 are kept), then `compose run --rm migrator`; a failed dump or migration stops the deploy before any app container is replaced |
    | `docker/Caddyfile.stand` | recreates `caddy` (compose sees the file's hash as `CADDYFILE_SHA`) |
-   | `compose.stand.yml`, `.env.stand` | compose recreates the services whose configuration changed |
+   | `docker/compose.stand.yml`, `.env.stand` | compose recreates the services whose configuration changed |
 
    It then runs `compose up -d --remove-orphans`, polls every recreated service
    each second until it is running and, where it has a healthcheck (`api`, `web`,
@@ -136,7 +136,7 @@ Only when a migration itself destroyed data, restore the dump taken before it
 (this overwrites the whole database; stop the api and workers first):
 
 ```bash
-docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml \
+docker compose --env-file .env.stand --env-file .release.env -f docker/compose.stand.yml \
   exec -T postgres pg_restore -U admin -d admin --clean --if-exists \
   < ~/backups/panel-<UTC time>-<12-hex sha>.dump
 ```
@@ -227,37 +227,8 @@ done
 The self-hosted `stand-deploy` runner and the `production` environment are no
 longer used; unregister the runner and delete the environment with its secrets.
 
-### Fast developer deploy (`scripts/dev-deploy-stand.sh`)
-
-A push to `dev` already reaches the stand host within minutes. For work that is not even
-committed yet, [`scripts/dev-deploy-stand.sh`](../../scripts/dev-deploy-stand.sh)
-rsyncs the working tree into `~/apps/squad-admin-panel/` (the same exclusions as
-the entry) over your own SSH login (`STAND_SSH_TARGET=user@host`, and `STAND_URL` for its
-health probe — the same values as the `stand` environment, not the deploy key), builds one service of the
-same compose project on the host through the
-[`compose.stand.build.yml`](../../compose.stand.build.yml) override, and restarts
-only that container (`up -d --no-deps`):
-
-```bash
-scripts/dev-deploy-stand.sh              # rebuild web only (default)
-scripts/dev-deploy-stand.sh api          # rebuild api only, no migrator
-scripts/dev-deploy-stand.sh worker-rcon  # rebuild one worker container
-CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-stand.sh full
-```
-
-The image is tagged `ghcr.io/seregatipich/squad-panel-<image>:dev-<short sha>`
-(plus `-dirty` for uncommitted changes) and never pushed; `/health` reports that
-stamp only for the `api` and `full` targets, where a pushed deploy reports a
-40-hex commit SHA. The preview is written into `.release.env`, so the next push
-to `dev` sees the difference and replaces it. It needs a release recorded on the
-host already. The `full` target runs `DEPLOY_BUILD=1 scripts/deploy-stand.sh`:
-every image is built on the host and migrations from the working tree are
-applied to the stand database (after the same backup), so it refuses to start
-without `CONFIRM_FULL_DEPLOY=deploy`. Host builds compete with the game server on
-the stand host for CPU.
-
 Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`) and
-`apps/api/test/compose-the stand host-*.test.ts`.
+`apps/api/test/compose-stand-*.test.ts`.
 
 ## Вход через Steam
 
