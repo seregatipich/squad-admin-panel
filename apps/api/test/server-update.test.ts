@@ -347,3 +347,34 @@ async function waitForStreamEntries(
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+describe('POST /api/v1/servers/:id/update lock ownership (#136)', () => {
+  it('does not release a depot lock that another run took over', async () => {
+    const id = await seedServer(h, 'stopped');
+    let finishUpdate: () => void = () => undefined;
+    const updateRunning = new Promise<void>((started) => {
+      h.bridge.depotUpdate = async () => {
+        started();
+        await new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        });
+        return { exit_code: 0 };
+      };
+    });
+
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/update`,
+      headers: { cookie },
+    });
+    expect(resp.json().status).toBe('started');
+    await updateRunning;
+
+    await h.redis.set('depot:updating', 'second-run', 'EX', 60);
+    finishUpdate();
+    await vi.waitFor(() => expect(openUpdateJobs).toBe(0), { timeout: 5_000 });
+
+    expect(await h.redis.get('depot:updating')).toBe('second-run');
+  });
+});

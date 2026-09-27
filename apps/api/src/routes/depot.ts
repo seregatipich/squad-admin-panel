@@ -8,6 +8,7 @@ import {
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { acquireDepotLock, DEPOT_LOCK_KEY, depotLockStartedAt } from '../lib/depot-lock.js';
 import {
   DEPOT_PROGRESS_STREAM,
   publishDepotProgressDone,
@@ -31,6 +32,14 @@ const depotUpdateBody = z
   })
   .strict()
   .default({});
+
+/**
+ * Server statuses whose container is up (or coming up) and must be stopped
+ * for the update and started again after it. Any other requested server is
+ * left untouched: restarting it would bring up a server the operator chose to
+ * keep down.
+ */
+const RESTARTABLE_STATUSES = new Set(['running', 'starting']);
 
 function parseBuildId(manifest: string): string | null {
   const m = /"buildid"\s+"(\d+)"/.exec(manifest);
@@ -82,6 +91,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       const { server_ids: serverIds } = parsed.data;
 
       // Validate that all requested server IDs exist and are not deleted.
+      const serversToStop: string[] = [];
+      const serversSkipped: string[] = [];
       if (serverIds.length > 0) {
         const found = await app.db
           .select({ id: servers.id, status: servers.status })
@@ -94,13 +105,22 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'servers_not_found', missing };
         }
+        const statusById = new Map(found.map((row) => [row.id, row.status]));
+        for (const id of serverIds) {
+          if (RESTARTABLE_STATUSES.has(statusById.get(id) ?? '')) serversToStop.push(id);
+          else serversSkipped.push(id);
+        }
       }
 
-      const startedAt = new Date().toISOString();
-      const acquired = await app.redis.set('depot:updating', startedAt, 'EX', 3600, 'NX');
-      if (!acquired) {
-        const since = await app.redis.get('depot:updating');
-        return { status: 'already_in_progress', since: since ?? startedAt };
+      const lock = await acquireDepotLock(app.redis, {
+        onRenewError: (error) => app.log.error({ err: error }, 'failed to renew depot update lock'),
+      });
+      if (!lock) {
+        const holder = await app.redis.get(DEPOT_LOCK_KEY);
+        return {
+          status: 'already_in_progress',
+          since: holder ? depotLockStartedAt(holder) : new Date().toISOString(),
+        };
       }
 
       // Background orchestration: stop servers → update depot → restart servers.
@@ -163,8 +183,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         try {
           await dedicated.connect();
 
-          // ── Phase 1: stop requested servers ──
-          for (const sid of serverIds) {
+          // ── Phase 1: stop the requested servers that are running ──
+          for (const sid of serversToStop) {
             try {
               // Best-effort: a dropped progress line must not skip the actual
               // stop below, so its failure is logged, not thrown.
@@ -243,7 +263,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
               app.log.error({ err: error }, 'failed to publish depot update completion event');
             },
           );
-          await app.redis.del('depot:updating').catch((error: unknown) => {
+          await lock.release().catch((error: unknown) => {
             app.log.error({ err: error }, 'failed to release depot update lock');
           });
           await dedicated.close().catch((error: unknown) => {
@@ -256,8 +276,9 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         status: 'started',
-        started_at: startedAt,
-        servers_to_stop: serverIds,
+        started_at: lock.startedAt,
+        servers_to_stop: serversToStop,
+        servers_skipped: serversSkipped,
       };
     },
   );
@@ -324,7 +345,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // all) between their POST and this WS connecting — synthesize a
           // terminal frame from the last known result instead of blocking
           // on a live event that will never arrive.
-          const updating = await redis.get('depot:updating');
+          const updating = await redis.get(DEPOT_LOCK_KEY);
           if (!updating) {
             const lastUpdateRaw = await redis.get('depot:last_update');
             if (lastUpdateRaw) {
