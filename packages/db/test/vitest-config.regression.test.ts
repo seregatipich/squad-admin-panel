@@ -1,31 +1,48 @@
-// Регрессия: DB integration tests используют общие fixtures public-схемы и
-// не должны запускать test files параллельно.
+// Регрессия: DB integration tests используют общие fixtures public-схемы. Файлы
+// идут параллельно только потому, что каждый слот воркера получает свой клон
+// мигрированного шаблона — без этой пары настроек параллельные файлы снова
+// делили бы одну базу.
 import { describe, expect, it } from 'vitest';
 import vitestConfig from '../vitest.config.js';
 
+type TestConfig = {
+  globalSetup?: string[];
+  setupFiles?: string[];
+  fileParallelism?: boolean;
+  poolOptions?: { forks?: { maxForks?: number } };
+  sequence?: { concurrent?: boolean };
+  testTimeout?: number;
+  hookTimeout?: number;
+};
+
+const cfg = (vitestConfig as { test?: TestConfig }).test;
+
 describe('vitest config invariants', () => {
-  it('provisions an isolated package database before tests run', () => {
-    const cfg = (vitestConfig as { test?: { globalSetup?: string[] } }).test;
+  it('migrates one package template before tests run', () => {
     expect(cfg?.globalSetup).toContain('./test/global-setup.ts');
   });
 
-  it('fileParallelism is false for shared DB integration tests', () => {
-    const cfg = (vitestConfig as { test?: { fileParallelism?: boolean } }).test;
-    expect(cfg?.fileParallelism).toBe(false);
+  it('gives every worker slot its own clone of the template', () => {
+    expect(cfg?.setupFiles).toContain('./test/helpers/clone-per-worker.ts');
+  });
+
+  it('runs files in parallel now that no two concurrent files share a database', () => {
+    expect(cfg?.fileParallelism).not.toBe(false);
+  });
+
+  it('bounds the worker slots, and so the clones, by VITEST_MAX_FORKS', () => {
+    expect(cfg?.poolOptions?.forks?.maxForks).toBe(Number(process.env.VITEST_MAX_FORKS) || 4);
   });
 
   it('sequence.concurrent is false', () => {
-    const cfg = (vitestConfig as { test?: { sequence?: { concurrent?: boolean } } }).test;
     expect(cfg?.sequence?.concurrent).toBe(false);
   });
 
   it('testTimeout has headroom for coverage runs under root workspace load', () => {
-    const cfg = (vitestConfig as { test?: { testTimeout?: number } }).test;
     expect(cfg?.testTimeout).toBeGreaterThanOrEqual(20_000);
   });
 
   it('global setup has enough time to create and migrate the package database', () => {
-    const cfg = (vitestConfig as { test?: { hookTimeout?: number } }).test;
     expect(cfg?.hookTimeout).toBeGreaterThanOrEqual(120_000);
   });
 });

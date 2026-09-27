@@ -1,7 +1,7 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -45,12 +45,16 @@ async function seedServer(
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('POST /api/v1/servers/:id/force-stop', () => {

@@ -10,8 +10,12 @@
 #   1. the working tree is clean (everything committed);
 #   2. you are on `dev` and it matches `origin/dev` (everything pushed);
 #   3. the branch model is intact (git-guard doctor reports no problems);
-#   4. the `ci` workflow is green on GitHub FOR THE CURRENT dev tip —
-#      a green run on an older SHA does not count.
+#   4. the dev stand runs this tip: the `deploy-tk104` run for the current dev
+#      tip succeeded (a tip that only changes docs, which the deploy ignores,
+#      is covered by the last green deploy of an ancestor);
+#   5. the tip is promoted — `origin/master` is the dev tip — and the `ci`
+#      workflow, which runs only on master, is green FOR THAT SHA. A green
+#      run on an older SHA does not count.
 #
 # Exit 0 = all checks passed; exit 1 = at least one failed (task is NOT done).
 # Requires: git, gh (authenticated), jq.
@@ -22,12 +26,13 @@
 set -u
 
 # Mode selection:
-#   (default)          dev-integration mode — the finished-and-integrated state:
-#                      on dev, dev == origin/dev, local test gate wired.
+#   (default)          integration mode — the finished-and-integrated state:
+#                      on dev, dev == origin/dev, deployed to the dev stand,
+#                      promoted to master with a green ci run.
 #   --feature [branch] parallel-wave handoff mode — a work branch is implemented,
 #                      tested, committed and pushed, ready for the orchestrator to
-#                      integrate. There is deliberately NO dev-CI check here: the
-#                      branch has not been merged yet. Use this to attest a wave
+#                      integrate. There is deliberately NO deploy or CI check
+#                      here: the branch has not been merged yet. Use this to attest a wave
 #                      task done; the orchestrator runs the default mode after
 #                      merging to dev. See CLAUDE.md "Parallel-wave handoff".
 MODE=dev
@@ -159,24 +164,68 @@ else
   pass "git-guard doctor clean"
 fi
 
-# --- 4. dev CI green for THIS tip ---------------------------------------------
-run=$(gh run list --branch dev --workflow ci --limit 15 \
-  --json headSha,status,conclusion,databaseId 2>/dev/null |
-  jq -r --arg sha "$dev_sha" '[.[] | select(.headSha == $sha)][0] // empty | "\(.status) \(.conclusion) \(.databaseId)"')
-if [ -z "$run" ]; then
-  fail "no ci run found for the current dev tip $dev_sha — push dev and watch the run (gh run watch)"
-else
+# Prints "<status> <conclusion> <run id>" for the newest run of a workflow on
+# a branch at exactly the given SHA, or nothing when there is none.
+run_for_sha() {
+  gh run list --branch "$1" --workflow "$2" --limit 30 \
+    --json headSha,status,conclusion,databaseId 2>/dev/null |
+    jq -r --arg sha "$3" '[.[] | select(.headSha == $sha)][0] // empty | "\(.status) \(.conclusion) \(.databaseId)"'
+}
+
+# check_run <label> <status conclusion id> <sha> <hint>
+check_run() {
+  local label=$1 run=$2 sha=$3 hint=$4 status rest conclusion run_id
   status=${run%% *}
   rest=${run#* }
   conclusion=${rest%% *}
   run_id=${rest#* }
   if [ "$status" != "completed" ]; then
-    fail "ci run $run_id for $dev_sha is still $status — work is not done until it is green (gh run watch $run_id)"
+    fail "$label run $run_id for $sha is still $status — work is not done until it is green (gh run watch $run_id)"
   elif [ "$conclusion" = "success" ]; then
-    pass "dev ci green at current tip (run $run_id)"
+    pass "$label green at $sha (run $run_id)"
   else
-    fail "ci run $run_id for $dev_sha concluded '$conclusion' — fix forward until green"
+    fail "$label run $run_id for $sha concluded '$conclusion' — $hint"
   fi
+}
+
+# --- 4. the dev stand runs this tip -------------------------------------------
+# deploy-tk104.yml ignores pushes that only touch Markdown or docs/, so such a
+# tip has no deploy run of its own; the newest green deploy of an ancestor
+# then already serves everything the tip changes.
+deploy_run=$(run_for_sha dev deploy-tk104.yml "$dev_sha")
+if [ -n "$deploy_run" ]; then
+  check_run "dev stand deploy" "$deploy_run" "$dev_sha" "fix forward and push dev again"
+else
+  deployed_sha=$(gh run list --branch dev --workflow deploy-tk104.yml --limit 30 \
+    --json headSha,status,conclusion 2>/dev/null |
+    jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .headSha' |
+    while read -r sha; do
+      if git merge-base --is-ancestor "$sha" "$dev_sha" 2>/dev/null; then
+        echo "$sha"
+        break
+      fi
+    done)
+  if [ -z "$deployed_sha" ]; then
+    fail "no deploy-tk104 run for the current dev tip $dev_sha — push dev and watch the deploy (gh run watch)"
+  elif git diff --name-only "$deployed_sha" "$dev_sha" | grep -qvE '(\.md$|^docs/)'; then
+    fail "no deploy-tk104 run for the current dev tip $dev_sha, and it changes deployable files since the last green deploy ${deployed_sha:0:12}"
+  else
+    pass "dev tip only changes docs since the last green deploy ${deployed_sha:0:12}"
+  fi
+fi
+
+# --- 5. promoted to master and ci green for THIS tip ------------------------
+master_sha=$(git rev-parse origin/master 2>/dev/null || echo "")
+if [ -n "$dev_sha" ] && [ "$master_sha" = "$dev_sha" ]; then
+  pass "dev tip promoted (origin/master == origin/dev == ${dev_sha:0:12})"
+  ci_run=$(run_for_sha master ci.yml "$dev_sha")
+  if [ -z "$ci_run" ]; then
+    fail "no ci run found on master for $dev_sha — watch the run the promotion started (gh run watch)"
+  else
+    check_run "master ci" "$ci_run" "$dev_sha" "fix forward on dev and promote again"
+  fi
+else
+  fail "origin/master ($master_sha) is not the dev tip ($dev_sha) — promote with: git push origin origin/dev:master"
 fi
 
 echo

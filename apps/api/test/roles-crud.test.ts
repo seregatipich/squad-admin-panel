@@ -187,18 +187,23 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
   const OWNER_STEAM = 76561198000001100n;
   let h: IntegrationHarness;
 
-  beforeEach(async () => {
+  // Each case creates roles under its own name and never touches the owner,
+  // so one app serves the whole block.
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
     });
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     // ownerSteamId64 and ownerPlayerId are set together in buildIntegrationApp's
     // seedOwner branch, so ownerSteamId64 being truthy guarantees ownerPlayerId is too.
     if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId as string);
-    await h.cleanup();
+  });
+
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   it('PUT /roles/:id accepts description=null and clears the field', async () => {

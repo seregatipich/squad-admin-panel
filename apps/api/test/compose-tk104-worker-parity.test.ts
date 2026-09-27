@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Regression test: every `worker-*` service defined in the reference compose
- * file (docker-compose.yml) must also exist in the tk104 production compose
+ * file (docker-compose.yml) must also exist in the tk104 dev-stand compose
  * file (compose.tk104.yml), and vice versa.
  *
  * Background: `worker-role-expirer` was added to docker-compose.yml but never
  * mirrored into compose.tk104.yml, so temporary role assignments never
- * expired in production — no container was running the expirer loop. The two
+ * expired on tk104 (then production) — no container ran the expirer loop. The two
  * files are maintained by hand in parallel; this test turns a silent drift
  * into a hard failure.
  */
@@ -63,9 +63,9 @@ describe('compose.tk104.yml — worker service parity with docker-compose.yml', 
       missingOnTk104,
       [
         `Workers defined in ${REFERENCE_COMPOSE} but missing from ${TK104_COMPOSE}: ${missingOnTk104.join(', ')}.`,
-        'Every worker must run in production — mirror the service definition',
-        `into ${TK104_COMPOSE} (worker.Dockerfile build, tk104 postgres/redis`,
-        'URLs, migrator dependency, logging block).',
+        'Every worker must run on tk104 — mirror the service definition',
+        `into ${TK104_COMPOSE} (WORKERS_IMAGE image, tk104 postgres/redis URLs,`,
+        'logging block) and give it a build in compose.tk104.build.yml.',
       ].join('\n'),
     ).toEqual([]);
 

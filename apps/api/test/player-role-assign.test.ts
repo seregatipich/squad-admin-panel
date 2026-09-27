@@ -254,20 +254,36 @@ describeIfDb('cache invalidation on role permission change', () => {
 describeIfDb('GET /api/v1/players — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001400n;
   let h: IntegrationHarness;
+  let harnessOwnerRoleId: string;
 
-  beforeEach(async () => {
+  // Built once for the describe; only the 403 case mutates state (it strips
+  // the owner's role), so each test first puts the owner back on Owner.
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
+    const [ownerRole] = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
+    if (!ownerRole) throw new Error('owner role missing');
+    harnessOwnerRoleId = ownerRole.id;
   });
 
-  afterEach(async () => {
-    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
-      invalidatePermissionCache(h.seed.ownerPlayerId);
-    }
-    await h.cleanup();
+  afterAll(async () => {
+    await h?.cleanup();
+  });
+
+  beforeEach(async () => {
+    await h.db
+      .update(players)
+      .set({ roleId: harnessOwnerRoleId })
+      .where(eq(players.steamId64, OWNER_STEAM));
+    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
   });
 
   it('returns 401 without authentication', async () => {
@@ -339,7 +355,9 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001410n;
   let h: IntegrationHarness;
 
-  beforeEach(async () => {
+  // Built once for the describe: every test seeds its own target player under
+  // a unique SteamID and none of them changes the owner's role.
+  beforeAll(async () => {
     // No seedOwnerGuard here: "returns 409 when trying to remove the last
     // Owner" below specifically needs OWNER_STEAM to be the sole Owner.
     h = await buildIntegrationApp({
@@ -348,11 +366,13 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
     });
   });
 
-  afterEach(async () => {
-    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
-      invalidatePermissionCache(h.seed.ownerPlayerId);
-    }
-    await h.cleanup();
+  afterAll(async () => {
+    await h?.cleanup();
+  });
+
+  beforeEach(() => {
+    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
   });
 
   it('assigns a role to a player and returns ok', async () => {

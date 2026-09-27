@@ -1,13 +1,16 @@
 # Host build override for compose.tk104.yml.
 #
-# Releases never build on tk104: CI builds the api, web, workers and caddy
-# images once, and the deploy loads them (see docs/operations/deployment.md).
-# This override restores the builds for the two cases that still need them:
-# scripts/dev-deploy-tk104.sh previews an unreleased working tree, and an
-# operator can rebuild by hand if a release artifact is unavailable:
+# A push to dev never builds on tk104: the deploy workflow builds the api, web,
+# workers and caddy images, pushes them to ghcr.io, and the host pulls them by
+# digest (see docs/operations/deployment.md). This override restores the builds
+# for the cases that still need them — scripts/dev-deploy-tk104.sh previews an
+# unpushed working tree, and DEPLOY_BUILD=1 scripts/deploy-tk104.sh builds a
+# whole release — tagging each image with the reference its *_IMAGE variable
+# names, for example:
 #
-#   PANEL_IMAGE_TAG=<tag> docker compose --env-file .env.tk104 \
-#     -f compose.tk104.yml -f compose.tk104.build.yml build <service>
+#   API_IMAGE=ghcr.io/seregatipich/squad-panel-api:dev-abc1234 \
+#     docker compose --env-file .env.tk104 --env-file .release.env \
+#     -f compose.tk104.yml -f compose.tk104.build.yml build api
 #
 # Every worker service builds the same all-workers image; the build cache makes
 # every build after the first one a no-op.

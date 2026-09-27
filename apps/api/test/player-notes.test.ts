@@ -1,6 +1,6 @@
 import { auditLog, playerNotes, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
@@ -79,15 +79,19 @@ describe('player notes', () => {
   let ownerCookie: string;
   let subjectId: string;
 
-  beforeEach(async () => {
-    seq = 0;
+  beforeAll(async () => {
     h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
     ownerCookie = await loginAsOwner(h);
+  });
+
+  beforeEach(async () => {
+    // A fresh subject per case keeps list totals and ordering to the notes
+    // this case wrote; `seq` keeps counting so SteamIDs never repeat.
     subjectId = await seedPlayer(h, null, 'SubjectPlayer');
   });
 
-  afterEach(async () => {
-    await h.cleanup();
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   describe('POST /api/v1/players/:playerId/notes', () => {

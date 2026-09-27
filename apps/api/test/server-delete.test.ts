@@ -9,7 +9,7 @@ import {
 import { ALLOWED_CONFIG_FILES } from '@squad/shared-config';
 import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
@@ -74,12 +74,19 @@ const silentLogger = {
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+// One app + database per file; every test seeds its own server (unique id and
+// slug) and Redis keys derive from it. relayAdminsCfgSyncOutbox() relays every
+// pending outbox row regardless of server, so the outbox starts empty.
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db.delete(adminsCfgSyncOutbox);
 });
 
 describe('softDeleteServer (orchestrator)', () => {
@@ -112,7 +119,7 @@ describe('softDeleteServer (orchestrator)', () => {
           directoryDelete: typeof directoryDelete;
         },
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: '127.0.0.1',
@@ -184,7 +191,7 @@ describe('softDeleteServer (orchestrator)', () => {
           db: h.db,
           bridge: bridge as unknown as FakeBridge,
           log: silentLogger,
-          // beforeEach always calls buildIntegrationApp with seedOwner, so
+          // beforeAll always calls buildIntegrationApp with seedOwner, so
           // ownerPlayerId is defined for every test in this file.
           actorPlayerId: h.seed.ownerPlayerId as string,
           actorIp: null,
@@ -221,7 +228,7 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
@@ -270,7 +277,7 @@ describe('softDeleteServer (orchestrator)', () => {
           db: h.db,
           bridge: bridge as unknown as FakeBridge,
           log: silentLogger,
-          // beforeEach always calls buildIntegrationApp with seedOwner, so
+          // beforeAll always calls buildIntegrationApp with seedOwner, so
           // ownerPlayerId is defined for every test in this file.
           actorPlayerId: h.seed.ownerPlayerId as string,
           actorIp: null,
@@ -309,7 +316,7 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
@@ -428,7 +435,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: '127.0.0.1',
@@ -470,7 +477,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
@@ -520,7 +527,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // beforeAll always calls buildIntegrationApp with seedOwner, so
         // ownerPlayerId is defined for every test in this file.
         actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,

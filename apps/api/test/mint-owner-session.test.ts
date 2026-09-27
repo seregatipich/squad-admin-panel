@@ -5,21 +5,45 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { main } from '../src/tools/mint-owner-session.js';
 import { type CreatedSchema, createIsolatedSchema } from './integration/isolated-db.js';
 
-const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const API_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NEW_PLAYER_STEAM_ID = '76561199925900001';
 const EXISTING_PLAYER_STEAM_ID = '76561199925900002';
 
 type SqlClient = ReturnType<typeof postgres>;
 
-function runCli(args: string[], env: NodeJS.ProcessEnv = process.env) {
-  return spawnSync('pnpm', ['--silent', 'mint:owner-session', '--', ...args], {
-    cwd: REPOSITORY_ROOT,
-    env,
-    encoding: 'utf8',
-    timeout: 15_000,
+interface CommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+// Runs the command in-process through the same `main` the CLI calls. The
+// leading `--` is what `pnpm mint:owner-session -- …` hands the script.
+async function runCommand(args: string[], env: NodeJS.ProcessEnv): Promise<CommandResult> {
+  let stdout = '';
+  let stderr = '';
+  const status = await main(['--', ...args], env, {
+    stdout: (text) => {
+      stdout += text;
+    },
+    stderr: (text) => {
+      stderr += text;
+    },
   });
+  return { status, stdout, stderr };
+}
+
+// Starts the real entry point the way the package script does (tsx with the
+// development export condition), minus the pnpm wrapper's own startup cost.
+function spawnCli(args: string[], env: NodeJS.ProcessEnv): CommandResult {
+  return spawnSync(
+    process.execPath,
+    ['--conditions=development', '--import', 'tsx', 'src/tools/mint-owner-session.ts', ...args],
+    { cwd: API_ROOT, env, encoding: 'utf8', timeout: 15_000 },
+  );
 }
 
 function tokenId(rawToken: string): string {
@@ -71,15 +95,15 @@ describe('mint-owner-session operator command', () => {
   });
 
   it('resolves workspace sources in a fresh checkout before packages are built', () => {
-    const manifest = JSON.parse(
-      readFileSync(path.join(REPOSITORY_ROOT, 'apps/api/package.json'), 'utf8'),
-    ) as { scripts?: Record<string, string> };
+    const manifest = JSON.parse(readFileSync(path.join(API_ROOT, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    };
 
     expect(manifest.scripts?.['mint:owner-session']).toContain('--conditions=development');
   });
 
-  it('prints help without requiring a database connection', () => {
-    const result = runCli(['--help'], { ...process.env, DATABASE_URL: '' });
+  it('prints help without requiring a database connection', async () => {
+    const result = await runCommand(['--help'], { DATABASE_URL: '' });
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
@@ -87,13 +111,10 @@ describe('mint-owner-session operator command', () => {
     expect(result.stdout).toContain('--confirm-steam-id64 <same 17 digits>');
   });
 
-  it('rejects an invalid SteamID64 before trying to connect', () => {
-    const result = runCli(
+  it('rejects an invalid SteamID64 before trying to connect', async () => {
+    const result = await runCommand(
       ['--steam-id64', '123', '--confirm-steam-id64', '123', '--name', 'Owner'],
-      {
-        ...process.env,
-        DATABASE_URL: '',
-      },
+      { DATABASE_URL: '' },
     );
 
     expect(result.status).toBe(1);
@@ -101,8 +122,8 @@ describe('mint-owner-session operator command', () => {
     expect(result.stderr).toContain('SteamID64 must contain exactly 17 digits');
   });
 
-  it('rejects a confirmation mismatch before trying to connect', () => {
-    const result = runCli(
+  it('rejects a confirmation mismatch before trying to connect', async () => {
+    const result = await runCommand(
       [
         '--steam-id64',
         NEW_PLAYER_STEAM_ID,
@@ -111,10 +132,7 @@ describe('mint-owner-session operator command', () => {
         '--name',
         'Owner',
       ],
-      {
-        ...process.env,
-        DATABASE_URL: '',
-      },
+      { DATABASE_URL: '' },
     );
 
     expect(result.status).toBe(1);
@@ -122,8 +140,8 @@ describe('mint-owner-session operator command', () => {
     expect(result.stderr).toContain('--confirm-steam-id64 must exactly match --steam-id64');
   });
 
-  it('requires DATABASE_URL after validating the explicit confirmation', () => {
-    const result = runCli(
+  it('requires DATABASE_URL after validating the explicit confirmation', async () => {
+    const result = await runCommand(
       [
         '--steam-id64',
         NEW_PLAYER_STEAM_ID,
@@ -132,17 +150,17 @@ describe('mint-owner-session operator command', () => {
         '--name',
         'Owner',
       ],
-      { ...process.env, DATABASE_URL: '' },
+      { DATABASE_URL: '' },
     );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('DATABASE_URL is required');
+    expect(result.stderr).toBe('mint-owner-session: DATABASE_URL is required\n');
   });
 
-  it('does not echo database credentials when a connection fails', () => {
+  it('does not echo database credentials when a connection fails', async () => {
     const credential = `mint-secret-${randomBytes(8).toString('hex')}`;
-    const result = runCli(
+    const result = await runCommand(
       [
         '--steam-id64',
         NEW_PLAYER_STEAM_ID,
@@ -151,22 +169,22 @@ describe('mint-owner-session operator command', () => {
         '--name',
         'Owner',
       ],
-      {
-        ...process.env,
-        DATABASE_URL: `postgres://admin:${credential}@127.0.0.1:1/admin`,
-      },
+      { DATABASE_URL: `postgres://admin:${credential}@127.0.0.1:1/admin` },
     );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/^mint-owner-session: /u);
     expect(result.stderr).not.toContain(credential);
   });
 
+  // The one case that still starts a process: it proves the entry point wires
+  // argv, stdout and the exit code the way an operator's shell sees them.
   it('creates a new Owner player and a six-hour panel session through player_id', async () => {
     await sql`DELETE FROM players WHERE steam_id64 = ${NEW_PLAYER_STEAM_ID}`;
     const startedAt = Date.now();
 
-    const result = runCli(
+    const result = spawnCli(
       [
         '--steam-id64',
         NEW_PLAYER_STEAM_ID,
@@ -297,7 +315,7 @@ describe('mint-owner-session operator command', () => {
     `;
     if (!existing) throw new Error('failed to seed existing player');
 
-    const result = runCli(
+    const result = await runCommand(
       [
         '--steam-id64',
         EXISTING_PLAYER_STEAM_ID,
@@ -306,7 +324,7 @@ describe('mint-owner-session operator command', () => {
         '--name',
         '  <MDC> Operator supplied name  ',
       ],
-      { ...process.env, DATABASE_URL: databaseUrl },
+      { DATABASE_URL: databaseUrl },
     );
 
     expect(result.status, result.stderr).toBe(0);

@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { writeAuditEntry } from '../src/lib/audit.js';
 import {
   buildIntegrationApp,
@@ -129,15 +129,17 @@ describe('GET /api/v1/audit — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001200n;
   let h: IntegrationHarness;
 
-  beforeEach(async () => {
+  // Built once for the describe: the only write is the single server.create
+  // the happy path adds, which the other tests' audit reads tolerate.
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
     });
   });
 
-  afterEach(async () => {
-    await h.cleanup();
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   it('returns 401 without authentication', async () => {

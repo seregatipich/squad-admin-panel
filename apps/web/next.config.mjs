@@ -41,6 +41,15 @@ function configsCsp() {
 /** @type {import('next').NextConfig} */
 export default {
   reactStrictMode: true,
+  // The web image build sits on the path of every `dev` deploy, and its type
+  // check and lint only repeat dedicated gates: `turbo run typecheck` and
+  // `biome check` run in the local pre-push checklist and in ci on master.
+  // This package's typecheck runs `next typegen` before `tsc --noEmit`, so
+  // it still checks page and layout exports against the generated route types
+  // the way the build did. Skipping both here cuts that time from every image
+  // build.
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
   async headers() {
     return [
       {

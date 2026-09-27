@@ -1,7 +1,7 @@
 import { chatMessages, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -22,9 +22,11 @@ import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = testSteamId(186000);
-const SERVER_ID = '019e2000-0000-7000-8000-000000000001';
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let serverId: string;
+const createdRoleIds: string[] = [];
 
 function okOutcome(overrides: Partial<WorkerRconCommandOutcome> = {}): WorkerRconCommandOutcome {
   return {
@@ -41,23 +43,46 @@ function notConnectedOutcome(): WorkerRconCommandOutcome {
   return { attempted: false, reason: 'worker_not_connected' };
 }
 
-beforeEach(async () => {
+// One app + database per file. Each test gets its own server, so chat rows,
+// the Redis roster and audit rows (all keyed by server id) never leak between
+// tests; the owner is put back on Owner after asRoleWithSquadPermissions().
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  serverId = uuidv7();
   await h.db.insert(servers).values({
-    id: SERVER_ID,
+    id: serverId,
     displayName: 'Messaging Test Server',
-    slug: 'messaging-test-server',
+    slug: `messaging-test-${serverId}`,
   });
   vi.mocked(sendRconCommandViaWorker).mockReset();
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
-});
-
 async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -107,7 +132,7 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
   it('rejects an unauthenticated request', async () => {
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/broadcast`,
+      url: `/api/v1/servers/${serverId}/broadcast`,
       payload: { message: 'hello there' },
     });
     expect(resp.statusCode).toBe(401);
@@ -117,7 +142,7 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/broadcast`,
+      url: `/api/v1/servers/${serverId}/broadcast`,
       headers: { cookie },
       payload: { message: 'hello there' },
     });
@@ -129,7 +154,7 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/broadcast`,
+      url: `/api/v1/servers/${serverId}/broadcast`,
       headers: { cookie },
       payload: { message: 'a' },
     });
@@ -144,7 +169,7 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/broadcast`,
+      url: `/api/v1/servers/${serverId}/broadcast`,
       headers: { cookie },
       payload: { message: 'Server restarting soon' },
     });
@@ -154,13 +179,13 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        serverId: SERVER_ID,
+        serverId,
         command: 'AdminBroadcast',
         args: ['Server restarting soon'],
       }),
     );
 
-    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, serverId));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.scope).toBe('broadcast');
     expect(rows[0]?.source).toBe('panel');
@@ -171,7 +196,7 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     const audit = await assertAuditRow(h, {
       action: 'server.broadcast',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(audit.afterSnapshot).toMatchObject({ message: 'Server restarting soon' });
   });
@@ -181,13 +206,13 @@ describeIfDb('POST /api/v1/servers/:serverId/broadcast', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/broadcast`,
+      url: `/api/v1/servers/${serverId}/broadcast`,
       headers: { cookie },
       payload: { message: 'Server restarting soon' },
     });
     expect(resp.statusCode).toBe(502);
 
-    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, serverId));
     expect(rows).toHaveLength(0);
   });
 });
@@ -196,7 +221,7 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
   it('rejects an unauthenticated request', async () => {
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/2/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/2/message?team_id=1`,
       payload: { message: 'move up' },
     });
     expect(resp.statusCode).toBe(401);
@@ -206,7 +231,7 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/2/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/2/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'move up' },
     });
@@ -218,7 +243,7 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/2/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/2/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'x' },
     });
@@ -231,8 +256,8 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
 
     await h.redis.set(
-      `rcon:roster:${SERVER_ID}`,
-      storedRoster(SERVER_ID, [
+      `rcon:roster:${serverId}`,
+      storedRoster(serverId, [
         rosterEntry({
           rcon_id: 0,
           eos_id: 'eos-a1',
@@ -272,7 +297,7 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/2/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/2/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'Push the flag now' },
     });
@@ -291,7 +316,7 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     const audit = await assertAuditRow(h, {
       action: 'server.squad_message',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     const after = audit.afterSnapshot as {
       squad_id: number;
@@ -308,14 +333,14 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
 
     await h.redis.set(
-      `rcon:roster:${SERVER_ID}`,
-      storedRoster(SERVER_ID, [
+      `rcon:roster:${serverId}`,
+      storedRoster(serverId, [
         rosterEntry({ eos_id: 'eos-b1', name: 'First', team_id: 1, squad_id: 4 }),
       ]),
     );
     const first = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/4/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/4/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'first wave' },
     });
@@ -326,14 +351,14 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
 
     // Roster changes between requests: First left, Second joined the squad.
     await h.redis.set(
-      `rcon:roster:${SERVER_ID}`,
-      storedRoster(SERVER_ID, [
+      `rcon:roster:${serverId}`,
+      storedRoster(serverId, [
         rosterEntry({ eos_id: 'eos-b2', name: 'Second', team_id: 1, squad_id: 4 }),
       ]),
     );
     const second = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/4/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/4/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'second wave' },
     });
@@ -346,11 +371,11 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
   it('returns an empty recipient list and still audits when the squad is empty', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
     const cookie = await asRoleWithSquadPermissions(['chat']);
-    await h.redis.set(`rcon:roster:${SERVER_ID}`, storedRoster(SERVER_ID, []));
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId, []));
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/squads/9/message?team_id=1`,
+      url: `/api/v1/servers/${serverId}/squads/9/message?team_id=1`,
       headers: { cookie },
       payload: { message: 'anyone there?' },
     });
@@ -361,20 +386,24 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
 });
 
 describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
-  const TARGET_EOS_ID = 'eos-msg2-target-000000000000001';
   const UNKNOWN_PLAYER_ID = '019e2000-0000-7000-8000-0000000009ff';
 
+  let targetEosId: string;
   let targetPlayerId: string;
   let unaddressablePlayerId: string;
+  // A fresh addressee per test: the card's chat listing below is filtered by
+  // player only, so rows logged by other tests must not share it.
+  let nextTargetSteamSuffix = 185001;
 
   beforeEach(async () => {
+    targetEosId = `eos-msg2-target-${uuidv7()}`;
     const [target] = await h.db
       .insert(players)
       .values({
-        steamId64: testSteamId(185001),
+        steamId64: testSteamId(nextTargetSteamSuffix++),
         canonicalName: 'DirectTarget',
         canonicalNameNormalized: 'directtarget',
-        eosId: TARGET_EOS_ID,
+        eosId: targetEosId,
       })
       .returning({ id: players.id });
     const [unaddressable] = await h.db
@@ -395,7 +424,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
   it('rejects an unauthenticated direct message', async () => {
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       payload: { message: 'stop teamkilling' },
     });
     expect(resp.statusCode).toBe(401);
@@ -407,7 +436,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'stop teamkilling' },
     });
@@ -423,7 +452,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${UNKNOWN_PLAYER_ID}/message`,
+      url: `/api/v1/servers/${serverId}/players/${UNKNOWN_PLAYER_ID}/message`,
       headers: { cookie },
       payload: { message: 'stop teamkilling' },
     });
@@ -436,7 +465,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${unaddressablePlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${unaddressablePlayerId}/message`,
       headers: { cookie },
       payload: { message: 'stop teamkilling' },
     });
@@ -449,7 +478,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'x'.repeat(301) },
     });
@@ -462,7 +491,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'stop teamkilling' },
     });
@@ -477,9 +506,9 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        serverId: SERVER_ID,
+        serverId,
         command: 'AdminWarn',
-        args: [TARGET_EOS_ID, 'stop teamkilling'],
+        args: [targetEosId, 'stop teamkilling'],
       }),
     );
   });
@@ -489,7 +518,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'last warning', log_to_card: true },
     });
@@ -498,11 +527,11 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const audit = await assertAuditRow(h, {
       action: 'server.player_message',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(audit.afterSnapshot).toMatchObject({
       player_id: targetPlayerId,
-      target: TARGET_EOS_ID,
+      target: targetEosId,
       message: 'last warning',
       log_to_card: true,
     });
@@ -513,13 +542,13 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'behave please', log_to_card: true },
     });
     expect(resp.statusCode).toBe(200);
 
-    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, serverId));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.playerId).toBe(targetPlayerId);
     expect(rows[0]?.scope).toBe('direct');
@@ -548,13 +577,13 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'silent nudge' },
     });
     expect(resp.statusCode).toBe(200);
 
-    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, serverId));
     expect(rows).toHaveLength(0);
   });
 
@@ -563,7 +592,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
     const cookie = await asRoleWithSquadPermissions(['chat']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      url: `/api/v1/servers/${serverId}/players/${targetPlayerId}/message`,
       headers: { cookie },
       payload: { message: 'you there?', log_to_card: true },
     });
@@ -573,7 +602,7 @@ describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
       reason: 'worker_not_connected',
     });
 
-    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, serverId));
     expect(rows).toHaveLength(0);
   });
 });

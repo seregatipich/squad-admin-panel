@@ -11,7 +11,7 @@ import {
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -30,15 +30,17 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 const OWNER_STEAM = testSteamId(965001);
-const TARGET_STEAM = testSteamId(965002);
-const ALT_STEAM = testSteamId(965003);
 const LIMITED_STEAM = testSteamId(965004);
+// Each case seeds its own target/alt pair above this base (see beforeEach).
+const PAIR_STEAM_BASE = 965100;
 
 let h: IntegrationHarness;
 let ownerId: string;
 let targetId: string;
 let altId: string;
+let altSteam: bigint;
 let serverId: string;
+let pairSeq = 0;
 
 function okOutcome() {
   return {
@@ -92,16 +94,27 @@ async function insertConfirmedAlt(): Promise<void> {
   });
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
+  ownerId = h.seed.ownerPlayerId;
+});
+
+afterAll(async () => {
+  await h.cleanup();
+});
+
+// A fresh target/alt pair per case: the ban flow leaves active bans and
+// moderation rows on its pair, which must not leak into the warning cases.
+beforeEach(async () => {
   vi.mocked(sendRconCommandViaWorker).mockReset();
   vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
-  ownerId = h.seed.ownerPlayerId;
-  targetId = await seedPlayer(TARGET_STEAM, 'Ban target');
-  altId = await seedPlayer(ALT_STEAM, 'Confirmed alt');
+  pairSeq += 1;
+  altSteam = testSteamId(PAIR_STEAM_BASE + pairSeq * 2 + 1);
+  targetId = await seedPlayer(testSteamId(PAIR_STEAM_BASE + pairSeq * 2), 'Ban target');
+  altId = await seedPlayer(altSteam, 'Confirmed alt');
   serverId = uuidv7();
   await h.db
     .insert(servers)
@@ -109,9 +122,8 @@ beforeEach(async () => {
   await insertConfirmedAlt();
 });
 
-afterEach(async () => {
+afterEach(() => {
   invalidateAllPermissionCaches();
-  await h.cleanup();
 });
 
 describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
@@ -196,7 +208,7 @@ describeIfDb('ALT-7 report ban flow', () => {
       expect.anything(),
       expect.objectContaining({
         command: 'AdminBan',
-        args: [String(ALT_STEAM), '0', 'alt test'],
+        args: [String(altSteam), '0', 'alt test'],
       }),
     );
 

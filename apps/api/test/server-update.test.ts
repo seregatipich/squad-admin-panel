@@ -1,7 +1,7 @@
 import { players, roles, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -26,21 +26,59 @@ async function seedServer(h: IntegrationHarness, status: string) {
 }
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
-beforeEach(async () => {
+// POST /servers/:id/update keeps running the SteamCMD job after it replies,
+// and on a shared app one test's job could release the depot lock or append to
+// depot:progress in the middle of the next test. Every job opens and closes the
+// fake bridge exactly once, so counting the pairs tells when none is in flight.
+let openUpdateJobs = 0;
+function trackedBridge() {
+  return makeFakeBridge({
+    connect: async () => {
+      openUpdateJobs++;
+    },
+    close: async () => {
+      openUpdateJobs--;
+    },
+  });
+}
+
+// One app + database per file; every test seeds its own server. Each test
+// starts with the default fake bridge (tests swap depotUpdate in place), no
+// depot keys in Redis and the owner back on Owner after the Viewer demotion.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
-    bridge: makeFakeBridge(),
+    bridge: trackedBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  Object.assign(h.bridge, trackedBridge());
   await h.redis.del('depot:updating', 'depot:last_update', 'depot:progress');
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId)
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.redis.del('depot:updating', 'depot:last_update', 'depot:progress');
-  await h.cleanup();
+  await vi.waitFor(() => expect(openUpdateJobs).toBe(0), { timeout: 5_000 });
 });
 
 describe('POST /api/v1/servers/:id/update', () => {
@@ -58,7 +96,9 @@ describe('POST /api/v1/servers/:id/update', () => {
     const body = resp.json();
     expect(body.status).toBe('started');
     expect(body.server_id).toBe(id);
-    await assertAuditRow(h, { action: 'server.game_update', resource: 'server' });
+    // Scoped to this server: other tests here write server.game_update rows
+    // into the same append-only audit_log.
+    await assertAuditRow(h, { action: 'server.game_update', resource: 'server', targetId: id });
   });
 
   it('accepts a "ready" server too', async () => {

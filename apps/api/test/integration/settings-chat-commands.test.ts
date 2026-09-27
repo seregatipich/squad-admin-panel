@@ -6,7 +6,7 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const OWNER_STEAM_ID = 76561198222075001n;
@@ -15,12 +15,14 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+// One app + database per file: every test seeds its own server (unique id and
+// slug) and only reads or writes rows keyed by it.
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 /** Inserts a server + settings + credentials row and returns the server id. */

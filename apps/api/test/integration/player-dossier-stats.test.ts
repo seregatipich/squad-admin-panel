@@ -4,7 +4,7 @@ import {
   playerVehicleStats,
   playerWeaponStats,
 } from '@squad/db/schema';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -17,8 +17,18 @@ const OWNER_STEAM_ID = 76561198000000991n;
 let h: IntegrationHarness;
 let playerId: string;
 
-afterEach(async () => {
-  if (h) await h.cleanup();
+// One harness and one dossier player for the file: every test only reads,
+// and each describe seeds a disjoint stats table for that same player.
+beforeAll(async () => {
+  h = await buildIntegrationApp({
+    seedOwner: { steamId64: OWNER_STEAM_ID },
+    bridge: makeFakeBridge(),
+  });
+  playerId = await seedPlayer();
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function seedPlayer(): Promise<string> {
@@ -35,12 +45,7 @@ async function seedPlayer(): Promise<string> {
 }
 
 describe('GET /api/v1/players/:playerId/weapon-stats', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      bridge: makeFakeBridge(),
-    });
-    playerId = await seedPlayer();
+  beforeAll(async () => {
     await h.db.insert(playerWeaponStats).values([
       {
         playerId,
@@ -94,12 +99,7 @@ describe('GET /api/v1/players/:playerId/weapon-stats', () => {
 });
 
 describe('GET /api/v1/players/:playerId/vehicle-stats', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      bridge: makeFakeBridge(),
-    });
-    playerId = await seedPlayer();
+  beforeAll(async () => {
     await h.db.insert(playerVehicleStats).values([
       { playerId, vehicleAssetId: 'BTR82A', kills: 5, damage: '320' },
       { playerId, vehicleAssetId: 'T72B3', kills: 2, damage: null },

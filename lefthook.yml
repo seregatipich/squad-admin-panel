@@ -7,11 +7,31 @@ pre-commit:
       glob: "*.{ts,tsx,js,jsx,json,css}"
       run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
     go-fmt:
+      # `gofmt -l` lists unformatted files but exits 0 either way, so the list
+      # itself must fail the hook. The bridge only builds for Linux, so vet
+      # targets linux/amd64 like its build script; a plain `go vet` fails on
+      # macOS for the Linux-only syscalls.
       glob: "apps/bridge/**/*.go"
       run: |
-        cd apps/bridge && gofmt -l -s . && go vet ./...
+        if ! command -v go >/dev/null 2>&1; then
+          echo "[go-fmt] skipping gofmt and go vet: go is not on PATH (the ci go job still runs them)"
+          exit 0
+        fi
+        cd apps/bridge || exit 1
+        unformatted="$(gofmt -l -s .)"
+        if [ -n "$unformatted" ]; then
+          echo "[go-fmt] not gofmt -s formatted (fix with: gofmt -w -s apps/bridge):"
+          echo "$unformatted"
+          exit 1
+        fi
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...
     gitleaks:
-      run: gitleaks protect --staged --no-banner --redact || true
+      run: |
+        if ! command -v gitleaks >/dev/null 2>&1; then
+          echo "[gitleaks] skipping the staged secret scan: gitleaks is not installed"
+          exit 0
+        fi
+        gitleaks protect --staged --config .gitleaks.toml --no-banner --redact
 
 pre-push:
   parallel: false
@@ -24,12 +44,13 @@ pre-push:
       priority: 1
       run: bash scripts/git-guard.sh check-push origin origin
     checklist:
-      # This is a fast local pre-check — the cloud `ci` workflow is the
-      # authoritative gate. Runs typecheck, biome, build, secret scan, and
-      # the affected test suite (auto-provisioning an isolated DB when
-      # possible). Any failure blocks the push. Skipped automatically on
-      # no-diff pushes (e.g. dev→master promotion). Bypass in an emergency
-      # with `git push --no-verify`.
-      # Knobs: FULL=1 (full coverage suite), SKIP_BUILD=1 (skip build step).
+      # The light local pre-check a dev push gets before it deploys the tk104
+      # stand: biome, gitleaks, typecheck and tests of what changed since
+      # origin/dev (auto-provisioning a test DB when possible; DB-backed suites
+      # are skipped with a warning without one). `ci` on master is the
+      # authoritative gate. Runs on every push, the dev→master promotion
+      # included. Bypass in an emergency with `git push --no-verify`.
+      # Knobs: FULL=1 (the full gate: build, test:cov, mutation tests),
+      # SKIP_BUILD=1 (with FULL=1), PREPUSH_TURBO_CONCURRENCY (default 2).
       priority: 2
       run: bash scripts/pre-push-checklist.sh

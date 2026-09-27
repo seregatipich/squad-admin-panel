@@ -1,7 +1,7 @@
 import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -64,7 +64,7 @@ describeIfDb('role-members bulk toolkit', () => {
     ).length;
   }
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
@@ -90,9 +90,17 @@ describeIfDb('role-members bulk toolkit', () => {
     });
   });
 
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  // Cases assert the exact member lists of the shared roles, so drop the
+  // players each case seeded (their role assignments go with them).
   afterEach(async () => {
     if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-    await h.cleanup();
+    for (const sid of [PLAYER_A, PLAYER_B, PLAYER_C]) {
+      await h.db.delete(players).where(eq(players.steamId64, sid));
+    }
   });
 
   it('requires authentication for import', async () => {

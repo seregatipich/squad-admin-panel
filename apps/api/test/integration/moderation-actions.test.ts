@@ -10,7 +10,7 @@ import {
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -42,8 +42,18 @@ let h: IntegrationHarness;
 let playerId: string;
 let authorId: string;
 
-afterEach(async () => {
-  if (h) await h.cleanup();
+// One app + database per file. Every test seeds its own players, servers,
+// roles and media under unique SteamIDs/uuids and asserts only on rows scoped
+// to them, so tests share the database without resets.
+beforeAll(async () => {
+  h = await buildIntegrationApp({
+    seedOwner: { steamId64: OWNER_STEAM_ID },
+    bridge: makeFakeBridge(),
+  });
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 async function seedPlayer(steamId: bigint, name: string, eosId?: string): Promise<string> {
@@ -146,11 +156,8 @@ function okOutcome(overrides: Partial<WorkerRconCommandOutcome> = {}): WorkerRco
 }
 
 describe('GET /api/v1/players/:playerId/moderation-actions', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: OWNER_STEAM_ID },
-      bridge: makeFakeBridge(),
-    });
+  // Both tests only read this history, so it is seeded once.
+  beforeAll(async () => {
     playerId = await seedPlayer(76561198000000123n, 'TargetPlayer');
     authorId = await seedPlayer(76561198000000124n, 'ModeratorPlayer');
     await h.db.insert(moderationActions).values([
@@ -218,7 +225,6 @@ describe('RBAC: mod:* squad-permission gate', () => {
   });
 
   it('panel user without squad ban permission cannot see mod:ban_perm', async () => {
-    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
     const actorId = await seedActorWithSquadPermissions({
       steamId64: testSteamId(977100),
       squadPermissionKeys: [],
@@ -234,7 +240,6 @@ describe('RBAC: mod:* squad-permission gate', () => {
   });
 
   it('panel user with squad ban permission receives mod:ban_perm', async () => {
-    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
     const actorId = await seedActorWithSquadPermissions({
       steamId64: testSteamId(977101),
       squadPermissionKeys: ['ban'],
@@ -251,8 +256,7 @@ describe('RBAC: mod:* squad-permission gate', () => {
 });
 
 describe('POST /api/v1/players/:playerId/moderation-actions', () => {
-  beforeEach(async () => {
-    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
+  beforeEach(() => {
     vi.mocked(sendRconCommandViaWorker).mockReset();
   });
 
@@ -348,15 +352,18 @@ describe('POST /api/v1/moderation-actions/:id/revert', () => {
   let actorId: string;
   let cookie: string;
 
-  beforeEach(async () => {
-    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
-    vi.mocked(sendRconCommandViaWorker).mockReset().mockResolvedValue(okOutcome());
-    vi.mocked(writeVersion).mockClear();
-    serverId = await seedServer('Revert Test Server');
+  // The actor's SteamID is unique, so it is seeded once for the describe.
+  beforeAll(async () => {
     actorId = await seedActorWithSquadPermissions({
       steamId64: testSteamId(977120),
       squadPermissionKeys: ['ban'],
     });
+  });
+
+  beforeEach(async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset().mockResolvedValue(okOutcome());
+    vi.mocked(writeVersion).mockClear();
+    serverId = await seedServer('Revert Test Server');
     cookie = await loginAsPlayerId(actorId);
   });
 
@@ -518,10 +525,6 @@ describe('GET /api/v1/players/:playerId/moderation-actions history filters', () 
   });
 
   it('history filters by action_type and server_id', async () => {
-    h = await buildIntegrationApp({
-      seedOwner: { steamId64: testSteamId(977130) },
-      bridge: makeFakeBridge(),
-    });
     const cookie = await loginAsOwner(h);
     const targetId = await seedPlayer(testSteamId(977131), 'FilterTarget');
     const serverA = await seedServer('Filter Server A');
@@ -598,14 +601,17 @@ describe('MOD-3 evidence on moderation actions', () => {
   let actorId: string;
   let cookie: string;
 
-  beforeEach(async () => {
-    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
-    vi.mocked(sendRconCommandViaWorker).mockReset().mockResolvedValue(okOutcome());
-    serverId = await seedServer('Evidence Test Server');
+  // The actor's SteamID is unique, so it is seeded once for the describe.
+  beforeAll(async () => {
     actorId = await seedActorWithSquadPermissions({
       steamId64: testSteamId(988000),
       squadPermissionKeys: ['ban', 'kick'],
     });
+  });
+
+  beforeEach(async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset().mockResolvedValue(okOutcome());
+    serverId = await seedServer('Evidence Test Server');
     cookie = await loginAsPlayerId(actorId);
   });
 

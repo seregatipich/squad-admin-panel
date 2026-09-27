@@ -1,12 +1,10 @@
-import { createIsolatedPackageTestDatabase } from '../../../../packages/db/test/helpers/isolated-database.js';
+// Resolves DATABASE_URL from the repo `.env`, as each test file's `load-env.ts`
+// does, before the template is built from it.
+import '../../_test-shared/load-env.js';
+import type { TestProject } from 'vitest/node';
+import { setupPackageTemplateDatabase } from '../../../../packages/db/test/helpers/package-template.js';
 
-/** Provisions one migrated database for the complete rcon test process. */
-export default async function setupRconTestDatabase(): Promise<() => Promise<void>> {
-  const baseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!baseUrl) return async () => undefined;
-
-  const isolated = await createIsolatedPackageTestDatabase(baseUrl, 'rcon');
-  process.env.DATABASE_URL = isolated.url;
-  process.env.TEST_DATABASE_URL = isolated.url;
-  return () => isolated.drop();
+/** Migrates the rcon package's template once; each worker slot gets a clone of it. */
+export default function setupRconTestDatabase(project: TestProject): Promise<() => Promise<void>> {
+  return setupPackageTemplateDatabase(project, 'rcon');
 }

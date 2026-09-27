@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mediaFiles, mediaLinks, moderationActions, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
@@ -142,7 +142,9 @@ async function withRacingDuplicateInsert<T>(
   }
 }
 
-beforeEach(async () => {
+// One app per file: every case links its own freshly inserted players, actions
+// and media files, so no case can see another's links.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'MediaLinkOwner' },
   });
@@ -173,9 +175,12 @@ beforeEach(async () => {
   otherPanelCookie = await loginAsSteam(OTHER_PANEL_STEAM);
 });
 
-afterEach(async () => {
+afterEach(() => {
   if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('POST /api/v1/media/:id/links', () => {
@@ -275,8 +280,8 @@ describe('POST /api/v1/media/:id/links', () => {
 describe('GET evidence listing', () => {
   it('lists moderation-action evidence on the player media endpoint', async () => {
     const targetPlayerId = await insertPlayer({
-      steamId64: testSteamId(978012),
-      canonicalName: 'MediaLinksTarget3',
+      steamId64: testSteamId(978016),
+      canonicalName: 'MediaLinksTarget7',
     });
     const actionId = await insertModerationAction(targetPlayerId);
     const mediaId = await insertMediaFile(h.seed.ownerPlayerId ?? null);

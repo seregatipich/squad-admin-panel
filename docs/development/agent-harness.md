@@ -1,6 +1,6 @@
 # Agent enforcement harness
 
-The branch model in [`CLAUDE.md`](../../CLAUDE.md) — `master` = production fed only from `dev`, `dev` = integration fed only by work-branch merges, no `main` branch, tests + CI mandatory — is enforced mechanically, in depth, for every coding agent and human contributor. This document describes each layer, how to set it up, and its limits.
+The branch model in [`CLAUDE.md`](../../CLAUDE.md) — `master` = the verified branch fed only by fast-forward from `dev`, `dev` = integration fed only by work-branch merges, no `main` branch, tests + CI mandatory — is enforced mechanically, in depth, for every coding agent and human contributor. This document describes each layer, how to set it up, and its limits.
 
 ## The shared guard
 
@@ -43,15 +43,17 @@ Client-side layers can be bypassed by a client that doesn't load them (e.g. Code
 | Ruleset | Target | Rules |
 | --- | --- | --- |
 | `block-main` | `refs/heads/main` | creation and update restricted — the branch cannot exist |
-| `protect-master` | `refs/heads/master` | no deletion, no force-push, and **required status checks** `branch-guard`, `node`, `go`, `docker` on the pushed SHA |
+| `protect-master` | `refs/heads/master` | no deletion, no force-push |
 | `protect-dev` | `refs/heads/dev` | no deletion, no force-push |
 
-Because a SHA can only carry those green checks by having been pushed to `dev` (the `ci` workflow runs on `dev` pushes, and `branch-guard` fails PRs targeting `master` from anything but `dev`), **the only way to update `master` is to fast-forward it to a CI-green `dev` tip**:
+`protect-master` requires no status checks. `ci` runs on `master` only after the promotion push has landed, so a check required *before* that push could never be satisfied. What makes a `master` push legitimate is that it fast-forwards to a commit already on `dev`:
 
 ```bash
 git fetch origin
 git push origin origin/dev:master
 ```
+
+The client hooks deny any other `master` push, and the `branch-guard` job's "Audit master ancestry" step turns the `ci` run of that push red when the SHA is not reachable from `dev` — a bypass is detected at once instead of passing silently.
 
 The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and are applied (create-or-update by name, idempotent) with:
 
@@ -59,7 +61,7 @@ The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and 
 scripts/apply-rulesets.sh   # requires gh with admin access
 ```
 
-> **Plan gating (2026-07-06):** GitHub rejects rulesets and branch protection on this repository with HTTP 403 — for **private** repositories they require GitHub Pro/Team; public repositories get them free. Until the repo is made public or the plan upgraded, this layer is dormant (the JSON and applier are ready — rerun `scripts/apply-rulesets.sh` the moment it's unlocked). The active free-plan fallback is **detection**: the `branch-guard` CI job's "Audit master ancestry" step fails the `ci` run on any push to `master` whose SHA is not reachable from `dev`, so a bypass turns master's CI red immediately instead of passing silently.
+> **Not applied yet (checked 2026-09-26):** the repository is public, so GitHub accepts rulesets on it, but `gh api repos/seregatipich/squad-admin-panel/rulesets` returns `[]` — `scripts/apply-rulesets.sh` has not been run since the move to this repository (the former private organization repository could not have rulesets without GitHub Pro/Team). Until it is run, the client hooks and the `branch-guard` audit are the only enforcement.
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
@@ -68,22 +70,24 @@ Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → R
 ## CI and deployment runners
 
 The repository is `seregatipich/squad-admin-panel`, a **public repository on a personal
-account**. Two facts follow: GitHub-hosted minutes are free, and there are no runner
-groups (they are an organization feature). The split is therefore:
+account**: GitHub-hosted minutes are free, and there are no runner groups (they are an
+organization feature). Every job of both workflows runs on a disposable `ubuntu-24.04`
+VM; there is no self-hosted runner.
 
-| Workflow | Runner | Why |
+| Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` (`branch-guard`, `node`, `go`, `docker`) | `runs-on: ubuntu-24.04` | Ephemeral VMs, jobs in parallel, and no verification code ever executes on the production host. |
-| `deploy-tk104.yml` (every job) | `runs-on: [self-hosted, tk104-deploy]` + `environment: production` | The only jobs that need the host. The runner is registered on the repository and runs on tk104 under the unprivileged `gh-runner` account (no sudo, no Docker group); it reaches the deploy account over SSH. |
+| [`deploy-tk104.yml`](../../.github/workflows/deploy-tk104.yml) | push to `dev` (except `**.md` and `docs/**`), or a dispatch with an optional `sha` | builds the four release images, pushes them to GHCR, and deploys them to the tk104 development stand — with no tests |
+| [`ci.yml`](../../.github/workflows/ci.yml) | push to `master` (the fast-forward promotion), or a dispatch | the full verification suite; nothing deploys from it |
 
 [`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh) fails
-CI when a `ci` job leaves the hosted image, when a deploy job leaves the labelled runner
-or the `production` environment or loses its `github.repository` guard, or when any
-workflow selects a runner group — a group a personal account does not have would leave
-the job `queued` forever without an error.
+CI when a job of either workflow leaves the hosted image or selects a self-hosted runner
+or a runner group — a group a personal account does not have would leave the job
+`queued` forever without an error — when `ci` runs on anything but `master` pushes and
+dispatches, when a deploy job loses its `github.repository` guard or the deploy leaves
+the `tk104-dev` environment, or when the job graph described below drifts.
 
-**Outside code must never reach the tk104 runner.** CI accepts only trusted `push`
-events for `dev`/`master` and explicit dispatches — never `pull_request`.
+**Outside code must never reach a deploy secret.** Both workflows accept only trusted
+`push` events and explicit dispatches — never `pull_request`.
 [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) enforces
 that no workflow combines a `pull_request`/`pull_request_target` trigger with a
 self-hosted job, recognising the bare label, inline and block label lists, and runner
@@ -91,49 +95,86 @@ groups, and it checks its own detector against fixtures first (#217, #286). That
 only sees workflow files already in the repository: a fork's pull request can bring its
 own workflow file. Two repository settings close that gap and must stay on — Settings →
 Actions → General → *Require approval for all outside collaborators*, and *Workflow
-permissions: read repository contents*. Deploy secrets (`TK104_SSH_KEY`,
-`TK104_SSH_KNOWN_HOSTS`) live only in the `production` environment, which admits the
-`master` branch alone.
+permissions: read repository contents*. The deploy secrets (`TK104_SSH_KEY`,
+`TK104_SSH_KNOWN_HOSTS`) live only in the `tk104-dev` environment, whose deployment
+branch policy admits `dev` alone.
 
-`cancel-in-progress: true` discards a superseded SHA so a merge wave does not spend
-runner time on commits that are already replaced.
+### The stand deploy
 
-The JavaScript checks run as parallel jobs, and `node` is the single gate over them:
+`deploy-tk104.yml` has two jobs and no workflow-level concurrency:
+
+- **`build`** — one matrix leg per image (`api`, `web`, `workers`, `caddy-tk104`), with
+  `packages: write`. A leg skips the build when
+  `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists (a redeploy or a
+  rollback); otherwise it builds that target of [`docker-bake.hcl`](../../docker-bake.hcl)
+  and pushes `:<sha>` and `:dev`, with a registry layer cache at `:buildcache`
+  (`mode=max`). A newer push cancels the same image's older build (concurrency group
+  `deploy-build-<image>`), so a merge wave spends minutes only on the commit that will be
+  deployed; the superseded run's deploy is then skipped.
+- **`deploy`** — after every build, in the `tk104-dev` environment, one at a time
+  (group `deploy-tk104`, never cancelled mid-flight). It resolves the four `:<sha>` tags
+  to digests, writes the deploy key and the pinned host key (checked with
+  `ssh-keygen -l` and `ssh-keygen -F tk104.duckdns.org`; `StrictHostKeyChecking=yes`),
+  and runs
+
+  ```bash
+  ssh seregatipich@tk104.duckdns.org \
+    "deploy <sha> api=sha256:<digest> web=sha256:<digest> workers=sha256:<digest> caddy-tk104=sha256:<digest>"
+  ```
+
+  The key is bound to a forced command on the host (`~/bin/panel-deploy`, an installed
+  copy of `scripts/tk104-deploy-entry.sh`) that accepts only that shape, fetches the
+  commit itself, and runs `scripts/deploy-tk104.sh` with the images pinned by digest: the
+  job never gets a shell on tk104 and copies no files there. It then polls
+  `https://tk104.duckdns.org/health` every 2 s for about 90 s until it answers 200 with
+  `"status":"ok"`, and removes the key whatever happened.
+
+Redeploy or roll back with `gh workflow run deploy-tk104.yml --ref dev -f sha=<40-hex sha>`;
+the build job refuses a commit that `dev` does not contain.
+[`scripts/deploy-tk104-workflow.test.ts`](../../scripts/deploy-tk104-workflow.test.ts)
+(part of `pnpm test:scripts`) locks the job graph and runs the steps' own shell against
+stubbed `gh`, `docker`, `ssh`, and `curl`.
+
+### Verification
+
+`ci.yml` cancels a superseded run of the same ref (`cancel-in-progress: true`); only
+the newest SHA matters and nothing deploys from it.
 
 | Job | What it runs |
 |---|---|
-| `node-lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck`, gitleaks |
-| `node-test` (`api`, `web`, `packages`) | one slice of `pnpm test:cov` each via [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh), after building only what that slice loads |
-| `node-scripts` | the full build, migrations, `pnpm test:scripts`, and Stryker — only when `packages/shared-config` changed in the pushed range (always on a manual dispatch or an unresolvable range) |
-| `node` | `needs` all three with `if: always()` and fails unless every one succeeded; it is the required status check and what `deploy-tk104` waits for |
+| `branch-guard` | the master ancestry audit (on `master` pushes) and the harness's own contract suites |
+| `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
+| `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
+| `test-web` (2 shards) | half of the web suite each — no services, no build |
+| `test-packages` | every other `test:cov` package whole under its own thresholds, four at a time, longest first; builds only the workers the contract tests start |
+| `scripts` | migrations, then `pnpm test:scripts` |
+| `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
+| `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
+| `images` | the `release` group and `rnsquadjs` of `docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `compose.tk104.yml` is in the workers image, and the workers image exits 64 without one |
+| `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
+| `gate` | `needs` every other job with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); then merges the API and web shards' blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite |
 
-The slices never split one package across jobs, because each package's coverage
-thresholds apply to its whole run; [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
-fails CI if the slices stop adding up to the `test:cov` list exactly. `docker` no longer
-waits for the tests, so the slowest job — not the sum of all jobs — sets the wall time.
-The `node-test` timeout stays at 45 minutes because a hosted VM starts without a Turbo
-cache.
+The API and web suites need no build: vitest resolves every `@squad/*` import to its
+source through the packages' `development` export condition, and the API harness builds
+its template database from the SQL migrations itself. One shard cannot meet its
+package's thresholds, so [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh)
+switches them off per shard and writes a blob report, and `gate` applies them to the
+merged coverage. [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
+fails CI if the slices stop adding up to the `test:cov` list exactly or the shard
+arguments drift.
 
-The `docker` job builds [`docker-bake.hcl`](../../docker-bake.hcl) in one parallel
-`docker/bake-action` run with a per-target GitHub Actions layer cache, tags every image
-with the commit SHA, and on a `dev` push uploads `api`, `web`, `workers` and
-`caddy-tk104` as the `release-images-<sha>` artifact — the exact bytes the deploy
-loads on tk104 (docs/operations/deployment.md). All workers share one image; compose
-selects the worker with `WORKER`, and the job fails if a worker named in
-`compose.tk104.yml` is missing from the image.
-
-On a `master` push every job except `branch-guard` skips: `master` only fast-forwards
-to a `dev` commit, which already passed them. `branch-guard` instead requires a
-successful `ci` run of that SHA on `dev`. `test-ci-runner-strategy.sh` locks both halves.
+The PostgreSQL and Redis service containers keep their data on bounded `tmpfs` mounts
+(1 GiB and 128 MiB), so an interrupted job never leaves anonymous volumes behind, and
+poll their health every 2 s. `test-api` and `test-packages` also switch off `fsync`,
+`synchronous_commit`, and `full_page_writes` — through `ALTER SYSTEM` and
+`pg_reload_conf()` over `docker exec`, since service containers take no server
+arguments — because the data dies with the VM. Turbo hashes no connection setting
+(`DATABASE_URL`, `REDIS_URL` and the rest are `globalPassThroughEnv`): the services get a
+new host port every run, and a hashed port would make every cached task a miss.
 
 The `go` job runs natively: the hosted image ships a C compiler, so `go test -race`
 needs no container, and `actions/setup-go` caches modules keyed by
-`apps/bridge/go.sum`. `govulncheck` is pinned to `v1.7.0`, and the job fails if the
-bridge binary is not statically linked.
-
-The `node-test` and `node-scripts` PostgreSQL and Redis service containers keep their data on bounded
-`tmpfs` mounts (1 GiB and 128 MiB), so an interrupted job never leaves anonymous
-volumes behind; the exact options are locked in `test-ci-runner-strategy.sh`.
+`apps/bridge/go.sum`.
 
 Для снижения локальной нагрузки перед `git push` можно задать
 `VITEST_MAX_FORKS=2`. Переменная включена в `globalPassThroughEnv` Turbo: она
@@ -144,36 +185,23 @@ volumes behind; the exact options are locked in `test-ci-runner-strategy.sh`.
 затронутых пакетных тестов; для осознанной локальной настройки служит
 `PREPUSH_TURBO_CONCURRENCY`, значение по умолчанию — `2`.
 
-## Runner recovery runbook
+## Deploy troubleshooting
 
-`ci` never waits for a self-hosted runner. If a **deployment** run stays `queued`, run
-[`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh): it lists the
-repository's runners with `status`/`busy` and exits non-zero unless at least one is
-`online`. There is no organization endpoint to consult. Its suite,
-[`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh), stubs
-`gh` and covers online, offline, none-registered, and failed-query cases, and fails if
-the script ever queries an organization.
+A failed `deploy-tk104` run names the step that broke:
 
-On tk104 the runner is the systemd unit
-`actions.runner.seregatipich-squad-admin-panel.tk104-deploy.service`, installed in
-`/home/gh-runner/actions-runner`:
-
-```bash
-ssh -i ~/.ssh/tk104_deploy seregatipich@tk104.duckdns.org \
-  'sudo systemctl status actions.runner.seregatipich-squad-admin-panel.tk104-deploy.service'
-```
-
-If its registration is gone (`Not configured. Run config.(sh/cmd)`), mint a
-repository registration token and re-register in place; a repository admin's `gh`
-token is enough, no organization scope is involved:
-
-```bash
-gh api -X POST repos/seregatipich/squad-admin-panel/actions/runners/registration-token --jq .token
-# on tk104, as gh-runner, in /home/gh-runner/actions-runner:
-./config.sh --url https://github.com/seregatipich/squad-admin-panel --token <token> \
-  --name tk104-deploy --labels tk104-deploy --unattended --replace
-sudo ./svc.sh install gh-runner && sudo ./svc.sh start
-```
+- **`build`** — a Dockerfile or bake problem. `ci`'s `images` job builds the same
+  targets when the commit is promoted.
+- **Resolve the image digests** — an image of that SHA is missing from GHCR, usually
+  because a build leg was cancelled by a newer push; re-run the workflow.
+- **Configure pinned SSH trust and deploy key** — the `tk104-dev` environment lacks
+  `TK104_SSH_KEY`, or `TK104_SSH_KNOWN_HOSTS` holds no valid key line for
+  `tk104.duckdns.org`.
+- **Deploy the release on tk104** — the forced command refused the request, or
+  `scripts/deploy-tk104.sh` failed on the host; its output is in the step log.
+- **External health check** — the release started, but `/health` did not report
+  `"status":"ok"` within about 90 s. Roll back with a dispatch of the last good SHA, or
+  with `bash scripts/rollback-tk104.sh` on the host. Neither undoes migrations (see
+  CLAUDE.md → "Dev stand and promotion").
 
 **History.** Verification first ran hosted with a separate self-hosted deploy runner
 (#286), then moved onto the `breaking-squad` organization's `selfhost-group-1` group
@@ -181,8 +209,10 @@ sudo ./svc.sh install gh-runner && sudo ./svc.sh start
 credential, and they failed twice with their registration files gone (#215, 2026-09-07).
 When the organization repository became unavailable (2026-09-16) the project moved to
 `seregatipich/squad-admin-panel`, returned verification to hosted VMs, and registered a
-single repository-level deploy runner on tk104; the old organization runners were
-uninstalled and archived on the host.
+single repository-level deploy runner on tk104. Since the CI/CD redesign (2026-09) tk104
+is a development stand fed by every `dev` push through hosted VMs and a forced-command
+SSH key, `ci` runs on `master` after promotion, and no workflow uses a self-hosted
+runner; `scripts/check-runner-health.sh` went with it.
 
 ## Completion verification
 
@@ -192,7 +222,7 @@ The harness also enforces *how tasks end*: CLAUDE.md's **Completion verification
 bash scripts/verify-done.sh   # exit 0 required before reporting done
 ```
 
-It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `ci` workflow is green **for the current `origin/dev` SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy-tk104` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
 
 For the **parallel-wave flow** (many work branches integrated serially by an orchestrator), a task agent's terminal state is a pushed feature branch, not a dev merge — use `bash scripts/verify-done.sh --feature`, which checks the branch is a work branch, the tree is clean, it is pushed (`HEAD == origin/<branch>`), and it was branched off `dev`. The orchestrator runs the default mode after merging. Test suite: [`scripts/test-verify-done.sh`](../../scripts/test-verify-done.sh) (runs in CI's `branch-guard` job with a stubbed `gh`) covers both modes.
 

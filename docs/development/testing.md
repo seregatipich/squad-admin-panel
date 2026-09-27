@@ -74,10 +74,13 @@ pnpm --filter @squad/api test
 набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
 `pnpm test:scripts`.
 
-Этот же контур входит в `scripts/pre-push-checklist.sh`: локальный
-предохранитель сначала подготавливает изолированную мигрированную БД, затем
-запускает `pnpm test:scripts` и только после него пакетные тесты. Ошибка любого
-эксплуатационного контракта блокирует отправку ветки.
+`scripts/pre-push-checklist.sh` запускает этот контур последним пунктом, после
+тестов изменённых пакетов, и только когда ветка относительно `origin/dev`
+меняет `scripts/` или `.github/`. Контуру нужны PostgreSQL и Redis: без
+доступной БД предохранитель пропускает его с предупреждением, а `FULL=1`
+запускает его всегда и без БД завершается ошибкой. Ошибка любого
+эксплуатационного контракта блокирует отправку ветки. Подробнее — в разделе
+[Git hooks](local-development.md#git-hooks).
 
 ```bash
 DATABASE_URL=<isolated-postgres> \
@@ -120,7 +123,14 @@ DATABASE_URL=<...> pnpm test:cov
 DATABASE_URL=<...> pnpm --filter @squad/api exec vitest run --coverage
 ```
 
-CI runs `pnpm test:cov` split into the `api`, `web` and `packages` slices of the `node-test` job (`scripts/ci-test-shard.sh`) and uploads each slice's `**/coverage/lcov.info` as the `coverage-<sha>-<slice>` artifact (retention: 7 days).
+CI (`ci.yml`, on `master` pushes and dispatches) runs the `test:cov` list through [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh) in three kinds of jobs:
+
+- `test-api` splits the API suite by test file over four VMs (`vitest run --shard=<i>/4`) and `test-web` splits the web suite over two. A shard sees only part of its suite, so it runs with the thresholds switched off and uploads a vitest blob report; the `gate` job merges the blobs with `vitest --merge-reports --coverage`, which enforces the thresholds below on the merged coverage of the whole suite.
+- `test-packages` runs every other package whole under its own thresholds, four at a time, starting the longest suites (`@squad/db`, `worker-log-ingest`, `worker-rcon`) first; one failing package does not stop the others.
+
+No coverage report is uploaded as an artifact. To reproduce one shard locally, run `bash scripts/ci-test-shard.sh api 1 4` with the database variables set; it writes `apps/api/.vitest-reports/blob-1-4.json` (git-ignored), and `pnpm exec vitest run --merge-reports --coverage` inside `apps/api` merges whatever blobs are there.
+
+Merged **branch** percentages are not comparable with an unsharded run of the same suite: on 2026-09-26 the API suite measured 92.7 % merged against 77.0 % unsharded, while lines, statements and functions agreed within 0.3 pp (web: 84.7 % against 84.2 %). Ratchet a branch threshold against an unsharded `pnpm --filter <package> exec vitest run --coverage`.
 
 Threshold values reflect the measured baseline at the time coverage was introduced, minus a 5 pp safety margin. They are intentional floors, not targets — ratchet them upward as new tests are added.
 
@@ -151,9 +161,15 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 
 ## Test isolation
 
-Tests in `apps/api/test/*.test.ts` run against a **per-worker isolated Postgres database** — each Vitest worker clones a fresh database from a once-migrated template (`worker-setup.ts` overrides `DATABASE_URL`/`TEST_DATABASE_URL`), so a run never mutates the operator's real DB. Test files that share a worker still share that worker's clone, and `test-isolation.regression.test.ts` enforces the scoping rules below — so they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly (i.e. not via the harness's per-test isolated database).
+Tests in `apps/api/test/*.test.ts` run against **isolated Postgres databases** cloned from a once-migrated template, so a run never mutates the operator's real DB. `worker-setup.ts` points `DATABASE_URL`/`TEST_DATABASE_URL` at a database of the test file's own and clones it only when the file's source reads those variables, calls `hostDbUrl()` or builds a `reusePublicSchema` harness; every `buildIntegrationApp()` call clones its own database as well. `test-isolation.regression.test.ts` enforces the scoping rules below — they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly.
 
-Database-heavy package suites use `globalSetup` with `createIsolatedPackageTestDatabase()` to provision one migrated `sqworker_*` database for the whole package run. Both `DATABASE_URL` and `TEST_DATABASE_URL` are replaced before test modules load, and the database is dropped during teardown. Packages whose contract and integration files can sweep the same rows, including `worker-clan-guard`, also disable file parallelism so tests inside that package cannot change each other's cooldown or deduplication state.
+Database-heavy package suites — `@squad/db` and the workers `automation`, `clan-guard`, `event-partition`, `log-ingest`, `rcon`, `role-expirer` and `seed-reward` — run their files in parallel, each Vitest worker slot on its own copy of one migrated database. The package's `globalSetup` calls `setupPackageTemplateDatabase()` (`packages/db/test/helpers/package-template.ts`), which migrates a `sqworker_<run>_<package>` template once per run and hands its URL to the workers through Vitest `provide`/`inject`, so no test ever connects to the template itself. The `clone-per-worker.ts` setup file then points `DATABASE_URL` and `TEST_DATABASE_URL` at `<template>__w<VITEST_POOL_ID>`, created with `CREATE DATABASE … TEMPLATE` by the slot's first file and reused by the files that run after it in that slot — files that run at the same time never share rows. Teardown drops the template together with its clones, and the next run of the same package sweeps whatever a crashed run left behind.
+
+The worker packages add `apps/workers/_test-shared/redis-per-worker.ts`, which gives each slot its own Redis logical database (1–7; 0 belongs to the local stack, 8–15 to the API suite) through `REDIS_URL`, `TEST_REDIS_URL` and `TEST_REDIS_DB`, so the worker a contract test spawns never shares streams, consumer groups or heartbeat keys with another file. `worker-ban-sync`, which has no database of its own, uses only this Redis setup. `VITEST_MAX_FORKS` (default 4) bounds the number of slots in all of these packages, and with it the clones and connections a run holds.
+
+### Harness lifetime
+
+Build the integration harness **once per file** — `buildIntegrationApp()` in `beforeAll`, `h.cleanup()` in `afterAll` — never in `beforeEach`. Each build clones a database, registers every route and drops the database again, about half a second per call; when 80 files did it per test, that alone was 73% of the api suite's test time. Keep tests independent with unique fixtures (`testSteamId()`, generated names and ids) and, where a test asserts over a whole table, reset exactly the rows it depends on in a `beforeEach` (for example `h.db.delete(issues)` in the issue filter suite). `harness-per-file.regression.test.ts` fails the suite when a test file builds the harness in `beforeEach`.
 
 ### Why it matters
 
@@ -209,10 +225,10 @@ To legitimately exclude a file from the guard (e.g. it uses `createIsolatedSchem
 
 ## Linters and type checkers
 
-Treat as part of the test suite. Pre-commit (`lefthook`) and CI both run them.
+Treat as part of the test suite. The pre-commit hook runs Biome on the staged files and `gofmt -s` plus `go vet` on staged bridge files; the pre-push checklist runs Biome over the source tree and typechecks the packages changed since `origin/dev` and their dependents; CI runs all of them in full. See [Git hooks](local-development.md#git-hooks).
 
 ```bash
-pnpm exec biome check .         # lint + format
-pnpm turbo run typecheck        # TS strict + `go build` on the bridge
-cd apps/bridge && go vet ./...  # also enforced by pre-commit
+pnpm exec biome check .                                 # lint + format
+pnpm turbo run typecheck                                # TS strict + `go build` on the bridge
+cd apps/bridge && GOOS=linux GOARCH=amd64 go vet ./...  # also enforced by pre-commit
 ```

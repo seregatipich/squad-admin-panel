@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let h: IntegrationHarness;
@@ -43,14 +43,31 @@ interface VerifyResult {
   reason: 'prev_hash' | 'row_hash' | null;
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: 76561198000000612n } });
   cookie = await loginAsOwner(h);
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
+
+/**
+ * Rewrites a stored row's context with the append-only deny trigger switched
+ * off, the way a superuser editing the table directly would.
+ */
+async function overwriteContext(id: string, context: Record<string, unknown>): Promise<void> {
+  await h.db.execute(sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_upd`);
+  try {
+    await h.db.execute(sql`
+      UPDATE audit_log
+         SET context = ${JSON.stringify(context)}::jsonb
+       WHERE id = ${id}::bigint
+    `);
+  } finally {
+    await h.db.execute(sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_upd`);
+  }
+}
 
 describe('GET /api/v1/audit/verify-chain', () => {
   it('requires authentication', async () => {
@@ -100,23 +117,22 @@ describe('GET /api/v1/audit/verify-chain', () => {
 
     // Simulate a superuser editing a stored row directly, bypassing the
     // append-only deny trigger (which normally blocks UPDATE/DELETE).
-    await h.db.execute(sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_upd`);
-    await h.db.execute(sql`
-      UPDATE audit_log
-         SET context = ${JSON.stringify({ seq: 2, tampered: true })}::jsonb
-       WHERE id = ${tamperedId}::bigint
-    `);
-    await h.db.execute(sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_upd`);
-
-    const res = await h.app.inject({
-      method: 'GET',
-      url: '/api/v1/audit/verify-chain',
-      headers: { cookie },
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as VerifyResult;
-    expect(body.ok).toBe(false);
-    expect(body.broken_at).toBe(tamperedId);
-    expect(body.reason).toBe('row_hash');
+    await overwriteContext(tamperedId, { seq: 2, tampered: true });
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/audit/verify-chain',
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as VerifyResult;
+      expect(body.ok).toBe(false);
+      expect(body.broken_at).toBe(tamperedId);
+      expect(body.reason).toBe('row_hash');
+    } finally {
+      // The file's tests share one chain, so restore the exact context the
+      // stored row_hash was computed over; later tests expect it intact.
+      await overwriteContext(tamperedId, { seq: 2 });
+    }
   });
 });

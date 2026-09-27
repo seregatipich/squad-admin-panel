@@ -1,6 +1,6 @@
 import { servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -25,17 +25,32 @@ const createBody = {
 };
 
 let h: IntegrationHarness;
+let stockContainerInspect: IntegrationHarness['bridge']['containerInspect'];
 
-beforeEach(async () => {
+beforeAll(async () => {
+  // The plugin's 4 s background loop would otherwise tick in the middle of a
+  // case on this long-lived harness, consuming the case's scripted inspects or
+  // turning its tickNow() into a no-op while the loop's tick is in flight.
+  // Only the interval is faked: every case drives ticks through tickNow().
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
     withStatusReconciler: true,
   });
+  stockContainerInspect = h.bridge.containerInspect;
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
+  vi.useRealTimers();
+});
+
+// Every case creates the same slug and ports, and a tick inspects every
+// transient server, so each case starts with no servers and the stock bridge.
+afterEach(async () => {
+  h.bridge.containerInspect = stockContainerInspect;
+  await h.db.delete(servers);
 });
 
 async function createServer(): Promise<string> {
@@ -372,10 +387,40 @@ describe('reconciler — fail-safe behavior', () => {
       .set({ status: 'starting', updatedAt: new Date() })
       .where(eq(servers.id, slowId));
 
+    // Deterministic stand-in for a slow bridge call: the slow server's inspect
+    // only returns after the fast server's inspect has completed, and the fast
+    // one only completes once the slow one is in flight. A tick that inspected
+    // servers one at a time, in either order, would leave its first call
+    // waiting on one that never starts; the bounded waits turn that into a
+    // failed assertion instead of a hang, and a parallel tick never waits on
+    // the timer at all.
+    let markSlowInFlight = (): void => undefined;
+    const slowInFlight = new Promise<void>((resolve) => {
+      markSlowInFlight = resolve;
+    });
+    let markFastDone = (): void => undefined;
+    const fastDone = new Promise<void>((resolve) => {
+      markFastDone = resolve;
+    });
+    const settlesWithin = async (event: Promise<void>, ms: number): Promise<boolean> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([
+        event.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), ms);
+        }),
+      ]);
+      clearTimeout(timer);
+      return settled;
+    };
+    const overlap = { fastSawSlowInFlight: false, slowOutlivedFast: false };
     h.bridge.containerInspect = async ({ name }) => {
-      const isSlow = name.endsWith(slowId);
-      if (isSlow) {
-        await new Promise((resolve) => setTimeout(resolve, 800));
+      if (name.endsWith(slowId)) {
+        markSlowInFlight();
+        overlap.slowOutlivedFast = await settlesWithin(fastDone, 5_000);
+      } else {
+        overlap.fastSawSlowInFlight = await settlesWithin(slowInFlight, 5_000);
+        markFastDone();
       }
       return {
         name,
@@ -391,11 +436,9 @@ describe('reconciler — fail-safe behavior', () => {
       };
     };
 
-    const t0 = Date.now();
     await h.app.statusReconciler.tickNow();
-    const elapsed = Date.now() - t0;
 
-    expect(elapsed).toBeLessThan(1500);
+    expect(overlap).toEqual({ fastSawSlowInFlight: true, slowOutlivedFast: true });
     const [fast] = await h.db.select().from(servers).where(eq(servers.id, fastId));
     const [slow] = await h.db.select().from(servers).where(eq(servers.id, slowId));
     expect(fast?.status).toBe('running');

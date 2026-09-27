@@ -18,8 +18,8 @@
  */
 import { adminsCfgSyncOutbox, configVersions, servers } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq, isNull } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { relaunchSidecar } from '../src/lib/rnsquadjs.js';
 import { markServerRunningAndEnqueue } from '../src/routes/server-install.js';
 import {
@@ -142,19 +142,30 @@ describe('server install depot seeding', () => {
   let h: IntegrationHarness;
   let bridge: FakeBridge;
 
+  beforeAll(async () => {
+    bridge = makeFakeBridge();
+    h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  // Every case creates a server with the same slug and ports, which only one
+  // active server may hold, and seeds its own depot layout into the fake host
+  // filesystem; release both so the next case starts from an empty host.
   afterEach(async () => {
     vi.unstubAllEnvs();
-    if (h) await h.cleanup();
+    bridge.files.clear();
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(isNull(servers.deletedAt));
   });
 
   describe('A) PANEL_DEPOT_HOST_PATH unset — legacy /var/lib/docker/volumes/... default', () => {
     const depotRoot = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data`;
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', '');
-      bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('seeds 19 non-empty cfg files + config_versions rows from the default depot root', async () => {
@@ -186,11 +197,9 @@ describe('server install depot seeding', () => {
   describe('B) PANEL_DEPOT_HOST_PATH=/opt/panel-data/depot — bind-mounted depot regression guard', () => {
     const depotRoot = '/opt/panel-data/depot';
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
-      bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('reads depot defaults from the env-override path (not the legacy stub)', async () => {
@@ -233,12 +242,10 @@ describe('server install depot seeding', () => {
   describe('C) one depot file missing — "creating empty" fallback still fires', () => {
     const depotRoot = '/opt/panel-data/depot';
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
-      bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
       bridge.files.delete(`${depotRoot}/SquadGame/ServerConfig/Admins.cfg`);
-      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('writes 0-byte Admins.cfg, logs the fallback, still seeds the other 18', async () => {
@@ -269,11 +276,9 @@ describe('server install depot seeding', () => {
   describe('D) rnsquadjs sidecar launch', () => {
     const depotRoot = '/opt/panel-data/depot';
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
-      bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('launches the sidecar for the assigned engine and seeds the ro Logs bind source', async () => {
@@ -313,11 +318,9 @@ describe('server install depot seeding', () => {
   describe('E) running transition and initial Admins.cfg outbox', () => {
     const depotRoot = '/opt/panel-data/depot';
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
-      bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('commits running and exactly one outbox row together', async () => {

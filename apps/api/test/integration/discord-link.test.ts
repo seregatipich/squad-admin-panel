@@ -1,7 +1,7 @@
-import { playerDiscordLinks, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { auditLog, playerDiscordLinks, players, roles } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -15,10 +15,6 @@ import {
 } from './harness.js';
 
 const OWNER_STEAM = testSteamId(979001);
-const LINKER_STEAM = testSteamId(979002);
-const OTHER_STEAM = testSteamId(979003);
-const PLAIN_STEAM = testSteamId(979004);
-const NO_ACCESS_STEAM = testSteamId(979005);
 
 const STATE_COOKIE = '__Host-discord-state';
 const STATE_REDIS_PREFIX = 'discord-oauth-state:';
@@ -27,8 +23,16 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 
+// Every case seeds its players under fresh SteamIDs and uniquely named roles
+// rather than deleting them afterwards: a player who made an audited request
+// cannot be deleted, because audit_log is append-only and rejects the
+// ON DELETE SET NULL of its actor column.
+let nextSteamSuffix = 979002;
+function freshSteamId(): bigint {
+  return testSteamId(nextSteamSuffix++);
+}
+
 async function seedPlayerWithRole(opts: {
-  steamId64: bigint;
   name: string;
   panelAccess: boolean;
   canAssignRoles: boolean;
@@ -36,7 +40,7 @@ async function seedPlayerWithRole(opts: {
   const roleId = uuidv7();
   await h.db.insert(roles).values({
     id: roleId,
-    name: `role-${opts.name}`,
+    name: `role-${opts.name}-${roleId}`,
     color: '#3366AA',
     panelAccess: opts.panelAccess,
     canAssignRoles: opts.canAssignRoles,
@@ -44,7 +48,7 @@ async function seedPlayerWithRole(opts: {
   const [row] = await h.db
     .insert(players)
     .values({
-      steamId64: opts.steamId64,
+      steamId64: freshSteamId(),
       canonicalName: opts.name,
       canonicalNameNormalized: opts.name.toLowerCase(),
       roleId,
@@ -53,11 +57,11 @@ async function seedPlayerWithRole(opts: {
   return row.id;
 }
 
-async function seedPlainPlayer(steamId64: bigint, name: string): Promise<string> {
+async function seedPlainPlayer(name: string): Promise<string> {
   const [row] = await h.db
     .insert(players)
     .values({
-      steamId64,
+      steamId64: freshSteamId(),
       canonicalName: name,
       canonicalNameNormalized: name.toLowerCase(),
     })
@@ -111,22 +115,27 @@ function callbackUrl(state: string, code = 'auth-code-1'): string {
   return `/api/v1/auth/discord/callback?code=${code}&state=${encodeURIComponent(state)}`;
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
 });
 
+afterAll(async () => {
+  if (h) await h.cleanup();
+});
+
+// Cases link the same Discord account, whose id is unique across links.
 afterEach(async () => {
   vi.unstubAllGlobals();
-  if (h) await h.cleanup();
+  await h.db.delete(playerDiscordLinks);
+  invalidateAllPermissionCaches();
 });
 
 describeIfDb('GET /api/v1/auth/discord/login', () => {
   it('redirects an authenticated player to Discord with scope=identify and stores the state', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -189,7 +198,6 @@ describeIfDb('GET /api/v1/auth/discord/login', () => {
 describeIfDb('GET /api/v1/auth/discord/callback', () => {
   it('links the Discord account, writes an audit row and redirects to the player card', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -227,7 +235,6 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('rejects a forged state with 403 and creates no link', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -253,7 +260,6 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('rejects a state that matches the cookie but was never issued with 400 state_expired', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -273,13 +279,11 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('rejects a state issued for a different player with 403', async () => {
     const linkerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
     });
     const otherId = await seedPlayerWithRole({
-      steamId64: OTHER_STEAM,
       name: 'Other',
       panelAccess: true,
       canAssignRoles: false,
@@ -312,13 +316,11 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('rejects the same Discord account on a second player with 409 already_linked_other', async () => {
     const firstId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
     });
     const secondId = await seedPlayerWithRole({
-      steamId64: OTHER_STEAM,
       name: 'Other',
       panelAccess: true,
       canAssignRoles: false,
@@ -353,7 +355,6 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('rejects a second link for an already-linked player with 409 already_linked_self', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -391,7 +392,6 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 
   it('answers 502 discord_exchange_failed when Discord rejects the token exchange', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -422,7 +422,6 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
 describeIfDb('GET /api/v1/players/:playerId/discord', () => {
   it('returns the link snapshot for a panel user with player:view', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -456,7 +455,7 @@ describeIfDb('GET /api/v1/players/:playerId/discord', () => {
   });
 
   it('returns linked=false with null fields for an unlinked player', async () => {
-    const targetId = await seedPlainPlayer(PLAIN_STEAM, 'Plain');
+    const targetId = await seedPlainPlayer('Plain');
     const cookie = await loginAsOwner(h);
 
     const res = await h.app.inject({
@@ -475,9 +474,8 @@ describeIfDb('GET /api/v1/players/:playerId/discord', () => {
   });
 
   it('is 403 for a session without panel access', async () => {
-    const targetId = await seedPlainPlayer(PLAIN_STEAM, 'Plain');
+    const targetId = await seedPlainPlayer('Plain');
     const strangerId = await seedPlayerWithRole({
-      steamId64: NO_ACCESS_STEAM,
       name: 'NoAccess',
       panelAccess: false,
       canAssignRoles: false,
@@ -494,7 +492,7 @@ describeIfDb('GET /api/v1/players/:playerId/discord', () => {
   });
 
   it('is 401 without a session', async () => {
-    const targetId = await seedPlainPlayer(PLAIN_STEAM, 'Plain');
+    const targetId = await seedPlainPlayer('Plain');
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${targetId}/discord`,
@@ -506,7 +504,6 @@ describeIfDb('GET /api/v1/players/:playerId/discord', () => {
 describeIfDb('DELETE /api/v1/players/me/discord/link', () => {
   it('removes the caller own link and writes an unlink audit row', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -534,15 +531,31 @@ describeIfDb('DELETE /api/v1/players/me/discord/link', () => {
       .where(eq(playerDiscordLinks.playerId, playerId));
     expect(rows).toHaveLength(0);
 
-    await assertAuditRow(h, {
-      action: 'integration.discord.unlink',
-      resource: 'player_discord_link',
-    });
+    // The self route has no target id, and every unlink request is audited,
+    // rejected ones included: on this shared harness only the actor tells
+    // this case's row from an earlier case's.
+    await expect
+      .poll(
+        async () =>
+          (
+            await h.db
+              .select({ id: auditLog.id })
+              .from(auditLog)
+              .where(
+                and(
+                  eq(auditLog.actionType, 'integration.discord.unlink'),
+                  eq(auditLog.targetType, 'player_discord_link'),
+                  eq(auditLog.actorPlayerId, playerId),
+                ),
+              )
+          ).length,
+        { timeout: 1_200, interval: 50 },
+      )
+      .toBeGreaterThan(0);
   });
 
   it('is 404 not_linked when the caller has no link', async () => {
     const playerId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -571,7 +584,6 @@ describeIfDb('DELETE /api/v1/players/me/discord/link', () => {
 describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
   it('lets a can_assign_roles admin force-unlink another player and audits it', async () => {
     const victimId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -609,7 +621,6 @@ describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
 
   it('is 403 for a panel user without can_assign_roles and leaves the link intact', async () => {
     const victimId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
@@ -624,7 +635,6 @@ describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
     });
 
     const weakId = await seedPlayerWithRole({
-      steamId64: OTHER_STEAM,
       name: 'WeakAdmin',
       panelAccess: true,
       canAssignRoles: false,
@@ -647,7 +657,7 @@ describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
   });
 
   it('is 404 not_linked when the target player has no link', async () => {
-    const targetId = await seedPlainPlayer(PLAIN_STEAM, 'Plain');
+    const targetId = await seedPlainPlayer('Plain');
     const cookie = await loginAsOwner(h);
 
     const res = await h.app.inject({
@@ -661,7 +671,7 @@ describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
   });
 
   it('is 401 without a session', async () => {
-    const targetId = await seedPlainPlayer(PLAIN_STEAM, 'Plain');
+    const targetId = await seedPlainPlayer('Plain');
     const res = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/players/${targetId}/discord/link`,
@@ -673,13 +683,11 @@ describeIfDb('DELETE /api/v1/players/:playerId/discord/link', () => {
 describeIfDb('GET /api/v1/users discord badge', () => {
   it('reports discord_linked for linked and unlinked panel users', async () => {
     const linkedId = await seedPlayerWithRole({
-      steamId64: LINKER_STEAM,
       name: 'Linker',
       panelAccess: true,
       canAssignRoles: false,
     });
     const unlinkedId = await seedPlayerWithRole({
-      steamId64: OTHER_STEAM,
       name: 'Unlinked',
       panelAccess: true,
       canAssignRoles: false,

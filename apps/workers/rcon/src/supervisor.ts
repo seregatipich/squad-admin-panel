@@ -936,7 +936,14 @@ class PerServerSupervisor {
    */
   private scheduleInfoRefresh(): void {
     const interval = this.opts.infoIntervalMs ?? DEFAULT_INFO_INTERVAL_MS;
-    this.infoTimer = setInterval(() => void this.refreshInfo(), interval);
+    this.infoTimer = setInterval(() => {
+      // Whenever this tick lines up with the roster timer's (every 10 s at the
+      // defaults, every tick when the intervals are equal) the roster refresh
+      // holds the client first, and a plain skip would drop the info refresh
+      // each time. Waiting as a hint serves it as soon as the client is free.
+      if (this.pollInFlight) this.requestRefresh(['info']);
+      else void this.refreshInfo();
+    }, interval);
   }
 
   private async refreshInfo(): Promise<void> {

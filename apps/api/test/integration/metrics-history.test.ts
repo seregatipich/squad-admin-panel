@@ -1,5 +1,5 @@
 import { HOST_METRICS_STREAM, packHostMetrics } from '@squad/shared-config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const sample = {
@@ -16,16 +16,20 @@ const sample = {
 let h: IntegrationHarness;
 let cookie: string;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: 76561198000000999n },
   });
   cookie = await loginAsOwner(h);
-  await h.redis.del(HOST_METRICS_STREAM);
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Every case asserts on the exact contents of the one shared stream.
+beforeEach(async () => {
+  await h.redis.del(HOST_METRICS_STREAM);
 });
 
 describe('GET /api/v1/host/metrics/history', () => {

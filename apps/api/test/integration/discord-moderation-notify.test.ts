@@ -2,7 +2,7 @@ import { discordWebhooks, playerReports, players, servers } from '@squad/db/sche
 import { STREAM_NAME } from '@squad/shared-types';
 import pino from 'pino';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ensureConsumerGroup,
   NOTIFY_CONSUMER_GROUP,
@@ -65,7 +65,7 @@ async function consumeAvailableEvent(stream: string, fetchImpl: typeof fetch): P
   });
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'Главный администратор' },
     bridge: makeFakeBridge(),
@@ -113,7 +113,7 @@ beforeEach(async () => {
   reportId = report.id;
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
 });
 
