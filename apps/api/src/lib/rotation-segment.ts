@@ -17,7 +17,7 @@ export const END_MARKER = '//SQUAD-PANEL END';
 const BEGIN_LINE = `${BEGIN_MARKER} — не редактировать вручную`;
 const SEGMENT_NEWLINE = '\r\n';
 
-/** 1–128 chars, no CR/LF, must not start with a `//` comment marker. */
+/** Upper bound enforced by {@link validateLayerName}. */
 const MAX_LAYER_NAME_LENGTH = 128;
 
 export interface LocatedSegment {
@@ -97,12 +97,22 @@ export function buildRotationSegmentBody(layerNames: readonly string[]): string 
 
 /**
  * Sanity-checks a single layer name before it is allowed into the managed
- * segment: 1–128 characters, no line breaks (would corrupt the segment
- * structure), and must not look like an operator `//` comment line.
+ * segment, so every accepted name round-trips through
+ * {@link buildRotationSegmentBody} → {@link parseRotationSegment} unchanged:
+ *   - 1–128 characters;
+ *   - no control characters (CR/LF would split the line, the rest are never
+ *     part of a Squad layer name);
+ *   - no leading/trailing whitespace, which the parser trims;
+ *   - no `//` anywhere — a leading one would be read back as an operator
+ *     comment, and one mid-name can carry {@link BEGIN_MARKER} or
+ *     {@link END_MARKER}, which {@link findManagedSegment} would match inside
+ *     the name and so truncate the segment (#36).
  */
 export function validateLayerName(name: string): boolean {
   if (name.length < 1 || name.length > MAX_LAYER_NAME_LENGTH) return false;
-  if (/[\r\n]/.test(name)) return false;
-  if (name.startsWith('//')) return false;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+  if (/[\u0000-\u001f\u007f]/.test(name)) return false;
+  if (name.trim() !== name) return false;
+  if (name.includes('//')) return false;
   return true;
 }

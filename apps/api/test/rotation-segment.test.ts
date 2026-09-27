@@ -106,6 +106,27 @@ describe('validateLayerName', () => {
   it('rejects names starting with a // comment marker', () => {
     expect(validateLayerName('// not a layer')).toBe(false);
   });
+
+  it('rejects segment markers anywhere in the name (#36 finding 51)', () => {
+    expect(validateLayerName(`Narva_RAAS_v1 ${END_MARKER}`)).toBe(false);
+    expect(validateLayerName(`Narva_RAAS_v1 ${BEGIN_MARKER}`)).toBe(false);
+    expect(validateLayerName('Narva // note')).toBe(false);
+  });
+
+  it('rejects control characters and surrounding whitespace the parser would trim', () => {
+    expect(validateLayerName('Narva\tRAAS')).toBe(false);
+    expect(validateLayerName('Narva\u0000')).toBe(false);
+    expect(validateLayerName(' Narva_RAAS_v1')).toBe(false);
+    expect(validateLayerName('Narva_RAAS_v1 ')).toBe(false);
+  });
+
+  it('keeps every accepted name round-tripping through the managed segment', () => {
+    const crafted = `Narva_RAAS_v1 ${END_MARKER}`;
+    const names = ['Yehorivka RAAS v11', crafted, 'Gorodok RAAS v1'];
+    const accepted = names.filter(validateLayerName);
+    const written = spliceManagedSegment('Tail_Layer\r\n', buildRotationSegmentBody(accepted));
+    expect(parseRotationSegment(written).layers).toEqual(accepted);
+  });
 });
 
 describe('round-trip', () => {
