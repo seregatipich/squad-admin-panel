@@ -2,14 +2,16 @@
 
 ## Purpose
 
-Ensures Postgres tables that are partitioned by time always have a partition ready for incoming writes. Runs as an hourly cron replacement for `pg_partman`'s `run_maintenance`. Manages two partitioned tables:
+Ensures Postgres tables that are partitioned by time always have a partition ready for incoming writes. Runs as an hourly cron replacement for `pg_partman`'s `run_maintenance`. Manages six partitioned tables:
 
 - `events` — monthly partitions with **24-month retention**. Worker keeps the current + next month partitions present and drops every partition whose name sorts before the `date_trunc('month', now()) - 24 months` cutoff. Initial partitions also come from `packages/db/drizzle/0000_init.sql`.
 - `diagnostic_events` — daily partitions with **24h retention**. Worker actively keeps `[-1, 0, +1, +2]` days from today present and drops every partition whose name sorts before yesterday (i.e. its entire range is more than 24h in the past).
+- `player_sessions` — monthly partitions, current + next month kept present (`ensurePlayerSessionPartitions`), nothing dropped.
+- `chat_messages`, `bonus_transactions`, `combat_events` — monthly partitions with a DEFAULT catch-all, current + next month kept present (`ensureDefaultBackedMonthlyPartitions`), rows already parked in DEFAULT for a new month moved into it, nothing dropped. Their migrations created only a fixed window of months; without this rotation chat, bonus-ledger and VIP-grant inserts fail from the first day past it (issue #6).
 
 ## Current status — fully implemented
 
-Both the `events` and `diagnostic_events` rotations are fully implemented and idempotent (`CREATE TABLE IF NOT EXISTS` / `DROP TABLE IF EXISTS`). No pg_partman.
+Every rotation is fully implemented and idempotent (`CREATE TABLE IF NOT EXISTS` / `DROP TABLE IF EXISTS` / an existence check). No pg_partman.
 
 ## What it does not do
 
@@ -18,6 +20,7 @@ Both the `events` and `diagnostic_events` rotations are fully implemented and id
 - Does not detach/archive dropped partitions before dropping them — a dropped partition's data is gone, not moved to cold storage.
 - Does not retain `diagnostic_events` data beyond ~48h (yesterday + today + 2 future days exist; any older child is dropped on the next hourly tick).
 - Does not retain `events` data beyond 24 months.
+- Does not apply any retention to `player_sessions`, `chat_messages`, `bonus_transactions` or `combat_events`.
 
 ## Code location
 

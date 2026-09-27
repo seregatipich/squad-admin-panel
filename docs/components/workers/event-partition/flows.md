@@ -5,7 +5,7 @@
 1. Read `DATABASE_URL` from environment; fatal-exit if missing.
 2. Connect to Postgres (`max: 1` connection pool).
 3. Connect to Redis if `REDIS_URL` is set.
-4. Call `runPartitionTick({ sql, diag })` immediately. It runs `ensureMonthlyPartitions(sql)` (events) and `ensureDiagPartitions(sql)` (diagnostic_events) concurrently via `Promise.allSettled`, then emits `event_partition.run_ok` / `event_partition.run_failed`.
+4. Call `runPartitionTick({ sql, diag })` immediately. It runs `ensureMonthlyPartitions(sql)` (events), `ensureDiagPartitions(sql)` (diagnostic_events), `ensurePlayerSessionPartitions(sql)` (player_sessions) and `ensureDefaultBackedMonthlyPartitions(sql, table)` for each of `chat_messages`, `bonus_transactions` and `combat_events` concurrently via `Promise.allSettled`, then emits `event_partition.run_ok` / `event_partition.run_failed`.
 5. Start `setInterval(runPartitionTick, 3_600_000)` (1 h).
 6. Start heartbeat (`worker:heartbeat:event-partition`, every 5 s).
 
@@ -17,6 +17,15 @@ Exported from `apps/workers/event-partition/src/index.ts`. Idempotent maintenanc
 2. **Drop stale**: compute `cutoffName = 'events_<YYYY_MM>'` for `date_trunc('month', now()) - interval '24 months'`. Query `pg_inherits` joined to `pg_class` for child partitions of `events` whose `relname < cutoffName`. For each match, run `DROP TABLE IF EXISTS <partname>;`. One info log per drop: `dropped stale events partition`.
 
 Why current + next month only? The initial 6-month bootstrap in `packages/db/drizzle/0000_init.sql` already covers a wide look-ahead window; the hourly rotation only needs to keep rolling that window forward by one month at a time.
+
+## `ensureDefaultBackedMonthlyPartitions(sql, table)` (active)
+
+For `chat_messages`, `bonus_transactions` and `combat_events` (issue #6), for the current month and next month (UTC):
+
+1. If `<name>_YYYY_MM` already exists, do nothing.
+2. Otherwise, in one transaction (a `DO` block): lock `<name>_default` `ACCESS EXCLUSIVE`, create `<name>_YYYY_MM` as `LIKE <name> INCLUDING DEFAULTS INCLUDING CONSTRAINTS`, move the DEFAULT partition's rows for the month into it, and `ATTACH PARTITION … FOR VALUES FROM ('<month-start>') TO ('<next-month-start>')`.
+
+The move exists because Postgres refuses to add a partition whose range the DEFAULT partition still holds rows for (`updated partition constraint for default partition would be violated`). Normally the DEFAULT partition is empty for the next month and the lock is held for milliseconds, once per table per month. Nothing is dropped. Migration `0117_monthly_partition_defaults` created the DEFAULT partitions of `chat_messages` and `bonus_transactions` and ran the same steps for the current month and three months ahead.
 
 ## `ensureDiagPartitions(sql)` (active)
 
@@ -44,4 +53,5 @@ Stop heartbeat → `clearInterval(interval)` → `sql.end({ timeout: 5 })` → `
 | Postgres unavailable on start | Fatal exit (no connection = no meaningful work) |
 | Redis unavailable | Heartbeat silently skipped; worker continues |
 | `diagnostic_events` parent table missing | DDL fails for both create and drop branches; logs at `error`; partitions never get rotated until migration `0017_diagnostic_events.sql` has run |
+| `<name>_default` partition missing for `chat_messages` / `bonus_transactions` / `combat_events` | The `LOCK TABLE` fails; logs at `error`, `event_partition.run_failed`; resolved by running migration `0117_monthly_partition_defaults` |
 | `events` parent table missing | DDL fails for both create and drop branches in `ensureMonthlyPartitions`; logs at `error`; isolated from the diag rotation by `Promise.allSettled` |

@@ -28,6 +28,17 @@ Integration tests for `ensureMonthlyPartitions(sql)` against a real, migrated da
 | Drops a pre-seeded partition older than the 24-month retention window | Seeds a ~40-month-old partition, runs the function, asserts it is gone |
 | Keeps a pre-seeded partition that is within the 24-month retention window | Seeds a ~12-month-old partition, runs the function, asserts it survives |
 
+### `default-backed-partition.test.ts`
+
+Integration tests for `ensureDefaultBackedMonthlyPartitions` through the real `runPartitionTick`, against the package's isolated, migrated database (issue #6).
+
+| Test | What it verifies |
+|---|---|
+| Creates the current and next month `<table>` partitions with UTC month bounds (×3) | Drops both partitions of `chat_messages` / `bonus_transactions` / `combat_events`, runs the tick, asserts both exist with exact `pg_get_expr` bounds |
+| Accepts a `<table>` insert for next month once the tick has run (×3) | Drops next month's partition, runs the tick, inserts a row dated next month and asserts it lands in `<table>_YYYY_MM` (before the fix: `no partition of relation … found for row`, or the DEFAULT partition for `combat_events`) |
+| Moves rows parked in `combat_events_default` into the month partition it creates | A row that landed in DEFAULT is moved into the new partition; DEFAULT keeps nothing for that month |
+| Never drops a partition of these tables | A seeded 5-year-old `bonus_transactions` partition survives the tick |
+
 ### `diag-partition.test.ts`
 
 Unit tests for `ensureDiagPartitions(sql)` — covers the `diagnostic_events` rotator.

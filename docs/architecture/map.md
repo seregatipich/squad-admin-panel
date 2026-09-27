@@ -1178,7 +1178,7 @@ return occurrences.length > 0 ? (occurrences.at(-1) ?? null) : null;
 | `seed-reward` | interval 24 h | `player_daily_presence.seed_seconds`, `economy_settings`, `roles` | `players.role_id`, `audit_log`, `sessions`; admins-cfg stream | ✅ |
 | `presence-daily` | interval 1 h (+ `COPLAY_FULL_REBUILD=1`) | `player_sessions`, `events` (seeding), `economy_settings` | `player_daily_presence`, `player_coplay`, `players.total_time_played_seconds`, `bonus_transactions`, `players.bonus_balance` | ✅ |
 | `leaderboard-aggregator` | interval 15 min | `player_daily_presence`, `match_players ⋈ matches`, `economy_settings` | `player_stat_periods`, `player_bonus_accruals`; `DEL leaderboard:*` | ✅ |
-| `event-partition` | interval 1 h (hard-coded) | `pg_inherits`/`pg_class` | partition DDL on `events` + `diagnostic_events` | ✅ |
+| `event-partition` | interval 1 h (hard-coded) | `pg_inherits`/`pg_class` | partition DDL on `events`, `diagnostic_events`, `player_sessions`, `chat_messages`, `bonus_transactions`, `combat_events` | ✅ |
 | `diag-flush` | stream `diag:queue` + journald poll | `diag:queue`, journald | `diagnostic_events` (batched raw SQL) | ✅ |
 | `metrics-sampler` | interval 15 s (containers every 2nd tick) | bridge `hostMetrics`/`containerStats`, `rcon:status:*` | Redis streams `host:metrics`, `container:metrics:<id>` — **no DB** | ✅ |
 | `audit-archiver` | interval 1 h (hard-coded) | — | **P0 stub** — emits `audit_archiver.run_ok` only | ✅ |
@@ -1757,7 +1757,7 @@ Other triggers follow the same philosophy — `config_versions_reject_mutation()
 
 Only two extensions are installed: `pgcrypto` (`0000_init.sql:5`, for `digest()`/`gen_random_uuid()`) and `pg_trgm` (`0025`, `0029`). **No PostGIS, no pg_cron, and — critically — no pg_partman.** There is also **no row-level security** anywhere: no `ENABLE ROW LEVEL SECURITY`, no `CREATE POLICY`. Authorization is entirely application-side RBAC via the `can_*` boolean columns on `roles`.
 
-### 8.8 Partitioning, and the rotation gap
+### 8.8 Partitioning and rotation
 
 Six tables are natively RANGE-partitioned. Every bootstrap block computes its bounds from `now()` **at migration-apply time** (`cur_month date := date_trunc('month', now())::date`), so partition coverage is *deployment-relative*, not a fixed calendar constant.
 
@@ -1765,21 +1765,25 @@ Six tables are natively RANGE-partitioned. Every bootstrap block computes its bo
 |---|---|---|---|---|---|---|
 | `events` | `occurred_at` | month | `0..5` (`0000_init.sql:237`) | no | `ensureMonthlyPartitions` | 24 months, dropped |
 | `diagnostic_events` | `ts` | day | `-1..23` (`0017:30`) | no | `ensureDiagPartitions` | ~24–48 h, dropped |
-| `player_sessions` | `connected_at` | month | `-1..3` (`0024:41`) | **no** | **none** | none |
-| `chat_messages` | `sent_at` | month | `-1..3` (`0025:57`) | **no** | **none** | none |
-| `bonus_transactions` | `created_at` | month | `-1..3` (`0026:29`) | **no** | **none** | none |
-| `combat_events` | `occurred_at` | month | `-1..3` (`0029:33`) | **yes** (`0029:28`) | **none** | none |
+| `player_sessions` | `connected_at` | month | `-1..3` (`0024:41`) | no | `ensurePlayerSessionPartitions` | none |
+| `chat_messages` | `sent_at` | month | `-1..3` (`0025:57`), `0..3` (`0117`) | yes (`0117`) | `ensureDefaultBackedMonthlyPartitions` | none |
+| `bonus_transactions` | `created_at` | month | `-1..3` (`0026:29`), `0..3` (`0117`) | yes (`0117`) | `ensureDefaultBackedMonthlyPartitions` | none |
+| `combat_events` | `occurred_at` | month | `-1..3` (`0029:33`), `0..3` (`0117`) | yes (`0029:28`) | `ensureDefaultBackedMonthlyPartitions` | none |
 
-`apps/workers/event-partition/src/index.ts` is the only code in the repo that issues `PARTITION OF` DDL outside a migration, and its hourly tick (`60 * 60 * 1000`, line 178) runs exactly two hard-coded routines:
+`apps/workers/event-partition/src/index.ts` is the only code in the repo that issues `PARTITION OF` DDL outside a migration, and its hourly tick keeps every one of the six tables partitioned:
 
 ```ts
 const results = await Promise.allSettled([
-  ensureMonthlyPartitions(sql),   // events only
-  ensureDiagPartitions(sql),      // diagnostic_events only
+  ensureMonthlyPartitions(sql),        // events
+  ensureDiagPartitions(sql),           // diagnostic_events
+  ensurePlayerSessionPartitions(sql),  // player_sessions
+  ...DEFAULT_BACKED_MONTHLY_TABLES.map((table) =>
+    ensureDefaultBackedMonthlyPartitions(sql, table),
+  ),                                   // chat_messages, bonus_transactions, combat_events
 ]);
 ```
 
-There is no table-list parameter, so extending it means editing the worker. Both drops select stale partitions by **lexicographic `relname` comparison** rather than bound inspection:
+For the three DEFAULT-backed tables a missing month is built as a plain table, receives the DEFAULT partition's rows for its range and is then attached, in one transaction — Postgres refuses to add a partition whose range the DEFAULT partition still holds rows for. Both drops select stale partitions by **lexicographic `relname` comparison** rather than bound inspection:
 
 ```sql
 SELECT p.relname AS partname
@@ -1790,9 +1794,9 @@ WHERE pp.relname = 'events' AND p.relname < ${cutoffName}
 
 That is safe only because both naming schemes are zero-padded (`events_YYYY_MM`, `diagnostic_events_YYYYMMDD`); a non-padded or non-dated sibling — a `*_default` partition, for instance — would sort after every dated name and never be dropped. The `diagnostic_events` cutoff is computed as *yesterday's* partition name (`Date.now() - 86_400_000`, line 36), so the real window is one to two days, not the "24h" the migration header claims.
 
-The remaining four partitioned tables have **no rotator at all**, and the same omission produces two opposite failure modes. `combat_events` has a `DEFAULT` catch-all, so once the bootstrap window is exhausted every row piles into a single unpartitioned heap — silent unbounded growth, with BRIN pruning progressively unable to skip anything. `player_sessions`, `chat_messages` and `bonus_transactions` have no DEFAULT, so their inserts will begin raising `no partition of relation … found for row` on the 1st of the 5th month after the migration ran. That is a *dated outage*, not a gradual degradation, and `bonus_transactions` failing also blocks all economy writes.
+Until issue #6 the last four tables had **no rotator at all**: `player_sessions`, `chat_messages` and `bonus_transactions` had no DEFAULT partition, so their inserts would have begun raising `no partition of relation … found for row` on the 1st of the 5th month after their migrations ran (2026-11-01 on production), and `combat_events` would have piled every row into its DEFAULT partition. `player_sessions` got its rotator on 2026-09-09; the other three got theirs plus migration `0117_monthly_partition_defaults`, which adds the missing DEFAULT partitions and the current month and three months ahead on its own, before the worker runs. No retention is applied to any of the four.
 
-The intended fix is documented but unimplemented. `packages/db/sql/` holds ten idempotent DDL files that duplicate migration content so integration tests and the orchestrator can materialize tables directly; five test files consume them, and `migrate.ts` does not. Each carries a **commented-out** `partman.create_parent(...)` block with a stated retention (24 months for sessions/bonus, 12 for chat/combat) and a note that pg_partman "takes over rotation in production" (`packages/db/sql/player-sessions.sql:68-86`, `chat-messages.sql:70`, `combat-events.sql:81`, `bonus-transactions.sql:83`). The extension is absent repo-wide; nothing enables it. These files are also a real duplication hazard — `packages/db/sql/combat-events.sql` and `drizzle/0029` must be kept in sync by hand, with no test asserting they match.
+`packages/db/sql/` holds idempotent DDL files that duplicate migration content so integration tests can materialize tables directly; `migrate.ts` does not read them. Their old commented-out `partman.create_parent(...)` blocks were removed with issue #6 — the extension is absent repo-wide. These files remain a duplication hazard — `packages/db/sql/combat-events.sql` and `drizzle/0029` must be kept in sync by hand, with no test asserting they match.
 
 ### 8.9 Consolidated retention across Postgres, Redis and the filesystem
 
@@ -1823,7 +1827,7 @@ The intended fix is documented but unimplemented. `packages/db/sql/` holds ten i
 
 Redis is the only tier with universally enforced caps, and every one of them drops data *silently* — `MAXLEN ~` is approximate, and nothing emits a warning on trim. `diag:queue` is the sharpest edge: during a Postgres outage the diag-flush consumer stops draining while producers keep `XADD`-ing, so the evidence of the outage is the first thing evicted.
 
-Postgres is the inverse: only two of six partitioned tables have a lifecycle, and the intended safety net is a stub. `apps/workers/audit-archiver/src/index.ts:20-29` awaits `Promise.resolve()` and emits `audit_archiver.run_ok` with the message `'archiver cycle ok (P0 stub)'` — a *healthy* heartbeat published while nothing is archived, which makes the unbounded `audit_log` a monitoring false-negative rather than a visible alarm. Ranked by when they bite: (1) `player_sessions`, `chat_messages`, `bonus_transactions` insert failures at a deployment-relative date roughly four to five months after their migrations ran; (2) `audit_log` and `config_versions` growing forever behind a green heartbeat; (3) media blob orphaning with dedup divergence; (4) `combat_events_default` degrading query plans without ever erroring.
+Postgres is the inverse: all six partitioned tables are rotated (§8.8), but only `events` and `diagnostic_events` have a retention policy, and the intended safety net is a stub. `apps/workers/audit-archiver/src/index.ts:20-29` awaits `Promise.resolve()` and emits `audit_archiver.run_ok` with the message `'archiver cycle ok (P0 stub)'` — a *healthy* heartbeat published while nothing is archived, which makes the unbounded `audit_log` a monitoring false-negative rather than a visible alarm. Ranked by when they bite: (1) `audit_log` and `config_versions` growing forever behind a green heartbeat; (2) media blob orphaning with dedup divergence. (The dated insert failures on `player_sessions`, `chat_messages`, `bonus_transactions` and the unbounded `combat_events_default` were fixed with issue #6.)
 
 ---
 
@@ -3390,9 +3394,11 @@ The 30-method contract is typed twice by hand with no generator. I diffed the tw
 
 `worker-log-ingest` tails `docker logs` and publishes to `events:server:{id}`; alongside it one RNSquadJS sidecar per server reads `SquadGame.log` from disk and publishes to the same stream (or a `:shadow` suffix). Mode is `PANEL_BRIDGE_MODE`, default shadow; production membership lives in the Redis set `rnsquadjs:cutover-servers`, written only by `POST /api/v1/servers/:id/rnsquadjs`. **Empty set = fully legacy, which is the current default.** The parity checker `shadowDiff.compareStreams` exists and is tested, but has **no production caller** — no route, worker or script runs it; it is an operator-invoked library only. `docs/architecture/README.md:51` ("We do not vendor or fork RNSquadJS") contradicts `docker/rnsquadjs.Dockerfile`, which clones upstream at a pinned SHA and applies `upstream.patch`.
 
-#### C.8 Unrotated partitions — a dated failure
+#### C.8 Unrotated partitions — a dated failure (resolved, issue #6)
 
-`worker-event-partition` rotates exactly two tables: `events` (24-month retention) and `diagnostic_events` (24-hour). Four other tables are range-partitioned and rotated by **nobody**:
+> **Resolved.** `worker-event-partition` now also rotates `player_sessions` (`ensurePlayerSessionPartitions`) and `chat_messages`, `bonus_transactions`, `combat_events` (`ensureDefaultBackedMonthlyPartitions`); migration `0117_monthly_partition_defaults` gave `chat_messages` and `bonus_transactions` DEFAULT partitions and three months of look-ahead. See §8.8. The original finding follows.
+
+`worker-event-partition` rotated exactly two tables: `events` (24-month retention) and `diagnostic_events` (24-hour). Four other tables were range-partitioned and rotated by **nobody**:
 
 | Table | Partition key | Created by | Rotator |
 |---|---|---|---|

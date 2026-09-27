@@ -15,7 +15,7 @@ The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis,
 | Kind | Severity | Trigger | Payload fields |
 |---|---|---|---|
 | `event_partition.started` | `info` | Right after `startHeartbeat`, before the first `runPartitionTick` | `pid: number` |
-| `event_partition.run_ok` | `info` | A successful hourly tick (both monthly + daily diag rotations resolved). | `{}` |
+| `event_partition.run_ok` | `info` | A successful hourly tick (every rotation resolved: `events`, `diagnostic_events`, `player_sessions`, `chat_messages`, `bonus_transactions`, `combat_events`). | `{}` |
 | `event_partition.run_failed` | `error` | One or more sub-rotations rejected. The tick still continues — failures are isolated per-rotation via `Promise.allSettled`. | `failures: string[]` (the rejected error messages) |
 | `event_partition.stopped` | `info` | Inside the SIGTERM/SIGINT handler before `process.exit(0)`. | `sig: 'SIGTERM' \| 'SIGINT'` |
 
@@ -65,4 +65,14 @@ const sql = postgres(process.env.DATABASE_URL!);
 await ensureMonthlyPartitions(sql);
 ```
 
-No data is returned to callers. The DDL is idempotent (`IF NOT EXISTS` / `IF EXISTS`).
+### `ensureDefaultBackedMonthlyPartitions(sql: postgres.Sql, table: DefaultBackedMonthlyTable): Promise<void>`
+
+Rotator for the monthly tables that have a `<name>_default` DEFAULT partition — the entries of the exported `DEFAULT_BACKED_MONTHLY_TABLES`: `chat_messages` (`sent_at`), `bonus_transactions` (`created_at`) and `combat_events` (`occurred_at`). Added for issue #6.
+
+- **Input**: a `postgres-js` `Sql` instance and a `{ name, keyColumn }` entry; both strings are trusted constants interpolated into DDL.
+- **Output**: `Promise<void>`.
+- **Side effects on Postgres**: for the current and next UTC month, one `DO` block (one transaction) that returns immediately if `<name>_YYYY_MM` exists; otherwise it takes an `ACCESS EXCLUSIVE` lock on `<name>_default`, creates `<name>_YYYY_MM (LIKE <name> INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`, moves the DEFAULT partition's rows for that month into it (`DELETE … RETURNING` → `INSERT`) and `ATTACH`es it. Postgres refuses to add a partition whose range the DEFAULT partition still holds rows for, which is why rows are moved first. Nothing is dropped.
+- **Side effects on logs**: one `info` line per month (`ensured <name> partition`) with a `partname` field.
+- **Errors**: any DDL error propagates to the caller; `runPartitionTick` logs it and emits `event_partition.run_failed`. The block fails if `<name>_default` does not exist — migration `0117_monthly_partition_defaults` creates it.
+
+No data is returned to callers. The DDL is idempotent (`IF NOT EXISTS` / `IF EXISTS` / an existence check).

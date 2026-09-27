@@ -2,10 +2,11 @@
 --
 -- Mirrors PRES-1 (packages/db/sql/player-sessions.sql) and CHATLOG-1
 -- (packages/db/sql/chat-messages.sql): native declarative partitioning by
--- occurred_at plus bootstrap partitions and a DEFAULT catch-all. In production
--- pg_partman.create_parent takes over rotation with 12-month retention (see the
--- pg_partman block at the bottom, kept commented because the extension is not
--- installed in CI). Drizzle-kit generates the plain table from
+-- occurred_at plus bootstrap partitions and a DEFAULT catch-all.
+-- worker-event-partition (`ensureDefaultBackedMonthlyPartitions`) keeps the
+-- current and next month partitioned from then on, moving any rows already in
+-- the DEFAULT partition, and drops nothing; pg_partman is not installed
+-- anywhere. Drizzle-kit generates the plain table from
 -- packages/db/src/schema/combat-events.ts; this file adds the partitioning, the
 -- partial teamkill index, the BRIN index and the DESC index ordering that
 -- Drizzle cannot express.
@@ -53,7 +54,7 @@ CREATE INDEX IF NOT EXISTS combat_events_occurred_at_brin_idx
 CREATE TABLE IF NOT EXISTS combat_events_default PARTITION OF combat_events DEFAULT;
 
 -- Bootstrap partitions: previous month + current + 3 look-ahead months.
--- pg_partman / pg_cron create and drop the rest in production.
+-- worker-event-partition creates the following months.
 DO $$
 DECLARE
   m          int;
@@ -72,26 +73,3 @@ BEGIN
     );
   END LOOP;
 END$$;
-
--- ---------------------------------------------------------------------------
--- Production rotation (pg_partman). Not run in CI because pg_partman is not
--- installed on the CI Postgres image; the orchestrator enables it in the
--- production migration:
---
---   CREATE EXTENSION IF NOT EXISTS pg_partman;
---   SELECT partman.create_parent(
---     p_parent_table    => 'public.combat_events',
---     p_control         => 'occurred_at',
---     p_type            => 'range',
---     p_interval        => '1 month',
---     p_premake         => 3
---   );
---   UPDATE partman.part_config
---   SET retention             = '12 months',
---       retention_keep_table  = false,
---       infinite_time_partitions = true
---   WHERE parent_table = 'public.combat_events';
---
--- pg_cron then runs SELECT partman.run_maintenance() hourly, or the existing
--- event-partition worker rotates partitions the same way it does for events.
--- ---------------------------------------------------------------------------

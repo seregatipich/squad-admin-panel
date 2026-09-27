@@ -4,6 +4,16 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-27
+
+### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)
+
+**Files:** `packages/db/drizzle/0117_monthly_partition_defaults.sql`, `packages/db/sql/{chat-messages,bonus-transactions,combat-events,player-sessions}.sql`, `packages/db/test/monthly-partition-defaults.migration.test.ts`
+
+Issue #6. `chat_messages` (0025) and `bonus_transactions` (0026) had only their migration-created months and no DEFAULT partition, so every insert would have failed from the first day past that window (2026-11-01 on production). The migration adds `chat_messages_default` and `bonus_transactions_default` and creates the current UTC month plus three months ahead for those two tables and `combat_events`, moving any rows `combat_events_default` already holds for those months. `worker-event-partition` (`ensureDefaultBackedMonthlyPartitions`) keeps the current + next month from then on. The `packages/db/sql/` snippets gain the same DEFAULT partitions and lose their never-applied pg_partman blocks. Rollback-safe: the previous release neither creates nor drops partitions of these tables.
+
+---
+
 ## 2026-09-07
 
 ### Remote log sources — `server_log_sources` (migration 0113)

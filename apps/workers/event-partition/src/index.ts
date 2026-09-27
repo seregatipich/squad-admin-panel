@@ -133,6 +133,83 @@ export async function ensurePlayerSessionPartitions(sql: postgres.Sql): Promise<
   }
 }
 
+/** A monthly RANGE-partitioned table that has a `<name>_default` DEFAULT partition. */
+export interface DefaultBackedMonthlyTable {
+  /** Parent table; its monthly partitions are named `<name>_YYYY_MM`. */
+  name: string;
+  /** The timestamptz partition key. */
+  keyColumn: string;
+}
+
+/**
+ * Monthly tables whose partitions exist only thanks to this worker. Their
+ * migrations created a fixed window of months (the pg_partman rotation their
+ * SQL files assumed was never installed), and migration 0117 gave each a
+ * DEFAULT partition. Nothing is dropped: no retention policy has been adopted
+ * for the chat log, the bonus ledger or the combat feed.
+ */
+export const DEFAULT_BACKED_MONTHLY_TABLES: readonly DefaultBackedMonthlyTable[] = [
+  { name: 'chat_messages', keyColumn: 'sent_at' },
+  { name: 'bonus_transactions', keyColumn: 'created_at' },
+  { name: 'combat_events', keyColumn: 'occurred_at' },
+];
+
+/**
+ * Ensures the current + next month partitions of a DEFAULT-backed monthly
+ * table exist (issue #6).
+ *
+ * Without them `chat_messages` and `bonus_transactions` reject every insert
+ * past the migration-created window ("no partition of relation … found for
+ * row"), taking the chat log, bonus accruals, manual adjustments and VIP grants
+ * down, and `combat_events` piles every row into its DEFAULT partition.
+ *
+ * Postgres refuses to add a partition whose range the DEFAULT partition still
+ * holds rows for, so a missing month is built as a plain table, receives the
+ * DEFAULT partition's rows for its range and is then attached — all in one
+ * `DO` block, i.e. one transaction. The ACCESS EXCLUSIVE lock on the DEFAULT
+ * partition keeps concurrent inserts from landing rows there between the move
+ * and the attach; it is taken at most once per table per month. Migration
+ * 0117 runs the same steps. Bounds are computed in UTC, matching
+ * {@link ensureMonthlyPartitions}.
+ *
+ * @param sql - Connection to the panel database.
+ * @param table - The table to rotate; its name and key column are trusted
+ *   constants from {@link DEFAULT_BACKED_MONTHLY_TABLES}, interpolated into DDL.
+ * @throws The Postgres error when creating or attaching a partition fails.
+ */
+export async function ensureDefaultBackedMonthlyPartitions(
+  sql: postgres.Sql,
+  table: DefaultBackedMonthlyTable,
+): Promise<void> {
+  const now = new Date();
+  const defaultPartition = `${table.name}_default`;
+  for (const offset of [0, 1]) {
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, 1));
+    const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 1));
+    const partname = `${table.name}_${monthStart.getUTCFullYear()}_${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}`;
+    const from = monthStart.toISOString().slice(0, 10);
+    const to = monthEnd.toISOString().slice(0, 10);
+    await sql.unsafe(`
+      DO $$
+      BEGIN
+        IF to_regclass('${partname}') IS NOT NULL THEN
+          RETURN;
+        END IF;
+        LOCK TABLE ${defaultPartition} IN ACCESS EXCLUSIVE MODE;
+        CREATE TABLE ${partname} (LIKE ${table.name} INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+        WITH moved AS (
+          DELETE FROM ${defaultPartition}
+          WHERE ${table.keyColumn} >= '${from}' AND ${table.keyColumn} < '${to}'
+          RETURNING *
+        )
+        INSERT INTO ${partname} SELECT * FROM moved;
+        ALTER TABLE ${table.name} ATTACH PARTITION ${partname} FOR VALUES FROM ('${from}') TO ('${to}');
+      END$$;
+    `);
+    log.info({ partname }, `ensured ${table.name} partition`);
+  }
+}
+
 export interface PartitionTickDeps {
   sql: postgres.Sql;
   diag: Diag;
@@ -146,6 +223,9 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
     ensureMonthlyPartitions(sql),
     ensureDiagPartitions(sql),
     ensurePlayerSessionPartitions(sql),
+    ...DEFAULT_BACKED_MONTHLY_TABLES.map((table) =>
+      ensureDefaultBackedMonthlyPartitions(sql, table),
+    ),
   ]);
   for (const r of results) {
     if (r.status === 'rejected') {

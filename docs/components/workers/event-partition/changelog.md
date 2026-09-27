@@ -1,5 +1,13 @@
 # Changelog — worker-event-partition
 
+## 2026-09-27
+
+### Fixed
+
+- `chat_messages`, `bonus_transactions` and `combat_events` were never rotated (issue #6): their migrations created a fixed window of months and the pg_partman rotation their SQL files assumed was never installed. From 2026-11-01 every chat-log, bonus-ledger, manual-adjustment and VIP-grant insert on production would have failed with `no partition of relation … found for row`, and `combat_events` rows would have piled up in `combat_events_default`. New `ensureDefaultBackedMonthlyPartitions(sql, table)` over the exported `DEFAULT_BACKED_MONTHLY_TABLES`, wired into `runPartitionTick`, keeps the current + next month partitioned (UTC bounds), moving any rows the DEFAULT partition already holds for a new month into it before attaching. Nothing is dropped.
+- Migration `0117_monthly_partition_defaults` gives `chat_messages` and `bonus_transactions` DEFAULT partitions and creates the current month and three months ahead for all three tables, so the outage is averted even before the worker's first tick.
+- `test/default-backed-partition.test.ts`: real-database regression tests through `runPartitionTick`.
+
 ## 2026-09-09
 
 ### Added
