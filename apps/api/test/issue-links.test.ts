@@ -50,9 +50,14 @@ async function seedRole(
   return id;
 }
 
+/**
+ * Seeds a player on `opts.roleId`, or on a fresh plain `panel_access` role
+ * when omitted: the tracker is panel-gated, and a panel session exists in
+ * production only for a `panel_access` holder.
+ */
 async function seedPlayer(
   db: DatabaseClient,
-  opts: { name?: string; roleId?: string | null } = {},
+  opts: { name?: string; roleId?: string } = {},
 ): Promise<string> {
   const id = uuidv7();
   const name = opts.name ?? `Player-${id.slice(0, 6)}`;
@@ -61,7 +66,7 @@ async function seedPlayer(
     steamId64: nextSteam(),
     canonicalName: name,
     canonicalNameNormalized: name.toLowerCase(),
-    roleId: opts.roleId ?? null,
+    roleId: opts.roleId ?? (await seedRole(db)),
   });
   return id;
 }

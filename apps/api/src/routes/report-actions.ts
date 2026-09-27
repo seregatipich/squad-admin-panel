@@ -275,9 +275,10 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * Warns, kicks, or bans a report's target and links the resulting
-   * moderation_actions row back to the report. Warn/kick require the target
-   * to currently be online (checked via the live roster); ban does not,
-   * since Squad's AdminBan accepts an offline SteamID64.
+   * moderation_actions row back to the report. Requires `can_handle_reports`
+   * plus the live-Squad `ban` (ban) or `kick` (warn/kick) permission. Warn/kick
+   * require the target to currently be online (checked via the live roster);
+   * ban does not, since Squad's AdminBan accepts an offline SteamID64.
    */
   fast.post(
     '/api/v1/reports/:id/actions',
@@ -285,6 +286,14 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
+      // MOD-2 — the same live-Squad permission `moderationWriteGuard` in
+      // `moderation-actions.ts` requires: `ban` for a ban (and its alts),
+      // `kick` for a warn or kick. `can_handle_reports` alone never grants it.
+      const requiredSquad = req.body.action_type === 'ban' ? 'ban' : 'kick';
+      if (!req.user?.permissions.squadPermissions.has(requiredSquad)) {
+        reply.code(403);
+        return { error: 'forbidden', required: requiredSquad };
+      }
 
       const report = await loadReport(req.params.id);
       if (!report) {

@@ -6,10 +6,9 @@ import {
   API_TOKEN_TOUCH_THROTTLE_SECONDS,
   extractBearerToken,
   hashApiToken,
-  intersectScopes,
   looksLikeApiToken,
 } from '../lib/api-tokens.js';
-import { loadUserPermissions } from '../lib/rbac.js';
+import { loadUserPermissions, narrowToTokenScopes } from '../lib/rbac.js';
 import { resolveSession, touchSession } from '../lib/sessions.js';
 
 export const SESSION_COOKIE = '__Host-sid';
@@ -91,18 +90,22 @@ export default fp(async (app) => {
             .where(eq(players.id, token.playerId))
             .limit(1);
           const player = playerRows[0];
-          if (player) {
-            const rolePerms = await loadUserPermissions(app.db, player.id);
-            const effective = intersectScopes(token.scopes, rolePerms.permissions);
+          const rolePerms = player ? await loadUserPermissions(app.db, player.id) : null;
+          // #7 — a token delegates its owner's *panel* access. Once the
+          // owner's live role no longer grants `panel_access` (demotion,
+          // expiry, removal) the token stops authenticating at all, instead
+          // of reaching the routes that authorise on `req.user` alone. The
+          // row is not revoked: restoring the role restores the token, the
+          // "live intersect" rule in docs/architecture/decisions.md. Role
+          // flags and Squad permissions are narrowed to the token's scopes
+          // as well as the catalogue set — see `narrowToTokenScopes`.
+          if (player && rolePerms?.panelAccess) {
             req.user = {
               playerId: player.id,
               steamId64: player.steamId64,
               canonicalName: player.canonicalName,
               avatarUrl: null,
-              permissions: {
-                ...rolePerms,
-                permissions: effective,
-              },
+              permissions: narrowToTokenScopes(rolePerms, token.scopes),
             };
             req.apiTokenId = token.id;
             await touchApiTokenLastUsed(app, token.id);
@@ -119,11 +122,11 @@ export default fp(async (app) => {
     // `config.selfService`; anywhere else the request is downgraded to
     // anonymous. Deny-by-default is required here rather than trusting the
     // permission set, because `loadUserPermissions` adds explicit
-    // `role_permissions` rows on top of the derived set, and because ~30 routes
-    // authorise on `req.user` alone (`issues.ts`, `message-templates.ts`,
-    // `banned-names.ts`) or on `squadPermissions`, which `rbac.ts` does not gate
-    // on `panel_access`. Downgrading instead of answering 403 keeps genuinely
-    // public routes public and leaks nothing about the caller.
+    // `role_permissions` rows on top of the derived set, and because routes
+    // authorise on `req.user` alone (`message-templates.ts`, …) or on
+    // `squadPermissions`, which `rbac.ts` does not gate on `panel_access`.
+    // Downgrading instead of answering 403 keeps genuinely public routes
+    // public and leaks nothing about the caller.
     //
     // The scope never over-restricts a real admin: once the player actually
     // holds `panel_access` the gate lifts without re-login.

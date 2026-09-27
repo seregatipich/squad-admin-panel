@@ -35,9 +35,14 @@ async function seedRole(
   return id;
 }
 
+/**
+ * Seeds a player on `opts.roleId`, or on a fresh plain `panel_access` role
+ * when omitted: the tracker is panel-gated, and a panel session exists in
+ * production only for a `panel_access` holder.
+ */
 async function seedPlayer(
   db: DatabaseClient,
-  opts: { name?: string; roleId?: string | null } = {},
+  opts: { name?: string; roleId?: string } = {},
 ): Promise<string> {
   const id = uuidv7();
   const name = opts.name ?? `Player-${id.slice(0, 6)}`;
@@ -46,7 +51,7 @@ async function seedPlayer(
     steamId64: nextSteam(),
     canonicalName: name,
     canonicalNameNormalized: name.toLowerCase(),
-    roleId: opts.roleId ?? null,
+    roleId: opts.roleId ?? (await seedRole(db)),
   });
   return id;
 }
@@ -100,6 +105,33 @@ describeIfDb('issues API — create, RBAC, comments, audit', () => {
       payload: { title: 'x', body: 'y' },
     });
     expect(create.statusCode).toBe(401);
+  });
+
+  it('rejects a session whose role lost panel_access with 403, even with can_manage_issues', async () => {
+    const authorCookie = await loginAs(h, await seedPlayer(h.db));
+    const issue = await createIssue(h, authorCookie, { title: 'Panel gate', body: 'probe' });
+    const demotedRole = await seedRole(h.db, { panelAccess: false, canManageIssues: true });
+    const cookie = await loginAs(h, await seedPlayer(h.db, { roleId: demotedRole }));
+
+    const requests = [
+      { method: 'GET' as const, url: '/api/v1/issues' },
+      { method: 'GET' as const, url: `/api/v1/issues/${issue.id}` },
+      { method: 'POST' as const, url: '/api/v1/issues', payload: { title: 'x', body: 'y' } },
+      {
+        method: 'PATCH' as const,
+        url: `/api/v1/issues/${issue.id}`,
+        payload: { state: 'closed' },
+      },
+      {
+        method: 'POST' as const,
+        url: `/api/v1/issues/${issue.id}/comments`,
+        payload: { body: 'probe' },
+      },
+    ];
+    for (const request of requests) {
+      const res = await h.app.inject({ ...request, headers: { cookie } });
+      expect(res.statusCode, `${request.method} ${request.url}`).toBe(403);
+    }
   });
 
   it('new issue is authored by the current player and starts in state=open (AC1)', async () => {

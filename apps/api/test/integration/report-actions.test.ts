@@ -3,6 +3,7 @@ import {
   moderationActions,
   playerReports,
   players,
+  roleSquadPermissions,
   roles,
   servers,
 } from '@squad/db/schema';
@@ -35,6 +36,7 @@ const OWNER_STEAM = testSteamId(951000);
 const HANDLER_STEAM = testSteamId(951001);
 const PANEL_ONLY_STEAM = testSteamId(951002);
 const NO_PANEL_STEAM = testSteamId(951003);
+const HANDLER_NO_SQUAD_STEAM = testSteamId(951020);
 const REPORTER_STEAM = testSteamId(951011);
 const TARGET_STEAM = testSteamId(951012);
 const REPORTER_STEAM_B = testSteamId(951013);
@@ -103,6 +105,7 @@ async function seedRoleWithPlayer(opts: {
   steamId64: bigint;
   panelAccess: boolean;
   canHandleReports: boolean;
+  squadPermissions?: string[];
 }): Promise<string> {
   const roleId = uuidv7();
   await h.db.insert(roles).values({
@@ -112,6 +115,11 @@ async function seedRoleWithPlayer(opts: {
     panelAccess: opts.panelAccess,
     canHandleReports: opts.canHandleReports,
   });
+  if (opts.squadPermissions?.length) {
+    await h.db
+      .insert(roleSquadPermissions)
+      .values(opts.squadPermissions.map((squadPermissionKey) => ({ roleId, squadPermissionKey })));
+  }
   const stub = `RA${String(opts.steamId64).slice(-6)}`;
   const [row] = await h.db
     .insert(players)
@@ -171,6 +179,13 @@ beforeAll(async () => {
   await seedRoleWithPlayer({
     roleName: `ReportActionsHandler-${uuidv7()}`,
     steamId64: HANDLER_STEAM,
+    panelAccess: true,
+    canHandleReports: true,
+    squadPermissions: ['kick', 'ban'],
+  });
+  await seedRoleWithPlayer({
+    roleName: `ReportActionsHandlerNoSquad-${uuidv7()}`,
+    steamId64: HANDLER_NO_SQUAD_STEAM,
     panelAccess: true,
     canHandleReports: true,
   });
@@ -236,6 +251,35 @@ describeIfDb('POST /api/v1/reports/:id/actions', () => {
     expect(res.statusCode).toBe(403);
     expect((res.json() as { required: string }).required).toBe('can_handle_reports');
   });
+
+  it.each([
+    ['ban', 'ban'],
+    ['kick', 'kick'],
+    ['warn', 'kick'],
+  ] as const)(
+    'rejects a %s from a report handler without the live-Squad %s permission (MOD-2)',
+    async (actionType, required) => {
+      vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
+      const reportId = await insertReport();
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/reports/${reportId}/actions`,
+        headers: {
+          cookie: await loginAsSteam(HANDLER_NO_SQUAD_STEAM),
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ action_type: actionType, reason: 'stop it', ban_length: '0' }),
+      });
+      expect(res.statusCode).toBe(403);
+      expect((res.json() as { required: string }).required).toBe(required);
+      expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+      const rows = await h.db
+        .select()
+        .from(moderationActions)
+        .where(eq(moderationActions.reportId, reportId));
+      expect(rows).toHaveLength(0);
+    },
+  );
 
   it('400s when the report has no resolved target', async () => {
     const reportId = await insertReport({ targetPlayerId: null, targetRaw: 'UnknownGuy' });

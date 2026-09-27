@@ -83,13 +83,13 @@ Any non-`/me/tokens*` route may be called with `Authorization: Bearer sqp_…` i
 1. If `__Host-sid` cookie is present → cookie path runs and the Bearer header is ignored.
 2. Else if the header matches `/^Bearer\s+(\S+)$/` and `looksLikeApiToken(token)` returns true:
    - Look up `player_api_tokens` by `token_hash = sha256(token)` and `revoked_at IS NULL`.
-   - Load the player and their role permissions.
-   - Set `req.user.permissions = rolePerms ∩ token.scopes`. Permissions the user lost since the token was minted are dropped automatically.
+   - Load the player and their role permissions. If the role no longer grants `panel_access`, stop here: the request stays unauthenticated.
+   - Set `req.user.permissions = narrowToTokenScopes(rolePerms, token.scopes)`: the catalogue set is `rolePerms ∩ token.scopes`, and role flags, live-Squad permissions and `panelAccess` are narrowed to match (see [`data-model.md`](data-model.md#validation-rules)). Permissions the user lost since the token was minted are dropped automatically.
    - Set `req.apiTokenId` (later forwarded to `audit_log.actor_token_id`).
    - Throttle `UPDATE last_used_at` to once per 60 s per token using a Redis NX lock.
 3. RBAC gate (`config.permissions`) runs on `req.user.permissions` as usual.
 
-A revoked or unknown token leaves `req.user` unset, so RBAC-gated routes return `401`.
+A revoked or unknown token, or one whose owner lost `panel_access`, leaves `req.user` unset, so RBAC-gated routes return `401`. A route that authorises on a role flag or Squad permission the token was not delegated returns `403`.
 
 ## Internal helpers (`apps/api/src/lib/api-tokens.ts`)
 
