@@ -122,49 +122,74 @@ export function planMerge(existing: ExistingBanRow[], incoming: ParsedBan[]): Me
   return { toInsert, toUpdate, toRevokeIds, skippedDuplicateKeys };
 }
 
-/** Applies a `MergePlan` to `external_bans`: insert, per-row update, and a single batched revoke — never a DELETE. */
+/**
+ * Rows per INSERT / ids per revoke UPDATE. Each inserted row binds 10
+ * parameters and postgres.js rejects a statement with more than 65534, so a
+ * single-statement import of a large public Bans.cfg (~6.5k+ new rows) would
+ * fail every sync. 1000 keeps every statement far below that cap.
+ */
+export const MERGE_BATCH_SIZE = 1000;
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+  return chunks;
+}
+
+/**
+ * Applies a `MergePlan` to `external_bans` in one transaction: batched
+ * inserts, per-row updates, and batched revokes — never a DELETE. Inserts and
+ * revokes are split into `MERGE_BATCH_SIZE` statements so a plan of any size
+ * stays under the driver's bound-parameter cap; the transaction keeps a
+ * partially applied plan from ever becoming visible.
+ */
 export async function applyMergePlan(
   db: DatabaseClient,
   sourceId: string,
   plan: MergePlan,
 ): Promise<ApplyMergeResult> {
-  if (plan.toInsert.length > 0) {
-    await db.insert(externalBans).values(
-      plan.toInsert.map((record) => ({
-        id: uuidv7(),
-        sourceId,
-        steamId64: record.steamId64,
-        eosId: record.eosId,
-        nickname: record.nickname,
-        reason: record.reason,
-        adminName: record.adminName,
-        issuedAt: record.issuedAt,
-        expiresAt: record.expiresAt,
-        raw: record.raw ?? {},
-      })),
-    );
-  }
+  await db.transaction(async (tx) => {
+    for (const batch of chunk(plan.toInsert, MERGE_BATCH_SIZE)) {
+      await tx.insert(externalBans).values(
+        batch.map((record) => ({
+          id: uuidv7(),
+          sourceId,
+          steamId64: record.steamId64,
+          eosId: record.eosId,
+          nickname: record.nickname,
+          reason: record.reason,
+          adminName: record.adminName,
+          issuedAt: record.issuedAt,
+          expiresAt: record.expiresAt,
+          raw: record.raw ?? {},
+        })),
+      );
+    }
 
-  for (const update of plan.toUpdate) {
-    await db
-      .update(externalBans)
-      .set({
-        nickname: update.nickname,
-        reason: update.reason,
-        adminName: update.adminName,
-        expiresAt: update.expiresAt,
-        raw: update.raw ?? {},
-        revokedAt: update.revokedAt,
-      })
-      .where(eq(externalBans.id, update.id));
-  }
+    for (const update of plan.toUpdate) {
+      await tx
+        .update(externalBans)
+        .set({
+          nickname: update.nickname,
+          reason: update.reason,
+          adminName: update.adminName,
+          expiresAt: update.expiresAt,
+          raw: update.raw ?? {},
+          revokedAt: update.revokedAt,
+        })
+        .where(eq(externalBans.id, update.id));
+    }
 
-  if (plan.toRevokeIds.length > 0) {
-    await db
-      .update(externalBans)
-      .set({ revokedAt: new Date() })
-      .where(and(inArray(externalBans.id, plan.toRevokeIds), isNull(externalBans.revokedAt)));
-  }
+    const revokedAt = new Date();
+    for (const ids of chunk(plan.toRevokeIds, MERGE_BATCH_SIZE)) {
+      await tx
+        .update(externalBans)
+        .set({ revokedAt })
+        .where(and(inArray(externalBans.id, ids), isNull(externalBans.revokedAt)));
+    }
+  });
 
   return {
     added: plan.toInsert.length,
