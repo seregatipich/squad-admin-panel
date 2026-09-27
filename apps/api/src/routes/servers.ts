@@ -19,6 +19,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
+import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
@@ -1014,6 +1015,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      const includeIps = canViewIps(req);
       const stream = `events:server:${req.params.id}`;
       const raw = (await app.redis.xrevrange(stream, '+', '-', 'COUNT', req.query.limit)) as Array<
         [string, string[]]
@@ -1042,7 +1044,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             event_id: env.event_id,
             type: env.type,
             ts: env.ts,
-            payload: env.payload,
+            payload: includeIps ? env.payload : redactPayloadIp(env.payload),
           });
         } catch {
           // ignore bad envelopes
