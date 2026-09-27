@@ -104,6 +104,14 @@ describe('GET /api/v1/auth/steam/callback', () => {
       cookies: { '__Host-steam-nonce': 'expected' },
     });
     expect(res.statusCode).toBe(400);
+    // #1233 — without `Secure` the browser ignores the deletion of a
+    // `__Host-` cookie and the spent nonce stays on the client.
+    const cookieHeader = (res.headers['set-cookie'] ?? '') as string | string[];
+    const headers = Array.isArray(cookieHeader) ? cookieHeader : [cookieHeader];
+    const deletion = headers.find((header) => header.startsWith('__Host-steam-nonce=;'));
+    expect(deletion).toMatch(/;\s*Secure/i);
+    expect(deletion).toMatch(/;\s*HttpOnly/i);
+    expect(deletion).toMatch(/;\s*Path=\//i);
   });
 
   it('rejects when redis nonce missing (expired)', async () => {

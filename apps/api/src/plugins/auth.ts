@@ -13,6 +13,22 @@ import { resolveSession, touchSession } from '../lib/sessions.js';
 
 export const SESSION_COOKIE = '__Host-sid';
 
+/**
+ * Attributes every panel `__Host-` cookie is set AND cleared with.
+ *
+ * A browser only accepts a `__Host-`-prefixed cookie that is `Secure`, has
+ * `Path=/` and no `Domain` (RFC 6265bis §4.1.3.2). That applies to the
+ * expiring `Set-Cookie` a logout sends too: a deletion without `Secure` is
+ * dropped whole, so the dead cookie would stay on the client (#1233). Pass
+ * this object to `reply.clearCookie` and spread it into `reply.setCookie`.
+ */
+export const HOST_COOKIE_ATTRIBUTES = {
+  path: '/',
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax',
+} as const;
+
 export default fp(async (app) => {
   const ttlSeconds = app.config.SESSION_TTL_SECONDS;
   const throttleSeconds = app.config.SESSION_TOUCH_THROTTLE_SECONDS;
@@ -56,10 +72,7 @@ export default fp(async (app) => {
           });
           if (touched) {
             reply.setCookie(SESSION_COOKIE, cookieToken, {
-              path: '/',
-              httpOnly: true,
-              secure: true,
-              sameSite: 'lax',
+              ...HOST_COOKIE_ATTRIBUTES,
               maxAge: ttlSeconds,
             });
           }

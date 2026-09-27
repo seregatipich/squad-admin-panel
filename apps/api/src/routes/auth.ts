@@ -9,7 +9,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { revokeAllForPlayer, revokeSession, tokenIdFromToken } from '../lib/sessions.js';
-import { SESSION_COOKIE } from '../plugins/auth.js';
+import { HOST_COOKIE_ATTRIBUTES, SESSION_COOKIE } from '../plugins/auth.js';
 
 /**
  * Сколько прошлых ников отдавать. Историю листает человек глазами, а у
@@ -40,7 +40,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           });
         }
       }
-      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      reply.clearCookie(SESSION_COOKIE, HOST_COOKIE_ATTRIBUTES);
       return { ok: true };
     },
   );
@@ -61,7 +61,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await revokeAllForPlayer(app.db, app.redis, req.user.playerId, app.liveBus);
-      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      reply.clearCookie(SESSION_COOKIE, HOST_COOKIE_ATTRIBUTES);
       return { ok: true };
     },
   );
@@ -210,7 +210,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'unauthenticated' };
       }
       await revokeAllForPlayer(app.db, app.redis, req.user.playerId, app.liveBus);
-      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      reply.clearCookie(SESSION_COOKIE, HOST_COOKIE_ATTRIBUTES);
       return { ok: true };
     },
   );

@@ -13,6 +13,7 @@ import {
   exchangeCode,
   fetchDiscordUser,
 } from '../lib/discord-oauth.js';
+import { HOST_COOKIE_ATTRIBUTES } from '../plugins/auth.js';
 
 const STATE_COOKIE = '__Host-discord-state';
 const STATE_TTL_SECONDS = 300;
@@ -101,10 +102,7 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
         STATE_TTL_SECONDS,
       );
       reply.setCookie(STATE_COOKIE, state, {
-        path: '/',
-        httpOnly: true,
-        secure: true,
-        sameSite: 'lax',
+        ...HOST_COOKIE_ATTRIBUTES,
         maxAge: STATE_TTL_SECONDS,
       });
 
@@ -134,7 +132,7 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const cookieState = req.cookies[STATE_COOKIE];
-      reply.clearCookie(STATE_COOKIE, { path: '/' });
+      reply.clearCookie(STATE_COOKIE, HOST_COOKIE_ATTRIBUTES);
 
       if (!requireSession(req, reply)) return reply;
       const playerId = req.user?.playerId as string;

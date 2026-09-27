@@ -6,6 +6,7 @@ import {
 } from '../lib/authenticated-player.js';
 import { buildLoginRedirectUrl, verifyWithSteam } from '../lib/steam-openid.js';
 import { fetchSteamProfile } from '../lib/steam-profile.js';
+import { HOST_COOKIE_ATTRIBUTES } from '../plugins/auth.js';
 
 const NONCE_COOKIE = '__Host-steam-nonce';
 const NONCE_TTL_SECONDS = 300;
@@ -26,10 +27,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         NONCE_TTL_SECONDS,
       );
       reply.setCookie(NONCE_COOKIE, nonce, {
-        path: '/',
-        httpOnly: true,
-        secure: true,
-        sameSite: 'lax',
+        ...HOST_COOKIE_ATTRIBUTES,
         maxAge: NONCE_TTL_SECONDS,
       });
       const url = buildLoginRedirectUrl({
@@ -47,7 +45,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       const q = req.query as Record<string, string | undefined>;
       const queryNonce = q.n;
       const cookieNonce = req.cookies[NONCE_COOKIE];
-      reply.clearCookie(NONCE_COOKIE, { path: '/' });
+      reply.clearCookie(NONCE_COOKIE, HOST_COOKIE_ATTRIBUTES);
 
       if (!queryNonce || !cookieNonce || queryNonce !== cookieNonce) {
         return reply.code(400).send({ error: 'nonce_mismatch' });

@@ -87,6 +87,22 @@ async function seedAuthedPlayer(
   return { token: result.token, sessionId: result.session.id, playerId: insertedId };
 }
 
+/**
+ * #1233 — a `__Host-` cookie is only accepted by a browser with `Secure`,
+ * `Path=/` and no `Domain`; a deletion header without `Secure` is dropped
+ * whole, leaving the dead session cookie on the client.
+ */
+function expectHostCookieCleared(setCookie: string | string[] | undefined, name: string): void {
+  const headers = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  const deletion = headers.find((header) => header.startsWith(`${name}=;`));
+  expect(deletion, `no deletion Set-Cookie for ${name}`).toBeDefined();
+  expect(deletion).toMatch(/;\s*Secure/i);
+  expect(deletion).toMatch(/;\s*HttpOnly/i);
+  expect(deletion).toMatch(/;\s*Path=\//i);
+  expect(deletion).toMatch(/;\s*SameSite=Lax/i);
+  expect(deletion).not.toMatch(/;\s*Domain=/i);
+}
+
 describe('GET /api/v1/me', () => {
   let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
   let h: Awaited<ReturnType<typeof buildApp>>;
@@ -158,6 +174,7 @@ describe('POST /api/v1/auth/logout', () => {
       .where(eq(sessionsTable.id, sessionId));
     expect(remaining.length).toBe(0);
     expect(revokedIds.has(sessionId)).toBe(true);
+    expectHostCookieCleared(res.headers['set-cookie'], SESSION_COOKIE);
   });
 
   it.each(['panel', 'self_service'] as const)(
@@ -185,7 +202,7 @@ describe('POST /api/v1/auth/logout', () => {
       expect(
         await h.db.select().from(sessionsTable).where(eq(sessionsTable.playerId, playerId)),
       ).toEqual([]);
-      expect(String(response.headers['set-cookie'])).toContain('__Host-sid=;');
+      expectHostCookieCleared(response.headers['set-cookie'], SESSION_COOKIE);
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
@@ -432,6 +449,7 @@ describe('DELETE /api/v1/me/sessions', () => {
     expect(remaining.length).toBe(0);
     expect(revokedIds.has(sessionId)).toBe(true);
     expect(revokedIds.has(second.session.id)).toBe(true);
+    expectHostCookieCleared(res.headers['set-cookie'], SESSION_COOKIE);
   });
 
   it('returns 401 when not authenticated', async () => {

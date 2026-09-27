@@ -1,7 +1,7 @@
 import { players } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { SESSION_COOKIE } from '../plugins/auth.js';
+import { HOST_COOKIE_ATTRIBUTES, SESSION_COOKIE } from '../plugins/auth.js';
 
 export type AuthenticatedPlayerSessionResult =
   | { ok: true; scope: 'panel' | 'self_service' }
@@ -73,10 +73,7 @@ export async function establishAuthenticatedPlayerSession(
     scope,
   });
   reply.setCookie(SESSION_COOKIE, token, {
-    path: '/',
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
+    ...HOST_COOKIE_ATTRIBUTES,
     maxAge: app.config.SESSION_TTL_SECONDS,
   });
   reply.redirect(scope === 'panel' ? '/' : '/me', 302);
