@@ -359,7 +359,7 @@ State held in plugin closure:
 Per tick:
 
 1. If `inFlight` is set → return early.
-2. Set `inFlight = true`. For each `name` in the constant `KNOWN_WORKERS = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition', 'diag-flush', 'metrics-sampler']`:
+2. Set `inFlight = true`. For each `name` in `MONITORED_WORKERS` from `@squad/shared-config` (one entry per `worker-*` service in `docker/compose.yml`, kept in sync by `test/heartbeat-watch-plugin.test.ts`):
    - `ttl = await app.redis.pttl('worker:heartbeat:' + name)`.
    - **Key absent** (`ttl < 0`):
      - `since = lostSince.get(name) ?? now`. Record/refresh `lostSince`.

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { heartbeatWatchPlugin } from '../src/plugins/heartbeat-watch.js';
@@ -88,5 +90,32 @@ describe('heartbeat-watch plugin', () => {
   it('handles redis errors gracefully without throwing', async () => {
     pttlFn.mockRejectedValue(new Error('connection lost'));
     await expect(app.heartbeatWatchTick()).resolves.toBeUndefined();
+  });
+
+  it('watches every worker service docker/compose.yml deploys (#37)', async () => {
+    // Line-based parse of the top-level `worker-*` service keys, as in
+    // compose-stand-worker-parity.test.ts.
+    const compose = readFileSync(resolve(__dirname, '../../../docker/compose.yml'), 'utf-8');
+    const deployed = [...compose.matchAll(/^ {2}worker-([\w-]+):\s*$/gm)]
+      .map((match) => match[1])
+      .sort();
+    expect(deployed.length).toBeGreaterThan(6);
+
+    await app.heartbeatWatchTick();
+
+    const watched = pttlFn.mock.calls.map(([key]) => String(key).replace('worker:heartbeat:', ''));
+    expect(watched.sort()).toEqual(deployed);
+  });
+
+  it('reports a lost heartbeat for a worker outside the original six, e.g. role-expirer', async () => {
+    pttlFn.mockImplementation(async (key: string) =>
+      key === 'worker:heartbeat:role-expirer' ? -2 : 25000,
+    );
+    await app.heartbeatWatchTick();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await app.heartbeatWatchTick();
+
+    const lost = diagEvents.filter((e) => e.kind === 'worker.heartbeat_lost');
+    expect(lost.map((e) => e.message)).toEqual(['worker role-expirer heartbeat absent for >30s']);
   });
 });
