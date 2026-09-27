@@ -27,7 +27,8 @@ players(steam_id64) ──< player_api_tokens(steam_id64)
 
 - `scopes ⊆ caller.permissions` at create time (route `POST /api/v1/me/tokens`).
 - `scopes` may contain only values that pass `isPermissionKey()`; unknown strings are rejected with HTTP 422.
-- At runtime the effective permission set is `currentRolePermissions ∩ token.scopes` — recomputed on every request, so demotions immediately shrink the token's reach.
+- At runtime the effective permission set is `currentRolePermissions ∩ token.scopes` — recomputed on every request, so demotions immediately shrink the token's reach. The rest of the role context is narrowed with it (`narrowToTokenScopes` in `apps/api/src/lib/rbac.ts`, #7): a role flag or live-Squad permission survives only when every catalogue key it gates is delegated (`canEditRoles` ← `role:create`+`role:edit`+`role:delete`, `canAssignRoles` ← `user:manage_roles`, `canManageIntegrations` ← `integration:manage`, `canViewIps` ← `player:view_ips`, Squad `kick` ← `mod:kick`+`mod:warn`, Squad `ban` ← `mod:ban_temp`+`mod:ban_perm`+`mod:unban`); flags and Squad permissions without a catalogue key (`isOwner`, `canManageIssues`, `canManageBanSources`, `canManageClans`, `canManageEconomy`, `canManageMedia`, `canHandleReports`, `combatView`, Squad `chat`/`changemap`/…) are never delegated; `panelAccess` holds only while at least one scope is effective.
+- A token whose owner no longer holds `panel_access` does not authenticate (401). The row stays unrevoked, so restoring the role restores the token.
 - Revocation is soft (`UPDATE … SET revoked_at = now()`). The row is never deleted while it has audit references; deletion would only happen via `players` CASCADE if the player itself is removed.
 
 ## Limits

@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { PERMISSION_KEYS } from '@squad/shared-config';
+import {
+  PERMISSION_KEYS,
+  type PermissionKey,
+  SQUAD_PERMISSION_KEYS,
+  type SquadPermissionKey,
+} from '@squad/shared-config';
 import { describe, expect, it } from 'vitest';
 import {
   API_TOKEN_PREFIX,
@@ -10,6 +15,7 @@ import {
   mintApiToken,
   validateScopesSubset,
 } from '../src/lib/api-tokens.js';
+import { narrowToTokenScopes, type PermissionContext } from '../src/lib/rbac.js';
 
 describe('mintApiToken', () => {
   it('emits sqp_<uuid>_<random> with sha256 hash and matching id', () => {
@@ -110,5 +116,96 @@ describe('extractBearerToken', () => {
   });
   it('handles array header (Node multi-value)', () => {
     expect(extractBearerToken(['Bearer first', 'Bearer second'])).toBe('first');
+  });
+});
+
+describe('narrowToTokenScopes', () => {
+  const owner: PermissionContext = {
+    permissions: new Set<PermissionKey>(PERMISSION_KEYS),
+    squadPermissions: new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS),
+    roleId: 'owner-role',
+    roleName: 'Owner',
+    panelAccess: true,
+    canViewIps: true,
+    canAssignRoles: true,
+    canEditRoles: true,
+    canManageIssues: true,
+    canManageBanSources: true,
+    canManageIntegrations: true,
+    canManageClans: true,
+    canManageEconomy: true,
+    canManageMedia: true,
+    canHandleReports: true,
+    combatView: true,
+    isOwner: true,
+  };
+
+  function flags(ctx: PermissionContext): Record<string, boolean> {
+    return Object.fromEntries(
+      Object.entries(ctx).filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === 'boolean',
+      ),
+    );
+  }
+
+  it('drops every capability and panel access for an introspection token', () => {
+    const narrowed = narrowToTokenScopes(owner, []);
+    expect(narrowed.permissions.size).toBe(0);
+    expect(narrowed.squadPermissions.size).toBe(0);
+    expect(Object.values(flags(narrowed)).every((value) => value === false)).toBe(true);
+    expect(narrowed.roleId).toBe('owner-role');
+  });
+
+  it('keeps panel access but no role flag or squad permission for a read-only scope', () => {
+    const narrowed = narrowToTokenScopes(owner, ['server:view']);
+    expect(Array.from(narrowed.permissions)).toEqual(['server:view']);
+    expect(narrowed.squadPermissions.size).toBe(0);
+    const { panelAccess, ...rest } = flags(narrowed);
+    expect(panelAccess).toBe(true);
+    expect(Object.values(rest).every((value) => value === false)).toBe(true);
+  });
+
+  it('delegates a mapped flag or squad permission only with every catalogue key it gates', () => {
+    expect(narrowToTokenScopes(owner, ['role:edit']).canEditRoles).toBe(false);
+    expect(
+      narrowToTokenScopes(owner, ['role:create', 'role:edit', 'role:delete']).canEditRoles,
+    ).toBe(true);
+    expect(narrowToTokenScopes(owner, ['user:manage_roles']).canAssignRoles).toBe(true);
+    expect(narrowToTokenScopes(owner, ['integration:manage']).canManageIntegrations).toBe(true);
+    expect(narrowToTokenScopes(owner, ['player:view_ips']).canViewIps).toBe(true);
+    expect(Array.from(narrowToTokenScopes(owner, ['mod:kick']).squadPermissions)).toEqual([]);
+    expect(
+      Array.from(narrowToTokenScopes(owner, ['mod:kick', 'mod:warn']).squadPermissions),
+    ).toEqual(['kick']);
+    expect(
+      Array.from(
+        narrowToTokenScopes(owner, ['mod:ban_temp', 'mod:ban_perm', 'mod:unban']).squadPermissions,
+      ),
+    ).toEqual(['ban']);
+  });
+
+  it('never raises a flag the role itself does not hold', () => {
+    const editor: PermissionContext = {
+      ...owner,
+      squadPermissions: new Set<SquadPermissionKey>(),
+      canEditRoles: false,
+      isOwner: false,
+    };
+    const narrowed = narrowToTokenScopes(editor, [
+      'role:create',
+      'role:edit',
+      'role:delete',
+      'mod:ban_temp',
+      'mod:ban_perm',
+      'mod:unban',
+    ]);
+    expect(narrowed.canEditRoles).toBe(false);
+    expect(narrowed.squadPermissions.size).toBe(0);
+  });
+
+  it('does not mutate the cached role context', () => {
+    narrowToTokenScopes(owner, []);
+    expect(owner.permissions.size).toBe(PERMISSION_KEYS.length);
+    expect(owner.isOwner).toBe(true);
   });
 });

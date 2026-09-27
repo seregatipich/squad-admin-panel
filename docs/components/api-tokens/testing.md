@@ -7,6 +7,7 @@
 | [`apps/api/test/api-tokens.test.ts`](../../../apps/api/test/api-tokens.test.ts) | unit | `mintApiToken` shape + uniqueness, `hashApiToken` determinism, `looksLikeApiToken` accept/reject, `validateScopesSubset` ok/unknown/not-granted paths, `intersectScopes`, `extractBearerToken`. |
 | [`apps/api/test/me-tokens.test.ts`](../../../apps/api/test/me-tokens.test.ts) | integration (real Postgres + Redis) | `GET/POST/DELETE /api/v1/me/tokens` happy + error paths, audit row written, list response carries no hash/plaintext. |
 | [`apps/api/test/auth-bearer.test.ts`](../../../apps/api/test/auth-bearer.test.ts) | integration | Bearer auth populates `req.user` with intersected scopes; cookie wins over Bearer; revoked tokens fall through to 401; `last_used_at` advances; `/me/tokens` rejects Bearer. |
+| [`apps/api/test/security/api-token-scope.test.ts`](../../../apps/api/test/security/api-token-scope.test.ts) | integration | #7: tokens scoped `[]` / `['server:view']` get 403 on flag- and Squad-permission-gated writes (banned names, VIP tiers, seasons, ban sources, external local ban, media publications, broadcast, map change, map vote, rotation) and on the issue tracker; fully delegated ban / role-edit scopes keep their capability; `/me` reports no Owner capability; a token stops authenticating once its owner loses `panel_access`. `narrowToTokenScopes` unit cases live in `api-tokens.test.ts`. |
 | [`apps/api/test/audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) | integration (existing) | Includes `meTokensRoutes` so the CI guard sees the new POST/DELETE routes have `config.audit`. |
 
 ## Run
@@ -31,6 +32,6 @@ Integration tests use `buildIntegrationApp` from [`apps/api/test/integration/har
 
 ## Edge cases worth knowing
 
-- **Permission cache TTL**: `loadUserPermissions` caches for 30 s. After demoting a user, Bearer requests may still see the old scope intersection for up to 30 s. This matches the cookie-session behaviour and is acceptable.
+- **Permission cache TTL**: `loadUserPermissions` caches for 30 s. After demoting a user, Bearer requests may still see the old scope intersection — and, after losing `panel_access`, may still authenticate — for up to 30 s. This matches the cookie-session behaviour and is acceptable.
 - **Cookie + Bearer collision**: cookie wins. Tested in `auth-bearer.test.ts` ("cookie wins when both cookie and Bearer are present").
 - **`looksLikeApiToken` short-circuit**: avoids a DB hit for obviously bad headers. Garbage Bearer headers ⇒ 401 without ever touching Postgres.

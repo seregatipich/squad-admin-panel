@@ -8,6 +8,7 @@ import {
   type SquadPermissionKey,
 } from '@squad/shared-config';
 import { eq, sql } from 'drizzle-orm';
+import { intersectScopes } from './api-tokens.js';
 
 export interface PermissionContext {
   permissions: Set<PermissionKey>;
@@ -231,6 +232,74 @@ export async function loadUserPermissions(
   };
   cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
   return value;
+}
+
+/**
+ * Narrows a token owner's live role context to what an API token delegates
+ * (issue #7). The effective permission set is `role ∩ token.scopes`
+ * (`intersectScopes`); every other capability in the context is derived from
+ * that narrowed set rather than copied from the role, because ~70 route
+ * guards authorise on these fields instead of `config.permissions`:
+ *
+ * - a role flag that `derivePanelPermissions` maps onto catalogue keys
+ *   survives only when the token was delegated every one of those keys
+ *   (`canAssignRoles` ← `user:manage_roles`, `canEditRoles` ←
+ *   `role:create`+`role:edit`+`role:delete`, `canManageIntegrations` ←
+ *   `integration:manage`, `canViewIps` ← `player:view_ips`);
+ * - live-Squad `kick` survives only with `mod:kick`+`mod:warn`, and `ban`
+ *   only with `mod:ban_temp`+`mod:ban_perm`+`mod:unban`; every other Squad
+ *   permission (`chat`, `changemap`, …) has no catalogue key, so a token
+ *   never carries it;
+ * - flags with no catalogue key (`isOwner`, `canManageIssues`,
+ *   `canManageBanSources`, `canManageClans`, `canManageEconomy`,
+ *   `canManageMedia`, `canHandleReports`, `combatView`) are never delegated;
+ * - `panelAccess` survives only while the token carries at least one
+ *   effective scope, so a `scopes: []` introspection token reaches `/me` but
+ *   no `panel_access`-guarded route.
+ *
+ * A flag is only ever narrowed, never raised: each result is ANDed with the
+ * role's own value.
+ *
+ * @param role - The owner's context from {@link loadUserPermissions}.
+ * @param scopes - The token's stored `player_api_tokens.scopes`.
+ * @returns A new context; `role` is not mutated (it is the shared cache entry).
+ */
+export function narrowToTokenScopes(
+  role: PermissionContext,
+  scopes: readonly string[],
+): PermissionContext {
+  const permissions = intersectScopes(scopes, role.permissions);
+  const delegates = (keys: ReadonlySet<PermissionKey>): boolean => {
+    for (const key of keys) if (!permissions.has(key)) return false;
+    return true;
+  };
+  const squadPermissions = new Set<SquadPermissionKey>();
+  if (role.squadPermissions.has('kick') && delegates(PANEL_PERMS_GATED_BY_SQUAD_KICK)) {
+    squadPermissions.add('kick');
+  }
+  if (role.squadPermissions.has('ban') && delegates(PANEL_PERMS_GATED_BY_SQUAD_BAN)) {
+    squadPermissions.add('ban');
+  }
+  return {
+    permissions,
+    squadPermissions,
+    roleId: role.roleId,
+    roleName: role.roleName,
+    panelAccess: role.panelAccess && permissions.size > 0,
+    canViewIps: role.canViewIps && delegates(PANEL_PERMS_GATED_BY_VIEW_IPS),
+    canAssignRoles: role.canAssignRoles && delegates(PANEL_PERMS_GATED_BY_ASSIGN),
+    canEditRoles: role.canEditRoles && delegates(PANEL_PERMS_GATED_BY_EDIT),
+    canManageIssues: false,
+    canManageBanSources: false,
+    canManageIntegrations:
+      role.canManageIntegrations && delegates(PANEL_PERMS_GATED_BY_INTEGRATIONS),
+    canManageClans: false,
+    canManageEconomy: false,
+    canManageMedia: false,
+    canHandleReports: false,
+    combatView: false,
+    isOwner: false,
+  };
 }
 
 export function invalidatePermissionCache(playerId: string): void {

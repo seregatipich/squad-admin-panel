@@ -5,7 +5,7 @@ Long-lived per-user API tokens for scripts, CI, monitoring, and Discord integrat
 ## Responsibilities
 
 - Mint, list, and revoke per-user tokens (`/api/v1/me/tokens*`).
-- Authenticate inbound requests via `Authorization: Bearer sqp_…` and intersect the token's `scopes` with the user's current role permissions.
+- Authenticate inbound requests via `Authorization: Bearer sqp_…` for owners who still hold `panel_access`, and narrow the owner's whole permission context — catalogue permissions, role flags, Squad permissions and `panel_access` — to the token's `scopes` (`narrowToTokenScopes`).
 - Wire the token id into the audit-log actor field (`audit_log.actor_token_id`).
 
 ## Non-responsibilities
@@ -45,7 +45,7 @@ sqp_<uuidv7>_<24 random bytes, base64url>
 
 ## Components depending on it
 
-- All RBAC-gated routes — Bearer is just another way to populate `req.user`.
+- All RBAC-gated routes — Bearer is just another way to populate `req.user`. Routes that authorise on a role flag or Squad permission with no catalogue key (media management, ban sources, economy, map/rotation control, broadcasts, …) are therefore unreachable with a token.
 - `audit_log.actor_token_id` — first becomes non-null with this feature.
 
 ## Related docs

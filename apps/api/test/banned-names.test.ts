@@ -23,34 +23,25 @@ afterEach(async () => {
   await h.cleanup();
 });
 
-async function asViewer(): Promise<string> {
-  const viewerRows = await h.db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.name, 'Viewer'))
-    .limit(1);
-  const viewerRoleId = viewerRows[0]?.id;
-  if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('Viewer role missing');
-  await h.db
-    .update(players)
-    .set({ roleId: viewerRoleId })
-    .where(eq(players.steamId64, h.seed.ownerSteamId64));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded above
-  invalidatePermissionCache(h.seed.ownerPlayerId!);
-  return loginAsOwner(h);
-}
-
-async function asBanOnlyRole(): Promise<string> {
+/**
+ * Moves the seeded owner onto a fresh custom role and logs in as it. A panel
+ * session exists in production only for a `panel_access` holder
+ * (`authenticated-player.ts`); `panelAccess: false` models a role whose panel
+ * access was withdrawn after that session was minted.
+ */
+async function asRole(opts: { squadBan: boolean; panelAccess?: boolean }): Promise<string> {
   const roleId = uuidv7();
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: 'Bannerman',
+      name: opts.squadBan ? 'Bannerman' : 'PanelNoBan',
       color: 'red',
       isSystemRole: false,
-      panelAccess: true,
+      panelAccess: opts.panelAccess ?? true,
     });
-    await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: 'ban' });
+    if (opts.squadBan) {
+      await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: 'ban' });
+    }
   });
   await h.db
     .update(players)
@@ -327,12 +318,12 @@ describe('RBAC — squad-permission "ban" gate', () => {
     const seeded = await createRule(ownerCookie, { pattern: 'seeded', match_type: 'exact' });
     const ruleId = seeded.body.id as string;
 
-    const viewerCookie = await asViewer();
+    const noBanCookie = await asRole({ squadBan: false });
 
     const list = await h.app.inject({
       method: 'GET',
       url: '/api/v1/banned-names',
-      headers: { cookie: viewerCookie },
+      headers: { cookie: noBanCookie },
     });
     expect(list.statusCode).toBe(200);
     const listBody = list.json() as { total: number; can_mutate: boolean };
@@ -342,7 +333,7 @@ describe('RBAC — squad-permission "ban" gate', () => {
     const post = await h.app.inject({
       method: 'POST',
       url: '/api/v1/banned-names',
-      headers: { cookie: viewerCookie },
+      headers: { cookie: noBanCookie },
       payload: { pattern: 'nope', match_type: 'exact' },
     });
     expect(post.statusCode).toBe(403);
@@ -350,7 +341,7 @@ describe('RBAC — squad-permission "ban" gate', () => {
     const patch = await h.app.inject({
       method: 'PATCH',
       url: `/api/v1/banned-names/${ruleId}`,
-      headers: { cookie: viewerCookie },
+      headers: { cookie: noBanCookie },
       payload: { is_active: false },
     });
     expect(patch.statusCode).toBe(403);
@@ -358,19 +349,52 @@ describe('RBAC — squad-permission "ban" gate', () => {
     const del = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/banned-names/${ruleId}`,
-      headers: { cookie: viewerCookie },
+      headers: { cookie: noBanCookie },
     });
     expect(del.statusCode).toBe(403);
   });
 
   it('non-owner role holding the ban squad-permission can mutate', async () => {
-    const cookie = await asBanOnlyRole();
+    const cookie = await asRole({ squadBan: true });
     const { statusCode, body } = await createRule(cookie, {
       pattern: 'ban-holder',
       match_type: 'exact',
     });
     expect(statusCode).toBe(201);
     expect(body.pattern).toBe('ban-holder');
+  });
+
+  it('403s every route for an in-game-only role (squad ban, no panel_access) on a panel session', async () => {
+    const ownerCookie = await loginAsOwner(h);
+    const { body: rule } = await createRule(ownerCookie, {
+      pattern: 'panel-gate-probe',
+      match_type: 'exact',
+    });
+    const cookie = await asRole({ squadBan: true, panelAccess: false });
+    const requests = [
+      { method: 'GET' as const, url: '/api/v1/banned-names' },
+      { method: 'GET' as const, url: '/api/v1/banned-names/check?nick=probe' },
+      {
+        method: 'POST' as const,
+        url: '/api/v1/banned-names',
+        payload: { pattern: 'panel-gate-new', match_type: 'exact' },
+      },
+      {
+        method: 'PATCH' as const,
+        url: `/api/v1/banned-names/${String(rule.id)}`,
+        payload: { is_active: false },
+      },
+      { method: 'DELETE' as const, url: `/api/v1/banned-names/${String(rule.id)}` },
+    ];
+    for (const request of requests) {
+      const res = await h.app.inject({ ...request, headers: { cookie } });
+      expect(res.statusCode, `${request.method} ${request.url}`).toBe(403);
+    }
+    const stored = await h.db
+      .select({ isActive: bannedNameRules.isActive })
+      .from(bannedNameRules)
+      .where(eq(bannedNameRules.id, String(rule.id)));
+    expect(stored).toEqual([{ isActive: true }]);
   });
 });
 
@@ -461,11 +485,11 @@ describe('GET /api/v1/banned-names/check — BANNAME-3 nick badge check', () => 
   });
 
   it('can_mutate is false for a role without the ban squad-permission', async () => {
-    const viewerCookie = await asViewer();
+    const noBanCookie = await asRole({ squadBan: false });
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/banned-names/check?nick=whatever',
-      headers: { cookie: viewerCookie },
+      headers: { cookie: noBanCookie },
     });
     const body = res.json() as { can_mutate: boolean };
     expect(body.can_mutate).toBe(false);

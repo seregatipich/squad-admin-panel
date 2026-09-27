@@ -90,6 +90,25 @@ function snapshot(row: typeof bannedNameRules.$inferSelect) {
   };
 }
 
+/**
+ * `panel_access` gate for every banned-name route (#7). Rules are a panel
+ * surface, and `squadPermissions` is not gated on `panel_access` in
+ * `rbac.ts`, so an in-game-only role (Squad `ban`, no panel) must not reach
+ * them through a session minted before its panel access was withdrawn.
+ * API tokens arrive here already narrowed by `narrowToTokenScopes`.
+ */
+function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
+  if (!req.user) {
+    reply.code(401);
+    return { error: 'unauthenticated' };
+  }
+  if (!req.user.permissions.panelAccess) {
+    reply.code(403);
+    return { error: 'forbidden' };
+  }
+  return null;
+}
+
 function hasBanPermission(req: FastifyRequest): boolean {
   return req.user?.permissions.squadPermissions.has('ban') ?? false;
 }
@@ -125,10 +144,8 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/banned-names',
     { schema: { querystring: listQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       const { search, match_type, is_active, page, page_size } = req.query;
       const conditions: SQL[] = [];
       if (search) conditions.push(ilike(bannedNameRules.pattern, `%${search}%`));
@@ -183,10 +200,8 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/banned-names/check',
     { schema: { querystring: checkQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       const rows = await app.db
         .select({
           id: bannedNameRules.id,
@@ -229,10 +244,10 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/banned-names',
     { schema: { body: createBody }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      // biome-ignore lint/style/noNonNullAssertion: panelGuard already 401s when req.user is missing
+      const user = req.user!;
       if (!hasBanPermission(req)) {
         reply.code(403);
         return { error: 'forbidden', required_squad_permission: 'ban' };
@@ -257,7 +272,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
             reason,
             action: req.body.action,
             isActive: req.body.is_active,
-            createdBy: req.user.playerId,
+            createdBy: user.playerId,
           })
           .returning();
         inserted = result[0];
@@ -282,7 +297,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         before: null,
         after: snapshot(inserted),
       });
-      return serializeRule(toRuleRow(inserted, req.user.canonicalName));
+      return serializeRule(toRuleRow(inserted, user.canonicalName));
     },
   );
 
@@ -290,10 +305,8 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/banned-names/:id',
     { schema: { params: idParam, body: updateBody }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       if (!hasBanPermission(req)) {
         reply.code(403);
         return { error: 'forbidden', required_squad_permission: 'ban' };
@@ -370,10 +383,8 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/banned-names/:id',
     { schema: { params: idParam }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       if (!hasBanPermission(req)) {
         reply.code(403);
         return { error: 'forbidden', required_squad_permission: 'ban' };

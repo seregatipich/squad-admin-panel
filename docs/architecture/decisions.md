@@ -224,6 +224,7 @@ Mint per-user, long-lived bearer tokens at `/api/v1/me/tokens` (cookie-only mana
 - `audit_log.actor_token_id` becomes non-null for the first time. Canonical-JSON hashing already includes the column, so chain integrity is unaffected — but the first row carrying a value will look "different" in audit dumps.
 - The `useId`/scopes-checkbox UI implies the user must already have the permission to grant it; users with no permissions can only mint a `scopes=[]` introspection token (allowed).
 - No expiry → operators must revoke leaked tokens manually. The `sqp_` prefix makes secret scanners catch the common case.
+- Amended by #7 (2026-09-27): the intersection covers the whole permission context, not only the catalogue set. Role flags and live-Squad permissions survive only when their catalogue keys are delegated, capabilities without a catalogue key are never delegated, and a token stops authenticating once its owner loses `panel_access` (`narrowToTokenScopes`, `apps/api/src/lib/rbac.ts`). Before that, a narrowly scoped token kept every flag-gated capability of its owner's role.
 
 ### Alternatives considered
 

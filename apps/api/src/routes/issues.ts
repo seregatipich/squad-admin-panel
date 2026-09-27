@@ -121,19 +121,31 @@ function isUniqueViolation(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Resolves the caller for the tracker routes, answering 401 without a user
+ * and 403 without `panel_access` (#7). The tracker is a panel surface:
+ * authentication alone let a session minted before the player's panel access
+ * was withdrawn keep reading and writing it. API tokens arrive already
+ * narrowed by `narrowToTokenScopes`, so a `scopes: []` token is refused here
+ * and no token ever carries `canManageIssues`.
+ *
+ * @returns The authenticated panel user, or `null` once a reply was sent.
+ */
 function currentUser(req: FastifyRequest, reply: FastifyReply) {
   if (!req.user) {
     reply.code(401).send({ error: 'unauthenticated' });
+    return null;
+  }
+  if (!req.user.permissions.panelAccess) {
+    reply.code(403).send({ error: 'forbidden' });
     return null;
   }
   return req.user;
 }
 
 /**
- * Hand-rolled `panel_access` gate for the player-card endpoint. The rest of
- * this module deliberately gates on authentication only, but every other
- * section of the player card is panel-gated, so this one matches its host
- * surface rather than its host module (mirrors `media-links.ts`).
+ * `panel_access` gate for the player-card endpoint, which returns its body
+ * instead of sending it (mirrors `media-links.ts`).
  */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {

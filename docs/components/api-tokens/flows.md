@@ -65,8 +65,13 @@ auth plugin onRequest hook
                      │
                      ├── load player canonical_name
                      ├── loadUserPermissions(steam_id64) ──► rolePerms (cached 30 s)
-                     ├── effective = intersectScopes(token.scopes, rolePerms)
-                     ├── req.user = { steamId64, canonicalName, permissions: { permissions: effective, clearance, roleIds } }
+                     ├── rolePerms.panelAccess = false ──► req.user unset ──► 401
+                     ├── narrowToTokenScopes(rolePerms, token.scopes) ──► effective context:
+                     │      permissions      = intersectScopes(token.scopes, rolePerms.permissions)
+                     │      role flags / Squad permissions kept only when their catalogue keys are delegated
+                     │      flags without a catalogue key (isOwner, canManageMedia, …) = false
+                     │      panelAccess      = effective permissions non-empty
+                     ├── req.user = { steamId64, canonicalName, permissions: effective context }
                      ├── req.apiTokenId = token.id
                      ├── touchApiTokenLastUsed()
                      │      │
@@ -111,12 +116,16 @@ me-tokens DELETE handler
 t0:  user has Owner role
      mint token with scopes=['server:start','server:stop']
 
-t1:  user is demoted to Viewer
+t1:  user is demoted to a panel role without server:start / server:stop
      loadUserPermissions cache expires after 30 s
      next Bearer request:
-       rolePerms = { 'server:view', ... }   (Viewer set)
        effective = intersect(['server:start','server:stop'], rolePerms) = {}
        any RBAC-gated route returns 403
+
+t2:  user is moved to a role without panel_access (or the role expires)
+     next Bearer request after the 30 s cache:
+       the token no longer authenticates ──► 401 on every non-public route
+       the row is not revoked: restoring the role restores the token
 ```
 
 No explicit revoke is required for a demotion to take effect.
