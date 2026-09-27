@@ -5,13 +5,13 @@ package fsx
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
+// MaxReadBytes caps a single file_read response and a single file write.
 const MaxReadBytes = 10 << 20
 
 // DefaultDepotHostPath is the fallback location for the squad-depot
@@ -33,41 +33,11 @@ func DepotHostPath() string {
 	return DefaultDepotHostPath
 }
 
-// Roots we allow *reading* from. The depot volume root is added so the
-// install flow can seed a new server's configs/{uuid}/ServerConfig/
-// directory from the SteamCMD-provided .cfg defaults.
-var readableRoots = []string{
-	validate.PanelDataRoot,
-	DepotHostPath(),
-}
-
-// Writable roots are a strict subset of readable. The depot volume is
-// intentionally omitted so the bridge cannot mutate game binaries.
+// Roots the bridge may write to. The depot volume is intentionally
+// omitted so the bridge cannot mutate game binaries. Reads are validated
+// and confined in handlers (readableTrustRoot), not here.
 var writableRoots = []string{
 	validate.PanelDataRoot,
-}
-
-func Read(p string) ([]byte, error) {
-	_, err := validate.Path(p, readableRoots...)
-	if err != nil {
-		return nil, err
-	}
-	info, err := os.Stat(p)
-	if err != nil {
-		return nil, fmt.Errorf("stat: %w", err)
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("%w: %q is a directory", validate.ErrForbidden, p)
-	}
-	if info.Size() > MaxReadBytes {
-		return nil, fmt.Errorf("%w: %q exceeds %d-byte cap", validate.ErrForbidden, p, MaxReadBytes)
-	}
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(f)
 }
 
 // mkdirAllWithMode is like os.MkdirAll but re-applies `perm` to every

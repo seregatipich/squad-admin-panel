@@ -201,6 +201,8 @@ When `exists: false` only `pid` and `exists` are populated.
 - Depot host path (default `/var/lib/docker/volumes/squad-depot/_data`, overridable via `PANEL_DEPOT_HOST_PATH`).
 - `/var/lib/squad-panel/.first-owner-claimed` sentinel.
 
+**Confinement:** the allowlist check is lexical, so every reader (`file_read`, `file_read_tail`, `file_read_stream`, `squad_log_list`) also resolves the path inside a trust root through `os.Root`: `configs/{uuid}` and `saved/{uuid}` per server (their contents are bind-mounted read-write into the game container), the depot root, and `/var/lib/squad-panel` for the sentinel. A symlink or `..` that leaves the trust root fails the request, and a target that is not a regular file (FIFO, socket, device) is refused with `forbidden`. `squad_log_retention_sweep` resolves each server's `Logs` directory the same way inside `saved/{uuid}`.
+
 ---
 
 ### `file_write`
@@ -418,6 +420,8 @@ Runs `docker rm -f`. If the container does not exist the call succeeds silently.
 ```
 
 `exit_code` reflects the Docker CLI exit code; it is 0 when the container exits cleanly or the context is cancelled.
+
+**Cancellation:** every request runs with a per-connection context that is cancelled when the client closes or half-closes (`socket.end()`) its connection, or when a frame can no longer be written. The API stops a follow by ending its dedicated connection, which kills the `docker logs --follow` process; `file_read_stream` stops the same way.
 
 ---
 

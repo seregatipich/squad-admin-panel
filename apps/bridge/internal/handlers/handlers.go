@@ -137,7 +137,7 @@ func (d *Dispatcher) Handle(
 	case "file_read_tail":
 		return d.fileReadTail(req)
 	case "file_read_stream":
-		return d.fileReadStream(req, onStream)
+		return d.fileReadStream(ctx, req, onStream)
 	case "file_write":
 		return d.fileWrite(req)
 	case "file_atomic_write":
@@ -260,10 +260,16 @@ func (d *Dispatcher) fileRead(req *rpc.Request) rpc.Response {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
-	if err := validateReadablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	f, st, err := openReadableFile(p.Path)
+	if err != nil {
+		return readableOpenErrorResponse(req.ID, err)
 	}
-	b, err := fsx.Read(p.Path)
+	defer f.Close()
+	if st.Size() > fsx.MaxReadBytes {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden,
+			fmt.Sprintf("%s: %q exceeds %d-byte cap", validate.ErrForbidden, p.Path, fsx.MaxReadBytes))
+	}
+	b, err := io.ReadAll(io.LimitReader(f, fsx.MaxReadBytes))
 	if err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
 	}
@@ -286,24 +292,17 @@ func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
-	if err := validateReadablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
-	}
 	maxBytes := p.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = fileReadTailDefaultMaxBytes
 	} else if maxBytes > fileReadTailMaxAllowedBytes {
 		maxBytes = fileReadTailMaxAllowedBytes
 	}
-	f, err := os.Open(p.Path)
+	f, st, err := openReadableFile(p.Path)
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+		return readableOpenErrorResponse(req.ID, err)
 	}
 	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
 	size := st.Size()
 	var off int64
 	if size > maxBytes {
@@ -354,14 +353,12 @@ type fileReadStreamParams struct {
 // file is read chunk_size bytes at a time and never buffered in full, so it
 // satisfies the "500 MB download must not be held in memory" requirement.
 // Modeled on containerLogsFollow (the existing streaming handler): the terminal
-// Response reports how many bytes were streamed.
-func (d *Dispatcher) fileReadStream(req *rpc.Request, onStream func(rpc.StreamFrame)) rpc.Response {
+// Response reports how many bytes were streamed. The stream stops with an
+// error as soon as ctx is cancelled (the client connection went away).
+func (d *Dispatcher) fileReadStream(ctx context.Context, req *rpc.Request, onStream func(rpc.StreamFrame)) rpc.Response {
 	var p fileReadStreamParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	if err := validateReadablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
 	}
 	chunkSize := p.ChunkSize
 	if chunkSize <= 0 {
@@ -369,20 +366,18 @@ func (d *Dispatcher) fileReadStream(req *rpc.Request, onStream func(rpc.StreamFr
 	} else if chunkSize > fileReadStreamMaxChunkBytes {
 		chunkSize = fileReadStreamMaxChunkBytes
 	}
-	f, err := os.Open(p.Path)
+	f, _, err := openReadableFile(p.Path)
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+		return readableOpenErrorResponse(req.ID, err)
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	} else if st.IsDir() {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "path is a directory")
-	}
 
 	buf := make([]byte, chunkSize)
 	var sent int64
 	for {
+		if err := ctx.Err(); err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "stream cancelled: "+err.Error())
+		}
 		n, readErr := f.Read(buf)
 		if n > 0 {
 			encoded, _ := json.Marshal(base64.StdEncoding.EncodeToString(buf[:n]))
@@ -524,7 +519,8 @@ type squadLogFile struct {
 }
 
 // squadLogList returns the SquadGame*.log files in the caller-supplied Logs
-// directory (validated read-only under the panel roots), each with its size,
+// directory (validated read-only under the panel roots and resolved inside
+// its trust root, see readableTrustRoot), each with its size,
 // RFC3339 mtime, and an is_live flag set on the active SquadGame.log. The API
 // builds the path as <saved>/<uuid>/SquadGame/Saved/Logs; a missing directory
 // yields an empty list rather than an error, mirroring readImmediateDirs.
@@ -533,10 +529,12 @@ func (d *Dispatcher) squadLogList(req *rpc.Request) rpc.Response {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
-	if err := validateReadablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	root, rel, err := openReadableRoot(p.Path)
+	if err != nil {
+		return readableOpenErrorResponse(req.ID, err)
 	}
-	entries, err := os.ReadDir(p.Path)
+	defer root.Close()
+	dir, err := root.Open(rel)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			body, _ := json.Marshal(map[string][]squadLogFile{"files": {}})
@@ -544,12 +542,17 @@ func (d *Dispatcher) squadLogList(req *rpc.Request) rpc.Response {
 		}
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
 	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
 	files := make([]squadLogFile, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() || !isSquadGameLog(entry.Name()) {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := root.Lstat(filepath.Join(rel, entry.Name()))
 		if err != nil {
 			continue
 		}
@@ -683,54 +686,78 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 		serverID := serverEntry.Name()
 		_, archiveEnabled := archiveSet[serverID]
 		result.ServersScanned++
-		logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
-		logEntries, err := os.ReadDir(logsDir)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			result.addRetentionError(serverID, "", fmt.Errorf("read logs dir failed: %w", err))
-			continue
-		}
-		result.LogDirsScanned++
-
-		for _, logEntry := range logEntries {
-			info, err := logEntry.Info()
-			if err != nil {
-				result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("stat log file failed: %w", err))
-				continue
-			}
-			if !info.Mode().IsRegular() {
-				continue
-			}
-			result.FilesScanned++
-			if !isRotatedSquadGameLog(logEntry.Name()) {
-				continue
-			}
-			if !info.ModTime().Add(retention).Before(now) {
-				continue
-			}
-			// LOG-3 (#51): for a flagged server, copy the expiring file into the
-			// restic backup staging tree BEFORE deleting it. A copy failure must
-			// leave the file in place (Rule 7 safety) — never delete unarchived.
-			if archiveEnabled {
-				if err := archiveExpiringLog(backupDumpRoot, serverID, logsDir, logEntry.Name()); err != nil {
-					result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("archive log file failed: %w", err))
-					continue
-				}
-				result.ArchivedCount++
-				result.ArchivedBytes += info.Size()
-			}
-			if err := os.Remove(filepath.Join(logsDir, logEntry.Name())); err != nil {
-				result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("delete log file failed: %w", err))
-				continue
-			}
-			result.DeletedCount++
-			result.DeletedBytes += info.Size()
-		}
+		result.sweepServerLogs(filepath.Join(savedRoot, serverID), serverID, now, retention, archiveEnabled, backupDumpRoot)
 	}
 
 	return result
+}
+
+// squadLogsRel is a server's Logs directory relative to its saved/{uuid} dir.
+var squadLogsRel = filepath.Join("SquadGame", "Saved", "Logs")
+
+// sweepServerLogs applies retention to one server's Logs directory. Every path
+// is resolved inside serverDir (saved/{uuid}) through an os.Root: the game
+// container can write anywhere below it, so a Logs directory or file replaced by a
+// symlink out of that tree is reported as an error instead of letting the
+// root-owned sweep delete or archive host files elsewhere.
+func (r *squadLogRetentionSweepResult) sweepServerLogs(serverDir, serverID string, now time.Time, retention time.Duration, archiveEnabled bool, backupDumpRoot string) {
+	serverRoot, err := os.OpenRoot(serverDir)
+	if err != nil {
+		r.addRetentionError(serverID, "", fmt.Errorf("open server dir failed: %w", err))
+		return
+	}
+	defer serverRoot.Close()
+	logsDir, err := serverRoot.Open(squadLogsRel)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		r.addRetentionError(serverID, "", fmt.Errorf("read logs dir failed: %w", err))
+		return
+	}
+	logEntries, err := logsDir.ReadDir(-1)
+	_ = logsDir.Close()
+	if err != nil {
+		r.addRetentionError(serverID, "", fmt.Errorf("read logs dir failed: %w", err))
+		return
+	}
+	r.LogDirsScanned++
+
+	for _, logEntry := range logEntries {
+		logRel := filepath.Join(squadLogsRel, logEntry.Name())
+		info, err := serverRoot.Lstat(logRel)
+		if err != nil {
+			r.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("stat log file failed: %w", err))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		r.FilesScanned++
+		if !isRotatedSquadGameLog(logEntry.Name()) {
+			continue
+		}
+		if !info.ModTime().Add(retention).Before(now) {
+			continue
+		}
+		// LOG-3 (#51): for a flagged server, copy the expiring file into the
+		// restic backup staging tree BEFORE deleting it. A copy failure must
+		// leave the file in place (Rule 7 safety) — never delete unarchived.
+		if archiveEnabled {
+			if err := archiveExpiringLog(backupDumpRoot, serverID, serverRoot, logRel); err != nil {
+				r.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("archive log file failed: %w", err))
+				continue
+			}
+			r.ArchivedCount++
+			r.ArchivedBytes += info.Size()
+		}
+		if err := serverRoot.Remove(logRel); err != nil {
+			r.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("delete log file failed: %w", err))
+			continue
+		}
+		r.DeletedCount++
+		r.DeletedBytes += info.Size()
+	}
 }
 
 func isRotatedSquadGameLog(name string) bool {
@@ -740,21 +767,23 @@ func isRotatedSquadGameLog(name string) bool {
 // archiveExpiringLog copies a single expiring rotated log into the restic
 // backup staging tree at <backupDumpRoot>/log-archive/<serverID>/<name> before
 // the retention sweep deletes it (LOG-3, #51). serverID is a validated UUID and
-// name is a validated rotated-log filename, so neither can escape the staging
-// root. The copy is staged to a sibling temp file and renamed into place so a
+// the name is a validated rotated-log filename, so neither can escape the
+// staging root; the source logRel is opened inside serverRoot and must be a
+// regular file. The copy is staged to a sibling temp file and renamed into place so a
 // snapshot never observes a half-written archive. Returns an error (leaving the
 // source untouched) when the staging root is unconfigured or the copy fails —
 // the caller then skips the delete.
-func archiveExpiringLog(backupDumpRoot, serverID, logsDir, name string) error {
+func archiveExpiringLog(backupDumpRoot, serverID string, serverRoot *os.Root, logRel string) error {
 	if backupDumpRoot == "" {
 		return fmt.Errorf("backup dump root not configured")
 	}
+	name := filepath.Base(logRel)
 	destDir := filepath.Join(backupDumpRoot, "log-archive", serverID)
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("create staging dir failed: %w", err)
 	}
 
-	src, err := os.Open(filepath.Join(logsDir, name))
+	src, _, err := openRegularInRoot(serverRoot, logRel)
 	if err != nil {
 		return fmt.Errorf("open source failed: %w", err)
 	}
@@ -820,20 +849,120 @@ func retentionErrorMessage(err error) string {
 // for bind-mounted squad-depot volumes Docker does NOT populate the
 // /var/lib/docker/volumes/squad-depot/_data stub, so the operator must set
 // the env var to the bind-mount source directly.
+//
+// This check is lexical only; readers must open through openReadableRoot /
+// openReadableFile so the path is also resolved inside its trust root.
 func validateReadablePath(p string) error {
-	if _, err := validate.PanelConfigFilePath(p); err == nil {
-		return nil
+	_, _, err := readableTrustRoot(p)
+	return err
+}
+
+// readableTrustRoot maps a path on the readable allowlist (see
+// validateReadablePath) to the directory its resolution must stay inside, plus
+// the path relative to that directory. configs/{uuid} and saved/{uuid} are
+// scoped per server: configs/{uuid}/ServerConfig and saved/{uuid} are
+// bind-mounted read-write into the game container, so anything inside may be
+// a planted symlink, while the {uuid} directory itself (a mount source or its
+// parent) cannot be replaced from the container. The depot and the
+// first-owner sentinel are rooted at their own directories.
+func readableTrustRoot(p string) (root, rel string, err error) {
+	if cleaned, err := validate.PanelConfigFilePath(p); err == nil {
+		root, rel := serverScopedRoot(validate.PanelConfigsRoot, cleaned)
+		return root, rel, nil
 	}
-	if _, err := validate.PanelSavedPath(p); err == nil {
-		return nil
+	if cleaned, err := validate.PanelSavedPath(p); err == nil {
+		root, rel := serverScopedRoot(validate.PanelSavedRoot, cleaned)
+		return root, rel, nil
 	}
-	if _, err := validate.Path(p, fsx.DepotHostPath()); err == nil {
-		return nil
+	depot := fsx.DepotHostPath()
+	if cleaned, err := validate.Path(p, depot); err == nil {
+		rel, _ := filepath.Rel(depot, cleaned)
+		return depot, rel, nil
 	}
-	if _, err := validate.PanelSentinelPath(p); err == nil {
-		return nil
+	if cleaned, err := validate.PanelSentinelPath(p); err == nil {
+		return filepath.Dir(cleaned), filepath.Base(cleaned), nil
 	}
-	return fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
+	return "", "", fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
+}
+
+// serverScopedRoot splits a validated <base>/{uuid}/... path into the
+// <base>/{uuid} directory and the remainder relative to it ("." for the
+// directory itself).
+func serverScopedRoot(base, cleaned string) (root, rel string) {
+	relToBase, _ := filepath.Rel(base, cleaned)
+	serverID, rest, _ := strings.Cut(relToBase, string(filepath.Separator))
+	if rest == "" {
+		rest = "."
+	}
+	return filepath.Join(base, serverID), rest
+}
+
+// openReadableRoot validates p against the readable allowlist and opens its
+// trust root. Resolving the returned relative path through the os.Root cannot
+// leave that directory, even via symlinks or "..". The caller closes the root.
+func openReadableRoot(p string) (*os.Root, string, error) {
+	rootDir, rel, err := readableTrustRoot(p)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, rel, nil
+}
+
+// errReadableIsDirectory reports that a file read targeted a directory.
+var errReadableIsDirectory = errors.New("path is a directory")
+
+// openReadableFile opens p for reading inside its trust root (see
+// openReadableRoot) and requires a regular file.
+func openReadableFile(p string) (*os.File, fs.FileInfo, error) {
+	root, rel, err := openReadableRoot(p)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer root.Close()
+	return openRegularInRoot(root, rel)
+}
+
+// openRegularInRoot opens rel inside root and returns it only when it is a
+// regular file. O_NONBLOCK keeps open(2) from hanging on a FIFO planted in an
+// untrusted directory; FIFOs, sockets and devices (e.g. an endless /dev/zero)
+// are then refused with validate.ErrForbidden, directories with
+// errReadableIsDirectory.
+func openRegularInRoot(root *os.Root, rel string) (*os.File, fs.FileInfo, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if st.IsDir() {
+		_ = f.Close()
+		return nil, nil, errReadableIsDirectory
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%w: %q is not a regular file", validate.ErrForbidden, rel)
+	}
+	return f, st, nil
+}
+
+// readableOpenErrorResponse maps an openReadableRoot/openReadableFile error to
+// the RPC error code the file handlers have always used.
+func readableOpenErrorResponse(id string, err error) rpc.Response {
+	switch {
+	case errors.Is(err, validate.ErrForbidden):
+		return rpc.NewErrorResponse(id, rpc.CodeForbidden, err.Error())
+	case errors.Is(err, errReadableIsDirectory):
+		return rpc.NewErrorResponse(id, rpc.CodeInvalidArgs, err.Error())
+	default:
+		return rpc.NewErrorResponse(id, rpc.CodeRuntimeError, err.Error())
+	}
 }
 
 func validateWritablePath(p string) error {
