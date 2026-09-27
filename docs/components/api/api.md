@@ -503,8 +503,8 @@ The redis plugin ([`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugin
 
 | Kind | When | `severity` | Payload |
 |---|---|---|---|
-| `redis.ping.fail` | ioredis `error` event fires (connection refused, READONLY, socket reset, etc.). Fires on every error, no de-duplication. | `error` | `{ err }` — the error message string. |
-| `redis.reconnect.attempt` | ioredis `reconnecting` event fires (the retry-strategy is about to re-dial). | `warn` | `{ delayMs }` — the backoff delay in milliseconds the retry-strategy chose. |
+| `redis.ping.fail` | First ioredis `error` event of an outage (connection refused, READONLY, socket reset, etc.). Later errors are silent until `ready` ends the outage. | `error` | `{ err }` — the error message string. |
+| `redis.reconnect.attempt` | First ioredis `reconnecting` event of an outage (the retry-strategy is about to re-dial). Later attempts are silent until `ready`. | `warn` | `{ delayMs }` — the backoff delay in milliseconds the retry-strategy chose. |
 | `redis.reconnect.success` | ioredis `ready` event fires AFTER a prior `error`. The first `ready` of clean startup is silent. The internal `redisDown` flag is reset to `false` on each successful re-arm. | `info` | `{}` |
 | `pg.ping.fail` | The 30 s `SELECT 1` health-check throws (postgres-js wraps connection refused / timeout / query error). Fires on every failed tick. | `error` | `{ err }` — the error message string. |
 | `pg.ping.ok` | First successful `SELECT 1` AFTER a prior `pg.ping.fail`. Subsequent OK ticks are silent until the next failure. Clean startup is silent. | `info` | `{}` |

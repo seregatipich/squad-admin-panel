@@ -772,38 +772,34 @@ Sources: [`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugins/redis.t
 The redis plugin is registered BEFORE diag in [`server.ts`](../../../apps/api/src/server.ts) (diag uses `app.redis` as its xadd target — see the "Diagnostic emission" section above), so the listeners use optional chaining `app.diag?.emit(...)` to handle the brief window during boot where redis events fire before the diag decorator exists. After the diag plugin registers, the lookup sees the live decorator on every emit because the listeners read `app.diag` lazily at fire time.
 
 ```
-redis = new Redis(REDIS_URL, {...})
-redisDown = false   ← module-local flag
+redis = new Redis(REDIS_URL, {
+  maxRetriesPerRequest: 3,     ← queued commands are rejected after 3 reconnect attempts
+  commandTimeout: 5000,        ← REDIS_COMMAND_TIMEOUT_MS, also covers the offline queue
+  ...
+})
+redisDown = false; reconnectReported = false
 
 redis.on('error', err):
-  app.log.warn(...)
-  app.diag?.emit({
-    component: 'api', kind: 'redis.ping.fail', severity: 'error',
-    message: `redis error: ${err.message}`,
-    payload: { err: err.message },
-  }).catch(() => undefined)
+  if redisDown: app.log.debug(...); return      ← one report per outage
   redisDown = true
+  app.log.warn(...)
+  app.diag?.emit({ kind: 'redis.ping.fail', severity: 'error', payload: { err } })
 
 redis.on('reconnecting', delay):
   app.log.info(...)
-  app.diag?.emit({
-    component: 'api', kind: 'redis.reconnect.attempt', severity: 'warn',
-    message: 'redis reconnecting',
-    payload: { delayMs: delay },
-  }).catch(() => undefined)
+  if reconnectReported: return
+  reconnectReported = true
+  app.diag?.emit({ kind: 'redis.reconnect.attempt', severity: 'warn', payload: { delayMs } })
 
 redis.on('ready'):
   app.log.info(...)
+  reconnectReported = false
   if redisDown:
-    app.diag?.emit({
-      component: 'api', kind: 'redis.reconnect.success', severity: 'info',
-      message: 'redis ready after a prior failure',
-      payload: {},
-    }).catch(() => undefined)
+    app.diag?.emit({ kind: 'redis.reconnect.success', severity: 'info', payload: {} })
     redisDown = false
 ```
 
-The `redisDown` flag is the load-bearing piece: on a clean startup ioredis fires exactly one `ready` event (no prior `error`/`reconnecting`), and we want that to be silent — the `redis.reconnect.success` kind is reserved for actual recovery transitions. Any subsequent `error` arms the flag, the next `ready` consumes it, and the cycle repeats.
+The `redisDown` flag is the load-bearing piece: on a clean startup ioredis fires exactly one `ready` event (no prior `error`/`reconnecting`), and we want that to be silent — the `redis.reconnect.success` kind is reserved for actual recovery transitions. The first `error` arms the flag, the next `ready` consumes it, and the cycle repeats. While it is armed, further errors and reconnect attempts emit nothing: each emit is itself an `XADD` queued behind the dead connection (#37). Because of `commandTimeout`, an HTTP handler touching Redis during an outage fails after 5 s instead of hanging; `routes/depot.ts` duplicates the client with `commandTimeout: undefined` for its `XREAD BLOCK 5000` loop.
 
 The db-health plugin uses a separate 30 s `setInterval` because postgres-js (the driver behind `app.db`) does not expose connection-state events the way ioredis does. The plugin tracks `pgDown` per-app via a `WeakMap<FastifyInstance, boolean>`; the exported `pgHealthTick(app)` helper drives the loop deterministically in tests.
 
