@@ -50,4 +50,9 @@ describe('shared-types index re-exports', () => {
       'AdminWarn',
     ]);
   });
+
+  it('re-exports the squad crowns contract', () => {
+    expect(root.squadCrownsKey('srv-1')).toBe('rcon:squad-crowns:srv-1');
+    expect(typeof root.squadCrownSchema.safeParse).toBe('function');
+  });
 });

@@ -14,6 +14,10 @@ import {
   seedCallSentPayload,
   seedingTransitionPayload,
   serverLifecyclePayload,
+  squadCreatedPayload,
+  squadDisbandedPayload,
+  squadLeaderChangedPayload,
+  squadPlayerRef,
   validatePayload,
 } from '../src/events.js';
 
@@ -502,5 +506,66 @@ describe('banname.matched payload schema', () => {
   it('validatePayload dispatches banname.matched through its schema', () => {
     expect(validatePayload('banname.matched', basePayload).ok).toBe(true);
     expect(validatePayload('banname.matched', { ...basePayload, action: 'ban' }).ok).toBe(false);
+  });
+});
+
+describe('squad history payload schemas', () => {
+  const anna = { eos_id: 'a'.repeat(32), steam_id64: '76561198000000001', name: 'Anna' };
+  const boris = { eos_id: 'b'.repeat(32), steam_id64: null, name: 'Boris' };
+  const base = {
+    team_id: 1,
+    team_name: 'United States Army',
+    squad_id: 3,
+    squad_name: 'Alpha',
+    creator: anna,
+  };
+
+  it('lists the three squad kinds in EVENT_TYPES', () => {
+    expect(EVENT_TYPES).toEqual(
+      expect.arrayContaining(['squad.created', 'squad.leader_changed', 'squad.disbanded']),
+    );
+  });
+
+  it('accepts a created payload and rejects unknown keys', () => {
+    expect(validatePayload('squad.created', base).ok).toBe(true);
+    expect(squadCreatedPayload.safeParse({ ...base, extra: 1 }).success).toBe(false);
+  });
+
+  it('accepts every leader change reason and rejects any other', () => {
+    for (const reason of ['passed', 'left_squad', 'disconnected'] as const) {
+      expect(
+        validatePayload('squad.leader_changed', { ...base, from: anna, to: boris, reason }).ok,
+      ).toBe(true);
+    }
+    expect(
+      squadLeaderChangedPayload.safeParse({ ...base, from: anna, to: boris, reason: 'kicked' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('accepts a disband with or without a known last leader', () => {
+    expect(
+      validatePayload('squad.disbanded', { ...base, last_leader: anna, creator_was_leader: true })
+        .ok,
+    ).toBe(true);
+    expect(
+      squadDisbandedPayload.safeParse({ ...base, last_leader: null, creator_was_leader: false })
+        .success,
+    ).toBe(true);
+  });
+
+  it('rejects a player reference without a 32-hex EOS id', () => {
+    expect(squadPlayerRef.safeParse({ ...anna, eos_id: 'not-eos' }).success).toBe(false);
+  });
+
+  it('accepts a player actor on the envelope', () => {
+    expect(
+      eventEnvelope.safeParse({
+        ...baseEnvelope,
+        type: 'squad.created',
+        actor: { kind: 'player', id: anna.eos_id },
+        payload: base,
+      }).success,
+    ).toBe(true);
   });
 });
