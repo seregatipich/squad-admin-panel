@@ -369,7 +369,9 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
   await app.register(requestContextPlugin);
   await app.register(diagPlugin);
-  await app.register(errorDiagPlugin);
+  // Many harness apps share one vitest process: report unhandled rejections
+  // but leave failing the run to vitest instead of exiting the worker.
+  await app.register(errorDiagPlugin, { exitOnUnhandledRejection: false });
   await app.register(heartbeatWatchPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
