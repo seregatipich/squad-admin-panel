@@ -68,7 +68,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 Required headers:
 
-- `x-balancer-timestamp`: ISO timestamp used in the signature payload.
+- `x-balancer-timestamp`: ISO timestamp used in the signature payload. Must be within 300 s of the panel's clock (either direction); a stale or future timestamp is rejected with 401 `invalid_signature`, so a captured request cannot be replayed later.
 - `x-balancer-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-balancer-timestamp>.<canonical-json-body>` using `BALANCER_WEBHOOK_SECRET`.
 
 Body:

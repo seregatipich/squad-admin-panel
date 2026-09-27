@@ -8,6 +8,8 @@ import {
 
 const SECRET = 'balancer-webhook-test-secret-with-enough-entropy';
 const TIMESTAMP = '2026-07-27T09:00:00.000Z';
+/** The verifier's clock, 10 s after {@link TIMESTAMP}. */
+const NOW = new Date('2026-07-27T09:00:10.000Z');
 
 const PAYLOAD = {
   source_snapshot_id: 'snap-1',
@@ -40,56 +42,100 @@ describe('createBalancerProposalSignature', () => {
     const expected = `sha256=${createHmac('sha256', SECRET)
       .update(`${TIMESTAMP}.${canonicalJson(PAYLOAD)}`)
       .digest('hex')}`;
-    expect(createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD)).toBe(expected);
+    expect(createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD, NOW)).toBe(expected);
   });
 });
 
 describe('verifyBalancerProposalSignature', () => {
   it('accepts a signature produced by createBalancerProposalSignature', () => {
     const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD)).toBe(true);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, NOW)).toBe(true);
   });
 
   it('accepts a bare hex signature without the sha256= prefix', () => {
     const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD).slice(
       'sha256='.length,
     );
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD)).toBe(true);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, NOW)).toBe(true);
   });
 
   it('rejects a missing timestamp or a missing signature', () => {
     const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
-    expect(verifyBalancerProposalSignature(SECRET, undefined, signature, PAYLOAD)).toBe(false);
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, undefined, PAYLOAD)).toBe(false);
+    expect(verifyBalancerProposalSignature(SECRET, undefined, signature, PAYLOAD, NOW)).toBe(false);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, undefined, PAYLOAD, NOW)).toBe(false);
   });
 
   it('rejects a signature made with a different secret', () => {
     const signature = createBalancerProposalSignature('other-secret', TIMESTAMP, PAYLOAD);
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD)).toBe(false);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, NOW)).toBe(false);
   });
 
   it('rejects a replayed signature bound to a different timestamp', () => {
     const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
     expect(
-      verifyBalancerProposalSignature(SECRET, '2026-07-27T10:00:00.000Z', signature, PAYLOAD),
+      verifyBalancerProposalSignature(SECRET, '2026-07-27T09:00:05.000Z', signature, PAYLOAD, NOW),
     ).toBe(false);
   });
 
   it('rejects a tampered payload', () => {
     const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
     expect(
-      verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, {
-        ...PAYLOAD,
-        source_snapshot_id: 'snap-2',
-      }),
+      verifyBalancerProposalSignature(
+        SECRET,
+        TIMESTAMP,
+        signature,
+        {
+          ...PAYLOAD,
+          source_snapshot_id: 'snap-2',
+        },
+        NOW,
+      ),
     ).toBe(false);
   });
 
   it('rejects a signature of the wrong length instead of throwing', () => {
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, 'sha256=abcd', PAYLOAD)).toBe(false);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, 'sha256=abcd', PAYLOAD, NOW)).toBe(
+      false,
+    );
   });
 
   it('rejects a non-hex signature instead of throwing', () => {
-    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, 'sha256=zzzz', PAYLOAD)).toBe(false);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, 'sha256=zzzz', PAYLOAD, NOW)).toBe(
+      false,
+    );
+  });
+
+  it('rejects a validly signed request replayed after the freshness window (#36 finding 15)', () => {
+    const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
+    const later = new Date(Date.parse(TIMESTAMP) + 301_000);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, later)).toBe(
+      false,
+    );
+    const atEdge = new Date(Date.parse(TIMESTAMP) + 300_000);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, atEdge)).toBe(
+      true,
+    );
+  });
+
+  it('rejects a timestamp too far in the future', () => {
+    const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
+    const earlier = new Date(Date.parse(TIMESTAMP) - 301_000);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, earlier)).toBe(
+      false,
+    );
+  });
+
+  it('honours a custom tolerance', () => {
+    const signature = createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD);
+    expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, signature, PAYLOAD, NOW, 5)).toBe(
+      false,
+    );
+  });
+
+  it('rejects an unparseable timestamp even when the MAC matches', () => {
+    const signature = createBalancerProposalSignature(SECRET, 'not-a-date', PAYLOAD);
+    expect(verifyBalancerProposalSignature(SECRET, 'not-a-date', signature, PAYLOAD, NOW)).toBe(
+      false,
+    );
   });
 });
