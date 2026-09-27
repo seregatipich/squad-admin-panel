@@ -28,6 +28,11 @@ const PLAYER_STEAM_ID = 76561198914100000n + BigInt(randomInt(1, 1_000_000));
 const OWNER_PLAYER_ID = uuidv7();
 const OWNER_PLAYER_STEAM_ID = 76561198914200000n + BigInt(randomInt(1, 1_000_000));
 const REWARD_ROLE_ID = uuidv7();
+const MANUAL_ROLE_ID = uuidv7();
+const MANUAL_PLAYER_ID = uuidv7();
+const MANUAL_PLAYER_STEAM_ID = 76561198914300000n + BigInt(randomInt(1, 1_000_000));
+const IDLE_PLAYER_ID = uuidv7();
+const IDLE_PLAYER_STEAM_ID = 76561198914400000n + BigInt(randomInt(1, 1_000_000));
 const SERVER_ID = uuidv7();
 const SESSION_ID = `seed-reward-${PLAYER_ID}`;
 
@@ -98,6 +103,8 @@ afterAll(async () => {
     .set({ seedRewardThresholdHoursPerMonth: 0, seedRewardRoleId: null })
     .where(eq(economySettings.id, 1));
   await db.delete(players).where(eq(players.steamId64, PLAYER_STEAM_ID));
+  await db.delete(players).where(eq(players.steamId64, MANUAL_PLAYER_STEAM_ID));
+  await db.delete(players).where(eq(players.steamId64, IDLE_PLAYER_STEAM_ID));
   // OWNER_PLAYER_STEAM_ID is intentionally never deleted: this suite runs
   // against the shared DATABASE_URL used by test:cov's concurrent packages,
   // so whether it is the last remaining Owner at cleanup time depends on
@@ -105,6 +112,7 @@ afterAll(async () => {
   // last Owner. Harmless to leave behind in CI's disposable service container.
   await db.delete(servers).where(eq(servers.id, SERVER_ID));
   await db.delete(roles).where(eq(roles.id, REWARD_ROLE_ID));
+  await db.delete(roles).where(eq(roles.id, MANUAL_ROLE_ID));
   await db.$client.end();
 });
 
@@ -334,5 +342,92 @@ describeIfDb('seed reward worker integration', () => {
       .from(players)
       .where(eq(players.id, OWNER_PLAYER_ID));
     expect(afterTick?.roleId).toBe(ownerRole.id);
+  });
+
+  it('keeps a manually assigned role for a qualifying player', async () => {
+    if (!db) throw new Error('database not configured');
+    await db.insert(roles).values({
+      id: MANUAL_ROLE_ID,
+      name: `SeedRewardManual_${MANUAL_ROLE_ID}`,
+      color: '#EF4444',
+      panelAccess: true,
+    });
+    const manualExpiry = new Date('2026-12-31T00:00:00.000Z');
+    await db.insert(players).values({
+      id: MANUAL_PLAYER_ID,
+      steamId64: MANUAL_PLAYER_STEAM_ID,
+      canonicalName: 'Админ на сиде',
+      canonicalNameNormalized: 'админ на сиде',
+      roleId: MANUAL_ROLE_ID,
+      roleExpiresAt: manualExpiry,
+      roleComment: 'назначен вручную',
+    });
+    await db.insert(playerDailyPresence).values({
+      playerId: MANUAL_PLAYER_ID,
+      serverId: SERVER_ID,
+      day: '2026-07-14',
+      seedSeconds: 3 * 3600,
+      sessionCount: 1,
+    });
+
+    const watermark = await auditWatermark();
+    const { redis } = makeRedis();
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+    await runSeedRewardTick({ ...createSeedRewardDeps(db, redis), now: NOW, diag });
+
+    const changes = await seedRewardAuditSince(watermark);
+    expect(changes.filter((row) => row.targetId === MANUAL_PLAYER_ID)).toEqual([]);
+    const [afterTick] = await db
+      .select({
+        roleId: players.roleId,
+        roleExpiresAt: players.roleExpiresAt,
+        roleComment: players.roleComment,
+      })
+      .from(players)
+      .where(eq(players.id, MANUAL_PLAYER_ID));
+    expect(afterTick).toEqual({
+      roleId: MANUAL_ROLE_ID,
+      roleExpiresAt: manualExpiry,
+      roleComment: 'назначен вручную',
+    });
+  });
+
+  it('grants nothing while the monthly threshold is zero', async () => {
+    if (!db) throw new Error('database not configured');
+    await db.insert(players).values({
+      id: IDLE_PLAYER_ID,
+      steamId64: IDLE_PLAYER_STEAM_ID,
+      canonicalName: 'Не сидировал',
+      canonicalNameNormalized: 'не сидировал',
+    });
+    await db
+      .update(economySettings)
+      .set({ seedRewardThresholdHoursPerMonth: 0 })
+      .where(eq(economySettings.id, 1));
+    try {
+      const watermark = await auditWatermark();
+      const { redis } = makeRedis();
+      const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+      const result = await runSeedRewardTick({
+        ...createSeedRewardDeps(db, redis),
+        now: NOW,
+        diag,
+      });
+
+      expect(result).toEqual({ skipped: true, granted: 0, revoked: 0, enqueued: 0 });
+      expect(await seedRewardAuditSince(watermark)).toEqual([]);
+      const [afterTick] = await db
+        .select({ roleId: players.roleId })
+        .from(players)
+        .where(eq(players.id, IDLE_PLAYER_ID));
+      expect(afterTick?.roleId).toBeNull();
+    } finally {
+      await db
+        .update(economySettings)
+        .set({ seedRewardThresholdHoursPerMonth: 2 })
+        .where(eq(economySettings.id, 1));
+    }
   });
 });

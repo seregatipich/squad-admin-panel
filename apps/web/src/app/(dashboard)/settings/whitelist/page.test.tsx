@@ -66,4 +66,25 @@ describe('WhitelistSettingsPage', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'offers the whitelist role picker only with user:manage_roles (#8)',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ permissions: ['whitelist:view', 'whitelist:edit'] }));
+      render(<WhitelistSettingsPage />);
+      expect(
+        await screen.findByText(/Выбрать роль whitelist может только пользователь с правом/),
+      ).toBeInTheDocument();
+      expect(screen.queryByLabelText('Роль для whitelist')).toBeNull();
+      cleanup();
+
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({ permissions: ['whitelist:view', 'whitelist:edit', 'user:manage_roles'] }),
+      );
+      render(<WhitelistSettingsPage />);
+      expect(await screen.findByLabelText('Роль для whitelist')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

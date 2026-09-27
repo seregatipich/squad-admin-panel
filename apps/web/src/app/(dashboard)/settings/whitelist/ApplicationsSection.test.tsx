@@ -80,7 +80,7 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn } = mockFetch();
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={true} />);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       expect(await screen.findByText('76561198000000001')).toBeInTheDocument();
       expect(screen.getByText(/пустите меня/)).toBeInTheDocument();
     },
@@ -92,7 +92,7 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn } = mockFetch({ items: [] });
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={true} />);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       expect(await screen.findByText(/заявок нет/i)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
@@ -103,7 +103,7 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn } = mockFetch();
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={false} />);
+      render(<ApplicationsSection canEdit={false} canManageRoles={false} />);
       await screen.findByText('76561198000000001');
       expect(screen.queryByRole('button', { name: /одобрить/i })).toBeNull();
       expect(screen.queryByRole('button', { name: /отклонить/i })).toBeNull();
@@ -116,7 +116,7 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn, calls } = mockFetch();
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={true} />);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       await screen.findByText('76561198000000001');
 
       // pick the 90-day term, then approve
@@ -140,7 +140,7 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn, calls } = mockFetch();
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={true} />);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       await screen.findByText('76561198000000001');
 
       fireEvent.change(screen.getByLabelText(/комментарий/i), {
@@ -163,13 +163,33 @@ describe('ApplicationsSection', () => {
     async () => {
       const { fn } = mockFetch({ patchStatus: 409 });
       vi.stubGlobal('fetch', fn);
-      render(<ApplicationsSection canEdit={true} />);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       await screen.findByText('76561198000000001');
 
       fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
       await waitFor(() =>
         expect(screen.getByText(/не удалось обработать заявку/i)).toBeInTheDocument(),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the role picker and sends no role_id without user:manage_roles (#8)',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={false} />);
+      await screen.findByText('76561198000000001');
+      expect(screen.queryByDisplayValue('VIP')).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
+
+      await waitFor(() => expect(screen.getByText(/заявка одобрена/i)).toBeInTheDocument());
+      const patch = calls.find((c) => c.init?.method === 'PATCH');
+      const payload = JSON.parse(String(patch?.init?.body)) as Record<string, unknown>;
+      expect(payload.status).toBe('approved');
+      expect(payload.role_id).toBeUndefined();
     },
     TEST_TIMEOUT_MS,
   );

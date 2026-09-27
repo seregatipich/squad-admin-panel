@@ -8,6 +8,7 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
+import { callerCanManageRoles, whitelistRoleWriteDenial } from '../lib/whitelist-role-guard.js';
 
 const PANEL_META_SINGLETON_ID = 1;
 const STEAM_ID64_RE = /^\d{17}$/;
@@ -117,7 +118,10 @@ function actorFrom(req: FastifyRequest): AuditActor {
  * `granted_until`) so the existing `worker-role-expirer` clears it automatically
  * when the term lapses (VIPSUB-1 reuse; WL-3 adds no new expiry mechanic). The
  * grant fans out to every active server's Admins.cfg via the durable outbox,
- * exactly like a manual role assignment.
+ * exactly like a manual role assignment. Approval never grants the Owner role
+ * or demotes an Owner, and a reviewer without `user:manage_roles` may only
+ * grant the configured whitelist role to an applicant holding no other role
+ * (#8, see `whitelistRoleWriteDenial`).
  */
 const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -386,8 +390,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
 
       // --- Approve --------------------------------------------------------
       const [applicant] = await app.db
-        .select({ id: players.id })
+        .select({
+          id: players.id,
+          currentRole: { id: roles.id, name: roles.name, isSystemRole: roles.isSystemRole },
+        })
         .from(players)
+        .leftJoin(roles, eq(roles.id, players.roleId))
         .where(eq(players.steamId64, existing.steamId64))
         .limit(1);
       if (!applicant) {
@@ -400,21 +408,36 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const settings = await loadSettings();
-      const resolvedRoleId =
-        req.body.role_id ?? existing.requestedRoleId ?? (await loadWhitelistRoleId());
+      const whitelistRoleId = await loadWhitelistRoleId();
+      const resolvedRoleId = req.body.role_id ?? existing.requestedRoleId ?? whitelistRoleId;
       if (!resolvedRoleId) {
         reply.code(409);
         return { error: 'whitelist_role_not_configured' };
       }
 
       const [role] = await app.db
-        .select({ id: roles.id, panelAccess: roles.panelAccess })
+        .select({
+          id: roles.id,
+          name: roles.name,
+          isSystemRole: roles.isSystemRole,
+          panelAccess: roles.panelAccess,
+        })
         .from(roles)
         .where(eq(roles.id, resolvedRoleId))
         .limit(1);
       if (!role) {
         reply.code(404);
         return { error: 'role_not_found' };
+      }
+      const denial = whitelistRoleWriteDenial({
+        canManageRoles: callerCanManageRoles(req),
+        targetRole: role,
+        whitelistRoleId,
+        currentRole: applicant.currentRole,
+      });
+      if (denial) {
+        reply.code(denial.status);
+        return { error: denial.error };
       }
 
       const now = new Date();

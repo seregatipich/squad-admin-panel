@@ -1,5 +1,14 @@
 # `api` — changelog
 
+## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
+
+### Security
+
+- `PATCH /api/v1/whitelist/applications/:id` больше не выдаёт роль Owner (`403 owner_assignment_forbidden`) и не меняет роль заявителя-владельца (`409 owner_role_protected`). Без `user:manage_roles` одобрение выдаёт только настроенную роль whitelist и только заявителю без другой роли, иначе `403 role_assignment_forbidden`.
+- `POST /api/v1/whitelist/members` не заменяет роль владельца (`409 owner_role_protected`), а без `user:manage_roles` не заменяет никакую другую роль (`403 role_assignment_forbidden`). `POST /api/v1/whitelist/import` пропускает такие строки с теми же причинами в `skipped[].reason`.
+- `PUT /api/v1/whitelist/settings`: сменить роль whitelist на другую можно только с `user:manage_roles` (`403 role_assignment_forbidden`); сбросить её в `null` по-прежнему можно с `whitelist:edit`.
+- `PUT /api/v1/settings/economy` отвечает `422 seed_reward_threshold_required`, если запрос правит награду за сид и роль награды задана при пороге 0 часов.
+
 ## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
 
 ### Removed

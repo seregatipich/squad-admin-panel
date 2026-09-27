@@ -193,6 +193,19 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
           reply.code(422);
           return { error: 'seed_reward_role_requires_no_panel_access' };
         }
+        // A zero threshold qualifies every player (worker-seed-reward skips it).
+        // Checked only when this request edits the seed reward, so a legacy
+        // zero-threshold row never blocks unrelated economy updates.
+        const changesSeedReward =
+          body.seed_reward_role_id !== undefined ||
+          body.seed_reward_threshold_hours_per_month !== undefined;
+        const rewardThresholdHours =
+          body.seed_reward_threshold_hours_per_month ??
+          before.seed_reward_threshold_hours_per_month;
+        if (changesSeedReward && rewardThresholdHours <= 0) {
+          reply.code(422);
+          return { error: 'seed_reward_threshold_required' };
+        }
       }
       const updates: Partial<typeof economySettings.$inferInsert> = {
         updatedByPlayerId: actorId,
