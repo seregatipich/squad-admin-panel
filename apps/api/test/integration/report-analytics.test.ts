@@ -5,6 +5,7 @@ import {
   playerReports,
   players,
   reporterStats,
+  roleSquadPermissions,
   roles,
   servers,
 } from '@squad/db/schema';
@@ -67,6 +68,7 @@ async function seedRoleWithPlayer(opts: {
   steamId64: bigint;
   panelAccess: boolean;
   canHandleReports: boolean;
+  squadPermissions?: string[];
 }): Promise<string> {
   const roleId = uuidv7();
   await h.db.insert(roles).values({
@@ -76,6 +78,11 @@ async function seedRoleWithPlayer(opts: {
     panelAccess: opts.panelAccess,
     canHandleReports: opts.canHandleReports,
   });
+  if (opts.squadPermissions?.length) {
+    await h.db
+      .insert(roleSquadPermissions)
+      .values(opts.squadPermissions.map((squadPermissionKey) => ({ roleId, squadPermissionKey })));
+  }
   const stub = `RN${String(opts.steamId64).slice(-6)}`;
   const [row] = await h.db
     .insert(players)
@@ -158,6 +165,8 @@ beforeEach(async () => {
     steamId64: HANDLER_STEAM,
     panelAccess: true,
     canHandleReports: true,
+    // Report actions also require the live-Squad `ban`/`kick` permission (MOD-2).
+    squadPermissions: ['kick', 'ban'],
   });
   await seedRoleWithPlayer({
     roleName: `RA-PanelOnly-${uuidv7()}`,
