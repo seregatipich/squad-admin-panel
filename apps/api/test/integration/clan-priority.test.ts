@@ -321,11 +321,11 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { has_priority: boolean }).has_priority).toBe(false);
-    const [row] = await h.db
-      .select({ hasPriority: clanMembers.hasPriority })
+    const priorityRows = await h.db
+      .select({ playerId: clanMembers.playerId })
       .from(clanMembers)
-      .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.leaderId)));
-    expect(row?.hasPriority).toBe(false);
+      .where(and(eq(clanMembers.playerId, clan.leaderId), eq(clanMembers.hasPriority, true)));
+    expect(priorityRows).toEqual([]);
     const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
   });
@@ -350,7 +350,7 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
     expect(await latestSyncReason()).toBe('clan.member.remove');
   });
 
-  it('DELETE /api/v1/clans/:id (disband) zeroes priorities and publishes a sync event', async () => {
+  it('DELETE /api/v1/clans/:id (disband) releases priority members and publishes a sync event', async () => {
     const clan = await seedClan({ leaderHasPriority: true });
     await drainSyncStream();
     const res = await h.app.inject({
@@ -359,11 +359,11 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
       headers: { cookie: managerCookie },
     });
     expect(res.statusCode).toBe(200);
-    const [row] = await h.db
-      .select({ hasPriority: clanMembers.hasPriority })
+    const priorityRows = await h.db
+      .select({ playerId: clanMembers.playerId })
       .from(clanMembers)
-      .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.leaderId)));
-    expect(row?.hasPriority).toBe(false);
+      .where(and(eq(clanMembers.playerId, clan.leaderId), eq(clanMembers.hasPriority, true)));
+    expect(priorityRows).toEqual([]);
     const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
     expect(await latestSyncReason()).toBe('clan.disband');

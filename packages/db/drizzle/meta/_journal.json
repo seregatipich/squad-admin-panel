@@ -722,6 +722,13 @@
       "when": 1788473400000,
       "tag": "0117_monthly_partition_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1788473460000,
+      "tag": "0118_clan_members_release_disbanded",
+      "breakpoints": true
     }
   ]
 }
