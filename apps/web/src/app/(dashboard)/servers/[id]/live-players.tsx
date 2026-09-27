@@ -41,6 +41,7 @@ import {
   type TeamColumn,
   teamLabel,
 } from './roster-format';
+import { SquadCrown } from './squad-crown';
 
 const BULK_KEYS = ['mod:warn', 'mod:kick', 'mod:ban_temp', 'mod:ban_perm'] as const;
 
@@ -756,6 +757,7 @@ function RosterRow({
               ★
             </span>
           ) : null}
+          {player.squad_crown ? <SquadCrown crown={player.squad_crown} /> : null}
           {player.player_id ? (
             <Link
               href={`/all-players/${player.player_id}`}

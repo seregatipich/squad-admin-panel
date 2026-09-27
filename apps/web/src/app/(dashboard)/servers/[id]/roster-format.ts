@@ -1,3 +1,5 @@
+import type { SquadCrown } from '@squad/shared-types';
+
 export interface RosterPlayer {
   player_id: string | null;
   rcon_id: number;
@@ -9,6 +11,11 @@ export interface RosterPlayer {
   is_leader: boolean;
   role: string | null;
   first_seen_at: string | null;
+  /**
+   * Корона создателя отряда в текущем матче (история отрядов). Отсутствует в
+   * ответе API, собранного до этой возможности.
+   */
+  squad_crown?: SquadCrown | null;
 }
 
 /** A side of the match as `ListSquads` names it — «United States Army». */
@@ -218,4 +225,35 @@ export function sortRoster(list: RosterPlayer[]): RosterPlayer[] {
 
 function pad(value: number): string {
   return value < 10 ? `0${value}` : String(value);
+}
+
+/** «21:04» по местному времени зрителя. */
+export function formatClock(iso: string): string {
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * Подсказка короны: одна строка на каждый отряд, созданный игроком в этом
+ * матче. Сначала время создания (если воркер его видел), затем передачи
+ * командования товарищам по отряду, в конце уход с поста командира.
+ *
+ * @param formatTime - Форматирует ISO-время; в тестах подставляется UTC.
+ */
+export function crownTooltipLines(
+  crown: SquadCrown,
+  formatTime: (iso: string) => string = formatClock,
+): string[] {
+  return crown.squads.map((squad) => {
+    let line = `Создал отряд "${squad.squad_name}"`;
+    if (squad.created_at) line += ` в ${formatTime(squad.created_at)}`;
+    const passed = squad.handoffs.filter((handoff) => handoff.reason === 'passed');
+    if (passed.length > 0) {
+      const list = passed.map((handoff) => `${handoff.to_name} (${formatTime(handoff.at)})`);
+      line += `, передал командование: ${list.join(', ')}`;
+    }
+    if (squad.abandoned_at) {
+      line += ` и покинул его, будучи командиром (${formatTime(squad.abandoned_at)})`;
+    }
+    return line;
+  });
 }

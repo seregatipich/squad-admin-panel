@@ -636,3 +636,51 @@ describe('LivePlayers — быстрые действия над игроком'
     TEST_TIMEOUT_MS,
   );
 });
+
+describe('LivePlayers — корона создателя отряда', () => {
+  it(
+    'shows the crown after the leader star only for a player who has one',
+    async () => {
+      const [leader, ...rest] = ROSTER.players;
+      stubRosterFetch(undefined, {
+        ...ROSTER,
+        players: [
+          {
+            ...leader,
+            squad_crown: {
+              color: 'grey',
+              squads: [
+                {
+                  squad_name: 'INF',
+                  team_id: 1,
+                  squad_id: 2,
+                  created_at: '2026-07-09T09:55:00.000Z',
+                  handoffs: [{ to_name: 'Mate', reason: 'passed', at: '2026-07-09T09:58:00.000Z' }],
+                  disbanded_at: null,
+                  abandoned_at: null,
+                },
+              ],
+            },
+          },
+          ...rest.map((player) => ({ ...player, squad_crown: null })),
+        ],
+      });
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const crowns = screen.getAllByRole('img', { name: /Создал отряд/ });
+      expect(crowns).toHaveLength(1);
+      expect(crowns[0]).toHaveAccessibleName(/передал командование: Mate/);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows no crown when the roster carries none',
+    async () => {
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      expect(screen.queryAllByRole('img', { name: /Создал отряд/ })).toHaveLength(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
