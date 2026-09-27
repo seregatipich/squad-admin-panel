@@ -81,6 +81,10 @@ Unit tests for raw Squad log retention orchestration.
 | Scheduler runs startup + hourly and stops | Immediate sweep on startup, repeat after `LOG_RETENTION_SWEEP_INTERVAL_MS`, no further calls after `stop()` |
 | Scheduler does not overlap sweeps | An hourly tick that fires while the previous sweep is still pending is skipped; the next tick after completion runs normally |
 
+### `alerts-store.test.ts` / `alerts-wiring.test.ts`
+
+Alert-rule runtime against the real test database and Redis ([#19](https://github.com/seregatipich/squad-admin-panel/issues/19)): an enabled rule writes `alert_events` and a disabled one does not, replayed events raise nothing twice, the connect window and cooldown of `unusual_activity`, `admin_login_new_ip` for admins vs. players, `custom` thresholds, invalid stored configs, and the IP-free live-bus frame. `alerts-wiring.test.ts` pins that `src/index.ts` calls the runtime for every parsed event, before the identity handler records a connect's IP. The engine's pure verdicts stay in `alerts-engine.test.ts`.
+
 ### `contract.test.ts`
 
 Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).

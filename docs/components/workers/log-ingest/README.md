@@ -12,6 +12,7 @@ For an external server (`servers.runtime='external'`) with an enabled `server_lo
 - Open a `container_logs_follow` stream per running server via `BridgeClient`.
 - Parse each stdout line with `LogIngestor` (category dispatch + regex matching).
 - Publish events to `events:server:{serverId}` with client-side best-effort dedup.
+- Evaluate the enabled `alert_rules` (`server_crashed`, `unusual_activity`, `admin_login_new_ip`, `custom`) against every parsed event and record each firing in `alert_events` (AUTO-3, [#19](https://github.com/seregatipich/squad-admin-panel/issues/19)) — see [api.md](api.md#alert-rules-alert_events).
 - Publish `worker:heartbeat:log-ingest` every 5 s.
 - Ask the host bridge to sweep expired rotated `SquadGame*.log` files once on startup and then hourly.
 

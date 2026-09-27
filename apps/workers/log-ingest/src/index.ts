@@ -11,6 +11,8 @@ import { logSourceStatusKey } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { sinkDepsFromEnv } from './alerts/sink.js';
+import { AlertRuleCache, handleAlertEvent } from './alerts/store.js';
 import { handleAltBanConnect } from './alt-ban/store.js';
 import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
@@ -98,6 +100,11 @@ async function main() {
   const chatFlagDetector = new ChatFlagDetector(db);
   const bannedNameCache = new BannedNameRuleCache(db);
   const externalBanCache = new ExternalBanCache(db, redis);
+  const alertRuleCache = new AlertRuleCache(db, {
+    onInvalidRule: (ruleId, reason) =>
+      log.warn({ ruleId, reason }, 'alert rule skipped: invalid config'),
+  });
+  const alertSink = sinkDepsFromEnv();
 
   const manager = new TailManager((wanted) => {
     const { serverId, beaconPort } = wanted;
@@ -222,12 +229,19 @@ async function main() {
         publishRconRefreshHint(redis, e).catch((err) =>
           log.warn({ err: (err as Error).message, type: e.type }, 'rcon refresh hint failed'),
         );
+        // AUTO-3 (#19): evaluate the operator's alert rules against the event.
+        const alerts = handleAlertEvent(db, redis, alertRuleCache, e, alertSink).catch((err) =>
+          log.error({ err: (err as Error).message, type: e.type }, 'alert evaluation failed'),
+        );
         if (e.type === 'player.connected') {
-          // Upsert the canonical identity first (PLAYER-1, #22) so the player
-          // row exists before the ban handlers below read it — otherwise a
-          // first-time connector is invisible to alt/external-ban enforcement
-          // until the next RCON poll.
-          handlePlayerConnected(db, e)
+          // The identity handler waits for the alert evaluation: it records
+          // this connect's IP, after which `admin_login_new_ip` would see it
+          // as already known. Then upsert the canonical identity (PLAYER-1,
+          // #22) so the player row exists before the ban handlers below read
+          // it — otherwise a first-time connector is invisible to
+          // alt/external-ban enforcement until the next RCON poll.
+          alerts
+            .then(() => handlePlayerConnected(db, e))
             .catch((err) =>
               log.error({ err: (err as Error).message }, 'player identity handling failed'),
             )
