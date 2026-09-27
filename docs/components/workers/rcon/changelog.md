@@ -5,6 +5,7 @@
 ### Fixed
 
 - [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 967): `upsertPlayers` искал игрока по `eos_id OR steam_id64` с `LIMIT 1` без порядка. Если eos и steam одного человека лежали в разных строках `players`, UPDATE падал на уникальном индексе, исключение обрывало весь опрос (после трёх неудач — RCON-соединение), а в `audit_log` каждые 30 с писалась ложная запись `player.steam_linked`. Теперь каждый игрок обрабатывается в своей транзакции, аудит пишется после UPDATE, строка с `eos_id` имеет приоритет, раздвоение помечается `steam_eos_conflict` (аудит `player.eos_steam_conflict` один раз), ошибка одного игрока логируется и не прерывает опрос, вставка новой строки идёт с `ON CONFLICT DO NOTHING` и повторным поиском. Тесты: `test/persist.integration.test.ts`, `test/persist.test.ts`.
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 977): чат-пакет (`SERVERDATA_CHAT_VALUE`, id 0) с телом ровно 246 байт начинается теми же 7 байтами, что и «хвост» сломанного второго ответа Squad на probe, и декодер срезал их где угодно в потоке. Поток терял границы кадров (`invalid RCON packet size: 0`), exec отклонялись, супервизор переподключался — длиной сообщения любой игрок мог держать RCON-соединение панели в цикле переподключений. Теперь хвост срезается только сразу после второго пустого ответа с тем же id. Тесты: `test/protocol.test.ts`.
 
 ## 2026-09-27 — История отрядов и короны создателей
 
