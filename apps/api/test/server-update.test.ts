@@ -79,7 +79,7 @@ beforeEach(async () => {
   await h.db
     .update(servers)
     .set({ status: 'stopped' })
-    .where(inArray(servers.status, ['starting', 'running', 'stopping']));
+    .where(inArray(servers.status, ['installing', 'starting', 'running', 'stopping']));
   await h.db
     .update(players)
     .set({ roleId: ownerRoleId })
@@ -163,7 +163,9 @@ describe('POST /api/v1/servers/:id/update', () => {
 
   // #20: the depot is one volume mounted into every Squad container, so the
   // update must not rewrite it under any other live server of the host.
-  it.each(['running', 'starting', 'stopping'])(
+  // An installing server ends its install with a containerRun that mounts the
+  // depot, so it counts as live too.
+  it.each(['running', 'starting', 'stopping', 'installing'])(
     'returns 409 servers_running and leaves the depot alone while another server is %s',
     async (otherStatus) => {
       const id = await seedServer(h, 'stopped');

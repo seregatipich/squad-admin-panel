@@ -10,9 +10,10 @@ const idParams = z.object({ id: z.string().uuid() });
 
 /**
  * Statuses in which a container server has (or is about to have) the shared
- * depot volume mounted by a live process.
+ * depot volume mounted by a live process. `installing` counts because an
+ * install ends with a containerRun that mounts the depot.
  */
-const LIVE_STATUSES = ['starting', 'running', 'stopping'];
+const LIVE_STATUSES = ['installing', 'starting', 'running', 'stopping'];
 
 const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -52,8 +53,9 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
       // The depot is one volume mounted into every Squad container, so this
       // "per-server" update rewrites the install under every server on the
       // host (#20). Refuse while any other container server is live. The check
-      // runs after the lock is taken because /start and /restart refuse while
-      // it is held, so a server stopped now stays down until the update ends.
+      // runs after the lock is taken because /start, /restart and /install
+      // refuse while it is held, so a server stopped now stays down until the
+      // update ends.
       const liveServers = await app.db
         .select({ id: servers.id })
         .from(servers)

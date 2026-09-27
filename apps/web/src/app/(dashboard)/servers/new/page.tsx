@@ -117,7 +117,12 @@ export default function NewServerWizard() {
       body: JSON.stringify({}),
     });
     if (!install.ok) {
-      setError(`Не удалось запустить установку (HTTP ${install.status})`);
+      const body = (await install.json().catch(() => null)) as { error?: string } | null;
+      setError(
+        body?.error === 'depot_update_in_progress'
+          ? 'Сервер создан, но установка не запущена: сейчас идёт обновление файлов игры. Дождитесь его окончания.'
+          : `Не удалось запустить установку (HTTP ${install.status})`,
+      );
       setStep('error');
       return;
     }

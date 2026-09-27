@@ -54,6 +54,23 @@ describe('NewServerPage', () => {
     fireEvent.change(screen.getByLabelText(/^Название/), { target: { value: 'Other Name' } });
     expect(screen.getByLabelText(/^Идентификатор/)).toHaveValue('eu-main');
   });
+
+  it('объясняет отказ установки, пока идёт обновление depot', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      Promise.resolve(
+        url === '/api/v1/servers'
+          ? new Response(JSON.stringify({ id: 'srv-new' }), { status: 201 })
+          : new Response(JSON.stringify({ error: 'depot_update_in_progress' }), { status: 409 }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<NewServerPage />);
+    fireEvent.change(screen.getByLabelText(/^Название/), { target: { value: 'Новый' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Установить' }));
+
+    expect(await screen.findByText(/идёт обновление файлов игры/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers/srv-new/install', expect.anything());
+  });
 });
 
 describe('NewServerPage — подключение существующего сервера', () => {

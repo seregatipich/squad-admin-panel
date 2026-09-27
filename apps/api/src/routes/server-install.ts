@@ -267,6 +267,13 @@ async function runInstall(
     }
   }
 
+  // #20: every Squad container mounts the one shared depot volume. A depot
+  // update may have started after the request-time check; booting now would
+  // run the server on a half-written install, so fail the install instead.
+  if ((await app.redis.get('depot:updating')) !== null) {
+    throw new Error('depot_update_in_progress');
+  }
+
   emit('container', `docker run --network host --name squad-${serverId} ${SERVER_IMAGE}`);
   const containerT0 = Date.now();
   const res = await app.bridge.containerRun({
@@ -398,6 +405,10 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
       if (srv.status === 'installing') {
         reply.code(409);
         return { error: 'install_in_progress' };
+      }
+      if ((await app.redis.get('depot:updating')) !== null) {
+        reply.code(409);
+        return { error: 'depot_update_in_progress' };
       }
       const actor = req.user
         ? { kind: 'steam' as const, playerId: req.user.playerId, tokenId: null }

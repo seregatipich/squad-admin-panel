@@ -4,8 +4,9 @@
 
 ### Fixed
 
-- `POST /api/v1/servers/:id/update` проверял только, что остановлен сервер `:id`, хотя SteamCMD переписывает общий том `squad-depot`, смонтированный во все Squad-контейнеры хоста. Теперь маршрут возвращает `409 { error: 'servers_running', server_ids }`, пока любой другой неудалённый container-сервер находится в `starting`/`running`/`stopping` (#20).
+- `POST /api/v1/servers/:id/update` проверял только, что остановлен сервер `:id`, хотя SteamCMD переписывает общий том `squad-depot`, смонтированный во все Squad-контейнеры хоста. Теперь маршрут возвращает `409 { error: 'servers_running', server_ids }`, пока любой другой неудалённый container-сервер находится в `installing`/`starting`/`running`/`stopping` (#20). `installing` учитывается потому, что установка заканчивается запуском контейнера с тем же depot.
 - `POST /api/v1/servers/:id/start` и `POST /api/v1/servers/:id/restart` возвращают `409 depot_update_in_progress`, пока удерживается блокировка `depot:updating`: сервер больше нельзя поднять на наполовину обновлённом depot.
+- `POST /api/v1/servers/:id/install` по той же причине возвращает `409 depot_update_in_progress`, пока удерживается `depot:updating`. Если обновление началось уже после запроса, установка перед `container_run` снова проверяет блокировку и завершается ошибкой `depot_update_in_progress` (сервер получает статус `failed`), а не запускает контейнер.
 
 ### Changed
 
