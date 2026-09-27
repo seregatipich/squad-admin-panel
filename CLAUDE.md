@@ -179,3 +179,35 @@ If the guard denies a command, do not work around it — follow the workflow abo
 - Never commit secrets; keep sensitive configuration in environment variables and document required vars in `.env.example`.
 - Do not add `.md` files to the repository root. The only permitted root docs are `README.md` and this `CLAUDE.md`. Planning notes, roadmaps, handoffs, and other artifacts go in `docs/`.
 - Update README/runbooks/migration notes when behavior, setup, or operations change.
+
+## Commands
+
+pnpm 9 workspace (`apps/*`, `apps/workers/*`, `packages/*`, `docker/rnsquadjs/plugins/*`) orchestrated by Turbo; never use npm or yarn. Package names: `@squad/api`, `@squad/web`, `@squad/db`, `@squad/<package>`, `@squad/worker-<dir>`, `@squad/bridge` (Go), `panel-bridge` (RNSquadJS sidecar plugin).
+
+```bash
+pnpm build                                        # turbo; typecheck/test depend on ^build
+pnpm turbo run typecheck
+pnpm exec biome check .                           # --write <file> to fix
+pnpm --filter <pkg> exec vitest run <path>        # one test file (add -t '<name>' for one case)
+pnpm test:cov                                     # the full JS suite exactly as CI runs it
+pnpm test:scripts                                 # operations-script contracts; needs DB + Redis URLs
+pnpm --filter @squad/api test:e2e                 # live panel only (PANEL_TEST_URL, PANEL_TEST_COOKIE)
+pnpm db:generate && pnpm db:migrate               # drizzle-kit reads dist/: build @squad/db first
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # hot-reload api + web
+```
+
+Prefer `vitest run <file>` over `pnpm turbo run test`, which builds every package first. `apps/api` tests use a real Postgres (see "Local test setup"); e2e tests are excluded from every non-e2e run.
+
+## Architecture
+
+A self-hosted control plane for Squad game servers on **one Linux host**, deployed as one Docker Compose stack. The deep reference is `docs/architecture/map.md` (pinned to an older commit — re-check against `dev`); install/stop/delete/restore sequences are in `docs/architecture/data-flow.md`.
+
+- **Privilege boundary.** `apps/bridge` (Go, root, systemd) is the only privileged component and the sole holder of the Docker socket. Everything else calls it over the Unix socket `/run/panel-host-bridge/bridge.sock` through `packages/bridge-client`. Its RPC set is a closed allowlist kept in lockstep across `packages/shared-config/src/bridge-methods.ts`, `packages/bridge-client/src/client.ts` and `apps/bridge/internal/handlers/handlers.go`; arguments (paths, images, mounts) are allowlisted in `apps/bridge/internal/validate/`. Bridge-consuming containers run as `user: "0:${PANEL_GID}"` — `group_add` breaks the `SO_PEERCRED` peer check.
+- **API (`apps/api`).** Fastify 5 + Zod type provider. `src/server.ts` registers plugins in a load-bearing order (registration order is hook order), then `registerRoutes()`. Authorization and auditing are *data on the route*, enforced by global hooks: `config.permissions` (keys from `packages/shared-config/src/permissions.ts`) and `config.audit` (required on every mutating route — `audit-coverage.test.ts` enforces it). Routes hardcode full `/api/v1/...` paths; business logic lives in `src/lib/`.
+- **Workers (`apps/workers/*`).** Independent deployables that share types, not code: no worker framework, each `src/index.ts` hand-rolls env → postgres/drizzle → ioredis → `createDiag` → optional bridge → `startHeartbeat` → signal handlers → tick loop. Copy-paste between workers is deliberate — do not add cross-worker dependencies. All build from `docker/worker.Dockerfile` with `ARG WORKER`. Health is Redis-only (`worker:heartbeat:<name>`, TTL 30 s); no worker opens a port. `apps/workers/_test-shared/contract.ts` is the shared heartbeat/SIGTERM contract test.
+- **Messaging.** Redis Streams carry domain events in the `EventEnvelope` from `packages/shared-types` (`events:server:{id}`, `events:global`). Consumers are idempotent twice over — Redis `SET NX` dedup key plus `processed_events` insert — and `XACK` only after the side effect commits; groups are named `<service>:v<n>`. Live browser updates go over one WebSocket (`/api/v1/ws/live`) fanned out via Redis pub/sub; the event unions in `apps/api/src/plugins/live-bus.ts` and `apps/web/src/lib/live-bus.ts` are separate and must be updated together.
+- **Database (`packages/db`).** Drizzle schema in `src/schema/`, forward-only SQL migrations in `drizzle/`. Drizzle cannot generate triggers, partitions or guards — append hand-written DDL (idempotent snippets in `packages/db/sql/`) to the generated migration. `audit_log` is an append-only SHA-256 hash chain and `config_versions` is append-only, both enforced by DB triggers; `events`/`diagnostic_events` are partitioned and rotated by `worker-event-partition`.
+- **Web (`apps/web`).** Next.js 15 App Router + React 19. No server-state library: pages use `useState`/`useEffect`, inline `fetch('/api/v1/…', { credentials: 'include', cache: 'no-store' })`, and per-page polling. **The UI is Russian-only** — all user-visible strings are Russian; `src/i18n` holds a single `ru` dictionary covering only the shell.
+- **Config files.** Squad's own `.cfg` files on the host stay the source of truth for live server config; the panel writes them through the bridge and records every write in `config_versions`.
+
+Further conventions (bridge-RPC checklist, test tiers, commit style `<type>(<scope>): <subject>`) are in `docs/development/conventions.md` and `docs/development/testing.md`.
