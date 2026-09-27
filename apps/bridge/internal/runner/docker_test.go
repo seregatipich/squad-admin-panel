@@ -712,7 +712,7 @@ func TestSidecarDirModesCarryNoSetuidOrSetgid(t *testing.T) {
 
 func TestBackupSnapshotsParsesJSON(t *testing.T) {
 	f := &Fake{Stdout: []byte(`[
-	  {"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"tk104","paths":["/data"],"tags":["cron"]}
+	  {"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"stand-host","paths":["/data"],"tags":["cron"]}
 	]`)}
 	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
 	snaps, err := d.BackupSnapshots(context.Background())
@@ -723,7 +723,7 @@ func TestBackupSnapshotsParsesJSON(t *testing.T) {
 		t.Fatalf("expected 1 snapshot, got %d", len(snaps))
 	}
 	got := snaps[0]
-	if got.ShortID != "a1b2c3d4" || got.Hostname != "tk104" {
+	if got.ShortID != "a1b2c3d4" || got.Hostname != "stand-host" {
 		t.Errorf("unexpected snapshot: %+v", got)
 	}
 	if len(got.Paths) != 1 || got.Paths[0] != "/data" {

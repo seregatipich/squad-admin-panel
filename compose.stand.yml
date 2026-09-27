@@ -1,10 +1,10 @@
-# The tk104 dev stand. Nothing is built here: the panel services run the images
+# The dev stand. Nothing is built here: the panel services run the images
 # the deploy workflow pushed to ghcr.io, pinned by digest (API_IMAGE, WEB_IMAGE,
-# WORKERS_IMAGE, CADDY_IMAGE). scripts/deploy-tk104.sh records the running
+# WORKERS_IMAGE, CADDY_IMAGE). scripts/deploy-stand.sh records the running
 # release in .release.env, so every compose command on the host reads both env
 # files (Compose 2.17+ merges them; .release.env wins):
 #
-#   docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml ps
+#   docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml ps
 #
 # A fully qualified ghcr.io name pinned by digest can only ever resolve to that
 # one image, so these services may pull (the deploy pulls just the changed
@@ -54,7 +54,7 @@ services:
       retries: 5
     logging: *default-logging
 
-  # Not part of `up`: deploy-tk104.sh runs it explicitly (`run --rm migrator`)
+  # Not part of `up`: deploy-stand.sh runs it explicitly (`run --rm migrator`)
   # after a database backup, and only when packages/db/drizzle changed, so a
   # failed migration stops the deploy before any app container is replaced.
   migrator:
@@ -88,8 +88,8 @@ services:
       SIDECAR_REDIS_URL: ${SIDECAR_REDIS_URL:-redis://127.0.0.1:6379}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
-      APP_DOMAIN: tk104.duckdns.org
-      PANEL_PUBLIC_URL: https://tk104.duckdns.org
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
       COOKIE_SECURE: 'true'
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
@@ -351,7 +351,7 @@ services:
       REDIS_URL: redis://redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       ROTATION_PROFILE_APPLY_HOUR: ${ROTATION_PROFILE_APPLY_HOUR:-4}
-      PANEL_PUBLIC_URL: https://tk104.duckdns.org
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
     user: "0:${PANEL_GID:-987}"
     volumes:
@@ -452,7 +452,7 @@ services:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
-      PANEL_PUBLIC_URL: https://tk104.duckdns.org
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
@@ -466,7 +466,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_APP_DOMAIN: tk104.duckdns.org
+      NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
       API_URL: http://api:3000
     depends_on:
       api:
@@ -494,13 +494,15 @@ services:
       - '443:443'
     environment:
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      # The site Caddyfile.stand serves; it lives in the host's .env.stand.
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
       DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
-      # Hash of docker/Caddyfile.tk104, from .release.env. Compose cannot see
+      # Hash of docker/Caddyfile.stand, from .release.env. Compose cannot see
       # a bind-mounted file change, and a single-file mount keeps showing the
       # replaced inode after rsync, so a Caddyfile edit must recreate caddy.
       CADDYFILE_SHA: ${CADDYFILE_SHA:-}
     volumes:
-      - ./docker/Caddyfile.tk104:/etc/caddy/Caddyfile:ro
+      - ./docker/Caddyfile.stand:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

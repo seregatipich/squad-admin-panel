@@ -10,7 +10,7 @@
 #   1. the working tree is clean (everything committed);
 #   2. you are on `dev` and it matches `origin/dev` (everything pushed);
 #   3. the branch model is intact (git-guard doctor reports no problems);
-#   4. the dev stand runs this tip: the `deploy-tk104` run for the current dev
+#   4. the dev stand runs this tip: the `deploy` run for the current dev
 #      tip succeeded (a tip that only changes docs, which the deploy ignores,
 #      is covered by the last green deploy of an ancestor);
 #   5. the tip is promoted — `origin/master` is the dev tip — and the `ci`
@@ -189,14 +189,14 @@ check_run() {
 }
 
 # --- 4. the dev stand runs this tip -------------------------------------------
-# deploy-tk104.yml ignores pushes that only touch Markdown or docs/, so such a
+# deploy.yml ignores pushes that only touch Markdown or docs/, so such a
 # tip has no deploy run of its own; the newest green deploy of an ancestor
 # then already serves everything the tip changes.
-deploy_run=$(run_for_sha dev deploy-tk104.yml "$dev_sha")
+deploy_run=$(run_for_sha dev deploy.yml "$dev_sha")
 if [ -n "$deploy_run" ]; then
   check_run "dev stand deploy" "$deploy_run" "$dev_sha" "fix forward and push dev again"
 else
-  deployed_sha=$(gh run list --branch dev --workflow deploy-tk104.yml --limit 30 \
+  deployed_sha=$(gh run list --branch dev --workflow deploy.yml --limit 30 \
     --json headSha,status,conclusion 2>/dev/null |
     jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .headSha' |
     while read -r sha; do
@@ -206,9 +206,9 @@ else
       fi
     done)
   if [ -z "$deployed_sha" ]; then
-    fail "no deploy-tk104 run for the current dev tip $dev_sha — push dev and watch the deploy (gh run watch)"
+    fail "no deploy run for the current dev tip $dev_sha — push dev and watch the deploy (gh run watch)"
   elif git diff --name-only "$deployed_sha" "$dev_sha" | grep -qvE '(\.md$|^docs/)'; then
-    fail "no deploy-tk104 run for the current dev tip $dev_sha, and it changes deployable files since the last green deploy ${deployed_sha:0:12}"
+    fail "no deploy run for the current dev tip $dev_sha, and it changes deployable files since the last green deploy ${deployed_sha:0:12}"
   else
     pass "dev tip only changes docs since the last green deploy ${deployed_sha:0:12}"
   fi

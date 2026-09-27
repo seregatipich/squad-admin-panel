@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # test-ci-runner-strategy.sh — lock the CI/CD job graph: every job on an
-# ephemeral GitHub-hosted VM, verification only for `master`, and the tk104
+# ephemeral GitHub-hosted VM, verification only for `master`, and the stand
 # development stand fed straight from `dev`.
 #
 # History: verification first ran hosted beside a self-hosted production deploy
 # runner (#286), then on an organization runner group; the repository now lives
 # on a personal account (no runner groups at all) and is public (hosted minutes
-# are free). tk104 is a development stand: a `dev` push builds the images on
-# hosted VMs, pushes them to GHCR, and hands tk104 the commit and digests over a
+# are free). the stand host is a development stand: a `dev` push builds the images on
+# hosted VMs, pushes them to GHCR, and hands the stand host the commit and digests over a
 # forced-command SSH key, so no job runs on the host and no runner lives there.
 # CI runs only on `master` and on dispatch.
 #
@@ -18,7 +18,7 @@ set -uo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 ci_workflow="$repo_root/.github/workflows/ci.yml"
-deploy_workflow="$repo_root/.github/workflows/deploy-tk104.yml"
+deploy_workflow="$repo_root/.github/workflows/deploy.yml"
 
 fail() {
   echo "test-ci-runner-strategy: FAIL — $1" >&2
@@ -91,7 +91,7 @@ ci_on=$(sed -n '/^on:$/,/^[a-z]/p' "$ci_workflow")
 has_line "$ci_on" '    branches: [master]' || fail 'ci push trigger is not restricted to master'
 has_line "$ci_on" '  workflow_dispatch:' || fail 'ci cannot be dispatched by hand'
 if grep -Eq 'branches: \[[^]]*dev' "$ci_workflow"; then
-  fail 'ci runs on dev again; dev deploys to tk104 without tests'
+  fail 'ci runs on dev again; dev deploys to the stand host without tests'
 fi
 if grep -Fq "github.ref != 'refs/heads/master'" "$ci_workflow"; then
   fail 'a ci job still skips on master, where ci now runs'
@@ -273,18 +273,18 @@ has_line "$images" '      packages: read' || fail 'images job cannot read the GH
 if has_text "$images" 'packages: write' || has_text "$images" 'cache-to=type=registry'; then
   fail 'ci writes the GHCR cache; only the dev deploy build may'
 fi
-for target in api web workers caddy-tk104 rnsquadjs; do
+for target in api web workers caddy rnsquadjs; do
   grep -Fq "target \"${target}\"" "$repo_root/docker-bake.hcl" ||
     fail "docker-bake.hcl has no '${target}' target"
 done
-for target in api web workers caddy-tk104; do
+for target in api web workers caddy; do
   has_text "$images" "${target}.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-${target}:buildcache" ||
     fail "bake target '${target}' does not reuse the GHCR layer cache the deploy build writes"
 done
 has_text "$images" 'rnsquadjs.cache-from=type=gha,scope=rnsquadjs' ||
   fail 'rnsquadjs lost its layer cache'
 has_text "$images" "await import('postgres')" || fail 'the api image smoke test is gone'
-has_text "$images" 'compose.tk104.yml' || fail 'the workers image is not checked against compose.tk104.yml'
+has_text "$images" 'compose.stand.yml' || fail 'the workers image is not checked against compose.stand.yml'
 has_text "$images" '[[ "${status}" -eq 64 ]]' || fail 'the workers image exit-64 smoke test is gone'
 if has_text "$images" 'upload-artifact' || has_text "$images" 'test-backup-restore'; then
   fail 'images job exports images or runs the backup round trip'
@@ -337,7 +337,7 @@ done
 [ "$(printf '%s\n' "$gate" | grep -Fxc '        run: pnpm exec vitest run --merge-reports --coverage')" -eq 2 ] ||
   fail 'the gate does not enforce merged coverage for both sharded suites'
 
-# --- deploy-tk104.yml: dev pushes build on hosted VMs and deploy over SSH. ---
+# --- deploy.yml: dev pushes build on hosted VMs and deploy over SSH. ---
 deploy_on=$(sed -n '/^on:$/,/^[a-z]/p' "$deploy_workflow")
 has_line "$deploy_on" '    branches: [dev]' || fail 'deploy does not follow dev pushes'
 has_line "$deploy_on" '  workflow_dispatch:' || fail 'deploy cannot be dispatched for a redeploy or rollback'
@@ -354,8 +354,8 @@ while IFS= read -r job; do
     fail "deploy job '$job' would also run in a fork"
 done < <(job_names "$deploy_workflow")
 deploy_job=$(job_block "$deploy_workflow" deploy)
-has_line "$deploy_job" '      name: tk104-dev' || fail 'deploy can read the tk104 secrets outside the tk104-dev environment'
-has_line "$deploy_job" '      url: https://tk104.duckdns.org' || fail 'deploy environment does not link the stand'
+has_line "$deploy_job" '      name: stand' || fail 'deploy can read the stand secrets outside the stand environment'
+has_line "$deploy_job" '      url: ${{ vars.STAND_URL }}' || fail 'deploy environment does not link the stand'
 has_line "$deploy_job" '    needs: build' || fail 'deploy does not wait for the image builds'
 
 backup_script="$repo_root/scripts/test-backup-restore.sh"
@@ -528,4 +528,4 @@ assert_rnsquad_deps_retry 4 1 3 '5,10,'
 cleanup_rnsquad_deps_fixture
 trap - EXIT
 
-echo "test-ci-runner-strategy: OK — every ci and deploy job runs on ${HOSTED_IMAGE}; ci is master-only, tk104 follows dev"
+echo "test-ci-runner-strategy: OK — every ci and deploy job runs on ${HOSTED_IMAGE}; ci is master-only, the stand host follows dev"

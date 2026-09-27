@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Return tk104 to the release that ran before the current one. Runs ON tk104
+# Return the stand host to the release that ran before the current one. Runs ON the stand host
 # from the app directory.
 #
 # The previous release's images are recorded in .release.prev.env. This hands
-# them to deploy-tk104.sh, which pulls any the host no longer has from ghcr.io,
+# them to deploy-stand.sh, which pulls any the host no longer has from ghcr.io,
 # recreates only the services that differ, waits for them, and then swaps the
 # two release files, so running it twice returns to where you started. It
 # does not undo migrations: the previous release runs against the current
@@ -47,4 +47,4 @@ exec env -u DEPLOY_BUILD \
   WEB_IMAGE="$(release_value "$PREVIOUS_FILE" WEB_IMAGE)" \
   WORKERS_IMAGE="$(release_value "$PREVIOUS_FILE" WORKERS_IMAGE)" \
   CADDY_IMAGE="$(release_value "$PREVIOUS_FILE" CADDY_IMAGE)" \
-  bash scripts/deploy-tk104.sh
+  bash scripts/deploy-stand.sh

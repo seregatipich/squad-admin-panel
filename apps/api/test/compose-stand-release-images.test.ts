@@ -3,11 +3,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * compose.tk104.yml runs the images the deploy workflow pushed to ghcr.io,
- * pinned by digest through the variables scripts/deploy-tk104.sh records in
- * .release.env; it must never build on the host. compose.tk104.build.yml
+ * compose.stand.yml runs the images the deploy workflow pushed to ghcr.io,
+ * pinned by digest through the variables scripts/deploy-stand.sh records in
+ * .release.env; it must never build on the host. compose.stand.build.yml
  * restores the builds for previews. The checks are line-based like
- * compose-tk104-worker-parity.test.ts, without a YAML dependency.
+ * compose-stand-worker-parity.test.ts, without a YAML dependency.
  */
 
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -39,9 +39,9 @@ function serviceBlocks(file: string): Map<string, string[]> {
   return blocks;
 }
 
-const tk104 = serviceBlocks('compose.tk104.yml');
-const buildOverride = serviceBlocks('compose.tk104.build.yml');
-const releaseServices = [...tk104.keys()].filter(
+const stand = serviceBlocks('compose.stand.yml');
+const buildOverride = serviceBlocks('compose.stand.build.yml');
+const releaseServices = [...stand.keys()].filter(
   (name) => ['migrator', 'api', 'web', 'caddy'].includes(name) || name.startsWith('worker-'),
 );
 
@@ -54,7 +54,7 @@ function imageVariable(service: string): string {
 }
 
 function block(service: string): string[] {
-  return tk104.get(service) ?? [];
+  return stand.get(service) ?? [];
 }
 
 /** The lines of a service's `healthcheck:` mapping. */
@@ -66,7 +66,7 @@ function healthcheck(service: string): string[] {
   return lines.slice(start + 1, end < 0 ? undefined : end);
 }
 
-describe('compose.tk104.yml release images', () => {
+describe('compose.stand.yml release images', () => {
   it('finds the panel services', () => {
     expect(releaseServices).toEqual(expect.arrayContaining(['migrator', 'api', 'web', 'caddy']));
     expect(releaseServices.filter((name) => name.startsWith('worker-')).length).toBeGreaterThan(10);
@@ -85,7 +85,7 @@ describe('compose.tk104.yml release images', () => {
   );
 
   it('never pulls the images the host builds, whose short names would resolve to Docker Hub', () => {
-    const hostBuilt = [...tk104].filter(([, lines]) => lines.includes("    profiles: ['images']"));
+    const hostBuilt = [...stand].filter(([, lines]) => lines.includes("    profiles: ['images']"));
     expect(hostBuilt.map(([service]) => service).sort()).toEqual([
       'depot-init-image',
       'rnsquadjs-image',
@@ -101,8 +101,8 @@ describe('compose.tk104.yml release images', () => {
   });
 
   it('no longer knows the tag-based image names', () => {
-    expect(read('compose.tk104.yml')).not.toMatch(
-      /PANEL_IMAGE_TAG|image: squad-panel\/(api|web|workers|caddy-tk104)/,
+    expect(read('compose.stand.yml')).not.toMatch(
+      /PANEL_IMAGE_TAG|image: squad-panel\/(api|web|workers|caddy)/,
     );
   });
 
@@ -113,7 +113,7 @@ describe('compose.tk104.yml release images', () => {
     },
   );
 
-  it('keeps a host build for every release service in compose.tk104.build.yml', () => {
+  it('keeps a host build for every release service in compose.stand.build.yml', () => {
     expect([...buildOverride.keys()].sort()).toEqual([...releaseServices].sort());
     for (const [service, lines] of buildOverride) {
       expect(
@@ -122,22 +122,22 @@ describe('compose.tk104.yml release images', () => {
       ).toBe(true);
       expect(
         lines.some((line) => /^ {4}image:/.test(line)),
-        `${service} must take its image name from compose.tk104.yml`,
+        `${service} must take its image name from compose.stand.yml`,
       ).toBe(false);
     }
   });
 });
 
-describe('compose.tk104.yml deploy contract', () => {
+describe('compose.stand.yml deploy contract', () => {
   it('keeps the migrator out of `up`: the deploy runs it explicitly, after a backup', () => {
     expect(block('migrator')).toContain("    profiles: ['migrate']");
-    for (const [service, lines] of tk104) {
+    for (const [service, lines] of stand) {
       expect(
         lines.some((line) => /^ {6}migrator:/.test(line)),
         `${service} still depends on the migrator`,
       ).toBe(false);
     }
-    expect(read('scripts/deploy-tk104.sh')).toMatch(/compose run --rm -T migrator/);
+    expect(read('scripts/deploy-stand.sh')).toMatch(/compose run --rm -T migrator/);
   });
 
   it('reports the recorded release version from the api', () => {
@@ -158,19 +158,19 @@ describe('compose.tk104.yml deploy contract', () => {
   });
 
   it('never uses start_interval, which Compose refuses on a Docker Engine older than 25', () => {
-    expect(read('compose.tk104.yml')).not.toMatch(/^\s+start_interval:/m);
+    expect(read('compose.stand.yml')).not.toMatch(/^\s+start_interval:/m);
   });
 
   it('recreates every service whose bind-mounted repository file changes', () => {
-    const mounting = [...tk104].filter(([, lines]) =>
+    const mounting = [...stand].filter(([, lines]) =>
       lines.some((line) => /^ {6}- \.\//.test(line)),
     );
     expect(mounting.map(([service]) => service)).toEqual(['caddy']);
     expect(block('caddy')).toContain(`      CADDYFILE_SHA: \${CADDYFILE_SHA:-}`);
-    expect(block('caddy')).toContain('      - ./docker/Caddyfile.tk104:/etc/caddy/Caddyfile:ro');
+    expect(block('caddy')).toContain('      - ./docker/Caddyfile.stand:/etc/caddy/Caddyfile:ro');
     // The hash compose sees is the one the deploy computes from that file.
-    expect(read('scripts/deploy-tk104.sh')).toMatch(
-      /caddyfile_sha="\$\(sha256sum < docker\/Caddyfile\.tk104/,
+    expect(read('scripts/deploy-stand.sh')).toMatch(
+      /caddyfile_sha="\$\(sha256sum < docker\/Caddyfile\.stand/,
     );
   });
 });

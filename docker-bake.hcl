@@ -1,7 +1,7 @@
 # Image build graph for CI and releases.
 #
 # CI builds every target in parallel (`docker buildx bake`), smoke-tests the
-# images, and exports the `release` group as the artifact the tk104 deploy
+# images, and exports the `release` group as the artifact the stand deploy
 # loads. Locally: `TAG=dev docker buildx bake --load release`.
 
 variable "TAG" {
@@ -9,12 +9,12 @@ variable "TAG" {
 }
 
 group "default" {
-  targets = ["api", "web", "workers", "caddy-tk104", "rnsquadjs"]
+  targets = ["api", "web", "workers", "caddy", "rnsquadjs"]
 }
 
-# What a tk104 release runs; compose.tk104.yml references these names.
+# What a the stand host release runs; compose.stand.yml references these names.
 group "release" {
-  targets = ["api", "web", "workers", "caddy-tk104"]
+  targets = ["api", "web", "workers", "caddy"]
 }
 
 target "api" {
@@ -35,10 +35,10 @@ target "workers" {
   tags       = ["squad-panel/workers:${TAG}"]
 }
 
-target "caddy-tk104" {
+target "caddy" {
   context    = "."
   dockerfile = "docker/caddy-duckdns.Dockerfile"
-  tags       = ["squad-panel/caddy-tk104:${TAG}"]
+  tags       = ["squad-panel/caddy:${TAG}"]
 }
 
 # The per-server sidecar is launched by the bridge from a host-built image and

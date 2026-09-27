@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Deploy one release to the tk104 dev stand. Runs ON tk104 from the app
-# directory, with .env.tk104 present. scripts/tk104-deploy-entry.sh calls it
-# for every push to dev, scripts/rollback-tk104.sh for a rollback. Idempotent:
+# Deploy one release to the dev stand. Runs ON the stand host from the app
+# directory, with .env.stand present. scripts/deploy-entry.sh calls it
+# for every push to dev, scripts/rollback-stand.sh for a rollback. Idempotent:
 # safe to re-run.
 #
 # Nothing is built here. The deploy workflow pushes the api, web, workers and
@@ -25,7 +25,7 @@
 #                     required — image references, for a release
 #                     ghcr.io/seregatipich/squad-panel-<image>@sha256:<digest>
 #   DEPLOY_BUILD=1    build the images on this host instead of pulling them
-#                     (scripts/dev-deploy-tk104.sh); the references then
+#                     (scripts/dev-deploy-stand.sh); the references then
 #                     default to $PANEL_IMAGE_REPO-<image>:$RELEASE_SHA
 #   PANEL_IMAGE_REPO  default ghcr.io/seregatipich/squad-panel
 #   BACKUP_DIR        pre-migration dumps (default ~/backups); the newest
@@ -38,15 +38,15 @@ PANEL_IMAGE_REPO="${PANEL_IMAGE_REPO:-ghcr.io/seregatipich/squad-panel}"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
-COMPOSE_FILE="compose.tk104.yml"
-BUILD_FILE="compose.tk104.build.yml"
-ENV_FILE=".env.tk104"
+COMPOSE_FILE="compose.stand.yml"
+BUILD_FILE="compose.stand.build.yml"
+ENV_FILE=".env.stand"
 RELEASE_FILE=".release.env"
 PREVIOUS_FILE=".release.prev.env"
 NEXT_FILE=".release.next.env"
 # Release-file key and image name of each panel image, index for index.
 IMAGE_KEYS=(API_IMAGE WEB_IMAGE WORKERS_IMAGE CADDY_IMAGE)
-IMAGE_NAMES=(api web workers caddy-tk104)
+IMAGE_NAMES=(api web workers caddy)
 
 fatal() {
   echo "fatal: $*" >&2
@@ -56,7 +56,13 @@ fatal() {
 cd "$APP_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  fatal "$APP_DIR/$ENV_FILE is missing (copy .env.example, fill the tk104 secrets incl. DUCKDNS_TOKEN)"
+  fatal "$APP_DIR/$ENV_FILE is missing (copy .env.example, fill the stand's secrets incl. APP_DOMAIN and DUCKDNS_TOKEN)"
+fi
+# The stand's public host name; compose and Caddy read it from the same file.
+app_domain="$(sed -n 's/^APP_DOMAIN=//p' "$ENV_FILE" | tail -n 1)"
+app_domain="${app_domain//[\"\']/}"
+if [[ ! "$app_domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  fatal "APP_DOMAIN in $APP_DIR/$ENV_FILE must be the stand's host name (got '${app_domain}')"
 fi
 if [[ ! "${RELEASE_SHA:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   fatal "RELEASE_SHA must name the release (got '${RELEASE_SHA:-}')"
@@ -76,7 +82,7 @@ done
 # APP_VERSION or CADDYFILE_SHA in the caller's shell would override the
 # release file below; the image variables are written there verbatim.
 unset APP_VERSION CADDYFILE_SHA
-for dependency in packages/db/drizzle docker/Caddyfile.tk104 "$COMPOSE_FILE"; do
+for dependency in packages/db/drizzle docker/Caddyfile.stand "$COMPOSE_FILE"; do
   [[ -e "$dependency" ]] || fatal "$APP_DIR/$dependency is missing"
 done
 
@@ -103,14 +109,14 @@ migrations_sha="$(
   cd packages/db/drizzle
   find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
 )"
-caddyfile_sha="$(sha256sum < docker/Caddyfile.tk104 | cut -d' ' -f1)"
+caddyfile_sha="$(sha256sum < docker/Caddyfile.stand | cut -d' ' -f1)"
 # Compose recreates a service whose configuration changed on its own, but the
-# early exit below must not skip an edited compose file or .env.tk104.
+# early exit below must not skip an edited compose file or .env.stand.
 compose_config_sha="$(cat "$COMPOSE_FILE" "$ENV_FILE" | sha256sum | cut -d' ' -f1)"
 
 trap 'rm -f "$NEXT_FILE"' EXIT
 {
-  echo "# Release running on tk104, written by scripts/deploy-tk104.sh. Compose reads it after .env.tk104."
+  echo "# Release running on the stand host, written by scripts/deploy-stand.sh. Compose reads it after .env.stand."
   echo "RELEASE_SHA=$RELEASE_SHA"
   echo "APP_VERSION=$app_version"
   for key in "${IMAGE_KEYS[@]}"; do echo "$key=${!key}"; done
@@ -127,9 +133,9 @@ if [[ "${DEPLOY_BUILD:-}" != 1 && -f "$RELEASE_FILE" ]] &&
   exit 0
 fi
 
-# Every compose call reads .env.tk104 and then the release file. Compose merges
+# Every compose call reads .env.stand and then the release file. Compose merges
 # several --env-file flags only since 2.17; an older one silently reads just
-# the last file and would recreate every service without the .env.tk104
+# the last file and would recreate every service without the .env.stand
 # secrets, so refuse before touching anything.
 compose_version="$(docker compose version --short 2>/dev/null || true)"
 compose_version="${compose_version#v}"
@@ -237,7 +243,7 @@ else
 fi
 
 echo "==> Local health probe (through Caddy on 443)"
-# Caddy serves TLS only for the tk104.duckdns.org SNI (DNS-01 cert), so probe
+# Caddy serves TLS only for the APP_DOMAIN SNI (DNS-01 cert), so probe
 # 127.0.0.1 with the real host name via --resolve instead of https://localhost.
 #
 # Retry rather than probe once: a recreated caddy needs a moment to bind 443
@@ -250,7 +256,7 @@ probe_status=0
 body=""
 for _ in $(seq 1 20); do
   probe_status=0
-  body="$(curl -fsk --resolve tk104.duckdns.org:443:127.0.0.1 https://tk104.duckdns.org/health \
+  body="$(curl -fsk --resolve "${app_domain}:443:127.0.0.1" "https://${app_domain}/health" \
     --max-time 10)" || probe_status=$?
   if [[ "$probe_status" -eq 0 ]]; then
     [[ "$body" == *"\"version\":\"${app_version}\""* ]] && break
@@ -299,4 +305,4 @@ for key in "${IMAGE_KEYS[@]}"; do
     done
 done
 
-echo "==> ${RELEASE_SHA} is live on https://tk104.duckdns.org/ (APP_VERSION=${app_version}; recreated: ${recreated:-none})"
+echo "==> ${RELEASE_SHA} is live on https://${app_domain}/ (APP_VERSION=${app_version}; recreated: ${recreated:-none})"

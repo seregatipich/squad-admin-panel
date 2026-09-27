@@ -6,7 +6,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
 
 - **`master` is the verified branch** (`origin/HEAD` → `master`): the only branch `ci` runs on, and the future source of production releases (production CD is not set up yet). It receives commits **only by fast-forward from `dev`** — never direct commits, never merges from work branches, never a branch base for new work.
 - **There is no `main` branch. Never create, push, checkout, or target a branch named `main`.** If a tool, template, or CLI defaults to `main`, override it to `master`. If you encounter a `main` ref, do not build on it or merge into it — report it so it can be deleted.
-- **`dev` is the integration branch, and every push to it deploys the tk104 development stand** (https://tk104.duckdns.org) within minutes, without running tests. All work lands in `dev` via merges from work branches. Never commit directly to `dev`.
+- **`dev` is the integration branch, and every push to it deploys the development stand** (host and origin come from the `stand` environment, never from the code) within minutes, without running tests. All work lands in `dev` via merges from work branches. Never commit directly to `dev`.
 - **Work branches are always created from an up-to-date `dev`**, never from `master`. Name them by intent: `feature/<slug>`, `fix/<slug>`, `chore/<slug>`, `docs/<slug>`, `refactor/<slug>`.
 
 ## Workflow (every task: issue, fix, feature, module)
@@ -30,7 +30,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
    git merge --no-ff feature/<slug>
    git push origin dev
    ```
-5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook (see "Local pre-check"). It is the only check a `dev` push gets before it reaches the stand: the push starts the `deploy-tk104` workflow, which builds the images and deploys them to tk104 without tests. Watch the deploy and fix forward if it fails.
+5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook (see "Local pre-check"). It is the only check a `dev` push gets before it reaches the stand: the push starts the `deploy` workflow, which builds the images and deploys them to the stand host without tests. Watch the deploy and fix forward if it fails.
 6. Promote the finished tip to `master` so the full `ci` suite verifies it (see "Dev stand and promotion"); work is not done while that run is red.
 7. Delete the merged work branch.
 
@@ -61,13 +61,13 @@ gh run view <run-id> --log-failed   # logs of the failing step
 
 To check a `dev` commit before promoting it, dispatch the same workflow on it: `gh workflow run ci.yml --ref dev`.
 
-**Everything runs on GitHub-hosted VMs (`runs-on: ubuntu-24.04`), including the deploy.** `deploy-tk104.yml` builds the images on hosted runners, pushes them to GHCR, and reaches tk104 over SSH with a forced-command key held in the `tk104-dev` environment, whose deployment branch policy admits `dev` alone. There is no self-hosted runner. The repository is public on a personal account, so hosted minutes are free and runner groups do not exist — a job that selects `runs-on: group: …` waits in the queue forever. [`scripts/test-ci-runner-strategy.sh`](scripts/test-ci-runner-strategy.sh) fails CI if a job leaves the hosted image, the deploy leaves the `tk104-dev` environment, or any workflow selects a runner group or a self-hosted runner.
+**Everything runs on GitHub-hosted VMs (`runs-on: ubuntu-24.04`), including the deploy.** `deploy.yml` builds the images on hosted runners, pushes them to GHCR, and reaches the stand host over SSH with a forced-command key held in the `stand` environment, whose deployment branch policy admits `dev` alone. There is no self-hosted runner. The repository is public on a personal account, so hosted minutes are free and runner groups do not exist — a job that selects `runs-on: group: …` waits in the queue forever. [`scripts/test-ci-runner-strategy.sh`](scripts/test-ci-runner-strategy.sh) fails CI if a job leaves the hosted image, the deploy leaves the `stand` environment, or any workflow selects a runner group or a self-hosted runner.
 
 Workflows stay limited to trusted pushes and explicit dispatches — never `pull_request` — and superseded runs are cancelled (a deploy already in flight is never interrupted). [`scripts/test-workflow-security.sh`](scripts/test-workflow-security.sh) fails CI if any workflow ever reaches a self-hosted job from a pull-request trigger, by label or by group. Because a fork's pull request can bring its own workflow file, the repository setting *Require approval for all outside collaborators* must stay on. See "CI and deployment runners" in `docs/development/agent-harness.md`.
 
 **Adding a package? Add it to `test:cov`.** The api and web suites run as parallel `vitest --shard` slices whose coverage is merged before the thresholds are checked; every other package runs through the `test:cov` script's explicit `--filter` list, driven by `scripts/ci-test-shard.sh`. A package missing from that list never runs in CI — it can be merged with a red suite while the dashboard stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
 
-**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** A mutable version tag (e.g. `@v4`) can be repointed to execute arbitrary code; the highest-severity case is `deploy-tk104.yml`, whose deploy job writes the tk104 SSH deploy key to disk (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line is not a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
+**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** A mutable version tag (e.g. `@v4`) can be repointed to execute arbitrary code; the highest-severity case is `deploy.yml`, whose deploy job writes the stand SSH deploy key to disk (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line is not a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
 
 ### Local pre-check
 
@@ -96,7 +96,7 @@ By default the checklist runs, in order:
 
 A task — issue, fix, feature, or module — counts as **done** only when ALL of the following hold:
 
-1. The work is merged into `dev`, **pushed to `origin/dev`**, and the `deploy-tk104` run for that tip is green (the stand runs it).
+1. The work is merged into `dev`, **pushed to `origin/dev`**, and the `deploy` run for that tip is green (the stand runs it).
 2. The change is **completely covered by tests** (regression tests for fixes, integration tests for modules — see Testing policy).
 3. **ALL tests are verified passing** — the tip is promoted to `master` and the full suite is green on its `ci` run, not just the tests you added.
 4. The **Completion verification** checklist below has been executed at completion time — `scripts/verify-done.sh` exits 0 and every judgment angle is backed by evidence.
@@ -131,7 +131,7 @@ The final comment must contain fresh, reviewable evidence for every item below:
 2. **Automated tests** — every exact command run, its result, and useful test counts. For a bug fix, include the regression test's observed red-before / green-after evidence.
 3. **Functionality verification** — the real API, UI, CLI, worker, deployment, or other user-visible scenario exercised; the applicable tool used (for example browser automation, `curl`, a database client, or service logs); and the actual observed result. Include reviewable response excerpts, screenshots, recordings, or artifact/log links when the applicable tool can produce them. “Should work” is not evidence.
 4. **Quality gates** — fresh results for typecheck, Biome, affected/full tests, and any applicable Go, build, migration, security, or platform-specific checks.
-5. **Delivery and CI** — work branch, delivered commit(s), current `dev` SHA, the `deploy-tk104` run URL/ID, and the `master` `ci` run URL/ID with every job's conclusion.
+5. **Delivery and CI** — work branch, delivered commit(s), current `dev` SHA, the `deploy` run URL/ID, and the `master` `ci` run URL/ID with every job's conclusion.
 6. **Completion verification** — the command and passing result from `bash scripts/verify-done.sh` for the current `dev` tip.
 7. **Verification provenance** — the agent/model or session identity when available, the tools used for verification, and the verification timestamp.
 8. **Risks, skips, and limitations** — this must say `None` for a 100% completion claim. If any required check, runtime scenario, tool, or acceptance criterion was skipped, unavailable, inconclusive, or failed, the issue is not 100% complete; post a progress/blocker comment instead and keep the issue open.
@@ -154,8 +154,8 @@ Every parallel task agent must also post a **`Feature-branch handoff evidence �
 
 ## Dev stand and promotion
 
-- **Every push to `dev` deploys the tk104 development stand** (https://tk104.duckdns.org) — tk104 is a stand for development, not production. `deploy-tk104.yml` builds the `api`, `web`, `workers` and `caddy-tk104` images in parallel on hosted runners, pushes them to GHCR (`ghcr.io/seregatipich/squad-panel-<image>:<sha>`), and hands the four digests to tk104 over SSH. The host pulls only the images whose digest changed, runs a `pg_dump` and the migrator only when `packages/db/drizzle` changed, and recreates only the services whose image or configuration changed; a push that changes neither is a no-op. Pushes that only touch Markdown or `docs/` do not deploy. Nothing is tested on this path — the local pre-check is the only gate before the stand.
-- **Redeploy or roll back** by dispatching the workflow with the commit you want: `gh workflow run deploy-tk104.yml --ref dev -f sha=<40-hex sha>` — images of every deployed SHA stay in GHCR. On the host, `bash scripts/rollback-tk104.sh` switches back to the previous release. Neither undoes migrations, so **every migration must stay compatible with the release before it** — add columns and tables first, drop what the previous release still reads only in a later release.
+- **Every push to `dev` deploys the development stand** — the stand is for development, not production. `deploy.yml` builds the `api`, `web`, `workers` and `caddy` images in parallel on hosted runners, pushes them to GHCR (`ghcr.io/seregatipich/squad-panel-<image>:<sha>`), and hands the four digests to the stand host over SSH. The host pulls only the images whose digest changed, runs a `pg_dump` and the migrator only when `packages/db/drizzle` changed, and recreates only the services whose image or configuration changed; a push that changes neither is a no-op. Pushes that only touch Markdown or `docs/` do not deploy. Nothing is tested on this path — the local pre-check is the only gate before the stand.
+- **Redeploy or roll back** by dispatching the workflow with the commit you want: `gh workflow run deploy.yml --ref dev -f sha=<40-hex sha>` — images of every deployed SHA stay in GHCR. On the host, `bash scripts/rollback-stand.sh` switches back to the previous release. Neither undoes migrations, so **every migration must stay compatible with the release before it** — add columns and tables first, drop what the previous release still reads only in a later release.
 - **Promote** only by **fast-forwarding `master` to the dev tip** — never merge commits, cherry-picks, or direct commits onto `master`:
   ```bash
   git fetch origin

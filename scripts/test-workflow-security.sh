@@ -72,15 +72,15 @@ expect_detector() {
 pr_on=$'on:\n  pull_request:\n    branches: [dev]\njobs:\n  x:\n'
 push_on=$'on:\n  push:\n    branches: [dev]\njobs:\n  x:\n'
 printf '%s    runs-on: self-hosted\n' "$pr_on" | expect_detector yes 'label'
-printf '%s    runs-on: [self-hosted, tk104-deploy]\n' "$pr_on" | expect_detector yes 'inline label list'
-printf '%s    runs-on:\n      - self-hosted\n      - tk104-deploy\n' "$pr_on" | expect_detector yes 'block label list'
+printf '%s    runs-on: [self-hosted, stand-deploy]\n' "$pr_on" | expect_detector yes 'inline label list'
+printf '%s    runs-on:\n      - self-hosted\n      - stand-deploy\n' "$pr_on" | expect_detector yes 'block label list'
 printf '%s    runs-on:\n      group: selfhost-group-1\n' "$pr_on" | expect_detector yes 'runner group'
-printf '%s    runs-on: [self-hosted, tk104-deploy]\n' "${pr_on/pull_request:/pull_request_target:}" | expect_detector yes 'pull_request_target'
-printf '%s    runs-on: [self-hosted, tk104-deploy]\n' "$push_on" | expect_detector no 'push-only self-hosted'
+printf '%s    runs-on: [self-hosted, stand-deploy]\n' "${pr_on/pull_request:/pull_request_target:}" | expect_detector yes 'pull_request_target'
+printf '%s    runs-on: [self-hosted, stand-deploy]\n' "$push_on" | expect_detector no 'push-only self-hosted'
 printf '%s    runs-on: ubuntu-24.04\n' "$pr_on" | expect_detector no 'hosted pull request'
 printf '%s    runs-on: self-hosted\n    steps:\n      - run: test "$E" = pull_request\n' "$push_on" |
   expect_detector no 'pull_request mentioned only in a run body'
-printf 'concurrency:\n  group: deploy-tk104\n%s    runs-on: ubuntu-24.04\n' "$pr_on" |
+printf 'concurrency:\n  group: deploy\n%s    runs-on: ubuntu-24.04\n' "$pr_on" |
   expect_detector no 'concurrency group is not a runner group'
 
 violations=()

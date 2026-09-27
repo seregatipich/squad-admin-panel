@@ -6,11 +6,8 @@ import path from 'node:path';
 import { after, describe, it } from 'node:test';
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
-const workflow = readFileSync(
-  path.join(REPOSITORY_ROOT, '.github/workflows/deploy-tk104.yml'),
-  'utf8',
-);
-const IMAGES = ['api', 'web', 'workers', 'caddy-tk104'] as const;
+const workflow = readFileSync(path.join(REPOSITORY_ROOT, '.github/workflows/deploy.yml'), 'utf8');
+const IMAGES = ['api', 'web', 'workers', 'caddy'] as const;
 const RELEASE_SHA = '0123456789abcdef0123456789abcdef01234567';
 // A throwaway public key; only its shape matters to ssh-keygen.
 const HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICkRPgVfqvX/r75lejiVRHnqb1XiL5DdeDRa19D9teZg';
@@ -65,7 +62,7 @@ function runStep(
   env: Record<string, string>,
   stubs: Record<string, string>,
 ): StepRun {
-  const root = mkdtempSync(path.join(tmpdir(), 'deploy-tk104-step-'));
+  const root = mkdtempSync(path.join(tmpdir(), 'deploy-step-'));
   temporaryRoots.push(root);
   const bin = path.join(root, 'bin');
   const home = path.join(root, 'home');
@@ -118,10 +115,10 @@ const DIGESTS: Record<(typeof IMAGES)[number], string> = {
   api: digest('a'),
   web: digest('b'),
   workers: digest('c'),
-  'caddy-tk104': digest('d'),
+  caddy: digest('d'),
 };
 
-describe('deploy-tk104 workflow triggers', () => {
+describe('deploy workflow triggers', () => {
   it('deploys every dev push except documentation-only ones, and on dispatch', () => {
     assert.match(
       workflow,
@@ -144,14 +141,14 @@ describe('deploy-tk104 workflow triggers', () => {
   });
 });
 
-describe('deploy-tk104 build job', () => {
+describe('deploy build job', () => {
   it('builds each release image in its own cancellable matrix leg on a hosted VM', () => {
     assert.match(build, /\n {4}runs-on: ubuntu-24\.04\n/u);
     assert.match(build, /\n {4}if: github\.repository == 'seregatipich\/squad-admin-panel'\n/u);
     assert.match(build, /\n {6}packages: write\n/u);
     assert.match(
       build,
-      /\n {6}fail-fast: false\n {6}matrix:\n {8}image: \[api, web, workers, caddy-tk104\]\n/u,
+      /\n {6}fail-fast: false\n {6}matrix:\n {8}image: \[api, web, workers, caddy\]\n/u,
     );
     assert.match(
       build,
@@ -247,19 +244,16 @@ describe('deploy-tk104 build job', () => {
   });
 });
 
-describe('deploy-tk104 deploy job', () => {
-  it('runs after every build, once at a time, in the tk104-dev environment', () => {
+describe('deploy deploy job', () => {
+  it('runs after every build, once at a time, in the stand environment', () => {
     assert.match(deploy, /\n {4}needs: build\n/u);
     assert.match(deploy, /\n {4}if: github\.repository == 'seregatipich\/squad-admin-panel'\n/u);
     assert.match(deploy, /\n {4}runs-on: ubuntu-24\.04\n/u);
     assert.match(
       deploy,
-      /\n {4}environment:\n {6}name: tk104-dev\n {6}url: https:\/\/tk104\.duckdns\.org\n/u,
+      /\n {4}environment:\n {6}name: stand\n {6}url: \$\{\{ vars\.STAND_URL \}\}\n/u,
     );
-    assert.match(
-      deploy,
-      /\n {4}concurrency:\n {6}group: deploy-tk104\n {6}cancel-in-progress: false\n/u,
-    );
+    assert.match(deploy, /\n {4}concurrency:\n {6}group: deploy\n {6}cancel-in-progress: false\n/u);
     assert.match(deploy, /\n {4}timeout-minutes: 15\n/u);
     assert.match(deploy, /\n {6}packages: read\n/u);
     assert.doesNotMatch(deploy, /packages: write/u);
@@ -273,18 +267,18 @@ describe('deploy-tk104 deploy job', () => {
     );
   });
 
-  it('pins tk104 SSH trust and removes the key whatever happens', () => {
+  it('pins the stand host SSH trust and removes the key whatever happens', () => {
     assert.doesNotMatch(workflow, /ssh-keyscan|StrictHostKeyChecking=(no|accept-new)/u);
     assert.equal((workflow.match(/StrictHostKeyChecking=yes/gu) ?? []).length, 1);
     assert.equal((workflow.match(/UserKnownHostsFile=/gu) ?? []).length, 1);
     const cleanup = step(deploy, 'Remove SSH deploy key');
     assert.match(cleanup, /\n {8}if: always\(\)\n/u);
-    assert.match(cleanup, /rm -f ~\/\.ssh\/id_deploy "\$\{RUNNER_TEMP\}\/tk104_known_hosts"/u);
+    assert.match(cleanup, /rm -f ~\/\.ssh\/id_deploy "\$\{RUNNER_TEMP\}\/stand_known_hosts"/u);
     const order = [
       'Resolve the release commit',
       'Resolve the image digests',
       'Configure pinned SSH trust and deploy key',
-      'Deploy the release on tk104',
+      'Deploy the release on the stand',
       'External health check',
       'Remove SSH deploy key',
     ].map((name) => deploy.indexOf(`      - name: ${name}\n`));
@@ -298,30 +292,53 @@ describe('deploy-tk104 deploy job', () => {
   describe('pinned SSH trust', () => {
     const script = runScript(step(deploy, 'Configure pinned SSH trust and deploy key'));
     const key = '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n-----END OPENSSH PRIVATE KEY-----';
+    const target = 'deployer@stand.example';
 
-    it('writes the deploy key only for a valid tk104 host key', () => {
+    it('writes the deploy key only for a valid stand host key', () => {
       const run = runStep(
         script,
-        { TK104_SSH_KNOWN_HOSTS: `tk104.duckdns.org ${HOST_KEY}\n`, TK104_DEPLOY_KEY: key },
+        {
+          STAND_SSH_KNOWN_HOSTS: `stand.example ${HOST_KEY}\n`,
+          STAND_DEPLOY_KEY: key,
+          STAND_SSH_TARGET: target,
+        },
         {},
       );
       assert.equal(run.status, 0, run.output);
       const deployKey = path.join(run.home, '.ssh/id_deploy');
       assert.equal(readFileSync(deployKey, 'utf8'), `${key}\n`);
       assert.equal(statSync(deployKey).mode & 0o777, 0o600);
-      assert.equal(statSync(path.join(run.runnerTemp, 'tk104_known_hosts')).mode & 0o777, 0o600);
+      assert.equal(statSync(path.join(run.runnerTemp, 'stand_known_hosts')).mode & 0o777, 0o600);
     });
 
-    for (const [name, knownHosts, deployKey, message] of [
-      ['a missing host key', '', key, /host key is missing/u],
-      ['a malformed host key', 'tk104.duckdns.org not-a-key', key, /host key is invalid/u],
-      ['a host key for another host', `example.org ${HOST_KEY}`, key, /host key is invalid/u],
-      ['a missing deploy key', `tk104.duckdns.org ${HOST_KEY}`, '', /deploy key is missing/u],
+    for (const [name, knownHosts, deployKey, sshTarget, message] of [
+      ['a missing host key', '', key, target, /host key is missing/u],
+      ['a malformed host key', 'stand.example not-a-key', key, target, /host key is invalid/u],
+      [
+        'a host key for another host',
+        `example.org ${HOST_KEY}`,
+        key,
+        target,
+        /host key is invalid/u,
+      ],
+      ['a missing deploy key', `stand.example ${HOST_KEY}`, '', target, /deploy key is missing/u],
+      ['an unset stand target', `stand.example ${HOST_KEY}`, key, '', /must be user@host/u],
+      [
+        'a stand target carrying a command',
+        `stand.example ${HOST_KEY}`,
+        key,
+        'deployer@stand.example; id',
+        /must be user@host/u,
+      ],
     ] as const) {
       it(`refuses ${name}`, () => {
         const run = runStep(
           script,
-          { TK104_SSH_KNOWN_HOSTS: knownHosts, TK104_DEPLOY_KEY: deployKey },
+          {
+            STAND_SSH_KNOWN_HOSTS: knownHosts,
+            STAND_DEPLOY_KEY: deployKey,
+            STAND_SSH_TARGET: sshTarget,
+          },
           {},
         );
         assert.notEqual(run.status, 0);
@@ -367,7 +384,7 @@ describe('deploy-tk104 deploy job', () => {
       ['an image missing from GHCR', { DIGEST_workers: '' }],
       ['a truncated digest', { DIGEST_web: 'sha256:abc' }],
       ['a digest of another algorithm', { DIGEST_api: `sha512:${'a'.repeat(64)}` }],
-      ['an injected digest', { DIGEST_caddy_tk104: `${digest('d')} rm` }],
+      ['an injected digest', { DIGEST_caddy: `${digest('d')} rm` }],
     ] as const) {
       it(`fails on ${name}`, () => {
         const run = runStep(script, digestEnv(overrides), { docker });
@@ -378,11 +395,11 @@ describe('deploy-tk104 deploy job', () => {
     }
   });
 
-  it('sends tk104 exactly the forced-command contract over pinned SSH', () => {
+  it('sends the stand host exactly the forced-command contract over pinned SSH', () => {
     const images = IMAGES.map((image) => `${image}=${DIGESTS[image]}`).join(' ');
     const run = runStep(
-      runScript(step(deploy, 'Deploy the release on tk104')),
-      { RELEASE_SHA, RELEASE_IMAGES: images },
+      runScript(step(deploy, 'Deploy the release on the stand')),
+      { RELEASE_SHA, RELEASE_IMAGES: images, STAND_SSH_TARGET: 'deployer@stand.example' },
       { ssh: 'printf "%s\\n" "$@" >> "$STUB_LOG"' },
     );
     assert.equal(run.status, 0, run.output);
@@ -391,13 +408,13 @@ describe('deploy-tk104 deploy job', () => {
     assert.equal(command, `deploy ${RELEASE_SHA} ${images}`);
     assert.match(
       command,
-      /^deploy [0-9a-f]{40} api=sha256:[0-9a-f]{64} web=sha256:[0-9a-f]{64} workers=sha256:[0-9a-f]{64} caddy-tk104=sha256:[0-9a-f]{64}$/u,
+      /^deploy [0-9a-f]{40} api=sha256:[0-9a-f]{64} web=sha256:[0-9a-f]{64} workers=sha256:[0-9a-f]{64} caddy=sha256:[0-9a-f]{64}$/u,
     );
-    assert.equal(args.at(-2), 'seregatipich@tk104.duckdns.org');
+    assert.equal(args.at(-2), 'deployer@stand.example');
     const options = args.slice(0, -2).join(' ');
     assert.ok(options.includes(`-i ${run.home}/.ssh/id_deploy`), options);
     assert.ok(
-      options.includes(`-o UserKnownHostsFile=${run.runnerTemp}/tk104_known_hosts`),
+      options.includes(`-o UserKnownHostsFile=${run.runnerTemp}/stand_known_hosts`),
       options,
     );
     assert.ok(options.includes('-o StrictHostKeyChecking=yes'), options);
@@ -422,13 +439,13 @@ describe('deploy-tk104 deploy job', () => {
     const sleep = 'printf "%s\\n" "$1" >> "$SLEEP_LOG"';
 
     function check(responses: string) {
-      const root = mkdtempSync(path.join(tmpdir(), 'deploy-tk104-sleep-'));
+      const root = mkdtempSync(path.join(tmpdir(), 'deploy-sleep-'));
       temporaryRoots.push(root);
       const sleepLog = path.join(root, 'sleep.log');
       writeFileSync(sleepLog, '');
       const run = runStep(
         script,
-        { CURL_RESPONSES: responses, SLEEP_LOG: sleepLog },
+        { CURL_RESPONSES: responses, SLEEP_LOG: sleepLog, STAND_URL: 'https://stand.example' },
         { curl, sleep },
       );
       return { run, sleeps: readFileSync(sleepLog, 'utf8').trim().split('\n').filter(Boolean) };
@@ -441,7 +458,7 @@ describe('deploy-tk104 deploy job', () => {
       assert.equal(run.status, 0, run.output);
       assert.equal(stubLog(run).length, 4);
       assert.deepEqual(sleeps, ['2', '2', '2']);
-      assert.ok(stubLog(run).every((call) => call.includes('https://tk104.duckdns.org/health')));
+      assert.ok(stubLog(run).every((call) => call.includes('https://stand.example/health')));
     });
 
     it('gives up after about 90 s of polling every 2 s', () => {
