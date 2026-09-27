@@ -57,6 +57,12 @@ beforeEach(async () => {
   // Cases swap bridge methods and seed fake files on the shared app.
   Object.assign(h.bridge, makeFakeBridge());
   await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
+  // Each case seeds its own 'running'/'starting' container server via
+  // seedRunning(); left over from a previous case, one of these would count
+  // as a live container server not listed in server_ids and now (#20
+  // follow-up) trip the servers_running guard for every later case in this
+  // file.
+  await h.db.delete(servers);
 });
 
 afterEach(async () => {

@@ -459,7 +459,21 @@ export default function DashboardPage() {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ server_ids: serverIds }),
           });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          if (!r.ok) {
+            const body = (await r.json().catch(() => null)) as {
+              error?: string;
+              server_ids?: string[];
+            } | null;
+            // The depot is one volume shared by every server on the host, so
+            // the API refuses unless every other live server is selected too
+            // (#20 follow-up).
+            if (body?.error === 'servers_running') {
+              throw new Error(
+                `Отметьте все запущенные серверы для остановки: не выбрано ${body.server_ids?.length ?? 0}.`,
+              );
+            }
+            throw new Error(`HTTP ${r.status}`);
+          }
           setDepotProgressOpen(true);
           void load();
         }}
