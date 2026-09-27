@@ -28,6 +28,12 @@
 
 - Право `server:update` помечено как опасное (`dangerous: true`): действие затрагивает все серверы хоста, как и `POST /api/v1/depot/update` под `server:install`.
 
+## 2026-09-27 — Проверка major brand для video/mp4
+
+### Security
+
+- `matchesMagicBytes` для `video/mp4` проверяет не только бокс `ftyp`, но и major brand: файлы HEIF/AVIF (`avif`, `heic`, `mif1` и родственные бренды) отклоняются с `400 magic_byte_mismatch` и в `POST /api/v1/media`, и в `POST /api/v1/public/media`. См. #22.
+
 ## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
 
 ### Removed

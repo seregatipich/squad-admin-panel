@@ -227,6 +227,49 @@ describe('POST /api/v1/media', () => {
     expect(res.json()).toEqual({ error: 'magic_byte_mismatch' });
   });
 
+  it.each(['avif', 'avis', 'heic', 'mif1'])(
+    'rejects an ISO-BMFF still image (major brand %s) declared as video/mp4 (#22)',
+    async (brand) => {
+      const header = Buffer.concat([
+        Buffer.from([0x00, 0x00, 0x00, 0x18]),
+        Buffer.from(`ftyp${brand}`, 'ascii'),
+      ]);
+      const content = Buffer.concat([header, Buffer.alloc(64, 1)]);
+      const { body, contentType } = buildMultipartPayload(
+        {},
+        { fieldname: 'file', filename: 'clip.mp4', contentType: 'video/mp4', content },
+      );
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/media',
+        headers: { cookie: ownerCookie, 'content-type': contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'magic_byte_mismatch' });
+    },
+  );
+
+  it('still accepts a real MP4 major brand as video/mp4', async () => {
+    const header = Buffer.concat([
+      Buffer.from([0x00, 0x00, 0x00, 0x18]),
+      Buffer.from('ftypisom', 'ascii'),
+    ]);
+    const content = Buffer.concat([header, Buffer.from(randomUUID())]);
+    const { body, contentType } = buildMultipartPayload(
+      {},
+      { fieldname: 'file', filename: 'clip.mp4', contentType: 'video/mp4', content },
+    );
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/media',
+      headers: { cookie: ownerCookie, 'content-type': contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().kind).toBe('video');
+  });
+
   it('dedups identical bytes by sha256 instead of storing them twice', async () => {
     const content = pngBytes(96);
 
