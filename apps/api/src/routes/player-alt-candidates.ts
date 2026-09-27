@@ -92,10 +92,10 @@ interface CandidateLink {
  * `player:view_ips` permission — without it the endpoint returns 403 and
  * leaks no IPs or candidates at all.
  *
- * Ban convention (no dedicated "ban" moderation_actions type exists yet):
- * `has_active_ban` is true when the candidate has either a non-reverted
- * `moderation_actions` row whose `action_type` contains `ban` (excluding the
- * `ban_source.*` audit trail of the external-ban importer) or an
+ * Ban convention: `has_active_ban` is true when the candidate has either a
+ * non-reverted `moderation_actions` row with `action_type = 'ban'` (the
+ * `unban` and `external_ban_kick` rows are not bans — a substring match on
+ * `ban` flagged every unbanned player forever, #36) or an
  * `external_bans` row that isn't revoked and isn't expired; `has_permanent_ban`
  * narrows that further to rows with no expiry (`context->>'expires_at'` /
  * `external_bans.expires_at` both absent).
@@ -257,8 +257,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
         SELECT MAX(created_at) AS last_ban_at
         FROM moderation_actions
         WHERE player_id = ${playerId}
-          AND action_type LIKE '%ban%'
-          AND action_type NOT LIKE 'ban_source%'
+          AND action_type = 'ban'
       `)) as unknown as Array<{ last_ban_at: Date | string | null }>;
       const lastBanAt = lastBanRow?.last_ban_at ? new Date(lastBanRow.last_ban_at) : null;
 
@@ -301,13 +300,13 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
           p.created_at,
           EXISTS (
             SELECT 1 FROM moderation_actions ma
-            WHERE ma.player_id = p.id AND ma.action_type LIKE '%ban%'
-              AND ma.action_type NOT LIKE 'ban_source%' AND ma.reverted_at IS NULL
+            WHERE ma.player_id = p.id AND ma.action_type = 'ban'
+              AND ma.reverted_at IS NULL
           ) AS has_active_mod_ban,
           EXISTS (
             SELECT 1 FROM moderation_actions ma
-            WHERE ma.player_id = p.id AND ma.action_type LIKE '%ban%'
-              AND ma.action_type NOT LIKE 'ban_source%' AND ma.reverted_at IS NULL
+            WHERE ma.player_id = p.id AND ma.action_type = 'ban'
+              AND ma.reverted_at IS NULL
               AND (ma.context ->> 'expires_at') IS NULL
           ) AS has_permanent_mod_ban,
           EXISTS (

@@ -305,7 +305,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(far?.signals.steamid_proximity.value).toBe(false);
   });
 
-  it('flags a non-reverted permanent ban as active+permanent, and a reverted one as neither', async () => {
+  it('flags a non-reverted permanent ban as active+permanent, and a reverted+unbanned one as neither', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
     const idC = await seedPlayer(PLAYER_C, 'PlayerC');
@@ -330,6 +330,8 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
         context: {},
         revertedAt: new Date(),
       },
+      // The unban path appends its own non-reverted `unban` row (#36 finding 14).
+      { playerId: idC, actionType: 'unban', authorSystemLabel: 'test-fixture', context: {} },
     ]);
 
     const cookie = await loginAsOwner(h);

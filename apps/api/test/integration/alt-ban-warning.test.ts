@@ -141,6 +141,43 @@ describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
     });
   });
 
+  it('does not count an unban ledger row as an active ban (#36 finding 14)', async () => {
+    // The unban path marks the ban reverted and appends its own `unban` row
+    // with reverted_at NULL; `LIKE '%ban%'` used to match that row forever.
+    await h.db.insert(moderationActions).values([
+      {
+        playerId: altId,
+        actionType: 'ban',
+        authorPlayerId: ownerId,
+        revertedAt: new Date(),
+        revertedBy: ownerId,
+      },
+      { playerId: altId, actionType: 'unban', authorPlayerId: ownerId },
+      { playerId: altId, actionType: 'external_ban_kick', authorSystemLabel: 'test' },
+    ]);
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: false }],
+    });
+
+    await h.db
+      .insert(moderationActions)
+      .values({ playerId: altId, actionType: 'ban', authorPlayerId: ownerId });
+    const banned = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(banned.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: true }],
+    });
+  });
+
   it('degrades to a count without leaking names without player:view_ips', async () => {
     const roleId = uuidv7();
     await h.db.insert(roles).values({
