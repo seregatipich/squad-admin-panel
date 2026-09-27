@@ -1,5 +1,11 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-27
+
+### Fixed
+
+- [#19](https://github.com/seregatipich/squad-admin-panel/issues/19): the AUTO-3 alert engine (`src/alerts/engine.ts`) was never called, so `server_crashed`, `unusual_activity`, `admin_login_new_ip` and log-derived `custom` rules created in «Настройки → Алерты» never fired. `src/alerts/store.ts` now evaluates the enabled rules for every parsed event and writes `alert_events` (details in [api.md](api.md#alert-rules-alert_events)). Stored rule configs are validated with zod instead of an unchecked cast, and the `AlertRuleConfig` union no longer includes `Record<string, unknown>`.
+
 ## 2026-09-09
 
 ### Fixed

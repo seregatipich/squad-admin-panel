@@ -37,6 +37,30 @@ All envelopes share the base shape:
 
 Written as `SET … EX 86400 NX` before each `XADD`. If the key already exists the event is dropped (TTL 24 h).
 
+## Alert rules (`alert_events`)
+
+`src/alerts/store.ts` runs the AUTO-3 engine (`src/alerts/engine.ts`) for every event the parser emits ([#19](https://github.com/seregatipich/squad-admin-panel/issues/19)). Enabled rules are cached for 15 s; each row's `config` is validated against its type's schema and an invalid row is skipped with an `alert rule skipped: invalid config` warning. `role_expiring` is not evaluated here (worker-role-expirer schedules it).
+
+| Rule type | Fires on | Firing policy |
+|---|---|---|
+| `server_crashed` | `server.crashed` | every crash; default severity `critical` |
+| `unusual_activity` | `player.connected` when the server's connects in the last `windowMinutes` (default 5) reach `connectThreshold` | at most once per window per server |
+| `admin_login_new_ip` | `player.connected` of a player whose unexpired role has `panel_access` (or the system Owner role) from an IP missing from `player_ip_history` | evaluated **before** the identity handler records the IP |
+| `custom` | an event whose type equals `eventKind` | every match, or once per `threshold` matches when a threshold is set (the counter restarts after each firing) |
+
+`custom` rules only see the event kinds this parser emits (`server.ready`, `server.stopped`, `server.crashed`, `player.connected`, `player.disconnected`, `match.started`, `match.ended`, `rcon.connected`). Kinds raised elsewhere — `bansync.failed`, `externalban.matched`, `alt.ban_evasion_suspected`, `reports.spam_flagged`, seed notifications — keep being written by their own producers.
+
+Each firing is delivered through `src/alerts/sink.ts` (no transport is configured in any deployment yet, so `delivered` stays `false`), inserted into `alert_events`, and announced as an `alert.triggered` live-bus frame whose `data` is `{ event_kind: <rule type>, rule_id, rule_name, severity, server_id }` — never the payload, which holds an IP for `admin_login_new_ip`. `GET /api/v1/alerts` strips `payload.ip` for callers without `player:view_ips`.
+
+Redis keys:
+
+| Key | Type | Purpose |
+|---|---|---|
+| `dedup:log-ingest-alerts:v1:{event_id}` | string, `EX 86400 NX` | one evaluation per event — the tail replays its last lines on reattach |
+| `alerts:connects:{serverId}` | sorted set (score = event time, member = event id) | sliding connect window for `unusual_activity`; trimmed to the longest window |
+| `alerts:cooldown:{ruleId}:{serverId}` | string, `PX <window> NX` | `unusual_activity` once-per-window guard |
+| `alerts:custom-count:{ruleId}:{serverId}` | counter | matches since the last firing of a `custom` rule with a threshold |
+
 ## Heartbeat key: `worker:heartbeat:log-ingest`
 
 Published every 5 s, TTL 30 s. `status` field contains `"tails=N"` where N is the number of active log tails.

@@ -278,6 +278,39 @@ describeIfDb('alerts history feed (panel_access)', () => {
     expect(feed[0]?.rule_type).toBe('server_crashed');
   });
 
+  it('hides an admin_login_new_ip address from viewers without player:view_ips (#19)', async () => {
+    const { body } = await createRule(editorCookie, {
+      name: `AdminIpRule-${Date.now()}`,
+      type: 'admin_login_new_ip',
+    });
+    const ruleId = body.id as string;
+    await h.db.insert(alertEvents).values({
+      ruleId,
+      severity: 'warning',
+      payload: { eventType: 'player.connected', actorId: 'admin-player', ip: '198.51.100.42' },
+    });
+
+    const asViewer = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/alerts?rule_id=${ruleId}`,
+      headers: { cookie: viewerCookie },
+    });
+    const viewerFeed = asViewer.json() as Array<{ payload: Record<string, unknown> }>;
+    expect(viewerFeed[0]?.payload).toEqual({
+      eventType: 'player.connected',
+      actorId: 'admin-player',
+    });
+    expect(asViewer.body).not.toContain('198.51.100.42');
+
+    const asOwner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/alerts?rule_id=${ruleId}`,
+      headers: { cookie: ownerCookie },
+    });
+    const ownerFeed = asOwner.json() as Array<{ payload: Record<string, unknown> }>;
+    expect(ownerFeed[0]?.payload.ip).toBe('198.51.100.42');
+  });
+
   it('lets a panel viewer read the aggregate list of rules', async () => {
     await createRule(editorCookie);
     const res = await h.app.inject({

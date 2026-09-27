@@ -221,6 +221,9 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
       // `role_expiring` reminders are admin-audience alerts: hidden unless the
       // caller holds can_assign_roles (mirrors the live-bus frame gating).
       const canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
+      // `admin_login_new_ip` alerts (#19) record the admin's address; it is
+      // an IP like any other and stays behind player:view_ips.
+      const canViewIps = req.user?.permissions.permissions.has('player:view_ips') ?? false;
       const ruleFilter = req.query.rule_id ? eq(alertEvents.ruleId, req.query.rule_id) : undefined;
       const visibilityFilter = canAssignRoles
         ? undefined
@@ -245,16 +248,19 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
         .where(conditions)
         .orderBy(desc(alertEvents.triggeredAt))
         .limit(req.query.limit);
-      return rows.map((row) => ({
-        id: row.id,
-        rule_id: row.rule_id,
-        rule_name: row.rule_name,
-        rule_type: row.rule_type,
-        triggered_at: row.triggered_at.toISOString(),
-        payload: (row.payload ?? {}) as Record<string, unknown>,
-        severity: row.severity,
-        delivered: row.delivered,
-      }));
+      return rows.map((row) => {
+        const { ip, ...withoutIp } = (row.payload ?? {}) as Record<string, unknown>;
+        return {
+          id: row.id,
+          rule_id: row.rule_id,
+          rule_name: row.rule_name,
+          rule_type: row.rule_type,
+          triggered_at: row.triggered_at.toISOString(),
+          payload: canViewIps && ip !== undefined ? { ...withoutIp, ip } : withoutIp,
+          severity: row.severity,
+          delivered: row.delivered,
+        };
+      });
     },
   );
 };

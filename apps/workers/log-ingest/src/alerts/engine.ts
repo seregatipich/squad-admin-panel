@@ -30,11 +30,12 @@ export interface SeverityOverrideConfig {
   severity?: AlertSeverity;
 }
 
-export type AlertRuleConfig =
-  | UnusualActivityConfig
-  | CustomConfig
-  | SeverityOverrideConfig
-  | Record<string, unknown>;
+/**
+ * Per-type rule configuration. The engine trusts this shape: rows loaded from
+ * `alert_rules` are validated against it by `AlertRuleCache` (`store.ts`)
+ * before they ever reach {@link evaluate}.
+ */
+export type AlertRuleConfig = UnusualActivityConfig | CustomConfig | SeverityOverrideConfig;
 
 export interface AlertRuleInput {
   id: string;
@@ -48,6 +49,8 @@ export interface AlertRuleInput {
 export interface AdminContext {
   isPanelAdmin: boolean;
   knownIps: readonly string[];
+  /** Panel `players.id` of the connecting admin; reported as the alert's `actorId`. */
+  playerId?: string | null;
 }
 
 export interface EvaluationContext {
@@ -126,7 +129,7 @@ function evaluateAdminLoginNewIp(
     payload: {
       eventType: event.type,
       serverId: event.server_id,
-      actorId: event.actor?.id ?? null,
+      actorId: admin.playerId ?? event.actor?.id ?? null,
       ip,
     },
   };
