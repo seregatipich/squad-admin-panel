@@ -264,6 +264,50 @@ describeIfDb('PUT /api/v1/settings/economy', () => {
     expect(res.json()).toEqual({ error: 'seed_reward_role_requires_no_panel_access' });
   });
 
+  it('rejects a seed reward role without a positive monthly threshold with 422', async () => {
+    const [before] = await h.db
+      .select({
+        threshold: economySettings.seedRewardThresholdHoursPerMonth,
+        roleId: economySettings.seedRewardRoleId,
+      })
+      .from(economySettings)
+      .where(eq(economySettings.id, 1));
+    const zeroRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: zeroRoleId,
+      name: `SeedZeroReward_${zeroRoleId}`,
+      color: '#8B5CF6',
+      panelAccess: false,
+    });
+
+    const withNewRole = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: { seed_reward_threshold_hours_per_month: 0, seed_reward_role_id: zeroRoleId },
+    });
+    expect(withNewRole.statusCode).toBe(422);
+    expect(withNewRole.json()).toEqual({ error: 'seed_reward_threshold_required' });
+
+    const zeroingConfiguredRole = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: { seed_reward_threshold_hours_per_month: 0 },
+    });
+    expect(zeroingConfiguredRole.statusCode).toBe(422);
+    expect(zeroingConfiguredRole.json()).toEqual({ error: 'seed_reward_threshold_required' });
+
+    const [after] = await h.db
+      .select({
+        threshold: economySettings.seedRewardThresholdHoursPerMonth,
+        roleId: economySettings.seedRewardRoleId,
+      })
+      .from(economySettings)
+      .where(eq(economySettings.id, 1));
+    expect(after).toEqual(before);
+  });
+
   it('rejects a negative coefficient with 400', async () => {
     const res = await h.app.inject({
       method: 'PUT',

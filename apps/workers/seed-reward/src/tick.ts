@@ -73,7 +73,7 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
         component: 'worker-seed-reward',
         kind: 'seed_reward.run_ok',
         severity: 'info',
-        message: 'seed reward role is not configured',
+        message: 'seed reward role or positive threshold is not configured',
         payload: { skipped: true, granted: 0, revoked: 0, enqueued: 0 },
       });
       return { skipped: true, granted: 0, revoked: 0, enqueued: 0 };
@@ -139,8 +139,14 @@ export function rollingSeedRewardWindow(now: Date): { fromDay: string; toDay: st
 
 /**
  * Apply reward grants and revocations atomically and write their audit rows.
- * A conditional update protects a concurrent manual ROLE-2 assignment from
- * being overwritten after the reconciliation snapshot was read.
+ *
+ * The reward is granted only to qualifying players who hold no role, and
+ * revoked only from players who still hold the reward role, so a manually
+ * assigned role (Owner, staff, VIP, a time-bounded grant) is never replaced or
+ * cleared (#8). A zero threshold would qualify every player in the table, so
+ * reconciliation is skipped (`configured: false`) until the threshold is
+ * positive. A conditional update protects a concurrent manual ROLE-2
+ * assignment from being overwritten after the reconciliation snapshot was read.
  */
 export async function reconcileSeedRewardAssignments(
   db: DatabaseClient,
@@ -158,7 +164,7 @@ export async function reconcileSeedRewardAssignments(
       .limit(1);
     const rewardRoleId = settings?.rewardRoleId ?? null;
     const thresholdSeconds = (settings?.thresholdHours ?? 0) * SECONDS_PER_HOUR;
-    if (!rewardRoleId) {
+    if (!rewardRoleId || thresholdSeconds <= 0) {
       return {
         configured: false,
         ...window,
@@ -178,11 +184,6 @@ export async function reconcileSeedRewardAssignments(
     if (rewardRole.panelAccess) {
       throw new Error('configured seed reward role must not grant panel access');
     }
-    const [ownerRole] = await tx
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
-      .limit(1);
 
     const states = await tx
       .select({
@@ -205,11 +206,10 @@ export async function reconcileSeedRewardAssignments(
 
     const changes: SeedRewardChange[] = [];
     for (const state of states) {
-      if (ownerRole && state.currentRoleId === ownerRole.id) continue;
       const seedSeconds = Number(state.seedSeconds);
       const qualifies = seedSeconds >= thresholdSeconds;
       const kind: SeedRewardChangeKind | null =
-        qualifies && state.currentRoleId !== rewardRoleId
+        qualifies && state.currentRoleId === null
           ? 'granted'
           : !qualifies && state.currentRoleId === rewardRoleId
             ? 'revoked'
