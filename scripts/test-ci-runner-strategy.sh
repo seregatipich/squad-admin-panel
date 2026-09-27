@@ -127,7 +127,7 @@ done
 lint=$(job_block "$ci_workflow" lint)
 for command in 'pnpm exec biome check .' 'bash scripts/test-cov-complete.sh' \
   'pnpm run solve:issues:test' 'pnpm turbo run typecheck --concurrency=4' \
-  './gitleaks detect --config .gitleaks.toml'; do
+  './gitleaks detect --config .github/gitleaks.toml'; do
   has_text "$lint" "$command" || fail "lint does not run '$command'"
 done
 printf '%s\n' "$lint" | grep -Eq 'uses:[[:space:]]+actions/cache@[0-9a-f]{40}' ||

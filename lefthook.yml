@@ -31,7 +31,7 @@ pre-commit:
           echo "[gitleaks] skipping the staged secret scan: gitleaks is not installed"
           exit 0
         fi
-        gitleaks protect --staged --config .gitleaks.toml --no-banner --redact
+        gitleaks protect --staged --config .github/gitleaks.toml --no-banner --redact
 
 pre-push:
   parallel: false
