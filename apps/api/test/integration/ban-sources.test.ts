@@ -395,6 +395,41 @@ describeIfDb('ban-sources mutations are audited', () => {
   });
 });
 
+// Audit #100 — the ban-sync worker fetches the stored URL unattended, so it
+// must not point into the panel's own network.
+describeIfDb('ban-source URLs cannot target internal addresses', () => {
+  it.each([
+    'http://redis:6379/',
+    'http://postgres:5432/',
+    'http://127.0.0.1:3000/api/v1/me',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.8/bans.cfg',
+    'http://[::1]/bans.cfg',
+    'http://localhost/bans.cfg',
+    'ftp://collabans.example.com/bans.cfg',
+  ])('rejects creating a source at %s with 400', async (url) => {
+    const res = await createSource(managerCookie, { url });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('url_not_allowed');
+  });
+
+  it('rejects moving an existing source to an internal address with 400', async () => {
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id as string}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data/' }),
+    });
+    expect(res.statusCode).toBe(400);
+    const [row] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, body.id as string));
+    expect(row?.url).toBe('https://collabans.example.com/bans.cfg');
+  });
+});
+
 // Audit #102 — the routes used to write their entry by hand on the success
 // path only; the declarative hook records every outcome.
 describeIfDb('ban-sources audit covers denied and rejected attempts', () => {

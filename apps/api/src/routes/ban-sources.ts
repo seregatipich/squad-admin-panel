@@ -1,4 +1,5 @@
 import { externalBanSources, externalBans } from '@squad/db/schema';
+import { checkOutboundUrl } from '@squad/shared-config';
 import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -11,9 +12,26 @@ const BAN_SOURCE_FORMATS = ['squad_bans_cfg', 'battlemetrics_json', 'json_generi
 const TRUST_LEVELS = ['trusted', 'normal', 'low'] as const;
 const ON_MATCH_ACTIONS = ['none', 'alert', 'kick'] as const;
 
+/**
+ * A ban-source URL is fetched unattended by `worker-ban-sync`, so it must not
+ * reach the panel's own network (audit #100): `checkOutboundUrl` refuses
+ * non-http(s) schemes, embedded credentials, Compose service names and
+ * non-public IP literals. The worker re-checks every resolved address.
+ */
+const sourceUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .superRefine((value, ctx) => {
+    const check = checkOutboundUrl(value);
+    if (!check.ok) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `url_not_allowed: ${check.reason}` });
+    }
+  });
+
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
-  url: z.string().url().max(2048),
+  url: sourceUrl,
   format: z.enum(BAN_SOURCE_FORMATS),
   trust_level: z.enum(TRUST_LEVELS).default('normal'),
   on_match: z.enum(ON_MATCH_ACTIONS).default('alert'),
@@ -26,7 +44,7 @@ const createBody = z.object({
 
 const updateBody = z.object({
   name: z.string().trim().min(1).max(128).optional(),
-  url: z.string().url().max(2048).optional(),
+  url: sourceUrl.optional(),
   format: z.enum(BAN_SOURCE_FORMATS).optional(),
   trust_level: z.enum(TRUST_LEVELS).optional(),
   on_match: z.enum(ON_MATCH_ACTIONS).optional(),

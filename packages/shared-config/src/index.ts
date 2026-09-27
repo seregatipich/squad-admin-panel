@@ -12,6 +12,7 @@ export * from './log-stream.js';
 export * from './log-stream-sink.js';
 export * from './map-vote-selection.js';
 export * from './metrics-pack.js';
+export * from './outbound-url.js';
 export * from './permissions.js';
 export * from './player-name.js';
 export * from './rcon-host.js';
