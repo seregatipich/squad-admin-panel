@@ -1,8 +1,10 @@
+import type { SquadCrown } from '@squad/shared-types';
 import { describe, expect, it } from 'vitest';
 import {
   buildRosterResponse,
   buildSquadMeta,
   collectRosterLookups,
+  parseStoredCrowns,
   parseStoredRoster,
   parseStoredSquads,
   type StoredRoster,
@@ -15,6 +17,21 @@ const LINKED_EOS = 'aaaa0123456789abcdef0123456789ab';
 const EOS_ONLY = 'bbbb0123456789abcdef0123456789ab';
 const UNKNOWN_EOS = 'cccc0123456789abcdef0123456789ab';
 const LINKED_STEAM = '76561198012345678';
+
+const CROWN: SquadCrown = {
+  color: 'grey',
+  squads: [
+    {
+      squad_name: 'INF',
+      team_id: 1,
+      squad_id: 2,
+      created_at: '2026-07-05T09:40:00.000Z',
+      handoffs: [{ to_name: 'Stranger', reason: 'passed', at: '2026-07-05T09:50:00.000Z' }],
+      disbanded_at: null,
+      abandoned_at: null,
+    },
+  ],
+};
 
 function entry(overrides: Partial<StoredRosterEntry>): StoredRosterEntry {
   return {
@@ -127,6 +144,23 @@ describe('buildSquadMeta', () => {
   });
 });
 
+describe('parseStoredCrowns', () => {
+  it('returns an empty map without a hash', () => {
+    expect(parseStoredCrowns(null).size).toBe(0);
+    expect(parseStoredCrowns({}).size).toBe(0);
+  });
+
+  it('keeps valid fields and drops malformed ones', () => {
+    const crowns = parseStoredCrowns({
+      [LINKED_EOS]: JSON.stringify(CROWN),
+      [EOS_ONLY]: '{not json',
+      [UNKNOWN_EOS]: JSON.stringify({ color: 'gold', squads: [] }),
+    });
+    expect([...crowns.keys()]).toEqual([LINKED_EOS]);
+    expect(crowns.get(LINKED_EOS)).toEqual(CROWN);
+  });
+});
+
 describe('collectRosterLookups', () => {
   it('collects EOS ids and only non-null steam ids', () => {
     const { eosIds, steamIds } = collectRosterLookups([
@@ -206,5 +240,19 @@ describe('buildRosterResponse', () => {
       },
     ]);
     expect(response.players[0]?.player_id).toBe('by-steam');
+  });
+
+  it("attaches each player's crown by EOS id and null to everyone else", () => {
+    const stored = storedRoster([
+      entry({ eos_id: LINKED_EOS }),
+      entry({ eos_id: EOS_ONLY, steam_id64: null }),
+    ]);
+    const response = buildRosterResponse(stored, [], null, new Map([[LINKED_EOS, CROWN]]));
+    expect(response.players[0]?.squad_crown).toEqual(CROWN);
+    expect(response.players[1]?.squad_crown).toBeNull();
+  });
+
+  it('defaults every crown to null', () => {
+    expect(buildRosterResponse(storedRoster([entry({})]), []).players[0]?.squad_crown).toBeNull();
   });
 });
