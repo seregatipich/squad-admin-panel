@@ -224,6 +224,63 @@ describe('status-reconciler tick', () => {
   });
 });
 
+describe('reconciler — crash detection while the status stays running (#37)', () => {
+  function runningInspect(restartCount: number): IntegrationHarness['bridge']['containerInspect'] {
+    return async ({ name }) => ({
+      name,
+      state: 'running',
+      running: true,
+      pid: 4242,
+      started_at: '2026-04-26T00:00:00Z',
+      finished_at: '2026-04-26T00:00:00Z',
+      exit_code: 137,
+      oom_killed: false,
+      image: 'squad-server:latest',
+      restart_count: restartCount,
+      labels: {},
+    });
+  }
+
+  it('records a crash when Docker restarted the container between ticks, and fails a crash loop', async () => {
+    const id = await createServer();
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const statusFrames: Array<{ status: string; source: string }> = [];
+    const unsubscribe = h.app.liveBus.subscribe((event) => {
+      if (event.type === 'server.status' && event.data.server_id === id) {
+        statusFrames.push({ status: event.data.status, source: event.data.source });
+      }
+    });
+    try {
+      // First observation only sets the restart-count baseline.
+      h.bridge.containerInspect = runningInspect(0);
+      await h.app.statusReconciler.tickNow();
+      expect(await h.redis.zcard(`crashes:${id}`)).toBe(0);
+
+      // Docker's restart policy brought the crashed container back before the
+      // next tick: running → running, restart_count 0 → 1.
+      h.bridge.containerInspect = runningInspect(1);
+      await h.app.statusReconciler.tickNow();
+      expect(await h.redis.zcard(`crashes:${id}`)).toBe(1);
+      expect(statusFrames).toContainEqual({ status: 'running', source: 'crash_detected' });
+
+      h.bridge.containerInspect = runningInspect(2);
+      await h.app.statusReconciler.tickNow();
+      h.bridge.containerInspect = runningInspect(3);
+      await h.app.statusReconciler.tickNow();
+
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+      expect(row?.status).toBe('failed');
+      expect(statusFrames).toContainEqual({ status: 'failed', source: 'crash_loop' });
+    } finally {
+      unsubscribe();
+      await h.redis.del(`crashes:${id}`);
+    }
+  });
+});
+
 describe('POST /api/v1/servers/:id/reconcile', () => {
   it('forces an immediate reconcile and returns the resulting state', async () => {
     const cookie = await loginAsOwner(h);
