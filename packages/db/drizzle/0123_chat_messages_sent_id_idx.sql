@@ -1,0 +1,11 @@
+-- B-tree on (sent_at, id) for chat_messages (#36). The chat-flag reindex
+-- (apps/api/src/lib/chat-flags.ts) walks the table with a keyset
+-- `ORDER BY sent_at, id LIMIT 500`; with only a BRIN on sent_at and indexes
+-- led by player_id/server_id, every page re-scanned and top-N sorted the
+-- whole remaining range. Created on the partitioned parent, so Postgres
+-- builds it on every existing partition and on each partition created later.
+-- Not CONCURRENTLY: that is not supported on a partitioned table; the build
+-- briefly blocks chat inserts on each partition while it runs.
+--
+-- Rollback-safe: an extra index the previous release simply ignores.
+CREATE INDEX IF NOT EXISTS chat_messages_sent_id_idx ON chat_messages (sent_at, id);

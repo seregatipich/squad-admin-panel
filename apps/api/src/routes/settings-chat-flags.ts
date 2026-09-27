@@ -18,6 +18,11 @@ const idParam = z.object({ id: z.string().uuid() });
 
 const REINDEX_DAYS_MAX = 365;
 
+/** Redis key that serialises reindex runs. */
+export const CHAT_REINDEX_LOCK_KEY = 'chat-flags:reindex:lock';
+/** Upper bound on one reindex; the lock expires even if the process dies mid-run. */
+const CHAT_REINDEX_LOCK_TTL_MS = 15 * 60_000;
+
 const listQuery = z.object({
   search: z.string().trim().max(256).optional(),
   pattern_type: patternTypeSchema.optional(),
@@ -346,7 +351,25 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
-      const summary = await reindexChatFlags(app.db, { days: req.body.days });
+      // One run at a time: two concurrent reindexes would scan and rewrite the
+      // same rows twice and hold two pool connections for the duration (#36).
+      const acquired = await app.redis.set(
+        CHAT_REINDEX_LOCK_KEY,
+        req.id,
+        'PX',
+        CHAT_REINDEX_LOCK_TTL_MS,
+        'NX',
+      );
+      if (acquired !== 'OK') {
+        reply.code(409);
+        return { error: 'reindex_in_progress' };
+      }
+      let summary: Awaited<ReturnType<typeof reindexChatFlags>>;
+      try {
+        summary = await reindexChatFlags(app.db, { days: req.body.days });
+      } finally {
+        await app.redis.del(CHAT_REINDEX_LOCK_KEY);
+      }
       await auditMutation(req, reply, {
         action: 'chat_flag_rule.reindex',
         targetId: `days:${summary.days}`,
