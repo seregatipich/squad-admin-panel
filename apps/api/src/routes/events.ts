@@ -1,9 +1,10 @@
-import { events, playerNameHistory, players, servers } from '@squad/db/schema';
+import { events, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
+import { playerNameMatch } from '../lib/player-name-search.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
@@ -39,10 +40,6 @@ type OrderDir = z.infer<typeof orderSchema>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 interface Cursor {
@@ -163,27 +160,6 @@ function csvRow(row: EventFullRow, includeIps: boolean): string {
 const eventsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolvePlayerIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    const pattern = `%${escapeLike(normalized)}%`;
-
-    const canonicalRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    for (const row of canonicalRows) ids.add(row.id);
-
-    const historyRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of historyRows) ids.add(row.id);
-
-    return Array.from(ids);
-  }
-
   async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
     const clauses: SQL[] = [];
 
@@ -199,9 +175,9 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (query.playerId) {
       clauses.push(eq(events.actorId, query.playerId));
     } else if (query.playerQuery) {
-      const playerIds = await resolvePlayerIds(query.playerQuery);
-      if (playerIds.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(events.actorId, playerIds));
+      const byName = playerNameMatch(events.actorId, query.playerQuery);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     // BANNAME-3: lets /banned-names link a rule's row to «its» events (e.g.

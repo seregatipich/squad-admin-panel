@@ -1,8 +1,9 @@
-import { gameVoteBallots, gameVotes, playerNameHistory, players, servers } from '@squad/db/schema';
+import { gameVoteBallots, gameVotes, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { playerNameMatch } from '../lib/player-name-search.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
@@ -37,10 +38,6 @@ type OrderDir = z.infer<typeof orderSchema>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
@@ -126,27 +123,6 @@ function serializeVote(row: VoteListRow) {
 const votesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolveInitiatorIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    const pattern = `%${escapeLike(normalized)}%`;
-
-    const canonicalRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    for (const row of canonicalRows) ids.add(row.id);
-
-    const historyRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of historyRows) ids.add(row.id);
-
-    return Array.from(ids);
-  }
-
   async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
     const clauses: SQL[] = [];
 
@@ -165,9 +141,9 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
     if (query.initiatorPlayerId) {
       clauses.push(eq(gameVotes.initiatorPlayerId, query.initiatorPlayerId));
     } else if (query.initiatorQuery) {
-      const initiatorIds = await resolveInitiatorIds(query.initiatorQuery);
-      if (initiatorIds.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(gameVotes.initiatorPlayerId, initiatorIds));
+      const byName = playerNameMatch(gameVotes.initiatorPlayerId, query.initiatorQuery);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     return { clauses, empty: false };

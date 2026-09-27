@@ -295,6 +295,19 @@ describeIfDb('events API (EVT-2)', () => {
     expect(none.items).toEqual([]);
   });
 
+  // Audit #118 — the query is normalised like the stored name, so a search
+  // that carries a clan tag still finds the player.
+  it('searches player by a nickname typed with a clan tag', async () => {
+    const server = await seedServer(h.db, 'EvtClanTagSrv');
+    const uniqueNick = `Krypton-${uuidv7().slice(0, 8)}`;
+    const player = await seedPlayer(h.db, { name: uniqueNick });
+    const wanted = await seedEvent(h.db, { serverId: server, occurredAt: at(42), actorId: player });
+
+    const query = encodeURIComponent(`[TAG]  ${uniqueNick.slice(0, 10)}`);
+    const found = await listEvents(`?serverId=${server}&playerQuery=${query}`);
+    expect(found.items.map((event) => event.event_id)).toEqual([wanted]);
+  });
+
   it('sorts by occurred_at in both directions', async () => {
     const server = await seedServer(h.db, 'EvtSortSrv');
     const early = await seedEvent(h.db, { serverId: server, occurredAt: at(50) });

@@ -342,6 +342,17 @@ describeIfDb('GET /api/v1/chat/messages — filters', () => {
     expect(body.items.every((item) => item.player.id === p1Id)).toBe(true);
   });
 
+  // Audit #118 — clan-tagged searches match the normalised stored name.
+  it('resolves playerQuery typed with a clan tag', async () => {
+    const body = await list(
+      ownerCookie,
+      `?playerQuery=${encodeURIComponent('[CLAN] Alpha')}&limit=300`,
+    );
+    expect(body.items).toHaveLength(3);
+    expect(body.items.every((item) => item.player.id === p1Id)).toBe(true);
+    expect(await count(ownerCookie, `?playerQuery=${encodeURIComponent('[CLAN] Alpha')}`)).toBe(3);
+  });
+
   it('resolves playerQuery by an older nickname no longer canonical', async () => {
     const body = await list(ownerCookie, '?playerQuery=oldalpha&limit=300');
     expect(body.items).toHaveLength(3);
