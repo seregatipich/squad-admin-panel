@@ -11,7 +11,13 @@ import {
 } from '@squad/db';
 import type { Diag } from '@squad/diag';
 import type { RconRefreshScope } from '@squad/shared-config';
-import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
+import {
+  CONSUMER_GROUP,
+  type EventEnvelope,
+  SQUAD_CROWNS_TTL_SECONDS,
+  STREAM_NAME,
+  squadCrownsKey,
+} from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
@@ -32,6 +38,14 @@ import {
 } from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
 import { computeSeedingTick, isSeedLayer, type SeedingState } from './seeding.js';
+import { parseSquadCreatedBroadcast, type SquadCreatedBroadcast } from './squad-broadcast.js';
+import { applySquadEvent, type CrownBook, crownBookFromHash, crownOf } from './squad-crowns.js';
+import {
+  buildSquadSnapshot,
+  diffSquads,
+  type SquadEvent,
+  type SquadSnapshot,
+} from './squad-tracker.js';
 
 /** Defaults mirror `server_settings.seed_live_at` / `seed_hysteresis` (SEED-1, #140). */
 const DEFAULT_SEED_LIVE_AT = 60;
@@ -49,6 +63,8 @@ const DEFAULT_HINT_DEBOUNCE_MS = 100;
  * them and the second one catches them without waiting for the timer.
  */
 const DEFAULT_HINT_FOLLOW_UP_MS = 1_500;
+/** A squad-creation broadcast waits this long for the roster refresh that first lists its squad. */
+const SQUAD_BROADCAST_TTL_MS = 10_000;
 
 /**
  * The `rcon:status` fields the panel renders. `rcon:status:changed` is
@@ -190,13 +206,15 @@ export class RconSupervisor {
 
   /**
    * Routes a refresh hint (see `RCON_REFRESH_CHANNEL`) to the server's
-   * supervisor. Returns false when this worker does not poll that server —
-   * it is stopped, or its hint raced a reconcile — and the hint is dropped.
+   * supervisor. `reason` is the log event that caused it; `match.started` and
+   * `match.ended` also reset the server's squad history. Returns false when
+   * this worker does not poll that server (it is stopped, or its hint raced a
+   * reconcile) and the hint is dropped.
    */
-  hint(serverId: string, scopes: RconRefreshScope[]): boolean {
+  hint(serverId: string, scopes: RconRefreshScope[], reason?: string): boolean {
     const sup = this.supervisors.get(serverId);
     if (!sup) return false;
-    sup.requestRefresh(scopes);
+    sup.requestRefresh(scopes, reason);
     return true;
   }
 }
@@ -250,6 +268,24 @@ class PerServerSupervisor {
   private seedingState: SeedingState | null = null;
   private seedingStateLoaded = false;
   private readonly layerIsSeedCache = new Map<string, boolean | null>();
+  /**
+   * Squad history (see `squad-tracker.ts`). `squadState` is the previous
+   * refresh's snapshot; `null` makes the next refresh a baseline (worker start,
+   * RCON reconnect, match reset).
+   */
+  private squadState: SquadSnapshot | null = null;
+  /** Set by a `match.started`/`match.ended` hint; consumed by the next {@link trackSquads}. */
+  private squadResetPending = false;
+  /**
+   * Set by `match.ended`: every snapshot stays a baseline until one lists no
+   * squads (the next map loaded) or `match.started` arrives, so the old map's
+   * squads vanishing is never reported as disbands.
+   */
+  private squadHoldUntilEmpty = false;
+  /** Parsed creation broadcasts waiting for the refresh that lists their squad. */
+  private pendingSquadBroadcasts: SquadCreatedBroadcast[] = [];
+  /** Current match's creator histories, mirrored into `rcon:squad-crowns:{id}`. */
+  private crownBook: CrownBook = new Map();
 
   constructor(
     private readonly target: Target,
@@ -260,6 +296,7 @@ class PerServerSupervisor {
 
   async start(): Promise<void> {
     await this.loadPriorSeedingState();
+    await this.loadPriorCrowns();
     this.connectLoop().catch((err) =>
       this.opts.log.error(
         { err: (err as Error).message, serverId: this.target.serverId },
@@ -280,6 +317,21 @@ class PerServerSupervisor {
       }
     } catch {
       // best-effort restore; a missing/invalid key just means we start fresh
+    }
+  }
+
+  /**
+   * Restores the current match's crowns after a worker restart so a creator's
+   * later handoffs extend the stored entry instead of replacing it.
+   * Best-effort: a missing or unreadable hash starts the match history empty.
+   */
+  private async loadPriorCrowns(): Promise<void> {
+    try {
+      this.crownBook = crownBookFromHash(
+        await this.opts.redis.hgetall(squadCrownsKey(this.target.serverId)),
+      );
+    } catch {
+      this.crownBook = new Map();
     }
   }
 
@@ -603,21 +655,165 @@ class PerServerSupervisor {
   }
 
   /**
+   * Turns this refresh's `ListSquads` + `ListPlayers` into squad history:
+   * persists each `squad.*` event and keeps `rcon:squad-crowns:{id}` current.
+   * Never throws: squad history is a moderation aid and must not cost the
+   * roster its refresh.
+   *
+   * A `match.started`/`match.ended` hint clears the crowns and makes this
+   * snapshot a baseline; after `match.ended` snapshots stay baselines until one
+   * lists no squads (see {@link squadHoldUntilEmpty}). The broadcast queue is
+   * filtered, diffed and replaced without an `await` in between, so a
+   * broadcast arriving meanwhile is never lost.
+   */
+  private async trackSquads(
+    squads: RconSquad[],
+    players: RconPlayer[],
+    polledAt: string,
+  ): Promise<void> {
+    try {
+      if (this.squadResetPending) {
+        this.squadResetPending = false;
+        this.squadState = null;
+        this.pendingSquadBroadcasts = [];
+        await this.clearCrowns();
+      }
+      if (this.squadHoldUntilEmpty) {
+        this.squadState = null;
+        if (squads.length === 0) this.squadHoldUntilEmpty = false;
+      }
+      const cutoff = Date.parse(polledAt) - SQUAD_BROADCAST_TTL_MS;
+      const fresh = this.pendingSquadBroadcasts.filter(
+        (broadcast) => Date.parse(broadcast.at) >= cutoff,
+      );
+      const diff = diffSquads(
+        this.squadState,
+        buildSquadSnapshot(squads, players, polledAt),
+        fresh,
+      );
+      this.squadState = diff.state;
+      this.pendingSquadBroadcasts = diff.pending;
+      if (diff.reset) {
+        await this.clearCrowns();
+        return;
+      }
+      const changedCreators = new Set<string>();
+      for (const event of diff.events) {
+        await this.emitSquadEvent(event);
+        const creator = applySquadEvent(this.crownBook, event);
+        if (creator) changedCreators.add(creator);
+      }
+      await this.writeCrowns(changedCreators);
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'squad tracking failed',
+      );
+    }
+  }
+
+  /**
+   * Publishes one squad lifecycle event the way {@link emitSeedingTransition}
+   * does: XADD to the server stream and a direct `events` insert, because
+   * stream events are otherwise never persisted. `actor_id` is the EOS id of
+   * the player the event is about (the creator, or the leader who gave up
+   * command), so `events_actor_occurred_idx` serves per-player lookups.
+   */
+  private async emitSquadEvent(event: SquadEvent): Promise<void> {
+    const eventId = uuidv7();
+    const actorId =
+      event.type === 'squad.leader_changed'
+        ? event.payload.from.eos_id
+        : event.payload.creator.eos_id;
+    const envelope: EventEnvelope = {
+      event_id: eventId,
+      version: 1,
+      type: event.type,
+      server_id: this.target.serverId,
+      ts: event.at,
+      actor: { kind: 'player', id: actorId },
+      correlation_id: null,
+      payload: event.payload,
+    };
+    try {
+      await this.opts.redis.xadd(
+        STREAM_NAME.eventsServer(this.target.serverId),
+        'MAXLEN',
+        '~',
+        '10000',
+        '*',
+        'envelope',
+        JSON.stringify(envelope),
+      );
+    } catch (err) {
+      this.opts.log.warn({ err: (err as Error).message, type: event.type }, 'event publish failed');
+    }
+    try {
+      await this.opts.db
+        .insert(events)
+        .values({
+          eventId,
+          serverId: this.target.serverId,
+          occurredAt: new Date(event.at),
+          kind: event.type,
+          version: 1,
+          actorKind: 'player',
+          actorId,
+          correlationId: null,
+          payload: event.payload,
+        })
+        .onConflictDoNothing({ target: [events.eventId, events.occurredAt] });
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, type: event.type },
+        'squad event persist failed',
+      );
+    }
+  }
+
+  /** Writes the crowns of `creators` that have one and refreshes the hash TTL. */
+  private async writeCrowns(creators: ReadonlySet<string>): Promise<void> {
+    const fields: Record<string, string> = {};
+    for (const eosId of creators) {
+      const history = this.crownBook.get(eosId);
+      const crown = history ? crownOf(history) : null;
+      if (crown) fields[eosId] = JSON.stringify(crown);
+    }
+    if (Object.keys(fields).length === 0) return;
+    const key = squadCrownsKey(this.target.serverId);
+    await this.opts.redis.hset(key, fields);
+    await this.opts.redis.expire(key, SQUAD_CROWNS_TTL_SECONDS);
+  }
+
+  /** Forgets the match's crowns, in memory and in Redis. */
+  private async clearCrowns(): Promise<void> {
+    this.crownBook = new Map();
+    await this.opts.redis.del(squadCrownsKey(this.target.serverId));
+  }
+
+  /**
    * Handle one unsolicited RCON packet.
    *
-   * Squad delivers in-game chat only this way — it is not in SquadGame.log —
-   * so this is the sole live-chat producer for a running server. Non-chat
-   * broadcasts (admin camera, squad creation, kicks) parse to null and are
-   * ignored.
+   * A squad-creation notice is queued for the next roster refresh, which dates
+   * the new squad by it (see {@link trackSquads}). Squad delivers in-game chat
+   * only this way (it is not in SquadGame.log), so this is the sole live-chat
+   * producer for a running server. Other broadcasts (admin camera, kicks)
+   * parse to null and are ignored.
    *
-   * Ingestion is queued rather than fired off per packet: each message costs
-   * several identity queries plus an insert, and a chat flood would otherwise
-   * open them all at once and let the archive rows land out of order. The
-   * queue is per server and never awaited by the caller, so a slow database
-   * cannot stall the socket's read loop or the poll timers.
+   * Chat ingestion is queued rather than fired off per packet: each message
+   * costs several identity queries plus an insert, and a chat flood would
+   * otherwise open them all at once and let the archive rows land out of
+   * order. The queue is per server and never awaited by the caller, so a slow
+   * database cannot stall the socket's read loop or the poll timers.
    */
   private ingestBroadcast(body: string): void {
-    const chat = parseRconChatLine(body, new Date().toISOString());
+    const receivedAt = new Date().toISOString();
+    const squadCreated = parseSquadCreatedBroadcast(body, receivedAt);
+    if (squadCreated) {
+      this.pendingSquadBroadcasts.push(squadCreated);
+      return;
+    }
+    const chat = parseRconChatLine(body, receivedAt);
     if (!chat) return;
     this.chatQueue = this.chatQueue
       .then(() =>
@@ -681,6 +877,9 @@ class PerServerSupervisor {
         );
         this.backoffMs = this.opts.initialBackoffMs ?? 1000;
         this.lastKitAccrualAt = null;
+        // Squads may have changed while the connection was down: the first
+        // refresh on this connection is a baseline, never a burst of events.
+        this.squadState = null;
         await this.emitEvent('rcon.connected', {});
         await this.emitDiag({
           kind: 'rcon.connected',
@@ -842,15 +1041,24 @@ class PerServerSupervisor {
   }
 
   /**
-   * Asks for an out-of-band refresh because something just changed — a log
+   * Asks for an out-of-band refresh because something just changed: a log
    * line announced a join, a leave or a new match, or the connection just
    * came up. Hints inside `hintDebounceMs` share one RCON round-trip; if a
    * timer holds the client, the hint waits for it rather than being dropped.
    * A roster hint is repeated once after `hintFollowUpMs` (see
-   * {@link DEFAULT_HINT_FOLLOW_UP_MS}). No-op while disconnected: the connect
-   * path requests a full refresh itself.
+   * {@link DEFAULT_HINT_FOLLOW_UP_MS}). `reason` `match.ended` /
+   * `match.started` also resets squad history (see {@link trackSquads}), even
+   * while disconnected. Otherwise a no-op while disconnected: the connect path
+   * requests a full refresh itself.
    */
-  requestRefresh(scopes: RconRefreshScope[]): void {
+  requestRefresh(scopes: RconRefreshScope[], reason?: string): void {
+    if (reason === 'match.ended') {
+      this.squadResetPending = true;
+      this.squadHoldUntilEmpty = true;
+    } else if (reason === 'match.started') {
+      this.squadResetPending = true;
+      this.squadHoldUntilEmpty = false;
+    }
     if (!this.client || this.stopped) return;
     for (const scope of scopes) this.pendingHints.add(scope);
     if (this.hintTimer) return;
@@ -888,8 +1096,9 @@ class PerServerSupervisor {
    * Refreshes only who is on the server and in which squad, every
    * `rosterIntervalMs` and on every roster hint, publishes `rcon.roster` — the
    * event the panel's live roster redraws on — and carries the new player and
-   * squad counts into `rcon:status`. It deliberately does NOT touch the
-   * database, kit time, seeding or A2S: those belong to the full poll, and
+   * squad counts into `rcon:status`. Apart from the rare squad lifecycle event
+   * ({@link trackSquads}) it deliberately does NOT touch the database, kit
+   * time, seeding or A2S: those belong to the full poll, and
    * running them this often would multiply the write load for data that
    * changes once a match, not once a squad join.
    */
@@ -911,6 +1120,7 @@ class PerServerSupervisor {
       this.rosterFirstSeen = firstSeen;
       await this.writeRoster(entries, polledAt);
       await this.writeSquads(squads, polledAt);
+      await this.trackSquads(squads, players, polledAt);
       if (this.client && !this.stopped) {
         await this.writeStatus('connected', {
           player_count: players.length,
@@ -1001,6 +1211,7 @@ class PerServerSupervisor {
         this.lastSuccessfulPollAt = pollAt;
         await this.writeRoster(entries, polledAt);
         await this.writeSquads(squads, polledAt);
+        await this.trackSquads(squads, players, polledAt);
         const pollMs = Date.now() - start;
         this.opts.log.info(
           {

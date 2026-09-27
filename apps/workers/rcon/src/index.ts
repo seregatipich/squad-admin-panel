@@ -91,7 +91,7 @@ async function main() {
     if (channel !== RCON_REFRESH_CHANNEL) return;
     const hint = parseRconRefreshHint(raw);
     if (!hint) return;
-    supervisor.hint(hint.server_id, hint.scopes);
+    supervisor.hint(hint.server_id, hint.scopes, hint.reason);
   });
   await hints.subscribe(RCON_REFRESH_CHANNEL).catch((err: Error) => {
     // Hints only speed things up; the poll timers still keep the panel fresh.
