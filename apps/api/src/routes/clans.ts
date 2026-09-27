@@ -1517,6 +1517,14 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           reply.code(409);
           return { error: 'player_already_in_clan' };
         }
+        // The deferred clan_members_single_leader trigger (check_violation) can
+        // fire when a full-permission caller explicitly requests
+        // member_role:'leader' for a clan that already has one — surface it as
+        // a 409 instead of an unhandled 500.
+        if (code === '23514') {
+          reply.code(409);
+          return { error: 'leader_conflict' };
+        }
         throw err;
       }
       if (!clanStillActive) {
@@ -1534,10 +1542,15 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         context: { requestId: req.id, method: req.method, url: req.url },
       });
       reply.code(201);
+      const roleOverridden = memberRole !== req.body.member_role;
       return {
         clan_id: clan.id,
         player_id: req.body.player_id,
         member_role: memberRole,
+        // The API's own contract for #14's silent override: the UI can show a
+        // hint whenever the requested role was not honored (first member of
+        // an empty clan is always forced to 'leader').
+        role_overridden: roleOverridden,
       };
     },
   );

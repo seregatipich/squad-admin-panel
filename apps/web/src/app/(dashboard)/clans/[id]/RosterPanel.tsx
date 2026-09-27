@@ -174,6 +174,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<SortField>('role');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
@@ -255,16 +256,19 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
       run: () => Promise<Response>,
       mapError: (body: PriorityErrorBody) => string = (body) =>
         `Действие не выполнено: ${body.error ?? 'unknown'}`,
+      onSuccess?: (body: unknown) => void,
     ) => {
       setBusyPlayerId(playerId);
+      setInfo(null);
       try {
         const res = await run();
+        const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as PriorityErrorBody;
-          setErr(mapError(body));
+          setErr(mapError(body as PriorityErrorBody));
           return false;
         }
         setErr(null);
+        onSuccess?.(body);
         await loadRoster();
         return true;
       } catch (e) {
@@ -338,13 +342,27 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
 
   const addMember = useCallback(
     async (playerId: string, role: string) => {
-      const ok = await mutate(playerId, () =>
-        fetch(`/api/v1/clans/${clanId}/members`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ player_id: playerId, member_role: role }),
-        }),
+      const ok = await mutate(
+        playerId,
+        () =>
+          fetch(`/api/v1/clans/${clanId}/members`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ player_id: playerId, member_role: role }),
+          }),
+        undefined,
+        (body) => {
+          // #14 follow-up: the first member of an empty clan is always
+          // forced to 'leader' regardless of the requested role — the API
+          // flags this with role_overridden so the operator isn't left
+          // thinking their chosen role was honored.
+          if ((body as { role_overridden?: boolean }).role_overridden) {
+            setInfo(
+              'Первый участник клана всегда становится главой — выбранная роль не применена.',
+            );
+          }
+        },
       );
       if (ok) setAddOpen(false);
     },
@@ -413,6 +431,16 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                   Повторить
                 </Button>
               }
+            />
+          ) : null}
+
+          {info ? (
+            <InlineBanner
+              tone="info"
+              title="Роль изменена автоматически"
+              description={info}
+              onDismiss={() => setInfo(null)}
+              dismissLabel="Скрыть уведомление"
             />
           ) : null}
 
