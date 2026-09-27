@@ -106,7 +106,7 @@ async function main() {
   });
   const alertSink = sinkDepsFromEnv();
 
-  const manager = new TailManager((wanted) => {
+  const manager = new TailManager((wanted, onDead) => {
     const { serverId, beaconPort } = wanted;
     log.info({ serverId, beaconPort, source: wanted.source.kind }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
@@ -367,6 +367,9 @@ async function main() {
           .catch(() => undefined);
       },
       onStopped: ({ reason, error }) => {
+        // A stream that ended on its own (bridge restart, socket drop, Docker
+        // restarting the container) must be re-dialled by the next reconcile.
+        if (reason !== 'aborted') onDead();
         diag
           .emit({
             component: 'worker-log-ingest',
