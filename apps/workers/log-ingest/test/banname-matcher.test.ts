@@ -77,6 +77,18 @@ describe('compileBannedNameRules + matchBannedNickname', () => {
     expect(matchBannedNickname('cheater', compiled)).toMatchObject({ ruleId: 'first' });
   });
 
+  // Audit #115 — a rule stored before the API refused unsafe regexes must not
+  // be able to stall ingestion on a crafted nickname.
+  it('drops a catastrophically backtracking regex rule', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'redos', pattern: '(a+)+$', matchType: 'regex' }),
+    ]);
+    expect(compiled.regex).toHaveLength(0);
+    const started = Date.now();
+    expect(matchBannedNickname(`${'a'.repeat(24)}!`, compiled)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('drops an invalid regex pattern silently instead of throwing', () => {
     expect(() =>
       compileBannedNameRules([rule({ id: 'r1', pattern: '(unterminated', matchType: 'regex' })]),

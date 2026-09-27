@@ -240,6 +240,17 @@ describe('POST /api/v1/banned-names — three match types + audit', () => {
     expect((body.detail as string).length).toBeGreaterThan(0);
   });
 
+  // Audit #115.
+  it('rejects a catastrophically backtracking regex with 422', async () => {
+    const cookie = await loginAsOwner(h);
+    const { statusCode, body } = await createRule(cookie, {
+      pattern: '(a+)+$',
+      match_type: 'regex',
+    });
+    expect(statusCode).toBe(422);
+    expect(body).toMatchObject({ error: 'invalid_pattern', detail: 'pattern_unsafe_regex' });
+  });
+
   it('rejects a pattern longer than 256 chars with 422', async () => {
     const cookie = await loginAsOwner(h);
     const { statusCode } = await createRule(cookie, {
@@ -447,6 +458,17 @@ describe('RBAC — squad-permission "ban" gate', () => {
 });
 
 describe('GET /api/v1/banned-names/check — BANNAME-3 nick badge check', () => {
+  // Audit #115 — the nickname is player-controlled input to every regex rule.
+  it('400s a nickname longer than BANNED_NAME_NICK_MAX', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/banned-names/check?nick=${'a'.repeat(65)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('401 without a session', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/banned-names/check?nick=x' });
     expect(res.statusCode).toBe(401);

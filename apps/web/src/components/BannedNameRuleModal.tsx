@@ -74,6 +74,17 @@ export interface BannedNameRuleModalProps {
 }
 
 /**
+ * Russian text for a `validateBannedNamePattern` error code; a regex compiler
+ * message is shown as is.
+ */
+function describePatternError(error: string): string {
+  if (error === 'pattern_unsafe_regex') {
+    return 'повторяемая группа с квантификатором или «|» может зависнуть на подобранном нике — упростите выражение';
+  }
+  return error;
+}
+
+/**
  * Prefillable create/edit modal for a `banned_name_rules` row (BANNAME-1,
  * extracted for reuse by BANNAME-3's quick-add entry points: the player
  * card, live roster, and chat viewers all open this same modal pre-seeded
@@ -134,7 +145,7 @@ export function BannedNameRuleModal({
       return;
     }
     if (!patternValidation.ok) {
-      setError(`Некорректный паттерн: ${patternValidation.error}`);
+      setError(`Некорректный паттерн: ${describePatternError(patternValidation.error)}`);
       return;
     }
     setSubmitting(true);
@@ -171,7 +182,9 @@ export function BannedNameRuleModal({
   }
 
   const patternError =
-    trimmedPattern !== '' && !patternValidation.ok ? patternValidation.error : undefined;
+    trimmedPattern !== '' && !patternValidation.ok
+      ? describePatternError(patternValidation.error)
+      : undefined;
 
   return (
     <Modal

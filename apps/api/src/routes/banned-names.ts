@@ -2,6 +2,7 @@ import { bannedNameRules, players } from '@squad/db/schema';
 import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
+  BANNED_NAME_NICK_MAX,
   type BannedNameMatchType,
   findBannedNameRuleMatch,
   isBannedNameAction,
@@ -35,7 +36,7 @@ const createBody = z.object({
 });
 
 const checkQuery = z.object({
-  nick: z.string().trim().min(1).max(256),
+  nick: z.string().trim().min(1).max(BANNED_NAME_NICK_MAX),
 });
 
 const updateBody = z.object({

@@ -6,6 +6,7 @@
 
 - `outbound-url.ts`: `checkOutboundUrl()` и `isPublicUnicastAddress()` — политика исходящих запросов для URL источников банов (аудит #100). API проверяет URL при записи, `worker-ban-sync` — перед каждым запросом, каждым редиректом и при каждом подключении.
 - Право `ban_source:view` (категория `moderation`) для чтения `/api/v1/ban-sources`.
+- `isSafeBannedNameRegex()` и `BANNED_NAME_NICK_MAX = 64` (аудит #115): `validateBannedNamePattern` отклоняет regex с повторяемой группой, внутри которой есть квантификатор или `|`, и с обратными ссылками (`pattern_unsafe_regex`); `matchBannedName` и матчер `worker-log-ingest` не исполняют такие правила, даже если они сохранены раньше.
 
 ### Changed
 
