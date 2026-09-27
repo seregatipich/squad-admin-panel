@@ -4,10 +4,10 @@
 // new version) or revert (repair the disk back to the DB tip byte-for-byte).
 // reset-default re-seeds a file from the SteamCMD depot template with the
 // install-time Rcon/Server rewrites so the RCON password survives.
-import { configVersions, serverCredentials } from '@squad/db/schema';
+import { configVersions, serverCredentials, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq, isNull } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import {
   assertAuditRow,
@@ -19,14 +19,14 @@ import {
 
 const OWNER_STEAM_ID = 76561198000064064n;
 // PANEL_DEPOT_HOST_PATH is resolved on every call by server-install.ts, so a
-// per-test env override needs no dynamic module reload.
+// per-file env override needs no dynamic module reload.
 const DEPOT_ROOT = '/depot-test-64';
 const DEPOT_CONFIG_DIR = `${DEPOT_ROOT}/SquadGame/ServerConfig`;
 
 let h: IntegrationHarness;
 let prevDepotEnv: string | undefined;
 
-beforeEach(async () => {
+beforeAll(async () => {
   prevDepotEnv = process.env.PANEL_DEPOT_HOST_PATH;
   process.env.PANEL_DEPOT_HOST_PATH = DEPOT_ROOT;
   h = await buildIntegrationApp({
@@ -35,10 +35,18 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
+beforeEach(async () => {
+  // Every case creates the same "drift-server" slug and ports; retire the
+  // previous case's server so the create succeeds, and drop the fake disk
+  // (including seeded depot templates) along with any swapped bridge method.
+  await h.db.update(servers).set({ deletedAt: new Date() }).where(isNull(servers.deletedAt));
+  Object.assign(h.bridge, makeFakeBridge());
+});
+
+afterAll(async () => {
   if (prevDepotEnv === undefined) delete process.env.PANEL_DEPOT_HOST_PATH;
   else process.env.PANEL_DEPOT_HOST_PATH = prevDepotEnv;
-  await h.cleanup();
+  await h?.cleanup();
 });
 
 async function login(): Promise<string> {

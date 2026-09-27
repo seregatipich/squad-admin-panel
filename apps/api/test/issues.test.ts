@@ -1,8 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
-import { auditLog, players, roles } from '@squad/db/schema';
+import { auditLog, issues, players, roles } from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -267,7 +267,7 @@ describeIfDb('issues API — filters, search, pagination (AC2)', () => {
   let h: IntegrationHarness;
   let ownerCookie: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: 76561198000089000n },
       bridge: makeFakeBridge(),
@@ -276,7 +276,14 @@ describeIfDb('issues API — filters, search, pagination (AC2)', () => {
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 
-  afterEach(async () => {
+  // Every case asserts totals over the whole issue list, so each starts from
+  // an empty tracker; deleting issues cascades to their comments, links and
+  // label links, while the migration-seeded labels stay.
+  beforeEach(async () => {
+    await h.db.delete(issues);
+  });
+
+  afterAll(async () => {
     await h.cleanup();
   });
 

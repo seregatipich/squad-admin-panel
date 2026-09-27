@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { auditLog, mediaUploadTokens, moderationActions, players, roles } from '@squad/db/schema';
 import { eq, gte } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MEDIA_MAX_UPLOAD_BYTES } from '../src/lib/media-storage.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
@@ -45,7 +45,9 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
   return `__Host-sid=${token}`;
 }
 
-beforeEach(async () => {
+// One app + database per file. Tests only mint tokens and assert on rows keyed
+// by the token they minted, so the players, role and owner session are shared.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'UploadTokenOwner' },
   });
@@ -73,9 +75,13 @@ beforeEach(async () => {
   targetPlayerId = target?.id ?? '';
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(() => {
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 describe('POST /api/v1/media/upload-tokens', () => {

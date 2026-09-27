@@ -4,19 +4,19 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Regression test: every `worker-*` service defined in the reference compose
- * file (docker-compose.yml) must also exist in the tk104 production compose
- * file (compose.tk104.yml), and vice versa.
+ * file (docker-compose.yml) must also exist in the dev-stand compose
+ * file (compose.stand.yml), and vice versa.
  *
  * Background: `worker-role-expirer` was added to docker-compose.yml but never
- * mirrored into compose.tk104.yml, so temporary role assignments never
- * expired in production — no container was running the expirer loop. The two
+ * mirrored into compose.stand.yml, so temporary role assignments never
+ * expired on the stand host (then production) — no container ran the expirer loop. The two
  * files are maintained by hand in parallel; this test turns a silent drift
  * into a hard failure.
  */
 
 const REPO_ROOT = resolve(__dirname, '../../..');
 const REFERENCE_COMPOSE = 'docker-compose.yml';
-const TK104_COMPOSE = 'compose.tk104.yml';
+const STAND_COMPOSE = 'compose.stand.yml';
 
 /**
  * Extracts top-level service names (2-space-indented keys under `services:`)
@@ -46,32 +46,32 @@ function workerServices(composeFile: string): string[] {
     .sort();
 }
 
-describe('compose.tk104.yml — worker service parity with docker-compose.yml', () => {
+describe('compose.stand.yml — worker service parity with docker-compose.yml', () => {
   const referenceWorkers = workerServices(REFERENCE_COMPOSE);
-  const tk104Workers = workerServices(TK104_COMPOSE);
+  const standWorkers = workerServices(STAND_COMPOSE);
 
   it('parses at least one worker service from each compose file', () => {
     expect(referenceWorkers.length).toBeGreaterThan(0);
-    expect(tk104Workers.length).toBeGreaterThan(0);
+    expect(standWorkers.length).toBeGreaterThan(0);
   });
 
   it('defines the same set of worker-* services in both compose files', () => {
-    const missingOnTk104 = referenceWorkers.filter((name) => !tk104Workers.includes(name));
-    const extraOnTk104 = tk104Workers.filter((name) => !referenceWorkers.includes(name));
+    const missingOnStand = referenceWorkers.filter((name) => !standWorkers.includes(name));
+    const extraOnStand = standWorkers.filter((name) => !referenceWorkers.includes(name));
 
     expect(
-      missingOnTk104,
+      missingOnStand,
       [
-        `Workers defined in ${REFERENCE_COMPOSE} but missing from ${TK104_COMPOSE}: ${missingOnTk104.join(', ')}.`,
-        'Every worker must run in production — mirror the service definition',
-        `into ${TK104_COMPOSE} (worker.Dockerfile build, tk104 postgres/redis`,
-        'URLs, migrator dependency, logging block).',
+        `Workers defined in ${REFERENCE_COMPOSE} but missing from ${STAND_COMPOSE}: ${missingOnStand.join(', ')}.`,
+        'Every worker must run on the stand host — mirror the service definition',
+        `into ${STAND_COMPOSE} (WORKERS_IMAGE image, the stand host postgres/redis URLs,`,
+        'logging block) and give it a build in compose.stand.build.yml.',
       ].join('\n'),
     ).toEqual([]);
 
     expect(
-      extraOnTk104,
-      `Workers defined in ${TK104_COMPOSE} but missing from ${REFERENCE_COMPOSE}: ${extraOnTk104.join(', ')}. Add them to ${REFERENCE_COMPOSE} or remove the drift.`,
+      extraOnStand,
+      `Workers defined in ${STAND_COMPOSE} but missing from ${REFERENCE_COMPOSE}: ${extraOnStand.join(', ')}. Add them to ${REFERENCE_COMPOSE} or remove the drift.`,
     ).toEqual([]);
   });
 });

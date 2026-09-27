@@ -5,7 +5,7 @@
 	}
 }
 
-tk104.duckdns.org {
+{$APP_DOMAIN} {
 	encode zstd gzip
 
 	tls {

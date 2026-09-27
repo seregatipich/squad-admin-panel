@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,7 +47,7 @@ describe('BackupPage', () => {
           id: 'full-1',
           short_id: 'a1b2c3d4',
           time: '2026-07-24T03:00:00Z',
-          hostname: 'tk104',
+          hostname: 'stand-host',
           paths: ['/data'],
           tags: ['cron'],
         },
@@ -56,7 +55,7 @@ describe('BackupPage', () => {
     );
     render(<BackupPage />);
     await waitFor(() => expect(screen.getByText('a1b2c3d4')).toBeInTheDocument());
-    expect(screen.getByText('tk104')).toBeInTheDocument();
+    expect(screen.getByText('stand-host')).toBeInTheDocument();
     expect(screen.getByText('cron')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'restore-a1b2c3d4' })).toBeInTheDocument();
   });
@@ -74,7 +73,7 @@ describe('BackupPage', () => {
           id: 'full-2',
           short_id: 'deadbeef',
           time: 'not-a-date',
-          hostname: 'tk104',
+          hostname: 'stand-host',
           paths: ['/data'],
           tags: [],
         },
@@ -128,7 +127,7 @@ describe('BackupPage', () => {
       id: 'full-3',
       short_id: 'a1b2c3d4',
       time: '2026-07-24T03:00:00Z',
-      hostname: 'tk104',
+      hostname: 'stand-host',
       paths: ['/data'],
       tags: [],
     };
@@ -154,7 +153,7 @@ describe('BackupPage', () => {
                 id: 'full-4',
                 short_id: 'cafebabe',
                 time: '2026-07-24T03:00:00Z',
-                hostname: 'tk104',
+                hostname: 'stand-host',
                 paths: ['/data'],
                 tags: [],
               },

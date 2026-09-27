@@ -1,0 +1,236 @@
+name: deploy
+
+# Deploys every push to `dev` to the development stand within minutes, with
+# no test gate in between. Which host that is lives in the `stand` environment,
+# not here: vars.STAND_SSH_TARGET (user@host), vars.STAND_URL (its public
+# origin) and the secrets STAND_SSH_KEY / STAND_SSH_KNOWN_HOSTS. The
+# tests run on `master` (ci.yml); what reaches `dev` is already reviewed code,
+# and a broken stand is fixed forward or rolled back with a dispatch.
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit on dev to (re)deploy — a full 40-character SHA; empty deploys the branch tip'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # One image per matrix leg on GitHub-hosted VMs, pushed to GHCR under the
+  # commit SHA. A newer push cancels the same image's older build, so a merge
+  # wave only spends minutes on the commit that will actually be deployed; the
+  # cancelled run's deploy is then skipped because one of its builds failed.
+  build:
+    # The image names are this repository's GHCR packages; a fork cannot push them.
+    if: github.repository == 'seregatipich/squad-admin-panel'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, web, workers, caddy]
+    concurrency:
+      group: deploy-build-${{ matrix.image }}
+      cancel-in-progress: true
+    steps:
+      # A dispatch may name any commit, so it is validated before it reaches a
+      # checkout, an image tag, or the bake overrides below.
+      - name: Resolve the release commit
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release commit must be a full 40-character SHA (got '${RELEASE_SHA}')."
+            exit 1
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch ]]; then
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${RELEASE_SHA}...dev" --jq '.status')
+            if [[ "${status}" != ahead && "${status}" != identical ]]; then
+              echo "::error::${RELEASE_SHA} is not on dev (compare status '${status}'); only dev commits may reach the stand host."
+              exit 1
+            fi
+          fi
+          echo "sha=${RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # A rollback or redeploy names a commit whose image is already in GHCR;
+      # rebuilding it would only produce a different digest for the same code.
+      - name: Check whether the image already exists
+        id: existing
+        env:
+          IMAGE: ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:${{ steps.release.outputs.sha }}
+        run: |
+          if docker buildx imagetools inspect "${IMAGE}" >/dev/null 2>&1; then
+            echo "${IMAGE} already exists; skipping the build."
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.existing.outputs.exists != 'true'
+        id: buildx
+
+      # docker-bake.hcl stays the image graph; only the tags and the registry
+      # layer cache (shared with the images job in ci.yml) are set here.
+      - name: Build and push the image
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          source: .
+          files: docker-bake.hcl
+          targets: ${{ matrix.image }}
+          push: true
+          set: |
+            ${{ matrix.image }}.tags=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:${{ steps.release.outputs.sha }}
+            ${{ matrix.image }}.tags=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:dev
+            ${{ matrix.image }}.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:buildcache
+            ${{ matrix.image }}.cache-to=type=registry,ref=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:buildcache,mode=max
+
+  # Hands the stand host the commit and the exact image digests over SSH. The key is
+  # bound to a forced command on the host (~/bin/panel-deploy), which accepts
+  # only `deploy <sha> api=… web=… workers=… caddy=…`, fetches that
+  # commit itself, and pulls the images by digest — this job never gets a
+  # shell there and never copies files.
+  deploy:
+    needs: build
+    if: github.repository == 'seregatipich/squad-admin-panel'
+    runs-on: ubuntu-24.04
+    environment:
+      name: stand
+      url: ${{ vars.STAND_URL }}
+    # Never cancel a deploy mid-flight; a newer run waits and then wins.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Resolve the release commit
+        id: release
+        env:
+          RELEASE_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release commit must be a full 40-character SHA (got '${RELEASE_SHA}')."
+            exit 1
+          fi
+          echo "sha=${RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Digests, not tags, go to the host: a tag can move between this lookup
+      # and the pull, a digest cannot.
+      - name: Resolve the image digests
+        id: images
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          images=()
+          for image in api web workers caddy; do
+            ref="ghcr.io/seregatipich/squad-panel-${image}:${RELEASE_SHA}"
+            digest=$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r '.digest // empty') || digest=''
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::${ref} has no valid digest (got '${digest}')."
+              exit 1
+            fi
+            images+=("${image}=${digest}")
+          done
+          echo "images=${images[*]}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure pinned SSH trust and deploy key
+        env:
+          STAND_DEPLOY_KEY: ${{ secrets.STAND_SSH_KEY }}
+          STAND_SSH_KNOWN_HOSTS: ${{ secrets.STAND_SSH_KNOWN_HOSTS }}
+          STAND_SSH_TARGET: ${{ vars.STAND_SSH_TARGET }}
+        run: |
+          if [[ ! "${STAND_SSH_TARGET}" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]]; then
+            echo "vars.STAND_SSH_TARGET must be user@host (got '${STAND_SSH_TARGET}')." >&2
+            exit 1
+          fi
+          if [[ -z "${STAND_SSH_KNOWN_HOSTS}" ]]; then
+            echo "Pinned stand SSH host key is missing." >&2
+            exit 1
+          fi
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "${STAND_SSH_KNOWN_HOSTS}" > "${RUNNER_TEMP}/stand_known_hosts"
+          chmod 600 "${RUNNER_TEMP}/stand_known_hosts"
+          if ! ssh-keygen -l -f "${RUNNER_TEMP}/stand_known_hosts" >/dev/null 2>&1 ||
+             ! ssh-keygen -F "${STAND_SSH_TARGET#*@}" -f "${RUNNER_TEMP}/stand_known_hosts" \
+               >/dev/null 2>&1; then
+            rm -f "${RUNNER_TEMP}/stand_known_hosts"
+            echo "Pinned stand SSH host key is invalid." >&2
+            exit 1
+          fi
+          if [[ -z "${STAND_DEPLOY_KEY}" ]]; then
+            echo "Stand SSH deploy key is missing." >&2
+            exit 1
+          fi
+          printf '%s\n' "${STAND_DEPLOY_KEY}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Deploy the release on the stand
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_IMAGES: ${{ steps.images.outputs.images }}
+          STAND_SSH_TARGET: ${{ vars.STAND_SSH_TARGET }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o UserKnownHostsFile="${RUNNER_TEMP}/stand_known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=20 \
+            "${STAND_SSH_TARGET}" \
+            "deploy ${RELEASE_SHA} ${RELEASE_IMAGES}"
+
+      # Polls every 2 s for about 90 s: the forced command returns once compose
+      # has started the release, and the api needs a few seconds to answer.
+      - name: External health check
+        env:
+          STAND_URL: ${{ vars.STAND_URL }}
+        run: |
+          body="${RUNNER_TEMP}/stand-health.json"
+          code=000
+          for _ in $(seq 1 45); do
+            code=$(curl --silent --output "${body}" --write-out '%{http_code}' \
+              --connect-timeout 3 --max-time 5 "${STAND_URL}/health") || code=000
+            if [[ "${code}" == 200 ]] && jq -e '.status == "ok"' "${body}" >/dev/null 2>&1; then
+              echo "${STAND_URL}/health -> 200 ok"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::${STAND_URL}/health did not report status ok within ~90 s (last HTTP ${code})."
+          exit 1
+
+      - name: Remove SSH deploy key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/stand_known_hosts"

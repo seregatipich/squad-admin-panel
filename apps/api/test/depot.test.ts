@@ -1,10 +1,10 @@
-import { players, roles } from '@squad/db/schema';
+import { randomUUID } from 'node:crypto';
+import { auditLog, players, roles } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { and, eq, sql } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
-  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
@@ -17,23 +17,59 @@ const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGa
 const DEPOT_MANIFEST = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/steamapps/appmanifest_403240.acf`;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
-beforeEach(async () => {
+// POST /depot/update keeps running its orchestration after it replies, and on a
+// shared app one test's run could release the lock or write depot:last_update
+// in the middle of the next test. Every run opens and closes the fake bridge
+// exactly once, so counting the pairs tells when no run is left in flight.
+let openDepotRuns = 0;
+function trackedBridge() {
+  return makeFakeBridge({
+    connect: async () => {
+      openDepotRuns++;
+    },
+    close: async () => {
+      openDepotRuns--;
+    },
+  });
+}
+
+// One app + database per file. Each test starts with the default fake bridge
+// (tests swap its methods and files in place), no depot keys in Redis and the
+// owner back on Owner after asViewer().
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
-    bridge: makeFakeBridge(),
+    bridge: trackedBridge(),
   });
-  await h.redis.del('depot:updating');
-  await h.redis.del('depot:last_update');
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  Object.assign(h.bridge, trackedBridge());
+  await h.redis.del('depot:updating', 'depot:last_update', 'depot:build_id');
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId)
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.redis.del('depot:updating');
-  await h.redis.del('depot:last_update');
-  await h.cleanup();
+  await vi.waitFor(() => expect(openDepotRuns).toBe(0), { timeout: 5_000 });
 });
 
 async function asViewer(): Promise<string> {
@@ -144,16 +180,32 @@ describe('POST /api/v1/depot/update', () => {
     };
 
     const cookie = await loginAsOwner(h);
+    // Other tests here also write depot.update rows into the shared,
+    // append-only audit_log; the audit context records the user agent, so a
+    // unique one identifies this request's own row.
+    const userAgent = `depot-update-audit-${randomUUID()}`;
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/depot/update',
-      headers: { cookie },
+      headers: { cookie, 'user-agent': userAgent },
     });
     expect(resp.statusCode).toBe(200);
     const body = resp.json();
     expect(body.status).toBe('started');
     expect(typeof body.started_at).toBe('string');
-    await assertAuditRow(h, { action: 'depot.update', resource: 'depot' });
+    await vi.waitFor(async () => {
+      const rows = await h.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.actionType, 'depot.update'),
+            eq(auditLog.targetType, 'depot'),
+            sql`${auditLog.context}->>'userAgent' = ${userAgent}`,
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    });
   });
 
   it('returns already_in_progress when depot:updating key exists in redis', async () => {

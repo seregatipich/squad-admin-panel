@@ -8,7 +8,7 @@ import {
   players,
 } from '@squad/db/schema';
 import { eq, gte } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import type { LiveEvent } from '../../src/plugins/live-bus.js';
 import {
@@ -98,7 +98,10 @@ async function uploadWithToken(
   });
 }
 
-beforeEach(async () => {
+// One app + database per file. Every test mints its own token and asserts on
+// rows keyed by that token or the media id it produced, so they share the
+// owner session and target player.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'PublicMediaOwner' },
   });
@@ -112,15 +115,19 @@ beforeEach(async () => {
     })
     .returning({ id: players.id });
   targetPlayerId = target?.id ?? '';
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
   // The manual per-IP limiter is keyed on `req.ip`, which every injected
   // request shares; reset it so one test's uploads never starve the next.
   const keys = await h.redis.keys(`${PUBLIC_MEDIA_RATE_LIMIT_PREFIX}*`);
   if (keys.length > 0) await h.redis.del(...keys);
-});
-
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 describe('POST /api/v1/public/media', () => {

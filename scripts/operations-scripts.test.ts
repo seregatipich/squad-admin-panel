@@ -7,22 +7,25 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { after, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
-  'scripts/deploy-tk104.sh',
-  'scripts/deploy-tk104-web.sh',
-  'scripts/dev-deploy-tk104.sh',
-  'scripts/rollback-tk104.sh',
+  'scripts/deploy-stand.sh',
+  'scripts/dev-deploy-stand.sh',
+  'scripts/rollback-stand.sh',
+  'scripts/deploy-entry.sh',
   'scripts/install-host-bridge.sh',
   'scripts/rebuild.sh',
   'scripts/uninstall.sh',
@@ -73,6 +76,25 @@ function loggingShim(directory: string, name: string, body = 'exit 0'): void {
   );
 }
 
+// Git exports these to its hooks, so under the pre-push checklist they name
+// this repository; a child that runs git in a fixture repository would then
+// operate on this one instead ("this operation must be run in a work tree").
+const GIT_LOCATION_VARIABLES = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_PREFIX',
+];
+
+function childEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const inherited = { ...process.env };
+  for (const name of GIT_LOCATION_VARIABLES) delete inherited[name];
+  return { ...inherited, ...overrides };
+}
+
 function run(
   command: string,
   args: string[],
@@ -80,7 +102,7 @@ function run(
 ): CommandResult {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: { ...process.env, ...options.env },
+    env: childEnvironment(options.env),
     input: options.input,
     encoding: 'utf8',
     timeout: 15_000,
@@ -96,7 +118,7 @@ async function runAsync(
 ): Promise<CommandResult> {
   const child = spawn(command, args, {
     cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: { ...process.env, ...options.env },
+    env: childEnvironment(options.env),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -151,7 +173,7 @@ describe('operation script static contracts', () => {
     const testScripts = packageJson.scripts?.['test:scripts'] ?? '';
     assert.match(testScripts, /--test-concurrency=1/);
     for (const testFile of [
-      'scripts/deploy-tk104-workflow.test.ts',
+      'scripts/deploy-workflow.test.ts',
       'scripts/operations-scripts.test.ts',
       'scripts/rnsquadjs-shadow-diff.test.ts',
       'scripts/verify-audit-chain.test.ts',
@@ -160,39 +182,431 @@ describe('operation script static contracts', () => {
     }
 
     const workflow = readFileSync(path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'), 'utf8');
-    const migrations = workflow.indexOf('name: Apply database migrations');
-    const scriptTests = workflow.indexOf('name: Run operations and verification script tests');
+    // Scoped to the `scripts` job: other jobs migrate too, and a match there
+    // would hide a scripts job that runs its contracts against an empty schema.
+    const jobStart = workflow.indexOf('\n  scripts:\n');
+    assert.ok(jobStart >= 0, 'ci.yml has no scripts job');
+    const jobEnd = workflow.slice(jobStart + 1).search(/\n {2}[a-z0-9-]+:\n/u);
+    const scriptsJob =
+      jobEnd < 0 ? workflow.slice(jobStart) : workflow.slice(jobStart, jobStart + 1 + jobEnd);
+    const migrations = scriptsJob.indexOf('name: Apply database migrations');
+    const scriptTests = scriptsJob.indexOf('name: Run operations and verification script tests');
     assert.ok(migrations >= 0 && scriptTests > migrations);
-    assert.match(workflow.slice(scriptTests), /run: pnpm test:scripts/);
+    assert.match(scriptsJob.slice(migrations), /\n {8}run: pnpm --filter @squad\/db migrate\n/u);
+    assert.match(scriptsJob.slice(scriptTests), /\n {8}run: pnpm test:scripts\n/u);
+    // test:scripts builds the one package its contracts load; a full Turbo
+    // build here only spends CI minutes.
+    assert.doesNotMatch(scriptsJob, /turbo run build/u);
+  });
+});
+
+describe('local pre-push checklist and git hooks', () => {
+  // The checklist probes an exported DATABASE_URL before trusting it, so the
+  // URLs handed to it must name something that accepts connections.
+  const database = net.createServer((socket) => socket.destroy());
+  let databaseUrl = '';
+  before(async () => {
+    database.listen(0, '127.0.0.1');
+    await once(database, 'listening');
+    databaseUrl = `postgres://admin@127.0.0.1:${(database.address() as net.AddressInfo).port}`;
+  });
+  after(() => {
+    database.close();
   });
 
-  it('runs script contracts after database setup and before package tests in pre-push', () => {
+  const MERGE_BASE = '0123456789abcdef0123456789abcdef01234567';
+
+  interface ChecklistFixture {
+    root: string;
+    script: string;
+    shims: string;
+    log: string;
+    dbEnvLog: string;
+  }
+
+  /**
+   * A copy of the checklist whose git, pnpm, gitleaks and node run as shims:
+   * git answers from the FAKE_* variables runChecklist sets, pnpm logs every
+   * call, prints FAKE_TURBO_LS for `turbo ls` and exits 37 for commands
+   * starting with FAKE_FAIL_ON, and every pnpm `turbo run test` records the
+   * database it would test against in `dbEnvLog`.
+   */
+  function checklistFixture(
+    packages: Record<string, Record<string, string>> = {},
+  ): ChecklistFixture {
     const { root, script } = copyScript('scripts/pre-push-checklist.sh');
     const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    for (const [directory, files] of Object.entries(packages)) {
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(root, directory, file)), { recursive: true });
+        writeFileSync(path.join(root, directory, file), content);
+      }
+    }
+    loggingShim(
+      shims,
+      'git',
+      [
+        'case "$1" in',
+        '  rev-parse) printf \'%s\\n\' "$FIXTURE_ROOT" ;;',
+        '  fetch) exit "$FAKE_FETCH_STATUS" ;;',
+        '  merge-base) [ -n "$FAKE_MERGE_BASE" ] || exit 1; printf \'%s\\n\' "$FAKE_MERGE_BASE" ;;',
+        '  diff) printf \'%s\' "$FAKE_CHANGED_FILES" ;;',
+        '  ls-files) printf \'%s\' "$FAKE_UNTRACKED_FILES" ;;',
+        '  *) exit 1 ;;',
+        'esac',
+      ].join('\n'),
+    );
+    loggingShim(
+      shims,
+      'pnpm',
+      [
+        'case "$*" in',
+        '  "-s turbo ls "*) printf \'%s\\n\' "$FAKE_TURBO_LS"; exit 0 ;;',
+        '  "turbo run test "*) printf \'%s|%s\\n\' "${DATABASE_URL:-}" "${TEST_DATABASE_URL:-}" >> "$DB_ENV_LOG" ;;',
+        'esac',
+        'case "$*" in "$FAKE_FAIL_ON"*) exit 37 ;; esac',
+        'exit 0',
+      ].join('\n'),
     );
     loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
+    executable(path.join(shims, 'node'), `exec ${JSON.stringify(process.execPath)} "$@"`);
+    return {
+      root,
+      script,
+      shims,
+      log: path.join(root, 'commands.log'),
+      dbEnvLog: path.join(root, 'db-env.log'),
+    };
+  }
 
-    const result = run('/bin/bash', [script], {
-      cwd: root,
+  function runChecklist(
+    fixture: ChecklistFixture,
+    options: {
+      changed?: string[];
+      untracked?: string[];
+      packages?: { name: string; path: string }[];
+      env?: NodeJS.ProcessEnv;
+    } = {},
+  ): CommandResult {
+    const items = options.packages ?? [];
+    return run('/bin/bash', [fixture.script], {
+      cwd: fixture.root,
       env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '1',
-        SKIP_BUILD: '1',
+        OPS_LOG: fixture.log,
+        DB_ENV_LOG: fixture.dbEnvLog,
+        FIXTURE_ROOT: fixture.root,
+        PATH: `${fixture.shims}:/usr/bin:/bin`,
+        FAKE_FETCH_STATUS: '0',
+        FAKE_MERGE_BASE: MERGE_BASE,
+        FAKE_FAIL_ON: '<never>',
+        FAKE_CHANGED_FILES: (options.changed ?? []).map((file) => `${file}\n`).join(''),
+        FAKE_UNTRACKED_FILES: (options.untracked ?? []).map((file) => `${file}\n`).join(''),
+        FAKE_TURBO_LS: JSON.stringify({
+          packageManager: 'pnpm9',
+          packages: { count: items.length, items },
+        }),
+        DATABASE_URL: `${databaseUrl}/isolated-test-database`,
+        TEST_DATABASE_URL: `${databaseUrl}/isolated-test-database`,
+        FULL: '',
+        SKIP_BUILD: '',
+        PREPUSH_TURBO_CONCURRENCY: '',
+        ...options.env,
+      },
+    });
+  }
+
+  /** The checklist's own commands, without the git plumbing it reads state with. */
+  function checklistCommands(fixture: ChecklistFixture): string[] {
+    return logLines(fixture.log).filter(
+      (line) => !/^git\|(rev-parse|merge-base|diff|ls-files)\|/.test(line),
+    );
+  }
+
+  const PLAIN_PACKAGE = { name: '@fixture/plain', path: 'packages/plain' };
+  const DB_PACKAGE = { name: '@fixture/db-worker', path: 'apps/workers/db-worker' };
+  const REDIS_PACKAGE = { name: '@fixture/redis-src', path: 'packages/redis-src' };
+  const API_PACKAGE = { name: '@squad/api', path: 'apps/api' };
+  const FIXTURE_PACKAGES = {
+    'packages/plain': {
+      'test/unit.test.ts': "it('adds', () => expect(1 + 1).toBe(2));\n",
+      // Source that reads the variable does not make the package's tests DB-backed.
+      'src/env.ts': 'export const url = process.env.DATABASE_URL;\n',
+    },
+    'apps/workers/db-worker': {
+      'test/global-setup.ts': 'const base = process.env.TEST_DATABASE_URL;\n',
+    },
+    'packages/redis-src': {
+      'src/queue.test.ts': 'const redis = process.env.REDIS_URL;\n',
+    },
+  };
+
+  it('runs the light default checklist in order, scoped to changes since the merge base', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE, PLAIN_PACKAGE, DB_PACKAGE],
+      changed: [
+        'apps/api/src/routes/players.ts',
+        'apps/api/test/players.test.ts',
+        'apps/api/test/helpers/players.ts',
+        'apps/api/test/e2e/install-lifecycle.e2e.test.ts',
+        'packages/plain/src/index.ts',
+        'apps/workers/db-worker/src/tick.ts',
+        'scripts/pre-push-checklist.sh',
+      ],
+      untracked: ['apps/api/test/integration/new-route.test.ts'],
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
+      'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
+      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+      `pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`,
+      'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain|--filter=@fixture/db-worker',
+      'pnpm|--filter|@squad/api|exec|vitest|run|--passWithNoTests|test/players.test.ts|test/e2e/install-lifecycle.e2e.test.ts|test/integration/new-route.test.ts',
+      'pnpm|test:scripts',
+    ]);
+    assert.deepEqual(logLines(fixture.dbEnvLog), [
+      `${databaseUrl}/isolated-test-database|${databaseUrl}/isolated-test-database`,
+    ]);
+  });
+
+  it('honours PREPUSH_TURBO_CONCURRENCY for the package tests', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { PREPUSH_TURBO_CONCURRENCY: '5' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.ok(
+      logLines(fixture.log).includes('pnpm|turbo|run|test|--concurrency=5|--filter=@fixture/plain'),
+    );
+  });
+
+  it('skips DB-backed suites with a warning instead of failing when no database is available', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE, PLAIN_PACKAGE, DB_PACKAGE, REDIS_PACKAGE],
+      changed: ['apps/api/test/players.test.ts', 'scripts/verify-done.sh'],
+      env: { DATABASE_URL: '', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const commands = checklistCommands(fixture);
+    assert.ok(commands.includes('pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain'));
+    assert.equal(
+      commands.some((line) => line.includes('vitest') || line === 'pnpm|test:scripts'),
+      false,
+    );
+    assert.match(
+      result.stdout,
+      /DB-backed package tests — skipped \(no database: @fixture\/db-worker @fixture\/redis-src\)/,
+    );
+    assert.match(result.stdout, /api tests — skipped \(no database: test\/players\.test\.ts\)/);
+    assert.match(
+      result.stdout,
+      /operations and verification script tests — skipped \(no database\)/,
+    );
+    assert.match(result.stdout, /No database for the DB-backed suites/);
+    assert.match(result.stdout, /pre-push checklist passed/);
+  });
+
+  it("provisions the worktree's own database when Docker and .env are available", () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    writeFileSync(path.join(fixture.root, '.env'), 'POSTGRES_PASSWORD=unused\n');
+    loggingShim(fixture.shims, 'docker');
+    executable(
+      path.join(fixture.root, 'scripts/new-test-db.sh'),
+      [
+        'printf \'new-test-db|%s\\n\' "$1" >> "$OPS_LOG"',
+        'echo "→ progress goes to stderr" >&2',
+        'printf "export DATABASE_URL=\'postgres://worktree-db\'\\n"',
+        'printf "export TEST_DATABASE_URL=\'postgres://worktree-db\'\\n"',
+      ].join('\n'),
+    );
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts'],
+      env: { DATABASE_URL: '', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const slug = `prepush_${path.basename(fixture.root).slice(0, 40)}`;
+    const commands = checklistCommands(fixture);
+    assert.deepEqual(commands.slice(commands.indexOf('docker|ps')), [
+      'docker|ps',
+      `new-test-db|${slug}`,
+      'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/db-worker',
+    ]);
+    assert.deepEqual(logLines(fixture.dbEnvLog), ['postgres://worktree-db|postgres://worktree-db']);
+  });
+
+  it('points TEST_DATABASE_URL at an exported DATABASE_URL when only that one is set', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts'],
+      env: { DATABASE_URL: `${databaseUrl}/exported`, TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(logLines(fixture.dbEnvLog), [
+      `${databaseUrl}/exported|${databaseUrl}/exported`,
+    ]);
+  });
+
+  it('skips the DB-backed suites instead of hanging when the exported database does not answer', async () => {
+    const closed = net.createServer();
+    closed.listen(0, '127.0.0.1');
+    await once(closed, 'listening');
+    const { port } = closed.address() as net.AddressInfo;
+    closed.close();
+    await once(closed, 'close');
+
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE, PLAIN_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts', 'packages/plain/src/index.ts'],
+      env: {
+        DATABASE_URL: `postgres://admin@127.0.0.1:${port}/stopped`,
+        TEST_DATABASE_URL: `postgres://admin@127.0.0.1:${port}/stopped`,
       },
     });
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(logLines(log), [
+    assert.match(result.stdout, /exported DATABASE_URL does not answer/);
+    assert.match(
+      result.stdout,
+      /DB-backed package tests — skipped \(no database: @fixture\/db-worker\)/,
+    );
+    assert.deepEqual(logLines(fixture.dbEnvLog), ['|']);
+  });
+
+  it('runs no api tests when the diff touches api source but no api test file', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [API_PACKAGE],
+      changed: ['apps/api/src/routes/players.ts', 'apps/api/test/helpers/players.ts'],
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const commands = checklistCommands(fixture);
+    assert.ok(commands.includes(`pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`));
+    assert.equal(
+      commands.some((line) => line.startsWith('pnpm|turbo|run|test') || line.includes('vitest')),
+      false,
+    );
+    assert.match(
+      result.stdout,
+      /api tests — skipped \(no api test file changed; ci runs the suite\)/,
+    );
+  });
+
+  it('runs test:scripts only when scripts/ or .github/ changed', () => {
+    const untouched = checklistFixture(FIXTURE_PACKAGES);
+    const packagesOnly = runChecklist(untouched, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts', 'docs/development/testing.md'],
+    });
+    assert.equal(packagesOnly.status, 0, `${packagesOnly.stdout}\n${packagesOnly.stderr}`);
+    assert.equal(logLines(untouched.log).includes('pnpm|test:scripts'), false);
+    assert.match(
+      packagesOnly.stdout,
+      /operations and verification script tests — skipped \(scripts\/ and \.github\/ unchanged\)/,
+    );
+
+    const workflowChanged = checklistFixture(FIXTURE_PACKAGES);
+    const workflowOnly = runChecklist(workflowChanged, {
+      changed: ['.github/workflows/ci.yml'],
+    });
+    assert.equal(workflowOnly.status, 0, `${workflowOnly.stdout}\n${workflowOnly.stderr}`);
+    assert.deepEqual(checklistCommands(workflowChanged).slice(3), [
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+      'pnpm|test:scripts',
+    ]);
+    assert.match(
+      workflowOnly.stdout,
+      /typecheck — skipped \(no package changed since origin\/dev\)/,
+    );
+  });
+
+  it('blocks the push when a changed package fails its tests', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { FAKE_FAIL_ON: 'turbo run test' },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /package tests \(changed since origin\/dev\) FAILED/);
+  });
+
+  it('blocks the push when an operation script contract fails', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      changed: ['scripts/deploy-stand.sh'],
+      env: { FAKE_FAIL_ON: 'test:scripts' },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /operations and verification script tests.*FAILED/);
+    assert.ok(logLines(fixture.log).includes('pnpm|test:scripts'));
+  });
+
+  it('keeps checking against the local origin/dev when the fetch fails', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [PLAIN_PACKAGE],
+      changed: ['packages/plain/src/index.ts'],
+      env: { FAKE_FETCH_STATUS: '128' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /could not fetch origin dev/);
+    assert.ok(
+      logLines(fixture.log).includes('pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain'),
+    );
+  });
+
+  it('fails when HEAD shares no history with origin/dev', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, { env: { FAKE_MERGE_BASE: '' } });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /changes since origin\/dev — no merge base with origin\/dev/);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.startsWith('pnpm|turbo')),
+      false,
+    );
+  });
+
+  it('only fetches, lints and scans when nothing changed since origin/dev', () => {
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture);
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
+      'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
+      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
+    ]);
+  });
+
+  it('FULL=1 keeps the full gate: build, script contracts, coverage and mutation suites', () => {
+    const fixture = checklistFixture();
+    const result = runChecklist(fixture, { env: { FULL: '1' } });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(checklistCommands(fixture), [
+      'git|fetch|-q|origin|dev',
       'pnpm|turbo|run|typecheck',
       'pnpm|exec|biome|check|.',
+      'pnpm|turbo|run|build',
       'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       'pnpm|test:scripts',
       'pnpm|test:cov',
@@ -200,89 +614,189 @@ describe('operation script static contracts', () => {
     ]);
   });
 
-  it('limits affected package tests to two simultaneous Turbo tasks by default', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '0',
-        SKIP_BUILD: '1',
-      },
-    });
-
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.ok(
-      logLines(log).includes('pnpm|turbo|run|test|--concurrency=2|--filter=...[origin/dev]'),
-    );
-  });
-
-  it('blocks pre-push when an operation script contract fails', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm', `if [[ "$*" == 'test:scripts' ]]; then exit 37; fi; exit 0`);
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
-        FULL: '1',
-        SKIP_BUILD: '1',
-      },
-    });
-
-    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /operations and verification script tests.*FAILED/);
-    assert.ok(logLines(log).includes('pnpm|test:scripts'));
-  });
-
-  it('fails closed without a database and does not start DB-backed script contracts', () => {
-    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    executable(
-      path.join(shims, 'git'),
-      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
-    );
-    loggingShim(shims, 'gitleaks');
-    loggingShim(shims, 'pnpm');
-
-    const result = run('/bin/bash', [script], {
-      cwd: root,
-      env: {
-        OPS_LOG: log,
-        PATH: `${shims}:/usr/bin:/bin`,
-        DATABASE_URL: '',
-        TEST_DATABASE_URL: '',
-        FULL: '1',
-        SKIP_BUILD: '1',
-      },
+  it('FULL=1 fails closed without a database and starts no DB-backed suite', () => {
+    const fixture = checklistFixture();
+    const result = runChecklist(fixture, {
+      env: { FULL: '1', SKIP_BUILD: '1', DATABASE_URL: '', TEST_DATABASE_URL: '' },
     });
 
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /tests — no DATABASE_URL and could not auto-provision/);
-    assert.equal(logLines(log).includes('pnpm|test:scripts'), false);
+    assert.match(result.stdout, /build — skipped \(SKIP_BUILD=1\)/);
+    const commands = logLines(fixture.log);
+    assert.equal(commands.includes('pnpm|test:scripts'), false);
+    assert.equal(commands.includes('pnpm|test:cov'), false);
+  });
+
+  it('runs web tests without waiting for the Next.js production build', () => {
+    const dryRun = run('pnpm', [
+      'exec',
+      'turbo',
+      'run',
+      'test',
+      'build',
+      '--dry=json',
+      '--filter=@squad/web',
+    ]);
+    assert.equal(dryRun.status, 0, dryRun.stderr);
+    const tasks = (
+      JSON.parse(dryRun.stdout) as {
+        tasks: {
+          taskId: string;
+          dependencies: string[];
+          resolvedTaskDefinition: { env: string[]; outputs: string[] };
+        }[];
+      }
+    ).tasks;
+    const webTest = tasks.find((task) => task.taskId === '@squad/web#test');
+    const webBuild = tasks.find((task) => task.taskId === '@squad/web#build');
+    assert.ok(webTest && webBuild);
+    assert.equal(webTest.dependencies.includes('@squad/web#build'), false);
+    assert.ok(webTest.dependencies.includes('@squad/shared-config#build'));
+    // next.config.mjs bakes API_URL into the rewrites, so it must key the build cache.
+    assert.deepEqual(webBuild.resolvedTaskDefinition.env, ['API_URL']);
+    assert.ok(webBuild.resolvedTaskDefinition.outputs.includes('.next/**'));
+  });
+
+  describe('pre-commit hook', () => {
+    const LEFTHOOK_CLI = path.join(REPOSITORY_ROOT, 'node_modules/lefthook/bin/index.js');
+
+    /** A git repo with the real lefthook.yml and `files` staged. */
+    function hookRepository(files: Record<string, string>): string {
+      const repository = path.join(temporaryRoot('squad-lefthook'), 'repo');
+      mkdirSync(repository, { recursive: true });
+      copyFileSync(
+        path.join(REPOSITORY_ROOT, 'lefthook.yml'),
+        path.join(repository, 'lefthook.yml'),
+      );
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+        writeFileSync(path.join(repository, file), content);
+      }
+      for (const args of [
+        ['init', '-q'],
+        ['add', '-A'],
+      ]) {
+        const git = run('git', args, { cwd: repository });
+        assert.equal(git.status, 0, git.stderr);
+      }
+      return repository;
+    }
+
+    function runPreCommit(repository: string, command: string, shims: string): CommandResult {
+      return run(
+        process.execPath,
+        [
+          LEFTHOOK_CLI,
+          'run',
+          'pre-commit',
+          '--commands',
+          command,
+          '--no-auto-install',
+          '--no-tty',
+          '--colors',
+          'off',
+        ],
+        {
+          cwd: repository,
+          env: {
+            OPS_LOG: path.join(repository, '..', 'commands.log'),
+            PATH: `${shims}:/usr/bin:/bin`,
+            LEFTHOOK: '1',
+            LEFTHOOK_EXCLUDE: '',
+          },
+        },
+      );
+    }
+
+    const BRIDGE_SOURCE = { 'apps/bridge/cmd/panel-host-bridge/main.go': 'package main\n' };
+
+    /** The "not installed" cases hide tools behind a PATH of shims plus /usr/bin:/bin. */
+    function onSystemPath(tool: string): string | false {
+      const lookup = run('/bin/sh', ['-c', `PATH=/usr/bin:/bin command -v ${tool}`]);
+      return lookup.status === 0 && `${tool} is installed in /usr/bin or /bin`;
+    }
+
+    it('blocks a commit whose Go files gofmt -s would change', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      // gofmt -l lists the file and still exits 0.
+      loggingShim(shims, 'gofmt', "printf 'cmd/panel-host-bridge/main.go\\n'; exit 0");
+      loggingShim(shims, 'go');
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /not gofmt -s formatted/);
+      assert.match(result.stdout, /cmd\/panel-host-bridge\/main\.go/);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), ['gofmt|-l|-s|.']);
+    });
+
+    it('vets the bridge for linux/amd64 once gofmt is clean', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      loggingShim(shims, 'gofmt');
+      loggingShim(
+        shims,
+        'go',
+        'printf \'env|%s|%s|%s\\n\' "$GOOS" "$GOARCH" "$CGO_ENABLED" >> "$OPS_LOG"',
+      );
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), [
+        'gofmt|-l|-s|.',
+        'go|vet|./...',
+        'env|linux|amd64|0',
+      ]);
+    });
+
+    it('fails the commit when go vet fails', () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+      const shims = shimDirectory();
+      loggingShim(shims, 'gofmt');
+      loggingShim(shims, 'go', 'exit 1');
+
+      const result = runPreCommit(repository, 'go-fmt', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    });
+
+    it('skips the Go checks when go is not installed', { skip: onSystemPath('go') }, () => {
+      const repository = hookRepository(BRIDGE_SOURCE);
+
+      const result = runPreCommit(repository, 'go-fmt', shimDirectory());
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /skipping gofmt and go vet: go is not on PATH/);
+    });
+
+    it('blocks a commit when gitleaks finds a staged secret', () => {
+      const repository = hookRepository({ 'notes.txt': 'harmless\n' });
+      const shims = shimDirectory();
+      loggingShim(shims, 'gitleaks', 'exit 1');
+
+      const result = runPreCommit(repository, 'gitleaks', shims);
+
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), [
+        'gitleaks|protect|--staged|--config|.gitleaks.toml|--no-banner|--redact',
+      ]);
+    });
+
+    it(
+      'skips the staged secret scan when gitleaks is not installed',
+      { skip: onSystemPath('gitleaks') },
+      () => {
+        const repository = hookRepository({ 'notes.txt': 'harmless\n' });
+
+        const result = runPreCommit(repository, 'gitleaks', shimDirectory());
+
+        assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+        assert.match(result.stdout, /skipping the staged secret scan: gitleaks is not installed/);
+      },
+    );
   });
 });
 
@@ -395,419 +909,839 @@ describe('bootstrap and host-bridge preflight boundaries', () => {
   });
 });
 
-describe('tk104 deployment command and health boundaries', () => {
-  function deployFixture(): {
-    root: string;
-    script: string;
-    log: string;
-    env: NodeJS.ProcessEnv;
-  } {
-    const { root, script } = copyScript('scripts/deploy-tk104.sh');
-    writeFileSync(path.join(root, '.env.tk104'), 'SAFE_TEST_VALUE=1\n');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    loggingShim(
-      shims,
-      'docker',
-      [
-        `if [[ "$*" == *'ps --format'* ]]; then printf '%s\\n' "\${DOCKER_HEALTH_OUTPUT:-api healthy}"; fi`,
-        `if [[ "$*" == 'image ls '* ]]; then printf '%s\\n' \${DOCKER_IMAGE_TAGS:-}; fi`,
-        `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-41}"; fi`,
-        'exit 0',
-      ].join('\n'),
-    );
-    loggingShim(shims, 'sleep');
-    // CURL_FAIL_TIMES makes the first N probes fail with CURL_EXIT and every
-    // later one succeed, modelling caddy finishing its TLS handshake mid-deploy.
-    // Without CURL_FAIL_TIMES the shim keeps its original always-CURL_EXIT behaviour.
-    loggingShim(
-      shims,
-      'curl',
-      [
-        `attempts_file="\${OPS_LOG:?}.curl-attempts"`,
-        'attempts=$(( $(cat "$attempts_file" 2>/dev/null || echo 0) + 1 ))',
-        'printf "%s" "$attempts" > "$attempts_file"',
-        `if [[ -n "\${CURL_FAIL_TIMES:-}" ]]; then`,
-        `  if [[ "$attempts" -le "$CURL_FAIL_TIMES" ]]; then exit "\${CURL_EXIT:-35}"; fi`,
-        '  exit 0',
-        'fi',
-        `exit "\${CURL_EXIT:-0}"`,
-      ].join('\n'),
-    );
-    return {
-      root,
-      script,
-      log,
-      env: {
-        OPS_LOG: log,
-        APP_DIR: root,
-        PANEL_IMAGE_TAG: RELEASE_SHA,
-        PATH: `${shims}:/usr/bin:/bin`,
-      },
-    };
-  }
+const IMAGE_REPO = 'ghcr.io/seregatipich/squad-panel';
+const RELEASE_SHA = 'a'.repeat(40);
+const NEXT_SHA = 'c'.repeat(40);
+const IMAGES = [
+  ['API_IMAGE', 'api'],
+  ['WEB_IMAGE', 'web'],
+  ['WORKERS_IMAGE', 'workers'],
+  ['CADDY_IMAGE', 'caddy'],
+] as const;
+type ImageKey = (typeof IMAGES)[number][0];
 
-  const RELEASE_SHA = 'a'.repeat(40);
+function imageRef(name: string, fill: string): string {
+  return `${IMAGE_REPO}-${name}@sha256:${fill.repeat(64)}`;
+}
 
-  it('fails before Docker when the deployment environment file is absent', () => {
-    const { root, script } = copyScript('scripts/deploy-tk104.sh');
-    const result = run('/bin/bash', [script], { env: { APP_DIR: root } });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /\.env\.tk104 is missing/);
-  });
+/** The four image variables of a release, each digest filled with `fill` unless overridden. */
+function releaseImages(
+  fill = '1',
+  overrides: Partial<Record<ImageKey, string>> = {},
+): Record<ImageKey, string> {
+  return Object.fromEntries(
+    IMAGES.map(([key, name]) => [key, overrides[key] ?? imageRef(name, fill)]),
+  ) as Record<ImageKey, string>;
+}
 
-  it('refuses to start without a release image tag, before any Docker call', () => {
-    const fixture = deployFixture();
-    for (const tag of ['', 'bad tag', '-leading-dash']) {
-      const result = run('/bin/bash', [fixture.script], {
-        env: { ...fixture.env, PANEL_IMAGE_TAG: tag },
-      });
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /PANEL_IMAGE_TAG must name the release images/);
+/**
+ * Stand-ins for the host's tools. `docker` answers the handful of queries the
+ * deploy makes: `compose ps -a` reports DOCKER_IDS_BEFORE until `up -d
+ * --remove-orphans` has run and DOCKER_IDS_AFTER afterwards (a changed ID is a
+ * recreated container), `compose ps` reports DOCKER_HEALTH, `image inspect`
+ * succeeds only for references in DOCKER_PRESENT, and `image ls <repo>` lists
+ * the IDs in DOCKER_REPO_IDS that belong to <repo>. `curl` answers /health with
+ * the APP_VERSION the deploy is rolling out, as the recreated api would.
+ */
+function hostShims(): string {
+  const shims = shimDirectory();
+  loggingShim(
+    shims,
+    'docker',
+    [
+      `last="\${@: -1}"`,
+      `if [[ "$*" == 'compose version --short' ]]; then printf '%s\\n' "\${DOCKER_COMPOSE_VERSION-2.29.7}"; exit 0; fi`,
+      `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-41}"; fi`,
+      `ids='postgres p1,redis r1,api a1,web w1,caddy c1,worker-rcon k1'`,
+      `health='postgres running healthy,redis running healthy,api running healthy,web running healthy,caddy running ,worker-rcon running '`,
+      'case "$*" in',
+      `  *'ps -a --format'*)`,
+      `    if grep -qF '|up|-d|--remove-orphans' "$OPS_LOG"; then ids="\${DOCKER_IDS_AFTER:-$ids}"; else ids="\${DOCKER_IDS_BEFORE:-$ids}"; fi`,
+      `    printf '%s\\n' "$ids" | tr ',' '\\n' ;;`,
+      `  *'ps --format'*) printf '%s\\n' "\${DOCKER_HEALTH:-$health}" | tr ',' '\\n' ;;`,
+      `  *pg_dump*) printf 'PGDMP' ;;`,
+      `  'image inspect'*)`,
+      `    case ",\${DOCKER_PRESENT:-}," in *",$last,"*) ;; *) exit 1 ;; esac`,
+      `    if [[ "$*" == *--format* ]]; then printf 'id:%s\\n' "$last"; fi ;;`,
+      `  'image ls'*)`,
+      `    for id in \${DOCKER_REPO_IDS//,/ }; do if [[ "$id" == "id:$last"[@:]* ]]; then printf '%s\\n' "$id"; fi; done ;;`,
+      'esac',
+      'exit 0',
+    ].join('\n'),
+  );
+  loggingShim(shims, 'sleep');
+  // CURL_FAIL_TIMES makes the first N probes fail with CURL_EXIT and every
+  // later one succeed, modelling caddy finishing its TLS handshake mid-deploy;
+  // CURL_EXIT alone fails every probe.
+  loggingShim(
+    shims,
+    'curl',
+    [
+      `attempts_file="\${OPS_LOG:?}.curl-attempts"`,
+      'attempts=$(( $(cat "$attempts_file" 2>/dev/null || echo 0) + 1 ))',
+      'printf "%s" "$attempts" > "$attempts_file"',
+      `if [[ -n "\${CURL_FAIL_TIMES:-}" ]]; then`,
+      `  if [[ "$attempts" -le "$CURL_FAIL_TIMES" ]]; then exit "\${CURL_EXIT:-35}"; fi`,
+      `elif [[ -n "\${CURL_EXIT:-}" ]]; then exit "$CURL_EXIT"; fi`,
+      `version="\${CURL_VERSION:-$(sed -n 's/^APP_VERSION=//p' "$APP_DIR/.release.next.env" 2>/dev/null)}"`,
+      `printf '{"status":"ok","uptime_s":1,"version":"%s"}' "$version"`,
+    ].join('\n'),
+  );
+  // Linux has sha256sum on the test PATH; macOS keeps it in /sbin (14+) or
+  // only offers shasum.
+  if (!existsSync('/usr/bin/sha256sum') && !existsSync('/bin/sha256sum')) {
+    if (existsSync('/sbin/sha256sum')) {
+      symlinkSync('/sbin/sha256sum', path.join(shims, 'sha256sum'));
+    } else {
+      executable(path.join(shims, 'sha256sum'), 'exec /usr/bin/shasum -a 256 "$@"');
     }
-    assert.deepEqual(logLines(fixture.log), []);
+  }
+  return shims;
+}
+
+interface DeployFixture {
+  root: string;
+  script: string;
+  log: string;
+  backups: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/** An app directory with the files the deploy hashes, and host tool shims. */
+function deployFixture(): DeployFixture {
+  const { root, script } = copyScript('scripts/deploy-stand.sh');
+  writeFileSync(path.join(root, '.env.stand'), 'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\n');
+  writeFileSync(path.join(root, 'compose.stand.yml'), 'services: {}\n');
+  mkdirSync(path.join(root, 'docker'));
+  writeFileSync(path.join(root, 'docker/Caddyfile.stand'), '{$APP_DOMAIN} {}\n');
+  mkdirSync(path.join(root, 'packages/db/drizzle/meta'), { recursive: true });
+  writeFileSync(path.join(root, 'packages/db/drizzle/0000_init.sql'), 'CREATE TABLE t ();\n');
+  writeFileSync(path.join(root, 'packages/db/drizzle/meta/_journal.json'), '{"entries":[]}\n');
+  const log = path.join(root, 'commands.log');
+  const backups = path.join(root, 'backups');
+  return {
+    root,
+    script,
+    log,
+    backups,
+    env: {
+      OPS_LOG: log,
+      APP_DIR: root,
+      BACKUP_DIR: backups,
+      HEALTH_TIMEOUT: '3',
+      PATH: `${hostShims()}:/usr/bin:/bin`,
+      RELEASE_SHA,
+      ...releaseImages(),
+    },
+  };
+}
+
+/** Runs one deploy with a fresh command log, as each deploy is its own SSH session. */
+function deploy(
+  fixture: DeployFixture,
+  env: NodeJS.ProcessEnv = {},
+  script = fixture.script,
+): Promise<CommandResult> {
+  rmSync(fixture.log, { force: true });
+  rmSync(`${fixture.log}.curl-attempts`, { force: true });
+  return runAsync('/bin/bash', [script], { env: { ...fixture.env, ...env } });
+}
+
+function releaseFile(fixture: DeployFixture, name = '.release.env'): Record<string, string> {
+  const entries = readFileSync(path.join(fixture.root, name), 'utf8')
+    .split('\n')
+    .filter((line) => /^[A-Z_]+=/.test(line))
+    .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]);
+  return Object.fromEntries(entries);
+}
+
+function dockerCommands(log: string): string[] {
+  return logLines(log).filter((line) => line.startsWith('docker|'));
+}
+
+const COMPOSE =
+  'docker|compose|--env-file|.env.stand|--env-file|.release.next.env|-f|compose.stand.yml';
+
+describe('the stand host release deploy', { concurrency: true }, () => {
+  it('fails before Docker when the deployment environment file is absent', async () => {
+    const { root, script } = copyScript('scripts/deploy-stand.sh');
+    const result = await runAsync('/bin/bash', [script], { env: { APP_DIR: root } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /\.env\.stand is missing/);
   });
 
-  it('starts the loaded release images without building, then probes and reports status', () => {
+  it('refuses a malformed release or image reference before any Docker call', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    const cases: Array<[NodeJS.ProcessEnv, RegExp]> = [
+      [{ RELEASE_SHA: '' }, /RELEASE_SHA must name the release/],
+      [{ RELEASE_SHA: 'bad sha' }, /RELEASE_SHA must name the release/],
+      [{ RELEASE_SHA: '-leading-dash' }, /RELEASE_SHA must name the release/],
+      [{ API_IMAGE: '' }, /API_IMAGE must be an image reference/],
+      [{ WEB_IMAGE: `${IMAGE_REPO}-web` }, /WEB_IMAGE must be an image reference/],
+      [{ WORKERS_IMAGE: `${IMAGE_REPO}-workers@sha256:abc` }, /WORKERS_IMAGE must be/],
+      [{ CADDY_IMAGE: `$(touch ${fixture.root}/pwned)@sha256:${'1'.repeat(64)}` }, /CADDY_IMAGE/],
+      [{ API_IMAGE: `GHCR.IO/x/api@sha256:${'1'.repeat(64)}` }, /API_IMAGE must be/],
+    ];
+    for (const [env, message] of cases) {
+      const result = await deploy(fixture, env);
+      assert.equal(result.status, 1, JSON.stringify(env));
+      assert.match(result.stderr, message);
+      assert.deepEqual(logLines(fixture.log), [], JSON.stringify(env));
+    }
+    assert.equal(existsSync(path.join(fixture.root, 'pwned')), false);
+    assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+  });
+
+  it("refuses to start without the stand's APP_DOMAIN in .env.stand", async () => {
+    for (const content of ['SAFE_TEST_VALUE=1\n', 'APP_DOMAIN=stand.example;id\n']) {
+      const fixture = deployFixture();
+      writeFileSync(path.join(fixture.root, '.env.stand'), content);
+      const result = await deploy(fixture);
+      assert.equal(result.status, 1, content);
+      assert.match(result.stderr, /APP_DOMAIN in .*\.env\.stand must be the stand's host name/);
+      assert.deepEqual(logLines(fixture.log), [], content);
+    }
+  });
+
+  it('refuses a Compose too old to merge both env files, before changing anything', async () => {
+    for (const version of ['2.16.0', 'v1.29.2', '']) {
+      const fixture = deployFixture();
+      const result = await deploy(fixture, { DOCKER_COMPOSE_VERSION: version });
+      assert.equal(result.status, 1, version);
+      assert.match(result.stderr, /Docker Compose 2\.17\+ is required/);
+      assert.deepEqual(logLines(fixture.log), ['docker|compose|version|--short']);
+      assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+    }
+  });
+
+  it('first release: pulls every image, backs up and migrates, starts, waits, records', async () => {
+    const fixture = deployFixture();
+    const result = await deploy(fixture, {
+      DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a2,web w2,caddy c2,worker-rcon k2',
+    });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Deploy complete/);
-    const commands = logLines(fixture.log).filter(
-      (line) => line.startsWith('docker|') && !line.startsWith('docker|image|ls|'),
-    );
-    assert.deepEqual(commands, [
-      `docker|image|inspect|squad-panel/api:${RELEASE_SHA}`,
-      `docker|image|inspect|squad-panel/web:${RELEASE_SHA}`,
-      `docker|image|inspect|squad-panel/workers:${RELEASE_SHA}`,
-      `docker|image|inspect|squad-panel/caddy-tk104:${RELEASE_SHA}`,
-      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|up|-d|--remove-orphans',
-      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps|--format|{{.Service}} {{.Health}}',
-      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|ps',
+    const images = releaseImages();
+    assert.deepEqual(dockerCommands(fixture.log), [
+      'docker|compose|version|--short',
+      ...IMAGES.flatMap(([key]) => [
+        `docker|image|inspect|${images[key]}`,
+        `docker|pull|--quiet|${images[key]}`,
+      ]),
+      `${COMPOSE}|up|-d|postgres`,
+      `${COMPOSE}|ps|--format|{{.Service}} {{.State}} {{.Health}}`,
+      `${COMPOSE}|exec|-T|postgres|pg_dump|-U|admin|-d|admin|-Fc`,
+      `${COMPOSE}|run|--rm|-T|migrator`,
+      `${COMPOSE}|ps|-a|--format|{{.Service}} {{.ID}}`,
+      `${COMPOSE}|up|-d|--remove-orphans`,
+      `${COMPOSE}|ps|-a|--format|{{.Service}} {{.ID}}`,
+      `${COMPOSE}|ps|--format|{{.Service}} {{.State}} {{.Health}}`,
+      `${COMPOSE}|ps`,
+      ...IMAGES.map(([key]) => `docker|image|inspect|--format|{{.Id}}|${images[key]}`),
+      ...IMAGES.map(([, name]) => `docker|image|ls|--quiet|--no-trunc|${IMAGE_REPO}-${name}`),
     ]);
     assert.equal(
       logLines(fixture.log).some((line) => line.includes('|build')),
       false,
     );
-    const all = logLines(fixture.log);
-    const curlIndex = all.findIndex((line) => line.startsWith('curl|'));
-    const statusIndex = all.findLastIndex((line) => line.endsWith('|ps'));
-    assert.ok(curlIndex > 1 && curlIndex < statusIndex);
+    assert.match(result.stdout, /Recreated: api caddy web worker-rcon/);
+    assert.match(result.stdout, new RegExp(`${RELEASE_SHA} is live`));
+
+    const recorded = releaseFile(fixture);
+    assert.deepEqual(Object.keys(recorded), [
+      'RELEASE_SHA',
+      'APP_VERSION',
+      'API_IMAGE',
+      'WEB_IMAGE',
+      'WORKERS_IMAGE',
+      'CADDY_IMAGE',
+      'CADDYFILE_SHA',
+      'MIGRATIONS_SHA',
+      'COMPOSE_CONFIG_SHA',
+    ]);
+    assert.equal(recorded.RELEASE_SHA, RELEASE_SHA);
+    assert.equal(recorded.APP_VERSION, RELEASE_SHA);
+    for (const [key] of IMAGES) assert.equal(recorded[key], images[key]);
+    for (const key of ['CADDYFILE_SHA', 'MIGRATIONS_SHA', 'COMPOSE_CONFIG_SHA']) {
+      assert.match(recorded[key] ?? '', /^[0-9a-f]{64}$/, key);
+    }
+    assert.equal(existsSync(path.join(fixture.root, '.release.prev.env')), false);
+    assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
+    const dumps = readdirSync(fixture.backups);
+    assert.equal(dumps.length, 1);
+    assert.match(dumps[0] ?? '', /^panel-\d{8}T\d{6}Z-a{12}\.dump$/);
+    assert.equal(readFileSync(path.join(fixture.backups, dumps[0] ?? ''), 'utf8'), 'PGDMP');
+    // The dump holds the whole database, so only the deploy account reads it.
+    assert.equal(statSync(path.join(fixture.backups, dumps[0] ?? '')).mode & 0o777, 0o600);
   });
 
-  it('fails before starting anything when a release image is not loaded', () => {
+  it('exits before any Docker call when a release changes no image and no configuration', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      env: {
-        ...fixture.env,
-        FAIL_DOCKER_MATCH: `image inspect squad-panel/workers:${RELEASE_SHA}`,
-        FAIL_CODE: '1',
-      },
+    assert.equal((await deploy(fixture)).status, 0);
+    const first = releaseFile(fixture);
+
+    const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /changes no image and no configuration: nothing to do/);
+    assert.deepEqual(logLines(fixture.log), []);
+    // The commit is recorded; the running api keeps reporting its own version.
+    assert.deepEqual(releaseFile(fixture), { ...first, RELEASE_SHA: NEXT_SHA });
+    assert.equal(existsSync(path.join(fixture.root, '.release.prev.env')), false);
+  });
+
+  it('pulls and recreates only what changed, keeping APP_VERSION while the api image stays', async () => {
+    const fixture = deployFixture();
+    assert.equal((await deploy(fixture)).status, 0);
+    const first = releaseFile(fixture);
+    const webImage = imageRef('web', '2');
+
+    const result = await deploy(fixture, {
+      RELEASE_SHA: NEXT_SHA,
+      WEB_IMAGE: webImage,
+      DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a1,web w2,caddy c1,worker-rcon k1',
     });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /squad-panel\/workers:a{40} is not loaded/);
+    assert.equal(result.status, 0, result.stderr);
+    const commands = dockerCommands(fixture.log);
+    assert.deepEqual(
+      commands.filter((line) => line.startsWith('docker|pull|')),
+      [`docker|pull|--quiet|${webImage}`],
+    );
     assert.equal(
-      logLines(fixture.log).some((line) => line.includes('|up|')),
+      commands.some((line) => /pg_dump|migrator|\|up\|-d\|postgres/.test(line)),
       false,
     );
+    assert.equal(commands.filter((line) => line.endsWith('|up|-d|--remove-orphans')).length, 1);
+    assert.match(result.stdout, /Recreated: web;/);
+
+    const recorded = releaseFile(fixture);
+    assert.equal(recorded.RELEASE_SHA, NEXT_SHA);
+    assert.equal(recorded.APP_VERSION, RELEASE_SHA);
+    assert.equal(recorded.WEB_IMAGE, webImage);
+    assert.deepEqual(releaseFile(fixture, '.release.prev.env'), first);
   });
 
-  it('builds the tag on the host through the build override only when asked', () => {
+  it('reports the new commit once the api image changes', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, DEPLOY_BUILD: '1', PANEL_IMAGE_TAG: 'dev-abc1234' },
+    assert.equal((await deploy(fixture)).status, 0);
+    const result = await deploy(fixture, {
+      RELEASE_SHA: NEXT_SHA,
+      API_IMAGE: imageRef('api', '2'),
     });
     assert.equal(result.status, 0, result.stderr);
-    const commands = logLines(fixture.log);
-    const build = commands.findIndex(
-      (line) =>
-        line ===
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|-f|compose.tk104.build.yml|build',
-    );
-    const up = commands.findIndex((line) => line.includes('|up|-d|--remove-orphans'));
-    assert.ok(build >= 0 && up > build, commands.join('\n'));
+    assert.equal(releaseFile(fixture).APP_VERSION, NEXT_SHA);
+    assert.match(result.stdout, new RegExp(`APP_VERSION=${NEXT_SHA}`));
   });
 
-  it('records the release, keeps the previous tag for rollback and pins it in the env file', () => {
+  it('backs up and migrates before the new containers start, only when drizzle changed', async () => {
     const fixture = deployFixture();
-    const previous = 'b'.repeat(40);
-    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
-    writeFileSync(
-      path.join(fixture.root, '.env.tk104'),
-      `SAFE_TEST_VALUE=1\nPANEL_IMAGE_TAG=${previous}\nAPP_VERSION=${previous}\n`,
-    );
-    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal((await deploy(fixture)).status, 0);
+    mkdirSync(fixture.backups, { recursive: true });
+    for (let day = 1; day <= 6; day += 1) {
+      writeFileSync(path.join(fixture.backups, `panel-2020010${day}T000000Z-old.dump`), 'PGDMP');
+    }
+    writeFileSync(path.join(fixture.root, 'packages/db/drizzle/0001_next.sql'), 'ALTER TABLE t;\n');
+
+    const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(path.join(fixture.root, '.release'), 'utf8'), `${RELEASE_SHA}\n`);
-    assert.equal(readFileSync(path.join(fixture.root, '.release.prev'), 'utf8'), `${previous}\n`);
+    const commands = dockerCommands(fixture.log);
+    const dump = commands.findIndex((line) => line.includes('|pg_dump|'));
+    const migrate = commands.indexOf(`${COMPOSE}|run|--rm|-T|migrator`);
+    const up = commands.indexOf(`${COMPOSE}|up|-d|--remove-orphans`);
+    assert.ok(dump >= 0 && migrate > dump && up > migrate, commands.join('\n'));
     assert.equal(
-      readFileSync(path.join(fixture.root, '.env.tk104'), 'utf8'),
-      `SAFE_TEST_VALUE=1\nPANEL_IMAGE_TAG=${RELEASE_SHA}\nAPP_VERSION=${RELEASE_SHA}\n`,
+      commands.some((line) => line.startsWith('docker|pull|')),
+      false,
     );
-  });
-
-  it('leaves the recorded release and env file alone when the deploy fails', () => {
-    const fixture = deployFixture();
-    const previous = 'b'.repeat(40);
-    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, DOCKER_HEALTH_OUTPUT: 'api starting' },
-    });
-    assert.equal(result.status, 1);
-    assert.equal(readFileSync(path.join(fixture.root, '.release'), 'utf8'), `${previous}\n`);
-    assert.equal(existsSync(path.join(fixture.root, '.release.prev')), false);
-    assert.equal(
-      readFileSync(path.join(fixture.root, '.env.tk104'), 'utf8'),
-      'SAFE_TEST_VALUE=1\n',
-    );
-  });
-
-  it('prunes old release images but never the running or previous tag', () => {
-    const fixture = deployFixture();
-    const previous = 'b'.repeat(40);
-    writeFileSync(path.join(fixture.root, '.release'), `${previous}\n`);
-    const result = run('/bin/bash', [fixture.script], {
-      env: {
-        ...fixture.env,
-        // Newest first, as `docker image ls` prints them.
-        DOCKER_IMAGE_TAGS: `${RELEASE_SHA} ${'c'.repeat(40)} ${previous} ${'d'.repeat(40)} <none>`,
-      },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const removed = logLines(fixture.log)
-      .filter((line) => line.startsWith('docker|image|rm|'))
-      .map((line) => line.split('|').at(-1));
-    // KEEP_RELEASES=3: running, previous, and the newest other tag survive.
-    assert.deepEqual(removed, [
-      `squad-panel/api:${'d'.repeat(40)}`,
-      `squad-panel/web:${'d'.repeat(40)}`,
-      `squad-panel/workers:${'d'.repeat(40)}`,
-      `squad-panel/caddy-tk104:${'d'.repeat(40)}`,
+    // The newest five dumps survive: this deploy's, the first deploy's, and
+    // the three most recent of the older ones.
+    const dumps = readdirSync(fixture.backups).sort();
+    assert.equal(dumps.length, 5, dumps.join('\n'));
+    assert.deepEqual(dumps.slice(0, 3), [
+      'panel-20200104T000000Z-old.dump',
+      'panel-20200105T000000Z-old.dump',
+      'panel-20200106T000000Z-old.dump',
     ]);
+    assert.ok(dumps.some((name) => name.endsWith(`-${NEXT_SHA.slice(0, 12)}.dump`)));
+    assert.notEqual(
+      releaseFile(fixture).MIGRATIONS_SHA,
+      releaseFile(fixture, '.release.prev.env').MIGRATIONS_SHA,
+    );
   });
 
-  it('fails closed when the API never becomes healthy', () => {
+  it('stops before any app container is replaced when a migration fails', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, DOCKER_HEALTH_OUTPUT: 'api starting' },
+    assert.equal((await deploy(fixture)).status, 0);
+    const running = readFileSync(path.join(fixture.root, '.release.env'), 'utf8');
+    writeFileSync(path.join(fixture.root, 'packages/db/drizzle/0001_next.sql'), 'ALTER TABLE t;\n');
+
+    const result = await deploy(fixture, {
+      RELEASE_SHA: NEXT_SHA,
+      API_IMAGE: imageRef('api', '2'),
+      FAIL_DOCKER_MATCH: 'run --rm -T migrator',
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /api did not become healthy/);
+    assert.match(result.stderr, /migrations failed; no app container was recreated \(backup: /);
+    const commands = dockerCommands(fixture.log);
+    assert.ok(commands.some((line) => line.includes('|pg_dump|')));
+    assert.equal(
+      commands.some((line) => line.includes('--remove-orphans')),
+      false,
+    );
     assert.equal(
       logLines(fixture.log).some((line) => line.startsWith('curl|')),
       false,
     );
-    assert.doesNotMatch(result.stdout, /Deploy complete/);
+    assert.equal(readFileSync(path.join(fixture.root, '.release.env'), 'utf8'), running);
+    assert.equal(existsSync(path.join(fixture.root, '.release.prev.env')), false);
+    assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
+  });
+
+  it('does not migrate when the pre-migration backup fails', async () => {
+    const fixture = deployFixture();
+    const result = await deploy(fixture, { FAIL_DOCKER_MATCH: 'pg_dump' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /database backup failed; nothing was migrated or recreated/);
+    const commands = dockerCommands(fixture.log);
+    assert.equal(
+      commands.some((line) => line.includes('migrator') || line.includes('--remove-orphans')),
+      false,
+    );
+    assert.deepEqual(readdirSync(fixture.backups), []);
+    assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+  });
+
+  it('applies a Caddyfile or .env.stand edit even when no image changed', async () => {
+    for (const edited of ['docker/Caddyfile.stand', '.env.stand']) {
+      const fixture = deployFixture();
+      assert.equal((await deploy(fixture)).status, 0);
+      const first = releaseFile(fixture);
+      writeFileSync(path.join(fixture.root, edited), '# edited\n', { flag: 'a' });
+
+      const result = await deploy(fixture, { RELEASE_SHA: NEXT_SHA });
+      assert.equal(result.status, 0, result.stderr);
+      const commands = dockerCommands(fixture.log);
+      assert.ok(commands.includes(`${COMPOSE}|up|-d|--remove-orphans`), edited);
+      assert.equal(
+        commands.some((line) => line.startsWith('docker|pull|') || line.includes('migrator')),
+        false,
+      );
+      const recorded = releaseFile(fixture);
+      const hash = edited === '.env.stand' ? 'COMPOSE_CONFIG_SHA' : 'CADDYFILE_SHA';
+      assert.notEqual(recorded[hash], first[hash], edited);
+    }
+  });
+
+  it('fails closed when a recreated service never becomes ready, keeping the recorded release', async () => {
+    const fixture = deployFixture();
+    assert.equal((await deploy(fixture)).status, 0);
+    const running = readFileSync(path.join(fixture.root, '.release.env'), 'utf8');
+
+    const result = await deploy(fixture, {
+      RELEASE_SHA: NEXT_SHA,
+      WEB_IMAGE: imageRef('web', '2'),
+      DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a1,web w2,caddy c1,worker-rcon k1',
+      DOCKER_HEALTH: 'api running healthy,web running starting',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /not ready after 3s: web\(running\/starting\)/);
+    assert.equal(logLines(fixture.log).filter((line) => line.startsWith('sleep|')).length, 3);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.startsWith('curl|')),
+      false,
+    );
+    assert.doesNotMatch(result.stdout, /is live/);
+    assert.equal(readFileSync(path.join(fixture.root, '.release.env'), 'utf8'), running);
+    assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
   });
 
   // regression (#290): the Caddy probe used to be a single-shot `curl -f`. The
-  // api-health wait above returns as soon as the api container is healthy, but
-  // caddy starts in the same `up -d` and needs a moment more to bind 443, so the
-  // probe raced the deploy it verifies. Production run 31948383567 went red with
-  // curl exit 35 (SSL connect error) 140 ms after caddy started, while the stack
-  // was healthy and serving https://tk104.duckdns.org/health with a 200.
-  it('retries the Caddy probe while TLS is still coming up, then reports success', () => {
+  // api-health wait returns as soon as the api container is healthy, but caddy
+  // starts in the same `up -d` and needs a moment more to bind 443, so the
+  // probe raced the deploy it verifies. Run 31948383567 went red with curl
+  // exit 35 (SSL connect error) 140 ms after caddy started, while the stack
+  // was healthy and serving https://<APP_DOMAIN>/health with a 200.
+  it('retries the Caddy probe while TLS is still coming up, then reports success', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, CURL_FAIL_TIMES: '3', CURL_EXIT: '35' },
-    });
+    const result = await deploy(fixture, { CURL_FAIL_TIMES: '3', CURL_EXIT: '35' });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Deploy complete/);
+    assert.match(result.stdout, /is live/);
     const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
     assert.equal(probes.length, 4, 'expected 3 failed probes then one success');
-    // The success path must still run the container-status step afterwards.
-    assert.equal(
-      logLines(fixture.log)
-        .filter((line) => line.startsWith('docker|'))
-        .at(-1)
-        ?.endsWith('|ps'),
-      true,
-    );
+    assert.ok(probes.every((line) => line.includes('|--resolve|stand.example:443:127.0.0.1|')));
   });
 
-  it('still fails closed, preserving the curl exit code, when the probe never recovers', () => {
+  it('still fails closed, preserving the curl exit code, when the probe never recovers', async () => {
     const fixture = deployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, CURL_EXIT: '35' },
-    });
+    const result = await deploy(fixture, { CURL_EXIT: '35' });
     assert.equal(result.status, 35);
-    assert.match(result.stderr, /health probe through Caddy failed after 20 attempts/);
-    assert.doesNotMatch(result.stdout, /Deploy complete/);
+    assert.match(
+      result.stderr,
+      /health probe through Caddy failed after 20 attempts \(curl exit 35/,
+    );
+    assert.doesNotMatch(result.stdout, /is live/);
     const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
     assert.equal(probes.length, 20, 'expected the retry budget to be exhausted');
+    assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('propagates start and HTTP-probe failures without announcing success', () => {
-    const upFixture = deployFixture();
-    const upFailure = run('/bin/bash', [upFixture.script], {
-      env: {
-        ...upFixture.env,
-        FAIL_DOCKER_MATCH: 'compose --env-file .env.tk104 -f compose.tk104.yml up',
-        FAIL_CODE: '47',
-      },
+  it('fails when /health keeps reporting a version other than the recorded one', async () => {
+    const fixture = deployFixture();
+    const result = await deploy(fixture, { CURL_VERSION: 'stale' });
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      new RegExp(`expected version ${RELEASE_SHA}, last response: .*"stale"`),
+    );
+    assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+  });
+
+  it('propagates a failed start without probing or recording the release', async () => {
+    const fixture = deployFixture();
+    const result = await deploy(fixture, {
+      FAIL_DOCKER_MATCH: 'up -d --remove-orphans',
+      FAIL_CODE: '47',
     });
-    assert.equal(upFailure.status, 47);
+    assert.equal(result.status, 47);
     assert.equal(
-      logLines(upFixture.log).some((line) => line.startsWith('curl|')),
+      logLines(fixture.log).some((line) => line.startsWith('curl|')),
       false,
     );
+    assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+    assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
+  });
 
-    const curlFixture = deployFixture();
-    const curlFailure = run('/bin/bash', [curlFixture.script], {
-      env: { ...curlFixture.env, CURL_EXIT: '22' },
+  it('builds the release on the host through the override when asked, never pulling', async () => {
+    const fixture = deployFixture();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await deploy(fixture, {
+        DEPLOY_BUILD: '1',
+        RELEASE_SHA: 'dev-abc1234',
+        API_IMAGE: undefined,
+        WEB_IMAGE: undefined,
+        WORKERS_IMAGE: undefined,
+        CADDY_IMAGE: undefined,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const commands = dockerCommands(fixture.log);
+      // A rebuilt tag can hide new content, so a second identical run builds too.
+      const build = commands.indexOf(`${COMPOSE}|-f|compose.stand.build.yml|build`);
+      const up = commands.indexOf(`${COMPOSE}|up|-d|--remove-orphans`);
+      assert.ok(build >= 0 && up > build, commands.join('\n'));
+      assert.equal(
+        commands.some((line) => line.startsWith('docker|pull|')),
+        false,
+      );
+    }
+    const recorded = releaseFile(fixture);
+    assert.equal(recorded.APP_VERSION, 'dev-abc1234');
+    for (const [key, name] of IMAGES) {
+      assert.equal(recorded[key], `${IMAGE_REPO}-${name}:dev-abc1234`);
+    }
+  });
+
+  it('removes panel images other than the running and the previous release', async () => {
+    const fixture = deployFixture();
+    const first = releaseImages('1');
+    const second = releaseImages('1', { WEB_IMAGE: imageRef('web', '2') });
+    const present = [...Object.values(first), second.WEB_IMAGE].join(',');
+    const staleWeb = imageRef('web', '3');
+    const staleApi = imageRef('api', '0');
+    const repoIds = [...Object.values(first), second.WEB_IMAGE, staleWeb, staleApi]
+      .map((reference) => `id:${reference}`)
+      .join(',');
+    assert.equal((await deploy(fixture, { DOCKER_PRESENT: present })).status, 0);
+
+    const result = await deploy(fixture, {
+      ...second,
+      RELEASE_SHA: NEXT_SHA,
+      DOCKER_PRESENT: present,
+      DOCKER_REPO_IDS: repoIds,
     });
-    assert.equal(curlFailure.status, 22);
-    assert.doesNotMatch(curlFailure.stdout, /Deploy complete/);
+    assert.equal(result.status, 0, result.stderr);
+    const removed = dockerCommands(fixture.log)
+      .filter((line) => line.startsWith('docker|image|rm|'))
+      .map((line) => line.split('|').at(-1));
+    assert.deepEqual(removed.sort(), [`id:${staleApi}`, `id:${staleWeb}`].sort());
+    // Already on the host, so nothing was pulled.
     assert.equal(
-      logLines(curlFixture.log)
-        .filter((line) => line.startsWith('docker|'))
-        .at(-1)
-        ?.endsWith('|ps'),
+      dockerCommands(fixture.log).some((line) => line.startsWith('docker|pull|')),
       false,
     );
   });
 });
 
-describe('tk104 web preview and rollback', () => {
-  const RELEASE_SHA = 'a'.repeat(40);
-
-  function hostFixture(relativePath: string): {
-    root: string;
-    script: string;
-    log: string;
-    env: NodeJS.ProcessEnv;
-  } {
-    const { root, script } = copyScript(relativePath);
-    writeFileSync(path.join(root, '.env.tk104'), 'SAFE_TEST_VALUE=1\n');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    loggingShim(
-      shims,
-      'docker',
-      [
-        `if [[ "$*" == *'ps --format'* ]]; then printf '%s\\n' 'web running'; fi`,
-        `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit 1; fi`,
-        'exit 0',
-      ].join('\n'),
-    );
-    loggingShim(shims, 'sleep');
-    loggingShim(shims, 'curl');
-    return {
-      root,
-      script,
-      log,
-      env: { OPS_LOG: log, APP_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
-    };
+describe('the stand host rollback', { concurrency: true }, () => {
+  /** A deploy fixture with the real rollback script next to the real deploy script. */
+  function rollbackFixture(): DeployFixture & { rollback: string } {
+    const fixture = deployFixture();
+    const rollback = path.join(fixture.root, 'scripts/rollback-stand.sh');
+    copyFileSync(path.join(REPOSITORY_ROOT, 'scripts/rollback-stand.sh'), rollback);
+    return { ...fixture, rollback };
   }
 
-  it('restarts only the loaded web image for a preview tag', () => {
-    const fixture = hostFixture('scripts/deploy-tk104-web.sh');
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, PANEL_IMAGE_TAG: RELEASE_SHA },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const docker = logLines(fixture.log).filter((line) => line.startsWith('docker|'));
-    assert.equal(docker[0], `docker|image|inspect|squad-panel/web:${RELEASE_SHA}`);
-    assert.ok(
-      docker.includes(
-        'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|up|-d|--no-deps|web',
-      ),
-      docker.join('\n'),
-    );
-    assert.equal(
-      docker.some((line) => line.includes('|build') || line.includes('--remove-orphans')),
-      false,
-    );
-  });
-
-  it('refuses a preview without a tag or with a missing image, before restarting web', () => {
-    const untagged = hostFixture('scripts/deploy-tk104-web.sh');
-    const noTag = run('/bin/bash', [untagged.script], { env: untagged.env });
-    assert.equal(noTag.status, 1);
-    assert.match(noTag.stderr, /PANEL_IMAGE_TAG must name the web image/);
-    assert.deepEqual(logLines(untagged.log), []);
-
-    const missing = hostFixture('scripts/deploy-tk104-web.sh');
-    const noImage = run('/bin/bash', [missing.script], {
-      env: {
-        ...missing.env,
-        PANEL_IMAGE_TAG: RELEASE_SHA,
-        FAIL_DOCKER_MATCH: 'image inspect',
-      },
-    });
-    assert.equal(noImage.status, 1);
-    assert.match(noImage.stderr, /is not loaded/);
-    assert.equal(
-      logLines(missing.log).some((line) => line.includes('|up|')),
-      false,
-    );
-  });
-
-  it('builds the preview web image through the override when asked', () => {
-    const fixture = hostFixture('scripts/deploy-tk104-web.sh');
-    const result = run('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, PANEL_IMAGE_TAG: 'dev-abc1234', DEPLOY_BUILD: '1' },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(
-      logLines(fixture.log)[0],
-      'docker|compose|--env-file|.env.tk104|-f|compose.tk104.yml|-f|compose.tk104.build.yml|build|web',
-    );
-  });
-
-  function rollbackFixture(): {
-    root: string;
-    script: string;
-    log: string;
-    env: NodeJS.ProcessEnv;
-  } {
-    const { root, script } = copyScript('scripts/rollback-tk104.sh');
-    const deployScript = path.join(root, 'scripts/deploy-tk104.sh');
-    const log = path.join(root, 'commands.log');
-    // The real deploy script is covered above; here only the hand-off matters.
-    executable(
-      deployScript,
-      `printf 'deploy|%s|%s\\n' "$PANEL_IMAGE_TAG" "$APP_VERSION" >> "\${OPS_LOG:?}"`,
-    );
-    return { root, script, log, env: { OPS_LOG: log, APP_DIR: root } };
-  }
-
-  it('rolls back to the previous release through the normal deploy path', () => {
+  it('redeploys the previous release and swaps the release files, without migrating', async () => {
     const fixture = rollbackFixture();
-    const previous = 'b'.repeat(40);
-    writeFileSync(path.join(fixture.root, '.release'), `${RELEASE_SHA}\n`);
-    writeFileSync(path.join(fixture.root, '.release.prev'), `${previous}\n`);
-    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal((await deploy(fixture)).status, 0);
+    const first = releaseFile(fixture);
+    const second = releaseImages('2');
+    assert.equal((await deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA })).status, 0);
+    const current = releaseFile(fixture);
+    assert.equal(current.APP_VERSION, NEXT_SHA);
+
+    // Only the current images are still on the host: the previous ones are pulled.
+    const result = await deploy(
+      fixture,
+      { DOCKER_PRESENT: Object.values(second).join(','), RELEASE_SHA: 'ignored' },
+      fixture.rollback,
+    );
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(logLines(fixture.log), [`deploy|${previous}|${previous}`]);
+    assert.match(result.stdout, new RegExp(`Rolling back ${NEXT_SHA} -> ${RELEASE_SHA}`));
+    assert.deepEqual(releaseFile(fixture), first);
+    assert.deepEqual(releaseFile(fixture, '.release.prev.env'), current);
+    const commands = dockerCommands(fixture.log);
+    assert.deepEqual(
+      commands.filter((line) => line.startsWith('docker|pull|')),
+      IMAGES.map(([key]) => `docker|pull|--quiet|${releaseImages('1')[key]}`),
+    );
+    assert.equal(
+      commands.some((line) => line.includes('pg_dump') || line.includes('migrator')),
+      false,
+    );
+
+    // A second rollback returns to where it started.
+    assert.equal((await deploy(fixture, {}, fixture.rollback)).status, 0);
+    assert.deepEqual(releaseFile(fixture), current);
   });
 
-  it('refuses a rollback with no previous release or onto the running one', () => {
+  it('refuses without a complete previous release, or onto the running one', async () => {
     const empty = rollbackFixture();
-    const none = run('/bin/bash', [empty.script], { env: empty.env });
+    const none = await deploy(empty, {}, empty.rollback);
     assert.equal(none.status, 1);
     assert.match(none.stderr, /no previous release recorded/);
+    assert.deepEqual(logLines(empty.log), []);
+
+    const partial = rollbackFixture();
+    writeFileSync(path.join(partial.root, '.release.prev.env'), `RELEASE_SHA=${RELEASE_SHA}\n`);
+    const incomplete = await deploy(partial, {}, partial.rollback);
+    assert.equal(incomplete.status, 1);
+    assert.match(incomplete.stderr, /records no API_IMAGE/);
+    assert.deepEqual(logLines(partial.log), []);
 
     const same = rollbackFixture();
-    writeFileSync(path.join(same.root, '.release'), `${RELEASE_SHA}\n`);
-    const onto = run('/bin/bash', [same.script], {
-      env: { ...same.env, ROLLBACK_TO: RELEASE_SHA },
-    });
+    assert.equal((await deploy(same)).status, 0);
+    copyFileSync(path.join(same.root, '.release.env'), path.join(same.root, '.release.prev.env'));
+    const onto = await deploy(same, {}, same.rollback);
     assert.equal(onto.status, 1);
     assert.match(onto.stderr, /already the running release/);
-    assert.deepEqual(logLines(empty.log), []);
     assert.deepEqual(logLines(same.log), []);
   });
 });
 
-describe('fast developer deploy to tk104', () => {
+describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
+  const VALID = [
+    'deploy',
+    RELEASE_SHA,
+    `api=sha256:${'1'.repeat(64)}`,
+    `web=sha256:${'2'.repeat(64)}`,
+    `workers=sha256:${'3'.repeat(64)}`,
+    `caddy=sha256:${'4'.repeat(64)}`,
+  ].join(' ');
+
+  function entryFixture(): {
+    root: string;
+    script: string;
+    log: string;
+    src: string;
+    app: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const { root, script } = copyScript('scripts/deploy-entry.sh');
+    const src = path.join(root, 'src');
+    const app = path.join(root, 'app');
+    // rsync is a shim, so the synced tree is prepared by hand; its deploy
+    // script is a stand-in recording what the entry handed over.
+    mkdirSync(path.join(app, 'scripts'), { recursive: true });
+    executable(
+      path.join(app, 'scripts/deploy-stand.sh'),
+      `printf 'deploy|%s|%s|%s|%s|%s|%s|%s|%s\\n' "$PWD" "$APP_DIR" "$RELEASE_SHA" "$API_IMAGE" "$WEB_IMAGE" "$WORKERS_IMAGE" "$CADDY_IMAGE" "\${DEPLOY_BUILD:-unset}" >> "\${OPS_LOG:?}"`,
+    );
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    loggingShim(
+      shims,
+      'git',
+      [
+        `if [[ -n "\${FAIL_GIT_MATCH:-}" && "$*" == *"$FAIL_GIT_MATCH"* ]]; then exit 128; fi`,
+        `if [[ "$*" == *'rev-parse HEAD' ]]; then printf '%s\\n' "\${GIT_HEAD:-}"; fi`,
+        'exit 0',
+      ].join('\n'),
+    );
+    loggingShim(shims, 'rsync');
+    return {
+      root,
+      script,
+      log,
+      src,
+      app,
+      env: {
+        OPS_LOG: log,
+        PANEL_SRC_DIR: src,
+        PANEL_APP_DIR: app,
+        PATH: `${shims}:/usr/bin:/bin`,
+        GIT_HEAD: RELEASE_SHA,
+        // The runner's own session must not leak a request into the test.
+        SSH_ORIGINAL_COMMAND: undefined,
+      },
+    };
+  }
+
+  it('refuses anything but the exact deploy request, before git, rsync or the deploy', async () => {
+    const fixture = entryFixture();
+    const sentinel = path.join(fixture.root, 'pwned');
+    const digest = (fill: string) => `sha256:${fill.repeat(64)}`;
+    const requests = [
+      '',
+      'deploy',
+      `${VALID}; rm -rf ~`,
+      `${VALID} && touch ${sentinel}`,
+      `${VALID} extra`,
+      `${VALID}\ntouch ${sentinel}`,
+      `${VALID}\n`,
+      ` ${VALID}`,
+      VALID.replace(' api=', '  api='),
+      VALID.replace(' api=', '\tapi='),
+      VALID.replace(RELEASE_SHA, RELEASE_SHA.slice(1)),
+      VALID.replace(RELEASE_SHA, `${RELEASE_SHA}0`),
+      VALID.replace(RELEASE_SHA, RELEASE_SHA.toUpperCase()),
+      VALID.replace(RELEASE_SHA, `$(touch ${sentinel})`),
+      VALID.replace(digest('2'), digest('2').toUpperCase()),
+      VALID.replace(digest('2'), '2'.repeat(64)),
+      VALID.replace(digest('3'), `sha256:${'3'.repeat(63)}`),
+      VALID.replace(`web=${digest('2')} workers=`, `workers=${digest('2')} web=`),
+      VALID.replace('caddy=', 'caddy-stand='),
+      VALID.replace('deploy ', 'rollback '),
+    ];
+    for (const request of requests) {
+      const result = await runAsync('/bin/bash', [fixture.script], {
+        env: { ...fixture.env, SSH_ORIGINAL_COMMAND: request },
+      });
+      assert.equal(result.status, 2, JSON.stringify(request));
+      assert.match(result.stderr, /^refused: expected 'deploy <40-hex sha> api=sha256:/);
+      assert.deepEqual(logLines(fixture.log), [], JSON.stringify(request));
+    }
+    const bare = await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
+    assert.equal(bare.status, 2);
+    // A forced command's request always wins over arguments.
+    const smuggled = await runAsync('/bin/bash', [fixture.script, ...VALID.split(' ')], {
+      env: { ...fixture.env, SSH_ORIGINAL_COMMAND: 'rollback' },
+    });
+    assert.equal(smuggled.status, 2);
+    assert.deepEqual(logLines(fixture.log), []);
+    assert.equal(existsSync(sentinel), false);
+    assert.equal(existsSync(fixture.src), false);
+  });
+
+  it('fetches the commit, syncs it without host state, and hands over to its deploy script', async () => {
+    const fixture = entryFixture();
+    const result = await runAsync('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, SSH_ORIGINAL_COMMAND: VALID, DEPLOY_BUILD: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const excludes = [
+      '.git',
+      'node_modules',
+      '.next',
+      'data',
+      'dist',
+      '.env',
+      '.env.*',
+      '.release*',
+    ]
+      .map((pattern) => `--exclude|${pattern}`)
+      .join('|');
+    assert.deepEqual(logLines(fixture.log), [
+      `git|init|--quiet|${fixture.src}`,
+      `git|-C|${fixture.src}|fetch|--quiet|--depth=1|--no-tags|https://github.com/seregatipich/squad-admin-panel.git|${RELEASE_SHA}`,
+      `git|-C|${fixture.src}|-c|advice.detachedHead=false|checkout|--quiet|--force|--detach|${RELEASE_SHA}`,
+      `git|-C|${fixture.src}|clean|--quiet|-ffdx`,
+      `git|-C|${fixture.src}|rev-parse|HEAD`,
+      `rsync|-a|--delete|${excludes}|${fixture.src}/|${fixture.app}/`,
+      [
+        'deploy',
+        fixture.app,
+        fixture.app,
+        RELEASE_SHA,
+        imageRef('api', '1'),
+        imageRef('web', '2'),
+        imageRef('workers', '3'),
+        imageRef('caddy', '4'),
+        // A request can only ever deploy registry images, never build.
+        'unset',
+      ].join('|'),
+    ]);
+    // No installed copy exists in the fixture's checkout, so it says to reinstall.
+    assert.match(result.stderr, /differs from scripts\/deploy-entry\.sh .* reinstall it/);
+  });
+
+  it('takes the same request as arguments when run by hand, with overridable locations', async () => {
+    const fixture = entryFixture();
+    mkdirSync(path.join(fixture.src, '.git'), { recursive: true });
+    mkdirSync(path.join(fixture.src, 'scripts'), { recursive: true });
+    copyFileSync(fixture.script, path.join(fixture.src, 'scripts/deploy-entry.sh'));
+    const result = await runAsync('/bin/bash', [fixture.script, ...VALID.split(' ')], {
+      env: {
+        ...fixture.env,
+        PANEL_REPO_URL: 'https://example.invalid/fork.git',
+        PANEL_IMAGE_REPO: 'ghcr.io/example/panel',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const commands = logLines(fixture.log);
+    // The checkout already exists, so it is reused rather than initialised.
+    assert.equal(
+      commands.some((line) => line.startsWith('git|init|')),
+      false,
+    );
+    assert.ok(commands.some((line) => line.includes('|https://example.invalid/fork.git|')));
+    assert.ok(commands.at(-1)?.includes(`|ghcr.io/example/panel-api@sha256:${'1'.repeat(64)}|`));
+    assert.doesNotMatch(result.stderr, /reinstall/);
+  });
+
+  it('stops before syncing when the commit cannot be fetched or checked out', async () => {
+    const unfetchable = entryFixture();
+    const fetchFailure = await runAsync('/bin/bash', [unfetchable.script], {
+      env: { ...unfetchable.env, SSH_ORIGINAL_COMMAND: VALID, FAIL_GIT_MATCH: 'fetch' },
+    });
+    assert.equal(fetchFailure.status, 128);
+    assert.equal(
+      logLines(unfetchable.log).some(
+        (line) => line.startsWith('rsync|') || line.startsWith('deploy|'),
+      ),
+      false,
+    );
+
+    const elsewhere = entryFixture();
+    const wrongHead = await runAsync('/bin/bash', [elsewhere.script], {
+      env: { ...elsewhere.env, SSH_ORIGINAL_COMMAND: VALID, GIT_HEAD: 'b'.repeat(40) },
+    });
+    assert.equal(wrongHead.status, 1);
+    assert.match(wrongHead.stderr, /is at 'b{40}', expected a{40}/);
+    assert.equal(
+      logLines(elsewhere.log).some(
+        (line) => line.startsWith('rsync|') || line.startsWith('deploy|'),
+      ),
+      false,
+    );
+  });
+});
+
+describe('fast developer deploy to the stand host', { concurrency: true }, () => {
   function devDeployFixture(): {
     root: string;
     script: string;
     log: string;
     env: NodeJS.ProcessEnv;
   } {
-    const { root, script } = copyScript('scripts/dev-deploy-tk104.sh');
+    const { root, script } = copyScript('scripts/dev-deploy-stand.sh');
     const shims = shimDirectory();
     const log = path.join(root, 'commands.log');
     loggingShim(shims, 'rsync', `exit "\${RSYNC_EXIT:-0}"`);
@@ -841,108 +1775,168 @@ describe('fast developer deploy to tk104', () => {
       root,
       script,
       log,
-      env: { OPS_LOG: log, SOURCE_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
+      env: {
+        OPS_LOG: log,
+        SOURCE_DIR: root,
+        PATH: `${shims}:/usr/bin:/bin`,
+        STAND_SSH_TARGET: 'deployer@stand.example',
+        STAND_URL: 'https://stand.example',
+      },
     };
   }
 
+  /** The remote command: every ssh argument after the target, which may itself contain `|`. */
   function sshPayload(log: string): string {
     return logLines(log)
       .filter((line) => line.startsWith('ssh|'))
-      .map((line) => line.split('|').at(-1) ?? '')
+      .map((line) => line.split('|').slice(6).join('|'))
       .join('\n');
   }
 
-  it('defaults to the web service and rebuilds it on the host after the sync', () => {
+  const COMPOSE_BOTH =
+    'docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml';
+
+  it('defaults to the web service: rebuilds it on the host after the sync and records it', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const commands = logLines(fixture.log);
     const rsyncIndex = commands.findIndex((line) => line.startsWith('rsync|'));
     const sshIndex = commands.findIndex((line) => line.startsWith('ssh|'));
     assert.ok(rsyncIndex >= 0 && sshIndex > rsyncIndex, commands.join('\n'));
-    assert.match(sshPayload(fixture.log), /DEPLOY_BUILD=1 bash scripts\/deploy-tk104-web\.sh/);
-    // Nothing that could touch the schema or other containers.
-    assert.doesNotMatch(sshPayload(fixture.log), /deploy-tk104\.sh|migrator|--remove-orphans/);
+    const payload = sshPayload(fixture.log);
+    const image = `${IMAGE_REPO}-web:dev-abc1234`;
+    assert.match(
+      payload,
+      /test -f \.release\.env \|\| \{ echo 'fatal: the stand host has no release recorded yet/,
+    );
+    assert.ok(payload.includes(`export WEB_IMAGE='${image}';`), payload);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build web;`), payload);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps web;`), payload);
+    assert.ok(
+      payload.includes(`sed -i -e 's|^WEB_IMAGE=.*|WEB_IMAGE=${image}|' .release.env`),
+      payload,
+    );
+    // Nothing that could touch the schema, other containers, or /health.
+    assert.doesNotMatch(payload, /deploy|migrator|--remove-orphans|APP_VERSION/);
   });
 
-  it('never ships host secrets, state, or build output', () => {
+  it('never ships host secrets, release records, state, or build output', async () => {
     const fixture = devDeployFixture();
-    run('/bin/bash', [fixture.script], { env: fixture.env });
+    await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
     const rsync = logLines(fixture.log).find((line) => line.startsWith('rsync|')) ?? '';
-    for (const excluded of ['.git', 'node_modules', '.next', 'data', 'dist', '.env', '.env.*']) {
+    for (const excluded of [
+      '.git',
+      'node_modules',
+      '.next',
+      'data',
+      'dist',
+      '.env',
+      '.env.*',
+      '.release*',
+    ]) {
       assert.ok(rsync.includes(`|--exclude|${excluded}`), `${excluded} is not excluded: ${rsync}`);
     }
     assert.ok(rsync.includes('|--delete'), rsync);
-    assert.match(rsync, /\|seregatipich@tk104\.duckdns\.org:apps\/squad-admin-panel\/$/);
+    assert.match(rsync, /\|deployer@stand\.example:apps\/squad-admin-panel\/$/);
   });
 
-  it('stamps a version that can never be mistaken for a released commit SHA', () => {
+  it('stamps a version that can never be mistaken for a pushed commit SHA', async () => {
     const fixture = devDeployFixture();
-    run('/bin/bash', [fixture.script], { env: { ...fixture.env, GIT_SHA: 'deadbee' } });
-    assert.match(
+    await runAsync('/bin/bash', [fixture.script, 'api'], {
+      env: { ...fixture.env, GIT_SHA: 'deadbee' },
+    });
+    assert.ok(
+      sshPayload(fixture.log).includes(
+        `export API_IMAGE='${IMAGE_REPO}-api:dev-deadbee' APP_VERSION='dev-deadbee';`,
+      ),
       sshPayload(fixture.log),
-      /APP_VERSION='dev-deadbee' PANEL_IMAGE_TAG='dev-deadbee'/,
     );
 
     const dirty = devDeployFixture();
-    run('/bin/bash', [dirty.script], {
+    await runAsync('/bin/bash', [dirty.script, 'api'], {
       env: { ...dirty.env, GIT_SHA: 'deadbee', GIT_DIRTY: ' M apps/web/src/page.tsx' },
     });
-    assert.match(
-      sshPayload(dirty.log),
-      /APP_VERSION='dev-deadbee-dirty' PANEL_IMAGE_TAG='dev-deadbee-dirty'/,
-    );
+    assert.match(sshPayload(dirty.log), /APP_VERSION='dev-deadbee-dirty'/);
   });
 
-  it('rebuilds only the api container, without the migrator, for the api target', () => {
+  it('rebuilds only the api container, without the migrator, and records its version', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
-    assert.match(payload, /-f compose\.tk104\.yml -f compose\.tk104\.build\.yml build api/);
-    assert.match(payload, /up -d --no-deps api/);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build api;`), payload);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps api;`), payload);
+    assert.ok(
+      payload.includes(
+        `sed -i -e 's|^API_IMAGE=.*|API_IMAGE=${IMAGE_REPO}-api:dev-abc1234|' -e 's|^APP_VERSION=.*|APP_VERSION=dev-abc1234|' .release.env`,
+      ),
+      payload,
+    );
     assert.doesNotMatch(payload, /migrator|--remove-orphans/);
   });
 
-  it('refuses the full deploy without the explicit confirmation, before any sync', () => {
+  it('refuses the full deploy without the explicit confirmation, before any sync', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /migrations from the working tree/);
     assert.deepEqual(logLines(fixture.log), []);
   });
 
-  it('runs the full deploy script once the confirmation is exact', () => {
+  it('runs the whole deploy as a host build once the confirmation is exact', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'full'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'full'], {
       env: { ...fixture.env, CONFIRM_FULL_DEPLOY: 'deploy' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(sshPayload(fixture.log), /DEPLOY_BUILD=1 bash scripts\/deploy-tk104\.sh/);
+    assert.match(
+      sshPayload(fixture.log),
+      /DEPLOY_BUILD=1 RELEASE_SHA='dev-abc1234' bash scripts\/deploy-stand\.sh$/,
+    );
   });
 
-  it('rebuilds a single worker container by name, on the same no-deps path', () => {
+  it('rebuilds a single worker container by name, on the same no-deps path', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'worker-rcon'], { env: fixture.env });
+    const result = await runAsync('/bin/bash', [fixture.script, 'worker-rcon'], {
+      env: fixture.env,
+    });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
-    assert.match(payload, /-f compose\.tk104\.build\.yml build worker-rcon/);
-    assert.match(payload, /up -d --no-deps worker-rcon/);
-    assert.doesNotMatch(payload, /migrator|--remove-orphans/);
+    assert.ok(
+      payload.includes(`export WORKERS_IMAGE='${IMAGE_REPO}-workers:dev-abc1234';`),
+      payload,
+    );
+    assert.ok(payload.includes('-f compose.stand.build.yml build worker-rcon;'), payload);
+    assert.ok(payload.includes('up -d --no-deps worker-rcon;'), payload);
+    assert.doesNotMatch(payload, /migrator|--remove-orphans|APP_VERSION/);
   });
 
-  it('rejects an unknown target before touching the production host', () => {
-    const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'postgres'], { env: fixture.env });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|worker-<name>\|full\]/);
-    assert.deepEqual(logLines(fixture.log), []);
+  it('refuses to run without the stand target and origin', async () => {
+    for (const unset of ['STAND_SSH_TARGET', 'STAND_URL']) {
+      const fixture = devDeployFixture();
+      const result = await runAsync('/bin/bash', [fixture.script], {
+        env: { ...fixture.env, [unset]: '' },
+      });
+      assert.notEqual(result.status, 0, unset);
+      assert.match(result.stderr, new RegExp(`${unset}: set ${unset}`));
+      assert.deepEqual(logLines(fixture.log), [], unset);
+    }
   });
 
-  it('stops at a failed sync instead of rebuilding a half-copied tree', () => {
+  it('rejects an unknown or malformed target before touching the stand host', async () => {
+    for (const target of ['postgres', 'worker-rcon;touch pwned', 'worker-', 'worker-RCON']) {
+      const fixture = devDeployFixture();
+      const result = await runAsync('/bin/bash', [fixture.script, target], { env: fixture.env });
+      assert.equal(result.status, 2, target);
+      assert.match(result.stderr, /usage: dev-deploy-stand\.sh \[web\|api\|worker-<name>\|full\]/);
+      assert.deepEqual(logLines(fixture.log), [], target);
+    }
+  });
+
+  it('stops at a failed sync instead of rebuilding a half-copied tree', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], {
-      ...{},
+    const result = await runAsync('/bin/bash', [fixture.script], {
       env: { ...fixture.env, RSYNC_EXIT: '23' },
     });
     assert.equal(result.status, 23);
@@ -952,9 +1946,9 @@ describe('fast developer deploy to tk104', () => {
     );
   });
 
-  it('retries the health probe while the rebuilt api is still booting, then reports success', () => {
+  it('retries the health probe while the rebuilt api is still booting, then reports success', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
       env: { ...fixture.env, CURL_FAIL_TIMES: '3' },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -962,9 +1956,9 @@ describe('fast developer deploy to tk104', () => {
     assert.equal(logLines(fixture.log).filter((line) => line.startsWith('curl|')).length, 4);
   });
 
-  it('fails closed, preserving the curl exit code, when health never recovers', () => {
+  it('fails closed, preserving the curl exit code, when health never recovers', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script, 'api'], {
+    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
       env: { ...fixture.env, CURL_PERSISTENT_EXIT: '22' },
     });
     assert.equal(result.status, 22);
@@ -972,9 +1966,11 @@ describe('fast developer deploy to tk104', () => {
     assert.doesNotMatch(result.stdout, /Done\./);
   });
 
-  it('fails when the remote rebuild fails, without announcing success', () => {
+  it('fails when the remote rebuild fails, without announcing success', async () => {
     const fixture = devDeployFixture();
-    const result = run('/bin/bash', [fixture.script], { env: { ...fixture.env, SSH_EXIT: '7' } });
+    const result = await runAsync('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, SSH_EXIT: '7' },
+    });
     assert.equal(result.status, 7);
     assert.doesNotMatch(result.stdout, /Done\./);
   });

@@ -5,7 +5,7 @@ import { playerSessions, players, servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { RconPlayer } from '../src/parse-list-players.js';
 import { closeServerSessions, reconcilePlayerSessions, upsertPlayers } from '../src/persist.js';
 
@@ -51,10 +51,17 @@ async function openSessionCount(): Promise<number> {
   return rows.length;
 }
 
-beforeAll(async () => {
+beforeAll(() => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
   db = drizzle(sql, { schema }) as unknown as DatabaseClient;
+});
+
+// A server per test: reconciling a roster closes every other open session of
+// the server, so a session a previous test left open would be counted by the
+// next one's `closed` total whenever the order changes.
+beforeEach(async () => {
+  if (!DATABASE_URL) return;
   serverId = randomUUID();
   await db.insert(servers).values({
     id: serverId,

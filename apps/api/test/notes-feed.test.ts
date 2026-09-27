@@ -1,7 +1,7 @@
 import { playerNameHistory, playerNotes, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -121,7 +121,8 @@ describe('global notes feed', () => {
   let n3: string;
   let n4: string;
 
-  beforeEach(async () => {
+  // Every case only reads the feed, so one seeded fixture serves the whole file.
+  beforeAll(async () => {
     seq = 0;
     h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
     ownerCookie = await loginAsOwner(h);
@@ -162,7 +163,7 @@ describe('global notes feed', () => {
     });
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await h.cleanup();
   });
 

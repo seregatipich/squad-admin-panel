@@ -1618,7 +1618,7 @@ func collectStreamBackupFrames(d *Dispatcher, req *rpc.Request) ([]rpc.StreamFra
 }
 
 func TestBackupSnapshots_ReturnsParsedSnapshots(t *testing.T) {
-	f := &runner.Fake{Stdout: []byte(`[{"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"tk104","paths":["/data"],"tags":[]}]`)}
+	f := &runner.Fake{Stdout: []byte(`[{"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"stand-host","paths":["/data"],"tags":[]}]`)}
 	d := backupDispatcher(f)
 	resp := d.Handle(context.Background(), &rpc.Request{ID: "b1", Method: "backup_snapshots", Params: json.RawMessage(`{}`)}, func(rpc.StreamFrame) {})
 	if !resp.OK {

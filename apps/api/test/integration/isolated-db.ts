@@ -89,6 +89,22 @@ function databaseUrl(name: string): string {
   return url.toString();
 }
 
+// CREATE/DROP DATABASE run from the cluster's always-present `postgres`
+// maintenance database: inside a test worker TEST_DATABASE_URL names the file's
+// own worker database, which is only cloned on demand and may not exist yet.
+function maintenanceDbUrl(): string {
+  return databaseUrl('postgres');
+}
+
+async function dropDatabase(name: string): Promise<void> {
+  const admin = postgres(maintenanceDbUrl(), { max: 1, onnotice: () => undefined });
+  try {
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+  } finally {
+    await admin.end();
+  }
+}
+
 let migrationStatementsCache: string[] | null = null;
 
 /**
@@ -185,7 +201,7 @@ function ensureTemplateDatabase(): Promise<string> {
 }
 
 async function buildTemplateDatabase(name: string): Promise<string> {
-  const admin = postgres(hostDbUrl(), { max: 1, onnotice: () => undefined });
+  const admin = postgres(maintenanceDbUrl(), { max: 1, onnotice: () => undefined });
   try {
     await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     await admin.unsafe(`CREATE DATABASE "${name}"`);
@@ -202,7 +218,7 @@ async function buildTemplateDatabase(name: string): Promise<string> {
 }
 
 async function cloneTemplate(target: string, template: string): Promise<void> {
-  const admin = postgres(hostDbUrl(), { max: 1, onnotice: () => undefined });
+  const admin = postgres(maintenanceDbUrl(), { max: 1, onnotice: () => undefined });
   try {
     let lastError: unknown;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -234,47 +250,148 @@ export async function createIsolatedSchema(): Promise<CreatedSchema> {
   return {
     schema: name,
     url: databaseUrl(name),
-    async drop() {
-      const admin = postgres(hostDbUrl(), { max: 1, onnotice: () => undefined });
-      try {
-        await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-      } finally {
-        await admin.end();
-      }
-    },
+    drop: () => dropDatabase(name),
   };
 }
 
-interface WorkerResources {
-  drop(): Promise<void>;
-}
-
-let workerResources: Promise<WorkerResources> | null = null;
+// `process.env.DATABASE_URL ? describe : describe.skip` only asks whether a
+// database is configured at all, so on its own it does not make a file a user
+// of the worker database.
+const DATABASE_URL_PRESENCE_GATE =
+  /process\.env\.DATABASE_URL\s*\?\s*describe\s*:\s*describe\.skip/g;
+const WORKER_DATABASE_REFERENCE = /DATABASE_URL|hostDbUrl|reusePublicSchema/;
 
 /**
- * File-isolation hook invoked by `worker-setup.ts` before a Vitest file runs.
- * Vitest evaluates setupFiles in each isolated file context, so the matching
- * afterAll hook must release this clone before that context disappears. Files
- * running in parallel never share mutable Postgres or Redis state.
+ * Decides from a test file's source whether it reaches the per-file worker
+ * database: by reading `DATABASE_URL`/`TEST_DATABASE_URL`, calling
+ * `hostDbUrl()`, or building a `reusePublicSchema` harness. Deliberately
+ * over-inclusive — any other mention counts, even in a comment — because the
+ * two mistakes are not symmetric: a false positive costs one clone, while a
+ * false negative leaves the file pointed at a worker database that does not
+ * exist yet, which fails loudly ("database … does not exist") and can never
+ * fall through to a database another file is using.
+ *
+ * @param source - The test file's TypeScript source.
+ * @returns Whether the worker database must be cloned before the file loads.
  */
-export async function provisionWorkerResources(): Promise<void> {
+export function sourceUsesWorkerDatabase(source: string): boolean {
+  return WORKER_DATABASE_REFERENCE.test(source.replace(DATABASE_URL_PRESENCE_GATE, ''));
+}
+
+/**
+ * Applies {@link sourceUsesWorkerDatabase} to the test file at `testPath`. An
+ * unknown or unreadable file counts as a user, so the fallback is the eager
+ * clone every file used to get.
+ *
+ * @param testPath - Absolute path of the test file about to run, if known.
+ * @returns Whether the worker database must be cloned before the file loads.
+ */
+export function testFileUsesWorkerDatabase(testPath: string | undefined): boolean {
+  if (!testPath) return true;
+  try {
+    return sourceUsesWorkerDatabase(readFileSync(testPath, 'utf-8'));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Maps a Vitest pool slot (`VITEST_POOL_ID`, 1..maxForks) to the Redis logical
+ * DB a file flushes and uses. Pool ids are unique among files running at the
+ * same time; `VITEST_WORKER_ID` is not — it grows with every file, so keying
+ * on it let a file started eight files after a still-running one flush the
+ * same logical DB underneath it. Distinct for up to eight forks, the bound the
+ * vitest config regression test pins.
+ *
+ * @param poolId - The `VITEST_POOL_ID` of the fork running the file.
+ * @returns A Redis logical DB index in 8..15.
+ */
+export function workerRedisDatabase(poolId: number): number {
+  return 8 + (poolId % 8);
+}
+
+interface WorkerDatabase {
+  name: string;
+  url: string;
+  clone: Promise<void> | null;
+}
+
+let workerResources: Promise<void> | null = null;
+let workerDatabase: WorkerDatabase | null = null;
+
+export interface ProvisionWorkerResourcesOptions {
+  /**
+   * Clone the worker database now (the default). When false the clone waits
+   * for the first {@link ensureWorkerDatabase} call; `DATABASE_URL` and
+   * `TEST_DATABASE_URL` name the file's own database either way.
+   */
+  database?: boolean;
+}
+
+/**
+ * File-isolation hook invoked by `worker-setup.ts` before a Vitest file runs:
+ * flushes the file's Redis logical DB and points `TEST_REDIS_URL` at it, and
+ * points `DATABASE_URL`/`TEST_DATABASE_URL` at a database name that belongs to
+ * this file alone. Vitest evaluates setupFiles in each isolated file context,
+ * so the matching afterAll hook must release the clone before that context
+ * disappears. Files running in parallel never share mutable Postgres or Redis
+ * state.
+ *
+ * @param options - Whether to clone the worker database now or on demand.
+ */
+export async function provisionWorkerResources(
+  options: ProvisionWorkerResourcesOptions = {},
+): Promise<void> {
   if (!workerResources) workerResources = doProvisionWorkerResources();
   await workerResources;
+  if (options.database ?? true) await ensureWorkerDatabase();
 }
 
+/**
+ * Clones the worker database that `DATABASE_URL`/`TEST_DATABASE_URL` name from
+ * the shared template on the first call; later and concurrent calls share that
+ * single clone. Outside a provisioned worker (e.g. the e2e config) there is no
+ * worker database and the configured URL is returned unchanged.
+ *
+ * @returns The URL `TEST_DATABASE_URL` points at, now backed by a database.
+ */
+export async function ensureWorkerDatabase(): Promise<string> {
+  if (workerResources) await workerResources;
+  const target = workerDatabase;
+  if (!target) return hostDbUrl();
+  if (!target.clone) {
+    target.clone = ensureTemplateDatabase().then((template) =>
+      cloneTemplate(target.name, template),
+    );
+  }
+  await target.clone;
+  return target.url;
+}
+
+/**
+ * @returns This file's worker database name, or null outside a provisioned
+ *   worker. The database itself exists only once {@link ensureWorkerDatabase}
+ *   has run.
+ */
+export function workerDatabaseName(): string | null {
+  return workerDatabase?.name ?? null;
+}
+
+/** Drops the worker database if it was ever cloned; safe to call repeatedly. */
 export async function releaseWorkerResources(): Promise<void> {
-  const resources = workerResources;
+  const database = workerDatabase;
   workerResources = null;
-  if (!resources) return;
-  await (await resources).drop();
+  workerDatabase = null;
+  if (!database?.clone) return;
+  // Settle an in-flight clone first so the drop cannot overtake CREATE DATABASE.
+  await database.clone.catch(() => undefined);
+  await dropDatabase(database.name);
 }
 
-async function doProvisionWorkerResources(): Promise<WorkerResources> {
-  const baseUrl = hostDbUrl();
-  const workerId = Number(process.env.VITEST_WORKER_ID ?? '1');
-
+async function doProvisionWorkerResources(): Promise<void> {
+  const poolId = Number(process.env.VITEST_POOL_ID ?? '1');
   const redisUrl = new URL(hostRedisUrl());
-  redisUrl.pathname = `/${8 + (workerId % 8)}`;
+  redisUrl.pathname = `/${workerRedisDatabase(poolId)}`;
   const redisTarget = redisUrl.toString();
   const flushClient = new Redis(redisTarget);
   try {
@@ -284,25 +401,11 @@ async function doProvisionWorkerResources(): Promise<WorkerResources> {
   }
   process.env.TEST_REDIS_URL = redisTarget;
 
-  const template = await ensureTemplateDatabase();
   const name = `sqworker_${currentRunId()}_${process.pid}_${randomBytes(4).toString('hex')}`;
-  await cloneTemplate(name, template);
   const url = databaseUrl(name);
+  workerDatabase = { name, url, clone: null };
   process.env.DATABASE_URL = url;
   process.env.TEST_DATABASE_URL = url;
-
-  return {
-    async drop() {
-      const maintenanceUrl = new URL(baseUrl);
-      maintenanceUrl.pathname = '/postgres';
-      const admin = postgres(maintenanceUrl.toString(), { max: 1, onnotice: () => undefined });
-      try {
-        await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-      } finally {
-        await admin.end();
-      }
-    },
-  };
 }
 
 /**

@@ -1,12 +1,12 @@
-import { createIsolatedPackageTestDatabase } from '../../../../packages/db/test/helpers/isolated-database.js';
+// Resolves DATABASE_URL from the repo `.env`, as each test file's `load-env.ts`
+// does, before the template is built from it.
+import '../../_test-shared/load-env.js';
+import type { TestProject } from 'vitest/node';
+import { setupPackageTemplateDatabase } from '../../../../packages/db/test/helpers/package-template.js';
 
-/** Provisions one migrated database for the complete clan-guard test process. */
-export default async function setupClanGuardTestDatabase(): Promise<() => Promise<void>> {
-  const baseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!baseUrl) return async () => undefined;
-
-  const isolated = await createIsolatedPackageTestDatabase(baseUrl, 'clan_guard');
-  process.env.DATABASE_URL = isolated.url;
-  process.env.TEST_DATABASE_URL = isolated.url;
-  return () => isolated.drop();
+/** Migrates the clan-guard package's template once; each worker slot gets a clone of it. */
+export default function setupClanGuardTestDatabase(
+  project: TestProject,
+): Promise<() => Promise<void>> {
+  return setupPackageTemplateDatabase(project, 'clan_guard');
 }

@@ -7,9 +7,9 @@
  */
 import { players, roles } from '@squad/db/schema';
 import { PANEL_SAVED_ROOT } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   buildIntegrationApp,
@@ -23,9 +23,10 @@ const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 
 let h: IntegrationHarness;
 
+// Each describe shares one harness across its cases, and several cases demote
+// the seeded owner; put it back on Owner so no case inherits a narrowed role.
 afterEach(async () => {
-  if (h?.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h?.cleanup();
+  await assignRole(await ownerRoleId());
 });
 
 /** Reassign the seeded owner to a fresh role, invalidating its perm cache. */
@@ -36,6 +37,17 @@ async function assignRole(roleId: string): Promise<void> {
   const ownerPlayerId = h.seed.ownerPlayerId;
   if (!ownerPlayerId) throw new Error('missing seeded owner');
   invalidatePermissionCache(ownerPlayerId);
+}
+
+async function ownerRoleId(): Promise<string> {
+  const rows = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  const id = rows[0]?.id;
+  if (!id) throw new Error('Owner role missing — migration 0009 not applied?');
+  return id;
 }
 
 async function viewerRoleId(): Promise<string> {
@@ -50,7 +62,7 @@ async function viewerRoleId(): Promise<string> {
 }
 
 describe('GET /api/v1/servers/:id/logs/files', () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
       seedOwnerGuard: true,
@@ -71,6 +83,10 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
         },
       }),
     });
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
   });
 
   it('lists SquadGame*.log files with size, mtime and the live badge', async () => {
@@ -145,8 +161,7 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
   const FRAME_BYTES = 400;
   let emittedFrames = 0;
 
-  beforeEach(async () => {
-    emittedFrames = 0;
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
       seedOwnerGuard: true,
@@ -162,6 +177,14 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
         },
       }),
     });
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  beforeEach(() => {
+    emittedFrames = 0;
   });
 
   it('streams the file as an attachment, reassembled byte-exact from many frames', async () => {

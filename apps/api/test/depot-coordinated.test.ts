@@ -1,11 +1,12 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
+  makeFakeBridge,
 } from './integration/harness.js';
 
 const OWNER = 76561198000000001n;
@@ -48,14 +49,25 @@ async function waitForDepotUpdate(timeoutMs = 5000): Promise<void> {
   }
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER } });
+});
+
+beforeEach(async () => {
+  // Cases swap bridge methods and seed fake files on the shared app.
+  Object.assign(h.bridge, makeFakeBridge());
   await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
 });
 
 afterEach(async () => {
+  // A background update left running by a failed case would otherwise keep
+  // writing depot:* keys into the next case.
+  await waitForDepotUpdate();
   await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
-  await h.cleanup();
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('POST /api/v1/depot/update with server_ids', () => {

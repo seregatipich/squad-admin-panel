@@ -149,7 +149,7 @@ Note the asymmetry: the privileged path is one-directional and narrow, while the
 | `packages/shared-types` | Zod schemas + `eventEnvelope`; the only package both `apps/web` and `apps/api` import |
 | `packages/bridge-client`, `packages/diag` | TS RPC client for the bridge; structural-injection diagnostics sink (the cleanest dependency boundary in the repo, `packages/diag/src/index.ts:1`) |
 | `docker/` | `api|web|worker|squad-server|restic|depot-init|rnsquadjs` Dockerfiles + two Caddyfiles. `worker.Dockerfile` is parameterised by `ARG WORKER` |
-| `scripts/` | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `deploy-tk104.sh` |
+| `scripts/` | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `deploy-stand.sh` |
 | `docs/` (238 `.md`) | `architecture/` (incl. `decisions.md` with **9** dated records), `components/`, `development/`, `operations/`. Substantially stale in places — see the documentation chapter |
 
 ### Sizing
@@ -205,7 +205,7 @@ Only three ports leave the host boundary: `caddy` on `80:80` and `443:443`, and 
 ```mermaid
 graph TB
   U["Browser"] -->|"HTTPS 443 / 80"| CADDY
-  subgraph HOST["Linux host (tk104 in production)"]
+  subgraph HOST["Linux host (the stand host in production)"]
     subgraph NET["compose default bridge network"]
       CADDY["<b>caddy</b> :80 :443<br/>path-routed reverse proxy"]
       WEB["<b>web</b> :3000<br/>Next.js 15 App Router"]
@@ -850,7 +850,7 @@ export default {
 };
 ```
 
-The rewrite *is* the BFF layer — there is no server-side API façade of its own. Same-origin also does the security work: the `__Host-sid` cookie rides along on every `fetch` and on the WebSocket upgrade without any CORS or token plumbing. Note that `output: 'standalone'` is dead configuration: `docker/web.Dockerfile:21-27` copies the whole `/app` tree and runs `next start`, and line 19 swallows build failures with `|| echo "web not yet built (Phase 0 static stub)"`, so a broken web build still produces a green image.
+The rewrite *is* the BFF layer — there is no server-side API façade of its own. Same-origin also does the security work: the `__Host-sid` cookie rides along on every `fetch` and on the WebSocket upgrade without any CORS or token plumbing. The image runs `next start` from a runtime stage that holds only the production dependencies and the build output (`docker/web.Dockerfile`), so `output: 'standalone'`, if set, is not what ships; `next build` skips its own type check and lint, which `ci` runs on `master` (`@squad/web`'s `typecheck` is `next typegen && tsc --noEmit`, so page and layout exports are still checked against the generated route types).
 
 ### 5.1 Route groups, layouts, middleware
 
@@ -2752,7 +2752,7 @@ redis-cli config set appendonly yes >/dev/null
 until [ "$(... aof_rewrite_in_progress ...)" = "0" ]; do sleep 0.3; done
 ```
 
-Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `compose.tk104.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the tk104 production stack is unbacked.**
+Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `compose.stand.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the stand production stack is unbacked.**
 
 ---
 
@@ -2913,7 +2913,7 @@ The layering is therefore upheld entirely by what each `package.json` declares. 
 
 ### 13.6 Suspicious edges
 
-1. **Runtime deps declared as `devDependencies` in `apps/api`.** `drizzle-orm` is imported in 116 files under `apps/api/src` and `undici` at `apps/api/src/lib/rcon.ts:2`, yet both sit in `devDependencies`. `docker/api.Dockerfile:38` runs `pnpm install --frozen-lockfile --prod`, which prunes exactly those symlinks.
+1. **Runtime deps must be `dependencies` in `apps/api`.** `drizzle-orm` (imported in 116 files under `apps/api/src`) and `undici` (`apps/api/src/lib/rcon.ts:2`) are runtime imports; the api image installs production dependencies only, so a runtime import left in `devDependencies` fails at start-up. Both are `dependencies`, and `apps/api/test/runtime-dependencies.test.ts` pins that.
 2. **`apps/workers/_test-shared` is a `package.json`-less workspace member** matched by the `apps/workers/*` glob and imported by relative path across package boundaries (`apps/workers/log-ingest/test/contract.test.ts:3` → `'../../_test-shared/contract.js'`, same in `role-expirer`, `seed-reward`, `clan-priority-expirer`). A real cross-package edge invisible to pnpm and to Turbo's affected-package graph.
 3. **`docker/rnsquadjs/plugins/panelBridge` is a workspace member with zero `@squad/*` imports** that hand-copies the envelope with `type: string` (unconstrained) and `server_id: string` (non-nullable) at `src/eventMap.ts:3` — a third, weaker copy of the contract.
 4. **Two unrelated exported types both named `RconClient`/`RconClientOptions`**: `apps/api/src/lib/rcon.ts:4` (HTTP-over-unix-socket via `undici`) and `apps/workers/rcon/src/client.ts:12` (raw Valve RCON TCP over `node:net`). Different transports, same names, neither shared.
@@ -3039,7 +3039,7 @@ All packages use `provider: 'v8'`, `reporter: ['text','lcov','json-summary']`, `
 | `worker-rcon` | 12 | 68 | 77 | 12 |
 | `@squad/web` | **1** | 17 | 83 | **1** |
 
-`pnpm test:cov` enumerates exactly **10** packages by `--filter`: api, web, db, shared-config, shared-types, bridge-client, and workers `rcon`, `log-ingest`, `metrics-sampler`, `role-expirer`. Parallelism: the API uses `pool: 'forks'` with `maxForks = Number(process.env.VITEST_MAX_FORKS) || 4` and `sequence.concurrent: false`; `packages/db` and `worker-log-ingest` disable `fileParallelism` entirely.
+`pnpm test:cov` enumerates exactly **10** packages by `--filter`: api, web, db, shared-config, shared-types, bridge-client, and workers `rcon`, `log-ingest`, `metrics-sampler`, `role-expirer`. Parallelism: the API uses `pool: 'forks'` with `maxForks = Number(process.env.VITEST_MAX_FORKS) || 4` and `sequence.concurrent: false`; `packages/db` and the database-heavy workers run their files in parallel under the same `VITEST_MAX_FORKS` bound, each worker slot on its own clone of a once-migrated package template (see `docs/development/testing.md`).
 
 ### 14.8 Thin coverage — the honest read
 
@@ -3065,7 +3065,7 @@ First, `typecheck` depends on `^build` because **there are no TypeScript project
 
 Second, `test` depends on the package's *own* `build`, so every `turbo run test` is preceded by a full `tsc -p` of that package. This is why `CLAUDE.md` steers agents to `pnpm --filter @squad/api exec vitest run <file>` instead.
 
-Third, `DATABASE_URL` and `TEST_DATABASE_URL` sit in `globalEnv`. Provisioning a fresh isolated DB changes the global hash and invalidates every cached task — cache hits can never mask a stale DB, but per-agent DB slugs mean near-zero cache reuse across parallel agents.
+Third, only `NODE_ENV` and `CI` sit in `globalEnv`; the connection settings (`DATABASE_URL`, `TEST_DATABASE_URL`, `REDIS_URL`, `TEST_REDIS_URL`, `POSTGRES_PASSWORD`, `APP_ENCRYPTION_KEY`, `PANEL_BRIDGE_SOCKET`) are `globalPassThroughEnv` — the tasks see them, the hash does not. No build output depends on which database a run points at, and hashing them made every per-agent test DB and every CI run (whose service containers get a new host port each time) a full cache miss. `globalDependencies` is `tsconfig.base.json` alone: no build reads `biome.json` or `.env.example`.
 
 `tsconfig.base.json` is aggressive: `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `allowUnreachableCode: false`, `isolatedModules`, `verbatimModuleSyntax`, target/lib `ES2023`, `moduleResolution: "Bundler"`. `exactOptionalPropertyTypes` is the one flag deliberately off. `apps/web/tsconfig.json` does **not** extend the base — it redeclares everything and is the only package with a path alias (`@/*` → `./src/*`); everywhere else, cross-package imports go through workspace package names.
 
@@ -3073,47 +3073,58 @@ Biome 2.2.0 handles lint and format together (2-space, `lineWidth: 100`, single 
 
 ### 14.10 CI on ephemeral hosted runners
 
-`.github/workflows/ci.yml` (204 lines) triggers on trusted pushes to `[master, dev]` plus explicit dispatch. It deliberately has no pull-request trigger: feature branches run the local pre-push gate and only accepted integration SHAs consume the organization allowance. Concurrency group `ci-${{ github.ref }}` uses `cancel-in-progress: true`, so a newer SHA replaces an obsolete run. All four jobs use a fresh `ubuntu-24.04` VM (2 vCPU / 8 GB / 14 GB for this private repository); production deployment remains in a separate self-hosted workflow.
+`.github/workflows/ci.yml` triggers only on pushes to `master` — the fast-forward promotion of a `dev` commit — and on explicit dispatch. It has no pull-request trigger and does not run on `dev`: `dev` feeds the development stand without tests (§14.11), so `ci` is the verification of what is promoted. Concurrency group `ci-${{ github.ref }}` uses `cancel-in-progress: true`, so a newer SHA replaces an obsolete run; nothing deploys from this workflow. Every job runs on a fresh `ubuntu-24.04` VM (the repository is public, so hosted minutes are free).
 
 ```mermaid
 graph LR
-  BG["branch-guard (10m)<br/>ancestry audit +<br/>test-git-guard.sh<br/>test-verify-done.sh"]
-  N["node (30m)<br/>pg16 + redis7 services"]
-  G["go (15m)<br/>setup-go 1.25.11<br/>vet + race + vuln"]
-  D["docker (30m)<br/>5 image builds +<br/>test-backup-restore.sh"]
-  N --> D
-  G --> D
+  BG["branch-guard<br/>ancestry audit +<br/>harness suites"]
+  L["lint<br/>biome, typecheck,<br/>gitleaks"]
+  TA["test-api ×4<br/>pg16 + redis7"]
+  TW["test-web ×2"]
+  TP["test-packages<br/>pg16 + redis7"]
+  S["scripts<br/>migrate + test:scripts"]
+  C["changes"] --> M["mutation<br/>(shared-config only)"]
+  G["go<br/>vet + race + vuln"]
+  I["images<br/>bake + smoke"]
+  B["backup<br/>INFRA-8"]
+  BG --> GATE["gate<br/>all green +<br/>merged coverage"]
+  L --> GATE
+  TA --> GATE
+  TW --> GATE
+  TP --> GATE
+  S --> GATE
+  C --> GATE
+  M --> GATE
+  G --> GATE
+  I --> GATE
+  B --> GATE
 ```
 
-**`branch-guard`** asserts `git merge-base --is-ancestor $GITHUB_SHA origin/dev` on a push to `master`. It also runs the git/verification harness tests, workflow pin/security tests, runner strategy guard, and the other CI policy suites.
+**`branch-guard`** asserts `git merge-base --is-ancestor $GITHUB_SHA origin/dev` on a push to `master`, then runs the git/verification harness tests, the workflow pin/security tests, the runner-strategy guard, and the other CI policy suites.
 
-**`node`** starts `postgres:16-alpine` and `redis:7-alpine` as service containers on **dynamic host ports**; a "Resolve service ports" step writes both `DATABASE_URL` and `TEST_DATABASE_URL` (plus `REDIS_URL` and `TEST_REDIS_URL` at `/15`) into `$GITHUB_ENV`. CPU parallelism is pinned via `VITEST_MAX_FORKS=2` and `PNPM_WORKSPACE_CONCURRENCY=2`. Step order: install → issue-runner tests → typecheck → production build → migrations → operations scripts → panel bridge → shared-config mutation tests → Biome → coverage completeness → full coverage → artifact → gitleaks.
+**`test-api`** (four shards) and **`test-web`** (two shards) run `scripts/ci-test-shard.sh`, which hands vitest `--shard=<i>/<n> --reporter=blob --coverage` with the thresholds switched off; neither builds or migrates anything, because vitest resolves `@squad/*` to source through the `development` export condition and the API harness builds its own template database from the SQL migrations. `test-api` starts `postgres:16-alpine` and `redis:7-alpine` service containers on **dynamic host ports**; a "Resolve service ports" step writes both `DATABASE_URL` and `TEST_DATABASE_URL` (plus `REDIS_URL` and `TEST_REDIS_URL` at `/15`) into `$GITHUB_ENV`, and a tuning step turns off `fsync`, `synchronous_commit` and `full_page_writes` with `ALTER SYSTEM` over `docker exec`. **`test-packages`** builds only the workers (their contract tests start `dist/index.js` under plain Node), migrates, and runs every other `test:cov` package whole under its own thresholds, four at a time, longest suites first. **`scripts`** migrates and runs `pnpm test:scripts`; **`changes`** → **`mutation`** runs Stryker only when `packages/shared-config` changed in the pushed range.
 
-**`go`** uses SHA-pinned `actions/setup-go` for 1.25.11 directly on the disposable VM. Bridge tests that touch absolute paths remain isolated because no machine survives the job. Steps: `go vet`, `go test -race -count=1`, `govulncheck`, then a static `CGO_ENABLED=0` build.
+**`go`** uses SHA-pinned `actions/setup-go` directly on the disposable VM. Steps: `go vet`, `go test -race -count=1`, `govulncheck` (pinned `v1.7.0`), then a static `CGO_ENABLED=0` build whose dynamic linking fails the job.
 
-**`docker`** is the only `needs`-gated job. After green Node and Go jobs it builds API, two worker variants, rnsquadjs and web images, then runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip). There is no persistent-runner cleanup: GitHub destroys the VM and all Docker state at job end.
+**`images`** builds the `release` group and `rnsquadjs` from `docker-bake.hcl`, reading the GHCR layer cache the stand deploy writes (`packages: read`; it never writes the cache), loads them, and smoke-tests them: the api image imports `postgres`, every `WORKER` in `compose.stand.yml` exists in the workers image, and the workers image exits 64 without one. **`backup`** runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip) beside it.
 
-### 14.11 Production delivery: deploy-tk104
+**`gate`** `needs` every other job with `if: always()` and fails unless all of them succeeded — only `mutation` may be skipped. It then downloads the API and web blob reports and runs `vitest run --merge-reports --coverage` in `apps/api` and `apps/web`, so each package's `vitest.config.ts` thresholds apply to the merged coverage of its whole suite.
 
-`.github/workflows/deploy-tk104.yml` fires on push to `master` with `paths-ignore: ['**.md','docs/**']`, concurrency `deploy-tk104` with `cancel-in-progress: false`. It writes `secrets.TK104_SSH_KEY`, `rsync -az --delete` (excluding `.git`, `node_modules`, `.next`, `data`, `dist`, `.env*`) to the production host, SSHes in to run `scripts/deploy-tk104.sh` (which brings up `compose.tk104.yml` with `--env-file .env.tk104`, waits for the api health status, and probes Caddy via `curl --resolve`), then polls `https://tk104.duckdns.org/health` up to 10 × 6 s.
+### 14.11 Stand delivery: deploy
 
-**It is not `needs`-gated on `ci`.** It is a separate workflow starting in parallel with the master CI run, so a red master CI does not stop the production deploy. The only safety net is the external health probe — and the fact that `master` is supposed to receive only dev SHAs that already passed CI. That invariant is the deploy gate, which is exactly why the enforcement harness below is load-bearing rather than decorative.
+the stand host is a **development stand**, not production. `.github/workflows/deploy.yml` fires on every push to `dev` with `paths-ignore: ['**.md','docs/**']`, and on a dispatch with an optional 40-hex `sha` for a redeploy or rollback. It runs no tests: what reaches `dev` is reviewed code, verified by `ci` once it is promoted to `master`, and a broken stand is fixed forward or rolled back.
+
+The `build` job is a matrix over `api`, `web`, `workers` and `caddy` on hosted VMs with `packages: write`. Each leg checks out the target SHA, skips the build when `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists, and otherwise builds its `docker-bake.hcl` target and pushes `:<sha>` and `:dev` with a registry layer cache at `:buildcache` (`mode=max`). Its concurrency group `deploy-build-<image>` cancels a superseded build, whose run then skips its deploy.
+
+The `deploy` job waits for every build, binds the `stand` environment (the only holder of `STAND_SSH_KEY` and `STAND_SSH_KNOWN_HOSTS`, admitting `dev` alone), and runs one at a time in group `deploy` with `cancel-in-progress: false`. It resolves the four tags to `sha256` digests, pins the host key (`ssh-keygen -F <stand host>`, `StrictHostKeyChecking=yes`), and sends one SSH command, `deploy <sha> api=sha256:… web=sha256:… workers=sha256:… caddy=sha256:…`. On the host the key is bound to a forced command (`~/bin/panel-deploy`, from `scripts/deploy-entry.sh`) that validates that line, fetches the commit into its own checkout, and runs `scripts/deploy-stand.sh` with the images pinned by digest; the job itself gets no shell and copies no files. Finally it polls `$STAND_URL/health` every 2 s for about 90 s, requiring HTTP 200 with `"status":"ok"`, and removes the key in an `always()` step.
 
 ### 14.12 The pre-push checklist
 
-`lefthook.yml` pre-commit runs in parallel: `git-guard check-commit`, staged-file Biome, `gofmt -l -s . && go vet ./...` for bridge Go files, and `gitleaks protect --staged … || true` (non-blocking by design). Pre-push is serial: `branch-guard` at priority 1, then `checklist` at priority 2.
+`lefthook.yml` pre-commit runs in parallel: `git-guard check-commit`, staged-file Biome, a `gofmt -l -s` check that fails on any listed file plus `go vet` for linux/amd64 (skipped without Go), and `gitleaks protect --staged`, which blocks on a finding (skipped without gitleaks). Pre-push is serial: `branch-guard` at priority 1, then `checklist` at priority 2.
 
-`scripts/pre-push-checklist.sh` runs seven steps through a `run_step` wrapper that accumulates passed/failed/skipped and exits non-zero on any failure: (1) `turbo run typecheck`; (2) repo-wide `biome check .`; (3) `turbo run build` (skippable with `SKIP_BUILD=1`); (4) gitleaks, only if installed; (5) operation and verification script contracts after database provisioning; (6) package tests; and (7) shared-config mutation tests. The database-backed steps auto-provision a database first:
+`scripts/pre-push-checklist.sh` is deliberately light, because a `dev` push deploys the dev stand without tests and the full suite runs in `ci` on `master`. Through a `run_step` wrapper that accumulates passed/failed/skipped it runs: (1) `git fetch origin dev`; (2) Biome over the source directories; (3) gitleaks on `origin/dev..HEAD`, only if installed; (4) `turbo run typecheck` for the packages changed since the merge base with `origin/dev` and their dependents; (5) the tests of the changed packages only — in `apps/api` only the changed test files — with suites that read `DATABASE_URL`/`REDIS_URL` skipped with a warning when no database is available (an exported `DATABASE_URL`, or one `scripts/new-test-db.sh` provisions for the worktree); and (6) `pnpm test:scripts`, only when `scripts/` or `.github/` changed. Measuring from the merge base rather than the `origin/dev` tip keeps commits that landed on `dev` after the branch forked from counting as its changes. `FULL=1` runs the old full gate instead (full typecheck, `biome check .`, the production build, `test:scripts`, `test:cov`, mutation tests) and fails without a database.
 
-```bash
-if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then
-  eval "$(bash scripts/new-test-db.sh prepush 2>/dev/null)" || true
-fi
-```
-
-then `pnpm test:cov` under `FULL=1`, else `turbo run test --filter='...[origin/dev]'`. With neither a DB nor Docker it **fails** rather than skipping. Note the deliberate asymmetry: `branch-guard` is wired as a lefthook *script* with `use_stdin: true` while `checklist` is a *command*, so the checklist auto-skips on no-diff pushes — precisely the dev→master promotion — while the branch guard still runs.
-
-`scripts/verify-done.sh` has two modes. Default requires a clean tree on `dev`, `HEAD == origin/dev`, a `git-guard.sh doctor` run with no `WARN`, and a `gh run list --branch dev --workflow ci` entry whose `headSha` equals the current dev tip and concluded `success`. `--feature [branch]` — the parallel-wave handoff mode — requires a work branch (explicitly rejecting `master|main|dev|HEAD`), a clean tree, `HEAD == origin/<branch>`, and a successful `git merge-base origin/dev HEAD`, with **no CI check**, since the branch is unmerged.
+`scripts/verify-done.sh` has two modes. Default requires a clean tree on `dev`, `HEAD == origin/dev`, a `git-guard.sh doctor` run with no `WARN`, a successful `deploy` run for the current dev tip, and that tip promoted to `master` with a `ci` run on exactly that SHA concluded `success`. `--feature [branch]` — the parallel-wave handoff mode — requires a work branch (explicitly rejecting `master|main|dev|HEAD`), a clean tree, `HEAD == origin/<branch>`, and a successful `git merge-base origin/dev HEAD`, with **no CI check**, since the branch is unmerged.
 
 ### 14.13 Three-layer branch-model enforcement
 
@@ -3139,7 +3150,7 @@ The rules are identical at every layer: no branch named `main` (create/checkout/
 
 `check_command` is honest about its limits: it splits on `&&`/`||`/`;`/`|`, strips env-var prefixes, tracks `cd`/`pushd` and `git -C <dir>`, and **skips commands targeting other repositories** by comparing `--git-common-dir` — so a scratch clone under `/tmp` is unguarded. Exit 2 with stderr means deny. `doctor` never blocks; it warns on a `core.hooksPath` shadowing lefthook, an existing local or remote `main`, `origin/master` not being an ancestor of `origin/dev`, and a missing `jq`.
 
-The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (deny creation and update on `refs/heads/main`), `protect-dev` (deny deletion and non-fast-forward), and `protect-master` (adds `required_status_checks` for `branch-guard`, `node`, `go`, `docker`). **They are currently dormant** — GitHub requires Pro/Team or a public repo for rulesets on this private repo — which is exactly why the `branch-guard` CI job duplicates the ancestry audit in code. Two of the three layers are client-side and bypassable with `--no-verify`; the only server-side check that actually holds today is that CI job.
+The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (deny creation and update on `refs/heads/main`), `protect-dev` and `protect-master` (deny deletion and non-fast-forward). `protect-master` requires no status checks: `ci` runs only after the promotion push has landed, so a pre-push requirement could never be met. **They are not applied yet** — the repository is public, so GitHub accepts them, but `scripts/apply-rulesets.sh` has not been run since the move to `seregatipich/squad-admin-panel` — which is exactly why the `branch-guard` CI job duplicates the ancestry audit in code. Two of the three layers are client-side and bypassable with `--no-verify`; the only server-side check that actually holds today is that CI job, and it detects a bypass after the fact rather than preventing it.
 
 ### 14.14 Agent orchestration as an in-repo subsystem
 
@@ -3147,7 +3158,7 @@ The rulesets (`enforcement: "active"`, `bypass_actors: []`) are `block-main` (de
 
 `AGENT_SYSTEM_PROMPT` (`:317`) declares `CLAUDE.md` authoritative, and `buildTaskPrompt` (`:220`) restates the branch model, the test policy, the local gate, `bash scripts/verify-done.sh --feature`, and the handoff-comment requirement verbatim — the CLAUDE.md contract is compiled into the prompt, so the docs are load-bearing runtime input, not commentary. `solveIssue` (`:364`) never throws, mapping session outcomes to `solved`/`failed`/`timed-out`; `runPool` (`:248`) is a hand-rolled lane pool that preserves input order; the process exits 1 unless every session is `solved`.
 
-Crucially, **the runner cannot push or merge**. It never invokes `git`; its only subprocess is `gh` with read-only subcommands. All pushing happens inside the sandbox, by the agent, on its own branch — the same three-layer guard applies there. And it is itself tested: `pnpm run solve:issues:test` runs `tsx --test scripts/solve-issues-parallel.test.ts` inside the CI `node` job.
+Crucially, **the runner cannot push or merge**. It never invokes `git`; its only subprocess is `gh` with read-only subcommands. All pushing happens inside the sandbox, by the agent, on its own branch — the same three-layer guard applies there. And it is itself tested: `pnpm run solve:issues:test` runs `tsx --test scripts/solve-issues-parallel.test.ts` inside the CI `lint` job.
 
 Two neighbouring automation scripts are worth knowing about because they are *not* wired to anything. `scripts/rnsquadjs-shadow-diff.mjs` (114 lines) `XRANGE`s `events:server:<id>` against `events:server:<id>:shadow` and calls `compareStreams` from the plugin's built `dist/shadowDiff.js`, implementing the "≥ 99% event-set parity" cutover criterion — but no workflow or package.json entry references it, and the only automated check on the same data is `apps/api/test/e2e/install-lifecycle.e2e.test.ts:163` asserting `xlen(:shadow) > 0`. `compareStreams` is unit-tested; the wrapper's gate thresholds are not. `scripts/mint-owner-session.mjs` (29 lines) is fully orphaned — zero call sites — and diverges from `apps/web/e2e/helpers.ts` in three ways (raw `pg` vs `docker exec psql`, no Redis session mirror, uuidv7 vs v4). `scripts/verify-audit-chain.ts` is the counterexample done right: it re-uses `apps/api/src/lib/audit-chain.ts#verifyAuditChain`, so the CLI and the `/api/v1/audit/verify-chain` route agree by construction rather than by convention.
 
@@ -3204,7 +3215,7 @@ const interval = setInterval(tick, TICK_INTERVAL_MS);
 // SIGTERM: clearInterval → diag '.stopped' → stopHeartbeat() → sql.end() → redis.quit()
 ```
 
-Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker-compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `compose.tk104.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
+Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker-compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `compose.stand.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
 
 **Pitfalls.** `KNOWN_WORKERS` lists only six names (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`) while `apps/workers/` holds 19 packages — 13 workers publish heartbeats nobody watches, so their death is invisible on the dashboard. Also, workers must never import from another `apps/*` package (`docs/development/conventions.md:26`), so shared constants such as the live-bus channel name are **re-declared** per worker rather than shared.
 

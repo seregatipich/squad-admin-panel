@@ -1,6 +1,6 @@
-import { altIgnoredIps, players } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { altDetectionSettings, altIgnoredIps, auditLog, players } from '@squad/db/schema';
+import { and, eq, gt, max } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -16,17 +16,61 @@ const OWNER_STEAM = testSteamId(820001);
 const TEST_PLAYER_LIMITED_VIEWER = testSteamId(820002);
 
 let h: IntegrationHarness;
+let auditBaseline = 0n;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
 });
 
-afterEach(async () => {
-  if (h) await h.cleanup();
+afterAll(async () => {
+  await h.cleanup();
 });
+
+beforeEach(async () => {
+  const [latest] = await h.db.select({ id: max(auditLog.id) }).from(auditLog);
+  auditBaseline = latest?.id ?? 0n;
+});
+
+// Cases assert the migration defaults and an empty ignore list, and several
+// seed the same limited viewer: re-create the singleton row exactly as
+// migration 0055 does, empty the list and drop that viewer.
+afterEach(async () => {
+  await h.db.delete(altDetectionSettings);
+  await h.db.insert(altDetectionSettings).values({ id: 1 });
+  await h.db.delete(altIgnoredIps);
+  await h.db.delete(players).where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
+  invalidateAllPermissionCaches();
+});
+
+/**
+ * Waits for an audit row written during the current case. `assertAuditRow`
+ * accepts any recent matching row, and on this shared harness several cases
+ * write the same action (every request is audited, rejected ones included),
+ * so it could pass on an earlier case's row.
+ */
+async function expectAuditRowFromThisCase(action: string, resource: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await h.db
+            .select({ id: auditLog.id })
+            .from(auditLog)
+            .where(
+              and(
+                eq(auditLog.actionType, action),
+                eq(auditLog.targetType, resource),
+                gt(auditLog.id, auditBaseline),
+              ),
+            )
+        ).length,
+      { timeout: 1_200, interval: 50 },
+    )
+    .toBeGreaterThan(0);
+}
 
 async function loginAsRoleWithoutViewIps(): Promise<string> {
   const [row] = await h.db
@@ -145,10 +189,7 @@ describe('PUT /api/v1/settings/alt-detection', () => {
     expect(body.settings.weight_shared_ip).toBe(80);
     expect(body.settings.medium_threshold).toBe(40);
 
-    await assertAuditRow(h, {
-      action: 'alt_detection.settings.update',
-      resource: 'alt_detection_settings',
-    });
+    await expectAuditRowFromThisCase('alt_detection.settings.update', 'alt_detection_settings');
   });
 
   it('round-trips weight_coplay_overlap and coplay_overlap_threshold_seconds', async () => {
@@ -246,10 +287,7 @@ describe('POST/DELETE /api/v1/settings/alt-detection/ignored-ips', () => {
     });
     expect(cidrBlock.statusCode).toBe(201);
 
-    await assertAuditRow(h, {
-      action: 'alt_detection.ignored_ip.create',
-      resource: 'alt_ignored_ip',
-    });
+    await expectAuditRowFromThisCase('alt_detection.ignored_ip.create', 'alt_ignored_ip');
   });
 
   it('rejects malformed input with 400', async () => {

@@ -2,7 +2,7 @@ import { servers } from '@squad/db/schema';
 import type { DiagEvent } from '@squad/diag';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -15,20 +15,28 @@ let h: IntegrationHarness;
 let captured: DiagEvent[];
 let counter = 0;
 
-beforeEach(async () => {
+// One app + database per file. A reconciler tick inspects every running
+// server, so each test starts with no servers, the default fake bridge (tests
+// swap containerInspect in place) and an empty capture of diag events.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     bridge: makeFakeBridge(),
     withStatusReconciler: true,
   });
-  captured = [];
   h.app.diag.emit = async (ev) => {
     captured.push(ev);
   };
-  counter += 1;
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  Object.assign(h.bridge, makeFakeBridge());
+  await h.db.delete(servers);
+  captured = [];
+  counter += 1;
 });
 
 async function seedRunningServer(): Promise<string> {

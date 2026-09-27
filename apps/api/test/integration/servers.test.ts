@@ -1,6 +1,14 @@
-import { players, roles, serverCredentials, serverSettings, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import {
+  auditLog,
+  players,
+  roles,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
+import { and, eq, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
 import {
@@ -38,18 +46,41 @@ const createBody = {
 };
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 
-beforeEach(async () => {
-  vi.mocked(relaunchSidecar).mockClear();
+// One app + database per file. Tests reuse the same slug and ports and some
+// read `servers` unfiltered, so each one starts with no servers (deleting
+// cascades to settings, credentials and config history), the default fake
+// bridge (tests swap its methods in place) and the owner back on Owner.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  vi.mocked(relaunchSidecar).mockClear();
+  Object.assign(h.bridge, makeFakeBridge());
+  await h.db.delete(servers);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 async function login(): Promise<string> {
@@ -105,10 +136,14 @@ describe('GET /api/v1/servers', () => {
 describe('POST /api/v1/servers', () => {
   it('inserts server + settings + credentials rows and writes audit row', async () => {
     const cookie = await login();
+    // Every test in this file writes server.create rows into the shared,
+    // append-only audit_log; the audit context records the user agent, so a
+    // unique one identifies this request's own row.
+    const userAgent = `servers-create-audit-${randomUUID()}`;
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/servers',
-      headers: { cookie },
+      headers: { cookie, 'user-agent': userAgent },
       payload: createBody,
     });
     expect(resp.statusCode).toBe(201);
@@ -138,8 +173,19 @@ describe('POST /api/v1/servers', () => {
 
     // The POST /servers route has no :id in the URL, so `extractTargetId` in
     // audit plugin returns null; we assert action+resource only here.
-    void id;
-    await assertAuditRow(h, { action: 'server.create', resource: 'server' });
+    await vi.waitFor(async () => {
+      const rows = await h.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.actionType, 'server.create'),
+            eq(auditLog.targetType, 'server'),
+            sql`${auditLog.context}->>'userAgent' = ${userAgent}`,
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    });
   });
 
   it('rejects a body missing required fields with 400/422', async () => {

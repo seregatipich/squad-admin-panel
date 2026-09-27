@@ -1,8 +1,8 @@
-import { configVersions, players, roleSquadPermissions, roles } from '@squad/db/schema';
+import { configVersions, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -32,18 +32,42 @@ const MANAGED_SEGMENT =
 const FIXTURE = `${HEADER}${MANUAL_LINE}${MANAGED_SEGMENT}${CRLF}`;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+const createdRoleIds: string[] = [];
 
-beforeEach(async () => {
+// One app + database per file. createServer() reuses one slug and port set,
+// so each test starts with no servers (deleting cascades to config history),
+// the owner back on Owner and the ad-hoc demotion roles removed.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db.delete(servers);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 async function login(): Promise<string> {
@@ -93,6 +117,7 @@ function readRotationFile(serverId: string): string | undefined {
  */
 async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -117,6 +142,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
 
 async function asRoleWithoutPanelAccess(): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.insert(roles).values({
     id: roleId,
     name: `NoPanelAccess-${roleId}`,

@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,21 +25,6 @@ vi.mock('@/components/UpdateProgressModal', () => ({
 import { ServerControls } from './ServerControls';
 
 const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
-
-/**
- * jsdom знает `<dialog>`, но не реализует `showModal()`/`close()`. Диалог
- * подтверждения удаления построен на нативном элементе, поэтому тест
- * воспроизводит ровно то, на что этот примитив опирается.
- */
-if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.removeAttribute('open');
-    this.dispatchEvent(new Event('close'));
-  };
-}
 
 function serverBody(status: string, runtime?: string) {
   return { server: { id: SERVER_ID, display_name: 'Test Server', status, runtime } };

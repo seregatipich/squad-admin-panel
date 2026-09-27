@@ -184,7 +184,7 @@ analyze_checkout_switch() {
   done
 
   if [ -n "$new_branch" ]; then
-    is_main_ref "$new_branch" && deny "creating a branch named 'main' — it must never exist; master is the production branch"
+    is_main_ref "$new_branch" && deny "creating a branch named 'main' — it must never exist; master is the default branch"
     case "$start_point" in
     master | origin/master | refs/heads/master)
       deny "creating '$new_branch' from master — work branches are created from dev"

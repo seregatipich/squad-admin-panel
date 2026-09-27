@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useId } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';

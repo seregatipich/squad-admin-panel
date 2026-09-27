@@ -10,7 +10,7 @@ import {
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -20,33 +20,53 @@ import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './ha
 
 const OWNER_STEAM_ID = testSteamId(143000);
 const SUBSCRIBER_STEAM_ID = testSteamId(143001);
-const SERVER_ID = '019f4700-0000-7000-8000-000000000001';
 const MANUAL_RULE_ID = '00000000-0000-7000-8000-000000000077';
 
 type AlertTriggeredEvent = Extract<LiveEvent, { type: 'alert.triggered' }>;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let serverId: string;
+
+// One app + database per file. Each test gets its own server, so the seed-call
+// cooldown, events and audit rows (all keyed by server id) never leak between
+// tests, and the owner is put back on Owner after asRoleWithSquadPermissions().
+beforeAll(async () => {
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
+});
+
+afterAll(async () => {
+  await h?.cleanup();
+});
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  serverId = uuidv7();
   await h.db.insert(servers).values({
-    id: SERVER_ID,
+    id: serverId,
     displayName: 'Seed Notification Server',
-    slug: 'seed-notification-server',
+    slug: `seed-notification-${serverId}`,
   });
   await h.db.insert(serverSettings).values({
-    serverId: SERVER_ID,
+    serverId,
     installPath: '/srv/squad',
     gamePort: 7787,
     queryPort: 27165,
     beaconPort: 15000,
     rconPort: 21114,
   });
-});
-
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
 });
 
 async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
@@ -66,9 +86,9 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db
     .update(players)
     .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeEach
+    // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
     .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeEach
+  // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
@@ -143,14 +163,14 @@ describe('SEED-4 seed-call notifications', () => {
   it('requires authentication and chat/manageserver permission', async () => {
     const unauthenticated = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/seed-call`,
+      url: `/api/v1/servers/${serverId}/seed-call`,
     });
     expect(unauthenticated.statusCode).toBe(401);
 
     const cookie = await asRoleWithSquadPermissions([]);
     const forbidden = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/seed-call`,
+      url: `/api/v1/servers/${serverId}/seed-call`,
       headers: { cookie },
     });
     expect(forbidden.statusCode).toBe(403);
@@ -162,7 +182,7 @@ describe('SEED-4 seed-call notifications', () => {
 
     const subscription = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${SERVER_ID}/seed-subscription`,
+      url: `/api/v1/servers/${serverId}/seed-subscription`,
       headers: { cookie: subscriber.cookie },
       payload: { channel: 'webpush', enabled: true },
     });
@@ -173,7 +193,7 @@ describe('SEED-4 seed-call notifications', () => {
     try {
       const call = await h.app.inject({
         method: 'POST',
-        url: `/api/v1/servers/${SERVER_ID}/seed-call`,
+        url: `/api/v1/servers/${serverId}/seed-call`,
         headers: { cookie: actorCookie },
       });
       expect(call.statusCode).toBe(200);
@@ -198,7 +218,7 @@ describe('SEED-4 seed-call notifications', () => {
       const storedEvents = await h.db
         .select()
         .from(events)
-        .where(and(eq(events.serverId, SERVER_ID), eq(events.kind, 'seed.call_sent')));
+        .where(and(eq(events.serverId, serverId), eq(events.kind, 'seed.call_sent')));
       expect(storedEvents).toHaveLength(1);
       expect(storedEvents[0]?.payload).toMatchObject({
         server_name: 'Seed Notification Server',
@@ -220,7 +240,7 @@ describe('SEED-4 seed-call notifications', () => {
 
       const repeated = await h.app.inject({
         method: 'POST',
-        url: `/api/v1/servers/${SERVER_ID}/seed-call`,
+        url: `/api/v1/servers/${serverId}/seed-call`,
         headers: { cookie: actorCookie },
       });
       expect(repeated.statusCode).toBe(429);
@@ -230,16 +250,16 @@ describe('SEED-4 seed-call notifications', () => {
 
       const unsubscribe = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/servers/${SERVER_ID}/seed-subscription`,
+        url: `/api/v1/servers/${serverId}/seed-subscription`,
         headers: { cookie: subscriber.cookie },
         payload: { channel: 'webpush', enabled: false },
       });
       expect(unsubscribe.statusCode).toBe(200);
 
-      await h.redis.del(`seed:call:cooldown:${SERVER_ID}`);
+      await h.redis.del(`seed:call:cooldown:${serverId}`);
       const callAfterUnsubscribe = await h.app.inject({
         method: 'POST',
-        url: `/api/v1/servers/${SERVER_ID}/seed-call`,
+        url: `/api/v1/servers/${serverId}/seed-call`,
         headers: { cookie: actorCookie },
       });
       expect(callAfterUnsubscribe.statusCode).toBe(200);
@@ -258,7 +278,7 @@ describe('SEED-4 seed-call notifications', () => {
       const audit = await h.db
         .select()
         .from(auditLog)
-        .where(and(eq(auditLog.actionType, 'seed.call_sent'), eq(auditLog.targetId, SERVER_ID)));
+        .where(and(eq(auditLog.actionType, 'seed.call_sent'), eq(auditLog.targetId, serverId)));
       expect(audit).toHaveLength(2);
       expect(audit.every((entry) => entry.actorPlayerId === h.seed.ownerPlayerId)).toBe(true);
     } finally {

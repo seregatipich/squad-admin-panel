@@ -1,6 +1,6 @@
 import { servers } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -11,12 +11,14 @@ const OWNER = 76561198000000001n;
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+// One app + database per file: every test seeds its own server (unique id and
+// slug), and its metrics stream is keyed by that id.
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER } });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('GET /api/v1/servers/:id/metrics', () => {

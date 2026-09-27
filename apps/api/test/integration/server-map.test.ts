@@ -1,7 +1,7 @@
 import { layers, matches, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -22,7 +22,6 @@ import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = testSteamId(187000);
-const SERVER_ID = '019e2000-0000-7000-8000-000000000002';
 const RUN_TAG = Date.now().toString(36);
 const LAYER_ACTIVE = `RM3TestLayer_Active_${RUN_TAG}`;
 const LAYER_NEXT = `RM3TestLayer_Next_${RUN_TAG}`;
@@ -30,6 +29,9 @@ const LAYER_DEPRECATED = `RM3TestLayer_Deprecated_${RUN_TAG}`;
 const LAYER_UNKNOWN = `RM3TestLayer_Unknown_${RUN_TAG}`;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+let serverId: string;
+const createdRoleIds: string[] = [];
 
 function okOutcome(overrides: Partial<WorkerRconCommandOutcome> = {}): WorkerRconCommandOutcome {
   return {
@@ -58,13 +60,19 @@ function rconStatus(overrides: Record<string, unknown> = {}) {
   });
 }
 
-beforeEach(async () => {
+// One app + database per file; the read-only layer catalog is seeded once.
+// Each test gets its own server, so the Redis status, open matches and audit
+// rows (all keyed by server id) never leak between tests — including into the
+// negative "no audit row" assertion.
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
-  await h.db.insert(servers).values({
-    id: SERVER_ID,
-    displayName: 'Map Widget Test Server',
-    slug: 'map-widget-test-server',
-  });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
   await h.db.insert(layers).values([
     {
       id: uuidv7(),
@@ -95,16 +103,34 @@ beforeEach(async () => {
       deprecated: true,
     },
   ]);
-  vi.mocked(sendRconCommandViaWorker).mockReset();
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  serverId = uuidv7();
+  await h.db.insert(servers).values({
+    id: serverId,
+    displayName: 'Map Widget Test Server',
+    slug: `map-widget-test-${serverId}`,
+  });
+  vi.mocked(sendRconCommandViaWorker).mockReset();
 });
 
 async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -131,15 +157,15 @@ describeIfDb('GET /api/v1/servers/:serverId/map', () => {
   it('rejects an unauthenticated request', async () => {
     const resp = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map`,
+      url: `/api/v1/servers/${serverId}/map`,
     });
     expect(resp.statusCode).toBe(401);
   });
 
   it('returns current/next resolved against the layer catalog, and match_started_at from the open match', async () => {
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus());
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     await h.db.insert(matches).values({
-      serverId: SERVER_ID,
+      serverId,
       layer: LAYER_ACTIVE,
       map: 'RM3 Test Map',
       gameMode: 'RAAS',
@@ -149,7 +175,7 @@ describeIfDb('GET /api/v1/servers/:serverId/map', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map`,
+      url: `/api/v1/servers/${serverId}/map`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -170,11 +196,11 @@ describeIfDb('GET /api/v1/servers/:serverId/map', () => {
   });
 
   it('returns next: null when ShowNextMap reports no next layer set ("to be voted")', async () => {
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus({ next_layer: undefined }));
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus({ next_layer: undefined }));
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/servers/${SERVER_ID}/map`,
+      url: `/api/v1/servers/${serverId}/map`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -187,7 +213,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
   it('rejects an unauthenticated request', async () => {
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       payload: { layer: LAYER_NEXT },
     });
     expect(resp.statusCode).toBe(401);
@@ -197,7 +223,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_NEXT },
     });
@@ -213,7 +239,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_UNKNOWN },
     });
@@ -226,7 +252,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_DEPRECATED },
     });
@@ -237,7 +263,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
 
   it('enqueues AdminSetNextLayer, writes an audit entry, patches redis, and publishes server.map.changed on success', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus());
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     const cookie = await asRoleWithSquadPermissions(['changemap']);
 
     const received: unknown[] = [];
@@ -245,7 +271,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_NEXT },
     });
@@ -255,7 +281,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        serverId: SERVER_ID,
+        serverId,
         command: 'AdminSetNextLayer',
         args: [LAYER_NEXT],
       }),
@@ -264,18 +290,18 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     const audit = await assertAuditRow(h, {
       action: 'server.map.set_next',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(audit.afterSnapshot).toMatchObject({ layer: LAYER_NEXT });
 
-    const patched = JSON.parse((await h.redis.get(`rcon:status:${SERVER_ID}`)) ?? '{}');
+    const patched = JSON.parse((await h.redis.get(`rcon:status:${serverId}`)) ?? '{}');
     expect(patched.next_layer).toBe(LAYER_NEXT);
 
     expect(received).toContainEqual(
       expect.objectContaining({
         type: 'server.map.changed',
         data: expect.objectContaining({
-          server_id: SERVER_ID,
+          server_id: serverId,
           action: 'server.map.set_next',
           layer: LAYER_NEXT,
         }),
@@ -285,12 +311,12 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
 
   it('accepts a deprecated layer with confirm_deprecated: true', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus());
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     const cookie = await asRoleWithSquadPermissions(['changemap']);
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_DEPRECATED, confirm_deprecated: true },
     });
@@ -303,12 +329,12 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
 
   it('502s and writes no audit row when the worker is not connected', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(notConnectedOutcome());
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus());
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     const cookie = await asRoleWithSquadPermissions(['changemap']);
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/next`,
+      url: `/api/v1/servers/${serverId}/map/next`,
       headers: { cookie },
       payload: { layer: LAYER_NEXT },
     });
@@ -319,7 +345,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
       assertAuditRow(h, {
         action: 'server.map.set_next',
         resource: 'server',
-        targetId: SERVER_ID,
+        targetId: serverId,
         withinMs: 500,
       }),
     ).rejects.toThrow();
@@ -331,7 +357,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/change', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/change`,
+      url: `/api/v1/servers/${serverId}/map/change`,
       headers: { cookie },
       payload: { layer: LAYER_NEXT },
     });
@@ -345,7 +371,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/change', () => {
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/change`,
+      url: `/api/v1/servers/${serverId}/map/change`,
       headers: { cookie },
       payload: { layer: LAYER_NEXT },
     });
@@ -353,7 +379,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/change', () => {
     expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        serverId: SERVER_ID,
+        serverId,
         command: 'AdminChangeLayer',
         args: [LAYER_NEXT],
       }),
@@ -362,7 +388,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/change', () => {
     const audit = await assertAuditRow(h, {
       action: 'server.map.change',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(audit.afterSnapshot).toMatchObject({ layer: LAYER_NEXT });
   });
@@ -373,7 +399,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/end-match', () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/end-match`,
+      url: `/api/v1/servers/${serverId}/map/end-match`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(403);
@@ -382,24 +408,24 @@ describeIfDb('POST /api/v1/servers/:serverId/map/end-match', () => {
 
   it('enqueues AdminEndMatch and writes a server.map.end_match audit entry with the current layer', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
-    await h.redis.set(`rcon:status:${SERVER_ID}`, rconStatus());
+    await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     const cookie = await asRoleWithSquadPermissions(['changemap']);
 
     const resp = await h.app.inject({
       method: 'POST',
-      url: `/api/v1/servers/${SERVER_ID}/map/end-match`,
+      url: `/api/v1/servers/${serverId}/map/end-match`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
     expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ serverId: SERVER_ID, command: 'AdminEndMatch', args: [] }),
+      expect.objectContaining({ serverId, command: 'AdminEndMatch', args: [] }),
     );
 
     const audit = await assertAuditRow(h, {
       action: 'server.map.end_match',
       resource: 'server',
-      targetId: SERVER_ID,
+      targetId: serverId,
     });
     expect(audit.afterSnapshot).toMatchObject({ layer: LAYER_ACTIVE });
   });

@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import '@testing-library/jest-dom/vitest';
+// @vitest-environment happy-dom
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';

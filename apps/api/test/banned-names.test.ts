@@ -1,7 +1,7 @@
 import { bannedNameRules, players, roleSquadPermissions, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -13,14 +13,38 @@ import {
 const OWNER_STEAM_ID = 76561198000009103n;
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
+const createdRoleIds: string[] = [];
 
-beforeEach(async () => {
+// One app + database per file. Each test starts from the seeded baseline by
+// resetting only what this file mutates: the rules table, the owner's role
+// (asViewer/asBanOnlyRole demote it) and the ad-hoc roles created here.
+beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing');
+  ownerRoleId = ownerRole.id;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.db.delete(bannedNameRules);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  for (const id of createdRoleIds.splice(0)) {
+    await h.db.delete(roles).where(eq(roles.id, id));
+  }
+  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
 async function asViewer(): Promise<string> {
@@ -42,6 +66,7 @@ async function asViewer(): Promise<string> {
 
 async function asBanOnlyRole(): Promise<string> {
   const roleId = uuidv7();
+  createdRoleIds.push(roleId);
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,

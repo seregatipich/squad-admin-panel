@@ -1,12 +1,11 @@
-import { playerCoplay, players, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { auditLog, coplaySettings, playerCoplay, players, servers } from '@squad/db/schema';
+import { and, eq, gt, max } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
-  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
@@ -17,17 +16,59 @@ const OWNER_STEAM = testSteamId(830001);
 const TEST_PLAYER_LIMITED_VIEWER = testSteamId(830002);
 
 let h: IntegrationHarness;
+let auditBaseline = 0n;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
 });
 
-afterEach(async () => {
-  if (h) await h.cleanup();
+afterAll(async () => {
+  await h.cleanup();
 });
+
+beforeEach(async () => {
+  const [latest] = await h.db.select({ id: max(auditLog.id) }).from(auditLog);
+  auditBaseline = latest?.id ?? 0n;
+});
+
+// Cases assert thresholds against the migration defaults and two of them seed
+// the same limited viewer: re-create the singleton row exactly as migration
+// 0036 does and drop that viewer.
+afterEach(async () => {
+  await h.db.delete(coplaySettings);
+  await h.db.insert(coplaySettings).values({ id: 1 });
+  await h.db.delete(players).where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
+  invalidateAllPermissionCaches();
+});
+
+/**
+ * Waits for an audit row written during the current case. `assertAuditRow`
+ * accepts any recent matching row, and on this shared harness every PUT case
+ * writes `coplay.settings.update`, so it could pass on an earlier case's row.
+ */
+async function expectAuditRowFromThisCase(action: string, resource: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await h.db
+            .select({ id: auditLog.id })
+            .from(auditLog)
+            .where(
+              and(
+                eq(auditLog.actionType, action),
+                eq(auditLog.targetType, resource),
+                gt(auditLog.id, auditBaseline),
+              ),
+            )
+        ).length,
+      { timeout: 1_200, interval: 50 },
+    )
+    .toBeGreaterThan(0);
+}
 
 async function loginAsRoleWithoutViewIps(): Promise<string> {
   const [row] = await h.db
@@ -175,10 +216,7 @@ describe('PUT /api/v1/settings/coplay', () => {
       headers: { cookie, 'content-type': 'application/json' },
       payload: JSON.stringify({ min_overlap_seconds: 60 }),
     });
-    await assertAuditRow(h, {
-      action: 'coplay.settings.update',
-      resource: 'coplay_settings',
-    });
+    await expectAuditRowFromThisCase('coplay.settings.update', 'coplay_settings');
   });
 
   it('wires settings -> coplay route end-to-end: lowering thresholds reveals a previously-hidden pair', async () => {

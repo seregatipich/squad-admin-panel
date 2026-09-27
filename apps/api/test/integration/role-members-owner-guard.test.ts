@@ -1,8 +1,8 @@
 import { players, roles } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   buildIntegrationApp,
@@ -22,7 +22,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — last-Owner invarian
   let secondOwnerId: string;
   let cookie: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
@@ -46,13 +46,24 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — last-Owner invarian
       .returning({ id: players.id });
     if (!inserted[0]) throw new Error('failed to seed second owner');
     secondOwnerId = inserted[0].id;
+  });
 
+  beforeEach(async () => {
+    // Every test starts from exactly two Owners; the removals under test
+    // demote one of them, so re-promote both before each case.
+    await h.db
+      .update(players)
+      .set({ roleId: ownerRoleId })
+      .where(inArray(players.steamId64, [OWNER_STEAM, SECOND_OWNER_STEAM]));
     cookie = await loginAsOwner(h);
   });
 
   afterEach(async () => {
     if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
-    await h.cleanup();
+  });
+
+  afterAll(async () => {
+    await h?.cleanup();
   });
 
   it('returns 409 cannot_remove_last_owner when exactly one Owner remains', async () => {

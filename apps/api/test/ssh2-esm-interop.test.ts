@@ -9,7 +9,7 @@ const API_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * Regression: ssh2 is CommonJS. Vitest's interop accepted
  * `import { utils } from 'ssh2'`, but production runs `node dist/index.js`
  * under real Node ESM, where `utils` is not a detectable named export — the
- * api crash-looped on tk104 (2026-09-07) until the routes switched to the
+ * api crash-looped on the stand host (2026-09-07) until the routes switched to the
  * default import. This test runs the same check under a real Node ESM
  * loader, not under vitest's transform.
  */

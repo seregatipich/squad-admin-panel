@@ -6,6 +6,8 @@ out/
 .turbo/
 .cache/
 coverage/
+# Blob reports of the sharded CI test runs (scripts/ci-test-shard.sh).
+.vitest-reports/
 *.log
 
 .env
@@ -44,7 +46,7 @@ apps/web/test-results/
 **/reports/mutation/
 
 .playwright-mcp/
-.env.tk104
+.env.stand
 .sentrux/
 
 # Playwright verification evidence artifacts
@@ -54,3 +56,6 @@ apps/web/e2e-evidence/
 # (session locks, worktrees, done/blocked markers, local overrides) is not.
 .claude/*
 !.claude/settings.json
+
+# Redis writes its snapshot into the working directory of a local redis-server.
+dump.rdb

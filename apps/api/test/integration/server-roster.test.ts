@@ -1,7 +1,7 @@
 import { players } from '@squad/db/schema';
 import { squadCrownsKey } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -19,14 +19,14 @@ const UNKNOWN_EOS = 'cccc0123456789abcdef0123456789ab';
 
 let h: IntegrationHarness;
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
   });
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await h.cleanup();
 });
 

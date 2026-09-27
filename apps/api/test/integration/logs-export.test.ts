@@ -7,7 +7,7 @@ import {
   packHostMetrics,
 } from '@squad/shared-config';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let h: IntegrationHarness;
@@ -26,13 +26,11 @@ async function seedLog(e: {
   await h.redis.xadd(...(args as [string, ...string[]]));
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: 76561198000000999n },
   });
   cookie = await loginAsOwner(h);
-  await h.redis.del(PANEL_LOGS_STREAM);
-  await h.redis.del(HOST_METRICS_STREAM);
 
   serverIdAlpha = uuidv7();
   await h.db.insert(serversTable).values({
@@ -51,8 +49,13 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
-  await h.cleanup();
+beforeEach(async () => {
+  await h.redis.del(PANEL_LOGS_STREAM);
+  await h.redis.del(HOST_METRICS_STREAM);
+});
+
+afterAll(async () => {
+  await h?.cleanup();
 });
 
 describe('GET /api/v1/logs/export', () => {

@@ -1,5 +1,5 @@
 import { encodeLogEntry, PANEL_LOGS_STREAM } from '@squad/shared-config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let h: IntegrationHarness;
@@ -22,16 +22,21 @@ async function seed(
   }
 }
 
-beforeEach(async () => {
+// One app + database per file; the logs stream is the only state these tests
+// touch, so each one starts with it emptied.
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: 76561198000000999n },
   });
   cookie = await loginAsOwner(h);
-  await h.redis.del(PANEL_LOGS_STREAM);
 });
 
-afterEach(async () => {
-  await h.cleanup();
+afterAll(async () => {
+  await h?.cleanup();
+});
+
+beforeEach(async () => {
+  await h.redis.del(PANEL_LOGS_STREAM);
 });
 
 describe('GET /api/v1/logs', () => {

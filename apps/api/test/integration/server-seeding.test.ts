@@ -1,7 +1,7 @@
 import { players, roleSquadPermissions, roles, serverSettings } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -31,14 +31,24 @@ const createBody = {
 };
 
 let h: IntegrationHarness;
+let ownerRoleId: string;
 let SERVER_ID: string;
+let createdSeeding: { seedLiveAt: number; seedHysteresis: number };
 
-beforeEach(async () => {
+beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
+  const [ownerRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRole) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRole.id;
+
   const cookie = await loginAsOwner(h);
   const create = await h.app.inject({
     method: 'POST',
@@ -48,11 +58,35 @@ beforeEach(async () => {
   });
   expect(create.statusCode).toBe(201);
   SERVER_ID = create.json<{ id: string }>().id;
+  const [settings] = await h.db
+    .select({
+      seedLiveAt: serverSettings.seedLiveAt,
+      seedHysteresis: serverSettings.seedHysteresis,
+    })
+    .from(serverSettings)
+    .where(eq(serverSettings.serverId, SERVER_ID));
+  if (!settings) throw new Error('server_settings row missing for the fixture server');
+  createdSeeding = settings;
 });
 
-afterEach(async () => {
-  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+afterAll(async () => {
   await h.cleanup();
+});
+
+// Cases write the seeding settings (the audit case expects the as-created
+// values in its before-snapshot), set the seeding Redis state, and move the
+// seeded owner to a narrow role; undo all three.
+afterEach(async () => {
+  await h.db
+    .update(serverSettings)
+    .set(createdSeeding)
+    .where(eq(serverSettings.serverId, SERVER_ID));
+  await h.redis.del(`seeding:state:${SERVER_ID}`);
+  await h.db
+    .update(players)
+    .set({ roleId: ownerRoleId })
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
 });
 
 /**
