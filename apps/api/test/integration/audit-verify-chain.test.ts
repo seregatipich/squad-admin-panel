@@ -1,5 +1,6 @@
-import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type SQL, sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let h: IntegrationHarness;
@@ -133,6 +134,32 @@ describe('GET /api/v1/audit/verify-chain', () => {
       // The file's tests share one chain, so restore the exact context the
       // stored row_hash was computed over; later tests expect it intact.
       await overwriteContext(tamperedId, { seq: 2 });
+    }
+  });
+
+  it('reads audit_log in LIMITed keyset pages instead of one unbounded SELECT (#37)', async () => {
+    await insertAuditRow('action.paged', 'server', null, { seq: 1 });
+    const dialect = new PgDialect();
+    const execute = vi.spyOn(h.app.db, 'execute');
+    let executed: string[];
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/audit/verify-chain',
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as VerifyResult).ok).toBe(true);
+      // Read before mockRestore(), which also clears the recorded calls.
+      executed = execute.mock.calls.map(([query]) => dialect.sqlToQuery(query as SQL).sql);
+    } finally {
+      execute.mockRestore();
+    }
+
+    const chainQueries = executed.filter((text) => /FROM audit_log/i.test(text));
+    expect(chainQueries.length).toBeGreaterThan(0);
+    for (const text of chainQueries) {
+      expect(text).toMatch(/\bLIMIT\b/i);
     }
   });
 });

@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { type AuditChainRow, verifyAuditChain } from '../../src/lib/audit-chain.js';
+import {
+  type AuditChainRow,
+  verifyAuditChain,
+  verifyAuditChainPaged,
+} from '../../src/lib/audit-chain.js';
 
 // Independent reference implementation of the DB trigger's hash, used only to
 // build fixtures here so verifyAuditChain is exercised against hashes it did
@@ -90,5 +94,62 @@ describe('verifyAuditChain', () => {
     expect(result.reason).toBe('row_hash');
     expect(result.brokenAt).toBe('1');
     expect(result.checked).toBe(0);
+  });
+});
+
+describe('verifyAuditChainPaged (#37)', () => {
+  /** Serves `rows` page by page by keyset (`id > afterId`), recording each request. */
+  function pagedLoader(rows: AuditChainRow[]) {
+    const calls: Array<{ afterId: string | null; limit: number }> = [];
+    const load = async (afterId: string | null, limit: number) => {
+      calls.push({ afterId, limit });
+      const start = afterId === null ? 0 : rows.findIndex((row) => row.id === afterId) + 1;
+      return rows.slice(start, start + limit);
+    };
+    return { load, calls };
+  }
+
+  it('walks the chain in bounded keyset pages and carries the hash across pages', async () => {
+    const { load, calls } = pagedLoader(buildChain(5));
+
+    const result = await verifyAuditChainPaged(load, 2);
+
+    expect(result).toEqual({ ok: true, checked: 5, brokenAt: null, reason: null });
+    expect(calls).toEqual([
+      { afterId: null, limit: 2 },
+      { afterId: '2', limit: 2 },
+      { afterId: '4', limit: 2 },
+    ]);
+  });
+
+  it('stops at an exact page boundary after one empty page', async () => {
+    const { load, calls } = pagedLoader(buildChain(4));
+
+    const result = await verifyAuditChainPaged(load, 2);
+
+    expect(result).toEqual({ ok: true, checked: 4, brokenAt: null, reason: null });
+    expect(calls.map((call) => call.afterId)).toEqual([null, '2', '4']);
+  });
+
+  it('reports a break in a later page with the rows checked across all pages', async () => {
+    const rows = buildChain(6);
+    // rows[4] exists: buildChain(6) produced six rows.
+    (rows[4] as AuditChainRow).context_text = '{"seq": "tampered"}';
+    const { load, calls } = pagedLoader(rows);
+
+    const result = await verifyAuditChainPaged(load, 2);
+
+    expect(result).toEqual({ ok: false, checked: 4, brokenAt: '5', reason: 'row_hash' });
+    expect(calls).toHaveLength(3);
+  });
+
+  it('treats a page whose first row does not link to the previous page as a prev_hash break', async () => {
+    const rows = buildChain(4);
+    (rows[2] as AuditChainRow).prev_hash_hex = 'ff'.repeat(32);
+    const { load } = pagedLoader(rows);
+
+    const result = await verifyAuditChainPaged(load, 2);
+
+    expect(result).toEqual({ ok: false, checked: 2, brokenAt: '3', reason: 'prev_hash' });
   });
 });

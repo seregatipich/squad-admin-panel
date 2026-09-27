@@ -3,7 +3,12 @@ import { desc, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type AuditChainRow, verifyAuditChain } from '../lib/audit-chain.js';
+import { type AuditChainRow, verifyAuditChainPaged } from '../lib/audit-chain.js';
+
+/** Audit rows read per query while verifying the hash chain. */
+const VERIFY_CHAIN_PAGE_SIZE = 1_000;
+/** Chain verifications allowed per client per minute. */
+const VERIFY_CHAIN_RATE_LIMIT = 6;
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -59,23 +64,36 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/audit/verify-chain',
-    { config: { permissions: ['audit:view'], audit: false } },
+    {
+      config: {
+        permissions: ['audit:view'],
+        audit: false,
+        // Each call rereads the whole table; a few per minute is plenty.
+        rateLimit: { max: VERIFY_CHAIN_RATE_LIMIT, timeWindow: '1 minute' },
+      },
+    },
     async () => {
-      const rows = (await app.db.execute(sql`
-        SELECT
-          id::text AS id,
-          action_type,
-          target_type,
-          target_id,
-          context::text AS context_text,
-          created_at::text AS created_at,
-          encode(prev_hash, 'hex') AS prev_hash_hex,
-          encode(row_hash, 'hex') AS row_hash_hex
-        FROM audit_log
-        ORDER BY audit_log.id ASC
-      `)) as unknown as AuditChainRow[];
-
-      const result = verifyAuditChain(rows);
+      // Keyset pages keep memory bounded by the page size on an append-only
+      // table that only grows (#37).
+      const result = await verifyAuditChainPaged(
+        async (afterId, limit) =>
+          (await app.db.execute(sql`
+            SELECT
+              id::text AS id,
+              action_type,
+              target_type,
+              target_id,
+              context::text AS context_text,
+              created_at::text AS created_at,
+              encode(prev_hash, 'hex') AS prev_hash_hex,
+              encode(row_hash, 'hex') AS row_hash_hex
+            FROM audit_log
+            ${afterId === null ? sql`` : sql`WHERE audit_log.id > ${afterId}::bigint`}
+            ORDER BY audit_log.id ASC
+            LIMIT ${limit}
+          `)) as unknown as AuditChainRow[],
+        VERIFY_CHAIN_PAGE_SIZE,
+      );
       return {
         ok: result.ok,
         checked: result.checked,

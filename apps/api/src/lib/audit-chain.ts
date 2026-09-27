@@ -66,9 +66,17 @@ export function expectedRowHashHex(prevHashHex: string | null, row: AuditChainRo
  * `prev_hash` must equal the previous row's `row_hash`, and its `row_hash` must
  * equal the recomputed digest. Returns the first break (fail-fast). An empty
  * input is a valid, intact chain.
+ *
+ * @param rows - Consecutive rows in ascending `id` order.
+ * @param precedingRowHashHex - `row_hash` of the row just before `rows[0]`,
+ *   or `null` when `rows[0]` is the genesis row. Lets a caller verify the
+ *   chain one page at a time.
  */
-export function verifyAuditChain(rows: readonly AuditChainRow[]): AuditChainResult {
-  let prevHashHex: string | null = null;
+export function verifyAuditChain(
+  rows: readonly AuditChainRow[],
+  precedingRowHashHex: string | null = null,
+): AuditChainResult {
+  let prevHashHex: string | null = precedingRowHashHex;
   let checked = 0;
 
   for (const row of rows) {
@@ -84,4 +92,43 @@ export function verifyAuditChain(rows: readonly AuditChainRow[]): AuditChainResu
   }
 
   return { ok: true, checked, brokenAt: null, reason: null };
+}
+
+/**
+ * Loads up to `limit` audit rows with `id > afterId` in ascending `id` order;
+ * `afterId` is `null` for the first page.
+ */
+export type AuditChainPageLoader = (
+  afterId: string | null,
+  limit: number,
+) => Promise<AuditChainRow[]>;
+
+/**
+ * Verifies the whole chain one keyset page at a time, carrying the last
+ * `row_hash` across pages, so memory stays bounded by `pageSize` however long
+ * the append-only table grows (#37). Stops at the first break or at the first
+ * page shorter than `pageSize`.
+ *
+ * @returns The same result {@link verifyAuditChain} would give for all rows,
+ *   with `checked` counted across every page.
+ */
+export async function verifyAuditChainPaged(
+  loadPage: AuditChainPageLoader,
+  pageSize: number,
+): Promise<AuditChainResult> {
+  let afterId: string | null = null;
+  let precedingRowHashHex: string | null = null;
+  let checked = 0;
+  for (;;) {
+    const rows = await loadPage(afterId, pageSize);
+    const page = verifyAuditChain(rows, precedingRowHashHex);
+    checked += page.checked;
+    if (!page.ok) return { ...page, checked };
+    const last = rows.at(-1);
+    if (!last || rows.length < pageSize) {
+      return { ok: true, checked, brokenAt: null, reason: null };
+    }
+    afterId = last.id;
+    precedingRowHashHex = last.row_hash_hex;
+  }
 }
