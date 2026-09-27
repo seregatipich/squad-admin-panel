@@ -100,6 +100,11 @@ export const PERMISSIONS = [
   },
   { key: 'mod:unban', category: 'moderation', label: 'Unban' },
   {
+    key: 'ban_source:view',
+    category: 'moderation',
+    label: 'Видеть источники внешних банов',
+  },
+  {
     key: 'banlist:read',
     category: 'moderation',
     label: 'Читать публикуемый банлист (федерация)',
@@ -155,7 +160,7 @@ export const PERMISSIONS = [
     label: 'Управлять интеграциями (Discord)',
     dangerous: true,
   },
-  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила', unimplemented: true },
+  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила' },
   {
     key: 'trigger:edit',
     category: 'triggers',

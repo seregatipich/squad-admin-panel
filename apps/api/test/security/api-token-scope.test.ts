@@ -314,6 +314,47 @@ describeIfDb('API token scopes narrow role flags and squad permissions (#7)', ()
   });
 });
 
+/**
+ * Audit #89/#101/#114 — reads that used to authorise on `panelAccess` alone
+ * let a token delegated ANY single scope read the chat archive, automation
+ * rules (with their RCON arguments), ban-source URLs and server analytics.
+ * Each now also declares the catalogue scope it belongs to.
+ */
+const SCOPE_GATED_READS: Array<{ url: () => string; scope: string; allowed: number }> = [
+  { url: () => '/api/v1/chat/messages', scope: 'events:view', allowed: 200 },
+  { url: () => '/api/v1/chat/messages/count', scope: 'events:view', allowed: 200 },
+  { url: () => '/api/v1/automation-rules', scope: 'trigger:view', allowed: 200 },
+  { url: () => '/api/v1/automation-runs', scope: 'trigger:view', allowed: 200 },
+  { url: () => '/api/v1/ban-sources', scope: 'ban_source:view', allowed: 200 },
+  { url: () => `/api/v1/ban-sources/${randomUUID()}`, scope: 'ban_source:view', allowed: 404 },
+  { url: () => '/api/v1/analytics/dashboard', scope: 'server:view', allowed: 200 },
+];
+
+describeIfDb('panel reads narrow to their catalogue scope (#89/#101/#114)', () => {
+  for (const read of SCOPE_GATED_READS) {
+    it(`403s ${read.url()} for a token delegated only an unrelated scope`, async () => {
+      const unrelated = read.scope === 'player:view_ips' ? 'config:view' : 'player:view_ips';
+      const token = await ownerToken([unrelated]);
+      const res = await h.app.inject({
+        method: 'GET',
+        url: read.url(),
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode, res.body).toBe(403);
+    });
+
+    it(`serves ${read.url()} to a token delegated ${read.scope}`, async () => {
+      const token = await ownerToken([read.scope]);
+      const res = await h.app.inject({
+        method: 'GET',
+        url: read.url(),
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode, res.body).toBe(read.allowed);
+    });
+  }
+});
+
 describeIfDb('API tokens of a player who lost panel_access (#7)', () => {
   it('stop authenticating once the owner is moved to a role without panel_access', async () => {
     const token = await mintToken(await cookieFor(DEMOTED_STEAM), []);

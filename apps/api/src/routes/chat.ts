@@ -73,16 +73,17 @@ function decodeCursor(raw: string): { sentAt: Date; id: bigint } | null {
   }
 }
 
+/**
+ * `panel_access` gate for the chat archive. The route also declares
+ * `config.permissions: ['events:view']`, so an API token reaches it only when
+ * delegated that scope (audit #114); this guard keeps a session whose role
+ * lacks `panel_access` out even if it holds an explicit `events:view` row.
+ * The auth hook has already answered 401 to an anonymous caller.
+ */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
+  if (req.user?.permissions.panelAccess) return null;
+  reply.code(403);
+  return { error: 'forbidden' };
 }
 
 const chatRoutes: FastifyPluginAsync = async (app) => {
@@ -154,7 +155,7 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/chat/messages',
     {
       schema: { querystring: listQuery },
-      config: { audit: false },
+      config: { audit: false, permissions: ['events:view'] },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -222,7 +223,7 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/chat/messages/count',
     {
       schema: { querystring: countQuery },
-      config: { audit: false },
+      config: { audit: false, permissions: ['events:view'] },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

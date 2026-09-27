@@ -78,16 +78,16 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
   return { from, to };
 }
 
+/**
+ * `panel_access` gate for the dashboard, which also declares
+ * `config.permissions: ['server:view']` so an API token reaches it only when
+ * delegated that scope (audit #89). The auth hook has already answered 401 to
+ * an anonymous caller.
+ */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
+  if (req.user?.permissions.panelAccess) return null;
+  reply.code(403);
+  return { error: 'forbidden' };
 }
 
 /** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
@@ -295,7 +295,10 @@ const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/analytics/dashboard',
-    { config: { audit: false }, schema: { querystring: dashboardQuery } },
+    {
+      config: { audit: false, permissions: ['server:view'] },
+      schema: { querystring: dashboardQuery },
+    },
     async (req, reply) => {
       const guard = panelGuard(req, reply);
       if (guard) return guard;

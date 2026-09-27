@@ -76,6 +76,16 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('balancer:edit')?.unimplemented).toBeUndefined();
   });
 
+  // Audit #101: the automation-rule and ban-source reads authorise on these
+  // keys, so an API token reaches them only when delegated the scope.
+  it('exposes production-active read keys for automation rules and ban sources', () => {
+    const byKey = new Map<string, PermissionDef>(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('trigger:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('ban_source:view')?.category).toBe('moderation');
+    expect(byKey.get('ban_source:view')?.unimplemented).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

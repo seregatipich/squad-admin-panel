@@ -18,7 +18,7 @@ Current keys by category:
 | servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update`, `server:download_logs` |
 | configs | `config:view`, `config:edit`, `config:rollback` |
 | players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
-| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban` |
+| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`, `ban_source:view`, `banlist:read` |
 | admin_groups | `admin_group:view`, `admin_group:edit` |
 | whitelist | `whitelist:view`, `whitelist:edit` |
 | host | `host:view`, `host:metrics` |
@@ -29,7 +29,7 @@ Current keys by category:
 | backup | `backup:view`*, `backup:trigger`*, `backup:restore`* |
 | api_tokens | `api_token:create`, `api_token:revoke` |
 | discord | `discord:link`* |
-| triggers | `trigger:view`*, `trigger:edit`* |
+| triggers | `trigger:view`, `trigger:edit`* |
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
 
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
@@ -90,6 +90,19 @@ Raw player IPs, and the per-IP coordinates derived from them, are gated by `play
 - `GET /api/v1/players/:playerId` — `ips: []` and `ips_visible: false` without it.
 - `GET /api/v1/events/:eventId` and `GET /api/v1/events/export` — the top-level `ip` of every event payload (e.g. `player.connected`) is returned as `null` without it. All `/api/v1/events*` routes additionally require `events:view` through `config.permissions`, so a token must carry that scope to read the journal.
 - `GET /api/v1/players/:playerId/geo-anomalies` and `GET /api/v1/geo-anomalies` — `points` (IP + latitude/longitude) is empty without it; the country-level summary stays.
+
+### Panel reads narrowed to a catalogue scope (audit #89/#101/#114)
+
+A route guard that checks only `panel_access` lets an API token through as soon as it carries any one scope (`narrowToTokenScopes` keeps `panelAccess` for every non-empty scope set). The reads below therefore also declare a catalogue key in `config.permissions`, and keep their `panel_access` guard so a session role without `panel_access` stays out even when it holds an explicit `role_permissions` row:
+
+| Route | Scope |
+|---|---|
+| `GET /api/v1/chat/messages`, `GET /api/v1/chat/messages/count` | `events:view` |
+| `GET /api/v1/automation-rules`, `GET /api/v1/automation-runs` | `trigger:view` |
+| `GET /api/v1/ban-sources`, `GET /api/v1/ban-sources/:id` | `ban_source:view` |
+| `GET /api/v1/analytics/dashboard` | `server:view` |
+
+Session users with `panel_access` are unaffected: `derivePanelPermissions` grants them every catalogue key.
 
 ### Config secrets (#10)
 

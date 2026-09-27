@@ -124,16 +124,17 @@ function actorFrom(req: FastifyRequest): AuditActor {
     : { kind: 'system', label: 'http-anonymous' };
 }
 
+/**
+ * `panel_access` gate for the read routes, which also declare
+ * `config.permissions: ['ban_source:view']` so an API token reaches them only when
+ * delegated that scope (audit #101). This guard keeps a session whose role
+ * lacks `panel_access` out even if it holds an explicit `ban_source:view` row. The
+ * auth hook has already answered 401 to an anonymous caller.
+ */
 function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403).send({ error: 'forbidden' });
-    return true;
-  }
-  return false;
+  if (req.user?.permissions.panelAccess) return false;
+  reply.code(403).send({ error: 'forbidden' });
+  return true;
 }
 
 function denyManage(req: FastifyRequest, reply: FastifyReply): boolean {
@@ -169,19 +170,23 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
     return Number(rows[0]?.count ?? 0);
   }
 
-  fast.get('/api/v1/ban-sources', { config: { audit: false } }, async (req, reply) => {
-    if (denyRead(req, reply)) return;
-    const sources = (await app.db
-      .select()
-      .from(externalBanSources)
-      .orderBy(externalBanSources.createdAt)) as unknown as SourceRow[];
-    const counts = await recordCounts();
-    return sources.map((source) => toPublic(source, counts.get(source.id) ?? 0));
-  });
+  fast.get(
+    '/api/v1/ban-sources',
+    { config: { audit: false, permissions: ['ban_source:view'] } },
+    async (req, reply) => {
+      if (denyRead(req, reply)) return;
+      const sources = (await app.db
+        .select()
+        .from(externalBanSources)
+        .orderBy(externalBanSources.createdAt)) as unknown as SourceRow[];
+      const counts = await recordCounts();
+      return sources.map((source) => toPublic(source, counts.get(source.id) ?? 0));
+    },
+  );
 
   fast.get(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: false, permissions: ['ban_source:view'] } },
     async (req, reply) => {
       if (denyRead(req, reply)) return;
       const rows = (await app.db
