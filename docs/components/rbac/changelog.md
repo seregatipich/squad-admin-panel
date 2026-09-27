@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-27 — role hierarchy guard (#30, audit findings #233, #267)
+
+### Security
+
+- A non-Owner can no longer widen their own grants through role assignment or role editing. `apps/api/src/lib/role-hierarchy.ts` compares a role's derived permission context with the actor's (`grantsBeyond` in `rbac.ts`: every flag, panel permission and Squad permission) and refuses with 403:
+  - `PUT/DELETE /api/v1/players/:playerId/role` and every `/api/v1/roles/:id/members*` mutation (add, remove, import, bulk-delete, move): `cannot_change_own_role` when the actor is among the changed players, `role_exceeds_actor_permissions` when the new role grants something the actor lacks, `target_outranks_actor` when a changed player's current role does (so only an Owner can remove or replace another Owner).
+  - `POST /api/v1/roles` and `PUT /api/v1/roles/:id`: `role_exceeds_actor_permissions` when the resulting role grants something the actor lacks; `PUT` also answers `cannot_edit_own_role` for the actor's own role. `PUT` and `DELETE` refuse a role that already exceeds the actor.
+  - 403 bodies carry `missing: string[]` (`can_view_ips`, `permission:role:edit`, `squad:ban`, …). An Owner bypasses every check.
+- `buildRolePermissionContext` / `loadRolePermissions` (`rbac.ts`) expose the role → permission derivation `loadUserPermissions` already used, so a proposed role is evaluated exactly like a held one.
+
 ## 2026-05-01 — Эпик 2 Phase 2: roles unified with Squad in-game permissions
 
 ### Added

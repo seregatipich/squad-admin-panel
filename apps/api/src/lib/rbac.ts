@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, rolePermissions } from '@squad/db/schema';
+import { players, rolePermissions, roleSquadPermissions, roles } from '@squad/db/schema';
 import {
   isPermissionKey,
   PERMISSION_KEYS,
@@ -174,29 +174,84 @@ export async function loadUserPermissions(
     return empty;
   }
 
-  const isOwner = row.role_name === 'Owner' && row.is_system_role === true;
-  const panelAccess = isOwner ? true : (row.panel_access ?? false);
-  const canViewIps = isOwner ? true : (row.can_view_ips ?? false);
-  const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
-  const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
-  const canManageIssues = isOwner ? true : (row.can_manage_issues ?? false);
-  const canManageBanSources = isOwner ? true : panelAccess && (row.can_manage_ban_sources ?? false);
-  const canManageIntegrations = isOwner ? true : (row.can_manage_integrations ?? false);
-  const canManageClans = isOwner ? true : (row.can_manage_clans ?? false);
-  const canManageEconomy = isOwner ? true : panelAccess && (row.can_manage_economy ?? false);
-  const canManageMedia = isOwner ? true : panelAccess && (row.can_manage_media ?? false);
-  const canHandleReports = isOwner ? true : (row.can_handle_reports ?? false);
-  const combatView = isOwner ? true : panelAccess && (row.combat_view ?? false);
-  const squadPermissions = isOwner
-    ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
-    : new Set<SquadPermissionKey>(
-        ((row.squad_permissions ?? []) as SquadPermissionKey[]).filter(Boolean),
-      );
-
   const explicit = await db
     .select({ key: rolePermissions.permissionKey })
     .from(rolePermissions)
     .where(eq(rolePermissions.roleId, row.role_id));
+
+  const value = buildRolePermissionContext(
+    row.role_id,
+    {
+      name: row.role_name ?? '',
+      isSystemRole: row.is_system_role ?? false,
+      panelAccess: row.panel_access ?? false,
+      canViewIps: row.can_view_ips ?? false,
+      canAssignRoles: row.can_assign_roles ?? false,
+      canEditRoles: row.can_edit_roles ?? false,
+      canManageIssues: row.can_manage_issues ?? false,
+      canManageBanSources: row.can_manage_ban_sources ?? false,
+      canManageIntegrations: row.can_manage_integrations ?? false,
+      canManageClans: row.can_manage_clans ?? false,
+      canManageEconomy: row.can_manage_economy ?? false,
+      canManageMedia: row.can_manage_media ?? false,
+      canHandleReports: row.can_handle_reports ?? false,
+      combatView: row.combat_view ?? false,
+      squadPermissions: row.squad_permissions ?? [],
+    },
+    explicit.map((entry) => entry.key),
+  );
+  cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
+  return value;
+}
+
+/**
+ * The grant-bearing columns of a `roles` row plus its live-Squad permissions
+ * (`role_squad_permissions`). A drizzle `select()` of `roles` satisfies every
+ * field but `squadPermissions`.
+ */
+export interface RoleGrantDefinition {
+  name: string;
+  isSystemRole: boolean;
+  panelAccess: boolean;
+  canViewIps: boolean;
+  canAssignRoles: boolean;
+  canEditRoles: boolean;
+  canManageIssues: boolean;
+  canManageBanSources: boolean;
+  canManageIntegrations: boolean;
+  canManageClans: boolean;
+  canManageEconomy: boolean;
+  canManageMedia: boolean;
+  canHandleReports: boolean;
+  combatView: boolean;
+  squadPermissions: readonly string[];
+}
+
+/**
+ * Derives the permission context every holder of a role receives — the same
+ * derivation {@link loadUserPermissions} applies to a player's live role, so
+ * callers can evaluate a role that is only proposed (e.g. the result of an
+ * edit that has not been written yet).
+ *
+ * @param roleId - The role's id, copied into the context.
+ * @param role - The role's flags and live-Squad permissions.
+ * @param explicitKeys - The role's `role_permissions` keys; unknown keys are ignored.
+ * @returns A fresh context; nothing is cached.
+ */
+export function buildRolePermissionContext(
+  roleId: string,
+  role: RoleGrantDefinition,
+  explicitKeys: readonly string[],
+): PermissionContext {
+  const isOwner = role.name === 'Owner' && role.isSystemRole;
+  const panelAccess = isOwner || role.panelAccess;
+  const canViewIps = isOwner || role.canViewIps;
+  const canAssignRoles = isOwner || role.canAssignRoles;
+  const canEditRoles = isOwner || role.canEditRoles;
+  const canManageIntegrations = isOwner || role.canManageIntegrations;
+  const squadPermissions = isOwner
+    ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
+    : new Set<SquadPermissionKey>((role.squadPermissions as SquadPermissionKey[]).filter(Boolean));
 
   const permissions = derivePanelPermissions(
     panelAccess,
@@ -207,31 +262,98 @@ export async function loadUserPermissions(
     isOwner,
     squadPermissions,
   );
-  for (const entry of explicit) {
-    if (isPermissionKey(entry.key)) permissions.add(entry.key);
+  for (const key of explicitKeys) {
+    if (isPermissionKey(key)) permissions.add(key);
   }
 
-  const value: PermissionContext = {
+  return {
     permissions,
     squadPermissions,
-    roleId: row.role_id,
-    roleName: row.role_name,
+    roleId,
+    roleName: role.name,
     panelAccess,
     canViewIps,
     canAssignRoles,
     canEditRoles,
-    canManageIssues,
-    canManageBanSources,
+    canManageIssues: isOwner || role.canManageIssues,
+    canManageBanSources: isOwner || (panelAccess && role.canManageBanSources),
     canManageIntegrations,
-    canManageClans,
-    canManageEconomy,
-    canManageMedia,
-    canHandleReports,
-    combatView,
+    canManageClans: isOwner || role.canManageClans,
+    canManageEconomy: isOwner || (panelAccess && role.canManageEconomy),
+    canManageMedia: isOwner || (panelAccess && role.canManageMedia),
+    canHandleReports: isOwner || role.canHandleReports,
+    combatView: isOwner || (panelAccess && role.combatView),
     isOwner,
   };
-  cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
-  return value;
+}
+
+/**
+ * Loads the permission context a role grants its holders, uncached.
+ *
+ * @param db - Database client.
+ * @param roleId - The role to evaluate.
+ * @returns The context, or `null` when the role does not exist.
+ */
+export async function loadRolePermissions(
+  db: DatabaseClient,
+  roleId: string,
+): Promise<PermissionContext | null> {
+  const [role] = await db.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+  if (!role) return null;
+  const squad = await db
+    .select({ key: roleSquadPermissions.squadPermissionKey })
+    .from(roleSquadPermissions)
+    .where(eq(roleSquadPermissions.roleId, roleId));
+  const explicit = await db
+    .select({ key: rolePermissions.permissionKey })
+    .from(rolePermissions)
+    .where(eq(rolePermissions.roleId, roleId));
+  return buildRolePermissionContext(
+    roleId,
+    { ...role, squadPermissions: squad.map((entry) => entry.key) },
+    explicit.map((entry) => entry.key),
+  );
+}
+
+const HIERARCHY_FLAGS = [
+  ['isOwner', 'owner'],
+  ['panelAccess', 'panel_access'],
+  ['canViewIps', 'can_view_ips'],
+  ['canAssignRoles', 'can_assign_roles'],
+  ['canEditRoles', 'can_edit_roles'],
+  ['canManageIssues', 'can_manage_issues'],
+  ['canManageBanSources', 'can_manage_ban_sources'],
+  ['canManageIntegrations', 'can_manage_integrations'],
+  ['canManageClans', 'can_manage_clans'],
+  ['canManageEconomy', 'can_manage_economy'],
+  ['canManageMedia', 'can_manage_media'],
+  ['canHandleReports', 'can_handle_reports'],
+  ['combatView', 'combat_view'],
+] as const satisfies ReadonlyArray<readonly [keyof PermissionContext, string]>;
+
+/**
+ * Lists every grant `target` carries that `actor` lacks — the role-hierarchy
+ * check behind role assignment and role editing (#30): a non-Owner may only
+ * hand out, edit or take away a role that fits entirely inside their own
+ * permissions, so no chain of assignments or edits can widen what they hold.
+ *
+ * @param actor - The acting user's context (token-narrowed when applicable).
+ * @param target - The role's context, e.g. from {@link loadRolePermissions}.
+ * @returns Stable identifiers of the missing grants (`can_view_ips`,
+ *   `permission:role:edit`, `squad:ban`, …); empty when `target` ⊆ `actor`.
+ */
+export function grantsBeyond(actor: PermissionContext, target: PermissionContext): string[] {
+  const missing: string[] = [];
+  for (const [field, label] of HIERARCHY_FLAGS) {
+    if (target[field] && !actor[field]) missing.push(label);
+  }
+  for (const key of target.permissions) {
+    if (!actor.permissions.has(key)) missing.push(`permission:${key}`);
+  }
+  for (const key of target.squadPermissions) {
+    if (!actor.squadPermissions.has(key)) missing.push(`squad:${key}`);
+  }
+  return missing;
 }
 
 /**

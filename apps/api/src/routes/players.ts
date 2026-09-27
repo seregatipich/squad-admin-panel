@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -397,6 +398,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;
 
@@ -470,6 +479,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       if (current.length === 0) {
         reply.code(404);
         return { error: 'player_not_found' };
+      }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
       }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       if (wasOwner) {
