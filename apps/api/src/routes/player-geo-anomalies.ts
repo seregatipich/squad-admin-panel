@@ -47,7 +47,25 @@ function toObservations(rows: IpRow[]): GeoObservation[] {
   }));
 }
 
-function serializeAnomalies(rows: IpRow[], config: GeoConfig) {
+/**
+ * Whether the caller may see raw IPs and the per-IP coordinates derived from
+ * them. Mirrors `players.ts` (ALT-8, #126): panel access alone does not imply
+ * IP visibility, and an API token needs the `player:view_ips` scope (#10).
+ */
+function canViewIps(req: FastifyRequest): boolean {
+  return req.user?.permissions.permissions.has('player:view_ips') ?? false;
+}
+
+/**
+ * Builds the anomaly summary for one player's IP history.
+ *
+ * @param rows - The player's `player_ip_history` rows, newest first.
+ * @param config - Detection thresholds from `geoip_settings`.
+ * @param includePoints - When false, `points` (raw IPs plus precise
+ *   coordinates) is returned empty; the country-level summary is kept, as
+ *   `players.ts` exposes countries without `player:view_ips` too.
+ */
+function serializeAnomalies(rows: IpRow[], config: GeoConfig, includePoints: boolean) {
   const result = detectGeoAnomalies(toObservations(rows), config);
   return {
     config: {
@@ -74,7 +92,7 @@ function serializeAnomalies(rows: IpRow[], config: GeoConfig) {
       last_observed_at: entry.lastObservedAt.toISOString(),
       observation_count: entry.observationCount,
     })),
-    points: rows
+    points: (includePoints ? rows : [])
       .filter((row) => row.latitude != null && row.longitude != null)
       .map((row) => ({
         ip: String(row.ip),
@@ -126,7 +144,7 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(desc(playerIpHistory.lastSeenAt))
         .limit(IP_HISTORY_CAP)) as IpRow[];
 
-      return serializeAnomalies(rows, config);
+      return serializeAnomalies(rows, config, canViewIps(req));
     },
   );
 
@@ -138,6 +156,7 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
 
       const config = await loadConfig();
+      const includePoints = canViewIps(req);
       const candidates = await app.db
         .select({
           playerId: playerIpHistory.playerId,
@@ -164,7 +183,7 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
           .where(eq(playerIpHistory.playerId, candidate.playerId))
           .orderBy(desc(playerIpHistory.lastSeenAt))
           .limit(IP_HISTORY_CAP)) as IpRow[];
-        const serialized = serializeAnomalies(rows, config);
+        const serialized = serializeAnomalies(rows, config, includePoints);
         if (!serialized.multi_country && !serialized.has_recent_switch) continue;
         items.push({ player_id: candidate.playerId, ...serialized });
       }

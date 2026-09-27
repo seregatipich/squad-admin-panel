@@ -15,11 +15,13 @@ import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './ha
 
 const OWNER_STEAM = testSteamId(913001);
 const NO_PANEL_STEAM = testSteamId(913002);
+const NO_IPS_STEAM = testSteamId(913005);
 const HOUR_MS = 3_600_000;
 
 let h: IntegrationHarness;
 let anomalyPlayerId: string;
 let noPanelCookie: string;
+let noIpsCookie: string;
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -142,7 +144,25 @@ beforeAll(async () => {
     },
   ]);
 
+  // #10: a moderator with panel access but without can_view_ips (so without
+  // `player:view_ips`) must not receive raw IPs or precise coordinates.
+  const noIpsRoleId = uuidv7();
+  await h.db.insert(roles).values({
+    id: noIpsRoleId,
+    name: 'GeoNoIps',
+    color: '#665544',
+    panelAccess: true,
+    canViewIps: false,
+  });
+  await h.db.insert(players).values({
+    steamId64: NO_IPS_STEAM,
+    canonicalName: 'Без IP',
+    canonicalNameNormalized: 'без ip',
+    roleId: noIpsRoleId,
+  });
+
   noPanelCookie = await loginAsSteam(NO_PANEL_STEAM, 'geo-nopanel');
+  noIpsCookie = await loginAsSteam(NO_IPS_STEAM, 'geo-noips');
 }, 60_000);
 
 afterAll(async () => {
@@ -193,6 +213,21 @@ describeIfDb('GET /api/v1/players/:playerId/geo-anomalies', () => {
     expect(body.points.every((point) => Number.isFinite(point.latitude))).toBe(true);
   });
 
+  it('withholds ips and coordinates from a panel user without player:view_ips', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${anomalyPlayerId}/geo-anomalies`,
+      headers: { cookie: noIpsCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AnomaliesResponse;
+    expect(body.multi_country).toBe(true);
+    expect(body.distinct_country_count).toBe(4);
+    expect(body.points).toEqual([]);
+    expect(res.body).not.toContain('5.10.20.30');
+    expect(res.body).not.toContain('48.85');
+  });
+
   it('returns an empty, non-flagged result for a player with no ip history', async () => {
     const emptyPlayerId = await seedPlayer('Без гео', 913004);
     const res = await h.app.inject({
@@ -216,6 +251,22 @@ describeIfDb('GET /api/v1/geo-anomalies feed', () => {
       headers: { cookie: noPanelCookie },
     });
     expect(res.statusCode).toBe(403);
+  });
+
+  it('withholds ips and coordinates in the feed from a panel user without player:view_ips', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/geo-anomalies',
+      headers: { cookie: noIpsCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{ player_id: string; multi_country: boolean; points: unknown[] }>;
+    };
+    const entry = body.items.find((item) => item.player_id === anomalyPlayerId);
+    expect(entry?.multi_country).toBe(true);
+    expect(body.items.every((item) => item.points.length === 0)).toBe(true);
+    expect(res.body).not.toContain('8.13.23.33');
   });
 
   it('surfaces the anomalous player in the global feed', async () => {

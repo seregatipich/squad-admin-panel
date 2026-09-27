@@ -1,7 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
-import { events, players, roles, servers } from '@squad/db/schema';
+import { events, playerApiTokens, players, roles, servers } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mintApiToken } from '../src/lib/api-tokens.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -20,7 +21,10 @@ function nextSteam(): bigint {
   return steamCounter;
 }
 
-async function seedRole(db: DatabaseClient, opts: { panelAccess?: boolean } = {}): Promise<string> {
+async function seedRole(
+  db: DatabaseClient,
+  opts: { panelAccess?: boolean; canViewIps?: boolean } = {},
+): Promise<string> {
   const id = uuidv7();
   await db.insert(roles).values({
     id,
@@ -28,6 +32,7 @@ async function seedRole(db: DatabaseClient, opts: { panelAccess?: boolean } = {}
     color: 'neutral',
     isSystemRole: false,
     panelAccess: opts.panelAccess ?? true,
+    canViewIps: opts.canViewIps ?? false,
   });
   return id;
 }
@@ -478,6 +483,119 @@ describeIfDb('events API (EVT-2)', () => {
         url: `/api/v1/events?ruleId=${uuidv7()}`,
       });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // #10 (finding #147): the journal must honour `events:view` (and therefore a
+  // token's scopes) and must not hand player IPs to callers that lack
+  // `player:view_ips`.
+  describe('sensitive data gating (#10)', () => {
+    const PLAYER_IP = '203.0.113.77';
+    let serverId: string;
+    let connectedEventId: string;
+
+    beforeAll(async () => {
+      serverId = await seedServer(h.db, 'EvtIpGateSrv');
+      connectedEventId = await seedEvent(h.db, {
+        serverId,
+        occurredAt: at(300),
+        kind: 'player.connected',
+        payload: {
+          steam_id64: '76561198000002222',
+          eos_id: null,
+          name: 'IpCarrier',
+          ip: PLAYER_IP,
+        },
+      });
+    });
+
+    async function tokenHeader(playerId: string, scopes: string[]): Promise<string> {
+      const minted = mintApiToken();
+      await h.db.insert(playerApiTokens).values({
+        id: minted.id,
+        playerId,
+        name: `events-test-${minted.id.slice(0, 8)}`,
+        tokenHash: minted.tokenHash,
+        scopes,
+      });
+      invalidatePermissionCache(playerId);
+      return `Bearer ${minted.plaintext}`;
+    }
+
+    async function fetchEnvelope(headers: Record<string, string>) {
+      return h.app.inject({
+        method: 'GET',
+        url: `/api/v1/events/${connectedEventId}`,
+        headers,
+      });
+    }
+
+    async function fetchExport(headers: Record<string, string>) {
+      return h.app.inject({
+        method: 'GET',
+        url: `/api/v1/events/export?serverId=${serverId}&kind=player.connected`,
+        headers,
+      });
+    }
+
+    it('redacts player IPs from the envelope and the CSV export without player:view_ips', async () => {
+      const moderatorRole = await seedRole(h.db, { panelAccess: true, canViewIps: false });
+      const moderator = await seedPlayer(h.db, { roleId: moderatorRole });
+      const moderatorCookie = await loginAs(h, moderator);
+
+      const envelope = await fetchEnvelope({ cookie: moderatorCookie });
+      expect(envelope.statusCode).toBe(200);
+      const body = envelope.json() as EnvelopeResponse;
+      expect(body.payload).toMatchObject({ name: 'IpCarrier', ip: null });
+      expect(envelope.body).not.toContain(PLAYER_IP);
+
+      const csv = await fetchExport({ cookie: moderatorCookie });
+      expect(csv.statusCode).toBe(200);
+      expect(csv.body).toContain(connectedEventId);
+      expect(csv.body).not.toContain(PLAYER_IP);
+    });
+
+    it('keeps player IPs for callers holding player:view_ips', async () => {
+      const ipRole = await seedRole(h.db, { panelAccess: true, canViewIps: true });
+      const ipViewer = await seedPlayer(h.db, { roleId: ipRole });
+      const ipViewerCookie = await loginAs(h, ipViewer);
+
+      const envelope = await fetchEnvelope({ cookie: ipViewerCookie });
+      expect(envelope.statusCode).toBe(200);
+      expect((envelope.json() as EnvelopeResponse).payload).toMatchObject({ ip: PLAYER_IP });
+
+      const csv = await fetchExport({ cookie: ipViewerCookie });
+      expect(csv.statusCode).toBe(200);
+      expect(csv.body).toContain(PLAYER_IP);
+    });
+
+    it('rejects an API token whose scopes lack events:view on every events route', async () => {
+      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
+      const authorization = await tokenHeader(h.seed.ownerPlayerId!, ['host:view']);
+      for (const url of [
+        '/api/v1/events',
+        '/api/v1/events/count',
+        '/api/v1/events/export',
+        `/api/v1/events/${connectedEventId}`,
+      ]) {
+        const res = await h.app.inject({ method: 'GET', url, headers: { authorization } });
+        expect(res.statusCode, url).toBe(403);
+        expect(res.body).not.toContain(PLAYER_IP);
+      }
+    });
+
+    it('lets an events:view token read the journal but redacts IPs unless it also holds player:view_ips', async () => {
+      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
+      const ownerId = h.seed.ownerPlayerId!;
+      const eventsOnly = await tokenHeader(ownerId, ['events:view']);
+      const narrow = await fetchEnvelope({ authorization: eventsOnly });
+      expect(narrow.statusCode).toBe(200);
+      expect((narrow.json() as EnvelopeResponse).payload).toMatchObject({ ip: null });
+
+      const withIps = await tokenHeader(ownerId, ['events:view', 'player:view_ips']);
+      const wide = await fetchEnvelope({ authorization: withIps });
+      expect(wide.statusCode).toBe(200);
+      expect((wide.json() as EnvelopeResponse).payload).toMatchObject({ ip: PLAYER_IP });
     });
   });
 });

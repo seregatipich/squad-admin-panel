@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Regression guard for the PANEL_DEPOT_HOST_PATH fix.
  *
@@ -233,6 +234,15 @@ describe('server install depot seeding', () => {
 
       const rconVersion = versions.find((v) => v.filename === 'Rcon.cfg');
       expect(rconVersion?.content).toMatch(new RegExp(`Port=${createBody.rcon_port}`));
+      // #10: the history row keeps the RCON password masked while its sha
+      // still describes the bytes written to disk.
+      const diskPassword = /^Password=(.+)$/m.exec(rcon)?.[1] ?? '';
+      expect(diskPassword).not.toBe('********');
+      expect(rconVersion?.content).toMatch(/^Password=\*{8}$/m);
+      expect(rconVersion?.content).not.toContain(diskPassword);
+      expect(Buffer.from(rconVersion?.sha256 as Buffer).toString('hex')).toBe(
+        createHash('sha256').update(rcon).digest('hex'),
+      );
 
       const legacyStubDir = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGame/ServerConfig`;
       expect(bridge.files.get(`${legacyStubDir}/Admins.cfg`)).toBeUndefined();
