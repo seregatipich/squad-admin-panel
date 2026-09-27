@@ -1191,23 +1191,33 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403);
         return { error: 'forbidden' };
       }
-      const before = clanSnapshot(clan);
       const disbandedAt = new Date();
-      await app.db.transaction(async (tx) => {
-        await tx
-          .update(clanMembers)
-          .set({ hasPriority: false })
-          .where(eq(clanMembers.clanId, clan.id));
+      // The roster is deleted, not kept: clan_members_player_unique_idx is
+      // global, so rows left behind a soft-deleted clan would bar its former
+      // members from every other clan. The audit `before` snapshot keeps the
+      // released roster. Soft-deleting the clan row first takes its row lock,
+      // so a concurrent member add either commits before the roster delete or
+      // sees the clan as deleted.
+      const released = await app.db.transaction(async (tx) => {
         await tx
           .update(clans)
           .set({ deletedAt: disbandedAt, updatedAt: disbandedAt })
           .where(eq(clans.id, clan.id));
+        const releasedMembers = await tx
+          .delete(clanMembers)
+          .where(eq(clanMembers.clanId, clan.id))
+          .returning({
+            player_id: clanMembers.playerId,
+            member_role: clanMembers.memberRole,
+            has_priority: clanMembers.hasPriority,
+          });
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'clan.disband',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: disbandedAt.toISOString(),
           request_id: req.id,
         });
+        return releasedMembers;
       });
       const afterRows = await app.db.select().from(clans).where(eq(clans.id, clan.id)).limit(1);
       const after = afterRows[0];
@@ -1217,7 +1227,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         actionType: 'clan.disband',
         targetType: 'clan',
         targetId: clan.id,
-        before,
+        before: { ...clanSnapshot(clan), members: released },
         after: after ? clanSnapshot(after) : null,
         context: { requestId: req.id, method: req.method, url: req.url },
       });
@@ -1416,12 +1426,35 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      // A non-empty clan must have exactly one leader (the deferred
+      // clan_members_single_leader trigger), and a clan created through the
+      // API starts empty, so its first member becomes the leader regardless of
+      // the requested role. The row lock serializes concurrent first adds so
+      // only one of them sees the clan empty, and orders the add against a
+      // concurrent disband so no row is left behind a deleted clan.
+      let memberRole: 'leader' | 'deputy' | 'member' = req.body.member_role;
+      let clanStillActive = true;
       try {
-        await app.db.insert(clanMembers).values({
-          clanId: clan.id,
-          playerId: req.body.player_id,
-          memberRole: req.body.member_role,
-          hasPriority: false,
+        await app.db.transaction(async (tx) => {
+          const locked = await tx.execute(
+            sql`SELECT id FROM clans WHERE id = ${clan.id} AND deleted_at IS NULL FOR UPDATE`,
+          );
+          if (locked.length === 0) {
+            clanStillActive = false;
+            return;
+          }
+          const [existing] = await tx
+            .select({ playerId: clanMembers.playerId })
+            .from(clanMembers)
+            .where(eq(clanMembers.clanId, clan.id))
+            .limit(1);
+          if (!existing) memberRole = 'leader';
+          await tx.insert(clanMembers).values({
+            clanId: clan.id,
+            playerId: req.body.player_id,
+            memberRole,
+            hasPriority: false,
+          });
         });
       } catch (err) {
         const { code } = pgError(err);
@@ -1431,6 +1464,10 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         }
         throw err;
       }
+      if (!clanStillActive) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
       await writeAuditEntry(app.db, {
         actor: auditActor(req),
         actorIp: req.ip ?? null,
@@ -1438,14 +1475,14 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         targetType: 'clan',
         targetId: clan.id,
         before: null,
-        after: { player_id: req.body.player_id, member_role: req.body.member_role },
+        after: { player_id: req.body.player_id, member_role: memberRole },
         context: { requestId: req.id, method: req.method, url: req.url },
       });
       reply.code(201);
       return {
         clan_id: clan.id,
         player_id: req.body.player_id,
-        member_role: req.body.member_role,
+        member_role: memberRole,
       };
     },
   );
