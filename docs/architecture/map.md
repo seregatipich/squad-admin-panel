@@ -1309,8 +1309,11 @@ Mode is one env var, `PANEL_BRIDGE_MODE`, defaulting to **shadow**:
 |---|---|---|
 | Event stream | `events:server:<id>:shadow` | `events:server:<id>` (the real stream) |
 | Status key | `rnsquadjs:status:<id>:shadow` | `rnsquadjs:status:<id>` |
+| Stream cap | `XADD MAXLEN ~ 10000` (`EVENT_STREAM_MAXLEN`) | same, matching log-ingest |
 | Types published | all 17 mapped | only 4 (`PRODUCTION_TYPES`) |
 | Unix-socket RCON server | not started | `/run/panelBridge/rcon.sock` |
+
+The shadow key still matches the `events:server:*` SCAN pattern, so `worker-automation` and `worker-discord` accept only keys matching `/^events:server:[^:]+$/` in `discoverEventStreams`; a shadow copy is never consumed as a live stream (#16).
 
 ```ts
 // docker/rnsquadjs/plugins/panelBridge/src/index.ts:41-46,64
