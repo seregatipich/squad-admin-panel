@@ -106,7 +106,8 @@ export class LogIngestor {
   }
 
   ingest(line: string): EventEnvelope[] {
-    if (isBenignNoise(line)) return [];
+    const parsed = parseLine(line);
+    if (parsed && isBenignNoise(parsed)) return [];
     const fatal = detectSquadFatal(line);
     if (fatal && this.onSquadFatal) {
       this.onSquadFatal({
@@ -117,7 +118,6 @@ export class LogIngestor {
         raw: line,
       });
     }
-    const parsed = parseLine(line);
     if (!parsed) {
       if (!fatal && this.onParseError && line.startsWith('[')) {
         this.onParseError({
