@@ -185,33 +185,39 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 		})
 	}()
 
+	// connCtx scopes every request on this connection. It is cancelled when
+	// the client goes away (EOF / read error) or a response can no longer be
+	// written, so streaming handlers (container_logs_follow, file_read_stream)
+	// stop and their child processes are killed instead of running until the
+	// container stops. The API cancels a follow by ending its dedicated
+	// connection, so this is the only cancellation signal it has.
+	connCtx, connCancel := context.WithCancel(ctx)
+
 	var writeMu sync.Mutex
-	writeResp := func(resp rpc.Response) {
-		payload, err := json.Marshal(resp)
+	writeFrame := func(v any) {
+		payload, err := json.Marshal(v)
 		if err != nil {
 			return
 		}
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		_ = rpc.WriteFrame(conn, payload)
-	}
-	writeStream := func(sf rpc.StreamFrame) {
-		payload, err := json.Marshal(sf)
-		if err != nil {
-			return
+		if err := rpc.WriteFrame(conn, payload); err != nil {
+			connCancel()
 		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		_ = rpc.WriteFrame(conn, payload)
 	}
+	writeResp := func(resp rpc.Response) { writeFrame(resp) }
+	writeStream := func(sf rpc.StreamFrame) { writeFrame(sf) }
 
 	// Each request runs in its own goroutine so a long-running streaming
 	// method (container_logs_follow, depot_update) cannot block other
 	// requests that arrive on the same connection while it streams. writeMu
 	// keeps the wire output frame-aligned when multiple calls interleave.
+	// Deferred calls run LIFO: connCancel below fires before inflight.Wait,
+	// so in-flight handlers are cancelled before serveConn waits for them.
 	reader := bufio.NewReader(conn)
 	var inflight sync.WaitGroup
 	defer inflight.Wait()
+	defer connCancel()
 	for {
 		payload, err := rpc.ReadFrame(reader)
 		if err != nil {
@@ -235,7 +241,7 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 		inflight.Add(1)
 		go func(req rpc.Request) {
 			defer inflight.Done()
-			resp := disp.Handle(ctx, &req, writeStream)
+			resp := disp.Handle(connCtx, &req, writeStream)
 			writeResp(resp)
 		}(req)
 	}
