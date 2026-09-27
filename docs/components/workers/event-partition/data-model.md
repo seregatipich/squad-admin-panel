@@ -38,6 +38,14 @@ Example: `diagnostic_events_20260428` covers `2026-04-28` to `2026-04-29`.
 
 The `relname` lexicographic ordering on `diagnostic_events_YYYYMMDD` matches calendar ordering, which is why the drop query uses `WHERE p.relname < 'diagnostic_events_<yyyymmdd of yesterday>'`.
 
+### `player_sessions` (partitioned table)
+
+Monthly partitions `player_sessions_YYYY_MM` by `connected_at`, bootstrapped by migration `0024`. The worker keeps the current + next month present (`ensurePlayerSessionPartitions`); nothing is dropped. No DEFAULT partition.
+
+### `chat_messages`, `bonus_transactions`, `combat_events` (partitioned tables)
+
+Monthly partitions `<name>_YYYY_MM` by `sent_at` / `created_at` / `occurred_at`, bootstrapped by migrations `0025` / `0026` / `0029`, each with a DEFAULT partition `<name>_default` (`combat_events` since `0029`, the other two since `0117_monthly_partition_defaults`, which also created the current month and three months ahead). The worker keeps the current + next month present (`ensureDefaultBackedMonthlyPartitions`), moving any rows the DEFAULT partition already holds for a new month into it; nothing is dropped. Rows outside every monthly partition (for example a chat line with a wildly wrong clock) land in DEFAULT instead of failing the insert.
+
 ## Redis keys
 
 | Key | TTL | Description |
