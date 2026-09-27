@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AUDIT_VERIFY_LOCK_KEY } from '../../src/routes/audit.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let h: IntegrationHarness;
@@ -135,4 +137,97 @@ describe('GET /api/v1/audit/verify-chain', () => {
       await overwriteContext(tamperedId, { seq: 2 });
     }
   });
+
+  it('stays intact when a later id takes the append lock first (#36 finding 16)', async () => {
+    // Connection B takes the chain lock the trigger uses, so A's INSERT — whose
+    // bigserial id is drawn before its trigger runs — blocks with the smaller
+    // id while B inserts a larger one and commits first. Before the fix the id
+    // order then diverged from the chain order and verification reported a
+    // prev_hash break on an untouched table.
+    const connA = postgres(h.url, { max: 1, onnotice: () => undefined });
+    const connB = postgres(h.url, { max: 1, onnotice: () => undefined });
+    try {
+      let insertA: Promise<unknown> | undefined;
+      await connB.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended('audit_log', 0))`;
+        insertA = connA`
+          INSERT INTO audit_log (actor_kind, actor_system_label, action_type, context, row_hash)
+          VALUES ('system', 'test-verify-chain', 'race.a', '{}'::jsonb, ''::bytea)`.execute();
+        await waitForBlockedAdvisoryLock();
+        await tx`
+          INSERT INTO audit_log (actor_kind, actor_system_label, action_type, context, row_hash)
+          VALUES ('system', 'test-verify-chain', 'race.b', '{}'::jsonb, ''::bytea)`;
+      });
+      await insertA;
+    } finally {
+      await connA.end({ timeout: 5 });
+      await connB.end({ timeout: 5 });
+    }
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify-chain',
+      headers: { cookie },
+    });
+    expect(res.json()).toMatchObject({ ok: true, broken_at: null, reason: null });
+  });
+
+  it('stays intact for rows written by a session in another TimeZone (#36 finding 16)', async () => {
+    const tokyo = postgres(h.url, {
+      max: 1,
+      onnotice: () => undefined,
+      connection: { TimeZone: 'Asia/Tokyo' },
+    });
+    try {
+      await tokyo`
+        INSERT INTO audit_log (actor_kind, actor_system_label, action_type, context, row_hash)
+        VALUES ('system', 'test-verify-chain', 'tz.tokyo', '{}'::jsonb, ''::bytea)`;
+    } finally {
+      await tokyo.end({ timeout: 5 });
+    }
+    await insertAuditRow('tz.after', null, null, {});
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify-chain',
+      headers: { cookie },
+    });
+    expect(res.json()).toMatchObject({ ok: true, broken_at: null, reason: null });
+  });
+
+  it('refuses a second verification while one is running (#36 finding 17)', async () => {
+    await h.redis.set(AUDIT_VERIFY_LOCK_KEY, 'other-run', 'PX', 60_000);
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/audit/verify-chain',
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'verify_in_progress' });
+    } finally {
+      await h.redis.del(AUDIT_VERIFY_LOCK_KEY);
+    }
+    const again = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify-chain',
+      headers: { cookie },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(await h.redis.get(AUDIT_VERIFY_LOCK_KEY)).toBeNull();
+  });
 });
+
+/** Resolves once some backend is queued on the audit chain's advisory lock. */
+async function waitForBlockedAdvisoryLock(): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const rows = (await h.db.execute(sql`
+      SELECT count(*)::int AS n FROM pg_locks
+       WHERE locktype = 'advisory' AND NOT granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    `)) as unknown as Array<{ n: number }>;
+    if ((rows[0]?.n ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('the concurrent INSERT never queued on the audit_log lock');
+}

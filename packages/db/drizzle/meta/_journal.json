@@ -750,6 +750,13 @@
       "when": 1788473640000,
       "tag": "0121_role_permissions_legacy_wipe",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1788473700000,
+      "tag": "0122_audit_log_chain_order",
+      "breakpoints": true
     }
   ]
 }

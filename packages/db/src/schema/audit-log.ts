@@ -24,6 +24,9 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 export const auditLog = pgTable(
   'audit_log',
   {
+    // No column default since migration 0122: the append trigger draws the id
+    // from this serial's sequence after taking the chain lock, so id order is
+    // chain order. Declared bigserial so inserts may omit it.
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     actorKind: text('actor_kind').notNull(),
