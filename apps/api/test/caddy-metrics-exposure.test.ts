@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
  */
 
 const REPO_ROOT = resolve(__dirname, '../../..');
-const CADDYFILES = ['docker/Caddyfile', 'docker/Caddyfile.tk104'];
+const CADDYFILES = ['docker/Caddyfile', 'docker/Caddyfile.stand'];
 
 function apiMatcherPaths(caddyfile: string): string[] {
   const line = caddyfile.split('\n').find((l) => /^\s*@api\s+path\s/.test(l));
