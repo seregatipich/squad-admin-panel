@@ -107,12 +107,24 @@ export interface StoredMediaFile {
  * removed and the corresponding error is thrown after the source stream has
  * been fully drained (so the caller's multipart parser doesn't hang waiting
  * for more of a part we've already decided to reject).
+ *
+ * A size breach is detected two ways: more than `maxBytes` bytes arrive, or
+ * the source reports `truncated` once drained. The second covers a multipart
+ * parser capped at the same size (`server.ts` registers
+ * `limits.fileSize: MEDIA_MAX_UPLOAD_BYTES`): busboy then cuts the part at
+ * exactly the cap and ends the stream without an error, so the byte count
+ * alone would store the truncated file as a success (#36).
+ *
+ * @throws {MediaSizeLimitExceededError} the upload is larger than `maxBytes`
+ *   or was truncated by the multipart parser.
+ * @throws {MediaMagicByteMismatchError} the bytes do not match `mimeType`.
  */
 export async function storeMediaUpload(params: {
   baseDir: string;
   id: string;
   mimeType: MediaUploadMimeType;
-  source: AsyncIterable<Buffer>;
+  /** The part's bytes; a busboy file stream also carries `truncated`. */
+  source: AsyncIterable<Buffer> & { readonly truncated?: boolean };
   maxBytes?: number;
   now?: Date;
 }): Promise<StoredMediaFile> {
@@ -157,6 +169,10 @@ export async function storeMediaUpload(params: {
     if (!writeStream.write(chunk)) {
       await new Promise<void>((resolve) => writeStream.once('drain', resolve));
     }
+  }
+
+  if (!rejection && params.source.truncated === true) {
+    rejection = new MediaSizeLimitExceededError(maxBytes);
   }
 
   if (!rejection && !headerChecked && !matchesMagicBytes(params.mimeType, headerBuf)) {
