@@ -1,6 +1,13 @@
 import fp from 'fastify-plugin';
 import { Counter, collectDefaultMetrics, Histogram, Registry } from 'prom-client';
 
+/**
+ * `route` label recorded for a request that matched no registered route
+ * (Fastify's 404 context has no `routeOptions.url`). Every such request shares
+ * this one label so arbitrary client-chosen URLs can never mint new series.
+ */
+export const UNMATCHED_ROUTE_LABEL = '__unmatched__';
+
 export interface MetricsContext {
   registry: Registry;
   httpRequests: Counter<string>;
@@ -43,16 +50,24 @@ export default fp(async (app) => {
 
   app.decorate('metrics', ctx);
 
+  // The `route` label must only ever come from the finite set of registered
+  // route templates. prom-client never evicts a label combination, so labelling
+  // by the raw `req.url` (as this hook once did for unmatched requests) let any
+  // anonymous client grow the registry — and the API's memory — without bound
+  // and leaked query strings into the scrape output (#9).
   app.addHook('onResponse', async (req, reply) => {
-    const route = req.routeOptions?.url ?? req.url ?? 'unknown';
+    const route = req.routeOptions?.url ?? UNMATCHED_ROUTE_LABEL;
     const method = req.method;
     const status = String(reply.statusCode);
     httpRequests.inc({ route, method, status });
     httpDuration.observe({ route, method, status }, reply.elapsedTime / 1000);
   });
 
+  // Operator-only: the registry exposes the route map, traffic volume and
+  // process internals, so it is gated like the other host metrics and is not
+  // routed by Caddy (#9). Nothing in the stack scrapes it.
   app.get('/metrics', {
-    config: { public: true, audit: false },
+    config: { permissions: ['host:metrics'], audit: false },
     schema: { hide: true },
     handler: async (_, reply) => {
       reply.header('Content-Type', registry.contentType);
