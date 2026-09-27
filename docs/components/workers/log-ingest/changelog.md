@@ -71,7 +71,7 @@
 
 ### Fixed
 
-- `docker-compose.yml`: replaced `group_add: [${PANEL_GID:-987}]` with `user: "0:${PANEL_GID:-987}"`. The previous form left the container running with `gid=0(root)` as primary GID; the bridge's SO_PEERCRED check inspects the primary GID and rejected every `containerLogsFollow` call with `rejected untrusted peer`. See [`docs/components/bridge/troubleshooting.md`](../../bridge/troubleshooting.md) and the matching [`config-sync` changelog entry](../config-sync/changelog.md#2026-04-28).
+- `docker/compose.yml`: replaced `group_add: [${PANEL_GID:-987}]` with `user: "0:${PANEL_GID:-987}"`. The previous form left the container running with `gid=0(root)` as primary GID; the bridge's SO_PEERCRED check inspects the primary GID and rejected every `containerLogsFollow` call with `rejected untrusted peer`. See [`docs/components/bridge/troubleshooting.md`](../../bridge/troubleshooting.md) and the matching [`config-sync` changelog entry](../config-sync/changelog.md#2026-04-28).
 ### Added
 
 - Wired `@squad/diag` into the worker (`createDiag({ redis, log })` constructed once at startup, threaded into `TailManager` and per-server `LogIngestor`).

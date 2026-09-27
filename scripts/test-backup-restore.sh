@@ -2,7 +2,7 @@
 # test-backup-restore.sh — end-to-end proof of the INFRA-8 backup/restore mechanism.
 #
 # Runs entirely on `docker` (the only tool the CI `docker` job has). It exercises
-# the EXACT dump commands the docker-compose.yml backup service runs in its
+# the EXACT dump commands the docker/compose.yml backup service runs in its
 # PRE_COMMANDS, backs them up with restic, simulates `docker compose down -v` by
 # destroying the databases, then restores from the latest snapshot into a fresh
 # Postgres + Redis and asserts the seeded data survived. Prints PASS/FAIL and

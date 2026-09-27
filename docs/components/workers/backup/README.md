@@ -10,7 +10,7 @@ The process logs `"worker-backup idle — deferred to later phase"` once at star
 
 ## Backup is already live via the restic service (INFRA-8)
 
-The scheduled backups the panel actually relies on today are **not** produced by this worker — they run in the `backup` service defined in `docker-compose.yml` (image built from `docker/restic.Dockerfile`). This worker stays a stub until a later phase folds the schedule into the worker fleet.
+The scheduled backups the panel actually relies on today are **not** produced by this worker — they run in the `backup` service defined in `docker/compose.yml` (image built from `docker/restic.Dockerfile`). This worker stays a stub until a later phase folds the schedule into the worker fleet.
 
 - **What is backed up:** logical dumps, not raw data dirs. Before each snapshot the service's `PRE_COMMANDS` run `pg_dump -Fc` (Postgres → `admin.dump`) and `redis-cli --rdb` (Redis → `dump.rdb`) into the `backup_dump` volume, then `restic backup /data` snapshots that directory. `pg_dump`/`redis-cli` reuse `POSTGRES_PASSWORD`.
 - **Archived Squad logs (LOG-3, #51):** for servers with `server_settings.archive_logs_to_backup` on, the host bridge copies a rotated `SquadGame*.log` into `${DATA_DIR}/backup-dump/log-archive/{uuid}/` (via `PANEL_BACKUP_DUMP_ROOT`) just before the LOG-1 10-day retention sweep deletes it. Because that path is already inside `RESTIC_BACKUP_SOURCES=/data`, the next snapshot captures it under the same 7d/4w/6m retention — no separate restic invocation.

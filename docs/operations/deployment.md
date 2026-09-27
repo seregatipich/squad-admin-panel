@@ -20,12 +20,12 @@ the code only once `dev` is fast-forwarded to `master` (see `CLAUDE.md`). A brok
 stand is fixed forward on `dev` or rolled back (below).
 
 [`docker/compose.stand.yml`](../../docker/compose.stand.yml) is a standalone compose file for
-the host — it does not extend `docker-compose.yml`. It mirrors the same service
+the host — it does not extend `docker/compose.yml`. It mirrors the same service
 topology (api/web/caddy + all workers + bridge socket mount on `api`/workers that
 need it), adapted to the stand host's Caddy DNS-01 Caddyfile and named-volume storage
 instead of `${DATA_DIR}`-bind-mounted volumes for postgres/redis/caddy. Keep the
 two files in sync by hand when the bridge-facing env/volumes on a worker change in
-`docker-compose.yml`. The host's secrets live in `.env.stand` (from
+`docker/compose.yml`. The host's secrets live in `.env.stand` (from
 `.env.example`, `chmod 600`), which additionally needs `PANEL_GID` and `DATA_DIR`
 set to match the host's `panel` group and the data tree created by
 `install-host-bridge.sh`.
@@ -415,6 +415,15 @@ sudo systemctl restart panel-host-bridge.service
 
 ## Panel update procedure
 
+The stack is defined in `docker/compose.yml`; `COMPOSE_FILE=docker/compose.yml` in
+`.env` lets the plain `docker compose` commands below find it from the repository
+root. An install whose `.env` predates that line needs it added once before the first
+update after the move (the scripts under `scripts/` set it themselves). The compose
+file pins the project name `squad-admin-panel`; an install that lives in a directory
+with another name ran under that directory's name, so set
+`COMPOSE_PROJECT_NAME=<that directory name>` in `.env` as well, or `up` would start a
+second copy of the stack next to the running one.
+
 ```bash
 git pull
 pnpm install
@@ -486,7 +495,7 @@ Because the bridge shells out to `docker compose` and `scripts/restore.sh` from 
 
 ```ini
 # /etc/systemd/system/panel-host-bridge.service — [Service]
-Environment=PANEL_COMPOSE_DIR=/opt/squad-admin-panel   # dir holding docker-compose.yml + .env + scripts/
+Environment=PANEL_COMPOSE_DIR=/opt/squad-admin-panel   # dir holding docker/compose.yml + .env + scripts/
 # ProtectSystem=strict also requires the deploy dir on ReadWritePaths for the restore path.
 ```
 

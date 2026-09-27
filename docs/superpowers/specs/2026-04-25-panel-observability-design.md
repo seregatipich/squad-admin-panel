@@ -260,7 +260,7 @@ A "Логи" link in the existing dashboard layout (`apps/web/src/app/(dashboard
 
 No DB migrations. No new permission keys. New Redis keys (`panel:logs`, `host:metrics`) are created on first XADD and capped on every write — safe to deploy alongside existing data.
 
-The new worker `worker-metrics-sampler` is added to `docker-compose.yml` alongside the others. If it's not running, the metrics modals show "no data yet" — graceful degrade.
+The new worker `worker-metrics-sampler` is added to `docker/compose.yml` alongside the others. If it's not running, the metrics modals show "no data yet" — graceful degrade.
 
 The pino side-channel is best-effort: if Redis is down, panel logs fall through to journald only, no exceptions propagate.
 

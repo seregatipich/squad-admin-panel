@@ -65,7 +65,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=prod-deps /app /app
 COPY --from=builder /out /app
-# A build-arg default keeps per-worker builds (docker-compose.yml) working;
+# A build-arg default keeps per-worker builds (docker/compose.yml) working;
 # the shared production image leaves it empty and compose sets WORKER.
 ARG WORKER=
 ENV WORKER=$WORKER

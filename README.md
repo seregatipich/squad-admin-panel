@@ -66,7 +66,7 @@ sudo ./scripts/rebuild.sh
                               └─────────────────┘
 ```
 
-### Services (docker-compose.yml)
+### Services (docker/compose.yml)
 
 | Service | Role |
 |---------|------|

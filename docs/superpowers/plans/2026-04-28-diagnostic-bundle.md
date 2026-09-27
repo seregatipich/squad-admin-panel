@@ -51,7 +51,7 @@
 - `packages/bridge-client/src/client.ts` — add `fileReadTail`
 - `apps/web/src/app/(dashboard)/layout.tsx` — mount `<DiagnosticsMenu>` in topbar
 - `apps/api/test/audit-coverage.test.ts` — assert routes flipping `servers.status` emit a paired diag event
-- `docker-compose.yml` — add `worker-diag-flush` service
+- `docker/compose.yml` — add `worker-diag-flush` service
 
 ---
 
@@ -612,7 +612,7 @@ Expected: PASS.
 
 - [ ] **Step 7: Add docker-compose service**
 
-In `docker-compose.yml`, add (alongside other workers):
+In `docker/compose.yml`, add (alongside other workers):
 
 ```yaml
   worker-diag-flush:
@@ -631,7 +631,7 @@ In `docker-compose.yml`, add (alongside other workers):
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/workers/diag-flush packages/shared-config docker-compose.yml
+git add apps/workers/diag-flush packages/shared-config docker/compose.yml
 git commit -m "feat(workers): worker-diag-flush — Redis Stream → batched diagnostic_events INSERT"
 ```
 

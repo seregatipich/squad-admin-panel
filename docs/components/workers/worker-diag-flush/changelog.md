@@ -37,7 +37,7 @@
 - Heartbeat publisher writing `worker:heartbeat:diag-flush` (TTL 30 s) via `startHeartbeat`.
 - Graceful shutdown on `SIGINT`/`SIGTERM`: stop loop, end pg pool with 5 s timeout, quit Redis, exit 0.
 - Vitest unit suite (`test/contract.test.ts`, 4 cases) covering: well-formed batch INSERT shape + XACK, malformed-only batch (XACK without INSERT), mixed batch (INSERT for valid + XACK both), empty-input short-circuit.
-- Compose service `worker-diag-flush` wired up in `docker-compose.yml`, depends on postgres + redis + migrator.
+- Compose service `worker-diag-flush` wired up in `docker/compose.yml`, depends on postgres + redis + migrator.
 
 ### Changed
 

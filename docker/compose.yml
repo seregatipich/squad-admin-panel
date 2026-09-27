@@ -1,3 +1,9 @@
+# Run from the repository root: .env there sets COMPOSE_FILE to this file, so a
+# plain `docker compose ...` finds it and reads that .env. Paths below resolve
+# from this directory, and the project name stays the one installs have run
+# under (their containers, network and volumes).
+name: squad-admin-panel
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -18,7 +24,7 @@ services:
       TLS_ISSUER: ${TLS_ISSUER:-internal}
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
     volumes:
-      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     healthcheck:
@@ -34,7 +40,7 @@ services:
 
   migrator:
     build:
-      context: .
+      context: ..
       dockerfile: docker/api.Dockerfile
     restart: 'no'
     environment:
@@ -48,7 +54,7 @@ services:
 
   api:
     build:
-      context: .
+      context: ..
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
     environment:
@@ -119,7 +125,7 @@ services:
 
   web:
     build:
-      context: .
+      context: ..
       dockerfile: docker/web.Dockerfile
     restart: unless-stopped
     environment:
@@ -133,7 +139,7 @@ services:
 
   worker-log-ingest:
     build:
-      context: .
+      context: ..
       dockerfile: docker/worker.Dockerfile
       args:
         WORKER: log-ingest
@@ -163,7 +169,7 @@ services:
 
   worker-config-sync:
     build:
-      context: .
+      context: ..
       dockerfile: docker/worker.Dockerfile
       args:
         WORKER: config-sync
@@ -191,7 +197,7 @@ services:
 
   worker-rcon:
     build:
-      context: .
+      context: ..
       dockerfile: docker/worker.Dockerfile
       args:
         WORKER: rcon
@@ -216,7 +222,7 @@ services:
     logging: *default-logging
 
   worker-audit-archiver:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -229,7 +235,7 @@ services:
     logging: *default-logging
 
   worker-event-partition:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -242,7 +248,7 @@ services:
     logging: *default-logging
 
   worker-presence-daily:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -255,7 +261,7 @@ services:
     logging: *default-logging
 
   worker-role-expirer:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -273,7 +279,7 @@ services:
     logging: *default-logging
 
   worker-seed-reward:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -292,7 +298,7 @@ services:
   # coupling the sweep to API requests or user logins. No key means a safe
   # no-op while heartbeat stays visible.
   worker-steam-refresh:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -312,7 +318,7 @@ services:
   # destinations are optional — with no credentials the worker simply defers
   # every publication instead of failing it, so it is safe to run unconfigured.
   worker-media-publisher:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -339,7 +345,7 @@ services:
     logging: *default-logging
 
   worker-leaderboard-aggregator:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -352,7 +358,7 @@ services:
     logging: *default-logging
 
   worker-diag-flush:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -376,7 +382,7 @@ services:
 
   worker-metrics-sampler:
     build:
-      context: .
+      context: ..
       dockerfile: docker/worker.Dockerfile
       args:
         WORKER: metrics-sampler
@@ -398,7 +404,7 @@ services:
     logging: *default-logging
 
   worker-clan-guard:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -416,7 +422,7 @@ services:
   # AUTO-1 (#72): evaluates user-defined trigger rules over the event streams
   # and enqueues RCON actions / records firings. DB + Redis only, no bridge.
   worker-automation:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -431,7 +437,7 @@ services:
     logging: *default-logging
 
   worker-scheduler:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -453,7 +459,7 @@ services:
     logging: *default-logging
 
   worker-ban-sync:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -470,7 +476,7 @@ services:
     logging: *default-logging
 
   worker-clan-priority-expirer:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -486,7 +492,7 @@ services:
     logging: *default-logging
 
   worker-discord:
-    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
+    build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -544,7 +550,7 @@ services:
   # them in one shot, while `docker compose up` skips them.
   squad-server-image:
     build:
-      context: ./docker
+      context: .
       dockerfile: squad-server.Dockerfile
     image: squad-server:latest
     profiles: ['images']
@@ -553,7 +559,7 @@ services:
 
   depot-init-image:
     build:
-      context: ./docker
+      context: .
       dockerfile: depot-init.Dockerfile
     image: squad-panel/depot-init:latest
     profiles: ['images']
@@ -565,7 +571,7 @@ services:
   # root (not ./docker) because the Dockerfile COPYs `docker/rnsquadjs/...`.
   rnsquadjs-image:
     build:
-      context: .
+      context: ..
       dockerfile: docker/rnsquadjs.Dockerfile
     image: squad-panel/rnsquadjs:latest
     profiles: ['images']
@@ -580,7 +586,7 @@ services:
   # snapshot of live WAL/AOF files cannot guarantee — that is the point of #14.
   backup:
     build:
-      context: .
+      context: ..
       dockerfile: docker/restic.Dockerfile
     image: squad-panel/restic:latest
     restart: unless-stopped

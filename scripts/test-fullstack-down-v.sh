@@ -4,7 +4,7 @@
 #
 # Unlike scripts/test-backup-restore.sh (which proves the backup mechanism at the
 # container level on the CI `docker` job), this exercises the WHOLE panel stack
-# from docker-compose.yml:
+# from docker/compose.yml:
 #
 #   1. docker compose --profile backup up -d          (bring the panel up)
 #   2. seed a canary row (Postgres) + key (Redis) into the live, migrated stack
@@ -32,6 +32,8 @@ set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+# docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
+export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE=(docker compose --profile backup)

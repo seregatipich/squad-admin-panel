@@ -21,7 +21,7 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ### `compose-backup.test.ts`
 
-Regression guard against silent drift of the INFRA-8 `backup` docker-compose service, sliced out of `docker-compose.yml` and asserted on as text (no YAML parser dependency). Verifies the service is gated behind the `backup` profile, builds the custom restic image, dumps Postgres/Redis via `PRE_COMMANDS` (`pg_dump -Fc`, `redis-cli --rdb`), backs up the `backup_dump` staging volume rather than the raw `postgres_data`/`redis_data` volumes, and waits for `postgres`/`redis` to be healthy before starting.
+Regression guard against silent drift of the INFRA-8 `backup` docker-compose service, sliced out of `docker/compose.yml` and asserted on as text (no YAML parser dependency). Verifies the service is gated behind the `backup` profile, builds the custom restic image, dumps Postgres/Redis via `PRE_COMMANDS` (`pg_dump -Fc`, `redis-cli --rdb`), backs up the `backup_dump` staging volume rather than the raw `postgres_data`/`redis_data` volumes, and waits for `postgres`/`redis` to be healthy before starting.
 
 ### `fullstack-down-v.test.ts`
 

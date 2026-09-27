@@ -69,7 +69,7 @@ Single overlay plugin. Three responsibilities, no business logic.
 
 ### 3.3. Mongo / MariaDB stance
 
-`rnsdb.ts` and any plugin that requires a database are kept **disabled** in the rendered `config.json` (`enabled: false` for `autoUpdateMods`, statistics, etc.). No Mongo or MariaDB service is added to `docker-compose.yml`. Postgres remains the only datastore for the panel.
+`rnsdb.ts` and any plugin that requires a database are kept **disabled** in the rendered `config.json` (`enabled: false` for `autoUpdateMods`, statistics, etc.). No Mongo or MariaDB service is added to `docker/compose.yml`. Postgres remains the only datastore for the panel.
 
 ### 3.4. Bridge changes (`apps/bridge/internal/runner/docker.go`)
 
@@ -90,7 +90,7 @@ Add `squad-panel/rnsquadjs:*` to the image allowlist. No other changes — same 
 - Delete `apps/workers/rcon/` (entire package).
 - Delete `apps/workers/log-ingest/` (entire package — parser, tail, publish, index). With `panelBridge` publishing `EventEnvelope` directly, nothing else uses this worker.
 - Move the regression fixture from `apps/workers/log-ingest/test/fixtures/SquadGame.log` to `docker/rnsquadjs/plugins/panelBridge/test/fixtures/SquadGame.log` before deletion. It is the input for parity tests in §7.1 and §8 Tier 1, and must survive Phase 5.
-- Remove `worker-rcon` and `worker-log-ingest` services from `docker-compose.yml`.
+- Remove `worker-rcon` and `worker-log-ingest` services from `docker/compose.yml`.
 - Drop `worker:heartbeat:rcon` / `worker:heartbeat:log-ingest` from `/api/v1/health/workers`; replace with `worker:heartbeat:rnsquadjs:{id}` aggregated per server.
 
 ## 4. Data and contract surface (must not change)

@@ -10,7 +10,7 @@
 
 **Likely causes**:
 
-1. **`worker-config-sync` is connecting to the bridge with the wrong primary GID** (`gid=0(root)` instead of `gid=987(panel)`). `journalctl -u panel-host-bridge` will show `rejected untrusted peer ... uid:0, user:root, pid:<worker-pid>` for every attempt. Cause: `docker-compose.yml` declares `group_add: [${PANEL_GID}]` instead of `user: "0:${PANEL_GID:-987}"`. The bridge's SO_PEERCRED check inspects only the primary GID, never the supplementary list. Fix in `docker-compose.yml`:
+1. **`worker-config-sync` is connecting to the bridge with the wrong primary GID** (`gid=0(root)` instead of `gid=987(panel)`). `journalctl -u panel-host-bridge` will show `rejected untrusted peer ... uid:0, user:root, pid:<worker-pid>` for every attempt. Cause: `docker/compose.yml` declares `group_add: [${PANEL_GID}]` instead of `user: "0:${PANEL_GID:-987}"`. The bridge's SO_PEERCRED check inspects only the primary GID, never the supplementary list. Fix in `docker/compose.yml`:
    ```yaml
    worker-config-sync:
      ...

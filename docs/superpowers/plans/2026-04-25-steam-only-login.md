@@ -574,7 +574,7 @@ COMMIT;
 - [ ] **Step 3: Run migration locally against ephemeral DB**
 
 ```bash
-docker compose -f docker-compose.yml down -v   # remove old volumes
+docker compose -f docker/compose.yml down -v   # remove old volumes
 docker compose up -d postgres redis
 DATABASE_URL=postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin pnpm db:migrate
 ```

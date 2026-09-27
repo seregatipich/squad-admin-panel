@@ -68,7 +68,7 @@ Before each task: run Sentrux baseline (`mcp__plugin_sentrux_sentrux__session_st
 - `docker/rnsquadjs/plugins/panelBridge/src/{index,redisPublisher,heartbeat}.ts` + tests — D4/D5 fixes
 - `apps/api/src/routes/server-install.ts`, `servers.ts`, `apps/api/src/lib/server-delete.ts`, `apps/api/src/server.ts`, `apps/api/src/plugins/types.ts`, `apps/api/src/config.ts`
 - `apps/workers/log-ingest/src/index.ts` — kill-switch filter
-- `docker-compose.yml` — API socket-root mount
+- `docker/compose.yml` — API socket-root mount
 - `docs/superpowers/specs/2026-04-24-rnsquadjs-migration-design.md` §11, `docs/architecture/decisions.md`
 
 ---
@@ -1216,9 +1216,9 @@ git commit -am "feat(api): per-server rnsquadjs cutover/rollback endpoint"
 
 ### Task 14: Host plumbing — compose mount, tmpfiles, systemd, e2e
 
-**Files:** Modify `docker-compose.yml` (api service), `apps/bridge/deploy/panel-host-bridge.tmpfiles.conf`, `apps/bridge/deploy/panel-host-bridge.service` (:48 ReadWritePaths), `apps/api/test/e2e/install-lifecycle.e2e.test.ts`
+**Files:** Modify `docker/compose.yml` (api service), `apps/bridge/deploy/panel-host-bridge.tmpfiles.conf`, `apps/bridge/deploy/panel-host-bridge.service` (:48 ReadWritePaths), `apps/api/test/e2e/install-lifecycle.e2e.test.ts`
 
-- [ ] **Step 1:** `docker-compose.yml` — add to the `api` service `volumes` list:
+- [ ] **Step 1:** `docker/compose.yml` — add to the `api` service `volumes` list:
 
 ```yaml
       - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
@@ -1340,7 +1340,7 @@ node scripts/rnsquadjs-shadow-diff.mjs <uuid>
 
 Only after Gate G4 + 1 week. New branch `feat/rnsquadjs-cleanup`:
 
-- [ ] **Step 1:** Delete `apps/workers/log-ingest/` and its compose service `worker-log-ingest` from `docker-compose.yml`; remove `log-ingest` from `KNOWN_WORKERS` in `apps/api/src/plugins/heartbeat-watch.ts:4-11`. The golden fixture already lives in the plugin package (survives per spec §3.6). Keep `worker-rcon` (D4). Keep `dropCutoverServers`? — it dies with the worker; delete `packages/shared-config` helpers only if no other references remain (`git grep filterCutoverServers`).
+- [ ] **Step 1:** Delete `apps/workers/log-ingest/` and its compose service `worker-log-ingest` from `docker/compose.yml`; remove `log-ingest` from `KNOWN_WORKERS` in `apps/api/src/plugins/heartbeat-watch.ts:4-11`. The golden fixture already lives in the plugin package (survives per spec §3.6). Keep `worker-rcon` (D4). Keep `dropCutoverServers`? — it dies with the worker; delete `packages/shared-config` helpers only if no other references remain (`git grep filterCutoverServers`).
 - [ ] **Step 2:** Run the full Gate-G1 command set again; fix fallout (e.g., tests importing the deleted worker, `turbo.json` filters, README worker table).
 - [ ] **Step 3:** Update `README.md` worker list + `docs/architecture/README.md` topology; spec §3.6 checkboxes.
 - [ ] **Step 4:** Sentrux + Codex gates, commit, push, merge per `superpowers:finishing-a-development-branch`.

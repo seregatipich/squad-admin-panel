@@ -732,8 +732,8 @@ func TestBackupSnapshotsParsesJSON(t *testing.T) {
 	// Assert the composed docker compose invocation.
 	args := strings.Join(f.Calls[0].Args, " ")
 	for _, must := range []string{
-		"compose --project-directory /opt/squad-admin-panel",
-		"-f /opt/squad-admin-panel/docker-compose.yml",
+		"compose -f /opt/squad-admin-panel/docker/compose.yml",
+		"--env-file /opt/squad-admin-panel/.env",
 		"--profile backup",
 		"run --rm --no-TTY --entrypoint /bin/sh backup -c restic snapshots --json",
 	} {
@@ -800,7 +800,7 @@ func TestBackupSnapshotsComposeDirFromEnv(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	args := strings.Join(f.Calls[0].Args, " ")
-	if !strings.Contains(args, "--project-directory /srv/panel") {
+	if !strings.Contains(args, "-f /srv/panel/docker/compose.yml --env-file /srv/panel/.env") {
 		t.Errorf("expected env compose dir in args, got: %s", args)
 	}
 }
