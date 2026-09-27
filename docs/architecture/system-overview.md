@@ -51,7 +51,7 @@ A server hosted elsewhere — another box, another panel — can be attached ove
 2. Editor `PUT` writes via `bridge.file_atomic_write` AND inserts a row in `config_versions` (append-only — DB trigger rejects `UPDATE`/`DELETE`).
 3. No-op writes (sha256 unchanged) short-circuit and don't pollute history.
 4. Restore creates a NEW version with the old content; never destructive.
-5. Blame walks `config_versions` with Myers diff (`apps/api/src/lib/blame.ts`), cached in Redis under `config-blame:{tip_version_id}` TTL 24h.
+5. Blame walks the 200 newest `config_versions` of the file with Myers diff (`apps/api/src/lib/blame.ts`, `BLAME_MAX_VERSIONS`), cached in Redis under `config-blame:v3:{tip_version_id}` TTL 24h.
 
 ### Watch panel-wide health and connector logs
 

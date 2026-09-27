@@ -72,14 +72,21 @@ describe('computeBlame', () => {
     expect(result[2]?.author_player_id).toBe('carol');
   });
 
-  it('sorts unordered input by created_at before walking the diff', () => {
+  it('walks versions in the given order even when their millisecond stamps tie (#36)', () => {
+    // The route orders on the full-precision timestamp in SQL; the ISO strings
+    // here are truncated, so computeBlame must not re-sort on them.
     const versions = [
-      v('v3', 'carol', '2026-04-03T00:00:00Z', 'one\ntwo\nthree\nfour'),
-      v('v1', 'alice', '2026-04-01T00:00:00Z', 'one\ntwo'),
-      v('v2', 'bob', '2026-04-02T00:00:00Z', 'one\ntwo\nthree'),
+      v('v1', 'alice', '2026-04-01T00:00:00.000Z', 'one\ntwo'),
+      v('v2', 'bob', '2026-04-01T00:00:00.000Z', 'one\nTWO'),
     ];
-    const result = computeBlame(versions);
-    expect(result.map((l) => l.version_id)).toEqual(['v1', 'v1', 'v2', 'v3']);
+    expect(computeBlame(versions).map((l) => [l.text, l.version_id])).toEqual([
+      ['one', 'v1'],
+      ['TWO', 'v2'],
+    ]);
+    expect(computeBlame([...versions].reverse()).map((l) => [l.text, l.version_id])).toEqual([
+      ['one', 'v2'],
+      ['two', 'v1'],
+    ]);
   });
 
   it('handles CRLF line endings', () => {
