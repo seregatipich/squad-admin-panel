@@ -47,6 +47,7 @@ const ACCRUAL_OK = {
   playersAccrued: 1,
   transactionsWritten: 2,
   balanceDelta: 4,
+  shortfallForgiven: 0,
 };
 
 describe('runPresenceDailyTick', () => {
@@ -202,6 +203,29 @@ describe('runPresenceDailyTick', () => {
 
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'economy_accrual.run_failed', severity: 'error' }),
+    );
+  });
+
+  it('still accrues today when yesterday fails, and reports the failed day (#18)', async () => {
+    accrueDailyBonuses.mockImplementation(async (_sql: unknown, input: { day: string }) => {
+      if (input.day === '2026-07-04') throw new Error('yesterday boom');
+      return ACCRUAL_OK;
+    });
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const now = new Date('2026-07-05T02:00:00.000Z');
+
+    await runEconomyAccrual({ sql: {} as never, diag, now });
+
+    expect(accrueDailyBonuses).toHaveBeenCalledWith({}, { day: '2026-07-05', now });
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'economy_accrual.run_failed',
+        severity: 'error',
+        payload: expect.objectContaining({ day: '2026-07-04' }),
+      }),
+    );
+    expect(diag.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'economy_accrual.run_ok' }),
     );
   });
 });

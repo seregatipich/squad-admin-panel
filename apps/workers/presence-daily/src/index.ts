@@ -30,44 +30,57 @@ export interface PresenceTickDeps {
   now?: Date;
 }
 
+/**
+ * Accrue economy bonuses for every day in the recent presence window.
+ *
+ * Each day runs in its own try so a failure on one day (typically "yesterday",
+ * which is processed first) never blocks accrual for the others (#18). Every
+ * failed day emits its own `economy_accrual.run_failed`; `economy_accrual.run_ok`
+ * is emitted only when every day in the window succeeded.
+ */
 export async function runEconomyAccrual(deps: PresenceTickDeps): Promise<void> {
   const { sql, diag } = deps;
   const now = deps.now ?? new Date();
   const window = recentPresenceWindow(now);
-  try {
-    let players = 0;
-    let transactions = 0;
-    let balanceDelta = 0;
-    let economyEnabled = false;
-    for (const day of daysInWindow(window.fromDay, window.toDay)) {
+  let players = 0;
+  let transactions = 0;
+  let balanceDelta = 0;
+  let shortfallForgiven = 0;
+  let economyEnabled = false;
+  let failedDays = 0;
+  for (const day of daysInWindow(window.fromDay, window.toDay)) {
+    try {
       const result = await accrueDailyBonuses(sql, { day, now });
       economyEnabled = economyEnabled || result.economyEnabled;
       players += result.playersAccrued;
       transactions += result.transactionsWritten;
       balanceDelta += result.balanceDelta;
+      shortfallForgiven += result.shortfallForgiven;
+    } catch (err) {
+      failedDays += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err: message, ...window, day }, 'economy accrual failed');
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'economy_accrual.run_failed',
+        severity: 'error',
+        message: `accrual failed for ${day}: ${message}`,
+        payload: { ...window, day },
+      });
     }
-    log.info(
-      { ...window, economyEnabled, players, transactions, balanceDelta },
-      'economy accrual ok',
-    );
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'economy_accrual.run_ok',
-      severity: 'info',
-      message: `accrued ${window.fromDay}..${window.toDay}`,
-      payload: { ...window, economyEnabled, players, transactions, balanceDelta },
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.error({ err: message, ...window }, 'economy accrual failed');
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'economy_accrual.run_failed',
-      severity: 'error',
-      message: `accrual failed: ${message}`,
-      payload: { ...window },
-    });
   }
+  if (failedDays > 0) return;
+  log.info(
+    { ...window, economyEnabled, players, transactions, balanceDelta, shortfallForgiven },
+    'economy accrual ok',
+  );
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'economy_accrual.run_ok',
+    severity: 'info',
+    message: `accrued ${window.fromDay}..${window.toDay}`,
+    payload: { ...window, economyEnabled, players, transactions, balanceDelta, shortfallForgiven },
+  });
 }
 
 export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void> {

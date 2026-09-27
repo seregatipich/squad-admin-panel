@@ -419,3 +419,94 @@ describeIfDb('accrueDailyBonuses with SEED-1 seeding-window attribution', () => 
     expect(seedTxCount[0]?.n).toBe(1);
   });
 });
+
+describeIfDb('accrueDailyBonuses with a negative recompute delta (#18)', () => {
+  async function ledgerSum(playerId: string): Promise<number> {
+    const [row] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(amount), 0)::int AS total
+      FROM bonus_transactions
+      WHERE player_id = ${playerId}
+    `;
+    return row?.total ?? 0;
+  }
+
+  async function spendEverything(playerId: string, amount: number) {
+    await sql`
+      INSERT INTO bonus_transactions (player_id, amount, type)
+      VALUES (${playerId}, ${-amount}, 'spend')
+    `;
+    await sql`UPDATE players SET bonus_balance = bonus_balance - ${amount} WHERE id = ${playerId}`;
+  }
+
+  async function seedTenHoursOnline() {
+    for (const playerId of [PLAYER_STEAM, PLAYER_EOS]) {
+      await seedSession({
+        playerId,
+        serverId: playerId === PLAYER_STEAM ? SERVER_1 : SERVER_2,
+        connectedAt: `${DAY}T08:00:00.000Z`,
+        disconnectedAt: `${DAY}T18:00:00.000Z`,
+        mode: 'online',
+      });
+    }
+    await recompute();
+  }
+
+  it('lowering k_online after a player spent the accrual clamps that balance at zero and still re-accrues everyone else', async () => {
+    await seedTenHoursOnline();
+    await setEconomy({ enabled: true, kOnline: 10, seedThreshold: 1 });
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+    expect(await balanceOf(PLAYER_STEAM)).toBe(100);
+    expect(await balanceOf(PLAYER_EOS)).toBe(100);
+
+    await spendEverything(PLAYER_STEAM, 100);
+    await setEconomy({ enabled: true, kOnline: 5, seedThreshold: 1 });
+
+    const result = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    expect(await balanceOf(PLAYER_STEAM)).toBe(0);
+    expect(await balanceOf(PLAYER_EOS)).toBe(50);
+    expect(result.balanceDelta).toBe(-50);
+    expect(result.shortfallForgiven).toBe(50);
+    expect(await ledgerFor(PLAYER_STEAM)).toEqual([
+      { type: 'adjust', amount: 50, reference_id: DAY },
+      { type: 'earn_online', amount: 50, reference_id: DAY },
+      { type: 'spend', amount: -100, reference_id: null },
+    ]);
+    expect(await ledgerSum(PLAYER_STEAM)).toBe(await balanceOf(PLAYER_STEAM));
+    expect(await ledgerSum(PLAYER_EOS)).toBe(await balanceOf(PLAYER_EOS));
+  });
+
+  it('stays idempotent after a clamp: re-running writes no further compensation', async () => {
+    await seedTenHoursOnline();
+    await setEconomy({ enabled: true, kOnline: 10, seedThreshold: 1 });
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+    await spendEverything(PLAYER_STEAM, 100);
+    await setEconomy({ enabled: true, kOnline: 5, seedThreshold: 1 });
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    const rerun = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    expect(rerun.balanceDelta).toBe(0);
+    expect(rerun.shortfallForgiven).toBe(0);
+    expect(await balanceOf(PLAYER_STEAM)).toBe(0);
+    const adjusts = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM bonus_transactions
+      WHERE player_id = ${PLAYER_STEAM} AND type = 'adjust'
+    `;
+    expect(adjusts[0]?.n).toBe(1);
+  });
+
+  it('only forgives the part of a negative delta the balance cannot cover', async () => {
+    await seedTenHoursOnline();
+    await setEconomy({ enabled: true, kOnline: 10, seedThreshold: 1 });
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+    await spendEverything(PLAYER_STEAM, 80);
+    await setEconomy({ enabled: true, kOnline: 5, seedThreshold: 1 });
+
+    const result = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    expect(await balanceOf(PLAYER_STEAM)).toBe(0);
+    expect(result.shortfallForgiven).toBe(30);
+    expect(await ledgerSum(PLAYER_STEAM)).toBe(0);
+  });
+});

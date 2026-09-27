@@ -14,6 +14,10 @@ const DEFAULT_SEED_THRESHOLD = 40;
 /** Ledger reference type used for machine-generated daily presence accruals. */
 export const DAILY_PRESENCE_REFERENCE_TYPE = 'daily_presence';
 
+/** Ledger comment on the `adjust` row that forgives an unrecoverable accrual reduction. */
+const SHORTFALL_ADJUST_COMMENT =
+  'Автокомпенсация: пересчёт уменьшил уже потраченные начисления, баланс не может быть отрицательным';
+
 /** Bonus transaction types written by the daily accrual job. */
 export const ACCRUAL_TX_TYPES = ['earn_online', 'earn_boost', 'earn_seed'] as const;
 
@@ -209,6 +213,11 @@ export interface AccrueDailyBonusesResult {
   transactionsWritten: number;
   /** Net change applied to `players.bonus_balance` across all players. */
   balanceDelta: number;
+  /**
+   * Bonuses forgiven through compensating `adjust` rows because a negative
+   * recompute delta exceeded a player's remaining balance (#18).
+   */
+  shortfallForgiven: number;
 }
 
 interface SettingsRow {
@@ -273,11 +282,17 @@ function toTransition(row: SeedingEventRow): SeedingTransitionEvent {
  *  4. for each player, compute `round(k × seconds / 3600)` per bonus type and
  *     write one `earn_online`/`earn_boost`/`earn_seed` transaction each
  *     (`reference = (player_id, day)`), skipping zero amounts;
- *  5. keep `players.bonus_balance` in sync.
+ *  5. keep `players.bonus_balance` in sync. A recompute can shrink a day's
+ *     accrual (a lowered coefficient, retroactive seed attribution, late
+ *     sessions); when the player already spent it and the balance cannot
+ *     absorb the negative delta, the balance stops at zero and the uncovered
+ *     part is forgiven with an `adjust` row (`reference = (player_id, day)`),
+ *     so one player's spend never fails the whole day's transaction (#18).
  *
  * Idempotent: existing accrual rows for the day are deleted and replaced, and
  * the balance is adjusted by the net delta, so re-running for the same day never
- * double-counts. Accruals are machine-generated and intentionally not written to
+ * double-counts. A forgiveness `adjust` row is permanent: the ledger still sums
+ * to the balance, and later re-runs compare against the reduced accrual. Accruals are machine-generated and intentionally not written to
  * `audit_log`.
  *
  * Note: switching a server's attribution from the threshold sweep to
@@ -404,6 +419,7 @@ export async function accrueDailyBonuses(
         playersAccrued: 0,
         transactionsWritten: 0,
         balanceDelta: 0,
+        shortfallForgiven: 0,
       };
     }
 
@@ -425,6 +441,7 @@ export async function accrueDailyBonuses(
     let playersAccrued = 0;
     let transactionsWritten = 0;
     let balanceDelta = 0;
+    let shortfallForgiven = 0;
 
     for (const row of aggregates) {
       const playerId = row.player_id;
@@ -467,18 +484,48 @@ export async function accrueDailyBonuses(
       }
 
       const delta = addedSum - removedSum;
-      if (delta !== 0) {
+      let shortfall = 0;
+      if (delta < 0) {
+        // A recompute can shrink an accrual the player has already spent
+        // (coefficient lowered, seed time re-attributed, late sessions). The
+        // balance must never go negative (`players_bonus_balance_nonneg_chk`),
+        // so the part it cannot cover is forgiven through an `adjust` row that
+        // keeps the ledger summing to the balance.
+        const [player] = await tx<{ bonus_balance: number }[]>`
+          SELECT bonus_balance FROM players WHERE id = ${playerId}::uuid FOR UPDATE
+        `;
+        shortfall = Math.max(0, -(Number(player?.bonus_balance ?? 0) + delta));
+      }
+      if (shortfall > 0) {
+        await tx`
+          INSERT INTO bonus_transactions
+            (player_id, amount, type, reference_type, reference_id, comment)
+          VALUES
+            (${playerId}::uuid, ${shortfall}, 'adjust', ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
+             ${SHORTFALL_ADJUST_COMMENT})
+        `;
+        shortfallForgiven += shortfall;
+      }
+      const balanceChange = delta + shortfall;
+      if (balanceChange !== 0) {
         await tx`
           UPDATE players
-          SET bonus_balance = bonus_balance + ${delta}, updated_at = now()
+          SET bonus_balance = bonus_balance + ${balanceChange}, updated_at = now()
           WHERE id = ${playerId}::uuid
         `;
-        balanceDelta += delta;
+        balanceDelta += balanceChange;
       }
       if (addedSum !== 0 || removedSum !== 0) playersAccrued += 1;
     }
 
-    return { day, economyEnabled: true, playersAccrued, transactionsWritten, balanceDelta };
+    return {
+      day,
+      economyEnabled: true,
+      playersAccrued,
+      transactionsWritten,
+      balanceDelta,
+      shortfallForgiven,
+    };
   });
 }
 
