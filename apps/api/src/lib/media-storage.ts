@@ -16,6 +16,27 @@ const MIME_EXTENSIONS: Record<MediaUploadMimeType, string> = {
 
 const MAGIC_BYTE_CHECK_LENGTH = 12;
 
+/**
+ * ISO-BMFF major brands of HEIF/AVIF still images and image sequences. They
+ * share MP4's `ftyp` box, so the box type alone lets such an image through as
+ * `video/mp4`; the brand at bytes 8-12 is what image decoders (libheif via
+ * sharp) key on, so these are refused outright (#22).
+ */
+const IMAGE_ONLY_ISOBMFF_BRANDS = new Set([
+  'avif',
+  'avis',
+  'heic',
+  'heix',
+  'heim',
+  'heis',
+  'hevc',
+  'hevx',
+  'hevm',
+  'hevs',
+  'mif1',
+  'msf1',
+]);
+
 /** Thrown when an uploaded stream exceeds `MEDIA_MAX_UPLOAD_BYTES` (or a caller-supplied cap). */
 export class MediaSizeLimitExceededError extends Error {
   constructor(maxBytes: number) {
@@ -35,7 +56,9 @@ export class MediaMagicByteMismatchError extends Error {
 /**
  * Checks the leading bytes of a file against the magic-byte signature for
  * `mimeType`. Guards against a client lying about `Content-Type` (or a
- * corrupted upload) for the four allowlisted formats.
+ * corrupted upload) for the four allowlisted formats. For `video/mp4` the
+ * ISO-BMFF major brand is checked too, so HEIF/AVIF images are not accepted
+ * as video.
  */
 export function matchesMagicBytes(mimeType: MediaUploadMimeType, header: Buffer): boolean {
   switch (mimeType) {
@@ -56,8 +79,13 @@ export function matchesMagicBytes(mimeType: MediaUploadMimeType, header: Buffer)
       );
     case 'video/mp4':
       // An MP4/ISO-BMFF file starts with a 4-byte box size followed by the
-      // ASCII box type "ftyp" at bytes 4-8.
-      return header.length >= 8 && header.subarray(4, 8).toString('ascii') === 'ftyp';
+      // ASCII box type "ftyp" at bytes 4-8, then the major brand at 8-12,
+      // which must not name a HEIF/AVIF image.
+      return (
+        header.length >= 8 &&
+        header.subarray(4, 8).toString('ascii') === 'ftyp' &&
+        !IMAGE_ONLY_ISOBMFF_BRANDS.has(header.subarray(8, 12).toString('ascii'))
+      );
     default:
       return false;
   }
