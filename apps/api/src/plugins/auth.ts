@@ -121,8 +121,8 @@ export default fp(async (app) => {
     // scoped `self_service` and is honoured ONLY on routes that opt in with
     // `config.selfService`; anywhere else the request is downgraded to
     // anonymous. Deny-by-default is required here rather than trusting the
-    // permission set, because `loadUserPermissions` adds explicit
-    // `role_permissions` rows on top of the derived set, and because routes
+    // permission set, because `loadUserPermissions` still honours explicit
+    // `role_permissions` rows (flag-gated, #36), and because routes
     // authorise on `req.user` alone (`message-templates.ts`, …) or on
     // `squadPermissions`, which `rbac.ts` does not gate on `panel_access`.
     // Downgrading instead of answering 403 keeps genuinely public routes

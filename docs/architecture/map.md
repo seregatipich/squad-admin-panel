@@ -2056,7 +2056,7 @@ Effective authority is `intersectScopes(token.scopes, loadUserPermissions(...))`
 
 Two disjoint vocabularies. `packages/shared-config/src/permissions.ts` defines **51 panel permission keys** across 16 categories, with optional `dangerous`/`unimplemented` flags; `PermissionKey` is a literal union derived from that array. `squad-permissions.ts` defines **21 squad permission keys** (`kick`, `ban`, `immune`, `reserve`, …) — these are Squad's own `Admins.cfg` group permissions replicated out to game servers and are **never** used to authorize a panel route.
 
-`roles` (`packages/db/src/schema/roles.ts`) carries 13 boolean columns: `is_system_role` plus the 12 access flags `panel_access`, `can_view_ips`, `can_assign_roles`, `can_edit_roles`, `can_manage_issues`, `can_manage_ban_sources`, `can_manage_integrations`, `can_manage_clans`, `can_manage_economy`, `can_manage_media`, `can_handle_reports`, `combat_view`.
+`roles` (`packages/db/src/schema/roles.ts`) carries 14 boolean columns: `is_system_role` plus the 13 access flags `panel_access`, `can_view_ips`, `can_assign_roles`, `can_edit_roles`, `can_manage_issues`, `can_manage_ban_sources`, `can_manage_integrations`, `can_manage_clans`, `can_manage_economy`, `can_manage_media`, `can_handle_reports`, `can_manage_infrastructure` (migration 0120), `combat_view`.
 
 `loadUserPermissions` (`apps/api/src/lib/rbac.ts:91`) issues one SQL query joining the role row and `array_agg`-ing squad permissions, then layers additive `role_permissions` rows. The decisive part is `derivePanelPermissions`:
 
@@ -2073,6 +2073,8 @@ for (const key of ALL_PANEL_PERMS) {
   out.add(key);
 }
 ```
+
+> **Updated for #36 (migrations 0120/0121).** `derivePanelPermissions` now runs every key through `keyPassesFlagGates`, which also withholds the infrastructure keys (`host:manage`, `server:install|delete|force_stop|update`, `config:edit|rollback`, `admin_group:edit`, `api_token:create`, `backup:restore`) unless the role has `can_manage_infrastructure`, and the `mod:*` keys unless the role holds the live-Squad `kick`/`ban` permission. Explicit `role_permissions` rows pass the same gates (they can no longer bypass a flag), and 0121 deleted the stored legacy rows. The paragraph below describes the model before that change.
 
 Read that carefully: **`panel_access = true` implicitly grants all 51 keys** minus exactly six gated ones — `user:manage_roles` (needs `can_assign_roles`), `role:create|edit|delete` (needs `can_edit_roles`), `integration:manage`, and `player:view_ips`. `role_permissions` rows are then additive only (`rbac.ts:183`) and can never subtract. The "role is a bag of permission-key strings" model described in `docs/architecture/rbac.md:3` is therefore **not** the enforced model; the real model is coarse boolean flags with a fine-grained key vocabulary layered on top for the API surface. Owner is identified by a hardcoded name match — `row.role_name === 'Owner' && row.is_system_role === true` (`rbac.ts:151`) — not by an ID or flag, and short-circuits every flag plus all squad permissions.
 

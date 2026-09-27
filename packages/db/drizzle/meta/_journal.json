@@ -736,6 +736,20 @@
       "when": 1788473520000,
       "tag": "0119_message_templates_seed_once",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788473580000,
+      "tag": "0120_role_can_manage_infrastructure",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1788473640000,
+      "tag": "0121_role_permissions_legacy_wipe",
+      "breakpoints": true
     }
   ]
 }

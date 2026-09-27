@@ -1,0 +1,11 @@
+-- Drop the legacy explicit grants in role_permissions (#36). No API route has
+-- written this table since the flag model (0015); 0015 only cleared the rows
+-- of the roles it re-seeded, so a custom role from the 0009 era could keep
+-- keys such as user:manage_roles or host:manage that the roles UI cannot show.
+-- rbac.ts now also runs any remaining explicit row through the same flag
+-- gates as the derived set; this removes the invisible rows themselves.
+-- Owner loses nothing: its permissions are hardcoded in rbac.ts.
+--
+-- Rollback-safe: data only. The previous release reads the table and simply
+-- finds no extra grants, i.e. a stricter permission set, never a broader one.
+DELETE FROM role_permissions;

@@ -494,7 +494,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 
 ## `role_permissions`
 
-M:N join table mapping roles to permission key strings. A player with `players.role_id = X` is granted every `permission_key` in the set `{ rp.permission_key | rp.role_id = X }`.
+M:N join table mapping roles to permission key strings. **Legacy**: no API route writes it since the flag model (0015), and migration 0121 deleted every stored row (#36). `loadUserPermissions` still honours a row, but only when the role's flags allow that key (the same gates as the flag-derived set), so it can never grant more than the role editor shows.
 
 **Columns**
 

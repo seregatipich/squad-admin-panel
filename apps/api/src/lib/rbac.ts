@@ -56,39 +56,95 @@ const PANEL_PERMS_GATED_BY_SQUAD_BAN: ReadonlySet<PermissionKey> = new Set<Permi
   'mod:ban_perm',
   'mod:unban',
 ]);
-const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
+/**
+ * Keys that change the host or the servers' files rather than moderate
+ * players: the privileged host daemon, the server lifecycle, config and
+ * Admins.cfg writes, and API-token minting. `panel_access` alone does not
+ * grant them; the role also needs `can_manage_infrastructure` (#36).
+ */
+export const PANEL_PERMS_GATED_BY_INFRASTRUCTURE: ReadonlySet<PermissionKey> =
+  new Set<PermissionKey>([
+    'host:manage',
+    'server:install',
+    'server:delete',
+    'server:force_stop',
+    'server:update',
+    'config:edit',
+    'config:rollback',
+    'admin_group:edit',
+    'api_token:create',
+    'backup:restore',
+  ]);
 
 /**
- * Derives the panel permission keys a role grants, gating certain catalogue
- * keys on the role's finer-grained sub-permissions.
+ * Every key that needs a role flag on top of `panel_access`. Each `dangerous`
+ * catalogue key must be in here; `rbac-infrastructure-gate.test.ts` fails when
+ * a new dangerous key is added without a gate.
+ */
+export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  ...PANEL_PERMS_GATED_BY_ASSIGN,
+  ...PANEL_PERMS_GATED_BY_EDIT,
+  ...PANEL_PERMS_GATED_BY_INTEGRATIONS,
+  ...PANEL_PERMS_GATED_BY_VIEW_IPS,
+  ...PANEL_PERMS_GATED_BY_SQUAD_KICK,
+  ...PANEL_PERMS_GATED_BY_SQUAD_BAN,
+  ...PANEL_PERMS_GATED_BY_INFRASTRUCTURE,
+]);
+
+const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
+
+/** The role flags {@link keyPassesFlagGates} checks a key against. */
+interface RoleFlagGates {
+  canAssignRoles: boolean;
+  canEditRoles: boolean;
+  canManageIntegrations: boolean;
+  canViewIps: boolean;
+  canManageInfrastructure: boolean;
+  squadPermissions: ReadonlySet<string>;
+}
+
+/**
+ * Whether a role's flags allow it to hold `key` at all, whatever the source
+ * of the key (derived from `panel_access` or an explicit `role_permissions`
+ * row).
  *
- * `squadPermissions` closes the RBAC gap where `mod:kick`/`mod:warn`/
+ * The live-Squad gate closes the RBAC gap where `mod:kick`/`mod:warn`/
  * `mod:ban_temp`/`mod:ban_perm`/`mod:unban` would otherwise be handed to
  * every `panel_access` user: those five keys additionally require the
  * role's live-Squad `kick`/`ban` permission (`role_squad_permissions`),
  * mirroring the enforcement already applied to `POST
  * /api/v1/external-bans` (`localBanGuard` in `external-bans.ts`).
  */
+function keyPassesFlagGates(key: PermissionKey, flags: RoleFlagGates): boolean {
+  if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !flags.canAssignRoles) return false;
+  if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !flags.canManageIntegrations) return false;
+  if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !flags.canViewIps) return false;
+  if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !flags.squadPermissions.has('kick')) {
+    return false;
+  }
+  if (PANEL_PERMS_GATED_BY_SQUAD_BAN.has(key) && !flags.squadPermissions.has('ban')) return false;
+  if (PANEL_PERMS_GATED_BY_INFRASTRUCTURE.has(key) && !flags.canManageInfrastructure) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Derives the panel permission keys a role grants: every catalogue key for
+ * Owner, nothing without `panel_access`, otherwise every key that passes
+ * {@link keyPassesFlagGates}.
+ */
 function derivePanelPermissions(
   panelAccess: boolean,
-  canAssignRoles: boolean,
-  canEditRoles: boolean,
-  canManageIntegrations: boolean,
-  canViewIps: boolean,
   isOwner: boolean,
-  squadPermissions: ReadonlySet<string>,
+  flags: RoleFlagGates,
 ): Set<PermissionKey> {
   if (isOwner) return new Set(ALL_PANEL_PERMS);
   if (!panelAccess) return new Set();
   const out = new Set<PermissionKey>();
   for (const key of ALL_PANEL_PERMS) {
-    if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
-    if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
-    if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
-    if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
-    if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !squadPermissions.has('kick')) continue;
-    if (PANEL_PERMS_GATED_BY_SQUAD_BAN.has(key) && !squadPermissions.has('ban')) continue;
-    out.add(key);
+    if (keyPassesFlagGates(key, flags)) out.add(key);
   }
   return out;
 }
@@ -108,6 +164,7 @@ interface RoleContextRow extends Record<string, unknown> {
   can_manage_economy: boolean | null;
   can_manage_media: boolean | null;
   can_handle_reports: boolean | null;
+  can_manage_infrastructure: boolean | null;
   combat_view: boolean | null;
   squad_permissions: string[] | null;
 }
@@ -135,6 +192,7 @@ export async function loadUserPermissions(
       r.can_manage_economy,
       r.can_manage_media,
       r.can_handle_reports,
+      r.can_manage_infrastructure,
       r.combat_view,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
@@ -193,22 +251,28 @@ export async function loadUserPermissions(
         ((row.squad_permissions ?? []) as SquadPermissionKey[]).filter(Boolean),
       );
 
+  const flags: RoleFlagGates = {
+    canAssignRoles,
+    canEditRoles,
+    canManageIntegrations,
+    canViewIps,
+    canManageInfrastructure: isOwner ? true : (row.can_manage_infrastructure ?? false),
+    squadPermissions,
+  };
+
   const explicit = await db
     .select({ key: rolePermissions.permissionKey })
     .from(rolePermissions)
     .where(eq(rolePermissions.roleId, row.role_id));
 
-  const permissions = derivePanelPermissions(
-    panelAccess,
-    canAssignRoles,
-    canEditRoles,
-    canManageIntegrations,
-    canViewIps,
-    isOwner,
-    squadPermissions,
-  );
+  const permissions = derivePanelPermissions(panelAccess, isOwner, flags);
+  // Explicit rows are legacy (no route writes them; migration 0121 wiped the
+  // stored ones) and pass the same flag gates as the derived set, so a stray
+  // row can never grant a key the role's flags withhold (#36).
   for (const entry of explicit) {
-    if (isPermissionKey(entry.key)) permissions.add(entry.key);
+    if (isPermissionKey(entry.key) && keyPassesFlagGates(entry.key, flags)) {
+      permissions.add(entry.key);
+    }
   }
 
   const value: PermissionContext = {
