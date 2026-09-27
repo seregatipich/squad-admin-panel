@@ -1,5 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  RCON_COMMAND_DEADLINE_FIELD,
+  RCON_COMMAND_EXPIRED_ERROR,
   RCON_COMMAND_GROUP,
   type RconCommandRequest,
   type RconCommandResult,
@@ -204,6 +206,29 @@ export class RconCommandQueue {
     const requestId = requestIdOf(request);
     const commandName = commandNameOf(request);
     if (requestId && (await this.resultExists(requestId))) {
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
+    // The producer stopped waiting at this deadline and already reported a
+    // timeout; running the command now would act without its audit/ledger
+    // record, or twice after a retry (#36).
+    const deadlineMs = Date.parse(getField(kv, RCON_COMMAND_DEADLINE_FIELD) ?? '');
+    if (!Number.isNaN(deadlineMs) && startedAt > deadlineMs) {
+      this.opts.log.warn(
+        { streamId, requestId, command: commandName, serverId: this.opts.serverId },
+        'rcon command expired before execution',
+      );
+      if (requestId) {
+        await this.writeResult({
+          ok: false,
+          server_id: this.opts.serverId,
+          request_id: requestId,
+          ...(commandName ? { command: commandName } : {}),
+          error: RCON_COMMAND_EXPIRED_ERROR,
+          completed_at: new Date().toISOString(),
+          duration_ms: 0,
+        });
+      }
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
       return;
     }

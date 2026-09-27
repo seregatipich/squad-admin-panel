@@ -1,4 +1,5 @@
 import {
+  RCON_COMMAND_DEADLINE_FIELD,
   type RconOperatorCommandName,
   rconCommandRequestSchema,
   rconCommandResultKey,
@@ -43,13 +44,19 @@ export async function sendRconCommandViaWorker(
   const connected = await isWorkerRconConnected(redis, opts.serverId);
   if (!connected) return { attempted: false, reason: 'worker_not_connected' };
 
+  const enqueuedAt = Date.now();
+  const timeoutMs = opts.timeoutMs ?? 4000;
   const request = rconCommandRequestSchema.parse({
     request_id: opts.requestId ?? uuidv7(),
     command: opts.command,
     args: opts.args ?? [],
     actor_player_id: opts.actorPlayerId ?? null,
-    enqueued_at: new Date().toISOString(),
+    enqueued_at: new Date(enqueuedAt).toISOString(),
   });
+  // The worker refuses to start the command once this wait is over, so a
+  // command reported here as `timeout` cannot run later without an audit row
+  // or a ledger entry, nor run twice when the operator retries (#36).
+  const deadline = enqueuedAt + timeoutMs;
   try {
     await redis.xadd(
       rconCommandStream(opts.serverId),
@@ -59,6 +66,8 @@ export async function sendRconCommandViaWorker(
       '*',
       'request',
       JSON.stringify(request),
+      RCON_COMMAND_DEADLINE_FIELD,
+      new Date(deadline).toISOString(),
     );
   } catch (err) {
     return {
@@ -69,9 +78,7 @@ export async function sendRconCommandViaWorker(
   }
 
   const resultKey = rconCommandResultKey(request.request_id);
-  const timeoutMs = opts.timeoutMs ?? 4000;
   const pollIntervalMs = opts.pollIntervalMs ?? 100;
-  const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     const raw = await redis.get(resultKey);
     if (raw) {

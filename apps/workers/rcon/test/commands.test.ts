@@ -365,6 +365,97 @@ describe('RconCommandQueue', () => {
     );
   });
 
+  it('drops a request past its deadline without executing it (#36 findings 1337/39)', async () => {
+    const redis = makeRedis([
+      [
+        '1700-5',
+        [
+          'request',
+          JSON.stringify(
+            commandRequest({ command: 'AdminBan', args: ['76561198000000001', '0', 'x'] }),
+          ),
+          'deadline_at',
+          new Date(Date.now() - 1_000).toISOString(),
+        ],
+      ],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Banned');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    expect(stored).toMatchObject({ ok: false, request_id: 'req-1', error: 'expired' });
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-5',
+    );
+  });
+
+  it('drops an expired request reclaimed after a restart', async () => {
+    const redis = makeRedis(null, [
+      [
+        '1700-6',
+        [
+          'request',
+          JSON.stringify(commandRequest()),
+          'deadline_at',
+          new Date(Date.now() - 60_000).toISOString(),
+        ],
+      ],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.reclaimPendingOnce()).resolves.toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-6',
+    );
+  });
+
+  it('executes a request whose deadline is still ahead, or that carries none', async () => {
+    const redis = makeRedis([
+      [
+        '1700-7',
+        [
+          'request',
+          JSON.stringify(commandRequest()),
+          'deadline_at',
+          new Date(Date.now() + 60_000).toISOString(),
+        ],
+      ],
+      ['1700-8', ['request', JSON.stringify(commandRequest({ request_id: 'req-2' }))]],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects malformed operator commands with a result instead of executing them', async () => {
     const redis = makeRedis([
       ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminNuke' }))]],
