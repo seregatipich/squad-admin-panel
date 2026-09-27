@@ -1,3 +1,5 @@
+import { type SquadCrown, squadCrownSchema } from '@squad/shared-types';
+
 export interface StoredRosterEntry {
   rcon_id: number;
   eos_id: string;
@@ -53,6 +55,11 @@ export interface RosterApiEntry {
   is_leader: boolean;
   role: string | null;
   first_seen_at: string | null;
+  /**
+   * The player's squad-creator crown for the current match, from worker-rcon's
+   * `rcon:squad-crowns:{id}` hash; `null` for a player without one.
+   */
+  squad_crown: SquadCrown | null;
 }
 
 /** A side of the match as `ListSquads` names it: `Team ID: 1 (United States Army)`. */
@@ -100,6 +107,24 @@ export function parseStoredSquads(raw: string | null): StoredSquads | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Parses `HGETALL rcon:squad-crowns:{serverId}` into crowns keyed by creator
+ * EOS id. A field that is not valid JSON or does not match the contract is
+ * dropped on its own, so one corrupt entry never hides the rest of the roster.
+ */
+export function parseStoredCrowns(raw: Record<string, string> | null): Map<string, SquadCrown> {
+  const crowns = new Map<string, SquadCrown>();
+  for (const [eosId, value] of Object.entries(raw ?? {})) {
+    try {
+      const parsed = squadCrownSchema.safeParse(JSON.parse(value));
+      if (parsed.success) crowns.set(eosId, parsed.data);
+    } catch {
+      // malformed field: this player simply shows no crown
+    }
+  }
+  return crowns;
 }
 
 export function collectRosterLookups(entries: StoredRosterEntry[]): {
@@ -150,6 +175,7 @@ export function buildRosterResponse(
   stored: StoredRoster | null,
   identities: PlayerIdentity[],
   storedSquads: StoredSquads | null = null,
+  crowns: ReadonlyMap<string, SquadCrown> = new Map(),
 ): RosterApiResponse {
   const meta = buildSquadMeta(storedSquads);
   if (!stored) return { polled_at: null, players: [], ...meta };
@@ -178,6 +204,7 @@ export function buildRosterResponse(
       is_leader: entry.is_leader ?? false,
       role: entry.role ?? null,
       first_seen_at: entry.first_seen_at ?? null,
+      squad_crown: crowns.get(entry.eos_id) ?? null,
     })),
     ...meta,
   };

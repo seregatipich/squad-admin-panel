@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  crownTooltipLines,
+  formatClock,
   formatTimeOnServer,
   groupRosterBySquad,
   groupRosterByTeam,
@@ -260,5 +262,102 @@ describe('groupRosterByTeam', () => {
     const roster = sortRoster([makePlayer({ name: 'Odd', team_id: 3, squad_id: 1 })]);
     const { teams } = groupRosterByTeam(roster);
     expect(teams.map((team) => team.team_id)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('crownTooltipLines', () => {
+  const utc = (iso: string) => iso.slice(11, 16);
+  const base = {
+    squad_name: 'Alpha',
+    team_id: 1,
+    squad_id: 1,
+    created_at: '2026-09-27T21:04:00.000Z',
+    handoffs: [],
+    disbanded_at: null,
+    abandoned_at: null,
+  };
+
+  it('describes a handoff to a squadmate', () => {
+    expect(
+      crownTooltipLines(
+        {
+          color: 'grey',
+          squads: [
+            {
+              ...base,
+              handoffs: [{ to_name: 'Ivan', reason: 'passed', at: '2026-09-27T21:10:00.000Z' }],
+            },
+          ],
+        },
+        utc,
+      ),
+    ).toEqual(['Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10)']);
+  });
+
+  it('describes leaving the squad while leading it', () => {
+    expect(
+      crownTooltipLines(
+        {
+          color: 'red',
+          squads: [
+            {
+              ...base,
+              handoffs: [
+                { to_name: 'Ivan', reason: 'disconnected', at: '2026-09-27T21:12:00.000Z' },
+              ],
+              abandoned_at: '2026-09-27T21:12:00.000Z',
+            },
+          ],
+        },
+        utc,
+      ),
+    ).toEqual(['Создал отряд "Alpha" в 21:04 и покинул его, будучи командиром (21:12)']);
+  });
+
+  it('writes one line per squad, handoffs before the abandonment', () => {
+    expect(
+      crownTooltipLines(
+        {
+          color: 'red',
+          squads: [
+            {
+              ...base,
+              handoffs: [
+                { to_name: 'Ivan', reason: 'passed', at: '2026-09-27T21:10:00.000Z' },
+                { to_name: 'Oleg', reason: 'passed', at: '2026-09-27T21:11:00.000Z' },
+              ],
+              abandoned_at: '2026-09-27T21:20:00.000Z',
+            },
+            { ...base, squad_name: 'Bravo', squad_id: 2, created_at: '2026-09-27T21:30:00.000Z' },
+          ],
+        },
+        utc,
+      ),
+    ).toEqual([
+      'Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10), Oleg (21:11) и покинул его, будучи командиром (21:20)',
+      'Создал отряд "Bravo" в 21:30',
+    ]);
+  });
+
+  it('omits the creation time when the worker never saw the squad being created', () => {
+    expect(
+      crownTooltipLines(
+        {
+          color: 'grey',
+          squads: [
+            {
+              ...base,
+              created_at: null,
+              handoffs: [{ to_name: 'Ivan', reason: 'passed', at: '2026-09-27T21:10:00.000Z' }],
+            },
+          ],
+        },
+        utc,
+      ),
+    ).toEqual(['Создал отряд "Alpha", передал командование: Ivan (21:10)']);
+  });
+
+  it('formats wall-clock time as HH:MM by default', () => {
+    expect(formatClock('2026-09-27T21:04:00.000Z')).toMatch(/^\d{2}:\d{2}$/);
   });
 });

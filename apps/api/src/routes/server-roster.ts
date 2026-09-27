@@ -1,4 +1,5 @@
 import { players } from '@squad/db/schema';
+import { squadCrownsKey } from '@squad/shared-types';
 import { inArray, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -6,6 +7,7 @@ import { z } from 'zod';
 import {
   buildRosterResponse,
   collectRosterLookups,
+  parseStoredCrowns,
   parseStoredRoster,
   parseStoredSquads,
 } from '../lib/roster.js';
@@ -22,14 +24,16 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req) => {
-      const [rawRoster, rawSquads] = await app.redis.mget(
-        `rcon:roster:${req.params.id}`,
-        `rcon:squads:${req.params.id}`,
-      );
+      // MGET cannot read a hash; both reads go out together on the one connection.
+      const [[rawRoster, rawSquads], rawCrowns] = await Promise.all([
+        app.redis.mget(`rcon:roster:${req.params.id}`, `rcon:squads:${req.params.id}`),
+        app.redis.hgetall(squadCrownsKey(req.params.id)),
+      ]);
       const stored = parseStoredRoster(rawRoster ?? null);
       const storedSquads = parseStoredSquads(rawSquads ?? null);
+      const crowns = parseStoredCrowns(rawCrowns);
       if (!stored || stored.players.length === 0) {
-        return buildRosterResponse(stored, [], storedSquads);
+        return buildRosterResponse(stored, [], storedSquads, crowns);
       }
 
       const { eosIds, steamIds } = collectRosterLookups(stored.players);
@@ -49,7 +53,7 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
               .where(matchClauses.length === 1 ? matchClauses[0] : or(...matchClauses))
           : [];
 
-      return buildRosterResponse(stored, identities, storedSquads);
+      return buildRosterResponse(stored, identities, storedSquads, crowns);
     },
   );
 };

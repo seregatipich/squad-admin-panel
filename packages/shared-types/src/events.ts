@@ -45,11 +45,19 @@ export const EVENT_TYPES = [
   'bansync.failed',
   'server.seeding_started',
   'server.seeding_ended',
+
+  'squad.created',
+  'squad.leader_changed',
+  'squad.disbanded',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
-const actorKind = z.enum(['user', 'system', 'external']);
+/**
+ * Who caused an event. `player` marks events about an in-game player that no
+ * panel user triggered (squad history); `id` is then the player's EOS id.
+ */
+const actorKind = z.enum(['user', 'system', 'external', 'player']);
 
 export const eventEnvelope = z
   .object({
@@ -246,6 +254,64 @@ export const seedingTransitionPayload = z
   .strict();
 export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;
 
+/** A player as squad history names them: EOS id always, SteamID64 when linked. */
+export const squadPlayerRef = z
+  .object({
+    eos_id: z.string().regex(/^[a-f0-9]{32}$/),
+    steam_id64: z
+      .string()
+      .regex(/^\d{17}$/)
+      .nullable(),
+    name: z.string(),
+  })
+  .strict();
+export type SquadPlayerRef = z.infer<typeof squadPlayerRef>;
+
+/**
+ * Why a squad's leader changed, judged by where the previous leader is in the
+ * same roster refresh: still in the squad (`passed`), online elsewhere
+ * (`left_squad`), or gone from `ListPlayers` (`disconnected`).
+ */
+export const squadLeaderChangeReason = z.enum(['passed', 'left_squad', 'disconnected']);
+export type SquadLeaderChangeReason = z.infer<typeof squadLeaderChangeReason>;
+
+/**
+ * Identity shared by every `squad.*` payload. Within a match a squad is
+ * `(team_id, squad_id, creator.eos_id)`: Squad reuses squad numbers.
+ */
+const squadBase = {
+  team_id: z.number().int(),
+  team_name: z.string(),
+  squad_id: z.number().int(),
+  squad_name: z.string(),
+  creator: squadPlayerRef,
+};
+
+/** `squad.created` — emitted by worker-rcon (`apps/workers/rcon/src/squad-tracker.ts`). */
+export const squadCreatedPayload = z.object(squadBase).strict();
+export type SquadCreatedPayload = z.infer<typeof squadCreatedPayload>;
+
+/** `squad.leader_changed` — leadership moved from `from` to `to`. */
+export const squadLeaderChangedPayload = z
+  .object({
+    ...squadBase,
+    from: squadPlayerRef,
+    to: squadPlayerRef,
+    reason: squadLeaderChangeReason,
+  })
+  .strict();
+export type SquadLeaderChangedPayload = z.infer<typeof squadLeaderChangedPayload>;
+
+/** `squad.disbanded` — the squad is gone; `creator_was_leader` is true when its creator led it last. */
+export const squadDisbandedPayload = z
+  .object({
+    ...squadBase,
+    last_leader: squadPlayerRef.nullable(),
+    creator_was_leader: z.boolean(),
+  })
+  .strict();
+export type SquadDisbandedPayload = z.infer<typeof squadDisbandedPayload>;
+
 export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'player.connected': playerConnectedPayload,
   'player.disconnected': playerDisconnectedPayload,
@@ -269,6 +335,9 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'seed.call_sent': seedCallSentPayload,
   'server.seeding_started': seedingTransitionPayload,
   'server.seeding_ended': seedingTransitionPayload,
+  'squad.created': squadCreatedPayload,
+  'squad.leader_changed': squadLeaderChangedPayload,
+  'squad.disbanded': squadDisbandedPayload,
 };
 
 export function validatePayload<T extends EventType>(

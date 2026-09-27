@@ -10,12 +10,15 @@ import {
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { handleMatchClose } from '../src/match-roster/store.js';
+import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match3 test database');
 
 const db = createDatabaseClient(DATABASE_URL);
+
+/** These tests are about combat folding; no roster snapshot is cached. */
+const NO_ROSTER_SNAPSHOT: RosterSnapshotReader = { mget: async () => [null, null] };
 
 const SERVER_ID = uuidv7();
 const PLAYER_A = uuidv7();
@@ -171,7 +174,7 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
   it('fills per-player kills/deaths/wounds/revives from combat events in the interval', async () => {
     await seedRoster();
     await seedCombatRound();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
 
     const roster = await rosterById(MATCH_ID);
     expect(roster.get(PLAYER_A)).toMatchObject({
@@ -189,7 +192,7 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
   it('excludes teamkills from kills but records the victim death', async () => {
     await seedRoster();
     await seedCombatRound();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
 
     const roster = await rosterById(MATCH_ID);
     expect(roster.get(PLAYER_A)?.kills).toBe(2);
@@ -201,7 +204,7 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
   it('assigns zeros (not NULL) to roster players without combat when the match has combat data', async () => {
     await seedRoster();
     await seedCombatRound();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
 
     const roster = await rosterById(MATCH_ID);
     expect(roster.get(PLAYER_E)).toMatchObject({
@@ -215,7 +218,7 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
 
   it('leaves combat columns NULL for a match played before combat parsing existed', async () => {
     await seedRoster();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
 
     const roster = await rosterById(MATCH_ID);
     const a = roster.get(PLAYER_A);
@@ -229,9 +232,9 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
   it('is idempotent: recomputing a closed match yields the same combat totals', async () => {
     await seedRoster();
     await seedCombatRound();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
     const first = await rosterById(MATCH_ID);
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
     const second = await rosterById(MATCH_ID);
 
     for (const id of [PLAYER_A, PLAYER_B, PLAYER_C, PLAYER_D, PLAYER_E]) {

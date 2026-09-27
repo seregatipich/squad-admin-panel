@@ -9,7 +9,10 @@ import {
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { handleMatchClose } from '../src/match-roster/store.js';
+import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
+
+/** These tests are about ghost-round filtering; no roster snapshot is cached. */
+const NO_ROSTER_SNAPSHOT: RosterSnapshotReader = { mget: async () => [null, null] };
 
 /**
  * Regression: production writes two `matches` rows per round — a ~3 ms "ghost"
@@ -92,7 +95,7 @@ async function openSessionsForWholeRound() {
 }
 
 function close(startedAt: Date, endedAt: Date) {
-  return handleMatchClose(db, {
+  return handleMatchClose(db, NO_ROSTER_SNAPSHOT, {
     kind: 'close',
     serverId: SERVER_ID,
     startedAt: startedAt.toISOString(),

@@ -82,6 +82,9 @@ export const KNOWN_EVENT_KINDS: Array<{ value: string; label: string }> = [
   { value: 'rcon.disconnected', label: 'RCON отключён' },
   { value: 'rcon.players_polled', label: 'Опрос игроков' },
   { value: 'banname.matched', label: 'Совпадение по запрещённому нику' },
+  { value: 'squad.created', label: 'Отряд создан' },
+  { value: 'squad.leader_changed', label: 'Смена командира отряда' },
+  { value: 'squad.disbanded', label: 'Отряд распущен' },
 ];
 
 const KIND_LABELS = new Map(KNOWN_EVENT_KINDS.map((entry) => [entry.value, entry.label]));

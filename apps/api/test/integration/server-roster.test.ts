@@ -1,4 +1,5 @@
 import { players } from '@squad/db/schema';
+import { squadCrownsKey } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -215,6 +216,57 @@ describeIfDb('GET /api/v1/servers/:id/roster', () => {
 
     const stranger = body.players[2];
     expect(stranger?.player_id).toBeNull();
+  });
+
+  it('attaches the creator crown from rcon:squad-crowns to the matching player', async () => {
+    const cookie = await loginAsOwner(h);
+    const serverId = uuidv7();
+    const crown = {
+      color: 'red',
+      squads: [
+        {
+          squad_name: 'INF',
+          team_id: 1,
+          squad_id: 2,
+          created_at: '2026-07-05T09:40:00.000Z',
+          handoffs: [
+            { to_name: 'Stranger', reason: 'disconnected', at: '2026-07-05T09:50:00.000Z' },
+          ],
+          disbanded_at: null,
+          abandoned_at: '2026-07-05T09:50:00.000Z',
+        },
+      ],
+    };
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId));
+    await h.redis.hset(squadCrownsKey(serverId), {
+      [LINKED_EOS]: JSON.stringify(crown),
+      [EOS_ONLY]: '{not json',
+    });
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/roster`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{ players: Array<{ eos_id: string; squad_crown: unknown }> }>();
+    const byEos = new Map(body.players.map((player) => [player.eos_id, player.squad_crown]));
+    expect(byEos.get(LINKED_EOS)).toEqual(crown);
+    expect(byEos.get(EOS_ONLY)).toBeNull();
+    expect(byEos.get(UNKNOWN_EOS)).toBeNull();
+  });
+
+  it('returns squad_crown null for every player when no crowns are stored', async () => {
+    const cookie = await loginAsOwner(h);
+    const serverId = uuidv7();
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId));
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/roster`,
+      headers: { cookie },
+    });
+    const body = resp.json<{ players: Array<{ squad_crown: unknown }> }>();
+    expect(body.players.map((player) => player.squad_crown)).toEqual([null, null, null]);
   });
 
   it('rejects an unauthenticated request', async () => {

@@ -1,18 +1,14 @@
-import {
-  type DatabaseClient,
-  events,
-  matches,
-  matchPlayers,
-  playerSessions,
-  players,
-} from '@squad/db';
-import { and, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { type DatabaseClient, matches, matchPlayers, playerSessions, players } from '@squad/db';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { MatchCommand } from '../parser/match.js';
 import { applyMatchCombatStats, loadMatchCombatStats } from './combat.js';
 
 export const DEFAULT_JOIN_GRACE_SECONDS = 60;
 
-const POLL_KIND = 'rcon.players_polled';
+/** The one Redis call match assembly makes; an ioredis client satisfies it. */
+export interface RosterSnapshotReader {
+  mget(...keys: string[]): Promise<Array<string | null>>;
+}
 
 const sqlExcluded = (column: string) => sql.raw(`excluded.${column}`);
 
@@ -110,47 +106,95 @@ export function filterRosterByPlaySeconds(
   return entries.filter((entry) => entry.playSeconds >= minSeconds);
 }
 
-interface PollPlayer {
-  steam_id64: string | null;
+/**
+ * How far past the match end worker-rcon's last roster snapshot may be and
+ * still describe that match: the close is handled a moment after its log line,
+ * and the snapshot keeps refreshing every 2 s.
+ */
+export const ROSTER_SNAPSHOT_SLACK_MS = 120_000;
+
+interface SnapshotPlayer {
   eos_id: string | null;
+  steam_id64: string | null;
   team_id: number | null;
   squad_id: number | null;
 }
 
+interface SnapshotSquad {
+  team_id: number;
+  squad_id: number;
+  name: string;
+}
+
+function parseSnapshot<Row>(
+  raw: string | null,
+  field: 'players' | 'squads',
+): { polledAtMs: number; rows: Row[] } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const rows = parsed[field];
+    const polledAtMs =
+      typeof parsed.polled_at === 'string' ? Date.parse(parsed.polled_at) : Number.NaN;
+    if (!Array.isArray(rows) || Number.isNaN(polledAtMs)) return null;
+    return { polledAtMs, rows: rows as Row[] };
+  } catch {
+    return null;
+  }
+}
+
+async function readRosterSnapshot(
+  redis: RosterSnapshotReader,
+  serverId: string,
+): Promise<[string | null, string | null]> {
+  try {
+    const [roster, squads] = await redis.mget(`rcon:roster:${serverId}`, `rcon:squads:${serverId}`);
+    return [roster ?? null, squads ?? null];
+  } catch {
+    // Team and squad decorate the roster; Redis being down must not cost the
+    // match its match_players rows.
+    return [null, null];
+  }
+}
+
+/**
+ * Team and squad name per panel player, from the last roster worker-rcon
+ * cached for the server (`rcon:roster:{id}` + `rcon:squads:{id}`, kept 90 s
+ * after the last refresh). Only players online in that snapshot are placed;
+ * anyone who left earlier keeps `null`. A snapshot polled outside
+ * [matchStart, matchEnd + {@link ROSTER_SNAPSHOT_SLACK_MS}] belongs to another
+ * match (a replayed log, a late close) and is ignored. A squad missing from
+ * `rcon:squads` leaves the player's team set and the squad name `null`.
+ */
 async function loadTeamSquadByPlayer(
   db: DatabaseClient,
+  redis: RosterSnapshotReader,
   serverId: string,
   matchStart: Date,
   matchEnd: Date,
 ): Promise<Map<string, TeamSquad>> {
-  const snapshot = await db
-    .select({ payload: events.payload })
-    .from(events)
-    .where(
-      and(
-        eq(events.serverId, serverId),
-        eq(events.kind, POLL_KIND),
-        gte(events.occurredAt, matchStart),
-        lte(events.occurredAt, matchEnd),
-      ),
-    )
-    .orderBy(desc(events.occurredAt))
-    .limit(1);
-
   const result = new Map<string, TeamSquad>();
-  const row = snapshot[0];
-  if (!row) return result;
+  const [rawRoster, rawSquads] = await readRosterSnapshot(redis, serverId);
+  const roster = parseSnapshot<SnapshotPlayer>(rawRoster, 'players');
+  if (!roster) return result;
+  const windowEndMs = matchEnd.getTime() + ROSTER_SNAPSHOT_SLACK_MS;
+  if (roster.polledAtMs < matchStart.getTime() || roster.polledAtMs > windowEndMs) return result;
 
-  const pollPlayers = ((row.payload as { players?: PollPlayer[] }).players ?? []).filter(
+  const squadNames = new Map<string, string>();
+  for (const squad of parseSnapshot<SnapshotSquad>(rawSquads, 'squads')?.rows ?? []) {
+    squadNames.set(`${squad.team_id}:${squad.squad_id}`, squad.name);
+  }
+
+  const snapshotPlayers = roster.rows.filter(
     (entry) => entry.steam_id64 !== null || entry.eos_id !== null,
   );
-  if (pollPlayers.length === 0) return result;
+  if (snapshotPlayers.length === 0) return result;
 
-  const steamIds = pollPlayers
+  const steamIds = snapshotPlayers
     .map((entry) => entry.steam_id64)
     .filter((value): value is string => value !== null)
     .map((value) => BigInt(value));
-  const eosIds = pollPlayers
+  const eosIds = snapshotPlayers
     .map((entry) => entry.eos_id)
     .filter((value): value is string => value !== null);
 
@@ -171,14 +215,17 @@ async function loadTeamSquadByPlayer(
     if (player.eosId !== null) playerByEos.set(player.eosId, player.id);
   }
 
-  for (const entry of pollPlayers) {
+  for (const entry of snapshotPlayers) {
     const playerId =
       (entry.steam_id64 !== null ? playerBySteam.get(entry.steam_id64) : undefined) ??
       (entry.eos_id !== null ? playerByEos.get(entry.eos_id) : undefined);
     if (!playerId) continue;
     result.set(playerId, {
       team: entry.team_id,
-      squadName: entry.squad_id === null ? null : String(entry.squad_id),
+      squadName:
+        entry.squad_id === null
+          ? null
+          : (squadNames.get(`${entry.team_id}:${entry.squad_id}`) ?? null),
     });
   }
   return result;
@@ -253,11 +300,12 @@ async function loadClosedMatch(
 
 export async function computeMatchRoster(
   db: DatabaseClient,
+  redis: RosterSnapshotReader,
   params: { serverId: string; matchStart: Date; matchEnd: Date },
 ): Promise<MatchRosterEntry[]> {
   const [sessions, teamSquadByPlayer] = await Promise.all([
     loadSessions(db, params.serverId, params.matchStart, params.matchEnd),
-    loadTeamSquadByPlayer(db, params.serverId, params.matchStart, params.matchEnd),
+    loadTeamSquadByPlayer(db, redis, params.serverId, params.matchStart, params.matchEnd),
   ]);
   return assembleMatchRoster({
     matchStart: params.matchStart,
@@ -269,6 +317,7 @@ export async function computeMatchRoster(
 
 export async function computeOpenMatchRoster(
   db: DatabaseClient,
+  redis: RosterSnapshotReader,
   params: { matchId: string; now: Date },
 ): Promise<MatchRosterEntry[]> {
   const rows = await db
@@ -283,15 +332,23 @@ export async function computeOpenMatchRoster(
   const match = rows[0];
   if (!match) return [];
   const matchEnd = match.endedAt ?? params.now;
-  return computeMatchRoster(db, {
+  return computeMatchRoster(db, redis, {
     serverId: match.serverId,
     matchStart: match.startedAt,
     matchEnd,
   });
 }
 
+/**
+ * Writes `match_players` for a closed match: play time from `player_sessions`
+ * overlap, team and squad name from worker-rcon's last Redis roster snapshot
+ * (see `loadTeamSquadByPlayer`), combat totals from `events`. Idempotent.
+ *
+ * @returns `null` for a non-close command or an unknown/open match, otherwise the number of rows written.
+ */
 export async function handleMatchClose(
   db: DatabaseClient,
+  redis: RosterSnapshotReader,
   command: MatchCommand,
 ): Promise<{ written: number } | null> {
   if (command.kind !== 'close' && command.kind !== 'close_server_down') return null;
@@ -307,7 +364,7 @@ export async function handleMatchClose(
   // dossier. It also drops genuine connect-and-leaves, which is what
   // DEFAULT_JOIN_GRACE_SECONDS was defined for.
   const roster = filterRosterByPlaySeconds(
-    await computeMatchRoster(db, {
+    await computeMatchRoster(db, redis, {
       serverId: match.serverId,
       matchStart: match.startedAt,
       matchEnd: match.endedAt,

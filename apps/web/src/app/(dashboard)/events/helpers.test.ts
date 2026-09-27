@@ -167,6 +167,15 @@ describe('events helpers', () => {
     expect(kindTone('banname.matched')).toContain('amber');
   });
 
+  it('labels the squad history kinds in Russian and offers them as filters', () => {
+    expect(kindLabel('squad.created')).toBe('Отряд создан');
+    expect(kindLabel('squad.leader_changed')).toBe('Смена командира отряда');
+    expect(kindLabel('squad.disbanded')).toBe('Отряд распущен');
+    expect(kindOptionsFromEvents([]).map((option) => option.value)).toEqual(
+      expect.arrayContaining(['squad.created', 'squad.leader_changed', 'squad.disbanded']),
+    );
+  });
+
   it('falls back through slug, name, id for the server label', () => {
     expect(shortServerName(makeEvent({ server_slug: 'main' }))).toBe('main');
     expect(shortServerName(makeEvent({ server_slug: null, server_name: 'Named' }))).toBe('Named');

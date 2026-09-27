@@ -6,6 +6,8 @@
 
 - [#19](https://github.com/seregatipich/squad-admin-panel/issues/19): the AUTO-3 alert engine (`src/alerts/engine.ts`) was never called, so `server_crashed`, `unusual_activity`, `admin_login_new_ip` and log-derived `custom` rules created in «Настройки → Алерты» never fired. `src/alerts/store.ts` now evaluates the enabled rules for every parsed event and writes `alert_events` (details in [api.md](api.md#alert-rules-alert_events)). Stored rule configs are validated with zod instead of an unchecked cast, and the `AlertRuleConfig` union no longer includes `Record<string, unknown>`.
 
+- `match_players.squad_name` (and `team`) were always `null`: `handleMatchClose` looked them up in `rcon.players_polled` rows of `events`, but worker-rcon only XADDs that event and nothing persists it. Match close now reads worker-rcon's `rcon:roster:{id}` + `rcon:squads:{id}` snapshots and stores the squad's name (not its number). Players who left before the close keep `null`. Snapshots outside the match window (+120 s) are ignored, and a Redis outage no longer affects whether the roster is written. `handleMatchClose` / `computeMatchRoster` / `computeOpenMatchRoster` take the Redis client as their second argument. Regression test: `test/match-roster-store.test.ts`.
+
 ## 2026-09-09
 
 ### Fixed

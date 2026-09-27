@@ -47,6 +47,23 @@ Both run once right after connect, then on their timers, and out of band on a **
 3. worker-rcon's subscriber routes it to that server's supervisor; hints within 100 ms share one round-trip, and a busy client makes the hint wait instead of being dropped.
 4. A roster hint is repeated once 1.5 s later, because Squad logs a join slightly before `ListPlayers` lists the player.
 
+## Squad history (every roster refresh)
+
+Both the 2 s roster refresh and the 30 s full poll pass their `ListSquads` + `ListPlayers` rows to `trackSquads` (`supervisor.ts`), right after writing `rcon:squads:{id}`:
+
+1. `buildSquadSnapshot()` keys each squad by `(team_id, squad_id, creator EOS id)`. Squad reuses squad numbers, and squads whose creator has no EOS id are skipped. It finds each squad's leader (`Is Leader: True` in the same team and squad).
+2. `diffSquads()` (`squad-tracker.ts`) compares the snapshot with the previous one. A new identity is `squad.created`. It is dated by the unsolicited RCON notice `… has created Squad <n> (Squad Name: …) on <faction>` when one arrived in the last 10 s (parsed by `squad-broadcast.ts` in `ingestBroadcast`), otherwise by the refresh time. A different leader is `squad.leader_changed`, with `reason` `passed` (old leader still in the squad), `left_squad` (online elsewhere) or `disconnected` (not in `ListPlayers`). A vanished identity is `squad.disbanded`, with `creator_was_leader`. A change faster than one refresh (A → B → C) is recorded as A → C.
+3. Each event is XADDed to `events:server:{id}` and inserted into `events` (`actor_kind = 'player'`, `actor_id` = EOS id of the creator, or of `from` for a leader change).
+4. `applySquadEvent()` (`squad-crowns.ts`) folds the event into the creator's history. Creators with a crown are written to `rcon:squad-crowns:{id}`, and the TTL is refreshed to 6 h.
+
+No false events:
+
+- The first snapshot after worker start or an RCON (re)connect is a baseline. Crowns survive: they are reloaded from Redis on start.
+- A `match.started` / `match.ended` refresh hint (its `reason`) deletes the crown hash and makes the next snapshot a baseline. After `match.ended`, snapshots stay baselines until one lists no squads or `match.started` arrives, so squads vanishing with the old map are never disbands.
+- If every squad of a snapshot with at least 3 squads vanishes in one refresh (a map change without a hint), crowns are cleared and nothing is reported.
+
+Squad tracking never throws. A Redis or database failure is logged (`squad tracking failed`, `squad event persist failed`) and the roster refresh goes on.
+
 ## Poll cycle (every 30 s)
 
 1. `exec('ListPlayers')` → `parseListPlayers()` → `upsertPlayers()` → `accruePlayerKitTime()`.

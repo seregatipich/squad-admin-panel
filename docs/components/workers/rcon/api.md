@@ -110,9 +110,32 @@ Failed results use `ok: false` and `error` instead of `response`.
 
 Pending entries are reclaimed with `XAUTOCLAIM` after 60 s idle. Before replaying a claimed entry, the worker checks this result key; if it already exists, the worker only acknowledges the stream entry.
 
+## Redis hash: `rcon:squad-crowns:{serverId}`
+
+One field per squad creator (EOS id) who gave up command of a squad they created in the current match. Written by `trackSquads` whenever that creator's history changes. The TTL (`SQUAD_CROWNS_TTL_SECONDS`, 6 h) is refreshed on every write, and the hash is deleted on a match reset. Contract: `packages/shared-types/src/squad-crowns.ts` (`squadCrownSchema`). Read by `GET /api/v1/servers/:id/roster` (`squad_crown`).
+
+```json
+{
+  "color": "grey",
+  "squads": [
+    {
+      "squad_name": "Alpha",
+      "team_id": 1,
+      "squad_id": 3,
+      "created_at": "2026-09-27T21:04:00.000Z",
+      "handoffs": [{ "to_name": "Ivan", "reason": "passed", "at": "2026-09-27T21:10:00.000Z" }],
+      "disbanded_at": null,
+      "abandoned_at": null
+    }
+  ]
+}
+```
+
+`grey`: the creator handed command to a squadmate. `red`: the creator left the squad or disconnected while leading it, or it disbanded under them (red overrides grey). `created_at` is `null` for a squad that already existed when tracking started. `abandoned_at` is when the creator gave up command by leaving.
+
 ## Redis stream: `events:server:{serverId}`
 
-Three event types are published by this worker. All entries use field name `envelope` containing JSON-encoded `EventEnvelope`.
+The event types below are published by this worker. All entries use field name `envelope` containing JSON-encoded `EventEnvelope`.
 
 ### `rcon.connected`
 
@@ -153,6 +176,17 @@ Emitted after every successful poll cycle.
   }
 }
 ```
+
+### `squad.created` / `squad.leader_changed` / `squad.disbanded`
+
+Emitted by squad history (see `flows.md`) and also inserted into `events`. `actor` is `{ "kind": "player", "id": "<eos>" }`.
+
+```json
+{ "payload": { "team_id": 1, "team_name": "United States Army", "squad_id": 3, "squad_name": "Alpha",
+  "creator": { "eos_id": "<eos>", "steam_id64": "76561198012345678", "name": "Anna" } } }
+```
+
+`squad.leader_changed` adds `from`, `to` (same shape as `creator`) and `reason` (`passed` | `left_squad` | `disconnected`). `squad.disbanded` adds `last_leader` (or `null`) and `creator_was_leader`.
 
 ## Heartbeat key: `worker:heartbeat:rcon`
 

@@ -1,6 +1,5 @@
 import {
   createDatabaseClient,
-  events,
   matches,
   matchPlayers,
   playerSessions,
@@ -8,14 +7,22 @@ import {
   servers,
 } from '@squad/db';
 import { and, asc, eq, sql } from 'drizzle-orm';
+import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { computeOpenMatchRoster, handleMatchClose } from '../src/match-roster/store.js';
+import {
+  computeOpenMatchRoster,
+  handleMatchClose,
+  type RosterSnapshotReader,
+} from '../src/match-roster/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match2 test database');
 
 const db = createDatabaseClient(DATABASE_URL);
+const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/3', {
+  maxRetriesPerRequest: null,
+});
 
 const SERVER_ID = uuidv7();
 const PLAYER_A = uuidv7();
@@ -36,38 +43,60 @@ const END = new Date(START.getTime() + 3600_000);
 const at = (offsetSeconds: number) => new Date(START.getTime() + offsetSeconds * 1000);
 
 const MATCH_ID = uuidv7();
+const ROSTER_KEY = `rcon:roster:${SERVER_ID}`;
+const SQUADS_KEY = `rcon:squads:${SERVER_ID}`;
 
-function pollPayload(
-  polledAt: Date,
-  entries: Array<{ steam: bigint; eos: string; team: number | null; squad: number | null }>,
-) {
-  return {
-    players: entries.map((entry) => ({
-      steam_id64: entry.steam.toString(),
-      eos_id: entry.eos,
-      name: 'player',
-      team_id: entry.team,
-      squad_id: entry.squad,
-      is_leader: false,
-    })),
-    polled_at: polledAt.toISOString(),
-    latency_ms: 12,
-  };
+interface SnapshotEntry {
+  steam: bigint | null;
+  eos: string;
+  team: number | null;
+  squad: number | null;
 }
 
-async function insertPoll(
-  occurredAt: Date,
-  entries: Array<{ steam: bigint; eos: string; team: number | null; squad: number | null }>,
+/** Writes what worker-rcon caches after a roster refresh at `polledAt`. */
+async function writeRosterSnapshot(
+  polledAt: Date,
+  entries: SnapshotEntry[],
+  squads: Array<{ team: number; squad: number; name: string }>,
 ) {
-  await db.insert(events).values({
-    eventId: uuidv7(),
-    serverId: SERVER_ID,
-    occurredAt,
-    kind: 'rcon.players_polled',
-    version: 1,
-    actorKind: 'system',
-    payload: pollPayload(occurredAt, entries),
-  });
+  const polled_at = polledAt.toISOString();
+  await redis.set(
+    ROSTER_KEY,
+    JSON.stringify({
+      server_id: SERVER_ID,
+      polled_at,
+      players: entries.map((entry, index) => ({
+        rcon_id: index,
+        eos_id: entry.eos,
+        steam_id64: entry.steam?.toString() ?? null,
+        name: 'player',
+        team_id: entry.team,
+        squad_id: entry.squad,
+        is_leader: false,
+        role: null,
+        first_seen_at: polled_at,
+      })),
+    }),
+  );
+  await redis.set(
+    SQUADS_KEY,
+    JSON.stringify({
+      server_id: SERVER_ID,
+      polled_at,
+      squads: squads.map((squad) => ({
+        team_id: squad.team,
+        team_name: squad.team === 1 ? 'Russian Ground Forces' : 'United States Army',
+        squad_id: squad.squad,
+        name: squad.name,
+        size: 1,
+        locked: false,
+        creator_name: 'player',
+        creator_eos_id: null,
+        creator_steam_id64: null,
+        is_command_squad: false,
+      })),
+    }),
+  );
 }
 
 function rosterRows(matchId: string) {
@@ -118,7 +147,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db.delete(matchPlayers).where(eq(matchPlayers.matchId, MATCH_ID));
-  await db.delete(events).where(eq(events.serverId, SERVER_ID));
   await db.delete(playerSessions).where(eq(playerSessions.serverId, SERVER_ID));
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
   await db.delete(players).where(eq(players.id, PLAYER_A));
@@ -126,17 +154,24 @@ afterAll(async () => {
   await db.delete(players).where(eq(players.id, PLAYER_C));
   await db.delete(players).where(eq(players.id, PLAYER_D));
   await db.delete(servers).where(eq(servers.id, SERVER_ID));
+  await redis.del(ROSTER_KEY, SQUADS_KEY);
+  await redis.quit();
   await db.$client.end();
 });
 
 beforeEach(async () => {
   await db.delete(matchPlayers).where(eq(matchPlayers.matchId, MATCH_ID));
-  await db.delete(events).where(eq(events.serverId, SERVER_ID));
   await db.delete(playerSessions).where(eq(playerSessions.serverId, SERVER_ID));
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
+  await redis.del(ROSTER_KEY, SQUADS_KEY);
 });
 
-async function seedClosedMatchScenario() {
+/**
+ * A left at 1800 s, B reconnected and is online at close, C left at 3500 s,
+ * D is in the snapshot but never had a session. The snapshot is the roster
+ * five seconds before the match ended, as worker-rcon would have cached it.
+ */
+async function seedClosedMatchScenario(snapshotAt: Date = new Date(END.getTime() - 5_000)) {
   await db.insert(matches).values({
     id: MATCH_ID,
     serverId: SERVER_ID,
@@ -152,15 +187,17 @@ async function seedClosedMatchScenario() {
     { playerId: PLAYER_B, serverId: SERVER_ID, connectedAt: at(900), disconnectedAt: null },
     { playerId: PLAYER_C, serverId: SERVER_ID, connectedAt: at(100), disconnectedAt: at(3500) },
   ]);
-  await insertPoll(at(500), [{ steam: STEAM_A, eos: EOS_A, team: 2, squad: 9 }]);
-  await insertPoll(at(1500), [
-    { steam: STEAM_A, eos: EOS_A, team: 1, squad: 2 },
-    { steam: STEAM_B, eos: EOS_B, team: 2, squad: 5 },
-    { steam: STEAM_D, eos: EOS_D, team: 1, squad: 3 },
-  ]);
-  await insertPoll(new Date(END.getTime() + 300_000), [
-    { steam: STEAM_A, eos: EOS_A, team: 2, squad: 7 },
-  ]);
+  await writeRosterSnapshot(
+    snapshotAt,
+    [
+      { steam: STEAM_B, eos: EOS_B, team: 2, squad: 5 },
+      { steam: STEAM_D, eos: EOS_D, team: 1, squad: 3 },
+    ],
+    [
+      { team: 2, squad: 5, name: 'Bravo Squad' },
+      { team: 1, squad: 3, name: 'Delta Squad' },
+    ],
+  );
 }
 
 const closeCommand = {
@@ -176,40 +213,71 @@ const closeCommand = {
 };
 
 describe('handleMatchClose', () => {
-  it('writes the roster with team/squad and play_seconds from sessions and the last in-interval poll', async () => {
+  it('names each squad from the Redis snapshots (regression: squad_name was always null)', async () => {
     await seedClosedMatchScenario();
-    const result = await handleMatchClose(db, closeCommand);
+    const result = await handleMatchClose(db, redis, closeCommand);
     expect(result).toEqual({ written: 3 });
 
     const rows = await rosterRows(MATCH_ID);
     const byId = new Map(rows.map((row) => [row.playerId, row]));
-
     expect(rows).toHaveLength(3);
     expect(byId.has(PLAYER_D)).toBe(false);
 
+    const b = byId.get(PLAYER_B);
+    expect(b?.team).toBe(2);
+    expect(b?.squadName).toBe('Bravo Squad');
+    expect(b?.playSeconds).toBe(3300);
+    expect(b?.leftAt).toBeNull();
+
+    // A and C left before the close, so the final roster cannot place them.
     const a = byId.get(PLAYER_A);
-    expect(a?.team).toBe(1);
-    expect(a?.squadName).toBe('2');
+    expect(a?.team).toBeNull();
+    expect(a?.squadName).toBeNull();
     expect(a?.playSeconds).toBe(1800);
     expect(a?.joinedAt.toISOString()).toBe(START.toISOString());
     expect(a?.leftAt?.toISOString()).toBe(at(1800).toISOString());
-
-    const b = byId.get(PLAYER_B);
-    expect(b?.team).toBe(2);
-    expect(b?.squadName).toBe('5');
-    expect(b?.playSeconds).toBe(3300);
-    expect(b?.leftAt).toBeNull();
 
     const c = byId.get(PLAYER_C);
     expect(c?.team).toBeNull();
     expect(c?.squadName).toBeNull();
     expect(c?.playSeconds).toBe(3400);
-    expect(c?.leftAt?.toISOString()).toBe(at(3500).toISOString());
+  });
+
+  it('keeps the team but no squad name when the squads snapshot is missing', async () => {
+    await seedClosedMatchScenario();
+    await redis.del(SQUADS_KEY);
+    await handleMatchClose(db, redis, closeCommand);
+    const [b] = await db
+      .select()
+      .from(matchPlayers)
+      .where(and(eq(matchPlayers.matchId, MATCH_ID), eq(matchPlayers.playerId, PLAYER_B)));
+    expect(b?.team).toBe(2);
+    expect(b?.squadName).toBeNull();
+  });
+
+  it('ignores a roster snapshot polled after the match window', async () => {
+    await seedClosedMatchScenario(new Date(END.getTime() + 10 * 60_000));
+    await handleMatchClose(db, redis, closeCommand);
+    const rows = await rosterRows(MATCH_ID);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.team === null && row.squadName === null)).toBe(true);
+  });
+
+  it('still writes the roster when Redis is unavailable', async () => {
+    await seedClosedMatchScenario();
+    const down: RosterSnapshotReader = {
+      mget: async () => {
+        throw new Error('redis down');
+      },
+    };
+    expect(await handleMatchClose(db, down, closeCommand)).toEqual({ written: 3 });
+    const rows = await rosterRows(MATCH_ID);
+    expect(rows.every((row) => row.squadName === null)).toBe(true);
   });
 
   it('collapses a reconnect into a single row with summed play_seconds', async () => {
     await seedClosedMatchScenario();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, redis, closeCommand);
     const rows = await db
       .select()
       .from(matchPlayers)
@@ -220,7 +288,7 @@ describe('handleMatchClose', () => {
 
   it('includes an EOS-only player (no steam_id64) in the roster', async () => {
     await seedClosedMatchScenario();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, redis, closeCommand);
     const rows = await db
       .select()
       .from(matchPlayers)
@@ -231,7 +299,7 @@ describe('handleMatchClose', () => {
 
   it('reconciles SUM(play_seconds) with the intersected session intervals', async () => {
     await seedClosedMatchScenario();
-    await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, redis, closeCommand);
 
     const [{ total }] = await db
       .select({ total: sql<number>`COALESCE(SUM(${matchPlayers.playSeconds}), 0)::int` })
@@ -259,15 +327,14 @@ describe('handleMatchClose', () => {
 
   it('is idempotent when the close replays', async () => {
     await seedClosedMatchScenario();
-    await handleMatchClose(db, closeCommand);
-    const second = await handleMatchClose(db, closeCommand);
+    await handleMatchClose(db, redis, closeCommand);
+    const second = await handleMatchClose(db, redis, closeCommand);
     expect(second).toEqual({ written: 3 });
-    const rows = await rosterRows(MATCH_ID);
-    expect(rows).toHaveLength(3);
+    expect(await rosterRows(MATCH_ID)).toHaveLength(3);
   });
 
   it('ignores non-close commands', async () => {
-    const result = await handleMatchClose(db, {
+    const result = await handleMatchClose(db, redis, {
       kind: 'open',
       serverId: SERVER_ID,
       startedAt: START.toISOString(),
@@ -290,13 +357,19 @@ describe('computeOpenMatchRoster', () => {
       { playerId: PLAYER_A, serverId: SERVER_ID, connectedAt: at(0), disconnectedAt: null },
       { playerId: PLAYER_B, serverId: SERVER_ID, connectedAt: at(600), disconnectedAt: null },
     ]);
-    await insertPoll(at(700), [
-      { steam: STEAM_A, eos: EOS_A, team: 1, squad: 4 },
-      { steam: STEAM_B, eos: EOS_B, team: 2, squad: 1 },
-    ]);
+    await writeRosterSnapshot(
+      at(700),
+      [
+        { steam: STEAM_A, eos: EOS_A, team: 1, squad: 4 },
+        { steam: STEAM_B, eos: EOS_B, team: 2, squad: 1 },
+      ],
+      [
+        { team: 1, squad: 4, name: 'Alpha Squad' },
+        { team: 2, squad: 1, name: 'Bravo Squad' },
+      ],
+    );
 
-    const now = at(1200);
-    const roster = await computeOpenMatchRoster(db, { matchId: MATCH_ID, now });
+    const roster = await computeOpenMatchRoster(db, redis, { matchId: MATCH_ID, now: at(1200) });
     const byId = new Map(roster.map((entry) => [entry.playerId, entry]));
 
     expect(roster).toHaveLength(2);
@@ -304,9 +377,7 @@ describe('computeOpenMatchRoster', () => {
     expect(byId.get(PLAYER_A)?.team).toBe(1);
     expect(byId.get(PLAYER_A)?.leftAt).toBeNull();
     expect(byId.get(PLAYER_B)?.playSeconds).toBe(600);
-    expect(byId.get(PLAYER_B)?.squadName).toBe('1');
-
-    const persisted = await rosterRows(MATCH_ID);
-    expect(persisted).toHaveLength(0);
+    expect(byId.get(PLAYER_B)?.squadName).toBe('Bravo Squad');
+    expect(await rosterRows(MATCH_ID)).toHaveLength(0);
   });
 });

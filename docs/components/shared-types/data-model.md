@@ -11,7 +11,7 @@ interface EventEnvelope {
   type: EventType;           // discriminator
   server_id: string | null;  // null for host-scope events
   ts: string;                // ISO-8601 UTC when the event occurred
-  actor: { kind: 'user' | 'system' | 'external'; id: string | null } | null;
+  actor: { kind: 'user' | 'system' | 'external' | 'player'; id: string | null } | null;  // 'player': id is an in-game EOS id
   correlation_id: string | null;  // request trace id when caused by an HTTP request
   payload: unknown;          // typed per `type`
 }
@@ -42,6 +42,7 @@ Validated with `eventEnvelope` (Zod, `.strict()`).
 | `match.started` / `match.ended` | `worker-log-ingest` | future stats projector |
 | `rcon.connected` / `rcon.disconnected` | `worker-rcon` | UI health card |
 | `rcon.players_polled` | `worker-rcon` | players-projector |
+| `squad.created` / `squad.leader_changed` / `squad.disbanded` | `worker-rcon` (squad history; also inserted into `events`) | events journal, per-player lookups by `actor_id` |
 | `bridge.connected` / `bridge.disconnected` | `api` (bridge plugin) | UI health card |
 
 `EVENT_TYPES` in [`events.ts`](../../../packages/shared-types/src/events.ts) is the authoritative tuple.
