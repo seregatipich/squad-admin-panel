@@ -328,14 +328,33 @@ describe('audit plugin', () => {
     expect(after.length).toBe(before.length);
   });
 
-  it('writes an audit row even when the request returns 4xx', async () => {
-    await h.app.inject({ method: 'POST', url: '/api/v1/auth/logout' });
-    await new Promise((r) => setTimeout(r, 150));
-    const rows = await h.db
+  it('writes an audit row even when an authenticated request returns 4xx', async () => {
+    const cookie = await loginAsOwner(h);
+    // An empty body fails validation: 400, no role is created.
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    const row = await assertAuditRow(h, { action: 'role.create' });
+    expect(row.statusCode).toBe(400);
+    expect(row.actorKind).toBe('steam');
+  });
+
+  it('writes no audit row for an anonymous request the auth hook rejects (#37)', async () => {
+    const before = await h.db
       .select()
       .from(auditLog)
       .where(and(eq(auditLog.actionType, 'user.logout'), eq(auditLog.actorKind, 'system')));
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    await assertAuditRow(h, { action: 'user.logout' });
+    const res = await h.app.inject({ method: 'POST', url: '/api/v1/auth/logout' });
+    expect(res.statusCode).toBe(401);
+    await new Promise((r) => setTimeout(r, 150));
+    const after = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'user.logout'), eq(auditLog.actorKind, 'system')));
+    expect(after.length).toBe(before.length);
   });
 });
