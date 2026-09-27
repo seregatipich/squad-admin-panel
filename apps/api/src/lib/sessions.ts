@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { type SessionScope, sessions } from '@squad/db/schema';
 import { and, eq, gt, lt } from 'drizzle-orm';
@@ -20,6 +20,20 @@ const REDIS_PREFIX = 'session:';
 const REDIS_TTL_SECONDS = 600;
 
 /**
+ * Key for the MAC every `session:<tokenId>` cache entry carries (#32).
+ *
+ * Redis is reachable from processes the panel does not trust — the game
+ * servers and the rnsquadjs sidecar run with `--network host` — so a cache
+ * entry is only honoured when its MAC verifies; anything else is treated as a
+ * miss and the session is resolved from Postgres. The key is random per
+ * process and never leaves memory, so nothing that can read or write Redis can
+ * forge an entry, move one onto another token id, or rewrite its playerId,
+ * scope or expiry. Entries written by another process (a restarted API, the
+ * `mint-owner-session` tool) simply miss once and are re-cached from the DB.
+ */
+const CACHE_MAC_KEY = randomBytes(32);
+
+/**
  * Minimal live-bus surface needed to push a forced logout. `app.liveBus`
  * satisfies this structurally, so callers pass it directly without coupling
  * this module to the full plugin type.
@@ -38,11 +52,8 @@ export interface SessionRevokePublisher {
  *
  * That direction is deliberate and safe: the column is `NOT NULL DEFAULT
  * 'panel'` under `sessions_scope_chk`, so an unknown value cannot exist in the
- * database. The only source of a missing value is a Redis cache entry written
- * by a process from before this migration — and every session that existed
- * then was a panel session, because a player without `panel_access` was never
- * issued one. Defaulting those to `self_service` would lock every admin out
- * mid-deploy for no security gain.
+ * database, and a cache entry is only read back when its MAC verifies, i.e.
+ * when this process wrote it with an explicit scope.
  */
 function normalizeScope(value: string | null | undefined): SessionScope {
   return value === 'self_service' ? 'self_service' : 'panel';
@@ -203,33 +214,52 @@ export async function touchSession(input: TouchSessionInput): Promise<boolean> {
   return true;
 }
 
+function cacheMac(tokenId: string, payload: string): Buffer {
+  return createHmac('sha256', CACHE_MAC_KEY).update(tokenId).update('\n').update(payload).digest();
+}
+
+/**
+ * Caches `record` under `session:<id>` as `{ payload, mac }`, where `mac`
+ * binds the serialized payload to the token id (see `CACHE_MAC_KEY`).
+ */
 async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
+  const payload = JSON.stringify({
+    playerId: record.playerId,
+    expiresAt: record.expiresAt.toISOString(),
+    lastActivityAt: record.lastActivityAt.toISOString(),
+    ip: record.ip,
+    userAgent: record.userAgent,
+    scope: record.scope,
+  });
   await redis.set(
     `${REDIS_PREFIX}${record.id}`,
-    JSON.stringify({
-      playerId: record.playerId,
-      expiresAt: record.expiresAt.toISOString(),
-      lastActivityAt: record.lastActivityAt.toISOString(),
-      ip: record.ip,
-      userAgent: record.userAgent,
-      scope: record.scope,
-    }),
+    JSON.stringify({ payload, mac: cacheMac(record.id, payload).toString('base64url') }),
     'EX',
     REDIS_TTL_SECONDS,
   );
 }
 
+/**
+ * Reads the cached session for `tokenId`. Returns null — a cache miss, so the
+ * caller falls back to Postgres — when the entry is absent, malformed, or its
+ * MAC does not verify for this token id.
+ */
 async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | null> {
   const raw = await redis.get(`${REDIS_PREFIX}${tokenId}`);
   if (!raw) return null;
   try {
-    const obj = JSON.parse(raw) as {
+    const envelope = JSON.parse(raw) as { payload?: unknown; mac?: unknown };
+    if (typeof envelope.payload !== 'string' || typeof envelope.mac !== 'string') return null;
+    const expected = cacheMac(tokenId, envelope.payload);
+    const actual = Buffer.from(envelope.mac, 'base64url');
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const obj = JSON.parse(envelope.payload) as {
       playerId: string;
       expiresAt: string;
       lastActivityAt: string;
       ip: string | null;
       userAgent: string | null;
-      scope?: string;
+      scope: string;
     };
     return {
       id: tokenId,
