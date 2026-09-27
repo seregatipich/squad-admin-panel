@@ -45,7 +45,12 @@ export const PERMISSIONS = [
     category: 'servers',
     label: 'Resource limits, ports, max_players',
   },
-  { key: 'server:update', category: 'servers', label: 'app_update через SteamCMD' },
+  {
+    key: 'server:update',
+    category: 'servers',
+    label: 'app_update через SteamCMD (общий depot всех серверов)',
+    dangerous: true,
+  },
   {
     key: 'server:download_logs',
     category: 'servers',

@@ -33,6 +33,16 @@ function containerName(id: string) {
   return `squad-${id}`;
 }
 
+/**
+ * Whether a depot update holds the `depot:updating` lock (taken by
+ * server-update.ts and depot.ts). Every Squad container mounts the one shared
+ * depot volume, so starting a container while SteamCMD rewrites it would boot
+ * the server on a half-written install (#20).
+ */
+async function isDepotUpdating(redis: Redis): Promise<boolean> {
+  return (await redis.get('depot:updating')) !== null;
+}
+
 interface SeedingSummary {
   state: 'seeding' | 'live';
   current_players: number;
@@ -556,6 +566,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
       if (isExternalRuntime(s.runtime)) return rejectExternalServer(reply);
+      if (await isDepotUpdating(app.redis)) {
+        reply.code(409);
+        return { error: 'depot_update_in_progress' };
+      }
       const settings = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, s.id),
       });
@@ -936,6 +950,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
       if (isExternalRuntime(s.runtime)) return rejectExternalServer(reply);
+      if (await isDepotUpdating(app.redis)) {
+        reply.code(409);
+        return { error: 'depot_update_in_progress' };
+      }
       const name = containerName(s.id);
       await app.db
         .update(servers)

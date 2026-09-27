@@ -1,5 +1,5 @@
 import { servers } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -7,6 +7,13 @@ import { publishDepotProgressDone, publishDepotProgressLine } from '../lib/depot
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 const idParams = z.object({ id: z.string().uuid() });
+
+/**
+ * Statuses in which a container server has (or is about to have) the shared
+ * depot volume mounted by a live process. `installing` counts because an
+ * install ends with a containerRun that mounts the depot.
+ */
+const LIVE_STATUSES = ['installing', 'starting', 'running', 'stopping'];
 
 const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -41,6 +48,29 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
       if (!acquired) {
         reply.code(409);
         return { error: 'depot_update_in_progress' };
+      }
+
+      // The depot is one volume mounted into every Squad container, so this
+      // "per-server" update rewrites the install under every server on the
+      // host (#20). Refuse while any other container server is live. The check
+      // runs after the lock is taken because /start, /restart and /install
+      // refuse while it is held, so a server stopped now stays down until the
+      // update ends.
+      const liveServers = await app.db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(
+          and(
+            ne(servers.id, row.id),
+            eq(servers.runtime, 'container'),
+            isNull(servers.deletedAt),
+            inArray(servers.status, LIVE_STATUSES),
+          ),
+        );
+      if (liveServers.length > 0) {
+        await app.redis.del('depot:updating');
+        reply.code(409);
+        return { error: 'servers_running', server_ids: liveServers.map((s) => s.id) };
       }
 
       (async () => {

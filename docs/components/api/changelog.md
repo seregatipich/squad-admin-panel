@@ -16,6 +16,18 @@
 - `POST /api/v1/roles` и `PUT /api/v1/roles/:id` возвращают `400`, если имя роли пустое или содержит управляющие символы, переводы строк, `:`, `,` или `/` (`role_name_invalid`).
 - `PUT /api/v1/players/:playerId/role` и `POST /api/v1/roles/:id/members` возвращают `400` для комментария с управляющими символами или переводом строки (`comment_not_single_line`); `POST /api/v1/clans` и `PATCH /api/v1/clans/:id` — для такого же названия клана (`name_not_single_line`).
 
+## 2026-09-27 — Обновление depot не трогает запущенные серверы
+
+### Fixed
+
+- `POST /api/v1/servers/:id/update` проверял только, что остановлен сервер `:id`, хотя SteamCMD переписывает общий том `squad-depot`, смонтированный во все Squad-контейнеры хоста. Теперь маршрут возвращает `409 { error: 'servers_running', server_ids }`, пока любой другой неудалённый container-сервер находится в `installing`/`starting`/`running`/`stopping` (#20). `installing` учитывается потому, что установка заканчивается запуском контейнера с тем же depot.
+- `POST /api/v1/servers/:id/start` и `POST /api/v1/servers/:id/restart` возвращают `409 depot_update_in_progress`, пока удерживается блокировка `depot:updating`: сервер больше нельзя поднять на наполовину обновлённом depot.
+- `POST /api/v1/servers/:id/install` по той же причине возвращает `409 depot_update_in_progress`, пока удерживается `depot:updating`. Если обновление началось уже после запроса, установка перед `container_run` снова проверяет блокировку и завершается ошибкой `depot_update_in_progress` (сервер получает статус `failed`), а не запускает контейнер.
+
+### Changed
+
+- Право `server:update` помечено как опасное (`dangerous: true`): действие затрагивает все серверы хоста, как и `POST /api/v1/depot/update` под `server:install`.
+
 ## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
 
 ### Removed

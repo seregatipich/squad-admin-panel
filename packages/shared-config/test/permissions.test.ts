@@ -49,6 +49,13 @@ describe('PERMISSIONS registry', () => {
     expect(def?.dangerous).toBeUndefined();
   });
 
+  // #20: server:update rewrites the depot shared by every server on the host,
+  // exactly like depot/update under the dangerous server:install.
+  it('marks server:update as dangerous', () => {
+    const def = PERMISSIONS.find((p) => p.key === 'server:update') as PermissionDef | undefined;
+    expect(def?.dangerous).toBe(true);
+  });
+
   it('marks every mod:* key as implemented', () => {
     const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
 
