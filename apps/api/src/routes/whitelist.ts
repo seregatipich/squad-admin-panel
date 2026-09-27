@@ -7,6 +7,12 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
+import {
+  callerCanManageRoles,
+  isOwnerRole,
+  type WhitelistRoleDenial,
+  whitelistRoleWriteDenial,
+} from '../lib/whitelist-role-guard.js';
 
 const PANEL_META_SINGLETON_ID = 1;
 const STEAM_ID64_RE = /^\d{17}$/;
@@ -25,7 +31,11 @@ interface WhitelistSettingsView {
 interface ImportSkippedRow {
   line: number;
   raw: string;
-  reason: 'malformed_row' | 'invalid_steam_id64' | 'player_not_found';
+  reason:
+    | 'malformed_row'
+    | 'invalid_steam_id64'
+    | 'player_not_found'
+    | WhitelistRoleDenial['error'];
 }
 
 interface ImportResult {
@@ -83,28 +93,55 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Idempotently assigns `whitelistRoleId` to a player, syncing Admins.cfg and
    * revoking panel sessions when the role loses panel access. Returns whether
-   * the player's role actually changed (used to pick 201 vs. 200 no-op).
+   * the player's role actually changed (used to pick 201 vs. 200 no-op), or the
+   * `whitelistRoleWriteDenial` refusal when the player holds the Owner role or,
+   * for a caller without `user:manage_roles`, any other role (#8).
    */
   async function assignWhitelistRole(
     req: FastifyRequest,
     whitelistRoleId: string,
     playerId: string,
     comment: string | null,
-  ): Promise<'assigned' | 'already_assigned' | 'player_not_found'> {
+  ): Promise<
+    | 'assigned'
+    | 'already_assigned'
+    | 'player_not_found'
+    | 'whitelist_role_not_configured'
+    | WhitelistRoleDenial
+  > {
     const playerRows = await app.db
-      .select({ id: players.id, roleId: players.roleId })
+      .select({
+        id: players.id,
+        currentRole: { id: roles.id, name: roles.name, isSystemRole: roles.isSystemRole },
+      })
       .from(players)
+      .leftJoin(roles, eq(roles.id, players.roleId))
       .where(eq(players.id, playerId))
       .limit(1);
     const player = playerRows[0];
     if (!player) return 'player_not_found';
-    if (player.roleId === whitelistRoleId && comment === null) return 'already_assigned';
 
     const roleRows = await app.db
-      .select({ panelAccess: roles.panelAccess })
+      .select({
+        id: roles.id,
+        name: roles.name,
+        isSystemRole: roles.isSystemRole,
+        panelAccess: roles.panelAccess,
+      })
       .from(roles)
       .where(eq(roles.id, whitelistRoleId))
       .limit(1);
+    const whitelistRole = roleRows[0];
+    if (!whitelistRole) return 'whitelist_role_not_configured';
+    const denial = whitelistRoleWriteDenial({
+      canManageRoles: callerCanManageRoles(req),
+      targetRole: whitelistRole,
+      whitelistRoleId,
+      currentRole: player.currentRole,
+    });
+    if (denial) return denial;
+    if (player.currentRole?.id === whitelistRoleId && comment === null) return 'already_assigned';
+
     await app.db.transaction(async (tx) => {
       await tx
         .update(players)
@@ -118,7 +155,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       });
     });
     invalidatePermissionCache(playerId);
-    if (!roleRows[0]?.panelAccess) {
+    if (!whitelistRole.panelAccess) {
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
     }
     return 'assigned';
@@ -150,9 +187,15 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           reply.code(404);
           return { error: 'role_not_found' };
         }
-        if (role.isSystemRole && role.name === 'Owner') {
+        if (isOwnerRole(role)) {
           reply.code(403);
           return { error: 'owner_role_forbidden' };
+        }
+        // The whitelist role is what every `whitelist:edit` holder can hand out,
+        // so choosing it is role management (#8).
+        if (roleId !== before.whitelist_role_id && !callerCanManageRoles(req)) {
+          reply.code(403);
+          return { error: 'role_assignment_forbidden' };
         }
       }
       await app.db
@@ -188,6 +231,14 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'whitelist_role_not_configured' };
       }
       const outcome = await assignWhitelistRole(req, whitelistRoleId, req.body.player_id, null);
+      if (typeof outcome === 'object') {
+        reply.code(outcome.status);
+        return { error: outcome.error };
+      }
+      if (outcome === 'whitelist_role_not_configured') {
+        reply.code(409);
+        return { error: 'whitelist_role_not_configured' };
+      }
       if (outcome === 'player_not_found') {
         reply.code(404);
         return { error: 'player_not_found' };
@@ -271,17 +322,32 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'whitelist_role_not_configured' };
       }
       const [whitelistRole] = await app.db
-        .select({ panelAccess: roles.panelAccess })
+        .select({
+          id: roles.id,
+          name: roles.name,
+          isSystemRole: roles.isSystemRole,
+          panelAccess: roles.panelAccess,
+        })
         .from(roles)
         .where(eq(roles.id, whitelistRoleId))
         .limit(1);
+      if (!whitelistRole) {
+        reply.code(409);
+        return { error: 'whitelist_role_not_configured' };
+      }
+      const canManageRoles = callerCanManageRoles(req);
       const lines = req.body.csv.split(/\r\n|\r|\n/).filter((line) => line.trim().length > 0);
       if (lines.length > IMPORT_MAX_ROWS) {
         reply.code(413);
         return { error: 'too_many_rows', max_rows: IMPORT_MAX_ROWS };
       }
       const result: ImportResult = { total_rows: lines.length, imported: 0, skipped: [] };
-      const assignments: Array<{ playerId: string; comment: string | null }> = [];
+      const assignments: Array<{
+        line: number;
+        raw: string;
+        playerId: string;
+        comment: string | null;
+      }> = [];
       for (const [index, raw] of lines.entries()) {
         const lineNumber = index + 1;
         const parsed = parseCsvRow(raw);
@@ -303,7 +369,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           result.skipped.push({ line: lineNumber, raw, reason: 'player_not_found' });
           continue;
         }
-        assignments.push({ playerId: player.id, comment: parsed.comment });
+        assignments.push({ line: lineNumber, raw, playerId: player.id, comment: parsed.comment });
       }
       const changedPlayerIds: string[] = [];
       await app.db.transaction(async (tx) => {
@@ -311,8 +377,12 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           assignments.length === 0
             ? []
             : await tx
-                .select({ id: players.id, roleId: players.roleId })
+                .select({
+                  id: players.id,
+                  currentRole: { id: roles.id, name: roles.name, isSystemRole: roles.isSystemRole },
+                })
                 .from(players)
+                .leftJoin(roles, eq(roles.id, players.roleId))
                 .where(
                   inArray(
                     players.id,
@@ -323,8 +393,22 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         for (const assignment of assignments) {
           const player = currentById.get(assignment.playerId);
           if (!player) continue;
+          const denial = whitelistRoleWriteDenial({
+            canManageRoles,
+            targetRole: whitelistRole,
+            whitelistRoleId,
+            currentRole: player.currentRole,
+          });
+          if (denial) {
+            result.skipped.push({
+              line: assignment.line,
+              raw: assignment.raw,
+              reason: denial.error,
+            });
+            continue;
+          }
           result.imported += 1;
-          if (player.roleId === whitelistRoleId && assignment.comment === null) continue;
+          if (player.currentRole?.id === whitelistRoleId && assignment.comment === null) continue;
           await tx
             .update(players)
             .set({ roleId: whitelistRoleId, roleExpiresAt: null, roleComment: assignment.comment })
@@ -340,7 +424,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       });
       for (const playerId of changedPlayerIds) {
         invalidatePermissionCache(playerId);
-        if (!whitelistRole?.panelAccess) {
+        if (!whitelistRole.panelAccess) {
           await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
         }
       }

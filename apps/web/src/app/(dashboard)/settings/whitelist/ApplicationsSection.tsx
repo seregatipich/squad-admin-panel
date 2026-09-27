@@ -67,6 +67,14 @@ const TERM_PRESETS: { value: string; label: string; days: number | null | 'defau
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Russian text for the approval refusals of the whitelist role guard (#8). */
+const DECISION_ERROR_TEXT: Record<string, string> = {
+  owner_assignment_forbidden: 'роль владельца панели нельзя выдать через заявку',
+  owner_role_protected: 'заявитель — владелец панели, его роль не меняется через заявку',
+  role_assignment_forbidden:
+    'выдать другую роль или заменить текущую роль заявителя может только пользователь с правом управления ролями',
+};
+
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   const date = new Date(iso);
@@ -85,9 +93,17 @@ function formatDate(iso: string | null): string {
  * Мастер-свитч публичного портала + срок по умолчанию, и очередь заявок с
  * одобрением (роль + срок → time-bounded grant, авто-снятие через
  * `worker-role-expirer`) или отклонением. Управление доступно только с правом
- * `whitelist:edit`; просмотр — с `whitelist:view`.
+ * `whitelist:edit`; просмотр — с `whitelist:view`. Выбор роли, отличной от роли
+ * whitelist, доступен только с правом `user:manage_roles` — API отклоняет
+ * такую выдачу без него (#8).
  */
-export function ApplicationsSection({ canEdit }: { canEdit: boolean }) {
+export function ApplicationsSection({
+  canEdit,
+  canManageRoles,
+}: {
+  canEdit: boolean;
+  canManageRoles: boolean;
+}) {
   const [settings, setSettings] = useState<ApplicationSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [defaultDays, setDefaultDays] = useState('');
@@ -195,7 +211,7 @@ export function ApplicationsSection({ canEdit }: { canEdit: boolean }) {
         // the API fall back to the configured whitelist role).
         const requestedRoleId = items.find((a) => a.id === id)?.requested_role_id ?? '';
         const roleId = rolePick[id] ?? requestedRoleId;
-        if (roleId) payload.role_id = roleId;
+        if (canManageRoles && roleId) payload.role_id = roleId;
         const expiresAt = resolveExpiresAt(id);
         if (expiresAt !== undefined) payload.expires_at = expiresAt;
       }
@@ -209,8 +225,9 @@ export function ApplicationsSection({ canEdit }: { canEdit: boolean }) {
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setError(`Не удалось обработать заявку: ${e.error ?? res.status}`);
+        const e = (await res.json().catch(() => ({}))) as { error?: string };
+        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) ?? e.error ?? res.status;
+        setError(`Не удалось обработать заявку: ${reason}`);
         return;
       }
       setNotice(status === 'approved' ? 'Заявка одобрена.' : 'Заявка отклонена.');
@@ -337,20 +354,22 @@ export function ApplicationsSection({ canEdit }: { canEdit: boolean }) {
 
                 {canEdit && app.status === 'pending' ? (
                   <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3">
-                    <FieldRow label="Роль" className="w-44">
-                      <Select
-                        size="sm"
-                        value={rolePick[app.id] ?? app.requested_role_id ?? ''}
-                        onChange={(e) => setRolePick((m) => ({ ...m, [app.id]: e.target.value }))}
-                      >
-                        <option value="">— роль whitelist —</option>
-                        {assignableRoles.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
-                          </option>
-                        ))}
-                      </Select>
-                    </FieldRow>
+                    {canManageRoles ? (
+                      <FieldRow label="Роль" className="w-44">
+                        <Select
+                          size="sm"
+                          value={rolePick[app.id] ?? app.requested_role_id ?? ''}
+                          onChange={(e) => setRolePick((m) => ({ ...m, [app.id]: e.target.value }))}
+                        >
+                          <option value="">— роль whitelist —</option>
+                          {assignableRoles.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </FieldRow>
+                    ) : null}
                     <FieldRow label="Срок" className="w-36">
                       <Select
                         size="sm"

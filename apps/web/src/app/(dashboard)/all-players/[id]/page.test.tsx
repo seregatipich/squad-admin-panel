@@ -90,14 +90,31 @@ const PLAYER_RESPONSE = {
   geo_configured: true,
 };
 
+interface MockRole {
+  id: string;
+  name: string;
+  color: string;
+  is_system_role: boolean;
+  role_expires_at: string | null;
+  role_comment: string | null;
+}
+
 function mockFetch(opts: {
   canBan: boolean;
   canManageRoles?: boolean;
+  canEditWhitelist?: boolean;
+  whitelistRole?: { id: string; name: string };
+  currentRole?: MockRole;
   checkMatched?: boolean;
   player?: Partial<(typeof PLAYER_RESPONSE)['player']>;
 }) {
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
+    if (url === '/api/v1/whitelist/members' && init?.method === 'POST') {
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true, changed: true }), { status: 201 }),
+      );
+    }
     if (url === `/api/v1/players/${PLAYER_ID}`) {
       const body = opts.player
         ? { ...PLAYER_RESPONSE, player: { ...PLAYER_RESPONSE.player, ...opts.player } }
@@ -109,7 +126,10 @@ function mockFetch(opts: {
         new Response(
           JSON.stringify({
             player_id: 'me-1',
-            permissions: opts.canManageRoles ? ['user:manage_roles'] : [],
+            permissions: [
+              ...(opts.canManageRoles ? ['user:manage_roles'] : []),
+              ...(opts.canEditWhitelist ? ['whitelist:edit'] : []),
+            ],
             squad_permissions: opts.canBan ? ['ban'] : [],
           }),
           { status: 200 },
@@ -118,13 +138,19 @@ function mockFetch(opts: {
     }
     if (url.startsWith('/api/v1/whitelist/settings')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ whitelist_role_id: null, whitelist_role_name: null }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({
+            whitelist_role_id: opts.whitelistRole?.id ?? null,
+            whitelist_role_name: opts.whitelistRole?.name ?? null,
+          }),
+          { status: 200 },
+        ),
       );
     }
     if (url === `/api/v1/players/${PLAYER_ID}/role`) {
-      return Promise.resolve(new Response(JSON.stringify({ role: null }), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ role: opts.currentRole ?? null }), { status: 200 }),
+      );
     }
     if (url === '/api/v1/roles') {
       return Promise.resolve(
@@ -281,5 +307,119 @@ describe('PlayerDetailPage', () => {
       /причина выдачи видна другим администраторам/i,
     );
     expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+  });
+
+  describe('whitelist quick action (#8)', () => {
+    const WHITELIST_ROLE = { id: 'role-wl', name: 'Whitelist' };
+    const ADMIN_ROLE: MockRole = {
+      id: 'role-admin',
+      name: 'Admin',
+      color: 'sky',
+      is_system_role: false,
+      role_expires_at: null,
+      role_comment: null,
+    };
+    const OWNER_ROLE: MockRole = {
+      ...ADMIN_ROLE,
+      id: 'role-owner',
+      name: 'Owner',
+      is_system_role: true,
+    };
+
+    async function whitelistCard(): Promise<HTMLElement> {
+      const title = await screen.findByText('Whitelist');
+      const card = title.closest('section');
+      if (!card) throw new Error('whitelist card not found');
+      return card;
+    }
+
+    function memberPosts(fetchMock: ReturnType<typeof mockFetch>) {
+      return fetchMock.mock.calls.filter(
+        ([url, init]) => url === '/api/v1/whitelist/members' && init?.method === 'POST',
+      );
+    }
+
+    it('offers «В whitelist» for a roleless player and adds them in one click', async () => {
+      const fetchMock = mockFetch({
+        canBan: false,
+        canEditWhitelist: true,
+        whitelistRole: WHITELIST_ROLE,
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+      const card = await whitelistCard();
+
+      await act(async () => {
+        fireEvent.click(await within(card).findByRole('button', { name: 'В whitelist' }));
+      });
+
+      await waitFor(() => expect(memberPosts(fetchMock)).toHaveLength(1));
+    });
+
+    it('hides «В whitelist» for a player with another role when the viewer cannot manage roles', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({
+          canBan: false,
+          canEditWhitelist: true,
+          whitelistRole: WHITELIST_ROLE,
+          currentRole: ADMIN_ROLE,
+        }),
+      );
+      await renderPage();
+      const card = await whitelistCard();
+
+      expect(
+        await within(card).findByText(/у него роль «Admin»\. Заменить её может только/),
+      ).toBeInTheDocument();
+      expect(within(card).queryByRole('button', { name: 'В whitelist' })).toBeNull();
+    });
+
+    it('never offers «В whitelist» for an Owner, even to a role manager', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({
+          canBan: false,
+          canManageRoles: true,
+          canEditWhitelist: true,
+          whitelistRole: WHITELIST_ROLE,
+          currentRole: OWNER_ROLE,
+        }),
+      );
+      await renderPage();
+      const card = await whitelistCard();
+
+      expect(
+        await within(card).findByText(/у него роль «Owner», её нельзя заменить через whitelist/),
+      ).toBeInTheDocument();
+      expect(within(card).queryByRole('button', { name: 'В whitelist' })).toBeNull();
+    });
+
+    it('asks a role manager to confirm replacing the named role before adding', async () => {
+      const fetchMock = mockFetch({
+        canBan: false,
+        canManageRoles: true,
+        canEditWhitelist: true,
+        whitelistRole: WHITELIST_ROLE,
+        currentRole: ADMIN_ROLE,
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+      const card = await whitelistCard();
+
+      await act(async () => {
+        fireEvent.click(await within(card).findByRole('button', { name: 'В whitelist' }));
+      });
+      const dialog = await screen.findByRole('dialog');
+      expect(
+        within(dialog).getByText(/Роль «Admin» будет заменена ролью whitelist/),
+      ).toBeInTheDocument();
+      expect(memberPosts(fetchMock)).toHaveLength(0);
+
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Заменить роль' }));
+      });
+      await waitFor(() => expect(memberPosts(fetchMock)).toHaveLength(1));
+    });
   });
 });

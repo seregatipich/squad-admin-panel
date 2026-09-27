@@ -264,7 +264,11 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <PlayerMarks playerId={playerId} />
 
-      <WhitelistQuickAction playerId={playerId} canEdit={canEditWhitelist} />
+      <WhitelistQuickAction
+        playerId={playerId}
+        canEdit={canEditWhitelist}
+        canManageRoles={canManageRoles}
+      />
 
       <ReportPlayerSection playerId={playerId} />
 
@@ -426,16 +430,35 @@ interface WhitelistSettings {
   whitelist_role_name: string | null;
 }
 
+const WHITELIST_ERROR_TEXT: Record<string, string> = {
+  owner_role_protected: 'Роль владельца панели нельзя заменить через whitelist.',
+  role_assignment_forbidden:
+    'Заменить роль игрока может только пользователь с правом управления ролями.',
+  whitelist_role_not_configured: 'Роль whitelist не настроена.',
+};
+
 /**
  * One-click "add to / remove from whitelist" action (WL-1, #65). Assigning or
  * removing the whitelist role is idempotent server-side, so this component
- * only needs to know the configured whitelist role and whether the current
- * player already holds it.
+ * only needs to know the configured whitelist role and the player's current
+ * role. The API never replaces an Owner's role here and requires
+ * `user:manage_roles` to replace any other role (#8), so the add button is
+ * offered only for a roleless player, or — after a confirmation naming the
+ * role being replaced — to a role manager.
  */
-function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit: boolean }) {
+function WhitelistQuickAction({
+  playerId,
+  canEdit,
+  canManageRoles,
+}: {
+  playerId: string;
+  canEdit: boolean;
+  canManageRoles: boolean;
+}) {
   const [settings, setSettings] = useState<WhitelistSettings | null>(null);
   const [current, setCurrent] = useState<SingleRole | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const reload = useCallback(async () => {
@@ -457,6 +480,16 @@ function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit
   if (!settings?.whitelist_role_id) return null;
 
   const isWhitelisted = current?.id === settings.whitelist_role_id;
+  const otherRole = current && !isWhitelisted ? current : null;
+  const otherRoleIsOwner = otherRole?.is_system_role === true && otherRole.name === 'Owner';
+  const canToggle = canEdit && (!otherRole || (canManageRoles && !otherRoleIsOwner));
+
+  let description = isWhitelisted ? 'Игрок в whitelist.' : 'Игрок не в whitelist.';
+  if (otherRole && otherRoleIsOwner) {
+    description = `Игрок не в whitelist: у него роль «${otherRole.name}», её нельзя заменить через whitelist.`;
+  } else if (otherRole && canEdit && !canManageRoles) {
+    description = `Игрок не в whitelist: у него роль «${otherRole.name}». Заменить её может только пользователь с правом управления ролями.`;
+  }
 
   async function toggle() {
     setBusy(true);
@@ -473,7 +506,12 @@ function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ player_id: playerId }),
           });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(
+          (body.error && WHITELIST_ERROR_TEXT[body.error]) ?? body.error ?? `HTTP ${r.status}`,
+        );
+      }
       await reload();
       setMsg({ kind: 'ok', text: isWhitelisted ? 'Убран из whitelist.' : 'Добавлен в whitelist.' });
     } catch (e) {
@@ -487,10 +525,14 @@ function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit
     <Card as="section" padding="none">
       <CardHeader
         title="Whitelist"
-        description={isWhitelisted ? 'Игрок в whitelist.' : 'Игрок не в whitelist.'}
+        description={description}
         actions={
-          canEdit ? (
-            <Button size="sm" loading={busy} onClick={() => void toggle()}>
+          canToggle ? (
+            <Button
+              size="sm"
+              loading={busy}
+              onClick={() => (otherRole ? setConfirmOpen(true) : void toggle())}
+            >
               {isWhitelisted ? 'Убрать из whitelist' : 'В whitelist'}
             </Button>
           ) : undefined
@@ -505,6 +547,22 @@ function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit
             dismissLabel="Скрыть сообщение"
           />
         </CardBody>
+      ) : null}
+      {otherRole ? (
+        <AlertDialog
+          open={confirmOpen}
+          onClose={() => setConfirmOpen(false)}
+          title="Добавить в whitelist"
+          body={`Роль «${otherRole.name}» будет заменена ролью whitelist «${settings.whitelist_role_name ?? 'whitelist'}», вместе с доступом, который она давала.`}
+          confirmLabel="Заменить роль"
+          cancelLabel="Отмена"
+          tone="destructive"
+          busy={busy}
+          onConfirm={async () => {
+            await toggle();
+            setConfirmOpen(false);
+          }}
+        />
       ) : null}
     </Card>
   );

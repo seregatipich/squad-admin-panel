@@ -40,7 +40,12 @@ interface RoleOption {
 interface ImportSkippedRow {
   line: number;
   raw: string;
-  reason: 'malformed_row' | 'invalid_steam_id64' | 'player_not_found';
+  reason:
+    | 'malformed_row'
+    | 'invalid_steam_id64'
+    | 'player_not_found'
+    | 'owner_role_protected'
+    | 'role_assignment_forbidden';
 }
 
 interface ImportResult {
@@ -57,6 +62,8 @@ const SKIP_REASON_LABEL: Record<ImportSkippedRow['reason'], string> = {
   malformed_row: 'некорректная строка',
   invalid_steam_id64: 'некорректный SteamID64',
   player_not_found: 'игрок не найден',
+  owner_role_protected: 'владелец панели — роль не меняется',
+  role_assignment_forbidden: 'у игрока другая роль — заменить её может только управляющий ролями',
 };
 
 export default function WhitelistSettingsPage() {
@@ -97,10 +104,14 @@ export default function WhitelistSettingsPage() {
   }, [refresh]);
 
   const canEdit = me?.permissions.includes('whitelist:edit') ?? false;
+  // Choosing the whitelist role decides what every whitelist editor can hand
+  // out, so the API requires user:manage_roles for it (#8).
+  const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
+  const canPickRole = canEdit && canManageRoles;
   const assignableRoles = roleOptions.filter((r) => !(r.is_system_role && r.name === 'Owner'));
 
   async function saveRole() {
-    if (!canEdit) return;
+    if (!canPickRole) return;
     setSaving(true);
     setErr(null);
     setNotice(null);
@@ -218,7 +229,12 @@ export default function WhitelistSettingsPage() {
                 ) : null}
               </div>
 
-              {canEdit ? (
+              {canEdit && !canManageRoles ? (
+                <p className="text-xs text-ink-3">
+                  Выбрать роль whitelist может только пользователь с правом управления ролями.
+                </p>
+              ) : null}
+              {canPickRole ? (
                 <FieldRow label="Роль для whitelist" htmlFor={roleSelectId}>
                   <Select
                     id={roleSelectId}
@@ -235,7 +251,7 @@ export default function WhitelistSettingsPage() {
                 </FieldRow>
               ) : null}
             </CardBody>
-            {canEdit ? (
+            {canPickRole ? (
               <CardFooter>
                 <Button
                   variant="primary"
@@ -258,7 +274,9 @@ export default function WhitelistSettingsPage() {
                 hint={
                   <>
                     Формат: одна строка на игрока — <code>SteamID64[,комментарий]</code>. Строки без
-                    корректного SteamID64 или с неизвестным игроком будут пропущены и показаны ниже.
+                    корректного SteamID64, с неизвестным игроком, с владельцем панели или (без права
+                    управления ролями) с игроком, у которого уже есть другая роль, будут пропущены и
+                    показаны ниже.
                   </>
                 }
               >
@@ -344,7 +362,7 @@ export default function WhitelistSettingsPage() {
             </CardBody>
           </Card>
 
-          <ApplicationsSection canEdit={canEdit} />
+          <ApplicationsSection canEdit={canEdit} canManageRoles={canManageRoles} />
         </>
       )}
     </PageContainer>
