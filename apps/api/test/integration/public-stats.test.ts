@@ -1,6 +1,14 @@
+import rateLimit from '@fastify/rate-limit';
 import { matches, playerDailyPresence, playerSessions, players, servers } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
+import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import publicStatsRoutes, {
+  PUBLIC_STATS_CACHE_TTL_SECONDS,
+  PUBLIC_STATS_RATE_LIMIT,
+} from '../../src/routes/public-stats.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
 
@@ -235,5 +243,78 @@ describeIfDb('GET /api/v1/public/stats', () => {
     expect(res.headers['content-type']).toContain('text/csv');
     const rows = res.body.trim().split('\r\n');
     expect(rows[0]).toBe('section,key,value');
+  });
+});
+
+describeIfDb('GET /api/v1/public/stats — anonymous load bounds (#30, finding #246)', () => {
+  const CACHE_FROM = '2026-06-10T00:00:00.000Z';
+  const CACHE_TO = '2026-06-11T00:00:00.000Z';
+
+  it('serves repeat requests for the same window from the Redis cache', async () => {
+    const first = await fetchPublicStats(`?from=${CACHE_FROM}&to=${CACHE_TO}`);
+    expect((first.json() as PublicStatsBody).summary.total_matches).toBe(0);
+
+    // A match landing inside the cached window stays invisible until the
+    // entry expires: the second request never reached Postgres.
+    const [inserted] = await h.db
+      .insert(matches)
+      .values({
+        serverId: SERVER_A,
+        map: 'Mutaha',
+        layer: 'Mutaha_AAS_v1',
+        winner: 'team1',
+        startedAt: new Date('2026-06-10T12:00:00Z'),
+        durationSeconds: 600,
+      })
+      .returning({ id: matches.id });
+    try {
+      const second = await fetchPublicStats(`?from=${CACHE_FROM}&to=${CACHE_TO}`);
+      expect((second.json() as PublicStatsBody).summary.total_matches).toBe(0);
+      const csv = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/public/stats.csv?from=${CACHE_FROM}&to=${CACHE_TO}`,
+      });
+      expect(csv.body.trim().split('\r\n')).toContain('summary,total_matches,0');
+
+      const keys = await h.redis.keys('public-stats:*');
+      expect(keys.length).toBeGreaterThan(0);
+      for (const key of keys) {
+        const ttl = await h.redis.ttl(key);
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(PUBLIC_STATS_CACHE_TTL_SECONDS);
+      }
+    } finally {
+      if (inserted) await h.db.delete(matches).where(eq(matches.id, inserted.id));
+    }
+  });
+
+  it('shares one cache entry across requests inside the same hour', async () => {
+    await h.redis.del(...(await h.redis.keys('public-stats:*')), 'public-stats:none');
+    await fetchPublicStats('?from=2026-06-12T00:05:00.000Z&to=2026-06-12T05:10:00.000Z');
+    await fetchPublicStats('?from=2026-06-12T00:40:00.000Z&to=2026-06-12T05:55:00.000Z');
+    expect(await h.redis.keys('public-stats:*')).toHaveLength(1);
+  });
+
+  it('applies a dedicated per-IP rate limit to both routes', async () => {
+    const app = Fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    app.decorate('db', h.db);
+    app.decorate('redis', h.redis);
+    await app.register(rateLimit, { max: 1200, timeWindow: '1 minute' });
+    await app.register(publicStatsRoutes);
+    try {
+      for (const url of ['/api/v1/public/stats', '/api/v1/public/stats.csv']) {
+        const query = `?from=${CACHE_FROM}&to=${CACHE_TO}`;
+        for (let i = 0; i < PUBLIC_STATS_RATE_LIMIT; i += 1) {
+          const ok = await app.inject({ method: 'GET', url: `${url}${query}` });
+          expect(ok.statusCode).toBe(200);
+        }
+        const limited = await app.inject({ method: 'GET', url: `${url}${query}` });
+        expect(limited.statusCode).toBe(429);
+      }
+    } finally {
+      await app.close();
+    }
   });
 });
