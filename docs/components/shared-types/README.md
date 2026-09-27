@@ -12,6 +12,7 @@ Single source of truth for cross-component contracts. Importable from anywhere i
 ## Files
 
 - [`packages/shared-types/src/events.ts`](../../../packages/shared-types/src/events.ts) — `EventEnvelope`, `EVENT_TYPES`, per-type payload schemas.
+- [`packages/shared-types/src/squad-crowns.ts`](../../../packages/shared-types/src/squad-crowns.ts) — `rcon:squad-crowns:{serverId}` key helper, TTL and `squadCrownSchema`.
 - [`packages/shared-types/src/plugins.ts`](../../../packages/shared-types/src/plugins.ts) — `pluginManifest`, `PLUGIN_PERMISSIONS`, `PluginHandler`, `hasPluginPermission`.
 - `packages/shared-types/src/auth.ts` — Steam OpenID session and player DTOs.
 - `packages/shared-types/src/servers.ts` — server DTOs, install WS frame schemas.

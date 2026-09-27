@@ -1,5 +1,11 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-27
+
+### Fixed
+
+- `match_players.squad_name` (and `team`) were always `null`: `handleMatchClose` looked them up in `rcon.players_polled` rows of `events`, but worker-rcon only XADDs that event and nothing persists it. Match close now reads worker-rcon's `rcon:roster:{id}` + `rcon:squads:{id}` snapshots and stores the squad's name (not its number). Players who left before the close keep `null`. Snapshots outside the match window (+120 s) are ignored, and a Redis outage no longer affects whether the roster is written. `handleMatchClose` / `computeMatchRoster` / `computeOpenMatchRoster` take the Redis client as their second argument. Regression test: `test/match-roster-store.test.ts`.
+
 ## 2026-09-09
 
 ### Fixed

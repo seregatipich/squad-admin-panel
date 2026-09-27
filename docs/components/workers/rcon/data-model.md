@@ -45,6 +45,10 @@ Presence is therefore poll-granular: a session shorter than one poll interval (3
 
 Downstream, `worker-presence-daily` recomputes `player_daily_presence` and `players.total_time_played_seconds` from these rows on its hourly tick.
 
+### `events` (squad history)
+
+`squad.created`, `squad.leader_changed` and `squad.disbanded` rows are inserted directly by `PerServerSupervisor.emitSquadEvent`, the same way as the seeding transitions (`onConflictDoNothing` on `(event_id, occurred_at)`). `actor_kind = 'player'`, `actor_id` = the EOS id of the squad's creator (`created`, `disbanded`) or of the leader who gave up command (`leader_changed`), so `events_actor_occurred_idx` serves per-player lookups. Payload schemas: `packages/shared-types/src/events.ts` (`squadCreatedPayload`, `squadLeaderChangedPayload`, `squadDisbandedPayload`). Retention follows the `events` partitions (24 months).
+
 ## Postgres tables read
 
 ### `servers`
@@ -66,6 +70,7 @@ Joined with `servers` to satisfy the inner join; no columns currently consumed b
 |---|---|---|
 | `rcon:status:{serverId}` | 300 s | RCON connection state + poll results |
 | `rcon:squads:{serverId}` | 90 s | Latest `ListSquads` snapshot grouped with team context |
+| `rcon:squad-crowns:{serverId}` | 6 h, refreshed on write | Hash: creator EOS id → `SquadCrown` JSON for the current match; deleted on match reset |
 | `rcon:command-result:{requestId}` | 120 s | Result of a queued P0 operator command |
 | `worker:heartbeat:rcon` | 30 s | Liveness heartbeat |
 | `events:server:{serverId}` | stream (MAXLEN ~10000) | Published events |

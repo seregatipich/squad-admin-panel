@@ -99,6 +99,14 @@ but move no aggregate. `player_sessions` is written by `worker-rcon` from the
 `ListPlayers` roster snapshot (PRES-1), not from this flow — see
 `docs/components/workers/rcon/data-model.md`.
 
+## Match close (`match_players`)
+
+On a `close` / `close_server_down` match command, `handleMatchClose` (`src/match-roster/store.ts`) writes one `match_players` row per player with at least 60 s of play:
+
+- `joined_at`, `left_at`, `play_seconds` come from `player_sessions` overlapping the match window.
+- `team` and `squad_name` come from worker-rcon's last Redis roster: `rcon:roster:{id}` (team and squad number) and `rcon:squads:{id}` (squad name). Only players in that snapshot, meaning online at close, are placed. Anyone who left earlier keeps `null`, and so does a squad missing from `rcon:squads`. A snapshot polled outside `[started_at, ended_at + 120 s]` is ignored as belonging to another match. If Redis is unreachable, the rows are still written with `null` placements.
+- Kills, deaths and the rest come from combat `events` (`applyMatchCombatStats`).
+
 ## Squad fatal detection patterns
 
 | Pattern | Source line shape | Captured groups |
