@@ -42,6 +42,8 @@ vi.mock('@squad/shared-config', () => ({
   HEARTBEAT_PREFIX: 'worker:heartbeat:',
   ALLOWED_CONFIG_FILES: [],
   configFileClass: vi.fn(),
+  isAdminsCfgSafeRoleName: vi.fn(),
+  isAdminsCfgSingleLineText: vi.fn(),
   isRoleColor: vi.fn(),
   isSquadPermissionKey: vi.fn(),
   SQUAD_PERMISSIONS: [],

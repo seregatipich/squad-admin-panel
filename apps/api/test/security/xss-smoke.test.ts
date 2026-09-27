@@ -39,7 +39,8 @@ afterAll(async () => {
 
 describe('XSS smoke — role name with HTML payload', () => {
   it('stores HTML role name as-is in JSON (not stripped or escaped at storage layer)', async () => {
-    const malicious = '<script>alert(1)</script>';
+    // No `/`, `:` or `,`: role names must stay valid Admins.cfg group names (#11).
+    const malicious = '<img src=x onerror=alert(1)>';
     const createRes = await h.app.inject({
       method: 'POST',
       url: '/api/v1/roles',
