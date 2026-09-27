@@ -216,6 +216,41 @@ describe('POST /api/v1/servers/external', () => {
     });
     expect([400, 422]).toContain(bad.statusCode);
   });
+
+  it('refuses a panel-internal RCON host or a password with line breaks (#34)', async () => {
+    const cookie = await loginAsOwner(h);
+    for (const [slug, overrides] of [
+      ['ssrf-loopback', { rcon_host: '127.0.0.1', rcon_port: 6379 }],
+      ['ssrf-docker-alias', { rcon_host: 'host.docker.internal' }],
+      ['ssrf-crlf', { rcon_password: 'x\r\nSET session:forged 1\r\n' }],
+    ] as const) {
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers/external',
+        headers: { cookie },
+        payload: { ...externalBody, ...overrides, slug },
+      });
+      expect(resp.statusCode, slug).toBe(400);
+      const [row] = await h.db.select().from(servers).where(eq(servers.slug, slug));
+      expect(row, slug).toBeUndefined();
+    }
+
+    const { id } = await createExternal(cookie);
+    for (const payload of [{ rcon_host: 'localhost' }, { rcon_password: 'x\nFLUSHALL' }]) {
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/external-connection`,
+        headers: { cookie },
+        payload,
+      });
+      expect(resp.statusCode).toBe(400);
+    }
+    const [creds] = await h.db
+      .select()
+      .from(serverCredentials)
+      .where(eq(serverCredentials.serverId, id));
+    expect(creds?.rconHost).toBe('203.0.113.10');
+  });
 });
 
 describe('reading an external server', () => {

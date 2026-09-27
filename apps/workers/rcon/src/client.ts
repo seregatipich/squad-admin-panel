@@ -48,8 +48,19 @@ export class RconClient {
 
   constructor(private readonly opts: RconClientOptions) {}
 
+  /**
+   * Opens the socket and authenticates.
+   *
+   * @throws when the password contains CR, LF or NUL — it is written verbatim
+   *   as the SERVERDATA_AUTH body, so a line break would smuggle commands into
+   *   any line-based service (e.g. the host's Redis) the target points at (#34).
+   *   The check runs before dialling, so such a password never leaves the process.
+   */
   async connect(): Promise<void> {
     if (this.socket) return;
+    if (/[\r\n\0]/.test(this.opts.password)) {
+      throw new Error('rcon password contains a line break or NUL; refusing to send it');
+    }
     this.closed = false;
     await new Promise<void>((resolve, reject) => {
       const sock = createConnection({ host: this.opts.host, port: this.opts.port });

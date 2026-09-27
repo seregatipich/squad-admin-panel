@@ -100,6 +100,109 @@ export const rconHostString = z
   .max(253)
   .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal');
 
+type Ipv4Octets = [number, number, number, number];
+
+const IPV4_DOTTED_QUAD = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/** Octets of a canonical dotted-quad IPv4 literal, or `null` when `host` is not one. */
+function parseIpv4(host: string): Ipv4Octets | null {
+  const match = IPV4_DOTTED_QUAD.exec(host);
+  if (!match) return null;
+  const octets = match.slice(1, 5).map(Number) as Ipv4Octets;
+  return octets.every((octet) => octet <= 255) ? octets : null;
+}
+
+/** Loopback (127/8), unspecified (0/8) and link-local (169.254/16, cloud metadata) IPv4. */
+function isInternalIpv4([first, second]: readonly number[]): boolean {
+  return first === 127 || first === 0 || (first === 169 && second === 254);
+}
+
+/**
+ * The eight 16-bit groups of an IPv6 literal (a trailing embedded IPv4 is
+ * folded into the last two groups), or `null` when it does not parse.
+ */
+function parseIpv6(literal: string): number[] | null {
+  const lastColon = literal.lastIndexOf(':');
+  const ipv4 = parseIpv4(literal.slice(lastColon + 1));
+  const hex = ipv4
+    ? `${literal.slice(0, lastColon + 1)}${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`
+    : literal;
+  const halves = hex.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves[1] ? halves[1].split(':') : [];
+  if (![...head, ...tail].every((group) => /^[0-9a-f]{1,4}$/.test(group))) return null;
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  return [...head, ...Array<string>(missing).fill('0'), ...tail].map((group) =>
+    Number.parseInt(group, 16),
+  );
+}
+
+/** Unspecified, loopback, link-local (fe80::/10) and IPv4-mapped/compatible internal IPv6. */
+function isInternalIpv6(groups: number[]): boolean {
+  const zeroPrefix = (length: number) => groups.slice(0, length).every((group) => group === 0);
+  if (groups.every((group) => group === 0)) return true;
+  if (zeroPrefix(7) && groups[7] === 1) return true;
+  if (((groups[0] ?? 0) & 0xffc0) === 0xfe80) return true;
+  const embeddedIpv4 = [groups[6] ?? 0, groups[7] ?? 0].flatMap((group) => [
+    group >> 8,
+    group & 0xff,
+  ]);
+  const mapped = zeroPrefix(5) && groups[5] === 0xffff;
+  const compatible = zeroPrefix(6);
+  return (mapped || compatible) && isInternalIpv4(embeddedIpv4);
+}
+
+/**
+ * True when `host` points back into the panel's own host rather than at a
+ * remote game server: loopback, unspecified or link-local literals,
+ * `localhost`, Docker/Podman host aliases, single-label names (Docker service
+ * names such as `redis`) and non-canonical numeric forms (`127.1`,
+ * `2130706433`) that the system resolver would expand to loopback.
+ * worker-rcon runs on the host network next to an unauthenticated Redis, so
+ * such a target turns an RCON dial into SSRF (#34).
+ */
+function isPanelInternalHost(rawHost: string): boolean {
+  const host = rawHost.toLowerCase().replace(/\.$/, '');
+  if (host.startsWith('[') || host.includes(':')) {
+    const groups = parseIpv6(host.replace(/^\[|\]$/g, ''));
+    return groups === null || isInternalIpv6(groups);
+  }
+  const ipv4 = parseIpv4(host);
+  if (ipv4) return isInternalIpv4(ipv4);
+  const labels = host.split('.');
+  const topLabel = labels[labels.length - 1] ?? '';
+  if (labels.length < 2 || /^(\d+|0x[0-9a-f]*)$/.test(topLabel)) return true;
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.docker.internal') ||
+    host.endsWith('.containers.internal')
+  );
+}
+
+/**
+ * RCON host of an external server. On top of {@link rconHostString} it refuses
+ * every address that resolves into the panel host itself (see
+ * {@link isPanelInternalHost}); container-runtime servers keep dialling
+ * loopback, but they never go through this schema.
+ */
+export const externalRconHost = rconHostString.refine((host) => !isPanelInternalHost(host), {
+  message: 'host must be a remote server, not loopback, link-local or a panel-internal name',
+});
+
+/**
+ * RCON password typed by an operator. CR, LF and NUL are refused: the
+ * password is sent verbatim as the SERVERDATA_AUTH body, and a line break
+ * would let it smuggle commands into any line-based service the dial lands on.
+ */
+export const rconPasswordString = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[^\r\n\0]+$/, 'password must not contain line breaks or NUL');
+
 /**
  * Body of `POST /api/v1/servers/external` — registers an already-running
  * Squad server that the panel does not host. The RCON password is the one
@@ -112,9 +215,9 @@ export const externalServerCreateInput = z
     display_name: z.string().min(1).max(120),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     description: z.string().max(500).nullable().optional(),
-    rcon_host: rconHostString,
+    rcon_host: externalRconHost,
     rcon_port: z.number().int().min(1).max(65_535),
-    rcon_password: z.string().min(1).max(200),
+    rcon_password: rconPasswordString,
     query_port: z.number().int().min(1).max(65_535),
     game_port: z.number().int().min(1).max(65_535).default(7787),
     max_players: z.number().int().min(1).max(100).default(100),
@@ -129,9 +232,9 @@ export type ExternalServerCreateInput = z.infer<typeof externalServerCreateInput
  */
 export const externalServerConnectionUpdate = z
   .object({
-    rcon_host: rconHostString.optional(),
+    rcon_host: externalRconHost.optional(),
     rcon_port: z.number().int().min(1).max(65_535).optional(),
-    rcon_password: z.string().min(1).max(200).optional(),
+    rcon_password: rconPasswordString.optional(),
     query_port: z.number().int().min(1).max(65_535).optional(),
     game_port: z.number().int().min(1).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),

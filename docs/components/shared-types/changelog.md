@@ -1,5 +1,10 @@
 # `shared-types` — changelog
 
+## 2026-09-27
+
+### Security
+- `api.ts` (#34): `externalRconHost` refuses hosts that land on the panel host itself (loopback, unspecified, link-local, IPv4-mapped/compatible IPv6, `localhost`, `*.docker.internal`, `*.containers.internal`, single-label names, non-canonical numeric IPv4 such as `127.1`), and `rconPasswordString` refuses CR, LF and NUL. Both replace the bare `rconHostString` / `z.string()` fields in `externalServerCreateInput` and `externalServerConnectionUpdate`; `rconHostString` itself (used by `ssh_host`) is unchanged.
+
 ## 2026-07-27
 
 ### Added

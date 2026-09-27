@@ -468,6 +468,54 @@ describe('externalServerCreateInput', () => {
     }
   });
 
+  it('rejects a loopback, link-local, unspecified or host-internal rcon_host (#34)', () => {
+    for (const rcon_host of [
+      '127.0.0.1',
+      '127.1.2.3',
+      '0.0.0.0',
+      '169.254.169.254',
+      'localhost',
+      'LOCALHOST',
+      'panel.localhost',
+      'host.docker.internal',
+      'gateway.docker.internal',
+      'redis',
+      '::1',
+      '[::1]',
+      '::',
+      '[fe80::1]',
+      '::ffff:127.0.0.1',
+      '[::ffff:7f00:1]',
+      '[::127.0.0.1]',
+      '127.1',
+      '2130706433',
+      '0x7f.1',
+      'localhost.',
+    ]) {
+      expect(
+        externalServerCreateInput.safeParse({ ...minimal, rcon_host }).success,
+        rcon_host,
+      ).toBe(false);
+    }
+  });
+
+  it('keeps private LAN addresses allowed for a server hosted next door', () => {
+    for (const rcon_host of ['10.0.0.5', '192.168.1.20', '172.20.0.3', '[fd00::10]']) {
+      expect(
+        externalServerCreateInput.safeParse({ ...minimal, rcon_host }).success,
+        rcon_host,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects an RCON password carrying CR, LF or NUL (#34)', () => {
+    for (const rcon_password of ['a\r\nSET x 1', 'a\nb', 'a\rb', 'a\u0000b']) {
+      expect(externalServerCreateInput.safeParse({ ...minimal, rcon_password }).success).toBe(
+        false,
+      );
+    }
+  });
+
   it('requires the RCON password — there is no container to generate one for', () => {
     const { rcon_password: _omitted, ...withoutPassword } = minimal;
     expect(externalServerCreateInput.safeParse(withoutPassword).success).toBe(false);
@@ -493,6 +541,15 @@ describe('externalServerConnectionUpdate', () => {
       externalServerConnectionUpdate.safeParse({ rcon_host: '198.51.100.7', rcon_password: 'x' })
         .success,
     ).toBe(true);
+  });
+
+  it('rejects a loopback host and a password with line breaks (#34)', () => {
+    expect(externalServerConnectionUpdate.safeParse({ rcon_host: '127.0.0.1' }).success).toBe(
+      false,
+    );
+    expect(
+      externalServerConnectionUpdate.safeParse({ rcon_password: 'x\r\nFLUSHALL' }).success,
+    ).toBe(false);
   });
 
   it('rejects an empty body — nothing to change', () => {

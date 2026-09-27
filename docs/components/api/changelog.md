@@ -1,5 +1,12 @@
 # `api` — changelog
 
+## 2026-09-27 — Внешний сервер не может указывать на саму панель (#34)
+
+### Security
+
+- `POST /api/v1/servers/external` и `PUT /api/v1/servers/:id/external-connection` возвращают `400`, если `rcon_host` указывает на хост панели: loopback, unspecified и link-local адреса (IPv4, IPv6, IPv4-mapped), `localhost` и `*.localhost`, `*.docker.internal`, `*.containers.internal`, имена без точки (имена docker-сервисов вроде `redis`) и нестандартные числовые формы (`127.1`, `2130706433`). Частные адреса LAN (`10.x`, `192.168.x`, `fd00::/8`) по-прежнему разрешены.
+- Те же маршруты возвращают `400`, если `rcon_password` содержит CR, LF или NUL: пароль уходит в пакет SERVERDATA_AUTH как есть, и перевод строки позволял выполнять команды в Redis хоста без аутентификации.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security
