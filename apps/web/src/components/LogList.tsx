@@ -62,6 +62,13 @@ interface Entry {
   ctx?: Record<string, unknown>;
 }
 
+/** `GET /api/v1/logs` response; the scanned ids are cursors past filtered-out entries. */
+interface LogsResponse {
+  entries: Entry[];
+  newest_scanned_id?: string | null;
+  oldest_scanned_id?: string | null;
+}
+
 interface ServersResponse {
   items: Array<{ id: string; display_name: string }>;
 }
@@ -104,10 +111,13 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       try {
         const r = await fetch(buildUrl(), { credentials: 'include', signal: controller.signal });
         if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        const body = (await r.json()) as LogsResponse;
         setEntries(body.entries);
         setLoaded(true);
-        if (body.entries.length > 0) lastIdRef.current = body.entries[0]?.id ?? null;
+        // Tail from the newest entry the server scanned, not the newest match:
+        // otherwise a run of non-matching entries is re-read on every poll.
+        // An empty stream tails from its very beginning.
+        lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? '0-0';
       } catch {
         // swallowed (likely AbortError)
       }
@@ -124,9 +134,9 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       try {
         const r = await fetch(buildUrl({ after }), { credentials: 'include' });
         if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        const body = (await r.json()) as LogsResponse;
+        lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? after;
         if (body.entries.length === 0) return;
-        lastIdRef.current = body.entries[0]?.id ?? after;
         setEntries((prev) => [...body.entries, ...prev].slice(0, 1000));
       } catch {
         // ignore transient errors

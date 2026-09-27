@@ -126,4 +126,26 @@ describe('LogList', () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('src='))).toBe(true),
     );
   });
+
+  // Regression (#186): the live tail advanced only past matching entries, so a
+  // run of filtered-out entries was re-read forever and later matches never came.
+  it('advances the live-tail cursor to the newest scanned id even when nothing matched', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      const body = url.includes('after=')
+        ? { entries: [], newest_scanned_id: '200-0' }
+        : { entries: [], newest_scanned_id: '100-0' };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<LogList servers={SERVERS} />);
+
+    await waitFor(
+      () => {
+        const urls = fetchMock.mock.calls.map(([url]) => url);
+        expect(urls.some((u) => u.includes('after=100-0'))).toBe(true);
+        expect(urls.some((u) => u.includes('after=200-0'))).toBe(true);
+      },
+      { timeout: 4000 },
+    );
+  });
 });
