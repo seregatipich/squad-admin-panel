@@ -581,6 +581,8 @@ Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/
 2. `INSERT INTO audit_log (...)`. The DB trigger acquires `pg_advisory_xact_lock(audit_log_lock)`, reads the previous `row_hash`, computes `sha256(prev_hash || canonical_json)`, and writes `row_hash` + `prev_hash`.
 3. `BEFORE UPDATE OR DELETE` triggers raise `audit_log is append-only`.
 
+An anonymous request rejected with 401/403 writes no row. `context.url` keeps the path without its query string, and `context.url` and `context.userAgent` are capped at 512 characters.
+
 ## Diagnostic emission
 
 Plugin: [`apps/api/src/lib/diag.ts`](../../../apps/api/src/lib/diag.ts). Registered in [`server.ts`](../../../apps/api/src/server.ts) right after `redisPlugin` so the underlying ioredis connection is available.
