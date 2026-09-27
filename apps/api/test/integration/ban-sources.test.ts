@@ -395,6 +395,71 @@ describeIfDb('ban-sources mutations are audited', () => {
   });
 });
 
+// Audit #102 — the routes used to write their entry by hand on the success
+// path only; the declarative hook records every outcome.
+describeIfDb('ban-sources audit covers denied and rejected attempts', () => {
+  it('records a 403 create by a user without can_manage_ban_sources', async () => {
+    const res = await createSource(viewerCookie);
+    expect(res.statusCode).toBe(403);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      statusCode: 403,
+    });
+    expect(row.statusCode).toBe(403);
+  });
+
+  it('records a 422 kick_requires_trusted_source create', async () => {
+    const res = await createSource(managerCookie, { trust_level: 'normal', on_match: 'kick' });
+    expect(res.statusCode).toBe(422);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      statusCode: 422,
+    });
+    expect(row.statusCode).toBe(422);
+  });
+
+  it('records a 404 delete of a missing source', async () => {
+    const missingId = uuidv7();
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/ban-sources/${missingId}`,
+      headers: { cookie: managerCookie },
+    });
+    expect(res.statusCode).toBe(404);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.delete',
+      resource: 'ban_source',
+      targetId: missingId,
+      statusCode: 404,
+    });
+    expect(row.statusCode).toBe(404);
+  });
+
+  it('keeps before/after snapshots on a successful update', async () => {
+    const { body } = await createSource(managerCookie, { trust_level: 'trusted' });
+    const id = body.id as string;
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ trust_level: 'low' }),
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.update',
+      resource: 'ban_source',
+      targetId: id,
+      statusCode: 200,
+    });
+    expect(row.statusCode).toBe(200);
+    expect(row.beforeSnapshot).toMatchObject({ trust_level: 'trusted', has_auth_header: true });
+    expect(row.afterSnapshot).toMatchObject({ trust_level: 'low', has_auth_header: true });
+    expect(JSON.stringify(row.afterSnapshot)).not.toContain('super-secret-token-xyz');
+  });
+});
+
 describeIfDb('external_bans dedup unique index', () => {
   it('re-importing the same record does not create a duplicate', async () => {
     const { body } = await createSource(managerCookie);

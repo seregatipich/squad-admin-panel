@@ -110,4 +110,4 @@ Session users with `panel_access` are unaffected: `derivePanelPermissions` grant
 
 ## Audit-coverage CI gate
 
-`apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.
+`apps/api/test/audit-coverage.test.ts` builds the route table with `registerRoutes()` — the same list `server.ts` serves — and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a declarative `config.audit: { action, resource }`. The hook in `plugins/audit.ts` then writes an entry for every outcome, denied (`403`) and rejected (`404`/`409`/`422`) attempts included; a handler passes before/after snapshots through `req.auditSnapshots`. `audit: false` is accepted only for machine-integration endpoints and for a frozen legacy list of routes that still write their own entries on the success path; that list may only shrink. Until audit #102/#116 the guard registered a hand-picked set of route modules, so `ban-sources.ts` and `banned-names.ts` shipped with `audit: false` unnoticed.

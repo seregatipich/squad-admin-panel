@@ -13,7 +13,6 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 
 const matchTypeSchema = z.enum(BANNED_NAME_MATCH_TYPES);
 const actionSchema = z.enum(BANNED_NAME_ACTIONS);
@@ -115,30 +114,6 @@ function hasBanPermission(req: FastifyRequest): boolean {
 
 const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
-
-  async function auditMutation(
-    req: FastifyRequest,
-    reply: FastifyReply,
-    input: {
-      action: string;
-      targetId: string;
-      before: unknown;
-      after: unknown;
-    },
-  ): Promise<void> {
-    if (!req.user) return;
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: input.action,
-      targetType: 'banned_name',
-      targetId: input.targetId,
-      before: input.before,
-      after: input.after,
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-  }
 
   fast.get(
     '/api/v1/banned-names',
@@ -242,7 +217,10 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/banned-names',
-    { schema: { body: createBody }, config: { audit: false } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'banned_name.create', resource: 'banned_name' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -291,19 +269,17 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'insert_failed' };
       }
       reply.code(201);
-      await auditMutation(req, reply, {
-        action: 'banned_name.create',
-        targetId: inserted.id,
-        before: null,
-        after: snapshot(inserted),
-      });
+      req.auditSnapshots = { targetId: inserted.id, before: null, after: snapshot(inserted) };
       return serializeRule(toRuleRow(inserted, user.canonicalName));
     },
   );
 
   fast.patch(
     '/api/v1/banned-names/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    {
+      schema: { params: idParam, body: updateBody },
+      config: { audit: { action: 'banned_name.update', resource: 'banned_name' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -362,12 +338,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      await auditMutation(req, reply, {
-        action: 'banned_name.update',
-        targetId: updated.id,
-        before: snapshot(existing),
-        after: snapshot(updated),
-      });
+      req.auditSnapshots = { before: snapshot(existing), after: snapshot(updated) };
       const authorRows = updated.createdBy
         ? await app.db
             .select({ name: players.canonicalName })
@@ -381,7 +352,10 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/banned-names/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    {
+      schema: { params: idParam },
+      config: { audit: { action: 'banned_name.delete', resource: 'banned_name' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -399,13 +373,8 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'rule_not_found' };
       }
+      req.auditSnapshots = { before: snapshot(existing), after: null };
       await app.db.delete(bannedNameRules).where(eq(bannedNameRules.id, req.params.id));
-      await auditMutation(req, reply, {
-        action: 'banned_name.delete',
-        targetId: existing.id,
-        before: snapshot(existing),
-        after: null,
-      });
       return { ok: true };
     },
   );

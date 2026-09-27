@@ -379,6 +379,29 @@ describe('RBAC — squad-permission "ban" gate', () => {
     expect(del.statusCode).toBe(403);
   });
 
+  // Audit #116 — denied and rejected mutations reach audit_log too.
+  it('audits a 403 create by a user without ban and a 422 invalid regex', async () => {
+    const noBanCookie = await asRole({ squadBan: false });
+    const denied = await createRule(noBanCookie, { pattern: 'nope', match_type: 'exact' });
+    expect(denied.statusCode).toBe(403);
+    const deniedRow = await assertAuditRow(h, {
+      action: 'banned_name.create',
+      resource: 'banned_name',
+      statusCode: 403,
+    });
+    expect(deniedRow.statusCode).toBe(403);
+
+    const banCookie = await asRole({ squadBan: true });
+    const invalid = await createRule(banCookie, { pattern: '(unclosed', match_type: 'regex' });
+    expect(invalid.statusCode).toBe(422);
+    const invalidRow = await assertAuditRow(h, {
+      action: 'banned_name.create',
+      resource: 'banned_name',
+      statusCode: 422,
+    });
+    expect(invalidRow.statusCode).toBe(422);
+  });
+
   it('non-owner role holding the ban squad-permission can mutate', async () => {
     const cookie = await asRole({ squadBan: true });
     const { statusCode, body } = await createRule(cookie, {
