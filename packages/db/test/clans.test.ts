@@ -208,7 +208,7 @@ describeIfDb('clan model constraints', () => {
   });
 });
 
-describeIfDb('0117 releases members stranded in disbanded clans (regression #14)', () => {
+describeIfDb('0118 releases members stranded in disbanded clans (regression #14)', () => {
   it('deletes the roster of soft-deleted clans only, freeing those players', async () => {
     const disbanded = await newClan({ name: 'disbanded' });
     await addMember(disbanded, PLAYER_IDS[0] as string, 'leader');
