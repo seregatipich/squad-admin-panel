@@ -149,7 +149,9 @@ Restore (3 endpoints, UI wizard glues them together)
                                                   ─▶  for each filename (skip License.cfg, Rcon.cfg):
                                                        bridge.fileAtomicWrite onto /configs/{newId}/ServerConfig/
                                                        INSERT config_versions (message='restored from server <id> backup <iso>')
-4. POST /servers/:newId/start                     ─▶  bridge.containerStart
+4. POST /servers/:newId/start                     ─▶  bridge.containerRm (if present) → bridge.containerRun
+                                                       from current server_settings (#30: start and restart
+                                                       always recreate, so PUT /settings changes apply)
 ```
 
 ## Live-bus fan-out

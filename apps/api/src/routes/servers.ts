@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { BridgeClient } from '@squad/bridge-client';
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import {
   DEPOT_VOLUME_NAME,
@@ -32,6 +33,46 @@ const serverIdParams = z.object({ id: z.string().uuid() });
 
 function containerName(id: string) {
   return `squad-${id}`;
+}
+
+/**
+ * Replaces a server's squad container with a fresh `docker run` built from
+ * its current `server_settings` (#30, finding #320). Ports, max players,
+ * tickrate and MULTIHOME are baked into the container's arguments when it is
+ * created, so restarting an existing container with `containerStart` would
+ * silently ignore every PUT /settings change since — and leave it listening on
+ * ports whose UFW rules that PUT already closed. Only stopped containers reach
+ * this: callers short-circuit (start) or stop first (restart).
+ *
+ * @param bridge - Bridge client.
+ * @param serverId - Panel server UUID.
+ * @param settings - The server's current settings row.
+ * @param exists - Whether a container is present to remove first.
+ * @returns The new container's id.
+ * @throws when the bridge refuses the remove or the run.
+ */
+async function runFreshServerContainer(
+  bridge: Pick<BridgeClient, 'containerRm' | 'containerRun'>,
+  serverId: string,
+  settings: typeof serverSettings.$inferSelect,
+  exists: boolean,
+): Promise<string> {
+  if (exists) await bridge.containerRm({ name: containerName(serverId) });
+  const run = await bridge.containerRun({
+    server_id: serverId,
+    image: SERVER_IMAGE,
+    game_port: settings.gamePort,
+    query_port: settings.queryPort,
+    beacon_port: settings.beaconPort,
+    rcon_port: settings.rconPort,
+    max_players: settings.maxPlayers,
+    tickrate: settings.tickrate,
+    multihome: settings.multihome,
+    configs_host: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`,
+    saved_host: `${PANEL_SAVED_ROOT}/${serverId}`,
+    depot_volume: DEPOT_VOLUME_NAME,
+  });
+  return run.container_id;
 }
 
 /**
@@ -620,26 +661,12 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           ts: new Date().toISOString(),
           data: { server_id: s.id, status: 'starting', source: 'start' },
         });
-        let containerId: string | null = s.containerId ?? null;
-        if (inspect && inspect.state !== 'not_found') {
-          await app.bridge.containerStart({ name });
-        } else {
-          const runRes = await app.bridge.containerRun({
-            server_id: s.id,
-            image: SERVER_IMAGE,
-            game_port: settings.gamePort,
-            query_port: settings.queryPort,
-            beacon_port: settings.beaconPort,
-            rcon_port: settings.rconPort,
-            max_players: settings.maxPlayers,
-            tickrate: settings.tickrate,
-            multihome: settings.multihome,
-            configs_host: `${PANEL_CONFIGS_ROOT}/${s.id}/ServerConfig`,
-            saved_host: `${PANEL_SAVED_ROOT}/${s.id}`,
-            depot_volume: DEPOT_VOLUME_NAME,
-          });
-          containerId = runRes.container_id;
-        }
+        const containerId = await runFreshServerContainer(
+          app.bridge,
+          s.id,
+          settings,
+          inspect !== null && inspect.state !== 'not_found',
+        );
         await req.diag.emit({
           component: 'api',
           kind: 'server.start.done',
@@ -966,7 +993,14 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         data: { server_id: s.id, status: 'starting', source: 'restart' },
       });
       await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
-      await app.bridge.containerStart({ name });
+      const settings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, s.id),
+      });
+      if (settings) {
+        await runFreshServerContainer(app.bridge, s.id, settings, true);
+      } else {
+        await app.bridge.containerStart({ name });
+      }
       // The sidecar was not part of the restart, but a prior manual stop may
       // have left it down; relaunch it so a restarted cutover server keeps its
       // log publisher. Non-fatal: the squad container is already restarting.

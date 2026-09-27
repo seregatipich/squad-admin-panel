@@ -401,6 +401,84 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 });
 
+describe('launch settings reach an existing container (#30, finding #320)', () => {
+  type RunParams = Parameters<IntegrationHarness['bridge']['containerRun']>[0];
+
+  async function createServerWithStoppedContainer(slug: string) {
+    const calls: string[] = [];
+    const runs: RunParams[] = [];
+    h.bridge.containerInspect = async () => ({ state: 'exited', running: false });
+    h.bridge.containerStart = async ({ name }) => {
+      calls.push(`start:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerStop = async ({ name }) => {
+      calls.push(`stop:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRm = async ({ name }) => {
+      calls.push(`rm:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async (params) => {
+      calls.push(`run:${params.server_id}`);
+      runs.push(params);
+      return { container_id: 'recreated' };
+    };
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug },
+      })
+    ).json<{ id: string }>();
+    await h.db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, id));
+    const settingsResp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/settings`,
+      headers: { cookie },
+      payload: { game_port: 7797, rcon_port: 21124, max_players: 64, tickrate: 40 },
+    });
+    expect(settingsResp.statusCode).toBe(200);
+    return { id, cookie, calls, runs };
+  }
+
+  it('POST /start recreates a stopped container with the current settings', async () => {
+    const { id, cookie, calls, runs } = await createServerWithStoppedContainer('recreate-start');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(calls).toEqual([`rm:squad-${id}`, `run:${id}`]);
+    expect(runs[0]).toMatchObject({
+      game_port: 7797,
+      rcon_port: 21124,
+      max_players: 64,
+      tickrate: 40,
+    });
+  });
+
+  it('POST /restart recreates the container with the current settings', async () => {
+    const { id, cookie, calls, runs } = await createServerWithStoppedContainer('recreate-restart');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(calls).toEqual([`stop:squad-${id}`, `rm:squad-${id}`, `run:${id}`]);
+    expect(runs[0]).toMatchObject({ game_port: 7797, max_players: 64, tickrate: 40 });
+  });
+});
+
 describe('POST /api/v1/servers/:id/stop', () => {
   it('calls container_stop and transitions to stopping when no creds are present', async () => {
     let stopped = false;
@@ -542,10 +620,18 @@ describe('POST /api/v1/servers/:id/stop', () => {
 });
 
 describe('POST /api/v1/servers/:id/restart', () => {
-  it('issues stop+start via bridge and flips status to starting', async () => {
+  it('issues stop+recreate via bridge and flips status to starting', async () => {
+    // Restart recreates the container (#30, finding #320) so settings changed
+    // since it was created take effect; containerStart is never used.
     let startCalls = 0;
+    let runCalls = 0;
     h.bridge.containerStart = async () => {
       startCalls++;
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async () => {
+      runCalls++;
+      return { container_id: 'restarted' };
     };
     const cookie = await login();
     const { id } = (
@@ -563,7 +649,8 @@ describe('POST /api/v1/servers/:id/restart', () => {
     });
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'restarting' });
-    expect(startCalls).toBe(1);
+    expect(runCalls).toBe(1);
+    expect(startCalls).toBe(0);
     await assertAuditRow(h, { action: 'server.restart', resource: 'server', targetId: id });
   });
 
