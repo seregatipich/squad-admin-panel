@@ -12,7 +12,7 @@ import {
   roleSquadPermissions,
   servers,
 } from '@squad/db/schema';
-import { normalizePlayerName } from '@squad/shared-config';
+import { isAdminsCfgSingleLineText, normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -60,7 +60,13 @@ function parseMatchesCursor(raw: string): MatchesCursor | null {
   }
 }
 
-const nameSchema = z.string().trim().min(1).max(NAME_MAX);
+// Written into Admins.cfg as `// clan:<name>`, so it must stay on one line (#11).
+const nameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(NAME_MAX)
+  .refine(isAdminsCfgSingleLineText, { message: 'name_not_single_line' });
 const tagsSchema = z
   .array(
     z

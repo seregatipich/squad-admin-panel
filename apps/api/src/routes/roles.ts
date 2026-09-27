@@ -1,6 +1,11 @@
 import type { DatabaseClient } from '@squad/db';
 import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
-import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
+import {
+  isAdminsCfgSafeRoleName,
+  isRoleColor,
+  isSquadPermissionKey,
+  SQUAD_PERMISSIONS,
+} from '@squad/shared-config';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -10,12 +15,18 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCacheForRole } from '../lib/rbac.js';
 
 const colorSchema = z.string().refine(isRoleColor, { message: 'invalid color' });
+/** Role names become Admins.cfg group names verbatim, so they must not alter its syntax (#11). */
+const roleNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(isAdminsCfgSafeRoleName, { message: 'role_name_invalid' });
 const squadPermissionsArraySchema = z
   .array(z.string().refine(isSquadPermissionKey, { message: 'unknown squad permission key' }))
   .max(SQUAD_PERMISSIONS.length);
 
 const createBody = z.object({
-  name: z.string().min(1).max(64),
+  name: roleNameSchema,
   color: colorSchema,
   description: z.string().max(256).optional(),
   squad_permissions: squadPermissionsArraySchema.default([]),
@@ -32,7 +43,7 @@ const createBody = z.object({
 });
 
 const updateBody = z.object({
-  name: z.string().min(1).max(64).optional(),
+  name: roleNameSchema.optional(),
   color: colorSchema.optional(),
   description: z.string().max(256).nullable().optional(),
   squad_permissions: squadPermissionsArraySchema.optional(),

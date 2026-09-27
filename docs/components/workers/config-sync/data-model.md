@@ -11,7 +11,7 @@ Used to enumerate every role the panel manages. Shape (subset relevant to this w
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid | PK |
-| `name` | text | unique; also written verbatim into `Admins.cfg` as `Group=<name>:…` and `Admin=<sid>:<name>` |
+| `name` | text | unique; also written verbatim into `Admins.cfg` as `Group=<name>:…` and `Admin=<sid>:<name>`. The API rejects, and the generator skips, names that fail `isAdminsCfgSafeRoleName` (see invariants) |
 | `is_system_role` | boolean | Owner-only |
 | `panel_access`, `can_assign_roles`, `can_edit_roles` | boolean | not consulted by the worker (those gate panel access; squad-side ignores them) |
 
@@ -76,6 +76,7 @@ Invariants:
 - Roles with `len(squad_permissions) = 0` are **omitted** (no `Group=` line, no associated `Admin=` lines either — those players are panel-only with no in-game effect).
 - `Group=` lines are sorted alphabetically by role name; permissions within a group are sorted alphabetically too. Determinism is required for the sha256 idempotency check to be stable.
 - `Admin=` lines are sorted by `(role_name, steam_id64)` (numeric tie-break by steam_id64).
+- Every inner line is blank, `Group=…` or `Admin=…` — stored values can never add lines or markers (#11). A role whose name is blank or contains a control/line-separator character, `:`, `,` or `/` is **omitted** with all of its `Admin=` lines (the API rejects such names on create/rename; the check in the generator also covers older rows). Assignment comments and clan names are flattened to one line — control and line-separator characters become a space and runs of `/` collapse to one — so neither marker can appear inside the segment.
 - Line endings are `\r\n` (Windows-style) — Squad expects this even on Linux.
 - The worker preserves bytes outside the markers verbatim. Other tools can co-exist by using their own marker fences (e.g. `//SQSTAT DELIMETER`).
 

@@ -7,7 +7,7 @@ import {
   players,
   roles,
 } from '@squad/db/schema';
-import { normalizePlayerName } from '@squad/shared-config';
+import { isAdminsCfgSingleLineText, normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -21,7 +21,14 @@ const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({
   role_id: z.string().uuid().nullable(),
   expires_at: z.string().datetime({ offset: true }).nullable().optional(),
-  comment: z.string().trim().max(512).nullable().optional(),
+  // Written into Admins.cfg after `//`, so it must stay on one line (#11).
+  comment: z
+    .string()
+    .trim()
+    .max(512)
+    .refine(isAdminsCfgSingleLineText, { message: 'comment_not_single_line' })
+    .nullable()
+    .optional(),
 });
 const PLAYER_SORTS = ['nickname', 'last_seen', 'created', 'total_time'] as const;
 const listQuery = z.object({
