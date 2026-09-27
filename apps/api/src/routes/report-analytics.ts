@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { escapeCsvField } from './analytics.js';
 
 const DEFAULT_WINDOW_DAYS = 30;
 const MAX_WINDOW_DAYS = 366;
@@ -90,11 +91,6 @@ interface ReportAnalyticsPayload {
     trusted: boolean;
     spam_flagged: boolean;
   }>;
-}
-
-function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
 }
 
 function toCsv(payload: ReportAnalyticsPayload): string {

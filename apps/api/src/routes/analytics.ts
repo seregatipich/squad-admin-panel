@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { neutralizeCsvFormula } from '../lib/csv.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -90,10 +91,15 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   return null;
 }
 
-/** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
+/**
+ * Escapes a value for embedding as a single comma-delimited CSV field:
+ * neutralizes spreadsheet formula triggers (see `neutralizeCsvFormula`),
+ * then applies RFC 4180 quoting.
+ */
 export function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
+  const safe = neutralizeCsvFormula(value);
+  if (/[",\r\n]/.test(safe)) return `"${safe.replace(/"/g, '""')}"`;
+  return safe;
 }
 
 /**

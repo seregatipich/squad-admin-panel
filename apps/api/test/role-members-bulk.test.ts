@@ -263,6 +263,36 @@ describeIfDb('role-members bulk toolkit', () => {
     expect(text).toContain(`${PLAYER_B};Bravo;`);
   });
 
+  it('export: neutralizes spreadsheet formulas in player-controlled cells (#257)', async () => {
+    await seedPlayer({
+      steamId64: PLAYER_A,
+      name: '=HYPERLINK("http://evil","x")',
+      roleId: viewerRoleId,
+      comment: '+cmd|calc',
+    });
+    await seedPlayer({
+      steamId64: PLAYER_B,
+      name: '@SUM(A1)',
+      roleId: viewerRoleId,
+      comment: '-1',
+    });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/roles/${viewerRoleId}/members/export`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain(`${PLAYER_A};"'=HYPERLINK(""http://evil"",""x"")";'+cmd|calc`);
+    expect(res.body).toContain(`${PLAYER_B};'@SUM(A1);-1`);
+    for (const line of res.body.split(/\r?\n/)) {
+      for (const cell of line.split(';')) {
+        expect(cell.replace(/^"/, '')).not.toMatch(/^[=+@\t\r]/);
+      }
+    }
+  });
+
   it('bulk-delete: removes exactly the selected members, leaving the rest', async () => {
     const idA = await seedPlayer({ steamId64: PLAYER_A, name: 'Alpha', roleId: viewerRoleId });
     const idB = await seedPlayer({ steamId64: PLAYER_B, name: 'Bravo', roleId: viewerRoleId });
