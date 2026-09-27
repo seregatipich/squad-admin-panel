@@ -148,7 +148,7 @@ const tail = await client.fileReadTail({
 // { content, offset: 12516352, size: 12582912, truncated: true }
 ```
 
-Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
+Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('not_found')` if the file does not exist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
 
 ---
 
@@ -405,6 +405,7 @@ try {
 |---|---|
 | `forbidden` | Path or image outside the allowlist |
 | `invalid_args` | Missing or malformed params |
+| `not_found` | File read on a path that does not exist |
 | `runtime_error` | Docker CLI or OS command failed |
 | `timeout` | Client-side deadline exceeded |
 | `internal` | Unexpected Go-side error |

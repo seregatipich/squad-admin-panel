@@ -953,11 +953,13 @@ func openRegularInRoot(root *os.Root, rel string) (*os.File, fs.FileInfo, error)
 }
 
 // readableOpenErrorResponse maps an openReadableRoot/openReadableFile error to
-// the RPC error code the file handlers have always used.
+// its RPC error code; a missing file or directory is not_found.
 func readableOpenErrorResponse(id string, err error) rpc.Response {
 	switch {
 	case errors.Is(err, validate.ErrForbidden):
 		return rpc.NewErrorResponse(id, rpc.CodeForbidden, err.Error())
+	case errors.Is(err, fs.ErrNotExist):
+		return rpc.NewErrorResponse(id, rpc.CodeNotFound, err.Error())
 	case errors.Is(err, errReadableIsDirectory):
 		return rpc.NewErrorResponse(id, rpc.CodeInvalidArgs, err.Error())
 	default:

@@ -37,6 +37,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 |---|---|
 | `forbidden` | Argument violated the allowlist (path, image, container name, etc.). |
 | `invalid_args` | Parameter validation failed (missing required field, wrong shape). |
+| `not_found` | The file or directory a read targeted does not exist (`file_read`, `file_read_stream`, `file_read_tail`). |
 | `runtime_error` | External command exited non-zero, timed out, or OS error. |
 | `timeout` | Client-side timeout before reply arrived. |
 | `internal` | Unexpected bridge bug — logged with full context. |
@@ -108,7 +109,7 @@ Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read s
 | `size` | `number` | Total size of the file in bytes at read time. |
 | `truncated` | `boolean` | `true` iff `size > max_bytes` (i.e. some prefix of the file was skipped). |
 
-Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `runtime_error` (open / stat / seek failed).
+Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `not_found` (file does not exist), `runtime_error` (open / stat / seek failed).
 
 ```json
 // request

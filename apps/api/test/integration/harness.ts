@@ -4,6 +4,7 @@ import path from 'node:path';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import websocket from '@fastify/websocket';
+import { BridgeError } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { auditLog, players, roles } from '@squad/db/schema';
@@ -201,12 +202,12 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     }),
     fileRead: async ({ path }) => {
       const buf = files.get(path);
-      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (!buf) throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
       return { content: buf.toString('utf-8') };
     },
     fileReadStream: async ({ path }, onStream) => {
       const buf = files.get(path);
-      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (!buf) throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
       onStream({ id: 'fake', stream: 'stdout', data: buf.toString('base64') });
       return { bytes_sent: buf.length };
     },

@@ -120,7 +120,7 @@ The user requirement was that the panel own the destructive lifecycle end-to-end
 
 1. **Soft-delete, not hard-delete.** Add `servers.deleted_at`, `servers.deleted_by_steam_id64`, `servers.deletion_backup_marker_id`. Replace the global unique slug index with a partial unique on `slug WHERE deleted_at IS NULL` so deleted slugs can be reused. All active-server queries get `WHERE deleted_at IS NULL`.
 
-2. **Backup is mandatory and uses the existing `config_versions` table.** The orchestrator (`apps/api/src/lib/server-delete.ts`) reads each `.cfg` via the bridge, then inserts a row per file tagged `message LIKE 'deletion-backup-marker%'`. If zero files could be backed up, the deletion aborts and the server stays alive. `Rcon.cfg` is backed up with its real password (it has to be — otherwise restore can't reproduce a working RCON setup).
+2. **Backup is mandatory and uses the existing `config_versions` table.** The orchestrator (`apps/api/src/lib/server-delete.ts`) reads each `.cfg` via the bridge, then inserts a row per file tagged `message LIKE 'deletion-backup-marker%'`. If any file fails to read for a reason other than the bridge's `not_found`, the deletion aborts and the server stays alive (#37). `Rcon.cfg` is backed up with its real password (it has to be — otherwise restore can't reproduce a working RCON setup).
 
 3. **Best-effort destructive phases after the backup.** Container stop+rm, `directory_delete configs`, `directory_delete saved`, ufw rule cleanup. Each phase records its own success/error in the response body and audit context. The DB soft-delete commits regardless — operators see exactly what succeeded and can finish the cleanup manually.
 

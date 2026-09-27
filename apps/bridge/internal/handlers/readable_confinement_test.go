@@ -259,3 +259,19 @@ func TestReadableTrustRoot_ConfinesEachAllowlistEntry(t *testing.T) {
 		t.Fatal("readableTrustRoot accepted a path outside every readable root")
 	}
 }
+
+// A missing file must be reported with the structured not_found code so the
+// API can tell "absent" from a real read failure without matching OS text
+// (issue #37, finding #50).
+func TestFileRead_MissingFileReturnsNotFound(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", root)
+	params, _ := json.Marshal(map[string]any{"path": filepath.Join(root, "ServerConfig", "Server.cfg")})
+	resp := (&Dispatcher{}).Handle(context.Background(), &rpc.Request{ID: "req-read-missing", Method: "file_read", Params: params}, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected an error for a missing file, got success: %s", resp.Result)
+	}
+	if resp.Error.Code != rpc.CodeNotFound {
+		t.Fatalf("code = %q, want %q (message %q)", resp.Error.Code, rpc.CodeNotFound, resp.Error.Message)
+	}
+}

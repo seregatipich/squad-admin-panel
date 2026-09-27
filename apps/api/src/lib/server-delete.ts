@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { BridgeClient } from '@squad/bridge-client';
+import { type BridgeClient, BridgeError } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import { adminsCfgSyncOutbox, configVersions, serverSettings, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT, PANEL_SAVED_ROOT } from '@squad/shared-config';
@@ -54,6 +54,19 @@ export interface DeleteContext {
 
 const NOT_FOUND_RE = /not_found|no such container/i;
 
+/**
+ * Whether a bridge `file_read` failure means the file does not exist. The
+ * bridge reports that with the structured `not_found` code; a bridge built
+ * before that code existed sent `runtime_error` carrying the OS
+ * "no such file or directory" text, which is still accepted so an API rolled
+ * out ahead of the bridge keeps deleting never-installed servers.
+ */
+function isFileNotFound(err: unknown): boolean {
+  if (!(err instanceof BridgeError)) return false;
+  if (err.code === 'not_found') return true;
+  return err.code === 'runtime_error' && /no such file or directory/i.test(err.message);
+}
+
 export async function softDeleteServer(
   ctx: DeleteContext,
   serverId: string,
@@ -87,33 +100,28 @@ export async function softDeleteServer(
     const configsDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
     type Backed = { filename: string; content: string; sha256: Buffer };
     const backed: Backed[] = [];
-    let allMissing = true;
+    const unreadable: Array<{ filename: string; error: string }> = [];
     for (const file of ALLOWED_CONFIG_FILES) {
       try {
         const { content } = await ctx.bridge.fileRead({ path: `${configsDir}/${file}` });
         const sha256 = createHash('sha256').update(content, 'utf8').digest();
         backed.push({ filename: file, content, sha256 });
-        allMissing = false;
       } catch (err) {
-        const msg = (err as Error).message;
-        if (!/no such file or directory/i.test(msg)) {
-          // Bridge actually failed (permissions, transport, etc.) — not a
-          // never-installed signal. Keep the existing safety net.
-          allMissing = false;
-        }
-        ctx.log.warn(
-          { err: msg, file, serverId },
-          'server-delete: config read failed (will not be backed up)',
-        );
+        if (isFileNotFound(err)) continue;
+        unreadable.push({ filename: file, error: (err as Error).message });
       }
     }
-    // never-installed fast path: install was interrupted before seedConfigs
-    // ran (status='failed'), so /var/lib/squad-panel/configs/<uuid> does not
-    // exist. There is nothing to back up — proceed with the rest of the
-    // teardown so the orphan row can be soft-deleted.
-    if (backed.length === 0 && !allMissing) {
+    // Every file that exists must reach config_versions before the configs
+    // dir is deleted: a single unreadable file (timeout, transport, the 10 MB
+    // fsx.MaxReadBytes cap) aborts the delete, since tearing down afterwards
+    // would destroy its only copy (#50). A file the bridge reports as
+    // not_found has nothing to lose, so an all-missing set is the
+    // never-installed case — an install interrupted before seedConfigs ran.
+    if (unreadable.length > 0) {
+      ctx.log.warn({ serverId, unreadable }, 'server-delete: config backup failed; aborting');
+      const names = unreadable.map((u) => u.filename).join(', ');
       throw new Error(
-        `cannot delete server ${serverId}: no config files could be backed up (read 0/${ALLOWED_CONFIG_FILES.length}); bridge errors look like a transport issue, not a missing configs dir`,
+        `cannot delete server ${serverId}: could not back up ${names} (read ${backed.length}/${ALLOWED_CONFIG_FILES.length}); fix the bridge error and retry — nothing was removed`,
       );
     }
     if (backed.length === 0) {
