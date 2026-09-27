@@ -65,6 +65,26 @@ describe('matchProtectedTag', () => {
     expect(matchProtectedTag('Some TST Player', 'TST')).toBe(false);
   });
 
+  it('does not match a bare tag that is only the start of a longer word (#17)', () => {
+    expect(matchProtectedTag('Altair', 'ALT')).toBe(false);
+    expect(matchProtectedTag('Ruslan', 'RU')).toBe(false);
+    expect(matchProtectedTag('rush_pro', 'RU')).toBe(false);
+    expect(matchProtectedTag('Русич', 'РУ')).toBe(false);
+    expect(matchProtectedTag('RU2Player', 'RU')).toBe(false);
+  });
+
+  it('matches a bare tag worn as a separate leading word (#17)', () => {
+    expect(matchProtectedTag('ALT Player', 'ALT')).toBe(true);
+    expect(matchProtectedTag('alt|Player', 'ALT')).toBe(true);
+    expect(matchProtectedTag('RU_Impostor', 'RU')).toBe(true);
+    expect(matchProtectedTag('  RU', 'RU')).toBe(true);
+  });
+
+  it('keeps matching a tag stored with its own trailing symbol as a plain prefix', () => {
+    expect(matchProtectedTag('[ABC]Player', '[ABC]')).toBe(true);
+    expect(matchProtectedTag('=ALT=Player', '=ALT=')).toBe(true);
+  });
+
   it('returns false for an empty tag', () => {
     expect(matchProtectedTag('[TST] Player', '')).toBe(false);
   });

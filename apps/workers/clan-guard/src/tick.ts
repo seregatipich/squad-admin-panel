@@ -84,20 +84,33 @@ const WRAPPER_PAIRS: readonly [string, string][] = [
   ['{', '}'],
 ];
 
+const WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
 /**
  * Case-insensitive PREFIX match of a clan tag against a raw (un-normalized)
- * player name. Handles both storage conventions for `clans.tags` — the tag
- * stored with its own wrapper characters (e.g. `[ABC]`, matched as a direct
- * prefix) and the tag stored bare (e.g. `ABC`, matched by re-wrapping it in
- * `[]`/`()`/`<>`/`{}` and checking that wrapped form as a prefix). A tag that
- * merely occurs elsewhere in the name (e.g. `Player [ABC]`) does NOT match —
- * only the start of the (trimmed) name is considered.
+ * player name. Handles both storage conventions for `clans.tags`:
+ *
+ * - the tag stored bare (e.g. `ABC`) matches when the name starts with it
+ *   re-wrapped in `[]`/`()`/`<>`/`{}`, or with the bare tag worn as a separate
+ *   leading word — followed by the end of the name or by a character that is
+ *   neither a letter nor a digit (`ABC Player`, `ABC|Player`, `ABC_Player`).
+ *   A name that merely begins with the same letters (`ABCdef`, `Altair` for
+ *   `ALT`) does NOT match (#17);
+ * - the tag stored with its own trailing symbol (e.g. `[ABC]`, `=ABC=`) is
+ *   matched as a plain prefix, since that symbol already ends the tag.
+ *
+ * A tag that merely occurs elsewhere in the name (e.g. `Player [ABC]`) does
+ * NOT match — only the start of the (trimmed) name is considered.
  */
 export function matchProtectedTag(rawName: string, tag: string): boolean {
   const name = rawName.trim().toLowerCase();
   const candidate = tag.trim().toLowerCase();
   if (candidate.length === 0) return false;
-  if (name.startsWith(candidate)) return true;
+  if (name.startsWith(candidate)) {
+    const tagEndsWithWordCharacter = WORD_CHARACTER.test(candidate.slice(-1));
+    const nextCharacter = name.charAt(candidate.length);
+    if (!tagEndsWithWordCharacter || !WORD_CHARACTER.test(nextCharacter)) return true;
+  }
   return WRAPPER_PAIRS.some(([open, close]) => name.startsWith(`${open}${candidate}${close}`));
 }
 
