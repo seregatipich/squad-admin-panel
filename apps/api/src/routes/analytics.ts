@@ -177,29 +177,61 @@ export async function computeAnalyticsAggregates(
         LIMIT ${limit}
       `);
 
+  // Peak concurrent players per hour-of-day, sampled at every whole UTC hour
+  // ("tick") in the window: a session is concurrent at tick t when
+  // connected_at <= t AND (disconnected_at IS NULL OR disconnected_at > t).
+  //
+  // Computed as a sweep line in ONE pass over player_sessions: each session
+  // that overlaps the window emits +1 at the first tick at/after it connected
+  // and -1 at the first tick at/after it disconnected (never before it
+  // connected, so corrupt rows net to zero); the running sum of those deltas
+  // over the ticks is the concurrent count. The previous correlated subquery
+  // re-scanned the whole session history once per tick (~2 200 times for a
+  // 92-day window), which let the anonymous /api/v1/public/stats route pin
+  // Postgres (#9).
   const peakRows = await app.db.execute<{ hour: number; peak: number }>(sql`
-        WITH ticks AS (
+        WITH bounds AS (
+          SELECT date_trunc('hour', ${fromIso}::timestamptz AT TIME ZONE 'UTC') AS first_tick,
+                 ${toIso}::timestamptz AT TIME ZONE 'UTC' AS last_wall
+        ),
+        ticks AS (
           SELECT gs AS wall
-          FROM generate_series(
-            date_trunc('hour', ${fromIso}::timestamptz AT TIME ZONE 'UTC'),
-            ${toIso}::timestamptz AT TIME ZONE 'UTC',
-            interval '1 hour'
-          ) AS gs
+          FROM bounds b, generate_series(b.first_tick, b.last_wall, interval '1 hour') AS gs
+        ),
+        deltas AS (
+          SELECT greatest(
+                   date_trunc('hour', ev.at_wall)
+                     + CASE WHEN ev.at_wall > date_trunc('hour', ev.at_wall)
+                            THEN interval '1 hour' ELSE interval '0' END,
+                   b.first_tick
+                 ) AS wall,
+                 sum(ev.delta) AS delta
+          FROM bounds b
+          JOIN player_sessions s
+            ON s.connected_at <= ${toIso}::timestamptz
+           AND (s.disconnected_at IS NULL OR s.disconnected_at > (b.first_tick AT TIME ZONE 'UTC'))
+          CROSS JOIN LATERAL (
+            VALUES
+              (s.connected_at AT TIME ZONE 'UTC', 1),
+              (
+                CASE WHEN s.disconnected_at IS NULL THEN NULL
+                     ELSE greatest(s.connected_at, s.disconnected_at) AT TIME ZONE 'UTC' END,
+                -1
+              )
+          ) AS ev(at_wall, delta)
+          WHERE ev.at_wall IS NOT NULL
+            AND (${serverId}::uuid IS NULL OR s.server_id = ${serverId}::uuid)
+          GROUP BY 1
         ),
         samples AS (
-          SELECT extract(hour FROM t.wall)::int AS hour,
-                 (
-                   SELECT count(*)::int
-                   FROM player_sessions s
-                   WHERE s.connected_at <= (t.wall AT TIME ZONE 'UTC')
-                     AND (s.disconnected_at IS NULL OR s.disconnected_at > (t.wall AT TIME ZONE 'UTC'))
-                     AND (${serverId}::uuid IS NULL OR s.server_id = ${serverId}::uuid)
-                 ) AS concurrent
+          SELECT t.wall,
+                 sum(COALESCE(d.delta, 0)) OVER (ORDER BY t.wall) AS concurrent
           FROM ticks t
+          LEFT JOIN deltas d ON d.wall = t.wall
         )
-        SELECT hour, max(concurrent)::int AS peak
+        SELECT extract(hour FROM wall)::int AS hour, max(concurrent)::int AS peak
         FROM samples
-        GROUP BY hour
+        GROUP BY 1
       `);
   const peakByHourMap = new Map<number, number>();
   for (const row of peakRows as unknown as Array<{ hour: number; peak: number }>) {

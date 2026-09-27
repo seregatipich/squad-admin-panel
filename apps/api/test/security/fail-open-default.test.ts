@@ -175,9 +175,30 @@ describeIfDb('fail-closed auth default (#246)', () => {
       const res = await bareApp.inject({ method: 'GET', url: '/api/v1/auth/steam/login' });
       expect(res.statusCode).toBe(302);
     });
+  });
 
-    it('GET /metrics stays reachable without a session', async () => {
+  describe('GET /metrics is operator-only (#9)', () => {
+    it('returns 401 to an unauthenticated request', async () => {
       const res = await bareApp.inject({ method: 'GET', url: '/metrics' });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'unauthenticated' });
+    });
+
+    it('returns 403 to an authenticated request without host:metrics', async () => {
+      const res = await bareApp.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: { cookie: noRoleCookie },
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('returns 200 to a request with host:metrics', async () => {
+      const res = await bareApp.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: { cookie: ownerCookie },
+      });
       expect(res.statusCode).toBe(200);
       expect(res.body).toContain('process_cpu_');
     });

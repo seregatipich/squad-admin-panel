@@ -443,3 +443,80 @@ describeIfDb('GET /api/v1/clans/:id/stats/export', () => {
     expect(lines).toContain('2026-06-02,2000,50');
   });
 });
+
+describeIfDb('clan stats date-window bounds (#9)', () => {
+  const statsPaths = ['stats', 'stats/export'] as const;
+
+  it.each(statsPaths)('/%s rejects a non-calendar day with 400 instead of a 500', async (path) => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/${path}?from=2024-12-01&to=2024-13-45`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it.each(statsPaths)('/%s rejects a window longer than 366 days with 400', async (path) => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/${path}?from=2000-01-01&to=2026-06-07`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_range' });
+  });
+
+  it('accepts a full 366-day window and returns one chart point per day', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/stats?from=2024-01-01&to=2024-12-31`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as ClanStatsResponse;
+    expect(body.chart).toHaveLength(366);
+    expect(body.chart[0]?.day).toBe('2024-01-01');
+    expect(body.chart.at(-1)?.day).toBe('2024-12-31');
+  });
+
+  it.each(statsPaths)('/%s rejects a day outside the supported years with 400', async (path) => {
+    for (const query of ['to=9999-12-31', 'from=1999-12-31&to=2000-01-05']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans/${clanId}/${path}?${query}`,
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode, query).toBe(400);
+    }
+  });
+
+  it.each([
+    ['a clan with a roster', () => clanId],
+    ['an empty clan', () => emptyClanId],
+  ])('walks a window ending on the last supported day for %s', async (_label, id) => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${id()}/stats?to=2999-12-31`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as ClanStatsResponse;
+    expect(body.chart).toHaveLength(30);
+    expect(body.chart[0]?.day).toBe('2999-12-02');
+    expect(body.chart.at(-1)?.day).toBe('2999-12-31');
+  });
+
+  it('walks a CSV export window ending on the last supported day', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/stats/export?from=2999-12-30&to=2999-12-31`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.trim().split('\r\n')).toEqual([
+      'day,online_seconds,boost_seconds',
+      '2999-12-30,0,0',
+      '2999-12-31,0,0',
+    ]);
+  });
+});
