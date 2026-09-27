@@ -190,7 +190,8 @@ POST /archive/:id/restore
                 │
                 ▼
    GET /api/v1/ws/live  ── per-socket route handler  ── browser
-        ping every 10s, drop on no-pong > 30s (close 4000)
+        ping every 10s, drop on no-pong > 30s (close 4000);
+        close 4001 on own session.revoked / 4001|4003 on 30s auth re-check (#12)
 ```
 
 The originating replica's Redis subscriber will see its own publish back; the in-process emit fires BEFORE the publish so the in-process subscribers may receive the event twice. UI updates are last-writer-wins, so this is benign (see [`live-bus/flows.md`](../components/live-bus/flows.md#2-cross-replica-fan-out)).

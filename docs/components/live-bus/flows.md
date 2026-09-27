@@ -76,7 +76,9 @@ If the publish fails (Redis blip), the SET still succeeded — the next REST `/a
 4. Server pings every 10 s with `{"type":"ping","ts":"..."}`.
 5. Client must reply with `{"type":"pong"}`. The handler updates `lastPongAt`. Any other JSON / non-JSON is ignored.
 6. If `lastPongAt` is older than 30 s when the next ping fires, the server closes the socket (code 4000, reason `pong timeout`).
-7. On `close`, the route clears the ping interval and calls the unsubscribe handle returned by `liveBus.subscribe`.
+7. A `session.revoked` event for this socket's own session is forwarded and the server then closes the socket (code 4001, reason `session revoked`).
+8. Every 30 s the route re-resolves the session / API token and reloads the player's permissions: a vanished or revoked session/token closes with 4001, a lost `server:view` with 4003 (reason `forbidden`); otherwise the `combat:view` and role-assignment filters are refreshed (#12).
+9. On `close`, the route clears the ping and revalidation intervals and calls the unsubscribe handle returned by `liveBus.subscribe`.
 
 ## 6. Redis disconnect / reconnect
 

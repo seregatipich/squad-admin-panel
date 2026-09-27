@@ -28,6 +28,12 @@ ws.addEventListener('message', (msg) => {
 });
 ```
 
+## Symptom: client gets disconnected with code 4001 or 4003
+
+**Cause**: the server closed the socket because its authorization no longer holds (#12). `4001` (`session revoked`) — the session was logged out or revoked, or the API token was revoked. `4003` (`forbidden`) — the player's role no longer grants `server:view` (or, for a self-service session, `panel_access`).
+
+**Fix**: none needed on the server; this is the intended behaviour. The client must log in again — a reconnect with the old credentials is rejected at the upgrade with 401/403.
+
 ## Symptom: "redis client lacks duplicate(); running in single-process mode" warning at startup
 
 **Cause**: a test fixture or a misconfigured embedding decorated `app.redis` with an object that does not implement `duplicate()`.

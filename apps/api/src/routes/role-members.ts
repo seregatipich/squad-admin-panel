@@ -400,7 +400,9 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       });
       for (const a of assignments) {
         invalidatePermissionCache(a.playerId);
-        if (!role.panelAccess) await revokeAllForPlayer(app.db, app.redis, a.playerId);
+        if (!role.panelAccess) {
+          await revokeAllForPlayer(app.db, app.redis, a.playerId, app.liveBus);
+        }
       }
       reply.code(201);
       return { ok: true, imported: assignments.length };
@@ -512,7 +514,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       });
       for (const id of removedIds) {
         invalidatePermissionCache(id);
-        await revokeAllForPlayer(app.db, app.redis, id);
+        await revokeAllForPlayer(app.db, app.redis, id, app.liveBus);
       }
       return { ok: true, removed: removedIds.length };
     },
@@ -600,7 +602,9 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       });
       for (const id of movedIds) {
         invalidatePermissionCache(id);
-        if (!targetRole.panelAccess) await revokeAllForPlayer(app.db, app.redis, id);
+        if (!targetRole.panelAccess) {
+          await revokeAllForPlayer(app.db, app.redis, id, app.liveBus);
+        }
       }
       return { ok: true, moved: movedIds.length };
     },

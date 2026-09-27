@@ -9,12 +9,13 @@ Process-local `EventEmitter` plus a Redis `PUB`/`SUB` fan-out, exposed to UI cli
 - Subscribe to the Redis channels `live-bus` and `rcon:status:changed` and re-emit any envelope they carry as `LiveEvent` frames so other API replicas and external workers can broadcast.
 - Serve a single multiplexed WebSocket route that forwards every emitted event to every connected, authenticated client.
 - Heartbeat the socket: server-side ping every 10 s, drop the socket if no client pong arrives within 30 s.
+- Keep each socket's authorization current (#12): close it server-side (code `4001`) when its own session is revoked, and re-check the session / API token and the player's permissions every 30 s — a vanished session or token closes with `4001`, a lost `server:view` with `4003`, and the `combat:view` / role-assignment event filters follow the fresh permissions.
 
 ## What this component does NOT do
 
 - It does NOT persist events. The event stream is a transient hot path; durable history lives in `events:server:{id}` Redis Streams + Postgres `events` table (see the [shared-types](../shared-types/README.md) component).
 - It does NOT replay missed events on reconnect, **except** `chat.message` and `combat.event`: the route keeps a small in-memory `ChatRingBuffer`/`CombatRingBuffer` (last 100 per server) and replays each buffer's tail — chat first, then combat — right after a socket connects. Every other event type still starts from the next published event onward; the web client falls back to a single REST refresh on connect for those.
-- It does NOT enforce per-event authorization for most event types — auth is at socket-open (the `server:view` permission) and every connected client sees every event — **except** `combat.event`, which is additionally dropped (both live and from the replay buffer) for connections whose user lacks the `combat:view` permission.
+- It does NOT enforce per-event authorization for most event types — auth is at socket-open (the `server:view` permission, re-checked every 30 s while the socket stays open) and every connected client sees every event — **except** `combat.event`, which is additionally dropped (both live and from the replay buffer) for connections whose user lacks the `combat:view` permission.
 
 ## Code location
 
