@@ -2,6 +2,9 @@
 // Usage: REDIS_URL=redis://127.0.0.1:6379 node scripts/rnsquadjs-shadow-diff.mjs <serverId> [sinceMs] [minEvents]
 //   minEvents also reads from env MIN_EVENTS (positional arg wins); default 100.
 //   MAX_STREAM_RECORDS bounds each XRANGE read; default 100000, hard maximum 1000000.
+//   The sidecar caps the shadow stream at MAXLEN ~ 10000 and it carries every event type, so on a
+//   busy server it may retain less than the default 24 h window; pick a sinceMs inside its retention
+//   (oldest entry: XRANGE events:server:<id>:shadow - + COUNT 1) or trimmed history reads as missing.
 // Prereq: build the plugin first — cd docker/rnsquadjs/plugins/panelBridge && npx tsc -p tsconfig.json
 //
 // Gate (exit 1 on any failure, 0 only when all pass):

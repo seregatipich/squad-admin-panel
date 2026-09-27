@@ -60,17 +60,28 @@ export async function ensureConsumerGroup(
 }
 
 /**
+ * A live per-server stream is exactly `events:server:<id>`. The SCAN pattern
+ * `events:server:*` also matches the RNSquadJS sidecar's shadow copy
+ * `events:server:<id>:shadow`, which must never be consumed: it duplicates
+ * events the live stream already carries under different `event_id`s (#16).
+ */
+const LIVE_SERVER_STREAM = /^events:server:[^:]+$/;
+
+/**
  * Discovers every event stream this worker might care about: the shared
  * `events:global` stream plus every per-server `events:server:<id>` stream
  * currently present in Redis (via `SCAN`). Called once per poll iteration so
  * a newly started game server's stream is picked up without a restart.
+ * Sidecar shadow streams are skipped (see `LIVE_SERVER_STREAM`).
  */
 export async function discoverEventStreams(redis: Redis): Promise<string[]> {
   const streams = new Set<string>([STREAM_NAME.eventsGlobal()]);
   let cursor = '0';
   do {
     const [next, keys] = await redis.scan(cursor, 'MATCH', 'events:server:*', 'COUNT', 100);
-    for (const key of keys) streams.add(key);
+    for (const key of keys) {
+      if (LIVE_SERVER_STREAM.test(key)) streams.add(key);
+    }
     cursor = next;
   } while (cursor !== '0');
   return [...streams];

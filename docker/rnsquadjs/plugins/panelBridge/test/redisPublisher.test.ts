@@ -47,7 +47,15 @@ describe('RedisPublisher (production mode)', () => {
     await pub.publishRconStatus({ state: 'connected', lastChange: '2026-04-24T10:00:00.000Z' });
     expect(r.calls[0]).toEqual({
       cmd: 'xadd',
-      args: [`events:server:${SERVER_ID}`, '*', 'envelope', JSON.stringify(ENVELOPE)],
+      args: [
+        `events:server:${SERVER_ID}`,
+        'MAXLEN',
+        '~',
+        '10000',
+        '*',
+        'envelope',
+        JSON.stringify(ENVELOPE),
+      ],
     });
     expect(r.calls[1].cmd).toBe('set');
     expect(r.calls[1].args[0]).toBe(`rnsquadjs:status:${SERVER_ID}`);
@@ -64,6 +72,26 @@ describe('RedisPublisher (shadow mode)', () => {
     await pub.publishRconStatus({ state: 'connected', lastChange: '2026-04-24T10:00:00.000Z' });
     expect(r.calls[0].args[0]).toBe(`events:server:${SERVER_ID}:shadow`);
     expect(r.calls[1].args[0]).toBe(`rnsquadjs:status:${SERVER_ID}:shadow`);
+  });
+
+  // Regression for #16: nothing trims the shadow stream (only the operator's
+  // diff script reads it), so an uncapped XADD grows Redis memory without bound.
+  it('caps the shadow stream with an approximate MAXLEN', async () => {
+    const r = fakeRedis();
+    const pub = new RedisPublisher(asRedis(r), SERVER_ID, 'shadow');
+    await pub.publishEvent(ENVELOPE);
+    expect(r.calls[0]).toEqual({
+      cmd: 'xadd',
+      args: [
+        `events:server:${SERVER_ID}:shadow`,
+        'MAXLEN',
+        '~',
+        '10000',
+        '*',
+        'envelope',
+        JSON.stringify(ENVELOPE),
+      ],
+    });
   });
 });
 
