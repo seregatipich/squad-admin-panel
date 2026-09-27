@@ -44,6 +44,27 @@ export function maskConfigSecrets(filename: string, content: string): string {
   );
 }
 
+/** The raw (unmasked) secret value for `filename`'s secret key in `content`, or null when absent/not a secret file. */
+function extractSecretValue(filename: string, content: string): string | null {
+  const key = SECRET_KEY_BY_FILE[filename];
+  if (!key) return null;
+  const match = secretLineRe(key).exec(content);
+  return match ? (match[2] ?? '') : null;
+}
+
+/** Appended to the masked value on the "after" side of a drift diff when the secret actually changed (#10 follow-up). */
+const CHANGED_SECRET_SUFFIX = ' (изменён)';
+
+function markChanged(filename: string, maskedContent: string): string {
+  const key = SECRET_KEY_BY_FILE[filename];
+  if (!key) return maskedContent;
+  return maskedContent.replace(secretLineRe(key), (line: string, prefix: string, value: string) =>
+    value.trim() === CONFIG_SECRET_MASK
+      ? `${prefix}${CONFIG_SECRET_MASK}${CHANGED_SECRET_SUFFIX}`
+      : line,
+  );
+}
+
 /**
  * Whether `content` still carries a masked `Password=` line, i.e. it came
  * from a masked API response or a masked history row.
@@ -79,6 +100,66 @@ async function credentialsRconPassword(
     app.encryptionKey,
     deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
   );
+}
+
+/**
+ * Masks both sides of a secret-bearing config file for a drift diff, but
+ * marks a changed secret distinctly instead of producing two identical
+ * masked lines that hide the change from the diff entirely (#10 follow-up).
+ *
+ * `tip.content` in `config_versions` is stored already masked (#10), so its
+ * raw secret value can never be recovered from the diff's "before" side —
+ * comparing two masked strings would always be a no-op. Instead, for
+ * `Rcon.cfg`, the panel's own authoritative password
+ * ({@link credentialsRconPassword}) stands in for "what the tip's password
+ * should currently read as"; when the disk's actual password differs from
+ * it (and both are non-empty), the `after` side's masked line gets
+ * {@link CHANGED_SECRET_SUFFIX} appended so the diff shows a visible change
+ * — the real values are never included in the response either way.
+ *
+ * @param app - Fastify instance (db, encryptionKey) to read the panel's
+ *   authoritative password from `server_credentials`.
+ * @param serverId - Server whose config is being diffed.
+ * @param filename - Config file name, e.g. `Rcon.cfg`.
+ * @param before - Content to mask for the diff's "before" side (the DB tip).
+ * @param after - Content to mask for the diff's "after" side (disk).
+ * @returns `[maskedBefore, maskedAfter]`.
+ */
+export async function maskConfigSecretsForDiff(
+  app: FastifyInstance,
+  serverId: string,
+  filename: string,
+  before: string,
+  after: string,
+): Promise<[string, string]> {
+  const key = SECRET_KEY_BY_FILE[filename];
+  const maskedBefore = maskConfigSecrets(filename, before);
+  const maskedAfter = maskConfigSecrets(filename, after);
+  if (!key) return [maskedBefore, maskedAfter];
+
+  if (filename === 'Rcon.cfg') {
+    const authoritative = await credentialsRconPassword(app, serverId);
+    const diskValue = extractSecretValue(filename, after);
+    const changed =
+      authoritative !== null &&
+      diskValue !== null &&
+      authoritative.trim() !== '' &&
+      diskValue.trim() !== '' &&
+      authoritative !== diskValue;
+    return changed
+      ? [maskedBefore, markChanged(filename, maskedAfter)]
+      : [maskedBefore, maskedAfter];
+  }
+
+  const beforeValue = extractSecretValue(filename, before);
+  const afterValue = extractSecretValue(filename, after);
+  const changed =
+    beforeValue !== null &&
+    afterValue !== null &&
+    beforeValue.trim() !== '' &&
+    afterValue.trim() !== '' &&
+    beforeValue !== afterValue;
+  return changed ? [maskedBefore, markChanged(filename, maskedAfter)] : [maskedBefore, maskedAfter];
 }
 
 /** Thrown when a masked `Rcon.cfg` is written but no real password is known. */

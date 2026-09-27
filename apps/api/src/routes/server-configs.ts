@@ -13,7 +13,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
-import { maskConfigSecrets, unmaskRconPassword } from '../lib/config-secrets.js';
+import {
+  maskConfigSecrets,
+  maskConfigSecretsForDiff,
+  unmaskRconPassword,
+} from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
@@ -535,15 +539,16 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'file_not_found', detail: (err as Error).message };
       }
+      const [maskedTip, maskedDisk] = await maskConfigSecretsForDiff(
+        app,
+        req.params.id,
+        req.params.name,
+        tip.content,
+        disk,
+      );
       return {
         name: req.params.name,
-        diff: createPatch(
-          req.params.name,
-          maskConfigSecrets(req.params.name, tip.content),
-          maskConfigSecrets(req.params.name, disk),
-          'panel',
-          'disk',
-        ),
+        diff: createPatch(req.params.name, maskedTip, maskedDisk, 'panel', 'disk'),
       };
     },
   );
