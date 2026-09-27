@@ -9,8 +9,9 @@ const PASSWORD_RE = /^\s*Password\s*=\s*(.*)$/m;
 /**
  * Reads a server's RCON password out of its on-host `Rcon.cfg`.
  *
- * The password is never mirrored into the database — `Rcon.cfg` is the single
- * source of truth — so the sidecar renders its config from it.
+ * `Rcon.cfg` on disk is the only plaintext copy of the password — the
+ * database holds it encrypted in `server_credentials` and masked in
+ * `config_versions` (#10) — so the sidecar renders its config from it.
  *
  * @param bridge - Bridge client used to read the host file.
  * @param serverId - Panel server UUID.

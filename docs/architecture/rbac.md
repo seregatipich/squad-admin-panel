@@ -91,6 +91,10 @@ Raw player IPs, and the per-IP coordinates derived from them, are gated by `play
 - `GET /api/v1/events/:eventId` and `GET /api/v1/events/export` — the top-level `ip` of every event payload (e.g. `player.connected`) is returned as `null` without it. All `/api/v1/events*` routes additionally require `events:view` through `config.permissions`, so a token must carry that scope to read the journal.
 - `GET /api/v1/players/:playerId/geo-anomalies` and `GET /api/v1/geo-anomalies` — `points` (IP + latitude/longitude) is empty without it; the country-level summary stays.
 
+### Config secrets (#10)
+
+`config:view` and `server:view` never grant a config secret. The `Password=` value of `Rcon.cfg` and the `LicenseKey=` value of `License.cfg` exist in plaintext only in the file on disk (and encrypted in `server_credentials`); every config response (`GET /configs/:name`, `versions/:vid`, `diff`, `blame`, `drift/diff`, `GET /servers/archive/:id/configs/:filename`) and every `config_versions` row the panel writes (editor writes, install seed, reset-default, deletion backup) carries `********` instead. Reads also mask rows written before the fix, since `config_versions` is append-only. See `apps/api/src/lib/config-secrets.ts`.
+
 ## Audit-coverage CI gate
 
 `apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.

@@ -7,6 +7,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type Redis from 'ioredis';
 import { ADMINS_CFG_SYNC_GROUP, ADMINS_CFG_SYNC_STREAM_PREFIX } from './admins-cfg-sync.js';
+import { maskConfigSecrets } from './config-secrets.js';
 import { purgeSidecarDir, removeSidecar } from './sidecar-lifecycle.js';
 
 // Prefix of the per-server Admins.cfg sync-status key the config-sync worker
@@ -131,7 +132,9 @@ export async function softDeleteServer(
             backed.map((b) => ({
               serverId,
               filename: b.filename,
-              content: b.content,
+              // #10: the RCON password and the license key stay on disk only;
+              // `config_versions` is append-only and readable with config:view.
+              content: maskConfigSecrets(b.filename, b.content),
               sha256: b.sha256,
               authorPlayerId: ctx.actorPlayerId,
               authorLabel: ctx.actorLabel,

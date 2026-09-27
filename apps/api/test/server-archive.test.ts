@@ -232,7 +232,7 @@ describe('POST /api/v1/servers/archive/:id/restore', () => {
 });
 
 describe('POST /api/v1/servers/:newId/restore-configs', () => {
-  it('overlays backup configs (skipping Rcon.cfg) and writes new config_versions rows', async () => {
+  it('overlays backup configs (skipping License.cfg and Rcon.cfg) and writes new config_versions rows', async () => {
     const archived = await seedAndSoftDelete(h, 'archived-overlay');
 
     // Create a fresh active server destined to receive overlays.
@@ -277,15 +277,16 @@ describe('POST /api/v1/servers/:newId/restore-configs', () => {
     };
     expect(body.ok).toBe(true);
     expect(body.archive_server_id).toBe(archived.id);
-    expect(body.files_skipped).toEqual(['Rcon.cfg']);
+    expect(body.files_skipped).toEqual(['License.cfg', 'Rcon.cfg']);
     expect(body.files_missing).toEqual([]);
     expect(body.errors).toEqual([]);
-    expect(body.files_restored).toBe(ALLOWED_CONFIG_FILES.length - 1);
+    expect(body.files_restored).toBe(ALLOWED_CONFIG_FILES.length - 2);
     expect(body.config_version_ids.length).toBe(body.files_restored);
 
-    expect(fileAtomicWrite).toHaveBeenCalledTimes(ALLOWED_CONFIG_FILES.length - 1);
+    expect(fileAtomicWrite).toHaveBeenCalledTimes(ALLOWED_CONFIG_FILES.length - 2);
     for (const call of fileAtomicWrite.mock.calls) {
       expect(call[0].path).not.toContain('Rcon.cfg');
+      expect(call[0].path).not.toContain('License.cfg');
       expect(call[0].path.startsWith(`/var/lib/squad-panel/configs/${newId}/ServerConfig/`)).toBe(
         true,
       );
@@ -300,8 +301,9 @@ describe('POST /api/v1/servers/:newId/restore-configs', () => {
           like(configVersions.message, 'restored from server%'),
         ),
       );
-    expect(restoredRows.length).toBe(ALLOWED_CONFIG_FILES.length - 1);
+    expect(restoredRows.length).toBe(ALLOWED_CONFIG_FILES.length - 2);
     expect(restoredRows.find((r) => r.filename === 'Rcon.cfg')).toBeUndefined();
+    expect(restoredRows.find((r) => r.filename === 'License.cfg')).toBeUndefined();
   });
 
   it('returns 404 when from_archive_id is not soft-deleted', async () => {

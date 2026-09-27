@@ -13,6 +13,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
+import { maskConfigSecrets, unmaskRconPassword } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
@@ -135,9 +136,12 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         const { content } = await app.bridge.fileRead({
           path: configPath(req.params.id, req.params.name),
         });
+        // #10: the RCON password in Rcon.cfg is masked like the license key;
+        // the sha still describes the disk bytes so it matches what a PUT
+        // reports and what drift detection compares.
         return {
           name: req.params.name,
-          content,
+          content: maskConfigSecrets(req.params.name, content),
           sha256: hex(sha256(content)),
           behavior: configFileClass(req.params.name),
         };
@@ -258,9 +262,10 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'version_not_found' };
       }
+      // #10: rows written before masking still hold plaintext secrets.
       return {
         id: row.id,
-        content: row.content,
+        content: maskConfigSecrets(req.params.name, row.content),
         sha256: hex(row.sha256 as unknown as Buffer),
         author_player_id: row.authorPlayerId ?? null,
         message: row.message,
@@ -302,8 +307,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       }
       const patch = createPatch(
         req.params.name,
-        fromRow.content,
-        toRow.content,
+        maskConfigSecrets(req.params.name, fromRow.content),
+        maskConfigSecrets(req.params.name, toRow.content),
         fromRow.id.slice(0, 8),
         toRow.id.slice(0, 8),
       );
@@ -338,7 +343,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         return { lines: [], authors: {} };
       }
       const tipId = tip[0]?.id;
-      const cacheKey = `config-blame:${tipId}`;
+      // v2 (#10): payloads cached before masking may hold plaintext secrets.
+      const cacheKey = `config-blame:v2:${tipId}`;
       const cached = await app.redis.get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
@@ -360,7 +366,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         );
       const vs: BlameVersion[] = rows.map((r) => ({
         id: r.id,
-        content: r.content,
+        content: maskConfigSecrets(req.params.name, r.content),
         author_player_id: r.author_player_id ?? null,
         author_label: r.author_label,
         created_at: (r.created_at as Date).toISOString(),
@@ -530,7 +536,13 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       }
       return {
         name: req.params.name,
-        diff: createPatch(req.params.name, tip.content, disk, 'panel', 'disk'),
+        diff: createPatch(
+          req.params.name,
+          maskConfigSecrets(req.params.name, tip.content),
+          maskConfigSecrets(req.params.name, disk),
+          'panel',
+          'disk',
+        ),
       };
     },
   );
@@ -768,6 +780,11 @@ function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
  * history) alongside `disk_repaired` and, when a write happened, the `reload`
  * outcome.
  *
+ * `Rcon.cfg` (#10): a masked `Password=` line is replaced with the real
+ * password before the disk write, the stored history row carries the masked
+ * rendering, and its `sha256` is the digest of the bytes on disk. Throws
+ * `RconPasswordUnavailableError` (422) when no real password is known.
+ *
  * Exported for reuse by the rotation editor (ROT-2, #145), which writes
  * `LayerRotation.cfg` through the same versioned-history pathway as the CFG-1
  * Monaco editor.
@@ -811,6 +828,12 @@ async function persistVersion(
   authorIp: string | null,
   opts?: { force?: boolean },
 ) {
+  // #10: `content` may carry the masked RCON password (editor round-trip or a
+  // masked history row). The disk gets the real bytes and the sha describes
+  // them (drift and dedup compare disk digests); the history row keeps only
+  // the masked rendering.
+  const diskContent =
+    name === 'Rcon.cfg' ? await unmaskRconPassword(app, serverId, content) : content;
   // read previous for parent_version_id linkage (best-effort)
   const prev = await db
     .select({ id: configVersions.id, sha: configVersions.sha256 })
@@ -819,7 +842,7 @@ async function persistVersion(
     .orderBy(desc(configVersions.createdAt))
     .limit(1);
   const prevRow = prev[0];
-  const newSha = sha256(content);
+  const newSha = sha256(diskContent);
   if (prevRow && Buffer.from(prevRow.sha as unknown as Buffer).equals(newSha)) {
     // History is unchanged, so we insert no new `config_versions` row. But the
     // file on disk may have drifted out-of-band (e.g. hand-edited over SSH)
@@ -838,7 +861,7 @@ async function persistVersion(
     }
     let reload: ReloadOutcome | undefined;
     if (opts?.force || !diskInSync) {
-      await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content });
+      await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content: diskContent });
       // Same hot_reload gate as the versioned write path (CFG-1, #63): only
       // files Squad re-reads from disk get the RCON reload; for the rest the
       // outcome tells the UI a restart / next match is needed instead.
@@ -857,13 +880,13 @@ async function persistVersion(
       ...(reload ? { reload } : {}),
     };
   }
-  await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content });
+  await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content: diskContent });
   const inserted = await db
     .insert(configVersions)
     .values({
       serverId,
       filename: name,
-      content,
+      content: maskConfigSecrets(name, diskContent),
       sha256: newSha,
       parentVersionId: prevRow?.id ?? null,
       authorPlayerId,

@@ -6,7 +6,14 @@ import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, asc, eq, isNotNull, like } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 
-const SKIPPED_FILES = new Set<string>(['Rcon.cfg']);
+/**
+ * Files never overlaid from an archive: `Rcon.cfg` is rebuilt from the new
+ * server's own credentials at install, and `License.cfg` is rendered only by
+ * `syncLicenseCfg` from the new server's `server_credentials` (SRV-6, #45) —
+ * restoring it would bypass that store, and legacy backup rows hold the old
+ * server's license key in plaintext (#10).
+ */
+const SKIPPED_FILES = new Set<string>(['License.cfg', 'Rcon.cfg']);
 
 export interface RestoreConfigsResult {
   archive_server_id: string;

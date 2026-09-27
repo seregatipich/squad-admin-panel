@@ -6,6 +6,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { restoreConfigsFromArchive } from '../lib/server-restore.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
@@ -184,7 +185,8 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       return {
         id: row.id,
         filename: req.params.filename,
-        content: row.content,
+        // #10: backup rows written before masking hold plaintext secrets.
+        content: maskConfigSecrets(req.params.filename, row.content),
         sha256_hex: row.sha256.toString('hex'),
         created_at: row.created_at,
         message: row.message,

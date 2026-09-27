@@ -259,14 +259,14 @@ Returned by `POST /api/v1/servers/:id/restore-configs`. Source: `RestoreConfigsR
   "ok": true,
   "archive_server_id": "0190abcd-...",
   "files_restored": 18,
-  "files_skipped": ["Rcon.cfg"],
+  "files_skipped": ["License.cfg", "Rcon.cfg"],
   "files_missing": [],
   "config_version_ids": ["0190ef01-...", "0190ef02-..."],
   "errors": []
 }
 ```
 
-`files_skipped` always contains `Rcon.cfg` (the new server keeps its freshly-generated RCON password). `files_missing` lists `ALLOWED_CONFIG_FILES` entries that had no `deletion-backup-marker` row in the archive. `errors[]` carries `{file, error}` from any `bridge.fileAtomicWrite` failure; the loop continues on error.
+`files_skipped` always contains `License.cfg` and `Rcon.cfg` (the new server keeps its own license from `server_credentials` and its freshly-generated RCON password, #10). `files_missing` lists `ALLOWED_CONFIG_FILES` entries that had no `deletion-backup-marker` row in the archive. `errors[]` carries `{file, error}` from any `bridge.fileAtomicWrite` failure; the loop continues on error.
 
 ### Archive server item
 

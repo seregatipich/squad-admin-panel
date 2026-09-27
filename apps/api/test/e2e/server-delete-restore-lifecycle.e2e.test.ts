@@ -8,7 +8,7 @@
  *   3. /archive list + detail expose the server and the backup of Admins.cfg.
  *   4. POST /archive/:id/restore creates a new server (different slug),
  *      install it, then POST /restore-configs overlays the backup.
- *   5. New server's Admins.cfg matches the marker exactly. Rcon.cfg skipped.
+ *   5. New server's Admins.cfg matches the marker exactly. Rcon.cfg and License.cfg skipped.
  *
  * Requires:
  *   - docker compose stack up + panel-host-bridge active

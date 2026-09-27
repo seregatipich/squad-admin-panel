@@ -146,7 +146,7 @@ Restore (3 endpoints, UI wizard glues them together)
 2. POST /servers/:newId/install                   ─▶  existing install pipeline (depot → seedConfigs → ufw → container_run)
 3. POST /servers/:newId/restore-configs           ─▶  SELECT config_versions WHERE message LIKE 'deletion-backup-marker%'
                                                        AND server_id=archiveId
-                                                  ─▶  for each filename (skip Rcon.cfg):
+                                                  ─▶  for each filename (skip License.cfg, Rcon.cfg):
                                                        bridge.fileAtomicWrite onto /configs/{newId}/ServerConfig/
                                                        INSERT config_versions (message='restored from server <id> backup <iso>')
 4. POST /servers/:newId/start                     ─▶  bridge.containerStart

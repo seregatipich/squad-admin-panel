@@ -121,7 +121,7 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 5. `POST /api/v1/servers/:newId/install` fires. WebSocket `/api/v1/servers/:newId/install/ws` streams progress through `LogConsole`.
 6. On install `done` frame: transition to "Восстановление конфигов".
 7. `POST /api/v1/servers/:newId/restore-configs` body `{from_archive_id: archiveId}`.
-8. Summary card shows `files_restored`, `files_skipped` (always includes `Rcon.cfg`), `files_missing`, and any `errors[]` per file.
+8. Summary card shows `files_restored`, `files_skipped` (always includes `License.cfg` and `Rcon.cfg`), `files_missing`, and any `errors[]` per file.
 9. "Запустить сервер" button → `POST /api/v1/servers/:newId/start` and navigate to `/servers/:newId`.
 
 ## Connection banner

@@ -15,6 +15,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
+import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
@@ -124,10 +125,12 @@ async function seedConfigs(
       // Create the initial config_versions row so History / Blame / Diff
       // are meaningful from day one. author_user_id=NULL means "system"
       // (installer, not a logged-in user). Next human PUT becomes v2.
+      // #10: the history row keeps the RCON password masked; the sha still
+      // describes the disk bytes so drift detection compares like with like.
       await db.insert(configVersions).values({
         serverId,
         filename: file,
-        content: protectedContent,
+        content: maskConfigSecrets(file, protectedContent),
         sha256: createHash('sha256').update(protectedContent).digest(),
         parentVersionId: null,
         authorPlayerId: null,
