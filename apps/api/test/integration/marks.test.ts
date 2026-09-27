@@ -258,7 +258,7 @@ describeIfDb('POST /api/v1/players/:id/marks', () => {
       payload: JSON.stringify({ mark_type_id: 4 }),
     });
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.json()).toEqual({ error: 'forbidden', required: ['player:set_flags'] });
   });
 
   it('returns 409 when a concurrent writer wins the race past the pre-check', async () => {

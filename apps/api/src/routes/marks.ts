@@ -136,7 +136,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/mark-types',
-    { schema: { querystring: markTypesQuery }, config: { audit: false } },
+    {
+      schema: { querystring: markTypesQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -159,44 +162,51 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/marks/active-summary', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select({
-        playerId: playerMarks.playerId,
-        markTypeId: markTypes.id,
-        slug: markTypes.slug,
-        labelEn: markTypes.labelEn,
-        labelRu: markTypes.labelRu,
-        icon: markTypes.icon,
-        severity: markTypes.severity,
-      })
-      .from(playerMarks)
-      .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
-      .where(isNull(playerMarks.clearedAt))
-      .orderBy(desc(markTypes.severity), asc(markTypes.sortOrder));
-    const byPlayer = new Map<string, Array<Record<string, unknown>>>();
-    for (const row of rows) {
-      const marks = byPlayer.get(row.playerId) ?? [];
-      marks.push({
-        mark_type_id: row.markTypeId,
-        slug: row.slug,
-        label_en: row.labelEn,
-        label_ru: row.labelRu,
-        icon: row.icon,
-        severity: row.severity,
-      });
-      byPlayer.set(row.playerId, marks);
-    }
-    return {
-      items: Array.from(byPlayer.entries()).map(([player_id, marks]) => ({ player_id, marks })),
-    };
-  });
+  fast.get(
+    '/api/v1/marks/active-summary',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const rows = await app.db
+        .select({
+          playerId: playerMarks.playerId,
+          markTypeId: markTypes.id,
+          slug: markTypes.slug,
+          labelEn: markTypes.labelEn,
+          labelRu: markTypes.labelRu,
+          icon: markTypes.icon,
+          severity: markTypes.severity,
+        })
+        .from(playerMarks)
+        .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
+        .where(isNull(playerMarks.clearedAt))
+        .orderBy(desc(markTypes.severity), asc(markTypes.sortOrder));
+      const byPlayer = new Map<string, Array<Record<string, unknown>>>();
+      for (const row of rows) {
+        const marks = byPlayer.get(row.playerId) ?? [];
+        marks.push({
+          mark_type_id: row.markTypeId,
+          slug: row.slug,
+          label_en: row.labelEn,
+          label_ru: row.labelRu,
+          icon: row.icon,
+          severity: row.severity,
+        });
+        byPlayer.set(row.playerId, marks);
+      }
+      return {
+        items: Array.from(byPlayer.entries()).map(([player_id, marks]) => ({ player_id, marks })),
+      };
+    },
+  );
 
   fast.get(
     '/api/v1/players/:playerId/marks',
-    { schema: { params: playerIdParams, querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: listQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -217,7 +227,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/players/:playerId/marks',
-    { schema: { params: playerIdParams, body: createMarkBody }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, body: createMarkBody },
+      config: { permissions: ['player:set_flags'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -314,7 +327,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/players/:playerId/marks/:markId',
-    { schema: { params: markParams, body: clearMarkBody }, config: { audit: false } },
+    {
+      schema: { params: markParams, body: clearMarkBody },
+      config: { permissions: ['player:set_flags'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

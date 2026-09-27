@@ -42,7 +42,7 @@ Streaming methods (deliver `BridgeStreamFrame` before the final response): `cont
 | `players` | `player:view_ips` | | |
 | `players` | `player:view_notes` | | ✓ |
 | `players` | `player:edit_notes` | | ✓ |
-| `players` | `player:set_flags` | | ✓ |
+| `players` | `player:set_flags` | | |
 | `moderation` | `mod:kick` | ✓ | |
 | `moderation` | `mod:warn` | | |
 | `moderation` | `mod:ban_temp` | ✓ | |
