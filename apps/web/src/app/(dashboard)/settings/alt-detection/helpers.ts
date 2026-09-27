@@ -90,14 +90,30 @@ export interface AltDetectionSettingsForm {
   high_threshold: number;
 }
 
+/** Every field of {@link AltDetectionSettingsForm}, in form order. */
+const ALT_DETECTION_SETTINGS_FORM_KEYS = [
+  'weight_shared_ip',
+  'weight_shared_name',
+  'weight_young_account',
+  'weight_steamid_proximity',
+  'steamid_delta_threshold',
+  'medium_threshold',
+  'high_threshold',
+] as const satisfies readonly (keyof AltDetectionSettingsForm)[];
+
 /**
- * Validates the scoring-settings form before submit: every field must be a
- * non-negative integer, and `medium_threshold` must not exceed
+ * Validates the scoring-settings form before submit: every form field must be
+ * a non-negative integer, and `medium_threshold` must not exceed
  * `high_threshold` (mirrors the API's `alt_detection_settings_thresholds_chk`
  * check constraint, so a client-side rejection never needs a round trip).
+ *
+ * Only the form fields are checked, by an explicit key list: the page passes
+ * the whole settings view from the API, which also carries non-numeric
+ * metadata (`updated_at`, `updated_by_player_id`) that is never submitted.
  */
 export function validateAltDetectionSettingsForm(form: AltDetectionSettingsForm): string | null {
-  for (const [key, value] of Object.entries(form)) {
+  for (const key of ALT_DETECTION_SETTINGS_FORM_KEYS) {
+    const value = form[key];
     if (!Number.isInteger(value) || value < 0) {
       return `Поле "${key}" должно быть неотрицательным целым числом.`;
     }
