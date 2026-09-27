@@ -1,5 +1,11 @@
 # Changelog — worker-rcon
 
+## 2026-09-27 — Раздвоенная личность игрока больше не ломает опрос
+
+### Fixed
+
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 967): `upsertPlayers` искал игрока по `eos_id OR steam_id64` с `LIMIT 1` без порядка. Если eos и steam одного человека лежали в разных строках `players`, UPDATE падал на уникальном индексе, исключение обрывало весь опрос (после трёх неудач — RCON-соединение), а в `audit_log` каждые 30 с писалась ложная запись `player.steam_linked`. Теперь каждый игрок обрабатывается в своей транзакции, аудит пишется после UPDATE, строка с `eos_id` имеет приоритет, раздвоение помечается `steam_eos_conflict` (аудит `player.eos_steam_conflict` один раз), ошибка одного игрока логируется и не прерывает опрос, вставка новой строки идёт с `ON CONFLICT DO NOTHING` и повторным поиском. Тесты: `test/persist.integration.test.ts`, `test/persist.test.ts`.
+
 ## 2026-09-27 — История отрядов и короны создателей
 
 ### Added

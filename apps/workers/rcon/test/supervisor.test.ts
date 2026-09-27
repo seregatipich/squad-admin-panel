@@ -396,15 +396,17 @@ function makeSeedingDb(insertedEvents: Array<Record<string, unknown>>) {
     return chain;
   };
 
-  return {
-    transaction: vi.fn(async (callback: (tx: { execute: ReturnType<typeof vi.fn> }) => unknown) =>
-      callback({ execute: vi.fn(async () => [{ changed_count: 0 }]) }),
+  // Every poll also opens one transaction per upserted player; only the
+  // session-reconcile transaction runs `execute`, so that is what is counted.
+  const sessionExecute = vi.fn(async () => [{ changed_count: 0 }]);
+  const db = {
+    sessionExecute,
+    transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+      callback({ ...db, execute: sessionExecute }),
     ),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(async () => []),
-        })),
+        where: vi.fn(() => Object.assign(Promise.resolve([]), { limit: vi.fn(async () => []) })),
       })),
     })),
     insert: vi.fn((table: unknown) => ({
@@ -418,7 +420,8 @@ function makeSeedingDb(insertedEvents: Array<Record<string, unknown>>) {
         where: vi.fn(() => Promise.resolve(undefined)),
       })),
     })),
-  } as never;
+  };
+  return db as never;
 }
 
 describe('RconSupervisor seeding transitions', () => {
@@ -475,7 +478,9 @@ describe('RconSupervisor seeding transitions', () => {
         kind: 'server.seeding_started',
         serverId: 'srv-seeding',
       });
-      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(
+        (db as { sessionExecute: ReturnType<typeof vi.fn> }).sessionExecute,
+      ).toHaveBeenCalledTimes(1);
       expect(seedingEnvelopeTypes()).toEqual(['server.seeding_started']);
 
       // Repeat polls at the same count: no further transition, but the
