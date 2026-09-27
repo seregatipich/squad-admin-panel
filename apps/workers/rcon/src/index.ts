@@ -103,6 +103,7 @@ async function main() {
       .select({
         serverId: servers.id,
         status: servers.status,
+        runtime: servers.runtime,
         host: serverCredentials.rconHost,
         port: serverCredentials.rconPort,
         queryPort: serverSettings.queryPort,
@@ -130,6 +131,7 @@ async function main() {
           seedLiveAt: row.seedLiveAt ?? undefined,
           seedHysteresis: row.seedHysteresis ?? undefined,
           password: decrypt(key, blob),
+          refuseRestrictedAddresses: row.runtime === 'external',
         });
       } catch (err) {
         log.error(

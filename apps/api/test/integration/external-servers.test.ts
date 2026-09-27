@@ -479,6 +479,46 @@ describe('PUT /api/v1/servers/:id/external-connection', () => {
     });
     expect([400, 422]).toContain(empty.statusCode);
   });
+
+  it('refuses a loopback host and a CRLF password on create and on repoint (#30, finding #333)', async () => {
+    const cookie = await loginAsOwner(h);
+    const smuggled = 'x\r\nSET session:forged owner\r\n';
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers/external',
+      headers: { cookie },
+      payload: { ...externalBody, slug: 'ssrf-probe', rcon_host: '127.0.0.1', rcon_port: 6379 },
+    });
+    expect(created.statusCode).toBe(400);
+    const crlf = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers/external',
+      headers: { cookie },
+      payload: { ...externalBody, slug: 'ssrf-probe', rcon_password: smuggled },
+    });
+    expect(crlf.statusCode).toBe(400);
+
+    const { id } = await createExternal(cookie);
+    for (const payload of [
+      { rcon_host: 'localhost' },
+      { rcon_host: '169.254.169.254' },
+      { rcon_host: 'redis' },
+      { rcon_password: smuggled },
+    ]) {
+      const repoint = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/external-connection`,
+        headers: { cookie },
+        payload,
+      });
+      expect(repoint.statusCode).toBe(400);
+    }
+    const [creds] = await h.db
+      .select({ host: serverCredentials.rconHost })
+      .from(serverCredentials)
+      .where(eq(serverCredentials.serverId, id));
+    expect(creds?.host).toBe(externalBody.rcon_host);
+  });
 });
 
 describe('DELETE /api/v1/servers/:id for an external server', () => {

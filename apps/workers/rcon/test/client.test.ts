@@ -294,3 +294,47 @@ describe("RconClient against Squad's broken probe reply", () => {
     }
   });
 });
+
+describe('RconClient restricted-address guard (#30, finding #333)', () => {
+  async function listenOnLoopback(): Promise<{
+    server: Server;
+    port: number;
+    accepted: () => number;
+  }> {
+    let accepted = 0;
+    const server = createServer((sock) => {
+      accepted += 1;
+      sock.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return { server, port: (server.address() as AddressInfo).port, accepted: () => accepted };
+  }
+
+  it('refuses a loopback literal without opening a socket', async () => {
+    const { server, port, accepted } = await listenOnLoopback();
+    try {
+      const client = new RconClient(
+        makeOpts({ host: '127.0.0.1', port, refuseRestrictedAddresses: true }),
+      );
+      await expect(client.connect()).rejects.toThrow(/restricted address/);
+      await sleep(20);
+      expect(accepted()).toBe(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('refuses a hostname that resolves to loopback (DNS rebinding)', async () => {
+    const { server, port, accepted } = await listenOnLoopback();
+    try {
+      const client = new RconClient(
+        makeOpts({ host: 'localhost', port, refuseRestrictedAddresses: true }),
+      );
+      await expect(client.connect()).rejects.toThrow(/restricted address/);
+      await sleep(20);
+      expect(accepted()).toBe(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
