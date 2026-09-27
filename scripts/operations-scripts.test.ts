@@ -22,10 +22,10 @@ import { after, before, describe, it } from 'node:test';
 const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
-  'scripts/deploy-tk104.sh',
-  'scripts/dev-deploy-tk104.sh',
-  'scripts/rollback-tk104.sh',
-  'scripts/tk104-deploy-entry.sh',
+  'scripts/deploy-stand.sh',
+  'scripts/dev-deploy-stand.sh',
+  'scripts/rollback-stand.sh',
+  'scripts/deploy-entry.sh',
   'scripts/install-host-bridge.sh',
   'scripts/rebuild.sh',
   'scripts/uninstall.sh',
@@ -173,7 +173,7 @@ describe('operation script static contracts', () => {
     const testScripts = packageJson.scripts?.['test:scripts'] ?? '';
     assert.match(testScripts, /--test-concurrency=1/);
     for (const testFile of [
-      'scripts/deploy-tk104-workflow.test.ts',
+      'scripts/deploy-workflow.test.ts',
       'scripts/operations-scripts.test.ts',
       'scripts/rnsquadjs-shadow-diff.test.ts',
       'scripts/verify-audit-chain.test.ts',
@@ -548,7 +548,7 @@ describe('local pre-push checklist and git hooks', () => {
   it('blocks the push when an operation script contract fails', () => {
     const fixture = checklistFixture(FIXTURE_PACKAGES);
     const result = runChecklist(fixture, {
-      changed: ['scripts/deploy-tk104.sh'],
+      changed: ['scripts/deploy-stand.sh'],
       env: { FAKE_FAIL_ON: 'test:scripts' },
     });
 
@@ -916,7 +916,7 @@ const IMAGES = [
   ['API_IMAGE', 'api'],
   ['WEB_IMAGE', 'web'],
   ['WORKERS_IMAGE', 'workers'],
-  ['CADDY_IMAGE', 'caddy-tk104'],
+  ['CADDY_IMAGE', 'caddy'],
 ] as const;
 type ImageKey = (typeof IMAGES)[number][0];
 
@@ -1009,11 +1009,11 @@ interface DeployFixture {
 
 /** An app directory with the files the deploy hashes, and host tool shims. */
 function deployFixture(): DeployFixture {
-  const { root, script } = copyScript('scripts/deploy-tk104.sh');
-  writeFileSync(path.join(root, '.env.tk104'), 'SAFE_TEST_VALUE=1\n');
-  writeFileSync(path.join(root, 'compose.tk104.yml'), 'services: {}\n');
+  const { root, script } = copyScript('scripts/deploy-stand.sh');
+  writeFileSync(path.join(root, '.env.stand'), 'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\n');
+  writeFileSync(path.join(root, 'compose.stand.yml'), 'services: {}\n');
   mkdirSync(path.join(root, 'docker'));
-  writeFileSync(path.join(root, 'docker/Caddyfile.tk104'), 'tk104.duckdns.org {}\n');
+  writeFileSync(path.join(root, 'docker/Caddyfile.stand'), '{$APP_DOMAIN} {}\n');
   mkdirSync(path.join(root, 'packages/db/drizzle/meta'), { recursive: true });
   writeFileSync(path.join(root, 'packages/db/drizzle/0000_init.sql'), 'CREATE TABLE t ();\n');
   writeFileSync(path.join(root, 'packages/db/drizzle/meta/_journal.json'), '{"entries":[]}\n');
@@ -1060,14 +1060,14 @@ function dockerCommands(log: string): string[] {
 }
 
 const COMPOSE =
-  'docker|compose|--env-file|.env.tk104|--env-file|.release.next.env|-f|compose.tk104.yml';
+  'docker|compose|--env-file|.env.stand|--env-file|.release.next.env|-f|compose.stand.yml';
 
-describe('tk104 release deploy', { concurrency: true }, () => {
+describe('the stand host release deploy', { concurrency: true }, () => {
   it('fails before Docker when the deployment environment file is absent', async () => {
-    const { root, script } = copyScript('scripts/deploy-tk104.sh');
+    const { root, script } = copyScript('scripts/deploy-stand.sh');
     const result = await runAsync('/bin/bash', [script], { env: { APP_DIR: root } });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /\.env\.tk104 is missing/);
+    assert.match(result.stderr, /\.env\.stand is missing/);
   });
 
   it('refuses a malformed release or image reference before any Docker call', async () => {
@@ -1090,6 +1090,17 @@ describe('tk104 release deploy', { concurrency: true }, () => {
     }
     assert.equal(existsSync(path.join(fixture.root, 'pwned')), false);
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
+  });
+
+  it("refuses to start without the stand's APP_DOMAIN in .env.stand", async () => {
+    for (const content of ['SAFE_TEST_VALUE=1\n', 'APP_DOMAIN=stand.example;id\n']) {
+      const fixture = deployFixture();
+      writeFileSync(path.join(fixture.root, '.env.stand'), content);
+      const result = await deploy(fixture);
+      assert.equal(result.status, 1, content);
+      assert.match(result.stderr, /APP_DOMAIN in .*\.env\.stand must be the stand's host name/);
+      assert.deepEqual(logLines(fixture.log), [], content);
+    }
   });
 
   it('refuses a Compose too old to merge both env files, before changing anything', async () => {
@@ -1298,8 +1309,8 @@ describe('tk104 release deploy', { concurrency: true }, () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.env')), false);
   });
 
-  it('applies a Caddyfile or .env.tk104 edit even when no image changed', async () => {
-    for (const edited of ['docker/Caddyfile.tk104', '.env.tk104']) {
+  it('applies a Caddyfile or .env.stand edit even when no image changed', async () => {
+    for (const edited of ['docker/Caddyfile.stand', '.env.stand']) {
       const fixture = deployFixture();
       assert.equal((await deploy(fixture)).status, 0);
       const first = releaseFile(fixture);
@@ -1314,7 +1325,7 @@ describe('tk104 release deploy', { concurrency: true }, () => {
         false,
       );
       const recorded = releaseFile(fixture);
-      const hash = edited === '.env.tk104' ? 'COMPOSE_CONFIG_SHA' : 'CADDYFILE_SHA';
+      const hash = edited === '.env.stand' ? 'COMPOSE_CONFIG_SHA' : 'CADDYFILE_SHA';
       assert.notEqual(recorded[hash], first[hash], edited);
     }
   });
@@ -1347,7 +1358,7 @@ describe('tk104 release deploy', { concurrency: true }, () => {
   // starts in the same `up -d` and needs a moment more to bind 443, so the
   // probe raced the deploy it verifies. Run 31948383567 went red with curl
   // exit 35 (SSL connect error) 140 ms after caddy started, while the stack
-  // was healthy and serving https://tk104.duckdns.org/health with a 200.
+  // was healthy and serving https://<APP_DOMAIN>/health with a 200.
   it('retries the Caddy probe while TLS is still coming up, then reports success', async () => {
     const fixture = deployFixture();
     const result = await deploy(fixture, { CURL_FAIL_TIMES: '3', CURL_EXIT: '35' });
@@ -1355,7 +1366,7 @@ describe('tk104 release deploy', { concurrency: true }, () => {
     assert.match(result.stdout, /is live/);
     const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
     assert.equal(probes.length, 4, 'expected 3 failed probes then one success');
-    assert.ok(probes.every((line) => line.includes('|--resolve|tk104.duckdns.org:443:127.0.0.1|')));
+    assert.ok(probes.every((line) => line.includes('|--resolve|stand.example:443:127.0.0.1|')));
   });
 
   it('still fails closed, preserving the curl exit code, when the probe never recovers', async () => {
@@ -1412,7 +1423,7 @@ describe('tk104 release deploy', { concurrency: true }, () => {
       assert.equal(result.status, 0, result.stderr);
       const commands = dockerCommands(fixture.log);
       // A rebuilt tag can hide new content, so a second identical run builds too.
-      const build = commands.indexOf(`${COMPOSE}|-f|compose.tk104.build.yml|build`);
+      const build = commands.indexOf(`${COMPOSE}|-f|compose.stand.build.yml|build`);
       const up = commands.indexOf(`${COMPOSE}|up|-d|--remove-orphans`);
       assert.ok(build >= 0 && up > build, commands.join('\n'));
       assert.equal(
@@ -1458,12 +1469,12 @@ describe('tk104 release deploy', { concurrency: true }, () => {
   });
 });
 
-describe('tk104 rollback', { concurrency: true }, () => {
+describe('the stand host rollback', { concurrency: true }, () => {
   /** A deploy fixture with the real rollback script next to the real deploy script. */
   function rollbackFixture(): DeployFixture & { rollback: string } {
     const fixture = deployFixture();
-    const rollback = path.join(fixture.root, 'scripts/rollback-tk104.sh');
-    copyFileSync(path.join(REPOSITORY_ROOT, 'scripts/rollback-tk104.sh'), rollback);
+    const rollback = path.join(fixture.root, 'scripts/rollback-stand.sh');
+    copyFileSync(path.join(REPOSITORY_ROOT, 'scripts/rollback-stand.sh'), rollback);
     return { ...fixture, rollback };
   }
 
@@ -1525,14 +1536,14 @@ describe('tk104 rollback', { concurrency: true }, () => {
   });
 });
 
-describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
+describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
   const VALID = [
     'deploy',
     RELEASE_SHA,
     `api=sha256:${'1'.repeat(64)}`,
     `web=sha256:${'2'.repeat(64)}`,
     `workers=sha256:${'3'.repeat(64)}`,
-    `caddy-tk104=sha256:${'4'.repeat(64)}`,
+    `caddy=sha256:${'4'.repeat(64)}`,
   ].join(' ');
 
   function entryFixture(): {
@@ -1543,14 +1554,14 @@ describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
     app: string;
     env: NodeJS.ProcessEnv;
   } {
-    const { root, script } = copyScript('scripts/tk104-deploy-entry.sh');
+    const { root, script } = copyScript('scripts/deploy-entry.sh');
     const src = path.join(root, 'src');
     const app = path.join(root, 'app');
     // rsync is a shim, so the synced tree is prepared by hand; its deploy
     // script is a stand-in recording what the entry handed over.
     mkdirSync(path.join(app, 'scripts'), { recursive: true });
     executable(
-      path.join(app, 'scripts/deploy-tk104.sh'),
+      path.join(app, 'scripts/deploy-stand.sh'),
       `printf 'deploy|%s|%s|%s|%s|%s|%s|%s|%s\\n' "$PWD" "$APP_DIR" "$RELEASE_SHA" "$API_IMAGE" "$WEB_IMAGE" "$WORKERS_IMAGE" "$CADDY_IMAGE" "\${DEPLOY_BUILD:-unset}" >> "\${OPS_LOG:?}"`,
     );
     const shims = shimDirectory();
@@ -1606,7 +1617,7 @@ describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
       VALID.replace(digest('2'), '2'.repeat(64)),
       VALID.replace(digest('3'), `sha256:${'3'.repeat(63)}`),
       VALID.replace(`web=${digest('2')} workers=`, `workers=${digest('2')} web=`),
-      VALID.replace('caddy-tk104=', 'caddy='),
+      VALID.replace('caddy=', 'caddy-stand='),
       VALID.replace('deploy ', 'rollback '),
     ];
     for (const request of requests) {
@@ -1662,20 +1673,20 @@ describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
         imageRef('api', '1'),
         imageRef('web', '2'),
         imageRef('workers', '3'),
-        imageRef('caddy-tk104', '4'),
+        imageRef('caddy', '4'),
         // A request can only ever deploy registry images, never build.
         'unset',
       ].join('|'),
     ]);
     // No installed copy exists in the fixture's checkout, so it says to reinstall.
-    assert.match(result.stderr, /differs from scripts\/tk104-deploy-entry\.sh .* reinstall it/);
+    assert.match(result.stderr, /differs from scripts\/deploy-entry\.sh .* reinstall it/);
   });
 
   it('takes the same request as arguments when run by hand, with overridable locations', async () => {
     const fixture = entryFixture();
     mkdirSync(path.join(fixture.src, '.git'), { recursive: true });
     mkdirSync(path.join(fixture.src, 'scripts'), { recursive: true });
-    copyFileSync(fixture.script, path.join(fixture.src, 'scripts/tk104-deploy-entry.sh'));
+    copyFileSync(fixture.script, path.join(fixture.src, 'scripts/deploy-entry.sh'));
     const result = await runAsync('/bin/bash', [fixture.script, ...VALID.split(' ')], {
       env: {
         ...fixture.env,
@@ -1723,14 +1734,14 @@ describe('tk104 forced-command deploy entry', { concurrency: true }, () => {
   });
 });
 
-describe('fast developer deploy to tk104', { concurrency: true }, () => {
+describe('fast developer deploy to the stand host', { concurrency: true }, () => {
   function devDeployFixture(): {
     root: string;
     script: string;
     log: string;
     env: NodeJS.ProcessEnv;
   } {
-    const { root, script } = copyScript('scripts/dev-deploy-tk104.sh');
+    const { root, script } = copyScript('scripts/dev-deploy-stand.sh');
     const shims = shimDirectory();
     const log = path.join(root, 'commands.log');
     loggingShim(shims, 'rsync', `exit "\${RSYNC_EXIT:-0}"`);
@@ -1764,7 +1775,13 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
       root,
       script,
       log,
-      env: { OPS_LOG: log, SOURCE_DIR: root, PATH: `${shims}:/usr/bin:/bin` },
+      env: {
+        OPS_LOG: log,
+        SOURCE_DIR: root,
+        PATH: `${shims}:/usr/bin:/bin`,
+        STAND_SSH_TARGET: 'deployer@stand.example',
+        STAND_URL: 'https://stand.example',
+      },
     };
   }
 
@@ -1777,7 +1794,7 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
   }
 
   const COMPOSE_BOTH =
-    'docker compose --env-file .env.tk104 --env-file .release.env -f compose.tk104.yml';
+    'docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml';
 
   it('defaults to the web service: rebuilds it on the host after the sync and records it', async () => {
     const fixture = devDeployFixture();
@@ -1791,17 +1808,17 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
     const image = `${IMAGE_REPO}-web:dev-abc1234`;
     assert.match(
       payload,
-      /test -f \.release\.env \|\| \{ echo 'fatal: tk104 has no release recorded yet/,
+      /test -f \.release\.env \|\| \{ echo 'fatal: the stand host has no release recorded yet/,
     );
     assert.ok(payload.includes(`export WEB_IMAGE='${image}';`), payload);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.tk104.build.yml build web;`), payload);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build web;`), payload);
     assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps web;`), payload);
     assert.ok(
       payload.includes(`sed -i -e 's|^WEB_IMAGE=.*|WEB_IMAGE=${image}|' .release.env`),
       payload,
     );
     // Nothing that could touch the schema, other containers, or /health.
-    assert.doesNotMatch(payload, /deploy-tk104|migrator|--remove-orphans|APP_VERSION/);
+    assert.doesNotMatch(payload, /deploy|migrator|--remove-orphans|APP_VERSION/);
   });
 
   it('never ships host secrets, release records, state, or build output', async () => {
@@ -1821,7 +1838,7 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
       assert.ok(rsync.includes(`|--exclude|${excluded}`), `${excluded} is not excluded: ${rsync}`);
     }
     assert.ok(rsync.includes('|--delete'), rsync);
-    assert.match(rsync, /\|seregatipich@tk104\.duckdns\.org:apps\/squad-admin-panel\/$/);
+    assert.match(rsync, /\|deployer@stand\.example:apps\/squad-admin-panel\/$/);
   });
 
   it('stamps a version that can never be mistaken for a pushed commit SHA', async () => {
@@ -1848,7 +1865,7 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
     const result = await runAsync('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
     assert.equal(result.status, 0, result.stderr);
     const payload = sshPayload(fixture.log);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.tk104.build.yml build api;`), payload);
+    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build api;`), payload);
     assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps api;`), payload);
     assert.ok(
       payload.includes(
@@ -1875,7 +1892,7 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       sshPayload(fixture.log),
-      /DEPLOY_BUILD=1 RELEASE_SHA='dev-abc1234' bash scripts\/deploy-tk104\.sh$/,
+      /DEPLOY_BUILD=1 RELEASE_SHA='dev-abc1234' bash scripts\/deploy-stand\.sh$/,
     );
   });
 
@@ -1890,17 +1907,29 @@ describe('fast developer deploy to tk104', { concurrency: true }, () => {
       payload.includes(`export WORKERS_IMAGE='${IMAGE_REPO}-workers:dev-abc1234';`),
       payload,
     );
-    assert.ok(payload.includes('-f compose.tk104.build.yml build worker-rcon;'), payload);
+    assert.ok(payload.includes('-f compose.stand.build.yml build worker-rcon;'), payload);
     assert.ok(payload.includes('up -d --no-deps worker-rcon;'), payload);
     assert.doesNotMatch(payload, /migrator|--remove-orphans|APP_VERSION/);
   });
 
-  it('rejects an unknown or malformed target before touching tk104', async () => {
+  it('refuses to run without the stand target and origin', async () => {
+    for (const unset of ['STAND_SSH_TARGET', 'STAND_URL']) {
+      const fixture = devDeployFixture();
+      const result = await runAsync('/bin/bash', [fixture.script], {
+        env: { ...fixture.env, [unset]: '' },
+      });
+      assert.notEqual(result.status, 0, unset);
+      assert.match(result.stderr, new RegExp(`${unset}: set ${unset}`));
+      assert.deepEqual(logLines(fixture.log), [], unset);
+    }
+  });
+
+  it('rejects an unknown or malformed target before touching the stand host', async () => {
     for (const target of ['postgres', 'worker-rcon;touch pwned', 'worker-', 'worker-RCON']) {
       const fixture = devDeployFixture();
       const result = await runAsync('/bin/bash', [fixture.script, target], { env: fixture.env });
       assert.equal(result.status, 2, target);
-      assert.match(result.stderr, /usage: dev-deploy-tk104\.sh \[web\|api\|worker-<name>\|full\]/);
+      assert.match(result.stderr, /usage: dev-deploy-stand\.sh \[web\|api\|worker-<name>\|full\]/);
       assert.deepEqual(logLines(fixture.log), [], target);
     }
   });

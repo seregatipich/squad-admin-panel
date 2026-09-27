@@ -4,7 +4,7 @@
 #
 # A `uses: owner/repo@v4`-style reference resolves whatever commit the `v4`
 # tag currently points to. A repointed tag would execute arbitrary code in CI;
-# deploy-tk104.yml is the highest-severity case because its self-hosted job
+# deploy.yml is the highest-severity case because its self-hosted job
 # checks out code and later writes the production SSH deploy key to disk (#248).
 #
 # This check keeps every remote `uses:` reference pinned to the 40-hex-char

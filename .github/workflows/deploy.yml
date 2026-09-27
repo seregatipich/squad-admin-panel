@@ -1,7 +1,9 @@
-name: deploy-tk104
+name: deploy
 
-# tk104 (https://tk104.duckdns.org) is the development stand: every push to
-# `dev` is running there within minutes, with no test gate in between. The
+# Deploys every push to `dev` to the development stand within minutes, with
+# no test gate in between. Which host that is lives in the `stand` environment,
+# not here: vars.STAND_SSH_TARGET (user@host), vars.STAND_URL (its public
+# origin) and the secrets STAND_SSH_KEY / STAND_SSH_KNOWN_HOSTS. The
 # tests run on `master` (ci.yml); what reaches `dev` is already reviewed code,
 # and a broken stand is fixed forward or rolled back with a dispatch.
 on:
@@ -37,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, web, workers, caddy-tk104]
+        image: [api, web, workers, caddy]
     concurrency:
       group: deploy-build-${{ matrix.image }}
       cancel-in-progress: true
@@ -57,7 +59,7 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch ]]; then
             status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${RELEASE_SHA}...dev" --jq '.status')
             if [[ "${status}" != ahead && "${status}" != identical ]]; then
-              echo "::error::${RELEASE_SHA} is not on dev (compare status '${status}'); only dev commits may reach tk104."
+              echo "::error::${RELEASE_SHA} is not on dev (compare status '${status}'); only dev commits may reach the stand host."
               exit 1
             fi
           fi
@@ -108,9 +110,9 @@ jobs:
             ${{ matrix.image }}.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:buildcache
             ${{ matrix.image }}.cache-to=type=registry,ref=ghcr.io/seregatipich/squad-panel-${{ matrix.image }}:buildcache,mode=max
 
-  # Hands tk104 the commit and the exact image digests over SSH. The key is
+  # Hands the stand host the commit and the exact image digests over SSH. The key is
   # bound to a forced command on the host (~/bin/panel-deploy), which accepts
-  # only `deploy <sha> api=… web=… workers=… caddy-tk104=…`, fetches that
+  # only `deploy <sha> api=… web=… workers=… caddy=…`, fetches that
   # commit itself, and pulls the images by digest — this job never gets a
   # shell there and never copies files.
   deploy:
@@ -118,11 +120,11 @@ jobs:
     if: github.repository == 'seregatipich/squad-admin-panel'
     runs-on: ubuntu-24.04
     environment:
-      name: tk104-dev
-      url: https://tk104.duckdns.org
+      name: stand
+      url: ${{ vars.STAND_URL }}
     # Never cancel a deploy mid-flight; a newer run waits and then wins.
     concurrency:
-      group: deploy-tk104
+      group: deploy
       cancel-in-progress: false
     timeout-minutes: 15
     permissions:
@@ -154,7 +156,7 @@ jobs:
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           images=()
-          for image in api web workers caddy-tk104; do
+          for image in api web workers caddy; do
             ref="ghcr.io/seregatipich/squad-panel-${image}:${RELEASE_SHA}"
             digest=$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r '.digest // empty') || digest=''
             if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -167,60 +169,68 @@ jobs:
 
       - name: Configure pinned SSH trust and deploy key
         env:
-          TK104_DEPLOY_KEY: ${{ secrets.TK104_SSH_KEY }}
-          TK104_SSH_KNOWN_HOSTS: ${{ secrets.TK104_SSH_KNOWN_HOSTS }}
+          STAND_DEPLOY_KEY: ${{ secrets.STAND_SSH_KEY }}
+          STAND_SSH_KNOWN_HOSTS: ${{ secrets.STAND_SSH_KNOWN_HOSTS }}
+          STAND_SSH_TARGET: ${{ vars.STAND_SSH_TARGET }}
         run: |
-          if [[ -z "${TK104_SSH_KNOWN_HOSTS}" ]]; then
-            echo "Pinned tk104 SSH host key is missing." >&2
+          if [[ ! "${STAND_SSH_TARGET}" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]]; then
+            echo "vars.STAND_SSH_TARGET must be user@host (got '${STAND_SSH_TARGET}')." >&2
+            exit 1
+          fi
+          if [[ -z "${STAND_SSH_KNOWN_HOSTS}" ]]; then
+            echo "Pinned stand SSH host key is missing." >&2
             exit 1
           fi
           umask 077
           mkdir -p ~/.ssh
-          printf '%s' "${TK104_SSH_KNOWN_HOSTS}" > "${RUNNER_TEMP}/tk104_known_hosts"
-          chmod 600 "${RUNNER_TEMP}/tk104_known_hosts"
-          if ! ssh-keygen -l -f "${RUNNER_TEMP}/tk104_known_hosts" >/dev/null 2>&1 ||
-             ! ssh-keygen -F tk104.duckdns.org -f "${RUNNER_TEMP}/tk104_known_hosts" \
+          printf '%s' "${STAND_SSH_KNOWN_HOSTS}" > "${RUNNER_TEMP}/stand_known_hosts"
+          chmod 600 "${RUNNER_TEMP}/stand_known_hosts"
+          if ! ssh-keygen -l -f "${RUNNER_TEMP}/stand_known_hosts" >/dev/null 2>&1 ||
+             ! ssh-keygen -F "${STAND_SSH_TARGET#*@}" -f "${RUNNER_TEMP}/stand_known_hosts" \
                >/dev/null 2>&1; then
-            rm -f "${RUNNER_TEMP}/tk104_known_hosts"
-            echo "Pinned tk104 SSH host key is invalid." >&2
+            rm -f "${RUNNER_TEMP}/stand_known_hosts"
+            echo "Pinned stand SSH host key is invalid." >&2
             exit 1
           fi
-          if [[ -z "${TK104_DEPLOY_KEY}" ]]; then
-            echo "tk104 SSH deploy key is missing." >&2
+          if [[ -z "${STAND_DEPLOY_KEY}" ]]; then
+            echo "Stand SSH deploy key is missing." >&2
             exit 1
           fi
-          printf '%s\n' "${TK104_DEPLOY_KEY}" > ~/.ssh/id_deploy
+          printf '%s\n' "${STAND_DEPLOY_KEY}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
-      - name: Deploy the release on tk104
+      - name: Deploy the release on the stand
         env:
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
           RELEASE_IMAGES: ${{ steps.images.outputs.images }}
+          STAND_SSH_TARGET: ${{ vars.STAND_SSH_TARGET }}
         run: |
           ssh -i ~/.ssh/id_deploy \
-            -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
+            -o UserKnownHostsFile="${RUNNER_TEMP}/stand_known_hosts" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=20 \
-            seregatipich@tk104.duckdns.org \
+            "${STAND_SSH_TARGET}" \
             "deploy ${RELEASE_SHA} ${RELEASE_IMAGES}"
 
       # Polls every 2 s for about 90 s: the forced command returns once compose
       # has started the release, and the api needs a few seconds to answer.
       - name: External health check
+        env:
+          STAND_URL: ${{ vars.STAND_URL }}
         run: |
-          body="${RUNNER_TEMP}/tk104-health.json"
+          body="${RUNNER_TEMP}/stand-health.json"
           code=000
           for _ in $(seq 1 45); do
             code=$(curl --silent --output "${body}" --write-out '%{http_code}' \
-              --connect-timeout 3 --max-time 5 https://tk104.duckdns.org/health) || code=000
+              --connect-timeout 3 --max-time 5 "${STAND_URL}/health") || code=000
             if [[ "${code}" == 200 ]] && jq -e '.status == "ok"' "${body}" >/dev/null 2>&1; then
-              echo "https://tk104.duckdns.org/health -> 200 ok"
+              echo "${STAND_URL}/health -> 200 ok"
               exit 0
             fi
             sleep 2
           done
-          echo "::error::https://tk104.duckdns.org/health did not report status ok within ~90 s (last HTTP ${code})."
+          echo "::error::${STAND_URL}/health did not report status ok within ~90 s (last HTTP ${code})."
           exit 1
 
       - name: Remove SSH deploy key
         if: always()
-        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts"
+        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/stand_known_hosts"

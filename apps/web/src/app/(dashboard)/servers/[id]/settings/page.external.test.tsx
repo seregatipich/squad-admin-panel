@@ -80,7 +80,7 @@ function stubFetch(runtime: 'external' | 'container') {
             ssh_user: body.ssh_user,
             log_path: body.log_path,
             enabled: body.enabled,
-            public_key: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@tk104',
+            public_key: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@stand-host',
             host_key_fingerprint: null,
             key_version: 1,
             updated_at: '2026-09-07T10:00:00.000Z',
@@ -212,7 +212,7 @@ describe('SettingsPage — источник логов внешнего серв
       regenerate_key: false,
     });
     expect(await screen.findByLabelText('Публичный ключ панели')).toHaveValue(
-      'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@tk104',
+      'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA squad-admin-panel@stand-host',
     );
     expect(screen.getByRole('button', { name: 'Перевыпустить ключ' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Удалить источник' })).toBeInTheDocument();

@@ -105,7 +105,7 @@ describe('GET /api/v1/host/backups', () => {
           id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
           short_id: SNAPSHOT_ID,
           time: '2026-07-24T03:00:00Z',
-          hostname: 'tk104',
+          hostname: 'stand-host',
           paths: ['/data'],
           tags: ['cron'],
         },

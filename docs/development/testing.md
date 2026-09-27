@@ -61,7 +61,7 @@ pnpm --filter @squad/api test
 скриптов, которые не относятся к одному workspace-пакету. Он проверяет:
 
 - безопасные preflight/confirmation/fail-closed границы `bootstrap`,
-  `install-host-bridge`, `deploy-tk104`, `rebuild` и `uninstall` на временных
+  `install-host-bridge`, `deploy`, `rebuild` и `uninstall` на временных
   копиях со всеми host-командами, заменёнными журналирующими подменами;
 - настоящий length-prefixed JSON-протокол `verify-bridge` через временный
   Unix-сокет;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local pre-push checklist. A push to `dev` deploys the tk104 development stand
+# Local pre-push checklist. A push to `dev` deploys the development stand
 # straight away, without tests, so this is the only check a change gets before
 # it reaches the stand; the full suite runs in `ci` once the tip is promoted to
 # `master`, and that run stays the authoritative gate. The default run is

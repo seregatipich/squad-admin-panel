@@ -49,7 +49,7 @@ assert_feature() {
 }
 
 # --- gh stub: canned `gh run list --json ...` output per workflow ---------
-# GH_DEPLOY_MODE answers for deploy-tk104.yml (runs on dev), GH_CI_MODE for
+# GH_DEPLOY_MODE answers for deploy.yml (runs on dev), GH_CI_MODE for
 # ci.yml (runs on master). GH_STUB_SHA is the tip under test; the `docs` deploy
 # mode reports a green deploy of GH_STUB_OLD_SHA only.
 mkdir -p "$TMP/bin"
@@ -61,7 +61,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$workflow" in
-deploy-tk104.yml) mode=${GH_DEPLOY_MODE:-green} ;;
+deploy.yml) mode=${GH_DEPLOY_MODE:-green} ;;
 *) mode=${GH_CI_MODE:-green} ;;
 esac
 case "$mode" in
@@ -106,7 +106,7 @@ GH_CI_MODE=running assert fail "master CI run still in progress"
 GH_CI_MODE=stale assert fail "green master CI run exists only for an older SHA"
 GH_CI_MODE=empty assert fail "no master CI run for the current tip"
 
-# A tip that only changes docs has no deploy run of its own (deploy-tk104.yml
+# A tip that only changes docs has no deploy run of its own (deploy.yml
 # ignores such pushes); the ancestor's green deploy covers it.
 deployed=$(git rev-parse HEAD)
 mkdir -p docs && echo guide >docs/guide.md && echo notes >NOTES.md

@@ -76,7 +76,7 @@ VM; there is no self-hosted runner.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`deploy-tk104.yml`](../../.github/workflows/deploy-tk104.yml) | push to `dev` (except `**.md` and `docs/**`), or a dispatch with an optional `sha` | builds the four release images, pushes them to GHCR, and deploys them to the tk104 development stand — with no tests |
+| [`deploy.yml`](../../.github/workflows/deploy.yml) | push to `dev` (except `**.md` and `docs/**`), or a dispatch with an optional `sha` | builds the four release images, pushes them to GHCR, and deploys them to the development stand — with no tests |
 | [`ci.yml`](../../.github/workflows/ci.yml) | push to `master` (the fast-forward promotion), or a dispatch | the full verification suite; nothing deploys from it |
 
 [`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh) fails
@@ -84,7 +84,7 @@ CI when a job of either workflow leaves the hosted image or selects a self-hoste
 or a runner group — a group a personal account does not have would leave the job
 `queued` forever without an error — when `ci` runs on anything but `master` pushes and
 dispatches, when a deploy job loses its `github.repository` guard or the deploy leaves
-the `tk104-dev` environment, or when the job graph described below drifts.
+the `stand` environment, or when the job graph described below drifts.
 
 **Outside code must never reach a deploy secret.** Both workflows accept only trusted
 `push` events and explicit dispatches — never `pull_request`.
@@ -95,15 +95,15 @@ groups, and it checks its own detector against fixtures first (#217, #286). That
 only sees workflow files already in the repository: a fork's pull request can bring its
 own workflow file. Two repository settings close that gap and must stay on — Settings →
 Actions → General → *Require approval for all outside collaborators*, and *Workflow
-permissions: read repository contents*. The deploy secrets (`TK104_SSH_KEY`,
-`TK104_SSH_KNOWN_HOSTS`) live only in the `tk104-dev` environment, whose deployment
+permissions: read repository contents*. The deploy secrets (`STAND_SSH_KEY`,
+`STAND_SSH_KNOWN_HOSTS`) live only in the `stand` environment, whose deployment
 branch policy admits `dev` alone.
 
 ### The stand deploy
 
-`deploy-tk104.yml` has two jobs and no workflow-level concurrency:
+`deploy.yml` has two jobs and no workflow-level concurrency:
 
-- **`build`** — one matrix leg per image (`api`, `web`, `workers`, `caddy-tk104`), with
+- **`build`** — one matrix leg per image (`api`, `web`, `workers`, `caddy`), with
   `packages: write`. A leg skips the build when
   `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists (a redeploy or a
   rollback); otherwise it builds that target of [`docker-bake.hcl`](../../docker-bake.hcl)
@@ -111,27 +111,27 @@ branch policy admits `dev` alone.
   (`mode=max`). A newer push cancels the same image's older build (concurrency group
   `deploy-build-<image>`), so a merge wave spends minutes only on the commit that will be
   deployed; the superseded run's deploy is then skipped.
-- **`deploy`** — after every build, in the `tk104-dev` environment, one at a time
-  (group `deploy-tk104`, never cancelled mid-flight). It resolves the four `:<sha>` tags
+- **`deploy`** — after every build, in the `stand` environment, one at a time
+  (group `deploy`, never cancelled mid-flight). It resolves the four `:<sha>` tags
   to digests, writes the deploy key and the pinned host key (checked with
-  `ssh-keygen -l` and `ssh-keygen -F tk104.duckdns.org`; `StrictHostKeyChecking=yes`),
+  `ssh-keygen -l` and `ssh-keygen -F <stand host>`; `StrictHostKeyChecking=yes`),
   and runs
 
   ```bash
-  ssh seregatipich@tk104.duckdns.org \
-    "deploy <sha> api=sha256:<digest> web=sha256:<digest> workers=sha256:<digest> caddy-tk104=sha256:<digest>"
+  ssh "$STAND_SSH_TARGET" \
+    "deploy <sha> api=sha256:<digest> web=sha256:<digest> workers=sha256:<digest> caddy=sha256:<digest>"
   ```
 
   The key is bound to a forced command on the host (`~/bin/panel-deploy`, an installed
-  copy of `scripts/tk104-deploy-entry.sh`) that accepts only that shape, fetches the
-  commit itself, and runs `scripts/deploy-tk104.sh` with the images pinned by digest: the
-  job never gets a shell on tk104 and copies no files there. It then polls
-  `https://tk104.duckdns.org/health` every 2 s for about 90 s until it answers 200 with
+  copy of `scripts/deploy-entry.sh`) that accepts only that shape, fetches the
+  commit itself, and runs `scripts/deploy-stand.sh` with the images pinned by digest: the
+  job never gets a shell on the stand host and copies no files there. It then polls
+  `$STAND_URL/health` every 2 s for about 90 s until it answers 200 with
   `"status":"ok"`, and removes the key whatever happened.
 
-Redeploy or roll back with `gh workflow run deploy-tk104.yml --ref dev -f sha=<40-hex sha>`;
+Redeploy or roll back with `gh workflow run deploy.yml --ref dev -f sha=<40-hex sha>`;
 the build job refuses a commit that `dev` does not contain.
-[`scripts/deploy-tk104-workflow.test.ts`](../../scripts/deploy-tk104-workflow.test.ts)
+[`scripts/deploy-workflow.test.ts`](../../scripts/deploy-workflow.test.ts)
 (part of `pnpm test:scripts`) locks the job graph and runs the steps' own shell against
 stubbed `gh`, `docker`, `ssh`, and `curl`.
 
@@ -150,7 +150,7 @@ the newest SHA matters and nothing deploys from it.
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
-| `images` | the `release` group and `rnsquadjs` of `docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `compose.tk104.yml` is in the workers image, and the workers image exits 64 without one |
+| `images` | the `release` group and `rnsquadjs` of `docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
 | `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
 | `gate` | `needs` every other job with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); then merges the API and web shards' blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite |
 
@@ -187,20 +187,20 @@ needs no container, and `actions/setup-go` caches modules keyed by
 
 ## Deploy troubleshooting
 
-A failed `deploy-tk104` run names the step that broke:
+A failed `deploy` run names the step that broke:
 
 - **`build`** — a Dockerfile or bake problem. `ci`'s `images` job builds the same
   targets when the commit is promoted.
 - **Resolve the image digests** — an image of that SHA is missing from GHCR, usually
   because a build leg was cancelled by a newer push; re-run the workflow.
-- **Configure pinned SSH trust and deploy key** — the `tk104-dev` environment lacks
-  `TK104_SSH_KEY`, or `TK104_SSH_KNOWN_HOSTS` holds no valid key line for
-  `tk104.duckdns.org`.
-- **Deploy the release on tk104** — the forced command refused the request, or
-  `scripts/deploy-tk104.sh` failed on the host; its output is in the step log.
+- **Configure pinned SSH trust and deploy key** — the `stand` environment lacks
+  `STAND_SSH_KEY`, or `STAND_SSH_KNOWN_HOSTS` holds no valid key line for
+  the stand's host (the part of `STAND_SSH_TARGET` after `@`).
+- **Deploy the release on the stand host** — the forced command refused the request, or
+  `scripts/deploy-stand.sh` failed on the host; its output is in the step log.
 - **External health check** — the release started, but `/health` did not report
   `"status":"ok"` within about 90 s. Roll back with a dispatch of the last good SHA, or
-  with `bash scripts/rollback-tk104.sh` on the host. Neither undoes migrations (see
+  with `bash scripts/rollback-stand.sh` on the host. Neither undoes migrations (see
   CLAUDE.md → "Dev stand and promotion").
 
 **History.** Verification first ran hosted with a separate self-hosted deploy runner
@@ -209,7 +209,7 @@ A failed `deploy-tk104` run names the step that broke:
 credential, and they failed twice with their registration files gone (#215, 2026-09-07).
 When the organization repository became unavailable (2026-09-16) the project moved to
 `seregatipich/squad-admin-panel`, returned verification to hosted VMs, and registered a
-single repository-level deploy runner on tk104. Since the CI/CD redesign (2026-09) tk104
+single repository-level deploy runner on the stand host. Since the CI/CD redesign (2026-09) the stand host
 is a development stand fed by every `dev` push through hosted VMs and a forced-command
 SSH key, `ci` runs on `master` after promotion, and no workflow uses a self-hosted
 runner; `scripts/check-runner-health.sh` went with it.
@@ -222,7 +222,7 @@ The harness also enforces *how tasks end*: CLAUDE.md's **Completion verification
 bash scripts/verify-done.sh   # exit 0 required before reporting done
 ```
 
-It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy-tk104` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
 
 For the **parallel-wave flow** (many work branches integrated serially by an orchestrator), a task agent's terminal state is a pushed feature branch, not a dev merge — use `bash scripts/verify-done.sh --feature`, which checks the branch is a work branch, the tree is clean, it is pushed (`HEAD == origin/<branch>`), and it was branched off `dev`. The orchestrator runs the default mode after merging. Test suite: [`scripts/test-verify-done.sh`](../../scripts/test-verify-done.sh) (runs in CI's `branch-guard` job with a stubbed `gh`) covers both modes.
 

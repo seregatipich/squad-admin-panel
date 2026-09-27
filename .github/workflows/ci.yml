@@ -2,7 +2,7 @@ name: ci
 # Verification runs on ephemeral GitHub-hosted Ubuntu VMs (the repository is
 # public, so hosted minutes are free) and only for what reaches `master` — a
 # fast-forward promotion of `dev` — or a manual dispatch. `dev` itself deploys
-# straight to the tk104 development stand without tests (deploy-tk104.yml);
+# straight to the development stand without tests (deploy.yml);
 # the local pre-push hook is the fast first check and this workflow is the
 # authoritative one (CLAUDE.md → "CI gate").
 on:
@@ -481,7 +481,7 @@ jobs:
           echo "panel-host-bridge is static"
 
   # Builds docker-bake.hcl and smoke-tests the images. The release images
-  # themselves are built and pushed by deploy-tk104.yml when the commit lands
+  # themselves are built and pushed by deploy.yml when the commit lands
   # on dev; this job reads their GHCR layer cache (never writes it), so a
   # promoted commit rebuilds from cache instead of from scratch.
   images:
@@ -515,15 +515,15 @@ jobs:
             api.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-api:buildcache
             web.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-web:buildcache
             workers.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-workers:buildcache
-            caddy-tk104.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-caddy-tk104:buildcache
+            caddy.cache-from=type=registry,ref=ghcr.io/seregatipich/squad-panel-caddy:buildcache
             rnsquadjs.cache-from=type=gha,scope=rnsquadjs
             rnsquadjs.cache-to=type=gha,scope=rnsquadjs,mode=max
       - name: verify api runtime database client
         run: docker run --rm --entrypoint node "squad-panel/api:${GITHUB_SHA}" --input-type=module -e "await import('postgres')"
       - name: verify every production worker is in the workers image
         run: |
-          workers=$(sed -n 's/^      WORKER: \([a-z0-9-]*\)$/\1/p' compose.tk104.yml)
-          [[ -n "${workers}" ]] || { echo "::error::no WORKER entries found in compose.tk104.yml"; exit 1; }
+          workers=$(sed -n 's/^      WORKER: \([a-z0-9-]*\)$/\1/p' compose.stand.yml)
+          [[ -n "${workers}" ]] || { echo "::error::no WORKER entries found in compose.stand.yml"; exit 1; }
           docker run --rm --entrypoint sh -e WORKERS="${workers}" "squad-panel/workers:${GITHUB_SHA}" -c '
             for worker in $WORKERS; do
               test -f "/app/apps/workers/${worker}/dist/index.js" || { echo "missing worker ${worker}" >&2; exit 1; }

@@ -4,13 +4,13 @@
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в `scripts/deploy-tk104.sh`, тот записывает его в `.env.tk104`, а `/health` возвращает для приёмки. | no |
-| `PANEL_IMAGE_TAG` | tk104 | — | compose.tk104.yml | Тег образов `squad-panel/{api,web,workers,caddy-tk104}`, которые запускает `compose.tk104.yml` (обычно SHA выпуска). Deploy-workflow передаёт его в `scripts/deploy-tk104.sh`, после успешного выпуска тот записывает его в `.env.tk104`, чтобы обычные `docker compose --env-file .env.tk104 …` находили образы. Без значения compose останавливается с `PANEL_IMAGE_TAG_is_required`. | no |
+| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в `scripts/deploy-stand.sh`, тот записывает его в `.env.stand`, а `/health` возвращает для приёмки. | no |
+| `PANEL_IMAGE_TAG` | the stand host | — | compose.stand.yml | Тег образов `squad-panel/{api,web,workers,caddy}`, которые запускает `compose.stand.yml` (обычно SHA выпуска). Deploy-workflow передаёт его в `scripts/deploy-stand.sh`, после успешного выпуска тот записывает его в `.env.stand`, чтобы обычные `docker compose --env-file .env.stand …` находили образы. Без значения compose останавливается с `PANEL_IMAGE_TAG_is_required`. | no |
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
 | `PANEL_PUBLIC_URL` | yes | — | api | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID; must be an HTTPS origin in production. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
-| `DUCKDNS_TOKEN` | only for tk104 | — | caddy (tk104) | DuckDNS API token for DNS-01 TLS (`compose.tk104.yml` / `docker/Caddyfile.tk104`) when port 80 is not forwarded. | yes |
+| `DUCKDNS_TOKEN` | only for the stand host | — | caddy (the stand host) | DuckDNS API token for DNS-01 TLS (`compose.stand.yml` / `docker/Caddyfile.stand`) when port 80 is not forwarded. | yes |
 | `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |

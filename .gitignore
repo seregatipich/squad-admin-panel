@@ -46,7 +46,7 @@ apps/web/test-results/
 **/reports/mutation/
 
 .playwright-mcp/
-.env.tk104
+.env.stand
 .sentrux/
 
 # Playwright verification evidence artifacts
