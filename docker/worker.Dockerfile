@@ -48,7 +48,8 @@ RUN --mount=type=bind,from=deps,source=/pnpm/store,target=/pnpm/store,rw \
 # this stage. /out gathers every dist at the path the runtime runs it from.
 FROM deps AS builder
 ENV TURBO_TELEMETRY_DISABLED=1
-COPY tsconfig.base.json turbo.json ./
+COPY turbo.json ./
+COPY packages/tsconfig.base.json packages/
 COPY packages packages
 COPY apps/workers apps/workers
 RUN pnpm turbo run build --filter="./apps/workers/*" --cache=local:,remote: && \
