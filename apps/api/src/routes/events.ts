@@ -1,6 +1,6 @@
 import { events, playerNameHistory, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
@@ -44,16 +44,24 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
+/**
+ * Whether the caller may see player IP addresses (ALT-8, #126). Read from the
+ * effective permission set, so an API token only sees IPs when its scopes
+ * include `player:view_ips`.
+ */
+function canViewIps(req: FastifyRequest): boolean {
+  return req.user?.permissions.permissions.has('player:view_ips') ?? false;
+}
+
+/**
+ * Returns the payload with a top-level `ip` field nulled out (#10). The field
+ * is carried by `player.connected` (`playerConnectedPayload.ip`); nulling it
+ * rather than deleting it keeps the payload valid against that schema.
+ */
+function redactPayloadIp(payload: unknown): unknown {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  if (!('ip' in payload)) return payload;
+  return { ...payload, ip: null };
 }
 
 interface Cursor {
@@ -116,7 +124,7 @@ function serializeEvent(row: EventListRow) {
   };
 }
 
-function serializeEnvelope(row: EventFullRow) {
+function serializeEnvelope(row: EventFullRow, includeIps: boolean) {
   const actor = row.actorKind || row.actorId ? { kind: row.actorKind, id: row.actorId } : null;
   return {
     event_id: row.eventId,
@@ -129,7 +137,7 @@ function serializeEnvelope(row: EventFullRow) {
     actor,
     actor_nickname: row.actorNickname,
     correlation_id: row.correlationId,
-    payload: row.payload,
+    payload: includeIps ? row.payload : redactPayloadIp(row.payload),
   };
 }
 
@@ -154,7 +162,7 @@ const CSV_COLUMNS = [
   'payload',
 ] as const;
 
-function csvRow(row: EventFullRow): string {
+function csvRow(row: EventFullRow, includeIps: boolean): string {
   const cells = [
     row.eventId,
     row.serverId,
@@ -166,7 +174,7 @@ function csvRow(row: EventFullRow): string {
     row.actorId,
     row.actorNickname,
     row.correlationId,
-    JSON.stringify(row.payload),
+    JSON.stringify(includeIps ? row.payload : redactPayloadIp(row.payload)),
   ];
   return cells.map(csvCell).join(',');
 }
@@ -276,11 +284,8 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/events',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const { order, limit } = req.query;
       const { clauses, empty } = await buildFilters(req.query);
       if (empty) return { items: [], next_cursor: null, limit };
@@ -319,11 +324,8 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/events/count',
-    { schema: { querystring: countQuery }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    { schema: { querystring: countQuery }, config: { permissions: ['events:view'], audit: false } },
+    async (req) => {
       const { clauses, empty } = await buildFilters(req.query);
       if (empty) return { total: 0 };
 
@@ -337,14 +339,11 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/events/export',
-    { schema: { querystring: exportQuery }, config: { audit: false } },
+    {
+      schema: { querystring: exportQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) {
-        reply.header('content-type', 'application/json; charset=utf-8');
-        return denied;
-      }
-
       const { clauses, empty } = await buildFilters(req.query);
       const rows = empty
         ? []
@@ -353,7 +352,8 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
             .orderBy(desc(events.occurredAt), desc(events.eventId))
             .limit(EXPORT_MAX);
 
-      const lines = [CSV_COLUMNS.join(','), ...rows.map(csvRow)];
+      const includeIps = canViewIps(req);
+      const lines = [CSV_COLUMNS.join(','), ...rows.map((row) => csvRow(row, includeIps))];
       const body = `${lines.join('\r\n')}\r\n`;
       const stamp = new Date().toISOString().slice(0, 10);
 
@@ -365,18 +365,15 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/events/:eventId',
-    { schema: { params: eventIdParam }, config: { audit: false } },
+    { schema: { params: eventIdParam }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const rows = await fullSelection().where(eq(events.eventId, req.params.eventId)).limit(1);
       const row = rows[0];
       if (!row) {
         reply.code(404);
         return { error: 'event_not_found' };
       }
-      return serializeEnvelope(row);
+      return serializeEnvelope(row, canViewIps(req));
     },
   );
 };

@@ -83,6 +83,14 @@ const required = req.routeOptions?.config?.permissions ?? [];
 
 Before #246 the check was inverted: a route with no `config.permissions` returned early and was silently public. Because most routes in this codebase authorise through an in-handler `Guard()` helper rather than `config.permissions`, that gap was usually masked — but two routes shipped to production unauthenticated purely because nobody had added `config.permissions`: `GET /api/docs*` (the full OpenAPI schema and Swagger UI) and `GET /api/v1/host/bridge-status`. `config.public: true` makes "this route is intentionally public" an explicit, reviewed decision instead of an accident of omission. It is reserved for a short, deliberate allowlist: health/readiness probes (`/health`, `/ready`), `/metrics`, signature- or token-gated webhooks (`integrations-balancer.ts`, `integrations-vip.ts`, `discord-interactions.ts`, `public-media.ts`'s upload-token redemption), the public data portals (`public-stats.ts`, `public-clans.ts`, `public-appeals.ts`), the pre-login BSS SSO round-trip (`auth-bss.ts`), and the setup wizard's status probe (`setup.ts`'s `GET /status`, not `POST /complete`).
 
+### Player IP visibility (#10)
+
+Raw player IPs, and the per-IP coordinates derived from them, are gated by `player:view_ips` (granted only to roles with `can_view_ips`), never by `panel_access` alone. Routes that return other data alongside IPs read the effective permission set (`req.user.permissions.permissions`), so an API token sees IPs only when its scopes include `player:view_ips`:
+
+- `GET /api/v1/players/:playerId` — `ips: []` and `ips_visible: false` without it.
+- `GET /api/v1/events/:eventId` and `GET /api/v1/events/export` — the top-level `ip` of every event payload (e.g. `player.connected`) is returned as `null` without it. All `/api/v1/events*` routes additionally require `events:view` through `config.permissions`, so a token must carry that scope to read the journal.
+- `GET /api/v1/players/:playerId/geo-anomalies` and `GET /api/v1/geo-anomalies` — `points` (IP + latitude/longitude) is empty without it; the country-level summary stays.
+
 ## Audit-coverage CI gate
 
 `apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.
