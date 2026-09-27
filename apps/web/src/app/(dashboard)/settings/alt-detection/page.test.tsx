@@ -35,6 +35,15 @@ function mockFetch(opts: { status?: number } = {}) {
     if (url.includes('/ignored-ips/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     }
+    if (url.endsWith('/api/v1/settings/alt-detection') && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as Record<string, number>;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ...SETTINGS, ...body, updated_at: '2026-07-21T10:00:00.000Z' }),
+          { status: 200 },
+        ),
+      );
+    }
     if (url.endsWith('/api/v1/settings/alt-detection')) {
       if (status !== 200) return Promise.resolve(new Response(null, { status }));
       return Promise.resolve(
@@ -92,6 +101,32 @@ describe('AltDetectionPage', () => {
         expect(calls.some((c) => c.init?.method === 'DELETE')).toBe(true);
       });
       expect(await screen.findByText('Исключение удалено.')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'saves the edited weights with a PUT of exactly the form fields',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<AltDetectionPage />);
+      const weight = await screen.findByLabelText('Вес: общий IP');
+      fireEvent.change(weight, { target: { value: '45' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+      expect(await screen.findByText('Параметры сохранены.')).toBeInTheDocument();
+      const put = calls.find((call) => call.init?.method === 'PUT');
+      expect(put?.url).toBe('/api/v1/settings/alt-detection');
+      expect(JSON.parse(String(put?.init?.body))).toEqual({
+        weight_shared_ip: 45,
+        weight_shared_name: 20,
+        weight_young_account: 15,
+        weight_steamid_proximity: 10,
+        steamid_delta_threshold: 5000,
+        medium_threshold: 40,
+        high_threshold: 70,
+      });
     },
     TEST_TIMEOUT_MS,
   );

@@ -24,7 +24,7 @@ import {
 } from '@/components/ui';
 import type { BadgeTone as PriorityTone } from '../helpers';
 import { priorityBadge } from '../helpers';
-import ClanSettingsPanel from './ClanSettingsPanel';
+import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
 import RosterPanel from './RosterPanel';
 import TagProtectionCard from './TagProtectionCard';
@@ -307,6 +307,23 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   }, []);
 
   const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+  // Стабильная ссылка между секундными тиками `nowMs`: новая — только после
+  // перезагрузки клана.
+  const settingsInitial = useMemo<ClanSettingsInitial | null>(
+    () =>
+      clan
+        ? {
+            name: clan.name,
+            description: clan.description,
+            tags: clan.tags,
+            max_priority_slots: clan.max_priority_slots,
+            primary_server_id: clan.primary_server_id,
+            is_public: clan.is_public,
+            priority_expires_at: clan.priority_expires_at,
+          }
+        : null,
+    [clan],
+  );
   const expiryBadge = useMemo(
     () => (clan ? priorityBadge(clan.priority_expires_at) : null),
     [clan],
@@ -425,18 +442,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
 
       {clan ? <TagProtectionCard clanId={clanId} initialProtected={clan.is_tag_protected} /> : null}
 
-      {clan && canManageClans ? (
+      {settingsInitial && canManageClans ? (
         <ClanSettingsPanel
           clanId={clanId}
-          initial={{
-            name: clan.name,
-            description: clan.description,
-            tags: clan.tags,
-            max_priority_slots: clan.max_priority_slots,
-            primary_server_id: clan.primary_server_id,
-            is_public: clan.is_public,
-            priority_expires_at: clan.priority_expires_at,
-          }}
+          initial={settingsInitial}
           servers={allServers}
           onSaved={() => void loadClan()}
         />

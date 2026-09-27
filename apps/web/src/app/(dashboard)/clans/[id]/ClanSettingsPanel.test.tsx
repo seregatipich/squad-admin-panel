@@ -56,6 +56,55 @@ describe('ClanSettingsPanel', () => {
     expect(screen.getByText('Публичный')).toBeInTheDocument();
   });
 
+  it('keeps unsaved edits when the parent re-renders with an equal but new initial object', () => {
+    // Страница клана перерисовывается каждую секунду (тикер длительности сессий)
+    // и передаёт `initial` свежим литералом.
+    vi.stubGlobal('fetch', mockFetch({}));
+    const { rerender } = render(
+      <ClanSettingsPanel clanId="clan-1" initial={INITIAL} servers={[]} onSaved={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByDisplayValue('Альфа'), { target: { value: 'Альфа Прайм' } });
+    fireEvent.change(screen.getByDisplayValue('Описание клана'), {
+      target: { value: 'Новое описание' },
+    });
+    fireEvent.change(screen.getByDisplayValue('ALF, ONE'), { target: { value: 'ALF' } });
+    fireEvent.change(screen.getByDisplayValue('10'), { target: { value: '12' } });
+
+    rerender(
+      <ClanSettingsPanel
+        clanId="clan-1"
+        initial={{ ...INITIAL, tags: [...INITIAL.tags] }}
+        servers={[]}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('Альфа Прайм')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Новое описание')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('ALF')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('12')).toBeInTheDocument();
+  });
+
+  it('refills the form when the clan itself changes on the server', () => {
+    vi.stubGlobal('fetch', mockFetch({}));
+    const { rerender } = render(
+      <ClanSettingsPanel clanId="clan-1" initial={INITIAL} servers={[]} onSaved={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByDisplayValue('Альфа'), { target: { value: 'черновик' } });
+
+    rerender(
+      <ClanSettingsPanel
+        clanId="clan-1"
+        initial={{ ...INITIAL, name: 'Бета', tags: ['BET'] }}
+        servers={[]}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('Бета')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('BET')).toBeInTheDocument();
+  });
+
   it('shows a Russian error banner when the core PATCH fails', async () => {
     vi.stubGlobal(
       'fetch',

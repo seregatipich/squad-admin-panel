@@ -84,14 +84,30 @@ export default function ClanSettingsPanel({
   const [disbanding, setDisbanding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Форма перезаполняется, только когда меняются сами серверные значения, а не
+  // ссылка на `initial`: страница клана перерисовывается каждую секунду, и сброс
+  // по ссылке стирал бы несохранённый ввод.
+  const initialName = initial.name;
+  const initialDescription = initial.description ?? '';
+  const initialTags = initial.tags.join(', ');
+  const initialMaxSlots = String(initial.max_priority_slots);
+  const initialPrimaryServerId = initial.primary_server_id ?? '';
+  const initialIsPublic = initial.is_public;
   useEffect(() => {
-    setName(initial.name);
-    setDescription(initial.description ?? '');
-    setTags(initial.tags.join(', '));
-    setMaxSlots(String(initial.max_priority_slots));
-    setPrimaryServerId(initial.primary_server_id ?? '');
-    setIsPublic(initial.is_public);
-  }, [initial]);
+    setName(initialName);
+    setDescription(initialDescription);
+    setTags(initialTags);
+    setMaxSlots(initialMaxSlots);
+    setPrimaryServerId(initialPrimaryServerId);
+    setIsPublic(initialIsPublic);
+  }, [
+    initialName,
+    initialDescription,
+    initialTags,
+    initialMaxSlots,
+    initialPrimaryServerId,
+    initialIsPublic,
+  ]);
 
   useEffect(() => {
     if (!armed || cooldownRemainingMs <= 0) return;

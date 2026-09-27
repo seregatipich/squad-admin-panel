@@ -70,6 +70,21 @@ describe('ExternalBansBrowser', () => {
     );
   });
 
+  it('loads the registry once per filter set instead of refetching on every render', async () => {
+    const fetchMock = stubFetch([ROW]);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ExternalBansBrowser />);
+    await screen.findByRole('link', { name: 'Читер' });
+
+    // Даём бесконечному циклу «рендер → новый load → эффект → fetch» время проявиться.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const registryCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).startsWith('/api/v1/external-bans'),
+    );
+    expect(registryCalls).toHaveLength(1);
+  });
+
   it('expands the bans of a row and announces the expanded state', async () => {
     vi.stubGlobal('fetch', stubFetch([ROW]));
     render(<ExternalBansBrowser />);

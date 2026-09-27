@@ -76,4 +76,17 @@ describe('validateAltDetectionSettingsForm', () => {
   it('rejects a non-integer value', () => {
     expect(validateAltDetectionSettingsForm({ ...baseForm, weight_shared_ip: 1.5 })).not.toBeNull();
   });
+
+  it('ignores the non-form metadata the API returns alongside the settings', () => {
+    // GET /api/v1/settings/alt-detection отдаёт settings вместе с updated_at и
+    // updated_by_player_id; страница валидирует именно этот объект.
+    const neverSaved = { ...baseForm, updated_at: null, updated_by_player_id: null };
+    const saved = {
+      ...baseForm,
+      updated_at: '2026-07-20T10:00:00.000Z',
+      updated_by_player_id: '019e2000-0000-7000-8000-0000000000aa',
+    };
+    expect(validateAltDetectionSettingsForm(neverSaved)).toBeNull();
+    expect(validateAltDetectionSettingsForm(saved)).toBeNull();
+  });
 });
