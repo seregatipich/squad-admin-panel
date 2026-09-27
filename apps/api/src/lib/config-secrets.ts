@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { serverCredentials } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -54,19 +55,22 @@ function hasMaskedRconPassword(content: string): boolean {
   return false;
 }
 
-/**
- * Resolves the password a masked `Rcon.cfg` must be written with: the one in
- * the current file on disk (so an editor round-trip changes nothing but the
- * edited lines), falling back to the encrypted `server_credentials` copy when
- * the file is missing or unreadable.
- */
-async function resolveRconPassword(app: FastifyInstance, serverId: string): Promise<string | null> {
+/** The `Password=` value of the current `Rcon.cfg` on disk, or null when unusable. */
+async function diskRconPassword(app: FastifyInstance, serverId: string): Promise<string | null> {
   try {
     const onDisk = await readRconPassword(app.bridge, serverId, 'config-write');
-    if (onDisk !== CONFIG_SECRET_MASK) return onDisk;
+    return onDisk === CONFIG_SECRET_MASK ? null : onDisk;
   } catch {
-    // Missing or unparseable file: fall through to the stored credentials.
+    // Missing or unparseable file.
+    return null;
   }
+}
+
+/** The panel's authoritative RCON password from `server_credentials`, or null. */
+async function credentialsRconPassword(
+  app: FastifyInstance,
+  serverId: string,
+): Promise<string | null> {
   const creds = await app.db.query.serverCredentials.findFirst({
     where: eq(serverCredentials.serverId, serverId),
   });
@@ -89,13 +93,25 @@ export class RconPasswordUnavailableError extends Error {
 
 /**
  * Turns `Rcon.cfg` content that may carry a masked password back into the
- * bytes to write on disk: every `Password=********` line gets the real
- * password (see {@link resolveRconPassword}). A password typed by the operator
- * is kept as typed; content without a masked line is returned unchanged.
+ * bytes to write on disk: every `Password=********` line gets a real password.
+ * A password typed by the operator is kept as typed; content without a masked
+ * line is returned unchanged.
+ *
+ * Which password fills the mask depends on the write:
+ * - Editor save (no `versionSha256`): the password in the current file on disk,
+ *   so a round-trip changes nothing but the edited lines, falling back to the
+ *   encrypted `server_credentials` copy when the file is missing or unreadable.
+ * - Restore of a stored version (`versionSha256` set — restore and drift
+ *   revert): the file on disk may carry an out-of-band password, so it must not
+ *   win by default. The candidate (`server_credentials` first, then disk) whose
+ *   filled content hashes to `versionSha256` reproduces the version exactly;
+ *   when none does, the panel's `server_credentials` copy is used, and the disk
+ *   only when no credentials row exists.
  *
  * @param app - Fastify instance (bridge, db, encryptionKey).
  * @param serverId - Server whose `Rcon.cfg` is being written.
  * @param content - Content from the editor or from a history row.
+ * @param opts.versionSha256 - `sha256` of the history row being restored.
  * @returns The content to write to disk.
  * @throws {RconPasswordUnavailableError} When a masked line is present but
  *   neither the file on disk nor `server_credentials` holds a password —
@@ -105,11 +121,29 @@ export async function unmaskRconPassword(
   app: FastifyInstance,
   serverId: string,
   content: string,
+  opts?: { versionSha256?: Buffer },
 ): Promise<string> {
   if (!hasMaskedRconPassword(content)) return content;
-  const password = await resolveRconPassword(app, serverId);
-  if (password === null) throw new RconPasswordUnavailableError();
-  return content.replace(secretLineRe('Password'), (line: string, prefix: string, value: string) =>
-    value.trim() === CONFIG_SECRET_MASK ? `${prefix}${password}` : line,
-  );
+  const fill = (password: string): string =>
+    content.replace(secretLineRe('Password'), (line: string, prefix: string, value: string) =>
+      value.trim() === CONFIG_SECRET_MASK ? `${prefix}${password}` : line,
+    );
+
+  if (!opts?.versionSha256) {
+    const password =
+      (await diskRconPassword(app, serverId)) ?? (await credentialsRconPassword(app, serverId));
+    if (password === null) throw new RconPasswordUnavailableError();
+    return fill(password);
+  }
+
+  const candidates = [
+    await credentialsRconPassword(app, serverId),
+    await diskRconPassword(app, serverId),
+  ].filter((password): password is string => password !== null);
+  if (candidates.length === 0) throw new RconPasswordUnavailableError();
+  const { versionSha256 } = opts;
+  const exact = candidates
+    .map(fill)
+    .find((filled) => createHash('sha256').update(filled).digest().equals(versionSha256));
+  return exact ?? fill(candidates[0] as string);
 }

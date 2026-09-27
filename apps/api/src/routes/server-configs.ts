@@ -431,6 +431,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         message,
         req.user?.playerId ?? null,
         req.ip ?? null,
+        { versionSha256: Buffer.from(target.sha256 as unknown as Buffer) },
       );
     },
   );
@@ -631,7 +632,9 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       }
       // force: the tip content matches the DB tip sha by construction, so the
       // dedup branch is taken — the force flag makes it repair the disk
-      // byte-for-byte without appending a duplicate history row.
+      // byte-for-byte without appending a duplicate history row. For a masked
+      // Rcon.cfg tip, versionSha256 makes the panel's password (not the
+      // drifted one on disk) fill the mask (#10).
       return writeVersion(
         app,
         req.params.id,
@@ -640,7 +643,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.body?.message ?? `revert to panel version ${tip.id.slice(0, 8)}`,
         req.user?.playerId ?? null,
         req.ip ?? null,
-        { force: true },
+        { force: true, versionSha256: Buffer.from(tip.sha as unknown as Buffer) },
       );
     },
   );
@@ -784,6 +787,10 @@ function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
  * password before the disk write, the stored history row carries the masked
  * rendering, and its `sha256` is the digest of the bytes on disk. Throws
  * `RconPasswordUnavailableError` (422) when no real password is known.
+ * `opts.versionSha256` marks a restore of a stored version (restore, drift
+ * revert): the mask is then filled with the password that reproduces that
+ * version, else the panel's `server_credentials` copy — never an out-of-band
+ * password found on disk (see `unmaskRconPassword`).
  *
  * Exported for reuse by the rotation editor (ROT-2, #145), which writes
  * `LayerRotation.cfg` through the same versioned-history pathway as the CFG-1
@@ -797,7 +804,7 @@ export async function writeVersion(
   message: string | null,
   authorPlayerId: string | null,
   authorIp: string | null,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; versionSha256?: Buffer },
 ) {
   if (name === 'Admins.cfg') {
     return withAdminsCfgServerLock(app.db, serverId, async (tx) =>
@@ -826,14 +833,16 @@ async function persistVersion(
   message: string | null,
   authorPlayerId: string | null,
   authorIp: string | null,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; versionSha256?: Buffer },
 ) {
   // #10: `content` may carry the masked RCON password (editor round-trip or a
   // masked history row). The disk gets the real bytes and the sha describes
   // them (drift and dedup compare disk digests); the history row keeps only
   // the masked rendering.
   const diskContent =
-    name === 'Rcon.cfg' ? await unmaskRconPassword(app, serverId, content) : content;
+    name === 'Rcon.cfg'
+      ? await unmaskRconPassword(app, serverId, content, { versionSha256: opts?.versionSha256 })
+      : content;
   // read previous for parent_version_id linkage (best-effort)
   const prev = await db
     .select({ id: configVersions.id, sha: configVersions.sha256 })

@@ -25,6 +25,7 @@ import {
 const OWNER_STEAM_ID = testSteamId(914001);
 const MASK = '********';
 const RCON_SECRET = 'Rc0n-Secret-Pw-9f1c';
+const OUT_OF_BAND_PASSWORD = 'Host-Side-Pw-5e2d';
 const LICENSE_SECRET = 'LIC-KEY-SECRET-77aa';
 const DEPOT_ROOT = '/depot-test-config-secrets';
 
@@ -118,6 +119,29 @@ async function storedContents(id: string, name: string): Promise<string[]> {
     .from(configVersions)
     .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, name)));
   return rows.map((row) => row.content);
+}
+
+/** The panel's authoritative RCON password, decrypted from `server_credentials`. */
+async function panelRconPassword(id: string): Promise<string> {
+  const [creds] = await h.db
+    .select()
+    .from(serverCredentials)
+    .where(eq(serverCredentials.serverId, id));
+  return decryptString(
+    h.app.encryptionKey,
+    deserialize(Buffer.from(creds?.rconPasswordEncrypted as unknown as Buffer)),
+  );
+}
+
+async function rconDriftState(id: string): Promise<string | undefined> {
+  const res = await h.app.inject({
+    method: 'GET',
+    url: `/api/v1/servers/${id}/configs/drift`,
+    headers: { cookie },
+  });
+  expect(res.statusCode, res.body).toBe(200);
+  const items = res.json<{ items: Array<{ name: string; state: string }> }>().items;
+  return items.find((item) => item.name === 'Rcon.cfg')?.state;
 }
 
 async function historyReads(id: string, name: string, fromId: string, toId: string) {
@@ -280,6 +304,67 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
     for (const body of await historyReads(id, 'Rcon.cfg', legacy!.id, next.version_id!)) {
       expect(body).not.toContain(RCON_SECRET);
     }
+  });
+
+  it('drift revert restores the panel password over an out-of-band change', async () => {
+    const id = await createServer();
+    const panelPassword = await panelRconPassword(id);
+    setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
+    await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
+    setDisk(id, 'Rcon.cfg', rconCfg(OUT_OF_BAND_PASSWORD, 6));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/drift/revert`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ unchanged: true, disk_repaired: true });
+    expect(readDisk(id, 'Rcon.cfg')).toBe(rconCfg(panelPassword, 6));
+    expect(await rconDriftState(id)).toBe('in_sync');
+    expect(await storedContents(id, 'Rcon.cfg')).toHaveLength(1);
+  });
+
+  it('restoring a version after an out-of-band change writes the panel password', async () => {
+    const id = await createServer();
+    const panelPassword = await panelRconPassword(id);
+    setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
+    const first = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
+    await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 7));
+    setDisk(id, 'Rcon.cfg', rconCfg(OUT_OF_BAND_PASSWORD, 7));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/restore/${first.version_id}`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readDisk(id, 'Rcon.cfg')).toBe(rconCfg(panelPassword, 6));
+    expect(res.json<{ sha256: string }>().sha256).toBe(sha256Hex(rconCfg(panelPassword, 6)));
+  });
+
+  it('drift accept records the out-of-band file masked and leaves the disk alone', async () => {
+    const id = await createServer();
+    const panelPassword = await panelRconPassword(id);
+    setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
+    await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
+    setDisk(id, 'Rcon.cfg', rconCfg(OUT_OF_BAND_PASSWORD, 8));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/drift/accept`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readDisk(id, 'Rcon.cfg')).toBe(rconCfg(OUT_OF_BAND_PASSWORD, 8));
+    const stored = await storedContents(id, 'Rcon.cfg');
+    expect(stored).toHaveLength(2);
+    expect(stored).toContain(rconCfg(MASK, 8));
+    for (const content of stored) expect(content).not.toContain(OUT_OF_BAND_PASSWORD);
+    expect(await rconDriftState(id)).toBe('in_sync');
   });
 
   it('drift diff masks the password on both sides', async () => {
