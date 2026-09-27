@@ -1814,7 +1814,7 @@ Until issue #6 the last four tables had **no rotator at all**: `player_sessions`
 | `audit_log` | PG | **never pruned, by design** | `audit_log_deny` triggers | deletion is *impossible*, not merely unimplemented |
 | `config_versions` | PG | never pruned | same append-only triggers (`0003:28-39`) | unbounded |
 | `processed_events` | PG | never pruned (`0000_init.sql:280`) | — | unbounded |
-| `sessions` | PG | `pruneExpired()` exists but has **no caller** | — | dead code; expired rows accumulate |
+| `sessions` | PG | `pruneExpired()` via `plugins/session-prune.ts` | hourly | expired rows deleted (#37) |
 | `moderation_actions`, `external_bans`, `player_ip_history` | PG | never pruned | — | `player_ip_history` is bounded by distinct IPs per player (UPSERT on `(playerId, ip)`, `geoip/observe.ts:22-42`) — the one natural brake |
 | `media_files` rows + blobs | PG + disk | soft delete only (`routes/media.ts:361`) | — | blob is **never unlinked**; dedup lookup filters `isNull(deletedAt)`, so soft-deleting the last active row orphans the file *and* makes the next identical upload write a second copy. No reaper exists. |
 | `diag:queue` | Redis stream | `MAXLEN ~ 100_000` (`shared-config/src/diag.ts:20`) | every emitter | silent, approximate eviction |
@@ -2035,7 +2035,7 @@ The DB primary key **is** the SHA-256 of the token (`sessions.id text primary ke
 | Rotation | **None.** The token value never changes — not at login, not on privilege change |
 | Signing | `@fastify/cookie` is registered with `secret: config.SESSION_SECRET` (`server.ts:159`) but the session cookie is set without `signed: true`. `SESSION_SECRET` guards nothing in the session path; integrity is purely the 24 random bytes, and rotating it does **not** invalidate sessions |
 | Revocation | `revokeSession` (DB delete + Redis del) and `revokeAllForPlayer`, which publishes one `session.revoked` live-bus event per killed session for forced logout. Called from logout, `DELETE /api/v1/me/sessions[/:id]`, and every role mutation in `routes/role-members.ts` (lines 201, 253, 385, 497, 585) when the new role lacks `panel_access` |
-| Expired-row GC | `pruneExpired` (`sessions.ts:149`) is exported with **no caller in the repo**; stale rows only vanish opportunistically when `resolveSession` finds a cached entry expired |
+| Expired-row GC | `plugins/session-prune.ts` calls `pruneExpired` hourly (#37) |
 
 ### 10.3 API tokens
 
@@ -2202,7 +2202,7 @@ Finally, audit writes **fail open**: the hook swallows errors and logs `'audit w
 | `APP_ENCRYPTION_KEY` rotation | **Not implemented** — `kv` always 1; docs claim otherwise | `lib/crypto.ts` |
 | API token expiry | **Absent** — no `expires_at`; revocation only | `player_api_tokens` schema |
 | Session token rotation | **Absent** — same token for its whole life | `lib/sessions.ts` |
-| Expired-session pruning | **Absent in practice** — `pruneExpired` has no caller | `sessions.ts:149` |
+| Expired-session pruning | Hourly `pruneExpired` from the `session-prune` plugin (#37) | `plugins/session-prune.ts` |
 | Audit archival / retention | **Not implemented** — worker is a P0 stub, no archive view exists | `apps/workers/audit-archiver/src/index.ts` |
 | External anchoring of the audit chain tip | **Absent** — superuser can rewrite history | — |
 | Audit coverage of *who* and *what* | **Assumed** — actor and before/after are outside the digest | `0008_steam_only_auth.sql:96-98` |
