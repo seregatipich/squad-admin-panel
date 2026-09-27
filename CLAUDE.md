@@ -189,7 +189,7 @@ pnpm build                                        # turbo; typecheck/test depend
 pnpm turbo run typecheck
 pnpm exec biome check .                           # --write <file> to fix
 pnpm --filter <pkg> exec vitest run <path>        # one test file (add -t '<name>' for one case)
-pnpm test:cov                                     # the full JS suite exactly as CI runs it
+pnpm test:cov                                     # the full JS suite with coverage (ci shards api/web)
 pnpm test:scripts                                 # operations-script contracts; needs DB + Redis URLs
 pnpm --filter @squad/api test:e2e                 # live panel only (PANEL_TEST_URL, PANEL_TEST_COOKIE)
 pnpm db:generate && pnpm db:migrate               # drizzle-kit reads dist/: build @squad/db first
