@@ -389,4 +389,30 @@ describeIfInfra('squad history through the RCON supervisor', () => {
       (await squadEvents()).some((row) => row.kind === 'squad.created' && row.actorId === dana.eos),
     ).toBe(true);
   });
+
+  it('clears crowns at match start and takes the squads it finds as a baseline', async () => {
+    const erik = gamePlayer('Erik', 1);
+    game.players.push(erik);
+    await refresh();
+    dana.leader = false;
+    erik.leader = true;
+    await refresh();
+    expect((await crown(dana.eos))?.color).toBe('grey');
+
+    const felix = gamePlayer('Felix', 2, true);
+    game.players.push(felix);
+    game.squads.push({ team: 1, id: 2, name: 'Echo', creator: felix });
+    const eventsBefore = (await squadEvents()).length;
+    await refresh('match.started');
+    expect(await redis.exists(squadCrownsKey(serverId))).toBe(0);
+    expect(await squadEvents()).toHaveLength(eventsBefore);
+
+    const gleb = gamePlayer('Gleb', 3, true);
+    game.players.push(gleb);
+    game.squads.push({ team: 1, id: 3, name: 'Foxtrot', creator: gleb });
+    await refresh();
+    const created = (await squadEvents()).filter((row) => row.kind === 'squad.created');
+    expect(created.some((row) => row.actorId === gleb.eos)).toBe(true);
+    expect(created.some((row) => row.actorId === felix.eos)).toBe(false);
+  });
 });
