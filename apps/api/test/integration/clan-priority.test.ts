@@ -229,6 +229,48 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  // Audit #125 — like adding and removing members, a deputy may act on
+  // rank-and-file members only: not on the leader, another deputy or itself.
+  it('lets a deputy toggle only rank-and-file members', async () => {
+    const clan = await seedClan({ leaderHasPriority: true });
+    const deputy = await seedPlayer('ЗаместительПриоритета');
+    const otherDeputy = await seedPlayer('ВторойЗаместитель');
+    await h.db.insert(clanMembers).values([
+      { clanId: clan.clanId, playerId: deputy.id, memberRole: 'deputy', hasPriority: false },
+      { clanId: clan.clanId, playerId: otherDeputy.id, memberRole: 'deputy', hasPriority: false },
+    ]);
+    const deputyCookie = await makeCookieFor(deputy.id);
+    const toggle = (playerId: string, enabled: boolean) =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/clans/${clan.clanId}/members/${playerId}/priority`,
+        headers: jsonHeaders(deputyCookie),
+        payload: JSON.stringify({ enabled }),
+      });
+
+    await drainSyncStream();
+    for (const [playerId, enabled] of [
+      [clan.leaderId, false],
+      [otherDeputy.id, true],
+      [deputy.id, true],
+    ] as const) {
+      const res = await toggle(playerId, enabled);
+      expect(res.statusCode, res.body).toBe(403);
+    }
+    const rows = await h.db
+      .select({ playerId: clanMembers.playerId, hasPriority: clanMembers.hasPriority })
+      .from(clanMembers)
+      .where(eq(clanMembers.clanId, clan.clanId));
+    const priority = new Map(rows.map((row) => [row.playerId, row.hasPriority]));
+    expect(priority.get(clan.leaderId)).toBe(true);
+    expect(priority.get(otherDeputy.id)).toBe(false);
+    expect(priority.get(deputy.id)).toBe(false);
+    expect(await syncTaskCount()).toBe(0);
+
+    const allowed = await toggle(clan.memberId, true);
+    expect(allowed.statusCode, allowed.body).toBe(200);
+  });
+
   it('enables priority, writes an audit row, and publishes an admins-cfg sync event', async () => {
     const clan = await seedClan();
     await drainSyncStream();
