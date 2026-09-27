@@ -48,7 +48,8 @@ RUN --mount=type=bind,from=deps,source=/pnpm/store,target=/pnpm/store,rw \
 # this stage. /out gathers every dist at the path the runtime runs it from.
 FROM deps AS builder
 ENV TURBO_TELEMETRY_DISABLED=1
-COPY tsconfig.base.json turbo.json ./
+COPY turbo.json ./
+COPY packages/tsconfig.base.json packages/
 COPY packages packages
 COPY apps/workers apps/workers
 RUN pnpm turbo run build --filter="./apps/workers/*" --cache=local:,remote: && \
@@ -64,7 +65,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=prod-deps /app /app
 COPY --from=builder /out /app
-# A build-arg default keeps per-worker builds (docker-compose.yml) working;
+# A build-arg default keeps per-worker builds (docker/compose.yml) working;
 # the shared production image leaves it empty and compose sets WORKER.
 ARG WORKER=
 ENV WORKER=$WORKER

@@ -52,6 +52,8 @@ echo
 
 printf '%b[1/5]%b Stopping containers...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
 cd "${REPO}"
+# docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
+export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 docker compose down --remove-orphans 2>/dev/null || true
 log "containers stopped"
 

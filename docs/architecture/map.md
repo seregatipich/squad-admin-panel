@@ -130,7 +130,7 @@ graph TB
 | Boundary | Transport | What crosses | Enforcement |
 |---|---|---|---|
 | Browser → Zone 2 | HTTPS via Caddy; path split `@api path /api/* /health /ready /metrics` → `api:3000`, everything else → `web:3000` (`docker/Caddyfile:16-27`) | JSON + `__Host-sid` cookie; one WebSocket at `/api/v1/ws/live` | `onRequest` auth hook; global rate limiter keyed on **(ip, playerId)** — `req.user` *is* populated when the key generator runs |
-| Zone 2 → Zone 1 | Unix socket `/run/panel-host-bridge/bridge.sock`, `0660 root:panel`, `PassCredentials=yes` | Exactly 30 JSON-RPC methods, allowlisted args | `SO_PEERCRED` on the **primary GID** — hence `user: "0:${PANEL_GID:-987}"`, never `group_add` (`docker-compose.yml:130-134`). Five services mount it: `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` |
+| Zone 2 → Zone 1 | Unix socket `/run/panel-host-bridge/bridge.sock`, `0660 root:panel`, `PassCredentials=yes` | Exactly 30 JSON-RPC methods, allowlisted args | `SO_PEERCRED` on the **primary GID** — hence `user: "0:${PANEL_GID:-987}"`, never `group_add` (`docker/compose.yml:130-134`). Five services mount it: `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` |
 | Zone 1 → Zone 3 | `docker run` over `/run/docker.sock` | Image allowlisted to `squad-server:latest` / `squad-panel/depot-init:latest`; mounts allowlisted under `/var/lib/squad-panel/{configs,saved}`; the sidecar image is reachable *only* via its dedicated `container_run_rnsquadjs` RPC | `apps/bridge/internal/validate/docker.go`; systemd sandbox (`ProtectSystem=strict`, `SystemCallFilter=@system-service`) |
 | Zone 3 → Zone 2 | Never through the bridge. Log files on the bind-mounted `Saved/` tree read by `worker-log-ingest`; RCON TCP on loopback from `worker-rcon` (`network_mode: host`); the sidecar writes to Redis and reads its config from `/run/squad-panel/rnsquadjs` | Game events, chat, roster, RCON responses | Sidecar runs `--read-only --user 1001:1001` with an env allowlist |
 
@@ -178,7 +178,7 @@ Counts are `.ts`/`.tsx`/`.go`, excluding `node_modules`, `dist`, `.next`.
 | Add a bridge RPC | Three files in lockstep: `packages/shared-config/src/bridge-methods.ts`, `packages/bridge-client/src/client.ts`, `apps/bridge/internal/handlers/handlers.go`; plus success + forbidden cases in `apps/api/test/e2e/bridge-rpc.e2e.test.ts`. Nothing mechanically diffs the TS and Go lists |
 | Add a stream event type | `packages/shared-types/src/events.ts` (`EVENT_TYPES`, payload schema, `eventEnvelope`) + producer and idempotent-consumer tests |
 | Add a live/WS event | `apps/api/src/plugins/live-bus.ts` (23 variants) **and** `apps/web/src/lib/live-bus.ts` — two independent unions, already drifted, with no parity test |
-| Add a worker | New `apps/workers/<name>` package `@squad/worker-<name>`; a compose service using `docker/worker.Dockerfile` with `args: { WORKER: <name> }` (pattern at `docker-compose.yml:347-359`) |
+| Add a worker | New `apps/workers/<name>` package `@squad/worker-<name>`; a compose service using `docker/worker.Dockerfile` with `args: { WORKER: <name> }` (pattern at `docker/compose.yml:347-359`) |
 | Add a settings group | `apps/web/src/app/(dashboard)/settings/<group>/` + `apps/api/src/routes/settings-<group>.ts` |
 | Run one test against an isolated DB | `eval "$(bash scripts/new-test-db.sh <slug>)"` then `pnpm --filter @squad/api exec vitest run test/<file>.test.ts` — avoid `turbo run test`, which builds every package first (`turbo.json:30-33`) |
 
@@ -198,9 +198,9 @@ Counts are `.ts`/`.tsx`/`.go`, excluding `node_modules`, `dist`, `.next`.
 
 ### 2.1 The shape of the deployment
 
-The panel is a **single-host system**. One Docker Compose project holds 27 services; exactly one component — the Go `panel-host-bridge` — runs on the host outside Docker, as a systemd unit (`docs/operations/deployment.md:3`). There is **no `networks:` block in any compose file**, so every service shares the implicit `<project>_default` bridge network. `worker-rcon` is the sole exception: `network_mode: host` (`docker-compose.yml:181`), which is the entire reason Postgres and Redis publish to host loopback at all.
+The panel is a **single-host system**. One Docker Compose project holds 27 services; exactly one component — the Go `panel-host-bridge` — runs on the host outside Docker, as a systemd unit (`docs/operations/deployment.md:3`). There is **no `networks:` block in any compose file**, so every service shares the implicit `<project>_default` bridge network. `worker-rcon` is the sole exception: `network_mode: host` (`docker/compose.yml:181`), which is the entire reason Postgres and Redis publish to host loopback at all.
 
-Only three ports leave the host boundary: `caddy` on `80:80` and `443:443`, and `postgres` / `redis` bound to `127.0.0.1:5432` / `127.0.0.1:6379` (`docker-compose.yml:12-14, 441, 458`). Neither `api` nor `web` publishes anything — both listen on container-internal `:3000` and are reachable only through Caddy's path split.
+Only three ports leave the host boundary: `caddy` on `80:80` and `443:443`, and `postgres` / `redis` bound to `127.0.0.1:5432` / `127.0.0.1:6379` (`docker/compose.yml:12-14, 441, 458`). Neither `api` nor `web` publishes anything — both listen on container-internal `:3000` and are reachable only through Caddy's path split.
 
 ```mermaid
 graph TB
@@ -247,7 +247,7 @@ graph TB
   DEP --> DATA
 ```
 
-Two details in that graph are easy to miss and load-bearing. First, **`caddy` depends on `api: service_healthy` but not on `web`** (`docker-compose.yml:31-33`) — in the main compose file the edge router can come up while the frontend is still starting. Second, the API reaches game servers over **two unrelated RCON paths**: `apps/api/src/lib/rcon.ts:20-25` opens an HTTP-over-unix-socket connection to the rnsquadjs sidecar at `/run/squad-panel/rnsquadjs/<serverId>/sock/rcon.sock`, while `worker-rcon` speaks raw Valve RCON TCP from the host netns (`apps/workers/rcon/src/client.ts`). Both export a type literally named `RconClient`; they share no code.
+Two details in that graph are easy to miss and load-bearing. First, **`caddy` depends on `api: service_healthy` but not on `web`** (`docker/compose.yml:31-33`) — in the main compose file the edge router can come up while the frontend is still starting. Second, the API reaches game servers over **two unrelated RCON paths**: `apps/api/src/lib/rcon.ts:20-25` opens an HTTP-over-unix-socket connection to the rnsquadjs sidecar at `/run/squad-panel/rnsquadjs/<serverId>/sock/rcon.sock`, while `worker-rcon` speaks raw Valve RCON TCP from the host netns (`apps/workers/rcon/src/client.ts`). Both export a type literally named `RconClient`; they share no code.
 
 ### 2.2 Three privilege zones
 
@@ -284,7 +284,7 @@ Crossing ② is the design's centre of gravity. The socket is `SocketMode=0660 S
     # otherwise every RPC fails with `rejected untrusted peer`.
     user: "0:${PANEL_GID:-987}"
 ```
-(`docker-compose.yml:130-134`, repeated verbatim at `:82-86`, `:158-162`, `:317-321`, `:368-372`)
+(`docker/compose.yml:130-134`, repeated verbatim at `:82-86`, `:158-162`, `:317-321`, `:368-372`)
 
 Five services hold that credential: `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler`. Containers bind-mount the socket **directory**, not the file — the recorded reason is that mounting the file froze consumers on a stale inode across bridge restarts.
 
@@ -1106,13 +1106,13 @@ const stopHeartbeat = startHeartbeat({ redis, name: 'scheduler', statusFn: () =>
 
 The order is: pino logger → `requiredEnv` (fatal `process.exit(1)` on a missing var) → postgres/drizzle → ioredis with exponential `retryStrategy` → `createDiag` → optional `BridgeClient.connect()` → `startHeartbeat` → `diag.emit({kind:'*.started'})` → `SIGINT`/`SIGTERM` handlers → first tick → `setInterval`. Scheduler registers signals *before* the first tick with a comment explaining why (`scheduler/src/index.ts:110-113`); most others register after. Entrypoint guarding is likewise inconsistent — `scheduler`, `stats`, `diag-flush`, `event-partition`, `leaderboard-aggregator` use `isMainEntrypoint()` so tests can import the module, while `log-ingest`, `backup`, `audit-archiver` call `main()` unconditionally at module scope (`log-ingest/src/index.ts:337`).
 
-**Health is Redis-only. No worker opens an HTTP port** — grepping `createServer|listen|fastify(` across `apps/workers/*/src` returns nothing. The contract is `worker:heartbeat:<name>`, written every `HEARTBEAT_INTERVAL_MS = 5_000` with `HEARTBEAT_TTL_SECONDS = 30` (`packages/shared-config/src/heartbeat.ts:14-16`), payload `{name, ts, pid, hostname, started_at, status}` where `status` comes from an optional `statusFn` (log-ingest reports `tails=<n>`). The API scans the prefix in `apps/api/src/plugins/health.ts:40`. Two gaps follow: `apps/api/src/plugins/heartbeat-watch.ts:4` alerts on only **6 hard-coded `KNOWN_WORKERS`** (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`), so the other 13 can die without a `worker.heartbeat_lost` diag; and `docker-compose.yml` declares **no `healthcheck:` for any worker service** — only `restart: unless-stopped`.
+**Health is Redis-only. No worker opens an HTTP port** — grepping `createServer|listen|fastify(` across `apps/workers/*/src` returns nothing. The contract is `worker:heartbeat:<name>`, written every `HEARTBEAT_INTERVAL_MS = 5_000` with `HEARTBEAT_TTL_SECONDS = 30` (`packages/shared-config/src/heartbeat.ts:14-16`), payload `{name, ts, pid, hostname, started_at, status}` where `status` comes from an optional `statusFn` (log-ingest reports `tails=<n>`). The API scans the prefix in `apps/api/src/plugins/health.ts:40`. Two gaps follow: `apps/api/src/plugins/heartbeat-watch.ts:4` alerts on only **6 hard-coded `KNOWN_WORKERS`** (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`), so the other 13 can die without a `worker.heartbeat_lost` diag; and `docker/compose.yml` declares **no `healthcheck:` for any worker service** — only `restart: unless-stopped`.
 
 Shutdown is uniform in shape: stop timers → emit `*.stopped` diag → `stopHeartbeat()` → `bridge.close()` → `sql.end({ timeout: 5 })` → `redis.quit().catch(() => undefined)` → `process.exit(0)`. Stream-loop workers poll a `shouldStop()` boolean per iteration rather than aborting the in-flight `BLOCK` read; `diag-flush` additionally awaits its in-flight batch promise.
 
 Config is bare `process.env` — no zod schema, no shared loader, `requiredEnv()` redefined per worker. Two names exist for one socket: `PANEL_BRIDGE_SOCKET` (scheduler, config-sync) vs `BRIDGE_SOCKET` (log-ingest, metrics-sampler). Failure contracts diverge too: `ban-sync`/`clan-guard`/`automation` swallow and continue; `role-expirer`/`clan-priority-expirer` emit a diag then rethrow; `discord`, `audit-archiver`, `backup`, `event-partition` degrade to heartbeat-only idle on missing env instead of exiting.
 
-All workers share one parameterised image, `docker/worker.Dockerfile`, selected by `ARG WORKER`. Bridge-consuming services must run `user: "0:${PANEL_GID}"` — compose repeats a warning that `group_add` breaks the bridge's `SO_PEERCRED` check (`docker-compose.yml:139-143`). `worker-rcon` uniquely runs `network_mode: host` and therefore reaches Postgres/Redis over `127.0.0.1`. **Metrics: no Prometheus, no OpenTelemetry anywhere in the fleet.**
+All workers share one parameterised image, `docker/worker.Dockerfile`, selected by `ARG WORKER`. Bridge-consuming services must run `user: "0:${PANEL_GID}"` — compose repeats a warning that `group_add` breaks the bridge's `SO_PEERCRED` check (`docker/compose.yml:139-143`). `worker-rcon` uniquely runs `network_mode: host` and therefore reaches Postgres/Redis over `127.0.0.1`. **Metrics: no Prometheus, no OpenTelemetry anywhere in the fleet.**
 
 `apps/workers/_test-shared/contract.ts` exports one factory, `workerContract(opts)`, asserting the two platform invariants against a spawned `dist/index.js`: the heartbeat key appears with `0 < ttl <= 30` within 30 s, and `SIGTERM` yields `exit(0)` within 8 s. It isolates on `TEST_REDIS_DB` (default 14) to fix a documented CI flake. **Adoption is 4 of 17** — only `clan-priority-expirer`, `role-expirer`, `log-ingest`, `seed-reward` import it; the other 13 carry hand-copied versions with the old 5 s window and a hardcoded `redis://127.0.0.1:6379/14`, i.e. the exact flake the shared harness was written to eliminate. `leaderboard-aggregator` and `presence-daily` have no contract test at all.
 
@@ -1157,7 +1157,7 @@ return occurrences.length > 0 ? (occurrences.at(-1) ?? null) : null;
 ```
 (`scheduler/src/scheduled-task-tick.ts:105-118`)
 
-**Double execution across replicas is not prevented.** There is no advisory lock and no `SELECT … FOR UPDATE` in `apps/workers/scheduler/src/`; the only guard is a non-atomic read-then-write cursor, `setLastExecutedAt` being a plain `UPDATE … WHERE id = ?` (`deps.ts:150-158`). The single `SET … NX` in the package is a per-server *seed-call cooldown* (`seed:call:cooldown:<serverId>`, `deps.ts:290-297`), not a tick lock. Two scheduler replicas would both see a task due and both fire. The architecture is implicitly single-replica for every interval worker, enforced only by convention: `docker-compose.yml` declares no `deploy.replicas` anywhere. Scheduler never speaks RCON directly — it `XADD`s onto `rcon:commands:<serverId>` and applies weekly rotation profiles through the Go bridge.
+**Double execution across replicas is not prevented.** There is no advisory lock and no `SELECT … FOR UPDATE` in `apps/workers/scheduler/src/`; the only guard is a non-atomic read-then-write cursor, `setLastExecutedAt` being a plain `UPDATE … WHERE id = ?` (`deps.ts:150-158`). The single `SET … NX` in the package is a per-server *seed-call cooldown* (`seed:call:cooldown:<serverId>`, `deps.ts:290-297`), not a tick lock. Two scheduler replicas would both see a task due and both fire. The architecture is implicitly single-replica for every interval worker, enforced only by convention: `docker/compose.yml` declares no `deploy.replicas` anywhere. Scheduler never speaks RCON directly — it `XADD`s onto `rcon:commands:<serverId>` and applies weekly rotation profiles through the Go bridge.
 
 ### 6.3 The complete roster
 
@@ -1429,7 +1429,7 @@ Streaming methods interleave `StreamFrame`s on the same socket ahead of the term
 
 The second test is not what it looks like. `unix.Ucred` carries only `Pid`, `Uid`, `Gid`; **the kernel never transmits the peer's supplementary group set over `SO_PEERCRED`**. So `GroupIds()` does not read the caller's credentials at all — it queries *the bridge host's own* `/etc/passwd` + `/etc/group` for whatever username `creds.Uid` maps to.
 
-That is exactly why `group_add` does not work for compose services. A container declaring `group_add: [987]` still presents `uid=0, gid=0` on the socket. The primary compare fails (`0 != 987`); the fallback resolves UID 0 against the *host's* passwd to `root` and enumerates *host root's* groups, which do not contain `panel`. The container's real supplementary set is invisible. Result: `ErrUntrustedPeer` (`peer.go:96-102`), logged as `rejected untrusted peer … uid:0, user:root`. Hence the five copies of `user: "0:${PANEL_GID:-987}"` in `docker-compose.yml` (`:86`, `:134`, `:162`, `:321`, `:372`), four of them carrying the comment "this MUST be `user: \"0:<panel-gid>\"`, never `group_add: [<panel-gid>]`". **The compose comment is correct; the docs' explanation is not.** `docs/components/bridge/configuration.md:38`, `docs/operations/troubleshooting.md:39` and `docs/architecture/decisions.md:223` attribute the failure to supplementary groups being "not visible across the user-namespace boundary" — the true reason is narrower and namespace-independent. A container running as a *host-known* non-root UID that is in `panel` would in fact pass via the fallback, which the docs' phrasing denies. The fallback's real purpose is the host-CLI operator case: `sudo usermod -aG panel $USER`.
+That is exactly why `group_add` does not work for compose services. A container declaring `group_add: [987]` still presents `uid=0, gid=0` on the socket. The primary compare fails (`0 != 987`); the fallback resolves UID 0 against the *host's* passwd to `root` and enumerates *host root's* groups, which do not contain `panel`. The container's real supplementary set is invisible. Result: `ErrUntrustedPeer` (`peer.go:96-102`), logged as `rejected untrusted peer … uid:0, user:root`. Hence the five copies of `user: "0:${PANEL_GID:-987}"` in `docker/compose.yml` (`:86`, `:134`, `:162`, `:321`, `:372`), four of them carrying the comment "this MUST be `user: \"0:<panel-gid>\"`, never `group_add: [<panel-gid>]`". **The compose comment is correct; the docs' explanation is not.** `docs/components/bridge/configuration.md:38`, `docs/operations/troubleshooting.md:39` and `docs/architecture/decisions.md:223` attribute the failure to supplementary groups being "not visible across the user-namespace boundary" — the true reason is narrower and namespace-independent. A container running as a *host-known* non-root UID that is in `panel` would in fact pass via the fallback, which the docs' phrasing denies. The fallback's real purpose is the host-CLI operator case: `sudo usermod -aG panel $USER`.
 
 Two further defects, both verified:
 
@@ -1706,7 +1706,7 @@ export function createDatabaseClient(url: string) {
 | Migrator | `packages/db/src/migrate.ts:11` | `postgres(url, { max: 1 })`, `drizzle(sql)` **without** `{ schema }` |
 | API integration harness | `apps/api/test/integration/harness.ts:411` | hand-built `postgres(url, { max: 2, onnotice: () => undefined })` — deliberately bypasses the factory |
 
-`prepare: false` disables postgres.js named prepared statements, which is what makes the stack pgbouncer-transaction-mode safe. The scaling consequence of the uniform `max: 16` is worth stating plainly: **pool sizing scales with container count, not with workload**. With 17 worker services plus the API in `docker-compose.yml`, the theoretical connection ceiling is ~288 against a default Postgres `max_connections` of 100. The API's `onClose` hook is also an explicit no-op with a comment noting Drizzle exposes no `close()`, so pools are reclaimed only at process exit (`apps/api/src/plugins/database.ts:8-11`) — a deviation from the tests, which do call `sql.end()`.
+`prepare: false` disables postgres.js named prepared statements, which is what makes the stack pgbouncer-transaction-mode safe. The scaling consequence of the uniform `max: 16` is worth stating plainly: **pool sizing scales with container count, not with workload**. With 17 worker services plus the API in `docker/compose.yml`, the theoretical connection ceiling is ~288 against a default Postgres `max_connections` of 100. The API's `onClose` hook is also an explicit no-op with a comment noting Drizzle exposes no `close()`, so pools are reclaimed only at process exit (`apps/api/src/plugins/database.ts:8-11`) — a deviation from the tests, which do call `sql.end()`.
 
 ### 8.6 Migrations and the drizzle-kit divorce
 
@@ -1819,7 +1819,7 @@ The intended fix is documented but unimplemented. `packages/db/sql/` holds ten i
 | `crashes:<serverId>` | Redis zset | exact 24 h `ZREMRANGEBYSCORE` (`plugins/status-reconciler.ts:241`) | API plugin | exact, score-based trim |
 | event dedup keys | Redis | `DEDUP_TTL_SECONDS = 86_400` (`shared-types/src/events.ts:292`) | ban-sync, discord | key expiry |
 | Squad game logs | bridge filesystem | `squadLogRetentionDays = 10` (`handlers.go:582`) | bridge sweep, driven hourly by log-ingest | file unlink; optional archive-before-delete per `archive_server_ids` |
-| restic snapshots | backup volume | `--keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune` (`docker-compose.yml:527`) | restic service | snapshot forget + prune |
+| restic snapshots | backup volume | `--keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune` (`docker/compose.yml:527`) | restic service | snapshot forget + prune |
 
 Redis is the only tier with universally enforced caps, and every one of them drops data *silently* — `MAXLEN ~` is approximate, and nothing emits a warning on trim. `diag:queue` is the sharpest edge: during a Postgres outage the diag-flush consumer stops draining while producers keep `XADD`-ing, so the evidence of the outage is the first thing evicted.
 
@@ -2098,11 +2098,11 @@ The architectural weakness is coverage, not the gate. Of 99 route files, only 39
 |---|---|---|---|
 | Browser | untrusted | TLS to Caddy | `__Host-sid` cookie, JSON |
 | Caddy (`docker/Caddyfile`) | container | `reverse_proxy api:3000` / `web:3000` | `/api/*`, `/health`, `/ready`, **`/metrics`** → api; rest → Next.js |
-| `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` | `user: "0:${PANEL_GID}"` (`docker-compose.yml:86,134,162,321,372`) | bind-mounted `/run/panel-host-bridge/bridge.sock` | length-prefixed JSON RPC, `MaxFrame = 16 MiB` |
+| `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` | `user: "0:${PANEL_GID}"` (`docker/compose.yml:86,134,162,321,372`) | bind-mounted `/run/panel-host-bridge/bridge.sock` | length-prefixed JSON RPC, `MaxFrame = 16 MiB` |
 | `panel-host-bridge` | root + `CAP_NET_ADMIN` | `os/exec` (`docker`, `ufw`, `du`, `restic`) + direct FS I/O | allowlisted args only |
 | Squad game containers | `--user 1001`, `--network host` | `ServerConfig:rw`, `Saved:rw`, `squad-depot:ro` | game traffic, loopback RCON |
 
-Containers run as UID 0 *inside* the container with the `panel` GID as primary group — deliberate (`docker-compose.yml:83`) because `ResolvePeer` (`apps/bridge/internal/auth/peer.go:35-96`) reads `SO_PEERCRED` and compares the peer's **primary** GID against `panel`; on mismatch it falls back to enumerating the groups the *host's* passwd/group database lists for that UID. The container's own supplementary groups are never visible to the kernel's `SO_PEERCRED` payload, which is why every bridge-attached service must use `user: "0:${PANEL_GID}"` and never `group_add`. Rejection happens once at connect (`cmd/panel-host-bridge/main.go:158`); the socket is `chmod 0660`. **There is no per-method authorization on the bridge**: any process in `panel` can invoke all 30 RPC methods (`packages/shared-config/src/bridge-methods.ts`), including `backup_restore`, `directory_delete`, and `host_agent_restart`.
+Containers run as UID 0 *inside* the container with the `panel` GID as primary group — deliberate (`docker/compose.yml:83`) because `ResolvePeer` (`apps/bridge/internal/auth/peer.go:35-96`) reads `SO_PEERCRED` and compares the peer's **primary** GID against `panel`; on mismatch it falls back to enumerating the groups the *host's* passwd/group database lists for that UID. The container's own supplementary groups are never visible to the kernel's `SO_PEERCRED` payload, which is why every bridge-attached service must use `user: "0:${PANEL_GID}"` and never `group_add`. Rejection happens once at connect (`cmd/panel-host-bridge/main.go:158`); the socket is `chmod 0660`. **There is no per-method authorization on the bridge**: any process in `panel` can invoke all 30 RPC methods (`packages/shared-config/src/bridge-methods.ts`), including `backup_restore`, `directory_delete`, and `host_agent_restart`.
 
 Injection is structurally excluded — every command goes through `exec.CommandContext(ctx, cmd, args...)` (`internal/runner/runner.go:30`), never a shell. The single `/bin/sh -c` is a constant `restic snapshots --json` (`docker.go:750`). Path traversal is blocked centrally:
 
@@ -2258,7 +2258,7 @@ Host metrics live in the second capped stream. `apps/workers/metrics-sampler` sa
 
 The Go bridge exposes no HTTP surface at all — no `/metrics`, no `/healthz`, no `/readyz`. Its `apps/bridge/internal/metrics/host.go:22-50` package is a *host-stats sampler*, not an instrumentation library: `HostInfo` (hostname, os, kernel, cpu_model, cores, ram_total, docker_version, ips) and `HostMetrics` (cpu_percent, ram/disk used, net rx/tx per sec, load averages, sampled_at), served over the `host_info` / `host_metrics` RPC methods among the bridge's 30. Its only log path off-box is journald, scraped by `diag-flush`.
 
-The no-Prometheus decision has one loose end worth knowing: `apps/api/package.json:47` still depends on `prom-client`, and `apps/api/src/plugins/metrics.ts` builds a private `Registry`, runs `collectDefaultMetrics`, and serves `GET /metrics` (line 54, `audit: false`, `schema: { hide: true }` so it is absent from OpenAPI). Nothing in `docker-compose.yml` scrapes it, and `docs/operations/monitoring.md:3` claims "There is no Prometheus exporter" — the endpoint exists but is unscraped and undocumented-as-existing.
+The no-Prometheus decision has one loose end worth knowing: `apps/api/package.json:47` still depends on `prom-client`, and `apps/api/src/plugins/metrics.ts` builds a private `Registry`, runs `collectDefaultMetrics`, and serves `GET /metrics` (line 54, `audit: false`, `schema: { hide: true }` so it is absent from OpenAPI). Nothing in `docker/compose.yml` scrapes it, and `docs/operations/monitoring.md:3` claims "There is no Prometheus exporter" — the endpoint exists but is unscraped and undocumented-as-existing.
 
 | Metric | Type | Labels | Incremented at |
 |---|---|---|---|
@@ -2725,7 +2725,7 @@ The sweep walks `savedRoot/<uuid>/SquadGame/Saved/Logs` and acts only on rotated
 
 ### 12.7 restic backup and restore
 
-A snapshot contains **logical dumps, not raw volumes**. The `backup` service (`docker-compose.yml:510-536`, behind `profiles: ['backup']`) backs up only the staging volume `backup_dump:/data`:
+A snapshot contains **logical dumps, not raw volumes**. The `backup` service (`docker/compose.yml:510-536`, behind `profiles: ['backup']`) backs up only the staging volume `backup_dump:/data`:
 
 ```yaml
 BACKUP_CRON: '0 3 * * *'
@@ -2751,7 +2751,7 @@ redis-cli config set appendonly yes >/dev/null
 until [ "$(... aof_rewrite_in_progress ...)" = "0" ]; do sleep 0.3; done
 ```
 
-Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `compose.stand.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the stand production stack is unbacked.**
+Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `docker/compose.stand.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker/compose.yml --env-file <dir>/.env` — **the entire backup subsystem is dev/self-hosted-compose only; the stand production stack is unbacked.**
 
 ---
 
@@ -3066,7 +3066,7 @@ Second, `test` depends on the package's *own* `build`, so every `turbo run test`
 
 Third, only `NODE_ENV` and `CI` sit in `globalEnv`; the connection settings (`DATABASE_URL`, `TEST_DATABASE_URL`, `REDIS_URL`, `TEST_REDIS_URL`, `POSTGRES_PASSWORD`, `APP_ENCRYPTION_KEY`, `PANEL_BRIDGE_SOCKET`) are `globalPassThroughEnv` — the tasks see them, the hash does not. No build output depends on which database a run points at, and hashing them made every per-agent test DB and every CI run (whose service containers get a new host port each time) a full cache miss. `globalDependencies` is `tsconfig.base.json` alone: no build reads `biome.json` or `.env.example`.
 
-`tsconfig.base.json` is aggressive: `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `allowUnreachableCode: false`, `isolatedModules`, `verbatimModuleSyntax`, target/lib `ES2023`, `moduleResolution: "Bundler"`. `exactOptionalPropertyTypes` is the one flag deliberately off. `apps/web/tsconfig.json` does **not** extend the base — it redeclares everything and is the only package with a path alias (`@/*` → `./src/*`); everywhere else, cross-package imports go through workspace package names.
+`packages/tsconfig.base.json` is aggressive: `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `allowUnreachableCode: false`, `isolatedModules`, `verbatimModuleSyntax`, target/lib `ES2023`, `moduleResolution: "Bundler"`. `exactOptionalPropertyTypes` is the one flag deliberately off. `apps/web/tsconfig.json` does **not** extend the base — it redeclares everything and is the only package with a path alias (`@/*` → `./src/*`); everywhere else, cross-package imports go through workspace package names.
 
 Biome 2.2.0 handles lint and format together (2-space, `lineWidth: 100`, single quotes, `trailingCommas: "all"` for JS and `"none"` for JSON). `noExplicitAny`, `noUnusedImports`, `noUnusedVariables`, `useConst`, `useImportType` are errors; `noNonNullAssertion` is a **warn** and does not block; `noConsole` and `complexity/noForEach` are off. Note the declared turbo `lint` task is nearly vestigial — only `apps/bridge` defines a `lint` script; TypeScript linting runs as a repo-wide `pnpm exec biome check .` outside turbo entirely.
 
@@ -3105,7 +3105,7 @@ graph LR
 
 **`go`** uses SHA-pinned `actions/setup-go` directly on the disposable VM. Steps: `go vet`, `go test -race -count=1`, `govulncheck` (pinned `v1.7.0`), then a static `CGO_ENABLED=0` build whose dynamic linking fails the job.
 
-**`images`** builds the `release` group and `rnsquadjs` from `docker-bake.hcl`, reading the GHCR layer cache the stand deploy writes (`packages: read`; it never writes the cache), loads them, and smoke-tests them: the api image imports `postgres`, every `WORKER` in `compose.stand.yml` exists in the workers image, and the workers image exits 64 without one. **`backup`** runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip) beside it.
+**`images`** builds the `release` group and `rnsquadjs` from `docker/docker-bake.hcl`, reading the GHCR layer cache the stand deploy writes (`packages: read`; it never writes the cache), loads them, and smoke-tests them: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` exists in the workers image, and the workers image exits 64 without one. **`backup`** runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip) beside it.
 
 **`gate`** `needs` every other job with `if: always()` and fails unless all of them succeeded — only `mutation` may be skipped. It then downloads the API and web blob reports and runs `vitest run --merge-reports --coverage` in `apps/api` and `apps/web`, so each package's `vitest.config.ts` thresholds apply to the merged coverage of its whole suite.
 
@@ -3113,7 +3113,7 @@ graph LR
 
 the stand host is a **development stand**, not production. `.github/workflows/deploy.yml` fires on every push to `dev` with `paths-ignore: ['**.md','docs/**']`, and on a dispatch with an optional 40-hex `sha` for a redeploy or rollback. It runs no tests: what reaches `dev` is reviewed code, verified by `ci` once it is promoted to `master`, and a broken stand is fixed forward or rolled back.
 
-The `build` job is a matrix over `api`, `web`, `workers` and `caddy` on hosted VMs with `packages: write`. Each leg checks out the target SHA, skips the build when `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists, and otherwise builds its `docker-bake.hcl` target and pushes `:<sha>` and `:dev` with a registry layer cache at `:buildcache` (`mode=max`). Its concurrency group `deploy-build-<image>` cancels a superseded build, whose run then skips its deploy.
+The `build` job is a matrix over `api`, `web`, `workers` and `caddy` on hosted VMs with `packages: write`. Each leg checks out the target SHA, skips the build when `ghcr.io/seregatipich/squad-panel-<image>:<sha>` already exists, and otherwise builds its `docker/docker-bake.hcl` target and pushes `:<sha>` and `:dev` with a registry layer cache at `:buildcache` (`mode=max`). Its concurrency group `deploy-build-<image>` cancels a superseded build, whose run then skips its deploy.
 
 The `deploy` job waits for every build, binds the `stand` environment (the only holder of `STAND_SSH_KEY` and `STAND_SSH_KNOWN_HOSTS`, admitting `dev` alone), and runs one at a time in group `deploy` with `cancel-in-progress: false`. It resolves the four tags to `sha256` digests, pins the host key (`ssh-keygen -F <stand host>`, `StrictHostKeyChecking=yes`), and sends one SSH command, `deploy <sha> api=sha256:… web=sha256:… workers=sha256:… caddy=sha256:…`. On the host the key is bound to a forced command (`~/bin/panel-deploy`, from `scripts/deploy-entry.sh`) that validates that line, fetches the commit into its own checkout, and runs `scripts/deploy-stand.sh` with the images pinned by digest; the job itself gets no shell and copies no files. Finally it polls `$STAND_URL/health` every 2 s for about 90 s, requiring HTTP 200 with `"status":"ok"`, and removes the key in an `always()` step.
 
@@ -3214,7 +3214,7 @@ const interval = setInterval(tick, TICK_INTERVAL_MS);
 // SIGTERM: clearInterval → diag '.stopped' → stopHeartbeat() → sql.end() → redis.quit()
 ```
 
-Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker-compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `compose.stand.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
+Checklist: `apps/workers/<name>/{package.json (name @squad/worker-<name>), tsconfig.json, vitest.config.ts, src/{index,tick,deps}.ts, test/}` → a `worker-<name>` service in `docker/compose.yml` with `build args: { WORKER: <name> }` (`docker/worker.Dockerfile:21` builds `@squad/worker-$WORKER`) → the same in `docker/compose.stand.yml` → the heartbeat name in `apps/api/src/plugins/heartbeat-watch.ts:4-11`.
 
 **Pitfalls.** `KNOWN_WORKERS` lists only six names (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`) while `apps/workers/` holds 19 packages — 13 workers publish heartbeats nobody watches, so their death is invisible on the dashboard. Also, workers must never import from another `apps/*` package (`docs/development/conventions.md:26`), so shared constants such as the live-bus channel name are **re-declared** per worker rather than shared.
 
@@ -3401,7 +3401,7 @@ The 30-method contract is typed twice by hand with no generator. I diffed the tw
 | `bonus_transactions` | `created_at` | migration DO-block, months −1..+3 | none |
 | `combat_events` | `occurred_at` | migration + `combat_events_default` DEFAULT partition | none |
 
-Each `packages/db/sql/*.sql` file carries a comment instructing the operator to install `pg_partman` in production — but `docker-compose.yml:435` pins `postgres:16-alpine`, which does not ship it, and no compose file, Dockerfile or script installs it. **Consequence:** once the pre-created +3-month window elapses, inserts into `chat_messages`, `player_sessions` and `bonus_transactions` fail outright with "no partition of relation found". `combat_events` survives because of its DEFAULT partition, silently degrading to an unpartitioned heap.
+Each `packages/db/sql/*.sql` file carries a comment instructing the operator to install `pg_partman` in production — but `docker/compose.yml:435` pins `postgres:16-alpine`, which does not ship it, and no compose file, Dockerfile or script installs it. **Consequence:** once the pre-created +3-month window elapses, inserts into `chat_messages`, `player_sessions` and `bonus_transactions` fail outright with "no partition of relation found". `combat_events` survives because of its DEFAULT partition, silently degrading to an unpartitioned heap.
 
 #### C.9 The confirmed log-parser `--timestamps` defect
 
@@ -3453,7 +3453,7 @@ Three of these read their thresholds from a settings singleton; reporter stats h
 | Doc claim | Reality | Verify with |
 |---|---|---|
 | `README.md:51` — workers are "7 active + 5 stubs" | **19** worker packages; **17** run as compose services | `ls -d apps/workers/*/ \| grep -v _test-shared \| wc -l` |
-| `README.md:71-85` — 13 compose services | **27** | `grep -cE '^  [a-z0-9-]+:' docker-compose.yml` (minus 2 anchor lines) |
+| `README.md:71-85` — 13 compose services | **27** | `grep -cE '^  [a-z0-9-]+:' docker/compose.yml` (minus 2 anchor lines) |
 | `README.md:58`, `system-overview.md:9`, `components/bridge/api.md:47` — "25 RPC methods" | **30** | `packages/shared-config/src/bridge-methods.ts` |
 | `components/bridge/api.md` documents 21 methods | 9 undocumented: `backup_snapshots`, `backup_run`, `backup_restore`, `container_run_rnsquadjs`, `docker_prune`, `file_read_stream`, `list_panel_dirs`, `list_squad_containers`, `squad_log_list` | — |
 | `components/api/README.md:23` — 13 route files | **99** | `ls apps/api/src/routes/*.ts \| wc -l` |
@@ -3461,7 +3461,7 @@ Three of these read their thresholds from a settings singleton; reporter stats h
 | `data-flow.md:15` — ~11 Postgres tables | **83** across 70 schema modules | `grep -rho 'pgTable(' packages/db/src/schema/ \| wc -l` |
 | `decisions.md:96`, `data-flow.md:154` — 6 live-bus event types | **23** | `apps/api/src/plugins/live-bus.ts` |
 | `rbac.md:16-33` category table | Omits `banlist:read`, `host:manage`, `integration:manage`; registry total is **51** | `packages/shared-config/src/permissions.ts` |
-| `operations/monitoring.md` — 5 workers | 17 compose worker services | `grep -cE '^  worker-' docker-compose.yml` |
+| `operations/monitoring.md` — 5 workers | 17 compose worker services | `grep -cE '^  worker-' docker/compose.yml` |
 | `operations/environment-variables.md` — 23 vars | `.env.example` defines 32 | — |
 
 ### Claims that are wrong, not merely stale
@@ -3469,7 +3469,7 @@ Three of these read their thresholds from a settings singleton; reporter stats h
 - **`system-overview.md:15` calls `{automation, backup, config-sync, discord, scheduler, stats}` stubs.** Five of the six are implemented and running in compose. `config-sync` alone is 1 173 LOC across 7 modules and is the subject of its own ADR — and `decisions.md:46` already contradicts this by describing it as "rewritten from a P2 stub". Only `apps/workers/backup` is a genuine stub (`log.info('worker-backup idle — deferred to later phase')`).
 - **`architecture/README.md:51` — "RNSquadJS is not a dependency… We do not vendor or fork RNSquadJS."** Contradicted by `decisions.md:299-317` (the 2026-06-12 decision adopting per-server RNSquadJS sidecars), the `rnsquadjs-image` compose service, the `container_run_rnsquadjs` bridge RPC, and `docker/rnsquadjs/`. The constraint needs rewriting, not deleting — the in-house parser is still the path for non-cutover servers.
 - **`decisions.md:140` — "`loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s."** It is an in-process `Map` keyed by player UUID (`apps/api/src/lib/rbac.ts:32-33`). The same section's own Rationale says "Single process cache", contradicting its Decision. This matters: the cache does not invalidate across API replicas.
-- **`security.md:19` — bridge socket is mounted into "api, worker-rcon, worker-log-ingest".** `worker-rcon` does **not** mount it (it is `network_mode: host` and speaks RCON on loopback). The five that do are `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` (`docker-compose.yml:88,136,164,323,374`).
+- **`security.md:19` — bridge socket is mounted into "api, worker-rcon, worker-log-ingest".** `worker-rcon` does **not** mount it (it is `network_mode: host` and speaks RCON on loopback). The five that do are `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` (`docker/compose.yml:88,136,164,323,374`).
 - **`rbac.md:67` describes the permission gate as a `preHandler`.** It is an `onRequest` hook (`apps/api/src/plugins/auth.ts:21`); there is no `preHandler` anywhere in `apps/api/src`.
 - **`decisions.md:137` and `README.md:98` advertise roles Owner / SeniorAdmin / Admin / Moderator / Viewer.** `0015_reseed_roles_squad.sql:68` deletes `Senior Admin` and `Viewer`; `0016_drop_legacy_viewer.sql` drops Viewer again. The seeded set is **Owner, Admin, Moderator, QueuePriority, Cameraman, Intern**.
 - **`operations/monitoring.md` — "Alerting via the Discord worker is planned as a P2 feature."** `worker-discord` ships; `alert_rules`/`alert_events` exist; `routes/alert-rules.ts` exists; `alert.triggered` is a live-bus event.

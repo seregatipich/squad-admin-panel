@@ -54,7 +54,7 @@
 | `apps/web/src/app/(dashboard)/dashboard/page.tsx` | Cards become `<button>` opening modal |
 | `apps/web/src/app/(dashboard)/layout.tsx` | "Логи" nav link |
 | `apps/web/package.json` | `recharts` dep |
-| `docker-compose.yml` | `worker-metrics-sampler` service |
+| `docker/compose.yml` | `worker-metrics-sampler` service |
 
 ---
 
@@ -1504,13 +1504,13 @@ git commit -m "feat(worker-metrics-sampler): poll bridge.host_metrics every 15s 
 ## Task 11: Add metrics-sampler to docker-compose
 
 **Files:**
-- Modify: `docker-compose.yml`
+- Modify: `docker/compose.yml`
 - Modify: `docker/worker.Dockerfile` (or whichever Dockerfile builds the workers — check `docker/`)
 
 - [ ] **Step 11.1: Inspect existing worker compose entries**
 
 ```bash
-grep -n "worker-rcon\|worker-log-ingest" docker-compose.yml
+grep -n "worker-rcon\|worker-log-ingest" docker/compose.yml
 ```
 
 - [ ] **Step 11.2: Add the new service mirroring `worker-rcon`'s shape**
@@ -1550,7 +1550,7 @@ Expected: no errors.
 - [ ] **Step 11.4: Commit**
 
 ```bash
-git add docker-compose.yml
+git add docker/compose.yml
 git commit -m "chore(compose): add worker-metrics-sampler service"
 ```
 

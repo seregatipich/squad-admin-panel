@@ -34,8 +34,8 @@
 - **`apps/bridge/deploy/panel-host-bridge.service`** `ReadWritePaths` now includes `/run/panel-host-bridge` so the bridge process can mutate its own socket file (required for clean shutdown / rebind).
 - **`apps/bridge/cmd/panel-host-bridge/main.go`** dev-mode fallback path updated.
 - **`packages/shared-config/src/bridge-methods.ts`** `BRIDGE_SOCKET_DEFAULT` updated.
-- **`apps/api/src/config.ts`**, **`apps/workers/{log-ingest,metrics-sampler,config-sync}/src/index.ts`**, **`scripts/{verify-bridge.sh,bootstrap.sh}`**, **`docker-compose.yml`** — all default-path references updated.
-- **`docker-compose.yml`** volumes for the api/web/worker-log-ingest/worker-config-sync/worker-metrics-sampler services switched from single-file bind-mount (`/run/panel-host-bridge.sock:/run/panel-host-bridge.sock`) to **directory bind-mount** (`/run/panel-host-bridge:/run/panel-host-bridge`).
+- **`apps/api/src/config.ts`**, **`apps/workers/{log-ingest,metrics-sampler,config-sync}/src/index.ts`**, **`scripts/{verify-bridge.sh,bootstrap.sh}`**, **`docker/compose.yml`** — all default-path references updated.
+- **`docker/compose.yml`** volumes for the api/web/worker-log-ingest/worker-config-sync/worker-metrics-sampler services switched from single-file bind-mount (`/run/panel-host-bridge.sock:/run/panel-host-bridge.sock`) to **directory bind-mount** (`/run/panel-host-bridge:/run/panel-host-bridge`).
 
 ### Fixed
 

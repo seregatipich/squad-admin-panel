@@ -4,13 +4,17 @@
 # release in .release.env, so every compose command on the host reads both env
 # files (Compose 2.17+ merges them; .release.env wins):
 #
-#   docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml ps
+#   docker compose --env-file .env.stand --env-file .release.env -f docker/compose.stand.yml ps
 #
 # A fully qualified ghcr.io name pinned by digest can only ever resolve to that
 # one image, so these services may pull (the deploy pulls just the changed
 # ones). The host-built images at the bottom are different: their short names
 # would resolve to somebody else's Docker Hub image, so they are never pulled —
 # the bridge starts them with `--pull never`, and compose has `pull_policy: never`.
+# Paths below resolve from this directory, so the project name is pinned to
+# the one the stand has always run under (its volumes and containers).
+name: squad-admin-panel
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -502,7 +506,7 @@ services:
       # replaced inode after rsync, so a Caddyfile edit must recreate caddy.
       CADDYFILE_SHA: ${CADDYFILE_SHA:-}
     volumes:
-      - ./docker/Caddyfile.stand:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.stand:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -520,7 +524,7 @@ services:
   # tags them in one shot, while `docker compose up` skips them.
   squad-server-image:
     build:
-      context: ./docker
+      context: .
       dockerfile: squad-server.Dockerfile
     image: squad-server:latest
     pull_policy: never
@@ -530,7 +534,7 @@ services:
 
   depot-init-image:
     build:
-      context: ./docker
+      context: .
       dockerfile: depot-init.Dockerfile
     image: squad-panel/depot-init:latest
     pull_policy: never
@@ -540,10 +544,10 @@ services:
 
   # The bridge launches one rnsquadjs sidecar per cutover server with
   # `--pull never`, so the tag MUST already exist locally. Context is the repo
-  # root (not ./docker) because the Dockerfile COPYs `docker/rnsquadjs/...`.
+  # root (not this directory) because the Dockerfile COPYs `docker/rnsquadjs/...`.
   rnsquadjs-image:
     build:
-      context: .
+      context: ..
       dockerfile: docker/rnsquadjs.Dockerfile
     image: squad-panel/rnsquadjs:latest
     pull_policy: never

@@ -4,19 +4,19 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Regression test: every `worker-*` service defined in the reference compose
- * file (docker-compose.yml) must also exist in the dev-stand compose
- * file (compose.stand.yml), and vice versa.
+ * file (docker/compose.yml) must also exist in the dev-stand compose
+ * file (docker/compose.stand.yml), and vice versa.
  *
- * Background: `worker-role-expirer` was added to docker-compose.yml but never
- * mirrored into compose.stand.yml, so temporary role assignments never
+ * Background: `worker-role-expirer` was added to docker/compose.yml but never
+ * mirrored into docker/compose.stand.yml, so temporary role assignments never
  * expired on the stand host (then production) — no container ran the expirer loop. The two
  * files are maintained by hand in parallel; this test turns a silent drift
  * into a hard failure.
  */
 
 const REPO_ROOT = resolve(__dirname, '../../..');
-const REFERENCE_COMPOSE = 'docker-compose.yml';
-const STAND_COMPOSE = 'compose.stand.yml';
+const REFERENCE_COMPOSE = 'docker/compose.yml';
+const STAND_COMPOSE = 'docker/compose.stand.yml';
 
 /**
  * Extracts top-level service names (2-space-indented keys under `services:`)
@@ -46,7 +46,7 @@ function workerServices(composeFile: string): string[] {
     .sort();
 }
 
-describe('compose.stand.yml — worker service parity with docker-compose.yml', () => {
+describe('docker/compose.stand.yml — worker service parity with docker/compose.yml', () => {
   const referenceWorkers = workerServices(REFERENCE_COMPOSE);
   const standWorkers = workerServices(STAND_COMPOSE);
 
@@ -63,9 +63,9 @@ describe('compose.stand.yml — worker service parity with docker-compose.yml', 
       missingOnStand,
       [
         `Workers defined in ${REFERENCE_COMPOSE} but missing from ${STAND_COMPOSE}: ${missingOnStand.join(', ')}.`,
-        'Every worker must run on the stand host — mirror the service definition',
-        `into ${STAND_COMPOSE} (WORKERS_IMAGE image, the stand host postgres/redis URLs,`,
-        'logging block) and give it a build in compose.stand.build.yml.',
+        'Every worker must run on the stand — mirror the service definition',
+        `into ${STAND_COMPOSE} (WORKERS_IMAGE image, the stand's postgres/redis URLs,`,
+        'logging block).',
       ].join('\n'),
     ).toEqual([]);
 

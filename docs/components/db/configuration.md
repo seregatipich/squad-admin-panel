@@ -21,7 +21,7 @@ postgres://admin:<POSTGRES_PASSWORD>@<host>:5432/admin
 | Scenario | `<host>` value | Notes |
 |---|---|---|
 | Inside Docker Compose (`api`, workers) | `postgres` | Service name resolves via Compose DNS |
-| Host-side migration run | `127.0.0.1` | Postgres port is published on the host in `docker-compose.yml` |
+| Host-side migration run | `127.0.0.1` | Postgres port is published on the host in `docker/compose.yml` |
 | CI (GitHub Actions) | `127.0.0.1` | Postgres service container started in the job |
 | Tier 2 integration tests on host | `127.0.0.1` | Same as host-side migration |
 
@@ -90,7 +90,7 @@ Sessions are stored in the `sessions` table in Postgres, not in Redis. The `__Ho
 
 ## Docker Compose Postgres service
 
-The `postgres` service in `docker-compose.yml` uses the official `postgres:16-alpine` image. The database and user named `admin` are created automatically from `POSTGRES_USER` and `POSTGRES_DB` environment variables. Port `5432` is published on the host for external access (migrations, Drizzle Studio, test runs).
+The `postgres` service in `docker/compose.yml` uses the official `postgres:16-alpine` image. The database and user named `admin` are created automatically from `POSTGRES_USER` and `POSTGRES_DB` environment variables. Port `5432` is published on the host for external access (migrations, Drizzle Studio, test runs).
 
 Data is persisted in the `pgdata` named volume. To reset the database:
 

@@ -47,7 +47,7 @@ All `recommended` rules are enabled, plus:
 
 ## TypeScript
 
-The strict compiler config is defined in `tsconfig.base.json`. Key rules beyond `strict: true`:
+The strict compiler config is defined in `packages/tsconfig.base.json`. Key rules beyond `strict: true`:
 
 - `noUncheckedIndexedAccess`: `arr[i]` returns `T | undefined`. Always check before use.
 - `noUnusedLocals` / `noUnusedParameters`: unused identifiers are compile errors.
@@ -164,6 +164,6 @@ Do not add features, options, helpers, or abstractions that are not required by 
 ## See also
 
 - [`biome.json`](../../biome.json) — authoritative formatter + linter config.
-- [`tsconfig.base.json`](../../tsconfig.base.json) — TypeScript strict flags.
+- [`packages/tsconfig.base.json`](../../packages/tsconfig.base.json) — TypeScript strict flags.
 - [`lefthook.yml`](../../lefthook.yml) — pre-commit hook definitions.
 - [`docs/development/conventions.md`](./conventions.md) — structural and workflow conventions.

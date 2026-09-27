@@ -24,9 +24,6 @@
 #   API_IMAGE, WEB_IMAGE, WORKERS_IMAGE, CADDY_IMAGE
 #                     required — image references, for a release
 #                     ghcr.io/seregatipich/squad-panel-<image>@sha256:<digest>
-#   DEPLOY_BUILD=1    build the images on this host instead of pulling them
-#                     (scripts/dev-deploy-stand.sh); the references then
-#                     default to $PANEL_IMAGE_REPO-<image>:$RELEASE_SHA
 #   PANEL_IMAGE_REPO  default ghcr.io/seregatipich/squad-panel
 #   BACKUP_DIR        pre-migration dumps (default ~/backups); the newest
 #                     KEEP_BACKUPS (default 5) are kept
@@ -38,8 +35,7 @@ PANEL_IMAGE_REPO="${PANEL_IMAGE_REPO:-ghcr.io/seregatipich/squad-panel}"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
-COMPOSE_FILE="compose.stand.yml"
-BUILD_FILE="compose.stand.build.yml"
+COMPOSE_FILE="docker/compose.stand.yml"
 ENV_FILE=".env.stand"
 RELEASE_FILE=".release.env"
 PREVIOUS_FILE=".release.prev.env"
@@ -69,9 +65,6 @@ if [[ ! "${RELEASE_SHA:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
 fi
 for i in "${!IMAGE_KEYS[@]}"; do
   key="${IMAGE_KEYS[$i]}"
-  if [[ "${DEPLOY_BUILD:-}" == 1 && -z "${!key:-}" ]]; then
-    printf -v "$key" '%s' "${PANEL_IMAGE_REPO}-${IMAGE_NAMES[$i]}:${RELEASE_SHA}"
-  fi
   # The references end up in an env file compose interpolates, so only plain
   # registry/name characters and a tag or digest get through.
   if [[ ! "${!key:-}" =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]{1,128}|@sha256:[0-9a-f]{64})$ ]]; then
@@ -125,8 +118,7 @@ trap 'rm -f "$NEXT_FILE"' EXIT
   echo "COMPOSE_CONFIG_SHA=$compose_config_sha"
 } > "$NEXT_FILE"
 
-# A host build reuses tags, so equal references prove nothing about content.
-if [[ "${DEPLOY_BUILD:-}" != 1 && -f "$RELEASE_FILE" ]] &&
+if [[ -f "$RELEASE_FILE" ]] &&
   cmp -s <(grep -v '^RELEASE_SHA=' "$RELEASE_FILE") <(grep -v '^RELEASE_SHA=' "$NEXT_FILE"); then
   mv -f "$NEXT_FILE" "$RELEASE_FILE"
   echo "==> ${RELEASE_SHA} changes no image and no configuration: nothing to do (APP_VERSION=${app_version})"
@@ -175,21 +167,16 @@ wait_until_ready() {
   return 1
 }
 
-if [[ "${DEPLOY_BUILD:-}" == 1 ]]; then
-  echo "==> Building the images for ${RELEASE_SHA} on this host"
-  compose -f "$BUILD_FILE" build
-else
-  for i in "${!IMAGE_KEYS[@]}"; do
-    key="${IMAGE_KEYS[$i]}"
-    changed "$key" || continue
-    if docker image inspect "${!key}" >/dev/null 2>&1; then
-      echo "==> ${IMAGE_NAMES[$i]}: ${!key} is already on this host"
-    else
-      echo "==> Pulling ${IMAGE_NAMES[$i]}: ${!key}"
-      docker pull --quiet "${!key}"
-    fi
-  done
-fi
+for i in "${!IMAGE_KEYS[@]}"; do
+  key="${IMAGE_KEYS[$i]}"
+  changed "$key" || continue
+  if docker image inspect "${!key}" >/dev/null 2>&1; then
+    echo "==> ${IMAGE_NAMES[$i]}: ${!key} is already on this host"
+  else
+    echo "==> Pulling ${IMAGE_NAMES[$i]}: ${!key}"
+    docker pull --quiet "${!key}"
+  fi
+done
 
 if changed MIGRATIONS_SHA; then
   echo "==> packages/db/drizzle changed: backing up the database before migrating"

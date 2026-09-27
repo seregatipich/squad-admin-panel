@@ -5,15 +5,15 @@ import { describe, expect, it } from 'vitest';
 // Regression guard against silent drift of the INFRA-8 backup service: it must
 // keep backing up the LOGICAL dumps (pg_dump + redis-cli --rdb) rather than the
 // raw data directories. No YAML parser is a dependency here, so we assert on the
-// text of the `backup` service block, sliced out of docker-compose.yml.
+// text of the `backup` service block, sliced out of docker/compose.yml.
 
-const composePath = path.resolve(import.meta.dirname, '../../../../docker-compose.yml');
+const composePath = path.resolve(import.meta.dirname, '../../../../docker/compose.yml');
 const compose = readFileSync(composePath, 'utf8');
 
 function serviceBlock(name: string): string {
   const lines = compose.split('\n');
   const start = lines.indexOf(`  ${name}:`);
-  if (start === -1) throw new Error(`service ${name} not found in docker-compose.yml`);
+  if (start === -1) throw new Error(`service ${name} not found in docker/compose.yml`);
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {
     const l = lines[i];

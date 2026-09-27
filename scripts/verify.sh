@@ -11,7 +11,7 @@
 #
 # DB provisioning, in order: an already-exported DATABASE_URL; a
 # gitignored .env.local at repo root (DATABASE_URL=... / REDIS_URL=...,
-# for a long-lived local stack — see .env.local.example); then the same
+# for a long-lived local stack — see the .env.local section of .env.example); then the same
 # auto-provisioning scripts/pre-push-checklist.sh uses (scripts/new-test-db.sh
 # over Docker, or a native Postgres on 127.0.0.1:5432); else fail with next
 # steps.

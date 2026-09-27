@@ -39,7 +39,7 @@ The Go bridge is the only non-TS code. Everything else — including scripts —
 
 ## TypeScript configuration
 
-`tsconfig.base.json` at the repo root is the shared base. All packages extend it. Key compiler flags:
+`packages/tsconfig.base.json` is the shared base. All packages extend it. Key compiler flags:
 
 - `strict: true`, `noImplicitAny`, `strictNullChecks`, `noImplicitReturns`
 - `noUnusedLocals`, `noUnusedParameters` — unused identifiers are compile errors.

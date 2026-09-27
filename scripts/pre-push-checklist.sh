@@ -68,7 +68,7 @@ warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
 
 scan_secrets() {
   if command -v gitleaks >/dev/null 2>&1; then
-    run_step "gitleaks" gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1 --log-opts "origin/dev..HEAD"
+    run_step "gitleaks" gitleaks detect --config .github/gitleaks.toml --no-banner --redact --exit-code 1 --log-opts "origin/dev..HEAD"
   else
     skip_step "gitleaks" "not installed"
   fi

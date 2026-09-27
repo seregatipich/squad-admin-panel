@@ -22,7 +22,7 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
-	// ComposeDir is the panel deploy directory that holds docker-compose.yml,
+	// ComposeDir is the panel deploy directory that holds docker/compose.yml,
 	// .env and scripts/restore.sh. The backup RPCs run `docker compose` (and the
 	// restore script) from here so they inherit RESTIC_PASSWORD/POSTGRES_PASSWORD
 	// from .env instead of the bridge having to hold those secrets. Empty falls
@@ -793,12 +793,13 @@ func (d *DockerRunner) composeDir() (string, error) {
 // composeBackupArgs builds the `docker compose` prefix that targets the
 // backup-profile service from the resolved deploy directory. The compose file
 // and .env are pinned explicitly so the invocation is independent of the
-// bridge's cwd.
+// bridge's cwd; the file resolves its own paths from docker/ and pins the
+// project name, so no --project-directory is needed.
 func composeBackupArgs(dir string) []string {
 	return []string{
 		"compose",
-		"--project-directory", dir,
-		"-f", filepath.Join(dir, "docker-compose.yml"),
+		"-f", filepath.Join(dir, "docker", "compose.yml"),
+		"--env-file", filepath.Join(dir, ".env"),
 		"--profile", "backup",
 	}
 }

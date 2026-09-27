@@ -193,7 +193,6 @@ pnpm test:cov                                     # the full JS suite with cover
 pnpm test:scripts                                 # operations-script contracts; needs DB + Redis URLs
 pnpm --filter @squad/api test:e2e                 # live panel only (PANEL_TEST_URL, PANEL_TEST_COOKIE)
 pnpm db:generate && pnpm db:migrate               # drizzle-kit reads dist/: build @squad/db first
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # hot-reload api + web
 ```
 
 Prefer `vitest run <file>` over `pnpm turbo run test`, which builds every package first. `apps/api` tests use a real Postgres (see "Local test setup"); e2e tests are excluded from every non-e2e run.

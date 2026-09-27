@@ -66,7 +66,7 @@ sudo ./scripts/rebuild.sh
                               └─────────────────┘
 ```
 
-### Services (docker-compose.yml)
+### Services (docker/compose.yml)
 
 | Service | Role |
 |---------|------|
@@ -127,12 +127,6 @@ pnpm dev                         # all apps in dev mode (turbo)
 pnpm test                        # run all tests
 pnpm typecheck                   # TypeScript checks
 pnpm lint                        # biome check
-```
-
-Dev compose override (hot-reload for API and Web):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
 ### Database

@@ -8,7 +8,7 @@
 | `DATABASE_URL` | **yes** | — | Postgres connection string; required as of AUTO-1 to load `automation_rules` and write `automation_runs`/`audit_log`. The process exits 1 if missing. | yes (embeds a password) |
 | `LOG_LEVEL` | no | `info` | Pino log level | no |
 
-The worker is defined as the `worker-automation` service in `docker-compose.yml` and `compose.stand.yml` (built from `docker/worker.Dockerfile` with `WORKER: automation`), depending on `postgres`, `redis`, and `migrator`.
+The worker is defined as the `worker-automation` service in `docker/compose.yml` and `docker/compose.stand.yml` (built from `docker/worker.Dockerfile` with `WORKER: automation`), depending on `postgres`, `redis`, and `migrator`.
 
 ## Tuning constants (not env-configurable in this pass)
 

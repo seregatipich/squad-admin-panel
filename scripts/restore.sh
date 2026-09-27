@@ -29,6 +29,8 @@ set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+# docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
+export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE=(docker compose --profile backup)

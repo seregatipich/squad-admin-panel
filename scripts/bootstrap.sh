@@ -308,6 +308,8 @@ stage_end
 stage_begin "docker compose build (first run: ~2 min)"
 
 cd "${REPO}"
+# docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
+export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 spin_run "building api + web + workers" docker compose build --progress=plain
 
 stage_end

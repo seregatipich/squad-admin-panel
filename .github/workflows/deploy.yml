@@ -93,7 +93,7 @@ jobs:
         if: steps.existing.outputs.exists != 'true'
         id: buildx
 
-      # docker-bake.hcl stays the image graph; only the tags and the registry
+      # docker/docker-bake.hcl stays the image graph; only the tags and the registry
       # layer cache (shared with the images job in ci.yml) are set here.
       - name: Build and push the image
         if: steps.existing.outputs.exists != 'true'
@@ -101,7 +101,7 @@ jobs:
         with:
           builder: ${{ steps.buildx.outputs.name }}
           source: .
-          files: docker-bake.hcl
+          files: docker/docker-bake.hcl
           targets: ${{ matrix.image }}
           push: true
           set: |

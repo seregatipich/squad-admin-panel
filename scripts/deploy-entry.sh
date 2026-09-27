@@ -69,7 +69,7 @@ if ! cmp -s "${BASH_SOURCE[0]}" "$src_dir/scripts/deploy-entry.sh"; then
 fi
 
 echo "==> Syncing ${sha} into ${app_dir}"
-# Same exclusions as scripts/dev-deploy-stand.sh: host secrets (.env*), the
+# Host secrets (.env*), the
 # release records (.release*), state (data) and build output stay on the host;
 # --delete makes everything else identical to the commit.
 mkdir -p "$app_dir"
@@ -80,7 +80,7 @@ rsync -a --delete \
   "$src_dir/" "$app_dir/"
 
 cd "$app_dir"
-exec env -u DEPLOY_BUILD \
+exec env \
   APP_DIR="$app_dir" \
   PANEL_IMAGE_REPO="$image_repo" \
   RELEASE_SHA="$sha" \

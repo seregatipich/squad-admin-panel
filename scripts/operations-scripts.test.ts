@@ -23,7 +23,6 @@ const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
   'scripts/deploy-stand.sh',
-  'scripts/dev-deploy-stand.sh',
   'scripts/rollback-stand.sh',
   'scripts/deploy-entry.sh',
   'scripts/install-host-bridge.sh',
@@ -360,7 +359,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
       `pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`,
       'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain|--filter=@fixture/db-worker',
@@ -592,7 +591,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
     ]);
   });
@@ -607,7 +606,7 @@ describe('local pre-push checklist and git hooks', () => {
       'pnpm|turbo|run|typecheck',
       'pnpm|exec|biome|check|.',
       'pnpm|turbo|run|build',
-      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       'pnpm|test:scripts',
       'pnpm|test:cov',
       'pnpm|turbo|run|test:mutation',
@@ -781,7 +780,7 @@ describe('local pre-push checklist and git hooks', () => {
 
       assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.deepEqual(logLines(path.join(repository, '..', 'commands.log')), [
-        'gitleaks|protect|--staged|--config|.gitleaks.toml|--no-banner|--redact',
+        'gitleaks|protect|--staged|--config|.github/gitleaks.toml|--no-banner|--redact',
       ]);
     });
 
@@ -1011,8 +1010,8 @@ interface DeployFixture {
 function deployFixture(): DeployFixture {
   const { root, script } = copyScript('scripts/deploy-stand.sh');
   writeFileSync(path.join(root, '.env.stand'), 'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\n');
-  writeFileSync(path.join(root, 'compose.stand.yml'), 'services: {}\n');
   mkdirSync(path.join(root, 'docker'));
+  writeFileSync(path.join(root, 'docker/compose.stand.yml'), 'services: {}\n');
   writeFileSync(path.join(root, 'docker/Caddyfile.stand'), '{$APP_DOMAIN} {}\n');
   mkdirSync(path.join(root, 'packages/db/drizzle/meta'), { recursive: true });
   writeFileSync(path.join(root, 'packages/db/drizzle/0000_init.sql'), 'CREATE TABLE t ();\n');
@@ -1060,7 +1059,7 @@ function dockerCommands(log: string): string[] {
 }
 
 const COMPOSE =
-  'docker|compose|--env-file|.env.stand|--env-file|.release.next.env|-f|compose.stand.yml';
+  'docker|compose|--env-file|.env.stand|--env-file|.release.next.env|-f|docker/compose.stand.yml';
 
 describe('the stand host release deploy', { concurrency: true }, () => {
   it('fails before Docker when the deployment environment file is absent', async () => {
@@ -1409,35 +1408,6 @@ describe('the stand host release deploy', { concurrency: true }, () => {
     assert.equal(existsSync(path.join(fixture.root, '.release.next.env')), false);
   });
 
-  it('builds the release on the host through the override when asked, never pulling', async () => {
-    const fixture = deployFixture();
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await deploy(fixture, {
-        DEPLOY_BUILD: '1',
-        RELEASE_SHA: 'dev-abc1234',
-        API_IMAGE: undefined,
-        WEB_IMAGE: undefined,
-        WORKERS_IMAGE: undefined,
-        CADDY_IMAGE: undefined,
-      });
-      assert.equal(result.status, 0, result.stderr);
-      const commands = dockerCommands(fixture.log);
-      // A rebuilt tag can hide new content, so a second identical run builds too.
-      const build = commands.indexOf(`${COMPOSE}|-f|compose.stand.build.yml|build`);
-      const up = commands.indexOf(`${COMPOSE}|up|-d|--remove-orphans`);
-      assert.ok(build >= 0 && up > build, commands.join('\n'));
-      assert.equal(
-        commands.some((line) => line.startsWith('docker|pull|')),
-        false,
-      );
-    }
-    const recorded = releaseFile(fixture);
-    assert.equal(recorded.APP_VERSION, 'dev-abc1234');
-    for (const [key, name] of IMAGES) {
-      assert.equal(recorded[key], `${IMAGE_REPO}-${name}:dev-abc1234`);
-    }
-  });
-
   it('removes panel images other than the running and the previous release', async () => {
     const fixture = deployFixture();
     const first = releaseImages('1');
@@ -1562,7 +1532,7 @@ describe('the stand host forced-command deploy entry', { concurrency: true }, ()
     mkdirSync(path.join(app, 'scripts'), { recursive: true });
     executable(
       path.join(app, 'scripts/deploy-stand.sh'),
-      `printf 'deploy|%s|%s|%s|%s|%s|%s|%s|%s\\n' "$PWD" "$APP_DIR" "$RELEASE_SHA" "$API_IMAGE" "$WEB_IMAGE" "$WORKERS_IMAGE" "$CADDY_IMAGE" "\${DEPLOY_BUILD:-unset}" >> "\${OPS_LOG:?}"`,
+      `printf 'deploy|%s|%s|%s|%s|%s|%s|%s\\n' "$PWD" "$APP_DIR" "$RELEASE_SHA" "$API_IMAGE" "$WEB_IMAGE" "$WORKERS_IMAGE" "$CADDY_IMAGE" >> "\${OPS_LOG:?}"`,
     );
     const shims = shimDirectory();
     const log = path.join(root, 'commands.log');
@@ -1643,7 +1613,7 @@ describe('the stand host forced-command deploy entry', { concurrency: true }, ()
   it('fetches the commit, syncs it without host state, and hands over to its deploy script', async () => {
     const fixture = entryFixture();
     const result = await runAsync('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, SSH_ORIGINAL_COMMAND: VALID, DEPLOY_BUILD: '1' },
+      env: { ...fixture.env, SSH_ORIGINAL_COMMAND: VALID },
     });
     assert.equal(result.status, 0, result.stderr);
     const excludes = [
@@ -1674,8 +1644,6 @@ describe('the stand host forced-command deploy entry', { concurrency: true }, ()
         imageRef('web', '2'),
         imageRef('workers', '3'),
         imageRef('caddy', '4'),
-        // A request can only ever deploy registry images, never build.
-        'unset',
       ].join('|'),
     ]);
     // No installed copy exists in the fixture's checkout, so it says to reinstall.
@@ -1731,248 +1699,6 @@ describe('the stand host forced-command deploy entry', { concurrency: true }, ()
       ),
       false,
     );
-  });
-});
-
-describe('fast developer deploy to the stand host', { concurrency: true }, () => {
-  function devDeployFixture(): {
-    root: string;
-    script: string;
-    log: string;
-    env: NodeJS.ProcessEnv;
-  } {
-    const { root, script } = copyScript('scripts/dev-deploy-stand.sh');
-    const shims = shimDirectory();
-    const log = path.join(root, 'commands.log');
-    loggingShim(shims, 'rsync', `exit "\${RSYNC_EXIT:-0}"`);
-    loggingShim(shims, 'ssh', `exit "\${SSH_EXIT:-0}"`);
-    // CURL_FAIL_TIMES models a rebuilt api answering 502 through Caddy while
-    // it boots: the first N probes fail, every later one succeeds.
-    loggingShim(
-      shims,
-      'curl',
-      [
-        `attempts_file="\${OPS_LOG:?}.dev-curl-attempts"`,
-        'attempts=$(( $(cat "$attempts_file" 2>/dev/null || echo 0) + 1 ))',
-        'printf "%s" "$attempts" > "$attempts_file"',
-        `if [[ -n "\${CURL_FAIL_TIMES:-}" && "$attempts" -le "$CURL_FAIL_TIMES" ]]; then exit "\${CURL_EXIT:-22}"; fi`,
-        `exit "\${CURL_PERSISTENT_EXIT:-0}"`,
-      ].join('\n'),
-    );
-    loggingShim(shims, 'sleep');
-    // `git` decides the version stamp; the shim keeps it deterministic and
-    // lets a test flip the tree to dirty.
-    loggingShim(
-      shims,
-      'git',
-      [
-        `if [[ "$*" == *'rev-parse'* ]]; then printf '%s\\n' "\${GIT_SHA:-abc1234}"; fi`,
-        `if [[ "$*" == *'status --porcelain'* ]]; then printf '%s' "\${GIT_DIRTY:-}"; fi`,
-        'exit 0',
-      ].join('\n'),
-    );
-    return {
-      root,
-      script,
-      log,
-      env: {
-        OPS_LOG: log,
-        SOURCE_DIR: root,
-        PATH: `${shims}:/usr/bin:/bin`,
-        STAND_SSH_TARGET: 'deployer@stand.example',
-        STAND_URL: 'https://stand.example',
-      },
-    };
-  }
-
-  /** The remote command: every ssh argument after the target, which may itself contain `|`. */
-  function sshPayload(log: string): string {
-    return logLines(log)
-      .filter((line) => line.startsWith('ssh|'))
-      .map((line) => line.split('|').slice(6).join('|'))
-      .join('\n');
-  }
-
-  const COMPOSE_BOTH =
-    'docker compose --env-file .env.stand --env-file .release.env -f compose.stand.yml';
-
-  it('defaults to the web service: rebuilds it on the host after the sync and records it', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
-    assert.equal(result.status, 0, result.stderr);
-    const commands = logLines(fixture.log);
-    const rsyncIndex = commands.findIndex((line) => line.startsWith('rsync|'));
-    const sshIndex = commands.findIndex((line) => line.startsWith('ssh|'));
-    assert.ok(rsyncIndex >= 0 && sshIndex > rsyncIndex, commands.join('\n'));
-    const payload = sshPayload(fixture.log);
-    const image = `${IMAGE_REPO}-web:dev-abc1234`;
-    assert.match(
-      payload,
-      /test -f \.release\.env \|\| \{ echo 'fatal: the stand host has no release recorded yet/,
-    );
-    assert.ok(payload.includes(`export WEB_IMAGE='${image}';`), payload);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build web;`), payload);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps web;`), payload);
-    assert.ok(
-      payload.includes(`sed -i -e 's|^WEB_IMAGE=.*|WEB_IMAGE=${image}|' .release.env`),
-      payload,
-    );
-    // Nothing that could touch the schema, other containers, or /health.
-    assert.doesNotMatch(payload, /deploy|migrator|--remove-orphans|APP_VERSION/);
-  });
-
-  it('never ships host secrets, release records, state, or build output', async () => {
-    const fixture = devDeployFixture();
-    await runAsync('/bin/bash', [fixture.script], { env: fixture.env });
-    const rsync = logLines(fixture.log).find((line) => line.startsWith('rsync|')) ?? '';
-    for (const excluded of [
-      '.git',
-      'node_modules',
-      '.next',
-      'data',
-      'dist',
-      '.env',
-      '.env.*',
-      '.release*',
-    ]) {
-      assert.ok(rsync.includes(`|--exclude|${excluded}`), `${excluded} is not excluded: ${rsync}`);
-    }
-    assert.ok(rsync.includes('|--delete'), rsync);
-    assert.match(rsync, /\|deployer@stand\.example:apps\/squad-admin-panel\/$/);
-  });
-
-  it('stamps a version that can never be mistaken for a pushed commit SHA', async () => {
-    const fixture = devDeployFixture();
-    await runAsync('/bin/bash', [fixture.script, 'api'], {
-      env: { ...fixture.env, GIT_SHA: 'deadbee' },
-    });
-    assert.ok(
-      sshPayload(fixture.log).includes(
-        `export API_IMAGE='${IMAGE_REPO}-api:dev-deadbee' APP_VERSION='dev-deadbee';`,
-      ),
-      sshPayload(fixture.log),
-    );
-
-    const dirty = devDeployFixture();
-    await runAsync('/bin/bash', [dirty.script, 'api'], {
-      env: { ...dirty.env, GIT_SHA: 'deadbee', GIT_DIRTY: ' M apps/web/src/page.tsx' },
-    });
-    assert.match(sshPayload(dirty.log), /APP_VERSION='dev-deadbee-dirty'/);
-  });
-
-  it('rebuilds only the api container, without the migrator, and records its version', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'api'], { env: fixture.env });
-    assert.equal(result.status, 0, result.stderr);
-    const payload = sshPayload(fixture.log);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} -f compose.stand.build.yml build api;`), payload);
-    assert.ok(payload.includes(`${COMPOSE_BOTH} up -d --no-deps api;`), payload);
-    assert.ok(
-      payload.includes(
-        `sed -i -e 's|^API_IMAGE=.*|API_IMAGE=${IMAGE_REPO}-api:dev-abc1234|' -e 's|^APP_VERSION=.*|APP_VERSION=dev-abc1234|' .release.env`,
-      ),
-      payload,
-    );
-    assert.doesNotMatch(payload, /migrator|--remove-orphans/);
-  });
-
-  it('refuses the full deploy without the explicit confirmation, before any sync', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'full'], { env: fixture.env });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /migrations from the working tree/);
-    assert.deepEqual(logLines(fixture.log), []);
-  });
-
-  it('runs the whole deploy as a host build once the confirmation is exact', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'full'], {
-      env: { ...fixture.env, CONFIRM_FULL_DEPLOY: 'deploy' },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(
-      sshPayload(fixture.log),
-      /DEPLOY_BUILD=1 RELEASE_SHA='dev-abc1234' bash scripts\/deploy-stand\.sh$/,
-    );
-  });
-
-  it('rebuilds a single worker container by name, on the same no-deps path', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'worker-rcon'], {
-      env: fixture.env,
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const payload = sshPayload(fixture.log);
-    assert.ok(
-      payload.includes(`export WORKERS_IMAGE='${IMAGE_REPO}-workers:dev-abc1234';`),
-      payload,
-    );
-    assert.ok(payload.includes('-f compose.stand.build.yml build worker-rcon;'), payload);
-    assert.ok(payload.includes('up -d --no-deps worker-rcon;'), payload);
-    assert.doesNotMatch(payload, /migrator|--remove-orphans|APP_VERSION/);
-  });
-
-  it('refuses to run without the stand target and origin', async () => {
-    for (const unset of ['STAND_SSH_TARGET', 'STAND_URL']) {
-      const fixture = devDeployFixture();
-      const result = await runAsync('/bin/bash', [fixture.script], {
-        env: { ...fixture.env, [unset]: '' },
-      });
-      assert.notEqual(result.status, 0, unset);
-      assert.match(result.stderr, new RegExp(`${unset}: set ${unset}`));
-      assert.deepEqual(logLines(fixture.log), [], unset);
-    }
-  });
-
-  it('rejects an unknown or malformed target before touching the stand host', async () => {
-    for (const target of ['postgres', 'worker-rcon;touch pwned', 'worker-', 'worker-RCON']) {
-      const fixture = devDeployFixture();
-      const result = await runAsync('/bin/bash', [fixture.script, target], { env: fixture.env });
-      assert.equal(result.status, 2, target);
-      assert.match(result.stderr, /usage: dev-deploy-stand\.sh \[web\|api\|worker-<name>\|full\]/);
-      assert.deepEqual(logLines(fixture.log), [], target);
-    }
-  });
-
-  it('stops at a failed sync instead of rebuilding a half-copied tree', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, RSYNC_EXIT: '23' },
-    });
-    assert.equal(result.status, 23);
-    assert.deepEqual(
-      logLines(fixture.log).filter((line) => line.startsWith('ssh|')),
-      [],
-    );
-  });
-
-  it('retries the health probe while the rebuilt api is still booting, then reports success', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
-      env: { ...fixture.env, CURL_FAIL_TIMES: '3' },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Done\./);
-    assert.equal(logLines(fixture.log).filter((line) => line.startsWith('curl|')).length, 4);
-  });
-
-  it('fails closed, preserving the curl exit code, when health never recovers', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script, 'api'], {
-      env: { ...fixture.env, CURL_PERSISTENT_EXIT: '22' },
-    });
-    assert.equal(result.status, 22);
-    assert.match(result.stderr, /never recovered/);
-    assert.doesNotMatch(result.stdout, /Done\./);
-  });
-
-  it('fails when the remote rebuild fails, without announcing success', async () => {
-    const fixture = devDeployFixture();
-    const result = await runAsync('/bin/bash', [fixture.script], {
-      env: { ...fixture.env, SSH_EXIT: '7' },
-    });
-    assert.equal(result.status, 7);
-    assert.doesNotMatch(result.stdout, /Done\./);
   });
 });
 

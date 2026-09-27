@@ -88,7 +88,7 @@ git remote add origin "$ORIGIN"
 git_q push origin dev feature/clean
 
 # The extracted command's --config flag is relative to cwd.
-cp "$REPO_ROOT/.gitleaks.toml" "$REPO/.gitleaks.toml"
+mkdir -p "$REPO/.github" && cp "$REPO_ROOT/.github/gitleaks.toml" "$REPO/.github/gitleaks.toml"
 
 # --- Test A: scoped push excludes an already-merged historical secret -------
 out=$(eval "$gitleaks_cmd" 2>&1)
@@ -154,7 +154,7 @@ git config user.email guard-test@example.com
 git config user.name "guard test"
 mkdir -p scripts apps/api/test
 cp "$CHECKLIST" scripts/pre-push-checklist.sh
-cp "$REPO_ROOT/.gitleaks.toml" .gitleaks.toml
+mkdir -p .github && cp "$REPO_ROOT/.github/gitleaks.toml" .github/gitleaks.toml
 echo "echo shared" >scripts/shared.sh
 echo "it('is shared', () => {});" >apps/api/test/shared.test.ts
 git add -A && git_q commit -m "base"
@@ -216,7 +216,7 @@ fi
 PC_REPO="$TMP/pre-commit"
 git init -q "$PC_REPO"
 cd "$PC_REPO" || exit 1
-cp "$REPO_ROOT/.gitleaks.toml" .gitleaks.toml
+mkdir -p .github && cp "$REPO_ROOT/.github/gitleaks.toml" .github/gitleaks.toml
 # Same split-literal rationale as feature/old-secret's secret.txt above.
 staged_p1="AKIA"
 staged_p2="QRSTUVWXYZABCDEF"

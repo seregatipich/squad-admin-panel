@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const composePath = resolve(__dirname, '../../../docker-compose.yml');
+const composePath = resolve(__dirname, '../../../docker/compose.yml');
 // Match the runtime directory; both legacy single-file mounts
 // (`/run/panel-host-bridge.sock`) and the current directory mount
 // (`/run/panel-host-bridge`) start with this prefix.
@@ -50,7 +50,7 @@ function parseServices(yaml: string): ServiceBlock[] {
   return services;
 }
 
-describe('docker-compose.yml — bridge socket permissions contract', () => {
+describe('docker/compose.yml — bridge socket permissions contract', () => {
   const compose = readFileSync(composePath, 'utf-8');
   const services = parseServices(compose);
   const bridgeUsers = services.filter((s) => s.body.includes(BRIDGE_PATH_PREFIX));

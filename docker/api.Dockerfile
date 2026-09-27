@@ -47,7 +47,8 @@ RUN --mount=type=bind,from=deps,source=/pnpm/store,target=/pnpm/store,rw \
 # reads from /app/packages/db/drizzle.
 FROM deps AS builder
 ENV TURBO_TELEMETRY_DISABLED=1
-COPY tsconfig.base.json turbo.json ./
+COPY turbo.json ./
+COPY packages/tsconfig.base.json packages/
 COPY packages/shared-config packages/shared-config
 COPY packages/shared-types packages/shared-types
 COPY packages/bridge-client packages/bridge-client
