@@ -63,9 +63,13 @@ export function DirectMessageModal({
   const serverSelectId = useId();
 
   const needsServerPick = target != null && target.serverId === null;
+  // Черновик сбрасывается по тому, кому адресовано сообщение, а не по ссылке на
+  // `target`: родители (живой состав с секундным тикером) передают новый
+  // объект на каждом рендере, и сброс по ссылке стирал бы ввод каждую секунду.
+  const targetKey = target ? `${target.serverId ?? ''}:${target.playerId}` : null;
 
   useEffect(() => {
-    if (!target) return;
+    if (targetKey === null) return;
     setMessage('');
     setLogToCard(false);
     setSelectedServerId('');
@@ -86,7 +90,7 @@ export function DirectMessageModal({
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [targetKey]);
 
   useEffect(() => {
     if (!needsServerPick) return;

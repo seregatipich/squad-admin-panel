@@ -112,6 +112,47 @@ describe('DirectMessageButton', () => {
     ).toBeInTheDocument();
   });
 
+  it(
+    'keeps the typed message when the parent re-renders with the same player',
+    async () => {
+      // Живой состав перерисовывает строку с кнопкой каждую секунду (тикер `now`).
+      const fetchMock = mockFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      const button = (
+        <DirectMessageButton
+          serverId="srv-1"
+          playerId={PLAYER_ID}
+          name="TargetNick"
+          canChat={true}
+          variant="icon"
+        />
+      );
+      const { rerender } = render(button);
+      fireEvent.click(screen.getByRole('button', { name: 'Сообщение игроку: TargetNick' }));
+      const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
+      fireEvent.change(textarea, { target: { value: 'не уходи с точки' } });
+
+      rerender(
+        <DirectMessageButton
+          serverId="srv-1"
+          playerId={PLAYER_ID}
+          name="TargetNick"
+          canChat={true}
+          variant="icon"
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText(/текст сообщения/i)).toHaveValue('не уходи с точки'),
+      );
+      const templateCalls = fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith('/api/v1/message-templates'),
+      );
+      expect(templateCalls).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it('renders nothing when there is no target', () => {
     const { container } = render(
       <DirectMessageButton playerId={null} name="TargetNick" canChat={true} />,
@@ -144,6 +185,34 @@ describe('DirectMessageModal — шаблоны', () => {
 });
 
 describe('DirectMessageModal', () => {
+  it(
+    'clears the draft when the modal is reopened or retargeted',
+    async () => {
+      const { rerender } = render(
+        <DirectMessageModal target={TARGET} onOpenChange={() => undefined} />,
+      );
+      fireEvent.change(await screen.findByPlaceholderText(/текст сообщения/i), {
+        target: { value: 'черновик' },
+      });
+
+      rerender(<DirectMessageModal target={null} onOpenChange={() => undefined} />);
+      rerender(<DirectMessageModal target={{ ...TARGET }} onOpenChange={() => undefined} />);
+      expect(await screen.findByPlaceholderText(/текст сообщения/i)).toHaveValue('');
+
+      fireEvent.change(screen.getByPlaceholderText(/текст сообщения/i), {
+        target: { value: 'черновик' },
+      });
+      rerender(
+        <DirectMessageModal
+          target={{ ...TARGET, playerId: '019e2000-0000-7000-8000-0000000000bb' }}
+          onOpenChange={() => undefined}
+        />,
+      );
+      await waitFor(() => expect(screen.getByPlaceholderText(/текст сообщения/i)).toHaveValue(''));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     'disables send while the message is shorter than 2 characters',
     async () => {
