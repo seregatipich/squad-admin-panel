@@ -114,7 +114,7 @@ graph TB
     end
   end
   BR -->|"TLS 443"| CADDY
-  CADDY -->|"/api/* /health /ready /metrics"| API
+  CADDY -->|"/api/* /health /ready"| API
   CADDY -->|"everything else"| WEB
   API --> PG & RD
   WK --> PG & RD
@@ -129,7 +129,7 @@ graph TB
 
 | Boundary | Transport | What crosses | Enforcement |
 |---|---|---|---|
-| Browser → Zone 2 | HTTPS via Caddy; path split `@api path /api/* /health /ready /metrics` → `api:3000`, everything else → `web:3000` (`docker/Caddyfile:16-27`) | JSON + `__Host-sid` cookie; one WebSocket at `/api/v1/ws/live` | `onRequest` auth hook; global rate limiter keyed on **(ip, playerId)** — `req.user` *is* populated when the key generator runs |
+| Browser → Zone 2 | HTTPS via Caddy; path split `@api path /api/* /health /ready` → `api:3000` (`/metrics` dropped in #9), everything else → `web:3000` (`docker/Caddyfile:16-27`) | JSON + `__Host-sid` cookie; one WebSocket at `/api/v1/ws/live` | `onRequest` auth hook; global rate limiter keyed on **(ip, playerId)** — `req.user` *is* populated when the key generator runs |
 | Zone 2 → Zone 1 | Unix socket `/run/panel-host-bridge/bridge.sock`, `0660 root:panel`, `PassCredentials=yes` | Exactly 30 JSON-RPC methods, allowlisted args | `SO_PEERCRED` on the **primary GID** — hence `user: "0:${PANEL_GID:-987}"`, never `group_add` (`docker-compose.yml:130-134`). Five services mount it: `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` |
 | Zone 1 → Zone 3 | `docker run` over `/run/docker.sock` | Image allowlisted to `squad-server:latest` / `squad-panel/depot-init:latest`; mounts allowlisted under `/var/lib/squad-panel/{configs,saved}`; the sidecar image is reachable *only* via its dedicated `container_run_rnsquadjs` RPC | `apps/bridge/internal/validate/docker.go`; systemd sandbox (`ProtectSystem=strict`, `SystemCallFilter=@system-service`) |
 | Zone 3 → Zone 2 | Never through the bridge. Log files on the bind-mounted `Saved/` tree read by `worker-log-ingest`; RCON TCP on loopback from `worker-rcon` (`network_mode: host`); the sidecar writes to Redis and reads its config from `/run/squad-panel/rnsquadjs` | Game events, chat, roster, RCON responses | Sidecar runs `--read-only --user 1001:1001` with an env allowlist |
@@ -186,7 +186,7 @@ Counts are `.ts`/`.tsx`/`.go`, excluding `node_modules`, `dist`, `.next`.
 
 **No multi-host orchestration.** The API reaches the host over a Unix socket (`apps/api/src/plugins/bridge.ts:9`); there is no network transport for the bridge at all. Running the API on a different machine from the game servers is not a config change, it is a redesign. Adding a second API replica also silently degrades WebSocket chat replay (per-process ring buffers, `apps/api/src/routes/live.ts:11`) and permission revocation (in-process `Map`, `apps/api/src/lib/rbac.ts:32`).
 
-**No Prometheus or Grafana.** The 2026-04-25 observability decision chose two capped Redis Streams instead — `panel:logs` (`MAXLEN ~ 100000`) and `host:metrics` (`MAXLEN ~ 5760`, packed 8-int tuples) — and rejected an external metrics stack explicitly. A `/metrics` endpoint exists and is proxied by Caddy with no ACL, but nothing scrapes it in-repo.
+**No Prometheus or Grafana.** The 2026-04-25 observability decision chose two capped Redis Streams instead — `panel:logs` (`MAXLEN ~ 100000`) and `host:metrics` (`MAXLEN ~ 5760`, packed 8-int tuples) — and rejected an external metrics stack explicitly. A `/metrics` endpoint exists but, since #9, requires `host:metrics` and is not proxied by Caddy; nothing scrapes it in-repo.
 
 **No email or web-push delivery.** `packages/db/src/schema/seed-subscriptions.ts:31` constrains `channel IN ('email','webpush')` and the API writes those rows (`apps/api/src/routes/server-seed-notifications.ts`), but no mailer, no VAPID keys, and no delivery worker exist. Notification preferences are schema and UI only.
 
@@ -510,7 +510,7 @@ Semantics are AND across the array, and **no declared `permissions` means fully 
 
 **Rate limiting** deserves a note because the registration order looks wrong and isn't. `@fastify/rate-limit` adds no instance hook; it uses `onRoute` to push a limiter onto each route's own `onRequest` array. Route-level `onRequest` hooks run *after* all instance-level ones, so by the time `keyGenerator: (req) => \`${req.ip}:${req.user?.playerId ?? ''}\`` (`server.ts:163`) executes, `authPlugin` has already populated `req.user`. The key really is `(ip, playerId)` for authenticated traffic.
 
-**metrics** (`metrics.ts:46`) increments `http_requests_total` and observes `http_request_duration_seconds` labelled `{route, method, status}`, using `req.routeOptions?.url` — the templated path, so no label-cardinality explosion. **audit** (`audit.ts:5`) writes an `auditLog` row when `config.audit` is an object, guessing `targetId` from `params.id ?? params.serverId ?? params.playerId` (`audit.ts:35-42`), recording status and `reply.elapsedTime`. Two consequences follow from it being `onResponse`: an audit failure can never fail the request (it is logged and dropped), and the audit row lands *after* the client already has its answer. It also cannot capture before/after snapshots — that is why 83 handlers additionally call `writeAuditEntry(...)` directly. Note `audit.ts:7-8` treats `undefined` and explicit `false` identically, so the 261 `audit: false` declarations are documentation, not behaviour.
+**metrics** (`metrics.ts:46`) increments `http_requests_total` and observes `http_request_duration_seconds` labelled `{route, method, status}`, using `req.routeOptions?.url` — the templated path — and the constant `__unmatched__` for requests that match no route, so client-chosen URLs cannot explode label cardinality (#9; before that fix unmatched requests fell back to the raw `req.url`). **audit** (`audit.ts:5`) writes an `auditLog` row when `config.audit` is an object, guessing `targetId` from `params.id ?? params.serverId ?? params.playerId` (`audit.ts:35-42`), recording status and `reply.elapsedTime`. Two consequences follow from it being `onResponse`: an audit failure can never fail the request (it is logged and dropped), and the audit row lands *after* the client already has its answer. It also cannot capture before/after snapshots — that is why 83 handlers additionally call `writeAuditEntry(...)` directly. Note `audit.ts:7-8` treats `undefined` and explicit `false` identically, so the 261 `audit: false` declarations are documentation, not behaviour.
 
 **Errors** go through one `setErrorHandler` (`error-diag.ts:12`) that emits an `http.5xx` diag event with a 2 000-char-truncated stack for status ≥ 500 and then calls `reply.send(err)`. It observes; it does not map. Status decisions live entirely in handlers, and Zod validation failures surface as Fastify's stock `FST_ERR_VALIDATION` 400 body — a different shape from the hand-written `{ error: 'slug_already_exists' }` style used inside handlers. The same module attaches a process-wide `unhandledRejection` listener behind a module-level boolean so repeated `buildServer()` calls in tests don't leak listeners (`error-diag.ts:37-51`).
 
@@ -2187,7 +2187,7 @@ Finally, audit writes **fail open**: the hook swallows errors and logs `'audit w
 | CORS policy | **Absent** — `@fastify/cors` installed, never registered | `apps/api/package.json:22` vs `server.ts` |
 | CSRF token / origin check | **Absent** — relies entirely on `SameSite=lax` + `__Host-` prefix | `plugins/auth.ts:60-66` |
 | CSP / security headers on user-facing HTML | **Absent** — helmet covers API JSON only; Next.js sets no `headers()` | `server.ts:158`, `apps/web/next.config.mjs` |
-| Auth on `/metrics` and `/api/docs` | **Absent** — both publicly routed by Caddy | `plugins/metrics.ts:55`, `server.ts:175` |
+| Auth on `/metrics` and `/api/docs` | `/metrics` requires `host:metrics` and is no longer routed by Caddy (#9); `/api/docs` gated since #246 | `plugins/metrics.ts`, `docker/Caddyfile` |
 | Per-method authorization on the bridge | **Absent** — `panel` group membership gates all 30 RPCs equally | `internal/auth/peer.go:38`, `handlers.go:129-187` |
 | Network-destination allowlist for `ban_sources.url` | **Absent**, redirects followed with `Authorization` attached | `routes/ban-sources.ts:17,30`, `fetch-source.ts:37-55` |
 | `ExtraArgs` validation on `container_run` | **Absent** | `handlers.go:882` → `docker.go:118` |
@@ -2258,7 +2258,7 @@ Host metrics live in the second capped stream. `apps/workers/metrics-sampler` sa
 
 The Go bridge exposes no HTTP surface at all — no `/metrics`, no `/healthz`, no `/readyz`. Its `apps/bridge/internal/metrics/host.go:22-50` package is a *host-stats sampler*, not an instrumentation library: `HostInfo` (hostname, os, kernel, cpu_model, cores, ram_total, docker_version, ips) and `HostMetrics` (cpu_percent, ram/disk used, net rx/tx per sec, load averages, sampled_at), served over the `host_info` / `host_metrics` RPC methods among the bridge's 30. Its only log path off-box is journald, scraped by `diag-flush`.
 
-The no-Prometheus decision has one loose end worth knowing: `apps/api/package.json:47` still depends on `prom-client`, and `apps/api/src/plugins/metrics.ts` builds a private `Registry`, runs `collectDefaultMetrics`, and serves `GET /metrics` (line 54, `audit: false`, `schema: { hide: true }` so it is absent from OpenAPI). Nothing in `docker-compose.yml` scrapes it, and `docs/operations/monitoring.md:3` claims "There is no Prometheus exporter" — the endpoint exists but is unscraped and undocumented-as-existing.
+The no-Prometheus decision has one loose end worth knowing: `apps/api/package.json:47` still depends on `prom-client`, and `apps/api/src/plugins/metrics.ts` builds a private `Registry`, runs `collectDefaultMetrics`, and serves `GET /metrics` (`audit: false`, `schema: { hide: true }` so it is absent from OpenAPI; since #9 it requires `host:metrics` and Caddy does not proxy it). Nothing in `docker-compose.yml` scrapes it, and `docs/operations/monitoring.md:3` claims "There is no Prometheus exporter" — the endpoint exists but is unscraped and undocumented-as-existing.
 
 | Metric | Type | Labels | Incremented at |
 |---|---|---|---|
