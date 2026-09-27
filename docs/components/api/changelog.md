@@ -1,5 +1,25 @@
 # `api` — changelog
 
+## 2026-09-27 — Исправления аудита API-библиотек (#36)
+
+### Security
+
+- `panel_access` больше не выдаёт инфраструктурные права. `host:manage`, `server:install`, `server:delete`, `server:force_stop`, `server:update`, `config:edit`, `config:rollback`, `admin_group:edit`, `api_token:create` и `backup:restore` требуют нового флага роли `can_manage_infrastructure` (миграция 0120). Флаг получили роль Admin и роли с `can_edit_roles`, у Moderator его нет. `POST/PUT /api/v1/roles` принимают `can_manage_infrastructure`, `GET /api/v1/roles` его возвращает.
+- Явные строки `role_permissions` проходят те же проверки флагов, что и права из `panel_access`, и больше не обходят их. Миграция 0121 удалила сохранённые legacy-строки.
+- `POST /api/v1/integrations/balancer/proposals` отклоняет `x-balancer-timestamp`, который отличается от часов панели больше чем на 300 с (`401 invalid_signature`), поэтому перехваченный запрос нельзя повторить позже.
+
+### Fixed
+
+- Предупреждение ALT-7 и `GET /api/v1/players/:id/alt-candidates` не считают строку `unban` (и `external_ban_kick`) активным баном: учитываются только строки `action_type = 'ban'` без `reverted_at`.
+- `PUT /api/v1/servers/:id/rotation` и календарь ротации отклоняют имя слоя с `//` в любом месте, с управляющими символами и с пробелами по краям. Имя с `//SQUAD-PANEL END` внутри больше не ломает управляемый сегмент `LayerRotation.cfg`.
+- `GET /api/v1/message-templates` больше ничего не вставляет. Встроенные шаблоны засеваются один раз миграцией 0119, поэтому удалённый шаблон не возвращается.
+- `POST /api/v1/media` и `POST /api/v1/public/media` отвечают `413 file_too_large`, если multipart-парсер обрезал файл по лимиту. Раньше файл больше 2 GiB молча сохранялся обрезанным.
+- `GET /api/v1/logs/export`: ошибка Redis или Postgres во время экспорта обрывает ответ и пишется в лог, а не роняет процесс API. Поток `panel:logs` читается один раз, а не по разу на каждую секцию.
+- `GET /api/v1/audit/verify-chain` больше не сообщает о ложном разрыве цепочки при параллельных вставках и при записи из сессии с другим TimeZone (миграция 0122). Таблица читается страницами по 5000 строк из одного снимка, одновременно идёт только одна проверка (`409 verify_in_progress`).
+- `GET /api/v1/servers/:id/configs/:name/blame` сортирует версии по точному `created_at` в SQL и разбирает не больше 200 последних версий. При обрезке истории ответ содержит `truncated: true`.
+- `POST /api/v1/settings/chat-flag-rules/reindex` обходит сообщения по новому индексу `(sent_at, id)` (миграция 0123) и обновляет каждую страницу одним запросом. Одновременно идёт только одна переиндексация (`409 reindex_in_progress`).
+- RCON-команда, по которой API уже ответил таймаутом, больше не выполняется воркером позже: в записи потока есть `deadline_at`, и после этого срока worker-rcon команду не запускает.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security
