@@ -43,6 +43,17 @@ Any other JSON is silently ignored. Non-JSON is silently ignored.
 - Client must reply with `{"type":"pong"}` within **30 s** of any ping; otherwise the server closes the socket with code `4000` and reason `"pong timeout"`.
 - Reconnect policy lives client-side (see `apps/web/src/lib/live-bus.ts` in Bundle F).
 
+#### Revocation (#12)
+
+The server never relies on the client to honour a revocation:
+
+- A `session.revoked` frame whose `session_id` is this socket's own session is sent to the client and the server then closes the socket with code `4001`, reason `"session revoked"`. Other sessions of the same player receive the frame but stay open.
+- Every **30 s** (`DEFAULT_REVALIDATE_INTERVAL_MS`, the `revalidateIntervalMs` plugin option) the socket re-resolves its session (or, for a Bearer connection, its API token) and reloads the player's permissions:
+  - session gone, expired or revoked, or token revoked → close `4001`, reason `"session revoked"`;
+  - no `server:view` any more (for a `self_service` session: no `panel_access`) → close `4003`, reason `"forbidden"`;
+  - otherwise the `combat:view` and role-assignment filters are updated from the fresh permissions.
+- A re-check that fails because Postgres or Redis is unavailable keeps the socket and retries on the next tick.
+
 ## Fastify decorations
 
 Provided by `apps/api/src/plugins/live-bus.ts`.

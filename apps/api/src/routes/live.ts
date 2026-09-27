@@ -1,13 +1,54 @@
+import { playerApiTokens } from '@squad/db/schema';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
+import { intersectScopes } from '../lib/api-tokens.js';
 import { ChatRingBuffer } from '../lib/chat-ring-buffer.js';
 import { CombatRingBuffer } from '../lib/combat-ring-buffer.js';
+import { loadUserPermissions, type PermissionContext } from '../lib/rbac.js';
+import { resolveSession } from '../lib/sessions.js';
+import { SESSION_COOKIE } from '../plugins/auth.js';
 
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
+/** Matches the `loadUserPermissions` cache TTL, so a re-check never reads older data than a request would. */
+const DEFAULT_REVALIDATE_INTERVAL_MS = 30_000;
 const CHAT_BUFFER_PER_SERVER = 100;
 const COMBAT_BUFFER_PER_SERVER = 100;
 
-const liveRoutes: FastifyPluginAsync = async (app) => {
+/** Close code sent when the connection's session or API token is no longer valid. */
+export const WS_CLOSE_SESSION_REVOKED = 4001;
+/** Close code sent when the connection's player no longer holds `server:view`. */
+export const WS_CLOSE_FORBIDDEN = 4003;
+
+export interface LiveRoutesOptions {
+  /**
+   * How often each open socket re-checks its session / API token and the
+   * player's permissions. Defaults to 30 s; tests pass a short interval.
+   */
+  revalidateIntervalMs?: number;
+}
+
+type Revalidation =
+  | { ok: true; permissions: PermissionContext }
+  | { ok: false; code: number; reason: string };
+
+/**
+ * `GET /api/v1/ws/live` — the single live-bus push channel.
+ *
+ * Authorization is checked on the HTTP upgrade by the global auth hook and
+ * then kept current for the life of the socket (#12):
+ * - a `session.revoked` event for this socket's own session is forwarded (so
+ *   the browser runs its forced logout) and the server then closes the socket
+ *   with {@link WS_CLOSE_SESSION_REVOKED}, whatever the client does;
+ * - every `revalidateIntervalMs` the session (or API token) is re-resolved and
+ *   the player's permissions reloaded. A vanished session/token closes with
+ *   {@link WS_CLOSE_SESSION_REVOKED}, a lost `server:view` with
+ *   {@link WS_CLOSE_FORBIDDEN}, and the `combatView` / `canAssignRoles`
+ *   filters are refreshed from the fresh permissions.
+ */
+const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
+  const revalidateIntervalMs = opts.revalidateIntervalMs ?? DEFAULT_REVALIDATE_INTERVAL_MS;
+
   const chatBuffer = new ChatRingBuffer(CHAT_BUFFER_PER_SERVER);
   const stopChatBuffer = app.liveBus.subscribe((event) => chatBuffer.push(event));
   app.addHook('onClose', async () => stopChatBuffer());
@@ -26,8 +67,11 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       let lastPongAt = Date.now();
       let closed = false;
       const connectionPlayerId = req.user?.playerId ?? null;
-      const canViewCombat = req.user?.permissions.combatView ?? false;
-      const canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
+      const connectionSessionId = req.session?.id ?? null;
+      const connectionSessionToken = req.session ? req.cookies[SESSION_COOKIE] : undefined;
+      const connectionApiTokenId = req.apiTokenId ?? null;
+      let canViewCombat = req.user?.permissions.combatView ?? false;
+      let canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
 
       app.diag
         .emit({
@@ -48,22 +92,103 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         }
       };
 
+      const closeSocket = (code: number, reason: string): void => {
+        if (closed) return;
+        closed = true;
+        try {
+          socket.close(code, reason);
+        } catch {
+          /* noop */
+        }
+      };
+
       const pinger = setInterval(() => {
         if (closed) return;
         if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
-          closed = true;
-          try {
-            socket.close(4000, 'pong timeout');
-          } catch {
-            /* noop */
-          }
+          closeSocket(4000, 'pong timeout');
           return;
         }
         safeSend({ type: 'ping', ts: new Date().toISOString() });
       }, PING_INTERVAL_MS);
 
+      /**
+       * Mirrors the auth hook's decision for this connection's identity,
+       * trusting nothing captured at upgrade time except the ids. The
+       * self-service downgrade matters here: this route does not opt in to
+       * `selfService`, so such a session must still hold `panel_access`.
+       */
+      const revalidate = async (): Promise<Revalidation> => {
+        if (!connectionPlayerId) {
+          return { ok: false, code: WS_CLOSE_SESSION_REVOKED, reason: 'session revoked' };
+        }
+        let scopes: string[] | null = null;
+        let selfServiceScope = false;
+        if (connectionSessionId && connectionSessionToken) {
+          const session = await resolveSession(app.db, app.redis, connectionSessionToken);
+          if (!session || session.id !== connectionSessionId) {
+            return { ok: false, code: WS_CLOSE_SESSION_REVOKED, reason: 'session revoked' };
+          }
+          selfServiceScope = session.scope === 'self_service';
+        } else if (connectionApiTokenId) {
+          const tokenRows = await app.db
+            .select({ scopes: playerApiTokens.scopes })
+            .from(playerApiTokens)
+            .where(
+              and(eq(playerApiTokens.id, connectionApiTokenId), isNull(playerApiTokens.revokedAt)),
+            )
+            .limit(1);
+          const token = tokenRows[0];
+          if (!token) {
+            return { ok: false, code: WS_CLOSE_SESSION_REVOKED, reason: 'session revoked' };
+          }
+          scopes = token.scopes;
+        } else {
+          return { ok: false, code: WS_CLOSE_SESSION_REVOKED, reason: 'session revoked' };
+        }
+        const permissions = await loadUserPermissions(app.db, connectionPlayerId);
+        const effective =
+          scopes === null
+            ? permissions.permissions
+            : intersectScopes(scopes, permissions.permissions);
+        if ((selfServiceScope && !permissions.panelAccess) || !effective.has('server:view')) {
+          return { ok: false, code: WS_CLOSE_FORBIDDEN, reason: 'forbidden' };
+        }
+        return { ok: true, permissions };
+      };
+
+      // One re-check at a time; a slow database must not stack them up. A
+      // failed check (database or Redis unavailable) keeps the socket and
+      // retries on the next tick: nothing has been granted since the last
+      // successful check, and failing closed would disconnect every client
+      // on a transient blip.
+      let revalidating = false;
+      const revalidator = setInterval(() => {
+        if (closed || revalidating) return;
+        revalidating = true;
+        revalidate()
+          .then((result) => {
+            if (!result.ok) {
+              closeSocket(result.code, result.reason);
+              return;
+            }
+            canViewCombat = result.permissions.combatView;
+            canAssignRoles = result.permissions.canAssignRoles;
+          })
+          .catch((err: unknown) => {
+            req.log.warn({ err: (err as Error).message }, 'live-bus: revalidation failed');
+          })
+          .finally(() => {
+            revalidating = false;
+          });
+      }, revalidateIntervalMs);
+
       const unsubscribe = app.liveBus.subscribe((event) => {
-        if (event.type === 'session.revoked' && event.data.player_id !== connectionPlayerId) {
+        if (event.type === 'session.revoked') {
+          if (event.data.player_id !== connectionPlayerId) return;
+          safeSend(event);
+          if (connectionSessionId !== null && event.data.session_id === connectionSessionId) {
+            closeSocket(WS_CLOSE_SESSION_REVOKED, 'session revoked');
+          }
           return;
         }
         if (
@@ -111,6 +236,7 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       socket.on('close', (code, reason) => {
         closed = true;
         clearInterval(pinger);
+        clearInterval(revalidator);
         unsubscribe();
         app.diag
           .emit({
