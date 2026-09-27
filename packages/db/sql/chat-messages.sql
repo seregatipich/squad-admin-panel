@@ -1,10 +1,10 @@
 -- chat_messages (CHATLOG-1): monthly RANGE-partitioned in-game + panel chat log.
 --
 -- Mirrors PRES-1 (packages/db/sql/player-sessions.sql): native declarative
--- partitioning by sent_at plus bootstrap partitions. In production
--- pg_partman.create_parent takes over rotation with 12-month retention (see the
--- pg_partman block at the bottom, kept commented because the extension is not
--- installed in CI). Drizzle-kit generates the plain table from
+-- partitioning by sent_at plus bootstrap partitions and a DEFAULT catch-all
+-- (migration 0117). worker-event-partition (`ensureDefaultBackedMonthlyPartitions`)
+-- keeps the current and next month partitioned from then on and drops nothing;
+-- pg_partman is not installed anywhere. Drizzle-kit generates the plain table from
 -- packages/db/src/schema/chat-messages.ts; this file adds the partitioning, the
 -- GIN pg_trgm index, the BRIN index and the DESC index ordering that Drizzle
 -- cannot express.
@@ -41,8 +41,12 @@ CREATE INDEX IF NOT EXISTS chat_messages_message_trgm_idx
 CREATE INDEX IF NOT EXISTS chat_messages_sent_at_brin_idx
   ON chat_messages USING brin (sent_at) WITH (pages_per_range = 32);
 
+-- DEFAULT catch-all partition so a row outside every monthly partition is
+-- stored instead of rejected (migration 0117).
+CREATE TABLE IF NOT EXISTS chat_messages_default PARTITION OF chat_messages DEFAULT;
+
 -- Bootstrap partitions: previous month + current + 3 look-ahead months.
--- pg_partman / pg_cron create and drop the rest in production.
+-- worker-event-partition creates the following months.
 DO $$
 DECLARE
   m          int;
@@ -61,26 +65,3 @@ BEGIN
     );
   END LOOP;
 END$$;
-
--- ---------------------------------------------------------------------------
--- Production rotation (pg_partman). Not run in CI because pg_partman is not
--- installed on the CI Postgres image; the orchestrator enables it in the
--- production migration:
---
---   CREATE EXTENSION IF NOT EXISTS pg_partman;
---   SELECT partman.create_parent(
---     p_parent_table    => 'public.chat_messages',
---     p_control         => 'sent_at',
---     p_type            => 'range',
---     p_interval        => '1 month',
---     p_premake         => 3
---   );
---   UPDATE partman.part_config
---   SET retention             = '12 months',
---       retention_keep_table  = false,
---       infinite_time_partitions = true
---   WHERE parent_table = 'public.chat_messages';
---
--- pg_cron then runs SELECT partman.run_maintenance() hourly, or the existing
--- event-partition worker rotates partitions the same way it does for events.
--- ---------------------------------------------------------------------------
