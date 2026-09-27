@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-27 — Обновление Next.js и sharp
+
+### Security
+
+- `next` поднят до `^15.5.26` (исправление GHSA-2xp9-vwfh-vxw4 из 15.5.24), переопределение `sharp` — до `^0.35.5` (GHSA-rgj7-g3m4-5g8c). См. #22.
+- Оптимизатор изображений Next отключён (`images.unoptimized: true`): панель не использует `next/image`, поэтому эндпоинт `/_next/image` больше не обслуживается. Проверяется `test/image-optimizer.regression.test.ts`.
+
 ## 2026-09-16 — Вход через Steam
 
 ### Changed

@@ -50,6 +50,10 @@ export default {
   // build.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // The panel renders no `next/image`, so the `/_next/image` optimizer (and
+  // the sharp/libheif decoding behind it) would only be reachable attack
+  // surface. With `unoptimized` Next serves no optimizer endpoint at all (#22).
+  images: { unoptimized: true },
   async headers() {
     return [
       {
