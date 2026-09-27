@@ -5,6 +5,8 @@ import {
   CLAN_PRIORITY_GROUP_NAME,
   END_MARKER,
   findManagedSegment,
+  isAdminsCfgSafeRoleName,
+  isAdminsCfgSingleLineText,
   type SegmentInputs,
   spliceManagedSegment,
 } from '../src/admins-config.js';
@@ -190,6 +192,198 @@ describe('buildManagedSegmentBody — clan priority (CLAN-4)', () => {
     expect(out.groupsCount).toBe(1);
     expect(out.adminsCount).toBe(1);
   });
+});
+
+const INJECTED_EOS = '0002ffffffffffffffffffffffffffff';
+const VICTIM_EOS = '0002a10186d9414e8e15c66eb3dbf70a';
+
+/** Every line strictly between the BEGIN and END markers of a generated body. */
+function innerLines(body: string): string[] {
+  const lines = body.split('\r\n');
+  return lines.slice(1, -1);
+}
+
+/**
+ * Structural invariant of the managed segment: exactly one BEGIN and one END
+ * marker, and every inner line is blank, a Group= definition or an Admin=
+ * grant whose group name is one Admins.cfg can parse unambiguously.
+ */
+function expectWellFormedSegment(body: string): void {
+  expect(body.split(BEGIN_MARKER)).toHaveLength(2);
+  expect(body.split(END_MARKER)).toHaveLength(2);
+  expect(body.split('\r\n').every((line) => !/[\r\n\u2028\u2029]/.test(line))).toBe(true);
+  for (const line of innerLines(body)) {
+    expect(line).toMatch(/^(|Group=[^:,/]+:[a-z,]+|Admin=[0-9a-f]{32}:[^:,/]+( \/\/ .*)?)$/);
+  }
+}
+
+describe('buildManagedSegmentBody — injection hardening (issue #11)', () => {
+  it('drops a role whose name carries CR/LF instead of emitting injected Admin= lines', () => {
+    const name = `X:ban\r\nAdmin=${INJECTED_EOS}:X\r\nGroup=Y`;
+    const out = buildManagedSegmentBody({
+      roles: [
+        { name, squadPermissions: ['kick'] },
+        { name: 'Admin', squadPermissions: ['kick'] },
+      ],
+      admins: [
+        { eosId: VICTIM_EOS, roleName: name },
+        { eosId: '0002b20286d9414e8e15c66eb3dbf70b', roleName: 'Admin' },
+      ],
+    });
+    expect(out.body).not.toContain(INJECTED_EOS);
+    expect(out.body).not.toContain(VICTIM_EOS);
+    expect(out.body).not.toContain('Group=X');
+    expect(out.body).not.toContain('Group=Y');
+    expect(out.groupsCount).toBe(1);
+    expect(out.adminsCount).toBe(1);
+    expectWellFormedSegment(out.body);
+  });
+
+  it.each([
+    ['colon', 'A:ban'],
+    ['comma', 'A,B'],
+    ['slash / end marker', 'A//SQUAD-PANEL END'],
+    ['unicode line separator', 'A\u2028B'],
+    ['tab', 'A\tB'],
+    ['blank', '   '],
+  ])('drops a role whose name contains a %s', (_label, name) => {
+    const out = buildManagedSegmentBody({
+      roles: [{ name, squadPermissions: ['kick'] }],
+      admins: [{ eosId: VICTIM_EOS, roleName: name }],
+    });
+    expect(out.body).toBe(`${BEGIN_MARKER} — не редактировать вручную\r\n${END_MARKER}`);
+    expect(out.groupsCount).toBe(0);
+    expect(out.adminsCount).toBe(0);
+  });
+
+  it('keeps Cyrillic and space-separated role names', () => {
+    const out = buildManagedSegmentBody({
+      roles: [{ name: 'Старший админ', squadPermissions: ['kick'] }],
+      admins: [{ eosId: VICTIM_EOS, roleName: 'Старший админ' }],
+    });
+    expect(out.body).toContain('Group=Старший админ:kick');
+    expect(out.body).toContain(`Admin=${VICTIM_EOS}:Старший админ`);
+  });
+
+  it('flattens CR/LF in an admin comment so it cannot add an Admin= or Group= line', () => {
+    const out = buildManagedSegmentBody({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [
+        {
+          eosId: VICTIM_EOS,
+          roleName: 'Admin',
+          comment: `x\r\nGroup=Pwn:ban,kick\r\nAdmin=${INJECTED_EOS}:Pwn\nAdmin=${INJECTED_EOS}:Owner`,
+        },
+      ],
+    });
+    const adminLines = innerLines(out.body).filter((l) => l.startsWith('Admin='));
+    const groupLines = innerLines(out.body).filter((l) => l.startsWith('Group='));
+    expect(adminLines).toHaveLength(1);
+    expect(adminLines[0]?.startsWith(`Admin=${VICTIM_EOS}:Admin // x `)).toBe(true);
+    expect(groupLines).toEqual(['Group=Admin:kick']);
+    expectWellFormedSegment(out.body);
+  });
+
+  it('flattens Unicode line/paragraph separators and other control characters in a comment', () => {
+    const out = buildManagedSegmentBody({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [
+        {
+          eosId: VICTIM_EOS,
+          roleName: 'Admin',
+          comment: `a\u2028Admin=${INJECTED_EOS}:Admin\u2029b\u0085c\u0000d`,
+        },
+      ],
+    });
+    expect(innerLines(out.body).filter((l) => l.startsWith('Admin='))).toHaveLength(1);
+    expectWellFormedSegment(out.body);
+  });
+
+  it('omits the comment suffix when the comment is only control characters', () => {
+    const out = buildManagedSegmentBody({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [{ eosId: VICTIM_EOS, roleName: 'Admin', comment: '\r\n\t' }],
+    });
+    expect(innerLines(out.body)).toContain(`Admin=${VICTIM_EOS}:Admin`);
+  });
+
+  it('flattens CR/LF in a clan name so it cannot add an Admin= line', () => {
+    const out = buildManagedSegmentBody({
+      roles: [],
+      admins: [],
+      clanPriority: [{ eosId: VICTIM_EOS, clanName: `Альфа\r\nAdmin=${INJECTED_EOS}:Owner` }],
+    });
+    const adminLines = innerLines(out.body).filter((l) => l.startsWith('Admin='));
+    expect(adminLines).toHaveLength(1);
+    expect(adminLines[0]?.startsWith(`Admin=${VICTIM_EOS}:ClanPriority // clan:Альфа `)).toBe(true);
+    expectWellFormedSegment(out.body);
+  });
+
+  it.each([
+    ['comment', 'end'],
+    ['clan name', 'end'],
+    ['comment', 'begin'],
+  ])(
+    'a %s containing the %s marker cannot truncate the managed segment on the next sync',
+    (field, which) => {
+      const marker = which === 'end' ? END_MARKER : BEGIN_MARKER;
+      const hostile = `a\r\nAdmin=${INJECTED_EOS}:Admin\r\n${marker}`;
+      const out = buildManagedSegmentBody({
+        roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+        admins: [
+          { eosId: VICTIM_EOS, roleName: 'Admin', comment: field === 'comment' ? hostile : null },
+        ],
+        clanPriority: field === 'clan name' ? [{ eosId: VICTIM_EOS, clanName: hostile }] : [],
+      });
+      expectWellFormedSegment(out.body);
+
+      const file = spliceManagedSegment('ServerAdmin=keep\r\n', out.body);
+      const located = findManagedSegment(file);
+      expect(located?.segment).toBe(out.body);
+
+      const revoked = buildManagedSegmentBody({ roles: [], admins: [] });
+      const resynced = spliceManagedSegment(file, revoked.body);
+      expect(resynced).toBe(`${revoked.body}\r\n\r\nServerAdmin=keep\r\n`);
+      expect(resynced).not.toContain(INJECTED_EOS);
+      expect(resynced).not.toContain(VICTIM_EOS);
+    },
+  );
+});
+
+describe('isAdminsCfgSafeRoleName', () => {
+  it.each(['Admin', 'QueuePriority', 'Старший админ', 'VIP-1', 'mod_2'])('accepts %s', (name) => {
+    expect(isAdminsCfgSafeRoleName(name)).toBe(true);
+  });
+
+  it.each([
+    '',
+    '   ',
+    'A:B',
+    'A,B',
+    'A/B',
+    'A\rB',
+    'A\nB',
+    'A\tB',
+    'A\u2028B',
+    'A\u2029B',
+    'A\u0085B',
+    'A\u007fB',
+  ])('rejects %j', (name) => {
+    expect(isAdminsCfgSafeRoleName(name)).toBe(false);
+  });
+});
+
+describe('isAdminsCfgSingleLineText', () => {
+  it('accepts ordinary single-line text, including slashes and colons', () => {
+    expect(isAdminsCfgSingleLineText('выдано до 01.01: см. тикет // #42')).toBe(true);
+  });
+
+  it.each(['a\rb', 'a\nb', 'a\tb', 'a\u2028b', 'a\u2029b', 'a\u0000b', 'a\u0085b'])(
+    'rejects %j',
+    (text) => {
+      expect(isAdminsCfgSingleLineText(text)).toBe(false);
+    },
+  );
 });
 
 describe('findManagedSegment', () => {

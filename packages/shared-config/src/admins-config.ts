@@ -37,6 +37,63 @@ export const CLAN_PRIORITY_GROUP_NAME = 'ClanPriority';
 const CLAN_PRIORITY_PERMISSION = 'reserve';
 
 /**
+ * Characters that end a line in Admins.cfg or in an editor: every Unicode
+ * control character (C0, DEL, C1 — which covers CR, LF, TAB and NEL) plus the
+ * Unicode line and paragraph separators U+2028/U+2029.
+ */
+const LINE_BREAKING_CHARACTERS = /[\p{Cc}\u2028\u2029]/u;
+const LINE_BREAKING_RUNS = /[\p{Cc}\u2028\u2029]+/gu;
+/**
+ * Squad parses `Group=<name>:<perm>,<perm>` and `Admin=<id>:<name>`, and `//`
+ * starts a comment (and both managed-segment markers), so a group name must
+ * not contain `:`, `,` or `/`.
+ */
+const ROLE_NAME_SYNTAX_CHARACTERS = /[:,/]/;
+const SLASH_RUNS = /\/{2,}/g;
+
+/**
+ * Whether a panel role name can be written verbatim as an Admins.cfg group
+ * name (`Group=<name>:…`, `Admin=<id>:<name>`) without changing the file's
+ * structure. Letters of any script, digits, spaces, `-` and `_` are fine; a
+ * blank name, any control or line-separator character, `:`, `,` and `/` are
+ * not (issue #11).
+ *
+ * @param name - The role name as stored in `roles.name`.
+ * @returns `true` when the name is safe to emit into the managed segment.
+ */
+export function isAdminsCfgSafeRoleName(name: string): boolean {
+  return (
+    name.trim().length > 0 &&
+    !LINE_BREAKING_CHARACTERS.test(name) &&
+    !ROLE_NAME_SYNTAX_CHARACTERS.test(name)
+  );
+}
+
+/**
+ * Whether free text (an assignment comment, a clan name) stays on one line
+ * when written into Admins.cfg: it contains no control character and no
+ * Unicode line/paragraph separator. Used by the API to reject such input up
+ * front; the generator additionally flattens it (see `buildManagedSegmentBody`).
+ *
+ * @param text - The user-supplied text.
+ * @returns `true` when the text contains no line-breaking character.
+ */
+export function isAdminsCfgSingleLineText(text: string): boolean {
+  return !LINE_BREAKING_CHARACTERS.test(text);
+}
+
+/**
+ * Make free text safe for the trailing `// …` comment of an Admin= line:
+ * every run of line-breaking characters becomes one space, and every run of
+ * slashes collapses to one so neither `//SQUAD-PANEL BEGIN` nor
+ * `//SQUAD-PANEL END` can appear inside the segment and cut it short on the
+ * next sync.
+ */
+function toAdminsCfgCommentText(text: string): string {
+  return text.replace(LINE_BREAKING_RUNS, ' ').replace(SLASH_RUNS, '/').trim();
+}
+
+/**
  * The byte-producing part of the managed segment: everything that is written
  * into Admins.cfg, without the sha256 idempotency hash (which needs
  * `node:crypto` and is therefore layered on top in a Node-only consumer). This
@@ -58,6 +115,12 @@ export interface ManagedSegmentBody {
  * alphabetically by role name then by eos_id) so a sha256 idempotency
  * check over the body is stable.
  *
+ * Every value is written so the segment keeps its line structure (issue #11):
+ * a role whose name fails `isAdminsCfgSafeRoleName` is left out together
+ * with all of its Admin= lines, and comments and clan names are flattened to
+ * one line with no `//` sequence. This holds for rows written by any path,
+ * including ones older than the API-side validation.
+ *
  * `clanPriority` (CLAN-4) is appended after the role-derived groups/admins:
  * a constant `Group=ClanPriority:reserve` line (skipped if a real role is
  * already named `ClanPriority`, to avoid a duplicate Group= definition),
@@ -66,7 +129,7 @@ export interface ManagedSegmentBody {
  */
 export function buildManagedSegmentBody(inputs: SegmentInputs): ManagedSegmentBody {
   const rolesWithPerms = inputs.roles
-    .filter((r) => r.squadPermissions.length > 0)
+    .filter((r) => r.squadPermissions.length > 0 && isAdminsCfgSafeRoleName(r.name))
     .map((r) => ({ ...r, squadPermissions: [...r.squadPermissions].sort() }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -97,10 +160,12 @@ export function buildManagedSegmentBody(inputs: SegmentInputs): ManagedSegmentBo
   if (totalGroups > 0 && totalAdmins > 0) lines.push('');
   for (const admin of admins) {
     const base = `Admin=${admin.eosId}:${admin.roleName}`;
-    lines.push(admin.comment ? `${base} // ${admin.comment}` : base);
+    const comment = admin.comment ? toAdminsCfgCommentText(admin.comment) : '';
+    lines.push(comment ? `${base} // ${comment}` : base);
   }
   for (const entry of clanAdmins) {
-    lines.push(`Admin=${entry.eosId}:${CLAN_PRIORITY_GROUP_NAME} // clan:${entry.clanName}`);
+    const clanName = toAdminsCfgCommentText(entry.clanName);
+    lines.push(`Admin=${entry.eosId}:${CLAN_PRIORITY_GROUP_NAME} // clan:${clanName}`);
   }
   lines.push(END_MARKER);
 

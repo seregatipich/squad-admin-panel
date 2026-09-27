@@ -1,4 +1,5 @@
 import { players, roles } from '@squad/db/schema';
+import { isAdminsCfgSingleLineText } from '@squad/shared-config';
 import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -20,7 +21,14 @@ const listQuery = z.object({
 });
 const memberBody = z.object({
   player_id: z.string().uuid(),
-  comment: z.string().trim().max(COMMENT_MAX_LEN).nullable().optional(),
+  // Written into Admins.cfg after `//`, so it must stay on one line (#11).
+  comment: z
+    .string()
+    .trim()
+    .max(COMMENT_MAX_LEN)
+    .refine(isAdminsCfgSingleLineText, { message: 'comment_not_single_line' })
+    .nullable()
+    .optional(),
 });
 const memberParam = z.object({
   id: z.string().uuid(),

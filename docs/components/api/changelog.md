@@ -9,6 +9,13 @@
 - `PUT /api/v1/whitelist/settings`: сменить роль whitelist на другую можно только с `user:manage_roles` (`403 role_assignment_forbidden`); сбросить её в `null` по-прежнему можно с `whitelist:edit`.
 - `PUT /api/v1/settings/economy` отвечает `422 seed_reward_threshold_required`, если запрос правит награду за сид и роль награды задана при пороге 0 часов.
 
+## 2026-09-27 — Проверка значений, попадающих в Admins.cfg (#11)
+
+### Fixed
+
+- `POST /api/v1/roles` и `PUT /api/v1/roles/:id` возвращают `400`, если имя роли пустое или содержит управляющие символы, переводы строк, `:`, `,` или `/` (`role_name_invalid`).
+- `PUT /api/v1/players/:playerId/role` и `POST /api/v1/roles/:id/members` возвращают `400` для комментария с управляющими символами или переводом строки (`comment_not_single_line`); `POST /api/v1/clans` и `PATCH /api/v1/clans/:id` — для такого же названия клана (`name_not_single_line`).
+
 ## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
 
 ### Removed

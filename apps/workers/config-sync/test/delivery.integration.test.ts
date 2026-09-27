@@ -3,9 +3,18 @@ import {
   markAdminsCfgSyncApplied,
   relayAdminsCfgSyncOutbox,
 } from '@squad/db';
-import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
+import {
+  adminsCfgSyncOutbox,
+  clanMembers,
+  clans,
+  players,
+  roleSquadPermissions,
+  roles,
+  servers,
+} from '@squad/db/schema';
+import { BEGIN_MARKER, END_MARKER } from '@squad/shared-config/admins-config';
 import { rconCommandResultKey } from '@squad/shared-types';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -360,5 +369,109 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
 
     expect(secondWroteBeforeRelease).toBe(false);
     expect(fileContent).not.toContain(eosId);
+  });
+  it('writes hostile role names, comments and clan names without changing the file structure (issue #11)', async () => {
+    await db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, serverId));
+    const suffix = uuidv7().replaceAll('-', '');
+    const hex = (seed: string) => `${seed}${suffix}`.slice(0, 32);
+    const injectedEos = hex('0002ffff');
+    const hostileRoleId = uuidv7();
+    const safeRoleId = uuidv7();
+    const clanId = uuidv7();
+    const hostileRoleMember = uuidv7();
+    const commentedMember = uuidv7();
+    const clanMember = uuidv7();
+    const hostileRoleName = `X:ban\r\nAdmin=${injectedEos}:X`;
+    const safeRoleName = `Safe ${suffix.slice(0, 8)}`;
+    await db.insert(roles).values([
+      { id: hostileRoleId, name: hostileRoleName },
+      { id: safeRoleId, name: safeRoleName },
+    ]);
+    await db.insert(roleSquadPermissions).values([
+      { roleId: hostileRoleId, squadPermissionKey: 'kick' },
+      { roleId: safeRoleId, squadPermissionKey: 'kick' },
+    ]);
+    await db.insert(players).values([
+      {
+        id: hostileRoleMember,
+        canonicalName: 'Hostile role member',
+        canonicalNameNormalized: 'hostile role member',
+        eosId: hex('0002aaaa'),
+        roleId: hostileRoleId,
+      },
+      {
+        id: commentedMember,
+        canonicalName: 'Commented member',
+        canonicalNameNormalized: 'commented member',
+        eosId: hex('0002bbbb'),
+        roleId: safeRoleId,
+        roleComment: `x\r\nAdmin=${injectedEos}:Owner\r\n${END_MARKER}`,
+      },
+      {
+        id: clanMember,
+        canonicalName: 'Clan member',
+        canonicalNameNormalized: 'clan member',
+        eosId: hex('0002cccc'),
+      },
+    ]);
+    await db.insert(clans).values({
+      id: clanId,
+      name: `C\u2028${END_MARKER}`,
+    });
+    await db
+      .insert(clanMembers)
+      .values({ clanId, playerId: clanMember, memberRole: 'leader', hasPriority: true });
+
+    let fileContent = 'ServerAdmin=keep\r\n';
+    const fileBridge = {
+      fileRead: vi.fn().mockImplementation(async () => ({ content: fileContent })),
+      fileAtomicWrite: vi.fn().mockImplementation(async ({ content }: { content: string }) => {
+        fileContent = content;
+        return { written: true };
+      }),
+    } as never;
+
+    try {
+      const first = await relayedEntry();
+      await handleAdminsCfgSyncEntry({ db, redis, bridge: fileBridge, log: logger() }, first.entry);
+
+      const lines = fileContent.split('\r\n');
+      expect(lines.filter((line) => line.includes(BEGIN_MARKER))).toHaveLength(1);
+      expect(lines.filter((line) => line.includes(END_MARKER))).toHaveLength(1);
+      expect(lines.some((line) => line.startsWith(`Admin=${injectedEos}`))).toBe(false);
+      expect(fileContent).not.toContain(hex('0002aaaa'));
+      expect(fileContent.replaceAll('\r\n', '')).not.toMatch(/[\r\n\u2028\u2029]/u);
+      expect(lines).toContain(`Group=${safeRoleName}:kick`);
+      expect(lines.filter((line) => line.startsWith('Admin='))).toEqual([
+        expect.stringMatching(new RegExp(`^Admin=${hex('0002bbbb')}:${safeRoleName} // x `)),
+        expect.stringMatching(
+          new RegExp(`^Admin=${hex('0002cccc')}:ClanPriority // clan:C /SQUAD-PANEL END$`),
+        ),
+      ]);
+
+      await db
+        .update(players)
+        .set({ roleId: null, roleComment: null })
+        .where(inArray(players.id, [hostileRoleMember, commentedMember]));
+      await db
+        .update(clanMembers)
+        .set({ hasPriority: false })
+        .where(eq(clanMembers.clanId, clanId));
+      const second = await relayedEntry();
+      await handleAdminsCfgSyncEntry(
+        { db, redis, bridge: fileBridge, log: logger() },
+        second.entry,
+      );
+
+      expect(fileContent.split('\r\n').filter((line) => line.startsWith('Admin='))).toEqual([]);
+      expect(fileContent).not.toContain(injectedEos);
+      expect(fileContent.endsWith(`${END_MARKER}\r\n\r\nServerAdmin=keep\r\n`)).toBe(true);
+    } finally {
+      await db.delete(clans).where(eq(clans.id, clanId));
+      await db
+        .delete(players)
+        .where(inArray(players.id, [hostileRoleMember, commentedMember, clanMember]));
+      await db.delete(roles).where(inArray(roles.id, [hostileRoleId, safeRoleId]));
+    }
   });
 });
