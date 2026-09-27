@@ -217,7 +217,29 @@ const STATS_DAY_MS = 86_400_000;
 const STATS_DEFAULT_RANGE_DAYS = 30;
 const STATS_TOP_MEMBERS_LIMIT = 10;
 const STATS_SESSION_WINDOW_CAP = 5000;
-const dayStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** Longest inclusive `from`..`to` span (in days) a clan stats request may ask for. */
+const STATS_MAX_RANGE_DAYS = 366;
+/**
+ * Bounds on any day a clan stats window may name. Nothing the panel records
+ * predates the lower one, and the upper one keeps every derived instant (the
+ * window end plus one day, the default 30-day lookback) inside four-digit
+ * years that both `Date#toISOString` and Postgres round-trip.
+ */
+const STATS_MIN_DAY = '2000-01-01';
+const STATS_MAX_DAY = '2999-12-31';
+
+/** True when `day` is a real `YYYY-MM-DD` calendar day (rejects e.g. `2024-13-45`). */
+function isCalendarDay(day: string): boolean {
+  const ms = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === day;
+}
+
+const dayStringSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((day) => isCalendarDay(day) && day >= STATS_MIN_DAY && day <= STATS_MAX_DAY, {
+    message: `must be a calendar day between ${STATS_MIN_DAY} and ${STATS_MAX_DAY}`,
+  });
 
 const statsQuery = z.object({
   from: dayStringSchema.optional(),
@@ -234,7 +256,13 @@ function subtractDays(day: string, days: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** Resolves the inclusive [fromDay, toDay] window for clan stats, defaulting to the trailing 30 days. */
+/**
+ * Resolves the inclusive [fromDay, toDay] window for clan stats, defaulting to
+ * the trailing 30 days. Returns `null` (answered as 400 `invalid_range`) when
+ * the window is inverted or spans more than {@link STATS_MAX_RANGE_DAYS} days:
+ * every day in the window becomes a chart point, so an unbounded span is an
+ * unbounded response (#9).
+ */
 function resolveStatsWindow(
   from: string | undefined,
   to: string | undefined,
@@ -242,7 +270,27 @@ function resolveStatsWindow(
   const toDay = to ?? new Date().toISOString().slice(0, 10);
   const fromDay = from ?? subtractDays(toDay, STATS_DEFAULT_RANGE_DAYS - 1);
   if (fromDay > toDay) return null;
+  if (statsWindowDayCount(fromDay, toDay) > STATS_MAX_RANGE_DAYS) return null;
   return { fromDay, toDay };
+}
+
+/** Number of days in the inclusive [fromDay, toDay] window (0 when inverted). */
+function statsWindowDayCount(fromDay: string, toDay: string): number {
+  const spanMs = Date.parse(`${toDay}T00:00:00.000Z`) - Date.parse(`${fromDay}T00:00:00.000Z`);
+  return Math.max(Math.round(spanMs / STATS_DAY_MS) + 1, 0);
+}
+
+/**
+ * Lists every `YYYY-MM-DD` day in the inclusive window. The walk is driven by
+ * the epoch-millisecond day count, so it always terminates — stepping a date
+ * *string* past `9999-12-31` yields `+010000-01`, which sorts before it and
+ * once looped forever (#9).
+ */
+function statsWindowDays(fromDay: string, toDay: string): string[] {
+  const startMs = Date.parse(`${fromDay}T00:00:00.000Z`);
+  return Array.from({ length: statsWindowDayCount(fromDay, toDay) }, (_, index) =>
+    new Date(startMs + index * STATS_DAY_MS).toISOString().slice(0, 10),
+  );
 }
 
 interface ClanStatsChartPoint {
@@ -300,10 +348,11 @@ interface ClanStatsPayload {
 }
 
 function emptyClanStatsPayload(clanId: string, fromDay: string, toDay: string): ClanStatsPayload {
-  const chart: ClanStatsChartPoint[] = [];
-  for (let cursor = fromDay; cursor <= toDay; cursor = subtractDays(cursor, -1)) {
-    chart.push({ day: cursor, online_seconds: 0, boost_seconds: 0 });
-  }
+  const chart: ClanStatsChartPoint[] = statsWindowDays(fromDay, toDay).map((day) => ({
+    day,
+    online_seconds: 0,
+    boost_seconds: 0,
+  }));
   return {
     clan_id: clanId,
     from: fromDay,
@@ -715,8 +764,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       .orderBy(asc(playerDailyPresence.day));
 
     const chartByDay = new Map<string, { online: number; boost: number }>();
-    for (let cursor = fromDay; cursor <= toDay; cursor = subtractDays(cursor, -1)) {
-      chartByDay.set(cursor, { online: 0, boost: 0 });
+    for (const day of statsWindowDays(fromDay, toDay)) {
+      chartByDay.set(day, { online: 0, boost: 0 });
     }
     const serverTotals = new Map<string, ClanStatsServerTotal>();
     let onlineTotal = 0;
