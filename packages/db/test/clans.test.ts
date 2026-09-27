@@ -14,6 +14,11 @@ const CONSTRAINTS_SQL = readFileSync(
   'utf-8',
 );
 
+const RELEASE_DISBANDED_SQL = path.resolve(
+  __dirname,
+  '../drizzle/0117_clan_members_release_disbanded.sql',
+);
+
 const PLAYER_IDS = Array.from({ length: 8 }, (_, i) => {
   const n = (i + 1).toString(16).padStart(2, '0');
   return `000000${n}-0000-4000-8000-000000000000`;
@@ -200,5 +205,28 @@ describeIfDb('clan model constraints', () => {
 
   it('is idempotent: re-applying the constraint DDL does not error', async () => {
     await expect(sql.unsafe(CONSTRAINTS_SQL)).resolves.toBeDefined();
+  });
+});
+
+describeIfDb('0117 releases members stranded in disbanded clans (regression #14)', () => {
+  it('deletes the roster of soft-deleted clans only, freeing those players', async () => {
+    const disbanded = await newClan({ name: 'disbanded' });
+    await addMember(disbanded, PLAYER_IDS[0] as string, 'leader');
+    await addMember(disbanded, PLAYER_IDS[1] as string, 'member');
+    await sql`UPDATE clans SET deleted_at = now() WHERE id = ${disbanded}`;
+    const active = await newClan({ name: 'active' });
+    await addMember(active, PLAYER_IDS[2] as string, 'leader');
+    await addMember(active, PLAYER_IDS[3] as string, 'member');
+
+    await sql.unsafe(readFileSync(RELEASE_DISBANDED_SQL, 'utf-8'));
+
+    const remaining = await sql<{ clan_id: string; player_id: string }[]>`
+      SELECT clan_id, player_id FROM clan_members ORDER BY player_id
+    `;
+    expect(remaining).toEqual([
+      { clan_id: active, player_id: PLAYER_IDS[2] },
+      { clan_id: active, player_id: PLAYER_IDS[3] },
+    ]);
+    await expect(addMember(active, PLAYER_IDS[0] as string, 'member')).resolves.toBeUndefined();
   });
 });
