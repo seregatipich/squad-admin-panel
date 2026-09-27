@@ -855,6 +855,167 @@ describeIfDb('approve removes the player from the published banlist', () => {
   });
 });
 
+describeIfDb('concurrent decisions on one appeal (#37)', () => {
+  it('lets exactly one of two simultaneous decisions win and keeps bans consistent with it', async () => {
+    const steamId64 = testSteamId(987220);
+    const { playerId } = await seedBannedPlayer(steamId64, 'AppealTarget220');
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция, которую два модератора решают одновременно.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    const decide = (status: 'approved' | 'rejected') =>
+      h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/appeals/${appealId}`,
+        headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status }),
+      });
+    const [approve, reject] = await Promise.all([decide('approved'), decide('rejected')]);
+
+    const codes = [approve.statusCode, reject.statusCode].sort();
+    expect(codes).toEqual([200, 409]);
+    const loser = approve.statusCode === 409 ? approve : reject;
+    expect(loser.json()).toEqual({ error: 'appeal_already_decided' });
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    const [ban] = await h.db
+      .select({ revertedAt: moderationActions.revertedAt })
+      .from(moderationActions)
+      .where(and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'ban')))
+      .limit(1);
+    if (appeal?.status === 'approved') {
+      expect(ban?.revertedAt).not.toBeNull();
+    } else {
+      expect(appeal?.status).toBe('rejected');
+      expect(ban?.revertedAt).toBeNull();
+    }
+    const unbans = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(
+        and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'unban')),
+      );
+    expect(unbans).toHaveLength(appeal?.status === 'approved' ? 1 : 0);
+  });
+});
+
+describeIfDb('approve that cannot edit Bans.cfg (#37)', () => {
+  it('answers 409 bans_cfg_conflict and hands the appeal back undecided with the ban intact', async () => {
+    const steamId64 = testSteamId(987240);
+    const { actionId } = await seedBannedPlayer(steamId64, 'AppealTarget240');
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция, одобрение которой не может отредактировать Bans.cfg.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    // Every read returns the original file, so the write never verifies and
+    // the unban gives up with bans_cfg_conflict.
+    const path = bansCfgPath(serverId);
+    const frozen = h.bridge.files.get(path)?.toString('utf-8') ?? '';
+    const stockFileRead = h.bridge.fileRead;
+    h.bridge.fileRead = async (params) =>
+      params.path === path ? { content: frozen } : stockFileRead(params);
+    try {
+      const res = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/appeals/${appealId}`,
+        headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status: 'approved', decision_note: 'снимаю бан' }),
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'bans_cfg_conflict' });
+    } finally {
+      h.bridge.fileRead = stockFileRead;
+    }
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status, decidedAt: banAppeals.decidedAt })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    expect(appeal).toEqual({ status: 'pending', decidedAt: null });
+    const [ban] = await h.db
+      .select({ revertedAt: moderationActions.revertedAt })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, actionId))
+      .limit(1);
+    expect(ban?.revertedAt).toBeNull();
+  });
+});
+
+describeIfDb('approve reverts bans whose server was deleted (#37)', () => {
+  it('reverts a ban with server_id NULL and drops it from the public banlist', async () => {
+    const steamId64 = testSteamId(987230);
+    const { playerId, actionId } = await seedBannedPlayer(steamId64, 'AppealTarget230');
+    // Deleting a server sets moderation_actions.server_id to NULL (on delete
+    // set null); the ban itself stays active.
+    await h.db
+      .update(moderationActions)
+      .set({ serverId: null })
+      .where(eq(moderationActions.id, actionId));
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция по бану с удалённого сервера, прошу снять.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    const enable = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/banlist-publication',
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ enabled: true, publish_scope: 'all_active' }),
+    });
+    expect(enable.statusCode).toBe(200);
+
+    const patched = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/appeals/${appealId}`,
+      headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ status: 'approved' }),
+    });
+    expect(patched.statusCode).toBe(200);
+    const body = patched.json() as {
+      revert: { reverted_action_ids: string[]; unban_action_ids: string[] };
+    };
+    expect(body.revert.reverted_action_ids).toContain(actionId);
+    expect(body.revert.unban_action_ids).toHaveLength(1);
+
+    const [ban] = await h.db
+      .select({
+        revertedAt: moderationActions.revertedAt,
+        revertedBy: moderationActions.revertedBy,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, actionId))
+      .limit(1);
+    expect(ban?.revertedAt).not.toBeNull();
+    expect(ban?.revertedBy).toBe(unbannerId);
+    const [unban] = await h.db
+      .select({ serverId: moderationActions.serverId })
+      .from(moderationActions)
+      .where(
+        and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'unban')),
+      )
+      .limit(1);
+    expect(unban).toEqual({ serverId: null });
+
+    const banlist = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=json',
+      headers: { cookie: ownerCookie },
+    });
+    expect(banlist.statusCode).toBe(200);
+    expect(banlist.body).not.toContain(String(steamId64));
+  });
+});
+
 describeIfDb('approve notifies Discord through the existing unban template', () => {
   it('renders the moderation.unban envelope into the enabled unban webhook', async () => {
     const steamId64 = testSteamId(987210);
