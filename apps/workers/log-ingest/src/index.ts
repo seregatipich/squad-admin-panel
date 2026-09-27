@@ -150,7 +150,7 @@ async function main() {
         matchChain = matchChain
           .then(() => handleMatchCommand(db, redis, command, { seedThreshold }))
           .then(async () => {
-            await handleMatchClose(db, command);
+            await handleMatchClose(db, redis, command);
           })
           .catch((err) =>
             log.error({ err: (err as Error).message, kind: command.kind }, 'match assembly failed'),
