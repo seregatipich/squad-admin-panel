@@ -378,6 +378,46 @@ describe('POST /api/v1/servers/:id/start', () => {
     expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), id);
   });
 
+  it('aborts and reverts status when a depot update acquires the lock during the containerInspect round-trip (#20 follow-up)', async () => {
+    // Simulates the race the initial isDepotUpdating() check alone missed:
+    // a depot update lands strictly between that first check and the eager
+    // status flip below (modeled here as landing during the bridge's
+    // containerInspect network round-trip).
+    h.bridge.containerInspect = async () => {
+      await h.redis.set('depot:updating', new Date().toISOString(), 'EX', 3600, 'NX');
+      return { state: 'not_found' };
+    };
+    let ran = false;
+    h.bridge.containerRun = async () => {
+      ran = true;
+      return { container_id: 'abc' };
+    };
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'start-depot-race' },
+      })
+    ).json<{ id: string }>();
+    const [before] = await h.db.select().from(servers).where(eq(servers.id, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(409);
+    expect(resp.json()).toEqual({ error: 'depot_update_in_progress' });
+    expect(ran).toBe(false);
+    const [after] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(after?.status).toBe(before?.status);
+
+    await h.redis.del('depot:updating');
+  });
+
   it('still returns 200 when the sidecar relaunch rejects', async () => {
     h.bridge.containerInspect = async () => ({ state: 'not_found' });
     vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));

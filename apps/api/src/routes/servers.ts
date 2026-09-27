@@ -615,6 +615,22 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           .update(servers)
           .set({ status: 'starting', updatedAt: new Date() })
           .where(eq(servers.id, s.id));
+        // Re-check the depot lock we already checked above (#20 follow-up):
+        // the initial check plus the containerInspect round-trip left a
+        // window where a depot update could see this server as
+        // 'stopped'/'ready' and proceed. Whichever side observes the other
+        // first now wins — depot/update's own servers_running check (which
+        // includes 'starting') catches us if it acquires the lock first, and
+        // this recheck catches it if we flip to 'starting' first — so no
+        // interleaving lets both sides through.
+        if (await isDepotUpdating(app.redis)) {
+          await app.db
+            .update(servers)
+            .set({ status: s.status, updatedAt: new Date() })
+            .where(eq(servers.id, s.id));
+          reply.code(409);
+          return { error: 'depot_update_in_progress' };
+        }
         app.liveBus?.publish({
           type: 'server.status',
           ts: new Date().toISOString(),
