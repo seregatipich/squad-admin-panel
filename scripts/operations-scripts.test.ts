@@ -17,7 +17,7 @@ import {
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { after, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
 const OPERATIONS_SCRIPTS = [
@@ -201,6 +201,19 @@ describe('operation script static contracts', () => {
 });
 
 describe('local pre-push checklist and git hooks', () => {
+  // The checklist probes an exported DATABASE_URL before trusting it, so the
+  // URLs handed to it must name something that accepts connections.
+  const database = net.createServer((socket) => socket.destroy());
+  let databaseUrl = '';
+  before(async () => {
+    database.listen(0, '127.0.0.1');
+    await once(database, 'listening');
+    databaseUrl = `postgres://admin@127.0.0.1:${(database.address() as net.AddressInfo).port}`;
+  });
+  after(() => {
+    database.close();
+  });
+
   const MERGE_BASE = '0123456789abcdef0123456789abcdef01234567';
 
   interface ChecklistFixture {
@@ -249,7 +262,7 @@ describe('local pre-push checklist and git hooks', () => {
       [
         'case "$*" in',
         '  "-s turbo ls "*) printf \'%s\\n\' "$FAKE_TURBO_LS"; exit 0 ;;',
-        '  "turbo run test "*) printf \'%s|%s\\n\' "$DATABASE_URL" "$TEST_DATABASE_URL" >> "$DB_ENV_LOG" ;;',
+        '  "turbo run test "*) printf \'%s|%s\\n\' "${DATABASE_URL:-}" "${TEST_DATABASE_URL:-}" >> "$DB_ENV_LOG" ;;',
         'esac',
         'case "$*" in "$FAKE_FAIL_ON"*) exit 37 ;; esac',
         'exit 0',
@@ -292,8 +305,8 @@ describe('local pre-push checklist and git hooks', () => {
           packageManager: 'pnpm9',
           packages: { count: items.length, items },
         }),
-        DATABASE_URL: 'postgres://isolated-test-database',
-        TEST_DATABASE_URL: 'postgres://isolated-test-database',
+        DATABASE_URL: `${databaseUrl}/isolated-test-database`,
+        TEST_DATABASE_URL: `${databaseUrl}/isolated-test-database`,
         FULL: '',
         SKIP_BUILD: '',
         PREPUSH_TURBO_CONCURRENCY: '',
@@ -355,7 +368,7 @@ describe('local pre-push checklist and git hooks', () => {
       'pnpm|test:scripts',
     ]);
     assert.deepEqual(logLines(fixture.dbEnvLog), [
-      'postgres://isolated-test-database|postgres://isolated-test-database',
+      `${databaseUrl}/isolated-test-database|${databaseUrl}/isolated-test-database`,
     ]);
   });
 
@@ -436,11 +449,40 @@ describe('local pre-push checklist and git hooks', () => {
     const result = runChecklist(fixture, {
       packages: [DB_PACKAGE],
       changed: ['apps/workers/db-worker/src/tick.ts'],
-      env: { DATABASE_URL: 'postgres://exported', TEST_DATABASE_URL: '' },
+      env: { DATABASE_URL: `${databaseUrl}/exported`, TEST_DATABASE_URL: '' },
     });
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(logLines(fixture.dbEnvLog), ['postgres://exported|postgres://exported']);
+    assert.deepEqual(logLines(fixture.dbEnvLog), [
+      `${databaseUrl}/exported|${databaseUrl}/exported`,
+    ]);
+  });
+
+  it('skips the DB-backed suites instead of hanging when the exported database does not answer', async () => {
+    const closed = net.createServer();
+    closed.listen(0, '127.0.0.1');
+    await once(closed, 'listening');
+    const { port } = closed.address() as net.AddressInfo;
+    closed.close();
+    await once(closed, 'close');
+
+    const fixture = checklistFixture(FIXTURE_PACKAGES);
+    const result = runChecklist(fixture, {
+      packages: [DB_PACKAGE, PLAIN_PACKAGE],
+      changed: ['apps/workers/db-worker/src/tick.ts', 'packages/plain/src/index.ts'],
+      env: {
+        DATABASE_URL: `postgres://admin@127.0.0.1:${port}/stopped`,
+        TEST_DATABASE_URL: `postgres://admin@127.0.0.1:${port}/stopped`,
+      },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /exported DATABASE_URL does not answer/);
+    assert.match(
+      result.stdout,
+      /DB-backed package tests — skipped \(no database: @fixture\/db-worker\)/,
+    );
+    assert.deepEqual(logLines(fixture.dbEnvLog), ['|']);
   });
 
   it('runs no api tests when the diff touches api source but no api test file', () => {

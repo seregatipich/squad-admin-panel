@@ -87,8 +87,26 @@ ensure_db() {
   [ -n "${DATABASE_URL:-}" ]
 }
 
+# An exported DATABASE_URL whose server is down (the local stack stopped, say)
+# would leave every DB-backed suite retrying its connection for minutes; a
+# three-second TCP probe turns that into the same skip as having no database.
+db_reachable() {
+  node -e '
+    const url = new URL(process.argv[1]);
+    const socket = require("node:net").connect(Number(url.port) || 5432, url.hostname);
+    socket.setTimeout(3000, () => process.exit(1));
+    socket.on("connect", () => process.exit(0));
+    socket.on("error", () => process.exit(1));
+  ' "$1" >/dev/null 2>&1
+}
+
 provision_db() {
   if [ -n "${DATABASE_URL:-}" ]; then
+    if ! db_reachable "$DATABASE_URL"; then
+      warn "The exported DATABASE_URL does not answer — is the database running? Treating it as no database."
+      unset DATABASE_URL TEST_DATABASE_URL
+      return
+    fi
     # The API harness reads TEST_DATABASE_URL; left unset it would not follow
     # the exported database.
     export TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}"

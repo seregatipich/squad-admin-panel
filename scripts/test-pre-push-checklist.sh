@@ -173,10 +173,24 @@ git add -A && git_q commit -m "dev moves on"
 git_q push origin dev
 git_q switch feature/branch-work
 
+# The checklist probes an exported DATABASE_URL before trusting it, so the URL
+# must name a port that accepts connections.
+PORT_FILE="$TMP/database-port"
+node -e '
+  const server = require("node:net").createServer((socket) => socket.destroy());
+  server.listen(0, "127.0.0.1", () => {
+    require("node:fs").writeFileSync(process.argv[1], String(server.address().port));
+  });
+' "$PORT_FILE" &
+DB_LISTENER=$!
+for _ in $(seq 1 50); do [ -s "$PORT_FILE" ] && break; sleep 0.1; done
+DB_URL="postgres://admin@127.0.0.1:$(cat "$PORT_FILE")/merge-base-test"
+
 out=$(PATH="$SHIMS:$PATH" PNPM_LOG="$PNPM_LOG" FULL='' \
-  DATABASE_URL=postgres://merge-base-test TEST_DATABASE_URL=postgres://merge-base-test \
+  DATABASE_URL="$DB_URL" TEST_DATABASE_URL="$DB_URL" \
   bash scripts/pre-push-checklist.sh 2>&1)
 rc=$?
+kill "$DB_LISTENER" 2>/dev/null
 if [ "$rc" -eq 0 ] &&
   grep -qxF -- "-s turbo ls --filter=[$merge_base] --output=json" "$PNPM_LOG" &&
   grep -qxF -- "turbo run typecheck --filter=...[$merge_base]" "$PNPM_LOG" &&
