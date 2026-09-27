@@ -12,6 +12,17 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 Issue #6. `chat_messages` (0025) and `bonus_transactions` (0026) had only their migration-created months and no DEFAULT partition, so every insert would have failed from the first day past that window (2026-11-01 on production). The migration adds `chat_messages_default` and `bonus_transactions_default` and creates the current UTC month plus three months ahead for those two tables and `combat_events`, moving any rows `combat_events_default` already holds for those months. `worker-event-partition` (`ensureDefaultBackedMonthlyPartitions`) keeps the current + next month from then on. The `packages/db/sql/` snippets gain the same DEFAULT partitions and lose their never-applied pg_partman blocks. Rollback-safe: the previous release neither creates nor drops partitions of these tables.
 
+### Negative accrual recompute no longer violates the balance CHECK (no migration)
+
+**Files:** `packages/db/src/economy/accrual.ts`, `apps/workers/presence-daily/src/index.ts`, `packages/db/test/economy-accrual.test.ts`
+
+No schema change. `accrueDailyBonuses` recomputes yesterday and today every hour, and the new accrual can be smaller than the old one (a lowered `k_*`, retroactive seed attribution, late sessions). When the player had already spent the difference, `bonus_balance + delta` went below zero, tripped `players_bonus_balance_nonneg_chk` and rolled back the whole day for every player (#18).
+
+#### Changed
+
+- A negative delta the balance cannot cover now stops the balance at zero and writes a compensating `adjust` row (`reference_type = 'daily_presence'`, `reference_id = day`) for the uncovered part, so the ledger still sums to `bonus_balance`. `AccrueDailyBonusesResult` gains `shortfallForgiven`.
+- `worker-presence-daily` accrues each day of the window in its own try: a failing day emits `economy_accrual.run_failed` with `payload.day` and no longer blocks the other day; `economy_accrual.run_ok` is emitted only when every day succeeded.
+
 ---
 
 ## 2026-09-07
