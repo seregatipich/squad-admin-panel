@@ -59,6 +59,24 @@ function dedupKey(row: {
   return `${steam}|${eos}|${issued}`;
 }
 
+/**
+ * Serializes a JSON value with object keys sorted at every depth, so two
+ * values that differ only in key order compare equal. Needed because `raw`
+ * is read back from a jsonb column, and Postgres does not keep the key order
+ * it was written with (it sorts by key length, then bytes).
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 function fieldsDiffer(existing: ExistingBanRow, incoming: ParsedBan): boolean {
   if ((existing.nickname ?? null) !== (incoming.nickname ?? null)) return true;
   if ((existing.reason ?? null) !== (incoming.reason ?? null)) return true;
@@ -66,7 +84,8 @@ function fieldsDiffer(existing: ExistingBanRow, incoming: ParsedBan): boolean {
   const existingExpiry = existing.expiresAt ? existing.expiresAt.getTime() : null;
   const incomingExpiry = incoming.expiresAt ? incoming.expiresAt.getTime() : null;
   if (existingExpiry !== incomingExpiry) return true;
-  if (JSON.stringify(existing.raw ?? null) !== JSON.stringify(incoming.raw ?? null)) return true;
+  // `applyMergePlan` stores a missing raw as `{}`, so compare it that way too.
+  if (canonicalJson(existing.raw ?? {}) !== canonicalJson(incoming.raw ?? {})) return true;
   if (existing.revokedAt !== null) return true;
   return false;
 }
