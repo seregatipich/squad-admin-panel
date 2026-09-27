@@ -1,5 +1,5 @@
 import { players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -13,14 +13,19 @@ import {
 
 const OWNER_STEAM_ID = 76561198000002001n;
 
-async function seedServer(h: IntegrationHarness, status: string) {
+async function seedServer(
+  h: IntegrationHarness,
+  status: string,
+  opts: { runtime?: 'container' | 'external'; deleted?: boolean } = {},
+) {
   const id = uuidv7();
   await h.db.insert(servers).values({
     id,
     displayName: `Server ${id.slice(0, 4)}`,
     slug: `s-${id}`,
     status,
-    runtime: 'container',
+    runtime: opts.runtime ?? 'container',
+    deletedAt: opts.deleted ? new Date() : null,
   });
   return id;
 }
@@ -69,6 +74,12 @@ afterAll(async () => {
 beforeEach(async () => {
   Object.assign(h.bridge, trackedBridge());
   await h.redis.del('depot:updating', 'depot:last_update', 'depot:progress');
+  // The depot is shared by every server, so a server another test left
+  // running would block this test's update; the schema is private to this file.
+  await h.db
+    .update(servers)
+    .set({ status: 'stopped' })
+    .where(inArray(servers.status, ['starting', 'running', 'stopping']));
   await h.db
     .update(players)
     .set({ roleId: ownerRoleId })
@@ -148,6 +159,48 @@ describe('POST /api/v1/servers/:id/update', () => {
     });
     expect(resp.statusCode).toBe(409);
     expect(resp.json().error).toBe('depot_update_in_progress');
+  });
+
+  // #20: the depot is one volume mounted into every Squad container, so the
+  // update must not rewrite it under any other live server of the host.
+  it.each(['running', 'starting', 'stopping'])(
+    'returns 409 servers_running and leaves the depot alone while another server is %s',
+    async (otherStatus) => {
+      const id = await seedServer(h, 'stopped');
+      const otherId = await seedServer(h, otherStatus);
+      let depotUpdateCalls = 0;
+      h.bridge.depotUpdate = async () => {
+        depotUpdateCalls++;
+        return { exit_code: 0 };
+      };
+
+      const cookie = await loginAsOwner(h);
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/servers/${id}/update`,
+        headers: { cookie },
+      });
+      expect(resp.statusCode).toBe(409);
+      expect(resp.json()).toEqual({ error: 'servers_running', server_ids: [otherId] });
+      expect(depotUpdateCalls).toBe(0);
+      // The refused request must not leave the depot lock behind.
+      expect(await h.redis.get('depot:updating')).toBeNull();
+    },
+  );
+
+  it('ignores deleted and external servers when checking for live servers', async () => {
+    const id = await seedServer(h, 'stopped');
+    await seedServer(h, 'running', { runtime: 'external' });
+    await seedServer(h, 'running', { deleted: true });
+    h.bridge.depotUpdate = async () => ({ exit_code: 0 });
+
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/update`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
   });
 
   it('returns 401 when unauthenticated', async () => {

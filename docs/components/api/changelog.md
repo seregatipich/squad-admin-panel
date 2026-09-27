@@ -1,5 +1,16 @@
 # `api` — changelog
 
+## 2026-09-27 — Обновление depot не трогает запущенные серверы
+
+### Fixed
+
+- `POST /api/v1/servers/:id/update` проверял только, что остановлен сервер `:id`, хотя SteamCMD переписывает общий том `squad-depot`, смонтированный во все Squad-контейнеры хоста. Теперь маршрут возвращает `409 { error: 'servers_running', server_ids }`, пока любой другой неудалённый container-сервер находится в `starting`/`running`/`stopping` (#20).
+- `POST /api/v1/servers/:id/start` и `POST /api/v1/servers/:id/restart` возвращают `409 depot_update_in_progress`, пока удерживается блокировка `depot:updating`: сервер больше нельзя поднять на наполовину обновлённом depot.
+
+### Changed
+
+- Право `server:update` помечено как опасное (`dangerous: true`): действие затрагивает все серверы хоста, как и `POST /api/v1/depot/update` под `server:install`.
+
 ## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
 
 ### Removed

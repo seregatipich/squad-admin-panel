@@ -134,6 +134,32 @@ describe('ServerControls', () => {
     expect(await screen.findByRole('button', { name: 'Обновить игру' })).toBeInTheDocument();
   });
 
+  // #20: the depot is shared by every server, so the API refuses the update
+  // while another server is live; the operator must learn why in Russian.
+  it('explains a servers_running refusal and keeps the progress modal closed', async () => {
+    stubFetch('stopped', undefined, (url, init) =>
+      url === `/api/v1/servers/${SERVER_ID}/update` && init?.method === 'POST'
+        ? ({
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+          } as Response)
+        : undefined,
+    );
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Обновить игру' }));
+    });
+
+    expect(
+      await screen.findByText(
+        'Обновление меняет общий depot всех серверов хоста. Сначала остановите запущенные серверы: 2.',
+      ),
+    ).toBeInTheDocument();
+    expect(latestProgressModalProps?.open ?? false).toBe(false);
+  });
+
   it('deletes the server only after its exact name is typed back', async () => {
     const fetchMock = stubFetch('stopped', undefined, (url, init) =>
       url === `/api/v1/servers/${SERVER_ID}` && init?.method === 'DELETE'

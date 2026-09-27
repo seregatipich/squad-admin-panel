@@ -123,7 +123,20 @@ export function ServerControls({ serverId }: { serverId: string }) {
         method: 'POST',
         credentials: 'include',
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        const body = (await r.json().catch(() => null)) as {
+          error?: string;
+          server_ids?: string[];
+        } | null;
+        // The depot is one volume shared by every server on the host, so the
+        // API refuses while any other server is live (#20).
+        if (body?.error === 'servers_running') {
+          throw new Error(
+            `Обновление меняет общий depot всех серверов хоста. Сначала остановите запущенные серверы: ${body.server_ids?.length ?? 0}.`,
+          );
+        }
+        throw new Error(`HTTP ${r.status}`);
+      }
       setUpdateRunning(true);
       setUpdateModalOpen(true);
     } catch (e) {
