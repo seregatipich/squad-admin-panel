@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-or
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
 import { playerNameMatch } from '../lib/player-name-search.js';
 
@@ -117,13 +118,6 @@ function serializeEnvelope(row: EventFullRow, includeIps: boolean) {
     correlation_id: row.correlationId,
     payload: includeIps ? row.payload : redactPayloadIp(row.payload),
   };
-}
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
 }
 
 const CSV_COLUMNS = [

