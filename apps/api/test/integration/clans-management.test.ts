@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { clanMembers, clans, players, roles } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -741,28 +742,98 @@ describeIfDb('POST /api/v1/clans/:id/members on a clan created through the API',
     expect(audit.afterSnapshot).toEqual({ player_id: playerId, member_role: 'leader' });
   });
 
-  it('elects exactly one leader when two first members are added concurrently', async () => {
-    const clanId = await createEmptyClan('Гонка-лидера');
-    const playerIds = [await seedPlayer('ГонкаА'), await seedPlayer('ГонкаБ')];
+  /**
+   * Holds `SELECT ... FOR UPDATE` on the clan row in a second connection, starts
+   * an add-member request, and proves the request waits on that row lock by
+   * asserting it is still unresolved after `LOCK_WAIT_MS`. `whileLocked` then
+   * mutates the clan inside the blocking transaction before it commits, which
+   * reproduces a concurrent first add or disband deterministically.
+   */
+  async function addMemberBehindClanLock(opts: {
+    clanId: string;
+    playerId: string;
+    whileLocked: (tx: postgres.TransactionSql) => Promise<unknown>;
+  }): Promise<{ statusCode: number; body: { member_role?: string; error?: string } }> {
+    const LOCK_WAIT_MS = 300;
+    const blocker = postgres(h.url, { max: 1, onnotice: () => undefined });
+    try {
+      let releaseLock: () => void = () => undefined;
+      const lockHeld = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      let lockTaken: () => void = () => undefined;
+      const lockAcquired = new Promise<void>((resolve) => {
+        lockTaken = resolve;
+      });
+      const blocking = blocker.begin(async (tx) => {
+        await tx`SELECT id FROM clans WHERE id = ${opts.clanId} FOR UPDATE`;
+        lockTaken();
+        await lockHeld;
+        await opts.whileLocked(tx);
+      });
+      await lockAcquired;
 
-    const responses = await Promise.all(
-      playerIds.map((playerId) =>
-        h.app.inject({
+      let settled = false;
+      const request = h.app
+        .inject({
           method: 'POST',
-          url: `/api/v1/clans/${clanId}/members`,
+          url: `/api/v1/clans/${opts.clanId}/members`,
           headers: jsonHeaders(managerCookie),
-          payload: JSON.stringify({ player_id: playerId }),
-        }),
-      ),
-    );
-    expect(responses.map((res) => res.statusCode)).toEqual([201, 201]);
-    const returnedRoles = responses
-      .map((res) => (res.json() as { member_role: string }).member_role)
-      .sort();
-    expect(returnedRoles).toEqual(['leader', 'member']);
+          payload: JSON.stringify({ player_id: opts.playerId }),
+        })
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+      const settledWhileLocked = settled;
 
-    const roles = [...(await rosterRoles(clanId)).values()].sort();
-    expect(roles).toEqual(['leader', 'member']);
+      releaseLock();
+      await blocking;
+      const res = await request;
+      expect(settledWhileLocked).toBe(false);
+      return { statusCode: res.statusCode, body: res.json() };
+    } finally {
+      await blocker.end();
+    }
+  }
+
+  it('waits for the clan row lock so a concurrent first add keeps a single leader', async () => {
+    const clanId = await createEmptyClan('Гонка-лидера');
+    const rivalId = await seedPlayer('ГонкаА');
+    const playerId = await seedPlayer('ГонкаБ');
+
+    const res = await addMemberBehindClanLock({
+      clanId,
+      playerId,
+      whileLocked: (tx) =>
+        tx`INSERT INTO clan_members (clan_id, player_id, member_role, has_priority)
+           VALUES (${clanId}, ${rivalId}, 'leader', false)`,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body.member_role).toBe('member');
+    const roles = await rosterRoles(clanId);
+    expect(roles.get(rivalId)).toBe('leader');
+    expect(roles.get(playerId)).toBe('member');
+  });
+
+  it('refuses an add that raced a disband and leaves no row behind the deleted clan', async () => {
+    const clanId = await createEmptyClan('Гонка-роспуска');
+    const playerId = await seedPlayer('ОпоздавшийУчастник');
+
+    const res = await addMemberBehindClanLock({
+      clanId,
+      playerId,
+      whileLocked: (tx) => tx`UPDATE clans SET deleted_at = now() WHERE id = ${clanId}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('clan_not_found');
+    const stranded = await h.db
+      .select({ clanId: clanMembers.clanId })
+      .from(clanMembers)
+      .where(eq(clanMembers.playerId, playerId));
+    expect(stranded).toHaveLength(0);
   });
 });
 
