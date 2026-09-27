@@ -144,10 +144,11 @@ cp "${DATA_DIR}/backup-dump/redis/dump.rdb" "${DATA_DIR}/redis/dump.rdb"
 
 # The redis service runs with --appendonly yes, so it loads its dataset from the
 # AOF, not from dump.rdb. Boot a one-off server with AOF off to load the RDB,
-# then CONFIG SET appendonly yes to rewrite the dataset into a fresh AOF.
+# then CONFIG SET appendonly yes to rewrite the dataset into a fresh AOF. It
+# takes the service's password, which redis-cli sends from REDISCLI_AUTH.
 "${COMPOSE[@]}" run --rm --no-deps -T redis sh -c '
   set -e
-  redis-server --dir /data --dbfilename dump.rdb --appendonly no --save "" &
+  redis-server --dir /data --dbfilename dump.rdb --appendonly no --save "" --requirepass "$REDISCLI_AUTH" &
   pid=$!
   until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.3; done
   redis-cli config set appendonly yes >/dev/null

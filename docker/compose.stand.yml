@@ -46,7 +46,38 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ['redis-server', '--save', '60', '1', '--appendonly', 'no']
+    # Redis is published on the host loopback, and the bridge starts the game
+    # servers and the rnsquadjs sidecars with --network host, so any process
+    # there can connect: every client must authenticate (#32). The default
+    # user (REDIS_PASSWORD) is the panel's; `rnsquadjs` (REDIS_SIDECAR_PASSWORD)
+    # is the third-party sidecar's and may only write its own event stream,
+    # status and heartbeat keys, never session:* or command queues. Both are
+    # embedded in redis:// URLs below, so keep them URL-safe (hex).
+    command:
+      - redis-server
+      - --save
+      - '60'
+      - '1'
+      - --appendonly
+      - 'no'
+      - --requirepass
+      - '${REDIS_PASSWORD:?REDIS_PASSWORD must be set (see .env.example)}'
+      - --user
+      - rnsquadjs
+      - 'on'
+      - '>${REDIS_SIDECAR_PASSWORD:?REDIS_SIDECAR_PASSWORD must be set (see .env.example)}'
+      - resetchannels
+      - '~events:server:*'
+      - '~rnsquadjs:status:*'
+      - '~worker:heartbeat:rnsquadjs:*'
+      - '+ping'
+      - '+info'
+      - '+xadd'
+      - '+set'
+      - '+quit'
+    environment:
+      # redis-cli (healthcheck, `compose exec redis redis-cli`) authenticates with it.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - '127.0.0.1:6379:6379'
     volumes:
@@ -86,10 +117,11 @@ services:
       # alone does not recreate it just to report a new SHA.
       APP_VERSION: ${APP_VERSION:-dev}
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       # Redis the per-server sidecar container reaches. It runs with
-      # --network host, so the compose service name does not resolve there.
-      SIDECAR_REDIS_URL: ${SIDECAR_REDIS_URL:-redis://127.0.0.1:6379}
+      # --network host, so the compose service name does not resolve there,
+      # and it authenticates as the restricted `rnsquadjs` ACL user (see redis).
+      SIDECAR_REDIS_URL: redis://rnsquadjs:${REDIS_SIDECAR_PASSWORD}@127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
@@ -147,7 +179,7 @@ services:
     environment:
       WORKER: log-ingest
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       # Decrypts the SSH private key of external servers' log sources
       # (server_log_sources); without it only panel-hosted containers are tailed.
@@ -168,7 +200,7 @@ services:
     environment:
       WORKER: config-sync
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
     user: "0:${PANEL_GID:-987}"
     volumes:
@@ -187,7 +219,7 @@ services:
     environment:
       WORKER: rcon
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
-      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       RCON_HOST_DEFAULT: 127.0.0.1
       RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
@@ -205,7 +237,7 @@ services:
     environment:
       WORKER: audit-archiver
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -217,7 +249,7 @@ services:
     environment:
       WORKER: event-partition
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -229,7 +261,7 @@ services:
     environment:
       WORKER: presence-daily
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -241,7 +273,7 @@ services:
     environment:
       WORKER: role-expirer
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       ROLE_EXPIRER_INTERVAL_MS: ${ROLE_EXPIRER_INTERVAL_MS:-60000}
       ROLE_EXPIRY_REMINDER_INTERVAL_MS: ${ROLE_EXPIRY_REMINDER_INTERVAL_MS:-86400000}
       VIP_RENEWAL_INTERVAL_MS: ${VIP_RENEWAL_INTERVAL_MS:-3600000}
@@ -258,7 +290,7 @@ services:
     environment:
       WORKER: seed-reward
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       SEED_REWARD_INTERVAL_MS: ${SEED_REWARD_INTERVAL_MS:-86400000}
     depends_on:
       postgres:
@@ -276,7 +308,7 @@ services:
     environment:
       WORKER: steam-refresh
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       STEAM_REFRESH_INTERVAL_MS: ${STEAM_REFRESH_INTERVAL_MS:-3600000}
     depends_on:
@@ -295,7 +327,7 @@ services:
     environment:
       WORKER: media-publisher
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MEDIA_STORAGE_DIR: /var/lib/squad-panel/media
       MEDIA_PUBLISHER_INTERVAL_MS: ${MEDIA_PUBLISHER_INTERVAL_MS:-60000}
       MEDIA_PUBLISHER_BATCH_SIZE: ${MEDIA_PUBLISHER_BATCH_SIZE:-3}
@@ -321,7 +353,7 @@ services:
     environment:
       WORKER: clan-guard
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       CLAN_GUARD_INTERVAL_MS: ${CLAN_GUARD_INTERVAL_MS:-120000}
     depends_on:
       postgres:
@@ -338,7 +370,7 @@ services:
     environment:
       WORKER: automation
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -352,7 +384,7 @@ services:
     environment:
       WORKER: scheduler
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       ROTATION_PROFILE_APPLY_HOUR: ${ROTATION_PROFILE_APPLY_HOUR:-4}
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
@@ -373,7 +405,7 @@ services:
     environment:
       WORKER: ban-sync
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       BAN_SYNC_INTERVAL_MS: ${BAN_SYNC_INTERVAL_MS:-60000}
     depends_on:
@@ -389,7 +421,7 @@ services:
     environment:
       WORKER: clan-priority-expirer
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       CLAN_PRIORITY_EXPIRER_INTERVAL_MS: ${CLAN_PRIORITY_EXPIRER_INTERVAL_MS:-60000}
     depends_on:
       postgres:
@@ -404,7 +436,7 @@ services:
     environment:
       WORKER: leaderboard-aggregator
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -416,7 +448,7 @@ services:
     environment:
       WORKER: diag-flush
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       DIAG_FLUSH_BATCH_SIZE: ${DIAG_FLUSH_BATCH_SIZE:-100}
       DIAG_JOURNALD_FORWARD: ${DIAG_JOURNALD_FORWARD:-true}
       DIAG_JOURNALD_UNIT: ${DIAG_JOURNALD_UNIT:-panel-host-bridge}
@@ -437,7 +469,7 @@ services:
     restart: unless-stopped
     environment:
       WORKER: metrics-sampler
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       LOG_LEVEL: ${LOG_LEVEL:-info}
     user: "0:${PANEL_GID:-987}"
@@ -454,7 +486,7 @@ services:
     environment:
       WORKER: discord
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
       LOG_LEVEL: ${LOG_LEVEL:-info}

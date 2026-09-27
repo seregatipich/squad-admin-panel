@@ -252,11 +252,18 @@ if [[ -f "${REPO}/.env" ]]; then
   PANEL_GID=$(getent group panel | cut -d: -f3)
   set_env_key DATA_DIR "${DATA_DIR}"
   set_env_key PANEL_GID "${PANEL_GID}"
+  # Redis requires these since #32; an older .env gets them once, never rotated.
+  for key in REDIS_PASSWORD REDIS_SIDECAR_PASSWORD; do
+    grep -qE "^${key}=.+" "${REPO}/.env" || set_env_key "${key}" "$(openssl rand -hex 32)"
+  done
 else
   APP_DOMAIN_DEFAULT="${APP_DOMAIN:-squad-panel.lan}"
   PG_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
   ENC_KEY=$(openssl rand -base64 32)
   SESS=$(openssl rand -base64 32)
+  # Hex: both are embedded in redis:// URLs.
+  REDIS_PW=$(openssl rand -hex 32)
+  REDIS_SIDECAR_PW=$(openssl rand -hex 32)
   PANEL_GID=$(getent group panel | cut -d: -f3)
   cat > "${REPO}/.env" <<EOF
 APP_DOMAIN=${APP_DOMAIN_DEFAULT}
@@ -266,7 +273,9 @@ POSTGRES_PASSWORD=${PG_PW}
 APP_ENCRYPTION_KEY=${ENC_KEY}
 SESSION_SECRET=${SESS}
 DATABASE_URL=postgres://admin:${PG_PW}@postgres:5432/admin
-REDIS_URL=redis://redis:6379
+REDIS_PASSWORD=${REDIS_PW}
+REDIS_SIDECAR_PASSWORD=${REDIS_SIDECAR_PW}
+REDIS_URL=redis://:${REDIS_PW}@redis:6379
 BRIDGE_SOCKET=/run/panel-host-bridge/bridge.sock
 COOKIE_SECURE=false
 LOG_LEVEL=info
