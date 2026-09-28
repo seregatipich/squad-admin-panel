@@ -237,8 +237,6 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           warning = await loadBanAltWarning(app, {
             playerId: report.targetPlayerId,
             canViewIps: req.user?.permissions.permissions.has('player:view_ips') ?? false,
-            cookie: req.headers.cookie,
-            authorization: req.headers.authorization,
           });
         } catch (error) {
           req.log.warn({ error }, 'ALT-7 warning lookup failed; continuing with the ban');

@@ -1,8 +1,9 @@
 import type { DatabaseClient } from '@squad/db';
 import { alertEvents, alertRules, playerReports, reporterStats } from '@squad/db/schema';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
+import { z } from 'zod';
 
 /** Minimum confirmed reports before a reporter can be marked `trusted`. */
 export const TRUSTED_MIN_CONFIRMED = 5;
@@ -49,12 +50,20 @@ export function computeReporterVerdict(input: ReporterVerdictInput): ReporterVer
   return { accuracy, trusted, spamFlaggedAt };
 }
 
-interface CustomAlertRuleConfig {
-  eventKind?: string;
-  severity?: 'info' | 'warning' | 'critical';
-}
+/**
+ * The slice of a `custom` alert rule's free-form `config` this module reads.
+ * `alert-rules.ts` stores config as an arbitrary record, so an out-of-range
+ * severity (which `alert_events_severity_chk` would reject) degrades to
+ * `warning` instead of aborting the alert.
+ */
+const customAlertRuleConfig = z.object({
+  eventKind: z.string().optional().catch(undefined),
+  severity: z.enum(['info', 'warning', 'critical']).optional().catch(undefined),
+});
 
 const SPAM_ALERT_EVENT_KIND = 'reports.spam_flagged';
+
+type Transaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0];
 
 /**
  * AUTO-3 style alert for a reporter transitioning into the spam flag: fires
@@ -62,40 +71,41 @@ const SPAM_ALERT_EVENT_KIND = 'reports.spam_flagged';
  * `config.eventKind = 'reports.spam_flagged'` exists (alert_events.rule_id is
  * a NOT NULL FK, so a rule is structurally required) — mirrors
  * apps/workers/ban-sync/src/alerts.ts raiseBanSyncFailureAlert.
+ *
+ * Inserts the `alert_events` rows inside the caller's transaction (the one
+ * that set the flag) and returns the payloads to announce after commit.
  */
-async function raiseSpamFlaggedAlert(
-  db: DatabaseClient,
-  redis: Pick<Redis, 'publish'>,
+async function insertSpamFlaggedAlerts(
+  tx: Transaction,
   reporterPlayerId: string,
   recentRejected: number,
-): Promise<void> {
-  const rules = await db
+): Promise<Array<Record<string, unknown>>> {
+  const rules = await tx
     .select({ id: alertRules.id, config: alertRules.config })
     .from(alertRules)
     .where(and(eq(alertRules.type, 'custom'), eq(alertRules.enabled, true)));
 
+  const announced: Array<Record<string, unknown>> = [];
   for (const rule of rules) {
-    const config = rule.config as CustomAlertRuleConfig;
+    const parsed = customAlertRuleConfig.safeParse(rule.config);
+    const config = parsed.success ? parsed.data : {};
     if (config.eventKind !== SPAM_ALERT_EVENT_KIND) continue;
 
-    const severity = config.severity ?? 'warning';
     const payload = {
       reporter_player_id: reporterPlayerId,
       recent_rejected: recentRejected,
       window_days: SPAM_WINDOW_DAYS,
       threshold: SPAM_REJECTED_THRESHOLD,
     };
-    await db.insert(alertEvents).values({
+    await tx.insert(alertEvents).values({
       id: uuidv7(),
       ruleId: rule.id,
-      severity,
+      severity: config.severity ?? 'warning',
       payload,
     });
-    await redis.publish(
-      'live-bus',
-      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-    );
+    announced.push(payload);
   }
+  return announced;
 }
 
 /**
@@ -106,7 +116,12 @@ async function raiseSpamFlaggedAlert(
  * gets linked to (or a report's) reporter changes. No-ops safely when
  * `reporterPlayerId` has no reports (upserts a zeroed row) — callers should
  * still guard against a null reporter (ingame `target_raw` reports) before
- * calling. Best-effort by convention: callers should wrap this in try/catch
+ * calling.
+ *
+ * The stats upsert, the `spam_flagged_at` transition and its alert rows commit
+ * together, and the transition is a conditional `UPDATE … WHERE
+ * spam_flagged_at IS NULL`: concurrent recomputes raise the alert once, and a
+ * failed alert insert rolls the flag back so the next recompute retries it. Best-effort by convention: callers should wrap this in try/catch
  * so a stats failure never fails the moderation request that triggered it.
  */
 export async function recomputeReporterStats(
@@ -148,50 +163,53 @@ export async function recomputeReporterStats(
       ),
     );
 
-  const [existing] = await db
-    .select({ spamFlaggedAt: reporterStats.spamFlaggedAt })
-    .from(reporterStats)
-    .where(eq(reporterStats.playerId, reporterPlayerId))
-    .limit(1);
-
   const verdict = computeReporterVerdict({
     total: Number(counts?.total ?? 0),
     resolved: Number(counts?.resolved ?? 0),
     rejected: Number(counts?.rejected ?? 0),
     confirmed: Number(counts?.confirmed ?? 0),
     recentRejected: Number(recent?.recentRejected ?? 0),
-    previousSpamFlaggedAt: existing?.spamFlaggedAt ?? null,
+    previousSpamFlaggedAt: null,
+  });
+  const isSpam = verdict.spamFlaggedAt != null;
+  const statColumns = {
+    totalReports: Number(counts?.total ?? 0),
+    resolvedReports: Number(counts?.resolved ?? 0),
+    rejectedReports: Number(counts?.rejected ?? 0),
+    confirmedReports: Number(counts?.confirmed ?? 0),
+    accuracy: verdict.accuracy,
+    trusted: verdict.trusted,
+  };
+
+  const announced = await db.transaction(async (tx) => {
+    await tx
+      .insert(reporterStats)
+      .values({ playerId: reporterPlayerId, ...statColumns, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: reporterStats.playerId,
+        set: { ...statColumns, updatedAt: new Date() },
+      });
+
+    if (!isSpam) {
+      await tx
+        .update(reporterStats)
+        .set({ spamFlaggedAt: null })
+        .where(eq(reporterStats.playerId, reporterPlayerId));
+      return [];
+    }
+    const flagged = await tx
+      .update(reporterStats)
+      .set({ spamFlaggedAt: new Date() })
+      .where(and(eq(reporterStats.playerId, reporterPlayerId), isNull(reporterStats.spamFlaggedAt)))
+      .returning({ playerId: reporterStats.playerId });
+    if (flagged.length === 0) return [];
+    return insertSpamFlaggedAlerts(tx, reporterPlayerId, Number(recent?.recentRejected ?? 0));
   });
 
-  await db
-    .insert(reporterStats)
-    .values({
-      playerId: reporterPlayerId,
-      totalReports: Number(counts?.total ?? 0),
-      resolvedReports: Number(counts?.resolved ?? 0),
-      rejectedReports: Number(counts?.rejected ?? 0),
-      confirmedReports: Number(counts?.confirmed ?? 0),
-      accuracy: verdict.accuracy,
-      trusted: verdict.trusted,
-      spamFlaggedAt: verdict.spamFlaggedAt,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: reporterStats.playerId,
-      set: {
-        totalReports: Number(counts?.total ?? 0),
-        resolvedReports: Number(counts?.resolved ?? 0),
-        rejectedReports: Number(counts?.rejected ?? 0),
-        confirmedReports: Number(counts?.confirmed ?? 0),
-        accuracy: verdict.accuracy,
-        trusted: verdict.trusted,
-        spamFlaggedAt: verdict.spamFlaggedAt,
-        updatedAt: new Date(),
-      },
-    });
-
-  const spamJustFlagged = existing?.spamFlaggedAt == null && verdict.spamFlaggedAt != null;
-  if (spamJustFlagged) {
-    await raiseSpamFlaggedAlert(db, redis, reporterPlayerId, Number(recent?.recentRejected ?? 0));
+  for (const payload of announced) {
+    await redis.publish(
+      'live-bus',
+      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
+    );
   }
 }

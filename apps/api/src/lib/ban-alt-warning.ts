@@ -2,6 +2,7 @@ import { findConfirmedAltLinks } from '@squad/db';
 import { playerSessions, players } from '@squad/db/schema';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { computeAltCandidates } from './alt-candidates.js';
 
 export interface BanAltWarningItem {
   player_id: string;
@@ -21,37 +22,33 @@ export interface BanAltWarning {
   candidates: BanAltWarningItem[];
 }
 
-interface CandidateResponse {
-  candidates?: Array<{
-    player_id: string;
-    current_name: string | null;
-    confidence: string;
-    link: { status: string } | null;
-  }>;
-}
-
 interface BanStatusRow {
   player_id: string;
   has_active_ban: boolean;
 }
 
+/** How many top-scored ALT-1 candidates the warning considers. */
+const CANDIDATE_SCAN_LIMIT = 100;
+
 /**
- * Loads the data needed by ALT-7 without exposing IPs. Candidate details are
- * obtained from the existing ALT-1 route, so its scoring and settings remain
- * the single source of truth. Viewers without `player:view_ips` receive only
- * the confirmed-link count needed for the privacy-degraded warning.
+ * Loads the data needed by ALT-7 without exposing IPs. Candidates come from
+ * {@link computeAltCandidates}, the same scoring the ALT-1 route serves, so
+ * its settings remain the single source of truth; a failure there throws
+ * instead of silently reading as "no candidates". Viewers without
+ * `player:view_ips` receive only the confirmed-link count needed for the
+ * privacy-degraded warning.
+ *
+ * @returns The warning, or null when the player does not exist.
  */
 export async function loadBanAltWarning(
   app: FastifyInstance,
   input: {
     playerId: string;
     canViewIps: boolean;
-    cookie?: string;
-    authorization?: string;
   },
 ): Promise<BanAltWarning | null> {
   const [target] = await app.db
-    .select({ id: players.id })
+    .select({ id: players.id, steamId64: players.steamId64 })
     .from(players)
     .where(eq(players.id, input.playerId))
     .limit(1);
@@ -70,19 +67,8 @@ export async function loadBanAltWarning(
     };
   }
 
-  const headers: Record<string, string> = {};
-  if (input.cookie) headers.cookie = input.cookie;
-  if (input.authorization) headers.authorization = input.authorization;
-  const candidateResponse = await app.inject({
-    method: 'GET',
-    url: `/api/v1/players/${input.playerId}/alt-candidates?limit=100`,
-    headers,
-  });
-  const candidateBody =
-    candidateResponse.statusCode === 200
-      ? (JSON.parse(candidateResponse.body) as CandidateResponse)
-      : { candidates: [] };
-  const candidates = (candidateBody.candidates ?? []).filter(
+  const scored = (await computeAltCandidates(app.db, target)).slice(0, CANDIDATE_SCAN_LIMIT);
+  const candidates = scored.filter(
     (candidate) => candidate.confidence === 'high' && candidate.link?.status !== 'confirmed',
   );
   const candidateIds = candidates.map((candidate) => candidate.player_id);

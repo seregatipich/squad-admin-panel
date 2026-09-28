@@ -31,8 +31,6 @@ const playerBanAltWarningRoutes: FastifyPluginAsync = async (app) => {
       const warning = await loadBanAltWarning(app, {
         playerId: req.params.playerId,
         canViewIps: req.user?.permissions.permissions.has('player:view_ips') ?? false,
-        cookie: req.headers.cookie,
-        authorization: req.headers.authorization,
       });
       if (!warning) {
         reply.code(404);
