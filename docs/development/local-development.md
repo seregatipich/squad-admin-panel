@@ -100,7 +100,7 @@ issues in `@fastify/static` below 10.1.0. Drop this override once `apps/api`
 deliberately upgrades `@fastify/swagger-ui` to `^6.1.1` or later — those
 releases already declare `@fastify/static: ^10.1.0` on their own.
 
-`"dompurify": "3.4.13"` pins the transitive `dompurify` copy that
+`"dompurify": "^3.4.13"` raises the transitive `dompurify` copy that
 `monaco-editor` resolves internally, including the fix for
 `GHSA-55q2-fjhq-7xh7`. Nothing in this repo or in `monaco-editor`'s shipped output
 imports the npm `dompurify` package — `monaco-editor` vendors its own
@@ -113,11 +113,36 @@ still vendors DOMPurify 3.4.8, but its sanitization path passes a string/fragmen
 and never enables DOMPurify's vulnerable `IN_PLACE` option; the npm override must
 not be described as replacing that embedded browser copy.
 
-`"fast-uri": "3.1.5"` forces the patched parser through every Fastify/AJV
+`"fast-uri": "^3.1.6"` forces the patched parser through every Fastify/AJV
 subtree, including the production API, because no workspace manifest owns this
-transitive package directly. `"postcss": "^8.5.26"` also raises its internal
+transitive package directly; 3.1.6 closes GHSA-5jgf-p345-68v8,
+GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf and GHSA-jqff-g426-hqxp.
+
+Every override is a range (a `^` floor), never an exact version: an exact pin
+holds the whole workspace on that version and keeps `pnpm update` and
+Dependabot from taking the next security fix. [`scripts/test-dependency-pins.sh`](../../scripts/test-dependency-pins.sh)
+fails CI on an exact override. `"postcss": "^8.5.26"` also raises its internal
 `nanoid` edge to a patched 3.3.x release. Both pins can be removed once all of
 their direct parents independently require the same fixed floors.
+
+## Install scripts (`pnpm.onlyBuiltDependencies`)
+
+Only the packages listed in root `package.json`'s `pnpm.onlyBuiltDependencies`
+(`@biomejs/biome`, `@node-rs/argon2`, `esbuild`) may run install scripts; pnpm
+skips every other dependency's `preinstall`/`install`/`postinstall`. The list
+must stay in `package.json`: the pinned pnpm 9 ignores the same setting in
+`pnpm-workspace.yaml` (that location arrived in pnpm 10), and while it sat
+there every transitive install script ran in CI and in the image builds.
+Deliberately not allowed:
+
+- `ssh2` (used by `worker-log-ingest` for SSH log sources) — its install script
+  only compiles an optional native crypto binding; without it ssh2 uses its
+  JavaScript/Node `crypto` implementation. Its optional `cpu-features` addon is
+  not built either.
+- `lefthook` — its postinstall only runs `lefthook install`, which the root
+  `prepare` script already does.
+
+Add a package only when it cannot work without its script, and say why here.
 
 ## Bridge development
 

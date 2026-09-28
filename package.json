@@ -55,11 +55,13 @@
       "@fastify/swagger-ui>@fastify/static": "^10.1.2",
       "test-exclude": "^8.0.0",
       "brace-expansion": "^5.0.9",
-      "dompurify": "3.4.13",
-      "fast-uri": "3.1.5"
+      "dompurify": "^3.4.13",
+      "fast-uri": "^3.1.6"
     },
-    "neverBuiltDependencies": [
-      "cpu-features"
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "@node-rs/argon2",
+      "esbuild"
     ]
   }
 }
