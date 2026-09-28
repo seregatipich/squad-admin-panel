@@ -10,6 +10,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { panelGuard } from '../lib/panel-guard.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;
@@ -51,10 +52,6 @@ type CountQuery = z.infer<typeof countQuery>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function encodeCursor(sentAt: Date, id: bigint): string {

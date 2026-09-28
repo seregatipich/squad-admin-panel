@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
 import { panelGuard } from '../lib/panel-guard.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
@@ -55,10 +56,6 @@ type FilterInput = z.infer<typeof countQuery>;
 
 const STAT_KEYS = ['kills', 'deaths', 'teamkills', 'wounds', 'revives'] as const;
 type StatKey = (typeof STAT_KEYS)[number];
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
 
 function buildFilters(query: FilterInput): SQL[] {
   const clauses: SQL[] = [];

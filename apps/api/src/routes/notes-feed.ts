@@ -19,6 +19,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
 import { panelGuard } from '../lib/panel-guard.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 100;
@@ -114,10 +115,6 @@ function parseCursor(raw: string): { createdAt: Date; id: string } | null {
   if (!Number.isInteger(millis) || Math.abs(millis) > 8.64e15) return null;
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   return { createdAt: new Date(millis), id };
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 const CSV_COLUMNS = [

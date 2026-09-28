@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
@@ -40,10 +41,6 @@ type OrderDir = z.infer<typeof orderSchema>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 interface Cursor {

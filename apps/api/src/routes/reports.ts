@@ -16,6 +16,7 @@ import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
+import { escapeLike } from '../lib/sql-like.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -57,10 +58,6 @@ const patchBody = z
   .refine((body) => body.status !== undefined || body.resolution_note !== undefined, {
     message: 'empty_update',
   });
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
 
 function auditActor(req: FastifyRequest): AuditActor {
   return {

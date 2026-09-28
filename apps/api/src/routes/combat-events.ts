@@ -6,6 +6,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 100;
@@ -46,10 +47,6 @@ type ListQuery = z.infer<typeof listQuery>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function encodeCursor(occurredAt: Date, id: bigint): string {
