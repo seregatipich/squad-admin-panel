@@ -48,6 +48,31 @@ describe('GeoipIntegrationPage', () => {
   );
 
   it(
+    'warns that the stored key downloads nothing while the database is missing (#161)',
+    async () => {
+      stubFetch({ db_present: false, last_refreshed_at: null });
+      render(<GeoipIntegrationPage />);
+
+      expect(await screen.findByText('База GeoLite2-City не загружена')).toBeInTheDocument();
+      expect(screen.getByText(/панель пока не скачивает базу автоматически/i)).toBeInTheDocument();
+      expect(screen.queryByText(/панель скачает базу/i)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows no missing-database warning once the database is present',
+    async () => {
+      stubFetch();
+      render(<GeoipIntegrationPage />);
+
+      await screen.findByText('Загружена');
+      expect(screen.queryByText('База GeoLite2-City не загружена')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'reports a failed load with a retry action',
     async () => {
       const fn = vi.fn(() => Promise.resolve(new Response('{}', { status: 500 })));
