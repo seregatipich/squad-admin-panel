@@ -1,4 +1,4 @@
-import { ChatFlagDetector } from '@squad/chat-ingest';
+import { ChatFlagDetector, PlayerIdCache } from '@squad/chat-ingest';
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
@@ -79,6 +79,7 @@ async function main() {
     log,
     diag,
     chatFlagDetector: new ChatFlagDetector(db),
+    playerIds: new PlayerIdCache(),
     rosterIntervalMs: positiveIntEnv(process.env.RCON_ROSTER_INTERVAL_MS),
     infoIntervalMs: positiveIntEnv(process.env.RCON_INFO_INTERVAL_MS),
   });

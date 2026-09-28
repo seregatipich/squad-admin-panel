@@ -141,7 +141,7 @@ describe('large frame reassembly', () => {
       copiedBytes += out.byteLength;
       return out;
     });
-    const result = await client.call<{ blob: string }>('host_info');
+    const result = (await client.hostInfo()) as unknown as { blob: string };
     expect(result.blob).toHaveLength(blob.length);
     expect(copiedBytes).toBeLessThan(encoded.byteLength * 3);
     await client.close();

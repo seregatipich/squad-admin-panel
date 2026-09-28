@@ -19,7 +19,7 @@
  * `chatCommands` (see the RNSquadJS migration design), avoiding double replies.
  */
 
-import { resolvePlayerId } from '@squad/chat-ingest';
+import { type PlayerIdCache, resolvePlayerId } from '@squad/chat-ingest';
 import {
   type ChatCommandName,
   type ChatCommandResponseSource,
@@ -136,11 +136,14 @@ async function statsMessage(
  * line is not a recognized command or when chat commands are disabled for the
  * server (no invocation is recorded and no RCON reply is sent in that case);
  * otherwise records the invocation and returns its outcome.
+ *
+ * `playerIds` is the worker's sender cache shared with chat archiving, so a
+ * command line does not repeat the identity lookups `handleChat` just ran.
  */
 export async function handleChatCommand(
   db: DatabaseClient,
   redis: RconEnqueue | null,
-  { serverId, chat }: { serverId: string; chat: ParsedChat },
+  { serverId, chat, playerIds }: { serverId: string; chat: ParsedChat; playerIds?: PlayerIdCache },
 ): Promise<ChatCommandOutcome | null> {
   const match = COMMAND_PATTERN.exec(chat.message);
   if (!match?.groups?.name) return null;
@@ -158,7 +161,7 @@ export async function handleChatCommand(
   if (settings[0]?.enabled === false) return null;
   const rulesText = settings[0]?.rulesText ?? null;
 
-  const playerId = await resolvePlayerId(db, chat);
+  const playerId = await resolvePlayerId(db, chat, playerIds);
 
   let message: string;
   switch (command) {

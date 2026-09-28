@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildChatFrame, type ChatInput, handleChat, LIVE_BUS_CHANNEL } from '../src/index.js';
+import {
+  buildChatFrame,
+  type ChatFlagDetector,
+  type ChatInput,
+  handleChat,
+  LIVE_BUS_CHANNEL,
+  PlayerIdCache,
+  resolvePlayerId,
+} from '../src/index.js';
 
 const EOS = '0002aaaa000000000000000000000001';
 const STEAM = '76561199000000001';
@@ -71,7 +79,7 @@ describe('handleChat', () => {
     });
 
     expect(redis.publish).toHaveBeenCalledTimes(1);
-    const [channel, payload] = redis.publish.mock.calls[0];
+    const [channel, payload] = redis.publish.mock.calls[0] ?? [];
     expect(channel).toBe(LIVE_BUS_CHANNEL);
     expect(JSON.parse(payload as string)).toEqual(frame);
     expect((db as unknown as { insert: unknown }).insert).not.toHaveBeenCalled();
@@ -83,5 +91,87 @@ describe('handleChat', () => {
       chat: chat({ message: 'offline mode' }),
     });
     expect(frame.data.message).toBe('offline mode');
+  });
+});
+
+const PLAYER_ID = '01a07b4c-b2d8-742a-9135-236515f86f46';
+
+/**
+ * A db stub whose identity lookup resolves to {@link PLAYER_ID} and whose
+ * archive insert succeeds, exposing both spies.
+ */
+function knownSenderDb() {
+  const chain: Record<string, unknown> = {
+    limit: vi.fn(async () => [{ id: PLAYER_ID }]),
+  };
+  for (const method of ['from', 'where', 'orderBy']) {
+    chain[method] = vi.fn(() => chain);
+  }
+  const values = vi.fn(async () => undefined);
+  const select = vi.fn(() => chain);
+  return { db: { select, insert: vi.fn(() => ({ values })) } as never, select, values };
+}
+
+describe('handleChat flag detection failures', () => {
+  it('archives the line unflagged and reports the detector error instead of swallowing it', async () => {
+    const { db, values } = knownSenderDb();
+    const detector = {
+      detect: vi.fn().mockRejectedValue(new Error('rules query failed')),
+    } as unknown as ChatFlagDetector;
+    const onFlagError = vi.fn();
+
+    await handleChat(db, null, { serverId: SERVER_ID, chat: chat(), onFlagError }, detector);
+
+    expect(onFlagError).toHaveBeenCalledTimes(1);
+    expect((onFlagError.mock.calls[0]?.[0] as Error).message).toBe('rules query failed');
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: PLAYER_ID, isFlagged: false, matchedRuleId: null }),
+    );
+  });
+});
+
+describe('resolvePlayerId with a PlayerIdCache', () => {
+  it('answers a repeat sender from the cache without querying', async () => {
+    const { db, select } = knownSenderDb();
+    const cache = new PlayerIdCache();
+
+    expect(await resolvePlayerId(db, chat(), cache)).toBe(PLAYER_ID);
+    expect(await resolvePlayerId(db, chat(), cache)).toBe(PLAYER_ID);
+    expect(await resolvePlayerId(db, chat({ eosId: null }), cache)).toBe(PLAYER_ID);
+
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache misses or name-only matches', async () => {
+    const cache = new PlayerIdCache();
+    const unknown = unknownSenderDb();
+    expect(await resolvePlayerId(unknown, chat(), cache)).toBeNull();
+    expect(await resolvePlayerId(unknown, chat(), cache)).toBeNull();
+    // Each miss runs the ID lookup plus the two name lookups again.
+    expect(
+      (unknown as unknown as { select: ReturnType<typeof vi.fn> }).select,
+    ).toHaveBeenCalledTimes(6);
+
+    const { db, select } = knownSenderDb();
+    const nameOnly = chat({ eosId: null, steamId64: null });
+    await resolvePlayerId(db, nameOnly, cache);
+    await resolvePlayerId(db, nameOnly, cache);
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
+  it('expires entries after the TTL and evicts the oldest entry past the size cap', () => {
+    let now = 1_000;
+    const cache = new PlayerIdCache({ ttlMs: 100, maxEntries: 2, now: () => now });
+    cache.remember(chat({ eosId: 'eos-a', steamId64: null }), 'player-a');
+    expect(cache.lookup(chat({ eosId: 'eos-a', steamId64: null }))).toBe('player-a');
+    now += 101;
+    expect(cache.lookup(chat({ eosId: 'eos-a', steamId64: null }))).toBeUndefined();
+
+    cache.remember(chat({ eosId: 'eos-b', steamId64: null }), 'player-b');
+    cache.remember(chat({ eosId: 'eos-c', steamId64: null }), 'player-c');
+    cache.remember(chat({ eosId: 'eos-d', steamId64: null }), 'player-d');
+    expect(cache.lookup(chat({ eosId: 'eos-b', steamId64: null }))).toBeUndefined();
+    expect(cache.lookup(chat({ eosId: 'eos-c', steamId64: null }))).toBe('player-c');
+    expect(cache.lookup(chat({ eosId: 'eos-d', steamId64: null }))).toBe('player-d');
   });
 });
