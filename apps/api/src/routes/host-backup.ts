@@ -1,4 +1,19 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
+
+/**
+ * A restic snapshot id (short 8 or full 64 lowercase hex) or `latest` — the
+ * same set the bridge's `validate.ResticSnapshotID` accepts, checked here too
+ * so a malformed id is refused at the API boundary with 400.
+ */
+const restoreParams = z.object({
+  id: z.string().regex(/^(latest|[a-f0-9]{8}([a-f0-9]{56})?)$/),
+});
+
+// `confirm` stays optional in the schema so a missing token keeps answering
+// the explicit `confirm_required` error below.
+const restoreBody = z.object({ confirm: z.string().optional() }).optional();
 
 /**
  * Backup/restore surface for the restic mechanism delivered by INFRA-8 (#14).
@@ -9,7 +24,9 @@ import type { FastifyPluginAsync } from 'fastify';
  * gated by a typed confirmation token that must echo the snapshot id, on top of
  * the `host:manage` RBAC gate and the `backup.restore` audit entry.
  */
-const hostBackupRoutes: FastifyPluginAsync = async (app) => {
+const hostBackupRoutes: FastifyPluginAsync = async (base) => {
+  const app = base.withTypeProvider<ZodTypeProvider>();
+
   // Lists the restic snapshots in the panel backup repository. Read-only, but
   // gated by host:manage because the whole backup surface is operator-only.
   app.get(
@@ -64,9 +81,10 @@ const hostBackupRoutes: FastifyPluginAsync = async (app) => {
   // Redis datasets. The body must carry `confirm` equal to the snapshot id in
   // the URL — a typed confirmation the UI forces the operator to enter — so a
   // stray or replayed POST cannot wipe live data.
-  app.post<{ Params: { id: string }; Body: { confirm?: string } }>(
+  app.post(
     '/api/v1/host/backups/:id/restore',
     {
+      schema: { params: restoreParams, body: restoreBody },
       config: {
         permissions: ['host:manage'],
         audit: { action: 'backup.restore', resource: 'backup' },
