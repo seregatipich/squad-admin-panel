@@ -8,6 +8,7 @@ import {
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { acquireDepotLock, DEPOT_LOCK_KEY, releaseDepotLock } from '../lib/depot-lock.js';
 import {
   DEPOT_PROGRESS_STREAM,
   publishDepotProgressDone,
@@ -97,9 +98,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const startedAt = new Date().toISOString();
-      const acquired = await app.redis.set('depot:updating', startedAt, 'EX', 3600, 'NX');
-      if (!acquired) {
-        const since = await app.redis.get('depot:updating');
+      if (!(await acquireDepotLock(app.redis, startedAt))) {
+        const since = await app.redis.get(DEPOT_LOCK_KEY);
         return { status: 'already_in_progress', since: since ?? startedAt };
       }
 
@@ -195,7 +195,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // progress frame never made it to the stream.
           const steamCmdStreamWrites: Promise<void>[] = [];
           const steamCmdStreamWriteErrors: unknown[] = [];
-          await dedicated.depotUpdate((frame) => {
+          const { exit_code: exitCode } = await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
             steamCmdStreamWrites.push(
               publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
@@ -205,6 +205,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           });
           await Promise.all(steamCmdStreamWrites);
           if (steamCmdStreamWriteErrors.length > 0) throw steamCmdStreamWriteErrors[0];
+          // The bridge reports a failed SteamCMD run as a normal reply.
+          if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 
           // ── Phase 3: store build ID from manifest ──
           try {
@@ -243,7 +245,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
               app.log.error({ err: error }, 'failed to publish depot update completion event');
             },
           );
-          await app.redis.del('depot:updating').catch((error: unknown) => {
+          await releaseDepotLock(app.redis, startedAt).catch((error: unknown) => {
             app.log.error({ err: error }, 'failed to release depot update lock');
           });
           await dedicated.close().catch((error: unknown) => {
@@ -324,7 +326,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // all) between their POST and this WS connecting — synthesize a
           // terminal frame from the last known result instead of blocking
           // on a live event that will never arrive.
-          const updating = await redis.get('depot:updating');
+          const updating = await redis.get(DEPOT_LOCK_KEY);
           if (!updating) {
             const lastUpdateRaw = await redis.get('depot:last_update');
             if (lastUpdateRaw) {

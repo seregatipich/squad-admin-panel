@@ -325,6 +325,53 @@ describe('POST /api/v1/servers/:id/update', () => {
         xaddSpy.mockRestore();
       }
     });
+
+    // Regression (#43 finding 321): the bridge answers a failed steamcmd run
+    // with a normal `{ exit_code: N }`, which was recorded as a successful update.
+    it('records a non-zero steamcmd exit code as a failed update', async () => {
+      const id = await seedServer(h, 'stopped');
+      h.bridge.depotUpdate = async () => ({ exit_code: 8 });
+
+      const cookie = await loginAsOwner(h);
+      await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/servers/${id}/update`,
+        headers: { cookie },
+      });
+
+      const entries = await waitForStreamEntries(h, 1);
+      const done = entries.map(([, kv]) => entryFields(kv)).find((f) => f.stream === 'event');
+      expect(JSON.parse(done?.text ?? '{}')).toMatchObject({ done: true, final: 'error' });
+      const lastUpdate = JSON.parse((await h.redis.get('depot:last_update')) ?? '{}');
+      expect(lastUpdate.status).toBe('failed');
+      expect(lastUpdate.error).toContain('exit code 8');
+    });
+
+    // Regression (#43 finding 322): the lock TTL equalled the RPC timeout and
+    // the job deleted the key unconditionally, so a stale job could release a
+    // lock another update had taken since.
+    it('holds the lock longer than the RPC timeout and never releases a lock it does not own', async () => {
+      const id = await seedServer(h, 'stopped');
+      let ttlDuringRun = 0;
+      h.bridge.depotUpdate = async () => {
+        ttlDuringRun = await h.redis.ttl('depot:updating');
+        // Another update took the lock after this one's expired.
+        await h.redis.set('depot:updating', 'other-holder');
+        return { exit_code: 0 };
+      };
+
+      const cookie = await loginAsOwner(h);
+      await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/servers/${id}/update`,
+        headers: { cookie },
+      });
+
+      await waitForStreamEntries(h, 1);
+      await vi.waitFor(() => expect(openUpdateJobs).toBe(0));
+      expect(ttlDuringRun).toBeGreaterThan(3600);
+      expect(await h.redis.get('depot:updating')).toBe('other-holder');
+    });
   });
 });
 

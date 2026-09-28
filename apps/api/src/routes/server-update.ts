@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { acquireDepotLock, releaseDepotLock } from '../lib/depot-lock.js';
 import { publishDepotProgressDone, publishDepotProgressLine } from '../lib/depot-progress.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
@@ -44,8 +45,7 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const startedAt = new Date().toISOString();
-      const acquired = await app.redis.set('depot:updating', startedAt, 'EX', 3600, 'NX');
-      if (!acquired) {
+      if (!(await acquireDepotLock(app.redis, startedAt))) {
         reply.code(409);
         return { error: 'depot_update_in_progress' };
       }
@@ -68,7 +68,7 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
           ),
         );
       if (liveServers.length > 0) {
-        await app.redis.del('depot:updating');
+        await releaseDepotLock(app.redis, startedAt);
         reply.code(409);
         return { error: 'servers_running', server_ids: liveServers.map((s) => s.id) };
       }
@@ -84,7 +84,7 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
           // progress frame never made it to the stream.
           const streamWrites: Promise<void>[] = [];
           const streamWriteErrors: unknown[] = [];
-          await dedicated.depotUpdate((frame) => {
+          const { exit_code: exitCode } = await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
             streamWrites.push(
               publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
@@ -94,6 +94,8 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
           });
           await Promise.all(streamWrites);
           if (streamWriteErrors.length > 0) throw streamWriteErrors[0];
+          // The bridge reports a failed SteamCMD run as a normal reply.
+          if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 
           await app.redis.set(
             'depot:last_update',
@@ -126,7 +128,7 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
               );
             },
           );
-          await app.redis.del('depot:updating').catch((error: unknown) => {
+          await releaseDepotLock(app.redis, startedAt).catch((error: unknown) => {
             app.log.error({ err: error, server_id: row.id }, 'failed to release depot update lock');
           });
           await dedicated.close().catch((error: unknown) => {
