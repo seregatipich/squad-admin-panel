@@ -118,15 +118,23 @@ function installFetch() {
 }
 
 let createObjectURLMock: ReturnType<typeof vi.fn>;
+let revokeObjectURLMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   analyticsResponse = { status: 200, body: ANALYTICS };
   votesResponse = { status: 200, body: VOTES };
   installFetch();
   createObjectURLMock = vi.fn(() => 'blob:mock');
+  revokeObjectURLMock = vi.fn();
   (URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURLMock;
-  (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn();
-  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeObjectURLMock;
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    // The anchor must be attached to the document at click time (some
+    // browsers won't fire a download from a detached element).
+    expect(document.body.contains(this)).toBe(true);
+  });
 });
 
 afterEach(() => {
@@ -186,8 +194,19 @@ describe('AnalyticsPanel — branch coverage', () => {
   it('exports JSON when data is present', async () => {
     await mount(<AnalyticsPanel servers={SERVERS} />);
     await screen.findByText('Матчей');
-    fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+    });
     expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    // Regression for #543: revoking in the same tick as click() risks an
+    // empty download in some browsers, so it must not happen synchronously.
+    expect(revokeObjectURLMock).not.toHaveBeenCalled();
+    // The revoke is deferred to a timer — flush it before the test's
+    // afterEach tears down the URL mocks.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:mock');
   });
 });
 
@@ -244,7 +263,15 @@ describe('VoteAnalyticsPanel — branch coverage', () => {
   it('exports JSON when data is present', async () => {
     await mount(<VoteAnalyticsPanel servers={SERVERS} />);
     await screen.findByText('Всего голосований');
-    fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+    });
     expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    // Regression for #556: same rationale as AnalyticsPanel's equivalent test.
+    expect(revokeObjectURLMock).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:mock');
   });
 });

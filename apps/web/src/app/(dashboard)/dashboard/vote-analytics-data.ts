@@ -70,7 +70,10 @@ export function hourScale(byHour: Array<{ count: number }>): number {
 export function formatTrendDay(day: string): string {
   const parsed = new Date(`${day}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return day;
-  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  // `day` is already a UTC calendar date (`to_char(... AT TIME ZONE 'UTC')`
+  // on the API side); without `timeZone: 'UTC'` here the browser's local
+  // zone shifts it — a negative UTC offset renders the day before.
+  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
 }
 
 export function buildVotesQuery(params: {

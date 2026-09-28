@@ -99,7 +99,6 @@ export const ROLE_LABELS: Record<string, string> = {
 };
 
 const PAGE_LIMIT = 25;
-const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_MIN_CHARS = 3;
 const PRIORITY_LOCK_MS = 3000;
 
@@ -115,6 +114,18 @@ const DOWNLOAD_LINK_CLASS =
   'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 export type SortField = 'name' | 'role' | 'priority' | 'joined_at' | 'last_seen' | 'online';
+
+/**
+ * Confirmation text for the "transfer leadership" dialog. The server always
+ * demotes the clan's *current* leader to deputy, never the viewer — an admin
+ * with `can_manage_clans` who is not themself the leader must not be told
+ * that they personally will be demoted.
+ */
+export function transferLeadershipMessage(isViewerLeader: boolean, targetName: string): string {
+  return isViewerLeader
+    ? `${targetName} станет главой клана, а вы — заместителем.`
+    : `${targetName} станет главой клана. Текущий глава станет заместителем.`;
+}
 
 export function memberRoleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role;
@@ -147,11 +158,14 @@ export interface Capabilities {
   canRemoveMembers: boolean;
   canManageFull: boolean;
   canTogglePriority: boolean;
+  /** True when the viewer is themself the clan's current leader (a roster row), not merely an admin with `can_manage_clans`. */
+  isLeader: boolean;
 }
 
 export function deriveCapabilities(me: MeResponse | null, members: RosterMember[]): Capabilities {
   const myRole = me ? members.find((m) => m.player_id === me.player_id)?.member_role : undefined;
-  const canManageFull = Boolean(me?.can_manage_clans) || myRole === 'leader';
+  const isLeader = myRole === 'leader';
+  const canManageFull = Boolean(me?.can_manage_clans) || isLeader;
   const isDeputy = myRole === 'deputy';
   return {
     canManageFull,
@@ -160,6 +174,7 @@ export function deriveCapabilities(me: MeResponse | null, members: RosterMember[
     // Mirrors the API gate on PUT .../priority (clanManageLevel !== null):
     // full managers and deputies may toggle, rank-and-file members may not.
     canTogglePriority: canManageFull || isDeputy,
+    isLeader,
   };
 }
 
@@ -568,7 +583,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         title="Передать лидерство?"
         body={
           pendingTransfer
-            ? `${pendingTransfer.canonical_name} станет главой клана, а вы — заместителем.`
+            ? transferLeadershipMessage(caps.isLeader, pendingTransfer.canonical_name)
             : ''
         }
         confirmLabel="Передать"
@@ -701,35 +716,39 @@ function AddMemberModal({
   const [searching, setSearching] = useState(false);
   const [role, setRole] = useState('member');
   const addRoleId = useId();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // SearchField already debounces onCommit (see its own `delay` prop); a
+  // second timer here only doubled the wait before a request and added a
+  // second place for a stale response to race a newer one. The effect runs
+  // straight off the committed `term`, with a `cancelled` guard so an older
+  // request never overwrites a newer one's results.
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
     const trimmed = term.trim();
     if (trimmed.length < SEARCH_MIN_CHARS) {
       setResults([]);
       setSearching(false);
       return;
     }
+    let cancelled = false;
     setSearching(true);
-    debounceRef.current = setTimeout(async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/v1/players/search?q=${encodeURIComponent(trimmed)}`, {
           credentials: 'include',
           cache: 'no-store',
         });
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const body = (await res.json()) as { items: SearchCandidate[] };
           setResults(body.items);
         }
       } catch {
         /* ignore */
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
-    }, SEARCH_DEBOUNCE_MS);
+    })();
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
+      cancelled = true;
     };
   }, [term]);
 

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -79,5 +80,48 @@ describe('ClansPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Создать клан' })).toBeInTheDocument();
     });
+  });
+
+  it('does not claim no clans exist when the load fails (#525)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/clans')) {
+          return Promise.resolve(new Response('fail', { status: 500 }));
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        if (url.startsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ can_manage_clans: false }), { status: 200 }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    render(<ClansPage />);
+    expect(await screen.findByText('Не удалось загрузить кланы')).toBeInTheDocument();
+    expect(screen.queryByText('Кланы ещё не созданы')).not.toBeInTheDocument();
+  });
+
+  it('resets the create-clan form on close instead of keeping stale input (#526)', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', mockFetch(true));
+    render(<ClansPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Создать клан' })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Создать клан' }));
+    const nameInput = await screen.findByLabelText('Название');
+    await user.type(nameInput, 'Черновик');
+    expect(nameInput).toHaveValue('Черновик');
+
+    await user.click(screen.getByRole('button', { name: 'Отмена' }));
+    await user.click(screen.getByRole('button', { name: 'Создать клан' }));
+    const reopenedInput = await screen.findByLabelText('Название');
+    expect(reopenedInput).toHaveValue('');
   });
 });

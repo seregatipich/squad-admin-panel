@@ -58,6 +58,12 @@ const PRIORITY_TONE: Record<PriorityTone, BadgeTone> = {
   warning: 'warn',
 };
 
+// Путь клана в URL решает роутер, но `clanId` подставляется прямо в путь
+// fetch-запросов всех панелей ниже (`/api/v1/clans/${clanId}/...`). Без этой
+// проверки значение вроде `..%2F..%2Fadmin` из адресной строки ушло бы в
+// произвольный same-origin путь API вместе с сессионными cookie.
+const CLAN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface OnlineMember {
   player_id: string;
   name: string;
@@ -182,6 +188,7 @@ function formatSessionDuration(startedAt: string, nowMs: number): string {
 
 export default function ClanDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: clanId } = use(params);
+  const clanIdValid = CLAN_ID_RE.test(clanId);
   const [clan, setClan] = useState<ClanDetail | null>(null);
   const [online, setOnline] = useState<OnlineResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -197,6 +204,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [canManageClans, setCanManageClans] = useState(false);
 
   const loadClan = useCallback(async () => {
+    if (!clanIdValid) {
+      setErr('Клан не найден.');
+      return;
+    }
     try {
       const res = await fetch(`/api/v1/clans/${clanId}`, {
         credentials: 'include',
@@ -212,9 +223,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [clanId]);
+  }, [clanId, clanIdValid]);
 
   const loadOnline = useCallback(async () => {
+    if (!clanIdValid) return;
     try {
       const res = await fetch(`/api/v1/clans/${clanId}/online`, {
         credentials: 'include',
@@ -225,10 +237,11 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     } catch {
       /* keep the previous snapshot on transient failures */
     }
-  }, [clanId]);
+  }, [clanId, clanIdValid]);
 
   const loadMatches = useCallback(
     async (cursor: string | null, serverId: string, replace: boolean) => {
+      if (!clanIdValid) return;
       setMatchesLoading(true);
       try {
         const query = new URLSearchParams({ limit: String(MATCHES_PAGE_LIMIT) });
@@ -261,7 +274,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         setMatchesLoading(false);
       }
     },
-    [clanId],
+    [clanId, clanIdValid],
   );
 
   useEffect(() => {
@@ -295,18 +308,33 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     void loadMatches(null, matchServerFilter, true);
   }, [loadMatches, matchServerFilter]);
 
+  const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+
   useEffect(() => {
     void loadOnline();
-    const poll = setInterval(() => void loadOnline(), ONLINE_POLL_MS);
+    // Скрытая вкладка не бьёт в API каждые ONLINE_POLL_MS — только читает
+    // актуальное состояние, когда вернётся на передний план (см. эффект ниже).
+    const poll = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadOnline();
+    }, ONLINE_POLL_MS);
     return () => clearInterval(poll);
   }, [loadOnline]);
 
   useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void loadOnline();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [loadOnline]);
+
+  useEffect(() => {
+    // Секундный тик нужен только строке «В сессии» — без единого участника
+    // онлайн таймер лишь перерисовывает всё дерево страницы впустую.
+    if (onlineCount === 0) return;
     const tick = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(tick);
-  }, []);
-
-  const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+  }, [onlineCount]);
   // Стабильная ссылка между секундными тиками `nowMs`: новая — только после
   // перезагрузки клана.
   const settingsInitial = useMemo<ClanSettingsInitial | null>(
@@ -328,6 +356,17 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     () => (clan ? priorityBadge(clan.priority_expires_at) : null),
     [clan],
   );
+
+  if (!clanIdValid) {
+    return (
+      <PageContainer width="wide">
+        <PageHeader title="Клан" backHref="/clans" backLabel="Все кланы" />
+        <Card padding="none">
+          <EmptyState title="Клан не найден" description="Некорректный идентификатор клана." />
+        </Card>
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer width="wide">
@@ -440,7 +479,13 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
 
       <ClanStatsPanel clanId={clanId} />
 
-      {clan ? <TagProtectionCard clanId={clanId} initialProtected={clan.is_tag_protected} /> : null}
+      {clan ? (
+        <TagProtectionCard
+          clanId={clanId}
+          initialProtected={clan.is_tag_protected}
+          canToggle={canManageClans}
+        />
+      ) : null}
 
       {settingsInitial && canManageClans ? (
         <ClanSettingsPanel

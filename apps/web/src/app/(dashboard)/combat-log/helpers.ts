@@ -66,14 +66,16 @@ export function showsDamageColumn(facet: CombatFacet): boolean {
 
 export interface EventTypeMeta {
   labelRu: string;
-  badgeClass: string;
 }
 
+// Badge color (tone) lives in CombatLog.tsx's own EVENT_TONE table, next to
+// the design-system <Badge> it feeds — this table only owns the Russian
+// label, so there is exactly one place that maps an event type to a tone.
 const EVENT_TYPE_META: Record<CombatEventType, EventTypeMeta> = {
-  death: { labelRu: 'Смерть', badgeClass: 'bg-red-900 text-red-200' },
-  damage: { labelRu: 'Урон', badgeClass: 'bg-amber-900 text-amber-200' },
-  wound: { labelRu: 'Ранение', badgeClass: 'bg-orange-900 text-orange-200' },
-  revive: { labelRu: 'Реанимация', badgeClass: 'bg-emerald-900 text-emerald-200' },
+  death: { labelRu: 'Смерть' },
+  damage: { labelRu: 'Урон' },
+  wound: { labelRu: 'Ранение' },
+  revive: { labelRu: 'Реанимация' },
 };
 
 function isEventType(value: string): value is CombatEventType {
@@ -82,7 +84,7 @@ function isEventType(value: string): value is CombatEventType {
 
 export function eventTypeMeta(eventType: string): EventTypeMeta {
   if (isEventType(eventType)) return EVENT_TYPE_META[eventType];
-  return { labelRu: eventType, badgeClass: 'bg-neutral-800 text-neutral-300' };
+  return { labelRu: eventType };
 }
 
 export interface CombatFilters {
@@ -424,7 +426,7 @@ const LIVE_KIND_TO_EVENT_TYPE: Record<CombatLiveEventKind, CombatEventType> = {
  * same frame delivered twice (e.g. a duplicate publish) dedupes to one row.
  */
 function liveRowId(data: CombatLiveEventData): number {
-  const key = `${data.server_id}|${data.kind}|${data.occurred_at}|${data.attacker_player_id ?? ''}|${data.victim_player_id ?? ''}|${data.weapon ?? ''}`;
+  const key = `${data.server_id}|${data.kind}|${data.occurred_at}|${data.attacker_player_id ?? ''}|${data.victim_player_id ?? ''}|${data.weapon ?? ''}|${data.damage ?? ''}`;
   let hash = 5381;
   for (let i = 0; i < key.length; i++) {
     hash = (hash * 33 + key.charCodeAt(i)) | 0;

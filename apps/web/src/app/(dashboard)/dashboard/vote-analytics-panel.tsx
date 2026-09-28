@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -52,31 +52,43 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const serverSelectId = useId();
   const windowSelectId = useId();
 
-  // See AnalyticsPanel: reading the clock during render desyncs SSR vs. the first client
-  // render (a hydration mismatch on the CSV href). Defer voteWindowRange() to after mount.
+  // See AnalyticsPanel: `voteWindowRange()` is recomputed on every `load()`
+  // call rather than cached per `windowDays`, so a server switch or a
+  // "Повторить" click never replays a stale `to`; `range` (for the CSV
+  // href) is only committed after a successful load.
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
-  useEffect(() => {
-    setRange(voteWindowRange(windowDays));
-  }, [windowDays]);
+  // Guards against two in-flight requests racing (fast server/period
+  // switches): only the response matching the most recently issued request
+  // is applied, and `loading` only clears once that request settles.
+  const loadTokenRef = useRef(0);
 
   const load = useCallback(async () => {
-    if (!range) return;
+    const freshRange = voteWindowRange(windowDays);
+    const requestId = ++loadTokenRef.current;
     setLoading(true);
     setError(null);
     try {
-      const query = buildVotesQuery({ serverId: serverId || null, from: range.from, to: range.to });
+      const query = buildVotesQuery({
+        serverId: serverId || null,
+        from: freshRange.from,
+        to: freshRange.to,
+      });
       const res = await fetch(`/api/v1/analytics/votes${query}`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      setData((await res.json()) as VoteAnalytics);
+      const body = (await res.json()) as VoteAnalytics;
+      if (loadTokenRef.current !== requestId) return;
+      setData(body);
+      setRange(freshRange);
     } catch (e) {
-      setError((e as Error).message);
+      if (loadTokenRef.current !== requestId) return;
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (loadTokenRef.current === requestId) setLoading(false);
     }
-  }, [serverId, range]);
+  }, [serverId, windowDays]);
 
   useEffect(() => {
     void load();
@@ -96,13 +108,15 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = 'vote-analytics.json';
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }, [data]);
 
   const trendMax = data ? trendScale(data.trend) : 1;
   const hourMax = data ? hourScale(data.by_hour) : 1;
-  const pending = !data && (loading || range === null);
+  const pending = !data;
 
   return (
     <Card as="section" padding="none">
@@ -180,11 +194,6 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
           <Skeleton variant="card" label="Загружаем аналитику голосований" />
           <Skeleton variant="block" count={2} />
         </CardBody>
-      ) : !data ? (
-        <EmptyState
-          title="Данных за период нет"
-          description="Выберите другой сервер или более длинный период."
-        />
       ) : data.summary.total_votes === 0 ? (
         <EmptyState
           title="За выбранный период голосований нет."

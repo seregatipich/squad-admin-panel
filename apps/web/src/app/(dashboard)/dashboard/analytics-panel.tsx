@@ -6,7 +6,6 @@ import {
   CardBody,
   CardGrid,
   CardHeader,
-  EmptyState,
   InlineBanner,
   Select,
   Skeleton,
@@ -68,37 +67,41 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const serverSelectId = useId();
   const windowSelectId = useId();
 
-  // `windowRange()` reads the current clock. Computing it during render makes the
-  // server-rendered HTML and the first client render disagree (the CSV href carries a
-  // `to=<now>` timestamp), which React reports as a hydration mismatch. Defer the clock
-  // read to after mount so the initial markup is deterministic.
+  // `windowRange()` reads the current clock, so it is recomputed on every
+  // `load()` call -- on mount, on a server/period change, and on "Повторить"
+  // -- rather than once per `windowDays` change. Otherwise a dashboard left
+  // open for a while, a server switch, or a retry would all replay the
+  // stale `to` captured when the period was last picked, and the CSV link
+  // would carry that same stale timestamp. `range` is only committed to
+  // state (for the CSV href) after a successful load, from inside `load`
+  // itself -- deferred past the first client render so the server-rendered
+  // HTML and the initial client render agree.
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
-  useEffect(() => {
-    setRange(windowRange(windowDays));
-  }, [windowDays]);
 
   const load = useCallback(async () => {
-    if (!range) return;
+    const freshRange = windowRange(windowDays);
     setLoading(true);
     setError(null);
     try {
       const query = buildAnalyticsQuery({
         serverId: serverId || null,
-        from: range.from,
-        to: range.to,
+        from: freshRange.from,
+        to: freshRange.to,
       });
       const res = await fetch(`/api/v1/analytics/dashboard${query}`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      setData((await res.json()) as DashboardAnalytics);
+      const body = (await res.json()) as DashboardAnalytics;
+      setData(body);
+      setRange(freshRange);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [serverId, range]);
+  }, [serverId, windowDays]);
 
   useEffect(() => {
     void load();
@@ -118,8 +121,12 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = 'analytics-dashboard.json';
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    // The download can start asynchronously in some browsers; revoking in
+    // the same tick as click() risks an empty or cancelled download there.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }, [data]);
 
   const scale = data ? peakScale(data.peak_by_hour) : 1;
@@ -128,7 +135,12 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const maxLayer = data ? Math.max(1, ...data.popular_layers.map((l) => l.matches)) : 1;
   // Первый ответ ещё не пришёл: диапазон считается после монтирования, поэтому
   // до него запрос даже не уходил (§8 — «что грузится»).
-  const pending = !data && (loading || range === null);
+  // A successful response always yields `data` (even an all-zero summary);
+  // the only paths where `!data` holds are "still loading" and "load
+  // failed", and the error branch above is checked first — so the
+  // EmptyState this used to gate on was unreachable except as a same-frame
+  // flicker before `loading` flipped true.
+  const pending = !data;
 
   return (
     <Card as="section" padding="none">
@@ -206,11 +218,6 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
           <Skeleton variant="card" label="Загружаем аналитику" />
           <Skeleton variant="block" count={2} />
         </CardBody>
-      ) : !data ? (
-        <EmptyState
-          title="Данных за период нет"
-          description="Выберите другой сервер или более длинный период."
-        />
       ) : (
         <CardBody className="space-y-6">
           <CardGrid cols={4}>
