@@ -45,9 +45,30 @@ if confirm "Remove squad-depot Docker volume (12+ GB of Squad game files)?"; the
   log "removed squad-depot volume"
 fi
 
-if confirm "Remove data tree ${DATA_DIR}? (WIPES DB, Redis, configs, saved logs)"; then
-  rm -rf "${DATA_DIR}"
-  log "removed ${DATA_DIR}"
+log "The data tree ${DATA_DIR} holds the database, Redis, media, Caddy state and saved logs,"
+log "and also the restic backup repository (backup-repo/) and its dump staging (backup-dump/)."
+if confirm "Remove data tree ${DATA_DIR}? (stops the stack; WIPES DB, Redis, configs, saved logs; backups in backup-repo/ and backup-dump/ are kept unless confirmed next)"; then
+  # The compose volumes are binds into the data tree: stop the stack and drop
+  # them first so nothing writes into, or keeps a mount of, a deleted path.
+  (
+    cd "${REPO_DIR}"
+    export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
+    docker compose --profile backup down -v --remove-orphans
+  ) || die "could not stop the compose stack; refusing to delete data from under running containers"
+  if confirm "ALSO delete the restic backup repository and dump staging (the local backups — cannot be undone)?"; then
+    rm -rf "${DATA_DIR}"
+    log "removed ${DATA_DIR}, backups included"
+  else
+    shopt -s dotglob nullglob
+    for entry in "${DATA_DIR}"/*; do
+      case "${entry##*/}" in
+        backup-repo | backup-dump) continue ;;
+      esac
+      rm -rf "${entry}"
+    done
+    shopt -u dotglob nullglob
+    log "removed ${DATA_DIR} except backup-repo/ and backup-dump/"
+  fi
 fi
 
 if confirm "Remove the 'panel' group?"; then
