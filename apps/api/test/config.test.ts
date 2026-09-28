@@ -169,4 +169,45 @@ describe('loadConfig', () => {
 
     expect(loadConfig().PANEL_PUBLIC_URL).toBe('http://localhost:3000');
   });
+
+  describe('host maintenance intervals (#85)', () => {
+    it('defaults the orphan sweep to 5 min and the docker prune to 24 h', async () => {
+      Object.assign(process.env, VALID_ENV);
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(5 * 60_000);
+      expect(cfg.HOST_DOCKER_PRUNE_INTERVAL_MS).toBe(24 * 60 * 60_000);
+    });
+
+    it('treats a blank value as unset', async () => {
+      Object.assign(process.env, VALID_ENV, {
+        HOST_ORPHAN_SWEEP_INTERVAL_MS: '',
+        HOST_DOCKER_PRUNE_INTERVAL_MS: ' ',
+      });
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(5 * 60_000);
+      expect(cfg.HOST_DOCKER_PRUNE_INTERVAL_MS).toBe(24 * 60 * 60_000);
+    });
+
+    it('accepts an explicit interval of at least one minute', async () => {
+      Object.assign(process.env, VALID_ENV, { HOST_ORPHAN_SWEEP_INTERVAL_MS: '120000' });
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(120_000);
+    });
+
+    it.each([
+      ['HOST_ORPHAN_SWEEP_INTERVAL_MS', '5m'],
+      ['HOST_ORPHAN_SWEEP_INTERVAL_MS', '0'],
+      ['HOST_DOCKER_PRUNE_INTERVAL_MS', '1000'],
+      ['HOST_DOCKER_PRUNE_INTERVAL_MS', 'NaN'],
+    ])('rejects %s=%s instead of spinning the timer every millisecond', async (key, value) => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      Object.assign(process.env, VALID_ENV, { [key]: value });
+      const loadConfig = await freshLoadConfig();
+      expect(() => loadConfig()).toThrow('process.exit called');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
 });
