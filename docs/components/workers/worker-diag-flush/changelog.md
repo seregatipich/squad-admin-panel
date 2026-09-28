@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-28
+
+### Fixed
+
+- #872: one bad row no longer strands its whole batch in the pending list. `parseEntry` rejects entries Postgres would refuse (non-UUID ids, an unparseable `ts`, an unknown severity, a non-JSON payload); when the batch INSERT is rejected for a row's data, rows are retried one by one and the rejected ones are logged and dropped; a pending-entry sweep (`XAUTOCLAIM`, at startup and every 30 s, 60 s min-idle) flushes batches whose flush failed and entries of dead consumers.
+
 ## 2026-04-29
 
 ### Fixed

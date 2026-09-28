@@ -44,17 +44,12 @@ psql -d admin -c "SELECT count(*) FROM diagnostic_events WHERE ts > now() - inte
 
 **Fix — Postgres rejection path**:
 
-- If logs show `severity` CHECK violation → producer is sending an unknown severity. Patch the producer; the batch will retry on next iteration once it stops poisoning.
+- A row Postgres rejects for its own data (bad severity, missing partition, deleted server) is dropped and logged as `diag entry rejected by Postgres`; it never holds back the rest of its batch. Patch the producer if these recur.
 - If logs show `relation "diagnostic_events" does not exist` → migrator did not run; `docker compose run --rm migrator` to rerun and recreate the container.
 
 **Fix — dead-consumer path**:
 
-- Restart the worker (`docker compose restart worker-diag-flush`).
-- If pending stays high, manually reclaim with `XAUTOCLAIM` to the new consumer name:
-  ```sh
-  redis-cli xautoclaim diag:queue diag-flush diag-flush-${NEW_PID} 60000 0
-  ```
-  where `NEW_PID` is the pid of the new container's process (visible via `docker compose top worker-diag-flush`). 60000 ms is the min-idle threshold.
+- Nothing to do by hand: the worker's reclaim sweep (`XAUTOCLAIM`, at startup and every 30 s) takes over entries idle for more than 60 s from any consumer. If `pending` stays high, the logs show why their flush keeps failing.
 
 ## Same row appears twice in Postgres
 
