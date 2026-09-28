@@ -107,4 +107,18 @@ describe('CommandPalette', () => {
     expect(await screen.findByText('Ничего не найдено.')).toBeInTheDocument();
     expect(screen.queryAllByRole('option')).toHaveLength(0);
   });
+
+  // #773: every row's hover handler used to share one mutable index, so any
+  // hover highlighted the last row and Enter opened the wrong destination.
+  it('highlights the hovered row, not the last one', async () => {
+    renderPalette();
+    await open();
+
+    const options = screen.getAllByRole('option');
+    expect(options.length).toBeGreaterThan(2);
+    fireEvent.mouseEnter(options[1]);
+
+    expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('option').at(-1)).toHaveAttribute('aria-selected', 'false');
+  });
 });
