@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { messageTemplates, players, roles } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
@@ -29,9 +30,9 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  // The listing cases assert the lazily seeded defaults are all there is, and
-  // demoteToViewer() drops the owner to Viewer: start each case with an empty
-  // template table and the seeded owner back on Owner.
+  // The listing cases assert exactly what they inserted, and demoteToViewer()
+  // drops the owner to Viewer: start each case with an empty template table
+  // and the seeded owner back on Owner.
   await h.db.delete(messageTemplates);
   await h.db
     .update(players)
@@ -77,39 +78,64 @@ describe('GET /api/v1/message-templates', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('seeds ~15 default phrases (created_by NULL) on first read', async () => {
+  it('lists the stored templates ordered by sort_order', async () => {
+    await h.db.insert(messageTemplates).values([
+      {
+        id: randomUUID(),
+        title: 'Second',
+        body: 'b',
+        category: 'info',
+        locale: 'en',
+        sortOrder: 20,
+      },
+      {
+        id: randomUUID(),
+        title: 'First',
+        body: 'a',
+        category: 'warn',
+        locale: 'ru',
+        sortOrder: 10,
+      },
+    ]);
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/message-templates',
       headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
-    const rows = res.json() as Array<Record<string, unknown>>;
-    expect(rows.length).toBeGreaterThanOrEqual(15);
-    for (const row of rows) {
-      expect(row.created_by).toBeNull();
-    }
-    const withPlayerToken = rows.filter((r) => String(r.body).includes('{player}'));
-    expect(withPlayerToken.length).toBeGreaterThan(0);
-    const enTemplates = rows.filter((r) => r.locale === 'en');
-    const ruTemplates = rows.filter((r) => r.locale === 'ru');
-    expect(enTemplates.length).toBeGreaterThan(0);
-    expect(ruTemplates.length).toBeGreaterThan(0);
+    const rows = res.json() as Array<{ title: string }>;
+    expect(rows.map((r) => r.title)).toEqual(['First', 'Second']);
   });
 
-  it('is idempotent: a second read does not duplicate the defaults', async () => {
-    await h.app.inject({ method: 'GET', url: '/api/v1/message-templates', headers: { cookie } });
-    const second = await h.app.inject({
+  // Regression (#40, #197): every GET re-inserted the built-in defaults with
+  // ON CONFLICT DO NOTHING, so a deleted default came back on the next read.
+  it('does not resurrect a deleted default template on the next read', async () => {
+    const defaultId = '0195b000-0000-7000-8000-000000000001';
+    await h.db.insert(messageTemplates).values({
+      id: defaultId,
+      title: 'Default',
+      body: '{player}, default',
+      category: 'warn',
+      locale: 'en',
+      sortOrder: 10,
+      createdBy: null,
+    });
+    const del = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/message-templates/${defaultId}`,
+      headers: { cookie },
+    });
+    expect(del.statusCode).toBe(200);
+
+    const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/message-templates',
       headers: { cookie },
     });
-    const rows = second.json() as unknown[];
-    const seeded = await h.db
-      .select()
-      .from(messageTemplates)
-      .where(isNull(messageTemplates.createdBy));
-    expect(rows.length).toBe(seeded.length);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+    const stored = await h.db.select().from(messageTemplates);
+    expect(stored).toEqual([]);
   });
 });
 

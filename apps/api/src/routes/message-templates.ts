@@ -5,7 +5,6 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import {
-  ensureDefaultMessageTemplates,
   MESSAGE_BODY_MAX,
   MESSAGE_TEMPLATE_CATEGORIES,
   MESSAGE_TEMPLATE_LOCALES,
@@ -75,7 +74,6 @@ const messageTemplatesRoutes: FastifyPluginAsync = async (app) => {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
-    await ensureDefaultMessageTemplates(app.db);
     const rows = await app.db
       .select()
       .from(messageTemplates)
