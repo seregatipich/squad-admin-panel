@@ -15,7 +15,7 @@ import Redis from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { publishDepotProgressDone, publishDepotProgressLine } from '../src/lib/depot-progress.js';
-import depotRoutes from '../src/routes/depot.js';
+import depotRoutes, { DEPOT_STREAMS_PER_CALLER } from '../src/routes/depot.js';
 import { hostRedisUrl } from './integration/isolated-db.js';
 
 let app: ReturnType<typeof Fastify>;
@@ -185,5 +185,20 @@ describe('GET /api/v1/depot/progress/ws', () => {
     expect(ws.readyState).toBe(WebSocket.OPEN);
     expect(frames.some((f) => (f as { done?: boolean }).done)).toBe(false);
     ws.close();
+  });
+
+  it('#1298: refuses a caller past its concurrent stream limit with close code 1013', async () => {
+    const open: WebSocket[] = [];
+    for (let i = 0; i < DEPOT_STREAMS_PER_CALLER; i++) {
+      const { ws } = connect();
+      await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+      open.push(ws);
+    }
+    const { ws: extra, frames } = connect();
+    const code = await new Promise<number>((resolve) => extra.on('close', (c) => resolve(c)));
+    expect(code).toBe(1013);
+    expect(frames).toContainEqual({ error: 'too_many_streams' });
+    for (const ws of open) ws.close();
+    await Promise.all(open.map(waitForClose));
   });
 });

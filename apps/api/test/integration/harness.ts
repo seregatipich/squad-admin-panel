@@ -159,6 +159,8 @@ export interface FakeBridge {
   }>;
   connect(): Promise<void>;
   close(): Promise<void>;
+  pause(): void;
+  resume(): void;
   /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
    *  read/write pathways that hit this map via `fileRead`/`fileAtomicWrite`. */
   files: Map<string, Buffer>;
@@ -172,6 +174,8 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     files,
     async connect() {},
     async close() {},
+    pause() {},
+    resume() {},
     ping: async () => ({ pong: true, version: 'test', hostname: 'test-host' }),
     hostInfo: async () => ({
       hostname: 'test-host',

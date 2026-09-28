@@ -1727,3 +1727,38 @@ func TestBackupRestore_BadSnapshotIDForbidden(t *testing.T) {
 		t.Fatalf("expected no restore invocation for a rejected snapshot id")
 	}
 }
+
+// #1298: every container_logs_follow runs a root `docker logs --follow`
+// process for as long as its client stays connected, so the bridge caps how
+// many run at once instead of spawning one per connection without bound.
+func TestContainerLogsFollow_RefusesPastConcurrencyCap(t *testing.T) {
+	d := &Dispatcher{Docker: runner.NewDocker(&runner.Fake{})}
+	params, _ := json.Marshal(map[string]any{
+		"name": "squad-019dbaa5-1234-7abc-8def-0123456789ab",
+		"tail": 10,
+	})
+	req := &rpc.Request{ID: "req-logs-cap", Method: "container_logs_follow", Params: params}
+
+	for i := 0; i < maxConcurrentLogFollows; i++ {
+		logFollowSlots <- struct{}{}
+	}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	for i := 0; i < maxConcurrentLogFollows; i++ {
+		<-logFollowSlots
+	}
+	if resp.OK {
+		t.Fatalf("expected the capped call to fail, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeRuntimeError ||
+		!strings.Contains(resp.Error.Message, "too many concurrent log follows") {
+		t.Fatalf("expected the concurrency-cap error, got %+v", resp.Error)
+	}
+
+	resp = d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.Error != nil && strings.Contains(resp.Error.Message, "too many concurrent log follows") {
+		t.Fatalf("a free slot must not be refused, got %+v", resp.Error)
+	}
+	if len(logFollowSlots) != 0 {
+		t.Fatalf("a finished follow must release its slot, %d still held", len(logFollowSlots))
+	}
+}

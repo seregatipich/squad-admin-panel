@@ -1170,6 +1170,17 @@ type containerLogsParams struct {
 	Tail int    `json:"tail,omitempty"`
 }
 
+// maxConcurrentLogFollows bounds the container_logs_follow streams the bridge
+// runs at once (#1298). Each one is a root `docker logs --follow` process that
+// lives as long as its client stays connected; the API caps its own sockets,
+// and this cap keeps any client of the socket from exhausting the host's
+// processes or file descriptors.
+const maxConcurrentLogFollows = 64
+
+// logFollowSlots is a counting semaphore of maxConcurrentLogFollows slots
+// shared by every connection to this bridge process.
+var logFollowSlots = make(chan struct{}, maxConcurrentLogFollows)
+
 func (d *Dispatcher) containerLogsFollow(
 	ctx context.Context,
 	req *rpc.Request,
@@ -1178,6 +1189,13 @@ func (d *Dispatcher) containerLogsFollow(
 	var p containerLogsParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	select {
+	case logFollowSlots <- struct{}{}:
+		defer func() { <-logFollowSlots }()
+	default:
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError,
+			fmt.Sprintf("too many concurrent log follows (limit %d)", maxConcurrentLogFollows))
 	}
 	push := func(stream string) func([]byte) {
 		return func(chunk []byte) {

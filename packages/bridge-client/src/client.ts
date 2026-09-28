@@ -155,6 +155,21 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     }
   }
 
+  /**
+   * Stops reading from the bridge socket — backpressure for a streaming call
+   * whose consumer cannot keep up. The unread bytes fill the kernel socket
+   * buffer, which blocks the bridge's writes and so its producer. Frames
+   * already received are still delivered. A no-op when not connected.
+   */
+  pause(): void {
+    this.socket?.pause();
+  }
+
+  /** Resumes reading from the bridge socket after {@link pause}. */
+  resume(): void {
+    this.socket?.resume();
+  }
+
   private safeEmit<E extends keyof BridgeClientEvents>(
     event: E,
     ...args: EventArgs<BridgeClientEvents, E>
