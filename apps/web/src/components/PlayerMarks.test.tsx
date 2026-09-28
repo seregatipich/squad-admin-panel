@@ -133,4 +133,53 @@ describe('PlayerMarks', () => {
 
     expect(await screen.findByText('Активных меток нет')).toBeInTheDocument();
   });
+
+  // #790: a failed reload used to escape `finally`, leaving busy=true forever
+  // and surfacing only as an unhandled rejection.
+  it('stays usable and explains a failed reload after setting a mark', async () => {
+    let marksCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/v1/mark-types') {
+        return Promise.resolve(new Response(JSON.stringify([MARK_TYPE]), { status: 200 }));
+      }
+      if (url.includes('/marks?include_cleared')) {
+        marksCalls += 1;
+        if (marksCalls > 1) return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+      }
+      if (init?.method === 'POST') return Promise.resolve(new Response('{}', { status: 201 }));
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PlayerMarks playerId="player-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Метки подозрения' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Опасность/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Не удалось загрузить метки');
+    fireEvent.click(screen.getByRole('button', { name: 'Метки подозрения' }));
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /Опасность/ })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      ),
+    );
+    expect(screen.getByRole('menuitem', { name: /Опасность/ })).not.toBeDisabled();
+  });
+
+  it('explains a failed initial load instead of rejecting silently', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input) === '/api/v1/mark-types'
+          ? Promise.resolve(new Response('<html>bad gateway</html>', { status: 502 }))
+          : Promise.reject(new TypeError('Failed to fetch')),
+      ),
+    );
+    render(<PlayerMarks playerId="player-1" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось загрузить метки');
+  });
 });
