@@ -51,6 +51,9 @@ export const chatMessages = pgTable(
       'gin',
       sql`${table.message} gin_trgm_ops`,
     ),
+    matchedRuleIdx: index('chat_messages_matched_rule_idx')
+      .on(table.matchedRuleId)
+      .where(sql`matched_rule_id IS NOT NULL`),
     sentAtBrinIdx: index('chat_messages_sent_at_brin_idx')
       .using('brin', table.sentAt)
       .with({ pages_per_range: 32 }),

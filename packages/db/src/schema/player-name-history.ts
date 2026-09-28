@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   bigserial,
   index,
@@ -33,6 +34,10 @@ export const playerNameHistory = pgTable(
       table.nameNormalized,
     ),
     nameNormalizedIdx: index('player_name_history_name_normalized_idx').on(table.nameNormalized),
+    nameNormalizedTrgmIdx: index('player_name_history_name_normalized_trgm_idx').using(
+      'gin',
+      sql`${table.nameNormalized} gin_trgm_ops`,
+    ),
     lastSeenAtIdx: index('player_name_history_last_seen_at_idx').on(table.lastSeenAt),
   }),
 );

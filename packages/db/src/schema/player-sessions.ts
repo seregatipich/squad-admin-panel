@@ -48,6 +48,9 @@ export const playerSessions = pgTable(
     openIdx: index('player_sessions_open_idx')
       .on(table.serverId, table.playerId)
       .where(sql`disconnected_at IS NULL`),
+    serverDisconnectedIdx: index('player_sessions_server_disconnected_idx')
+      .on(table.serverId, table.disconnectedAt)
+      .where(sql`disconnected_at IS NOT NULL`),
     connectedAtBrinIdx: index('player_sessions_connected_at_brin_idx')
       .using('brin', table.connectedAt)
       .with({ pages_per_range: 32 }),
