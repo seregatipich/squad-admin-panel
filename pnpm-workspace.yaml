@@ -6,5 +6,4 @@ packages:
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
-  - '@node-rs/argon2'
   - esbuild
