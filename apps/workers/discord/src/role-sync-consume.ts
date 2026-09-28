@@ -112,6 +112,15 @@ export interface RunRoleSyncLoopOpts {
  * the Discord bot is unconfigured. Redelivery would not help (the bot is still
  * unconfigured a second later) and the reconcile tick re-derives everything
  * once the operator finishes the setup, so nothing is lost by acking.
+ *
+ * Full-reconcile requests (`player_id: null`) that arrive in the same batch
+ * are coalesced into one sweep: a burst of mapping edits or repeated clicks
+ * on the manual reconcile button queues one pass, not one per click. The
+ * sweep checks `shouldStop` between players so shutdown never waits for it.
+ *
+ * The consumer group is created inside the loop and retried on failure (for
+ * example `LOADING` right after a Redis restart), so a transient Redis error
+ * never ends the loop.
  */
 export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> {
   const {
@@ -131,12 +140,6 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
     now = Date.now,
   } = opts;
 
-  await redis
-    .xgroup('CREATE', DISCORD_ROLE_SYNC_STREAM, group, '$', 'MKSTREAM')
-    .catch((err: Error) => {
-      if (!String(err.message).includes('BUSYGROUP')) throw err;
-    });
-
   let nextReconcileAt =
     reconcileIntervalMs > 0 ? now() + reconcileIntervalMs : Number.POSITIVE_INFINITY;
 
@@ -149,7 +152,19 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
     log,
   });
 
-  const handleRequest = async (request: DiscordRoleSyncRequest): Promise<void> => {
+  /** Tracks full reconciles within one read batch so duplicates are coalesced. */
+  interface BatchState {
+    reconciled: boolean;
+  }
+
+  const handleRequest = async (
+    request: DiscordRoleSyncRequest,
+    batch: BatchState = { reconciled: false },
+  ): Promise<void> => {
+    if (request.player_id === null && batch.reconciled) {
+      log.debug({ reason: request.reason }, 'discord full reconcile coalesced into this batch');
+      return;
+    }
     const context = await loadBotContext(db, encryptionKey);
     if (!context) {
       log.debug(
@@ -160,7 +175,8 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
     }
     const deps = buildDeps(context);
     if (request.player_id === null) {
-      const summary = await reconcileLinkedPlayers(deps);
+      batch.reconciled = true;
+      const summary = await reconcileLinkedPlayers(deps, { shouldStop });
       await publishStatus(redis, log, summary.lastError);
       return;
     }
@@ -168,17 +184,34 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
     await publishStatus(redis, log, result.error ?? null);
   };
 
-  const processEntry = async (id: string, fields: string[]): Promise<void> => {
+  const processEntry = async (id: string, fields: string[], batch: BatchState): Promise<void> => {
     const request = parseRoleSyncRequest(fields);
     if (!request) {
       log.warn({ id }, 'malformed discord role-sync request; acking without action');
     } else {
-      await handleRequest(request);
+      await handleRequest(request, batch);
     }
     await redis.xack(DISCORD_ROLE_SYNC_STREAM, group, id);
   };
 
+  let groupReady = false;
   while (!shouldStop()) {
+    if (!groupReady) {
+      try {
+        await redis
+          .xgroup('CREATE', DISCORD_ROLE_SYNC_STREAM, group, '$', 'MKSTREAM')
+          .catch((err: Error) => {
+            if (!String(err.message).includes('BUSYGROUP')) throw err;
+          });
+        groupReady = true;
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'role-sync consumer group creation failed');
+        await sleepMs(1000);
+        continue;
+      }
+    }
+
+    const reclaimBatch: BatchState = { reconciled: false };
     try {
       const claimed = (await redis.xautoclaim(
         DISCORD_ROLE_SYNC_STREAM,
@@ -190,13 +223,15 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
         reclaimBatchSize,
       )) as [string, [string, string[]][], string[]];
       for (const [id, fields] of claimed?.[1] ?? []) {
-        await processEntry(id, fields);
+        await processEntry(id, fields, reclaimBatch);
       }
     } catch (err) {
       const message = (err as Error).message;
-      if (!message.includes('NOGROUP')) log.warn({ err: message }, 'role-sync xautoclaim failed');
+      if (message.includes('NOGROUP')) groupReady = false;
+      else log.warn({ err: message }, 'role-sync xautoclaim failed');
     }
 
+    const readBatch: BatchState = { reconciled: false };
     try {
       const res = (await redis.xreadgroup(
         'GROUP',
@@ -213,7 +248,7 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
       for (const [, entries] of res ?? []) {
         for (const [id, fields] of entries) {
           try {
-            await processEntry(id, fields);
+            await processEntry(id, fields, readBatch);
           } catch (err) {
             log.error(
               { err: (err as Error).message, id },
@@ -223,7 +258,9 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
         }
       }
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'role-sync poll iteration failed');
+      const message = (err as Error).message;
+      if (message.includes('NOGROUP')) groupReady = false;
+      log.error({ err: message }, 'role-sync poll iteration failed');
       await sleepMs(1000);
     }
 

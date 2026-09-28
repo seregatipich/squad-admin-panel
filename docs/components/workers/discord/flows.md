@@ -1,7 +1,11 @@
 # worker-discord — Flows
 
 Three independent loops run in one process; any one can be idle without
-affecting the others.
+affecting the others. The notify and role-sync loops block in `XREADGROUP` and
+each own a dedicated Redis connection (`redis.duplicate()`); the heartbeat and
+the status-channel loop share the main one. A loop that returns or throws
+before shutdown ends the process with exit code 1 so compose restarts it,
+rather than leaving a dead loop behind a live heartbeat.
 
 ## Notify (DISCORD-2)
 
@@ -9,7 +13,21 @@ Discover event streams → reclaim anything a dead consumer left pending →
 `XREADGROUP` → map the envelope type to a Discord event type → render the
 stored (or default) template → POST to every enabled matching webhook → set the
 dedup key → `XACK`. Delivery is at-least-once: the dedup key is only written
-after a successful send, and the `XACK` only after that.
+after every matching webhook received the embed, and the `XACK` only after that.
+
+**Failed delivery (#62).** A webhook that still fails after its in-call retries
+(network error, 5xx, a hung request cut off after 10 s, or a 429 asking to wait
+more than 60 s) leaves the entry pending instead of acknowledging it. The
+reclaim sweep retries it after `DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS` (30 s), and
+each webhook that already got the embed is skipped via a per-webhook mark
+`dedup:<group>:<event_id>:<webhook_id>`. After 10 failed attempts (counter
+`discord:notify:attempts:<group>:<event_id>`) the entry is acknowledged with an
+error log so one broken webhook cannot pin it forever.
+
+**Consumer groups.** A group is created the first time a stream is seen. When
+Redis answers `NOGROUP` (the stream key was deleted and recreated), the cache
+is cleared and the group is created again on the next iteration, so one
+recreated stream never stalls delivery for every server.
 
 ## Role sync (DISCORD-5)
 
@@ -38,6 +56,12 @@ both ways: a role removed by hand in Discord is restored, and a managed role
 granted by hand is stripped. The link table is walked rather than the guild
 member list because batch member listing needs the privileged `GUILD_MEMBERS`
 intent.
+
+The sweep loads the enabled mappings and every link joined with its player's
+panel role once (two queries per sweep), then calls Discord player by player,
+retrying a `429` on the member lookup after Discord's `Retry-After`. Several
+`player_id: null` requests read in the same batch run one sweep, and shutdown
+stops the sweep between players.
 
 Reconcile is also the durability backstop: the `XADD` is best-effort, so a lost
 request self-heals within one interval instead of needing a transactional

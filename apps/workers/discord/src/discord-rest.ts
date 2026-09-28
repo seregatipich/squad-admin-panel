@@ -237,27 +237,45 @@ export type GuildMemberResult =
  *
  * A `404` means the Discord account is simply not in the guild, which is a
  * normal state (the player linked their account but never joined the server),
- * so it is reported as `notAMember` rather than as an error.
+ * so it is reported as `notAMember` rather than as an error. A `429` is
+ * retried after Discord's advertised delay, like `roleCall`, and reported as
+ * `rate_limited` once `MAX_RATE_LIMIT_RETRIES` is exhausted.
  */
 export async function fetchGuildMemberRoles(
   deps: DiscordRestDeps,
   discordUserId: string,
 ): Promise<GuildMemberResult> {
   let res: Response;
-  try {
-    res = await deps.fetchImpl(memberUrl(deps, discordUserId), {
-      method: 'GET',
-      headers: authHeaders(deps),
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      notAMember: false,
-      failure: {
-        reason: 'network_error',
-        message: `Discord недоступен: ${(err as Error).message}`,
-      },
-    };
+  let rateLimitRetries = 0;
+  for (;;) {
+    try {
+      res = await deps.fetchImpl(memberUrl(deps, discordUserId), {
+        method: 'GET',
+        headers: authHeaders(deps),
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        notAMember: false,
+        failure: {
+          reason: 'network_error',
+          message: `Discord недоступен: ${(err as Error).message}`,
+        },
+      };
+    }
+    if (res.status !== 429) break;
+    rateLimitRetries++;
+    if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+      return {
+        ok: false,
+        notAMember: false,
+        failure: {
+          reason: 'rate_limited',
+          message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
+        },
+      };
+    }
+    await deps.sleep(await readRetryAfterMs(res));
   }
 
   if (res.status === 404) return { ok: false, notAMember: true };
