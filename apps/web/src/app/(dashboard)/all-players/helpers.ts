@@ -51,16 +51,29 @@ export function sortIndicator(current: PlayerSortState, column: PlayerSortKey): 
 }
 
 /**
- * Querystring for `GET /api/v1/players`, without the leading `?`.
+ * Players per page of the list; equals the server's default `limit` for
+ * `GET /api/v1/players`, so the first page needs no paging params.
+ */
+export const PLAYERS_PAGE_SIZE = 200;
+
+/**
+ * Builds the `GET /api/v1/players` querystring for the current sort, filter
+ * and page.
  *
  * @param state - The sort to request from the server.
  * @param onlyNew - When true, appends `filter=new` (players first seen in the last 7 days).
- * @returns The encoded querystring, always `sort` then `dir`, then optional `filter`.
+ * @param page - 1-based page number; pages after the first append `limit` and `offset`.
+ * @returns The encoded querystring, always `sort` then `dir`, then optional `filter`,
+ *   then `limit`/`offset` for pages after the first.
  */
-export function buildPlayersListQuery(state: PlayerSortState, onlyNew: boolean): string {
+export function buildPlayersListQuery(state: PlayerSortState, onlyNew: boolean, page = 1): string {
   const params = new URLSearchParams();
   params.set('sort', state.key);
   params.set('dir', state.dir);
   if (onlyNew) params.set('filter', 'new');
+  if (page > 1) {
+    params.set('limit', String(PLAYERS_PAGE_SIZE));
+    params.set('offset', String((page - 1) * PLAYERS_PAGE_SIZE));
+  }
   return params.toString();
 }

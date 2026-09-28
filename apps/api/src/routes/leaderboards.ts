@@ -12,6 +12,7 @@ import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { steamId64Equals } from '../lib/player-search.js';
 
 const METRIC_COLUMNS = {
   online: playerStatPeriods.onlineSeconds,
@@ -120,7 +121,6 @@ function serializeSeason(row: SeasonRow): SeasonMeta {
 }
 
 function buildSearchFilter(search: string): SQL {
-  const exactMatch = search.toLowerCase();
   const nameMatch = normalizePlayerName(search);
   const nameHistoryMatch = sql`EXISTS (
     SELECT 1 FROM player_name_history h
@@ -128,7 +128,7 @@ function buildSearchFilter(search: string): SQL {
   )`;
   const filter = or(
     sql`${players.canonicalNameNormalized} LIKE ${`%${nameMatch}%`}`,
-    sql`${players.steamId64}::text = ${exactMatch}`,
+    steamId64Equals(players.steamId64, search.trim()),
     sql`${players.eosId} = ${search}`,
     nameHistoryMatch,
   );

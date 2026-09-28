@@ -232,7 +232,7 @@ describe('GET /api/v1/players — sorting and filters', () => {
     const { status, body } = await list('');
     expect(status).toBe(200);
     expect(Object.keys(body).sort()).toEqual(['items', 'total']);
-    expect(body.total).toBe(body.items.length);
+    expect(body.total).toBe(body.items.length); // every player fits on the first page
     const item = body.items.find((i) => i.canonical_name === 'Alphazz');
     expect(item).toBeDefined();
     expect(Object.keys(item as ListItem).sort()).toEqual([
@@ -246,6 +246,78 @@ describe('GET /api/v1/players — sorting and filters', () => {
     ]);
     expect((item as ListItem).steam_id64).toBe(testSteamId(270002).toString());
     expect((item as ListItem).total_time_played_seconds).toBe(400);
+  });
+
+  // Regression (#40, #236): the list was cut at 200 rows with no offset and
+  // `total` echoed the page size, so later players were unreachable and the
+  // page showed «всего: 200».
+  it('pages with limit/offset in the requested order', async () => {
+    const all = await order('sort=nickname&dir=asc');
+    const first = await list('sort=nickname&dir=asc&limit=2&offset=0');
+    const second = await list('sort=nickname&dir=asc&limit=2&offset=2');
+    expect(first.body.items).toHaveLength(2);
+    expect(second.body.items).toHaveLength(2);
+    const paged = [...first.body.items, ...second.body.items]
+      .map((i) => i.canonical_name)
+      .filter((n) => FIXTURE_NAMES.has(n));
+    expect(paged).toEqual(all.slice(0, paged.length));
+  });
+
+  it('reports the total number of matching players, not the page size', async () => {
+    const whole = await list('');
+    const page = await list('limit=2');
+    expect(page.body.items).toHaveLength(2);
+    expect(page.body.total).toBe(whole.body.total);
+    expect(page.body.total).toBe(FIXTURES.length + 1); // fixtures + the seeded owner
+    const filtered = await list('q=ozz&limit=1');
+    expect(filtered.body.items).toHaveLength(1);
+    expect(filtered.body.total).toBe(2);
+  });
+
+  it('returns an empty page past the end while keeping the total', async () => {
+    const { status, body } = await list('offset=1000');
+    expect(status).toBe(200);
+    expect(body.items).toEqual([]);
+    expect(body.total).toBe(FIXTURES.length + 1);
+  });
+
+  it('rejects a limit above 500 and a negative offset with 400', async () => {
+    expect((await list('limit=501')).status).toBe(400);
+    expect((await list('offset=-1')).status).toBe(400);
+  });
+
+  // Regression (#40, #1328): search input went into LIKE unescaped, so `%` or
+  // `_` matched every player; the SteamID64 match cast the column to text.
+  it('matches LIKE wildcards in ?q= literally', async () => {
+    expect((await list('q=%25')).body.total).toBe(0);
+    expect((await list('q=_')).body.total).toBe(0);
+    const search = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/players/search?q=___',
+      headers: { cookie: ownerCookie },
+    });
+    expect(search.statusCode).toBe(200);
+    expect((search.json() as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it('finds a player by exact SteamID64 in the list and the typeahead search', async () => {
+    const steamId = testSteamId(270003).toString();
+    expect(await order(`q=${steamId}`)).toEqual(['Bravozz']);
+    const search = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/search?q=${steamId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(search.statusCode).toBe(200);
+    expect((search.json() as { items: Array<{ canonical_name: string }> }).items).toEqual([
+      expect.objectContaining({ canonical_name: 'Bravozz' }),
+    ]);
+  });
+
+  it('treats a digit string longer than bigint as no SteamID64 instead of failing', async () => {
+    const { status, body } = await list(`q=${'9'.repeat(25)}`);
+    expect(status).toBe(200);
+    expect(body.total).toBe(0);
   });
 
   it('still returns 401 without a session', async () => {

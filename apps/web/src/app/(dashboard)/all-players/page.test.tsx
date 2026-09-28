@@ -201,6 +201,37 @@ describe('PlayersPage', () => {
     });
   });
 
+  // Regression (#40, #236): the list stopped at 200 players with no way to
+  // reach the rest, and «всего» showed the page size.
+  it('shows the server total and pages through players beyond the first 200', async () => {
+    const listUrls = await renderPage({ players: { ...PLAYERS_RESPONSE, total: 450 } });
+    expect(screen.getByText('всего: 450')).toBeInTheDocument();
+    expect(screen.getByText('Стр. 1 из 3')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    await waitFor(() => {
+      expect(listUrls).toContain('/api/v1/players?sort=last_seen&dir=desc&limit=200&offset=200');
+    });
+    expect(screen.getByText('Стр. 2 из 3')).toBeInTheDocument();
+  });
+
+  it('returns to the first page when the sort changes', async () => {
+    const listUrls = await renderPage({ players: { ...PLAYERS_RESPONSE, total: 450 } });
+    await userEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    await waitFor(() => {
+      expect(listUrls).toContain('/api/v1/players?sort=last_seen&dir=desc&limit=200&offset=200');
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^Ник/ }));
+    await waitFor(() => {
+      expect(listUrls.at(-1)).toBe('/api/v1/players?sort=nickname&dir=asc');
+    });
+  });
+
+  it('hides the pager when every player fits on one page', async () => {
+    await renderPage();
+    expect(screen.queryByRole('button', { name: 'Вперёд' })).not.toBeInTheDocument();
+  });
+
   it('ticking the new-players checkbox refetches with filter=new', async () => {
     const listUrls = await renderPage();
     await userEvent.click(screen.getByRole('checkbox', { name: 'новые (<7 дней)' }));
