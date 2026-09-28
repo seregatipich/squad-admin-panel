@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  excerpt,
-  formatReportDate,
-  REPORT_STATUS_BADGE_CLASSES,
-  REPORT_STATUS_LABELS,
-} from './reports-summary';
+import { excerpt, formatReportDate, REPORT_STATUS_LABELS } from './reports-summary';
 
 describe('excerpt', () => {
   it('returns the body unchanged when shorter than the limit', () => {
@@ -33,12 +28,11 @@ describe('formatReportDate', () => {
   });
 });
 
-describe('REPORT_STATUS_LABELS / REPORT_STATUS_BADGE_CLASSES', () => {
+describe('REPORT_STATUS_LABELS', () => {
   it('covers every report status', () => {
     const statuses = ['pending', 'in_review', 'resolved', 'rejected'] as const;
     for (const status of statuses) {
       expect(REPORT_STATUS_LABELS[status]).toBeTruthy();
-      expect(REPORT_STATUS_BADGE_CLASSES[status]).toBeTruthy();
     }
   });
 });

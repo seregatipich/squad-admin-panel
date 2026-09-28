@@ -385,4 +385,84 @@ describe('PlayerDetailPage', () => {
       await waitFor(() => expect(memberPosts(fetchMock)).toHaveLength(1));
     });
   });
+
+  describe('playerId path safety (#480)', () => {
+    it('rejects a non-UUID route param without ever calling the API', async () => {
+      const fetchMock = mockFetch({ canBan: false });
+      vi.stubGlobal('fetch', fetchMock);
+      await act(async () => {
+        render(
+          <Suspense fallback={null}>
+            <PlayerDetailPage
+              params={Promise.resolve({ id: '..%2Fapi%2Fv1%2Fwhitelist%2Fmembers%2Fx' })}
+            />
+          </Suspense>,
+        );
+      });
+      expect(await screen.findByText('Некорректный идентификатор игрока.')).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('role change error messages (#478)', () => {
+    const ADMIN_ROLE: MockRole = {
+      id: 'role-admin',
+      name: 'Admin',
+      color: 'sky',
+      is_system_role: false,
+      role_expires_at: null,
+      role_comment: null,
+    };
+
+    it('shows "insufficient rights" for a generic permission-hook 403 on removal, not the Owner text', async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === `/api/v1/players/${PLAYER_ID}/role` && init?.method === 'DELETE') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }),
+          );
+        }
+        return mockFetch({ canBan: false, canManageRoles: true, currentRole: ADMIN_ROLE })(
+          input,
+          init,
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Снять роль' }));
+      });
+
+      expect(await screen.findByText('Недостаточно прав для этого действия.')).toBeInTheDocument();
+      expect(screen.queryByText('Нельзя выдать роль Owner через UI.')).not.toBeInTheDocument();
+    });
+
+    it('names the removed player, not the viewer, in the last-Owner 409 message', async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === `/api/v1/players/${PLAYER_ID}/role` && init?.method === 'DELETE') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'cannot_remove_last_owner' }), { status: 409 }),
+          );
+        }
+        return mockFetch({ canBan: false, canManageRoles: true, currentRole: ADMIN_ROLE })(
+          input,
+          init,
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Снять роль' }));
+      });
+
+      expect(await screen.findByText(/последний Owner панели/)).toBeInTheDocument();
+    });
+  });
 });

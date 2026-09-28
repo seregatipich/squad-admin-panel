@@ -57,12 +57,6 @@ export const MODE_HEX: Record<SessionMode, string> = {
   seed: '#bf5af2',
 };
 
-export function bonusValueSeconds(
-  totals: Pick<PresenceTotals, 'online_seconds' | 'boost_seconds' | 'queue_seconds'>,
-): number {
-  return totals.online_seconds + 2 * totals.boost_seconds;
-}
-
 export function utcDayKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }

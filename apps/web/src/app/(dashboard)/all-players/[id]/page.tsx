@@ -63,6 +63,7 @@ import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PlaysWithSection } from './PlaysWithSection';
 import { PresenceSection } from './PresenceSection';
+import { fmtDuration } from './presence';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
 import { SeedContributionSection } from './SeedContributionSection';
@@ -135,6 +136,14 @@ interface Me {
 
 const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку игроков' } as const;
 
+// Route params come from the URL and, per Next.js's dynamic-route matcher,
+// are decodeURIComponent'd before this component ever sees them — so a
+// crafted segment such as `..%2Fapi%2Fv1%2Fwhitelist%2Fmembers%2F..` can
+// carry `/` or `?` into `playerId`. Every fetch below interpolates it
+// unencoded into a same-origin, credentialed API path, so an id that isn't a
+// well-formed UUID is rejected up front instead of being sent anywhere.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
   const locale = useIntlLocale();
   const { id: playerId } = use(params);
@@ -158,6 +167,10 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
    */
   const load = useCallback(() => {
     setErr(null);
+    if (!UUID_RE.test(playerId)) {
+      setErr('Некорректный идентификатор игрока.');
+      return;
+    }
     fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setData)
@@ -460,22 +473,47 @@ function WhitelistQuickAction({
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
 
   const reload = useCallback(async () => {
-    const [settingsRes, roleRes] = await Promise.all([
-      fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
-      fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (settingsRes.ok) setSettings((await settingsRes.json()) as WhitelistSettings);
-    if (roleRes.ok) {
-      const body = (await roleRes.json()) as { role: SingleRole | null };
-      setCurrent(body.role);
+    try {
+      const [settingsRes, roleRes] = await Promise.all([
+        fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
+        fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (settingsRes.ok) setSettings((await settingsRes.json()) as WhitelistSettings);
+      if (roleRes.ok) {
+        const body = (await roleRes.json()) as { role: SingleRole | null };
+        setCurrent(body.role);
+      }
+      setLoadErr(false);
+    } catch {
+      setLoadErr(true);
     }
   }, [playerId]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  if (loadErr && !settings) {
+    return (
+      <Card as="section" padding="none">
+        <CardHeader title="Whitelist" />
+        <CardBody>
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить статус whitelist"
+            action={
+              <Button size="sm" onClick={() => void reload()}>
+                Повторить
+              </Button>
+            }
+          />
+        </CardBody>
+      </Card>
+    );
+  }
 
   if (!settings?.whitelist_role_id) return null;
 
@@ -568,6 +606,18 @@ function WhitelistQuickAction({
   );
 }
 
+const ROLE_ACTION_ERROR_TEXT: Record<string, string> = {
+  owner_assignment_forbidden: 'Нельзя выдать роль Owner через UI.',
+  cannot_remove_last_owner:
+    'Это последний Owner панели — сначала назначьте другого Owner, прежде чем снимать роль.',
+  forbidden: 'Недостаточно прав для этого действия.',
+};
+
+function roleActionErrorText(error: string | undefined, status: number): string {
+  if (error && ROLE_ACTION_ERROR_TEXT[error]) return ROLE_ACTION_ERROR_TEXT[error];
+  return `Недостаточно прав для этого действия (HTTP ${status}).`;
+}
+
 function PanelAccessSection({ playerId, canManage }: { playerId: string; canManage: boolean }) {
   const [current, setCurrent] = useState<SingleRole | null>(null);
   const [editing, setEditing] = useState(false);
@@ -578,21 +628,27 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
   const commentHintId = useId();
 
   const reload = useCallback(async () => {
-    const [rRes, listRes] = await Promise.all([
-      fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
-      // Only managers need the full role list; viewers don't query it.
-      canManage
-        ? fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
-        : Promise.resolve(null),
-    ]);
-    if (rRes.ok) {
-      const body = (await rRes.json()) as { role: SingleRole | null };
-      setCurrent(body.role);
+    try {
+      const [rRes, listRes] = await Promise.all([
+        fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
+        // Only managers need the full role list; viewers don't query it.
+        canManage
+          ? fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
+          : Promise.resolve(null),
+      ]);
+      if (rRes.ok) {
+        const body = (await rRes.json()) as { role: SingleRole | null };
+        setCurrent(body.role);
+      }
+      if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
+      setLoadErr(false);
+    } catch {
+      setLoadErr(true);
     }
-    if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
   }, [playerId, canManage]);
 
   useEffect(() => {
@@ -627,15 +683,9 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(buildRoleAssignPayload(roleId, expiresAt, comment)),
             });
-      if (r.status === 409) {
-        setMsg({
-          kind: 'err',
-          text: 'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.',
-        });
-        return;
-      }
-      if (r.status === 403) {
-        setMsg({ kind: 'err', text: 'Нельзя выдать роль Owner через UI.' });
+      if (r.status === 409 || r.status === 403) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        setMsg({ kind: 'err', text: roleActionErrorText(body.error, r.status) });
         return;
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -676,6 +726,17 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
       />
 
       <CardBody className="space-y-3">
+        {loadErr ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить роль игрока"
+            action={
+              <Button size="sm" onClick={() => void reload()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
         {msg ? (
           <InlineBanner
             tone={msg.kind === 'ok' ? 'good' : 'crit'}
@@ -959,12 +1020,4 @@ function initials(name: string): string {
     .map((w) => w[0] ?? '')
     .join('')
     .toUpperCase();
-}
-
-function fmtDuration(seconds: number): string {
-  if (!seconds) return '0m';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h === 0) return `${m}m`;
-  return `${h}h ${m}m`;
 }
