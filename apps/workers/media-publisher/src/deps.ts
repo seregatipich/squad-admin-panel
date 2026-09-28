@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import type { DatabaseClient } from '@squad/db';
+import { type DatabaseClient, withMediaStoragePathLock } from '@squad/db';
 import { mediaFiles, mediaPublications, mediaPublishSettings } from '@squad/db/schema';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { createTelegramPublisher } from './publishers/telegram.js';
@@ -245,29 +245,40 @@ export function createMediaPublisherDeps(
         .limit(1);
       if (pending.length > 0) return false;
 
-      const sharing = await db
-        .select({ id: mediaFiles.id })
-        .from(mediaFiles)
-        .where(
-          and(
-            eq(mediaFiles.storagePath, job.storagePath),
-            ne(mediaFiles.id, job.mediaId),
-            isNull(mediaFiles.deletedAt),
-          ),
-        )
-        .limit(1);
-      if (sharing.length > 0) return false;
+      // The sharing check and the update that clears storage_path must be
+      // atomic against the media upload route's sha256-dedup insert
+      // (apps/api/src/routes/media.ts), which reads a live storage_path and
+      // points a new row at it with no lock of its own: without this shared
+      // advisory lock, a dedup insert landing between the check below and
+      // the delete could end up referencing a file this call is about to
+      // remove (#63 finding 944).
+      const storagePath = job.storagePath;
+      const released = await withMediaStoragePathLock(db, storagePath, async (tx) => {
+        const sharing = await tx
+          .select({ id: mediaFiles.id })
+          .from(mediaFiles)
+          .where(
+            and(
+              eq(mediaFiles.storagePath, storagePath),
+              ne(mediaFiles.id, job.mediaId),
+              isNull(mediaFiles.deletedAt),
+            ),
+          )
+          .limit(1);
+        if (sharing.length > 0) return false;
 
-      const updated = await db
-        .update(mediaFiles)
-        .set({ storagePath: null, externalUrl })
-        .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, job.storagePath)))
-        .returning({ id: mediaFiles.id });
-      if (updated.length === 0) return false;
+        const updated = await tx
+          .update(mediaFiles)
+          .set({ storagePath: null, externalUrl })
+          .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, storagePath)))
+          .returning({ id: mediaFiles.id });
+        return updated.length > 0;
+      });
+      if (!released) return false;
 
       // The database no longer references the bytes; reclaiming them is best
       // effort, and a missing file must not fail the publication.
-      await removeFile(path.join(options.mediaBaseDir, job.storagePath)).catch(() => undefined);
+      await removeFile(path.join(options.mediaBaseDir, storagePath)).catch(() => undefined);
       return true;
     },
   };
