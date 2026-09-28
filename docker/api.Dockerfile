@@ -61,6 +61,9 @@ RUN pnpm turbo run build --filter=@squad/api... --cache=local:,remote: && \
     cp -a --parents packages/*/dist packages/db/drizzle apps/api/dist /out/
 
 FROM base AS runtime
+# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
+# label!=panel.preserve=true`) from deleting this image while it is unused.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 ENV PORT=3000
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates \

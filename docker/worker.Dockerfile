@@ -57,6 +57,9 @@ RUN pnpm turbo run build --filter="./apps/workers/*" --cache=local:,remote: && \
     cp -a --parents packages/*/dist apps/workers/*/dist /out/
 
 FROM base AS runtime
+# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
+# label!=panel.preserve=true`) from deleting this image while it is unused.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 # systemd provides journalctl for worker-diag-flush's journald forwarding; it
 # is installed for every worker because they share this image.

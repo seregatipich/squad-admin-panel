@@ -25,7 +25,7 @@ Every frame (request, response, stream chunk) is:
 { "id": "req-uuid-v7", "ok": false, "code": "forbidden", "message": "image not in allowlist" }
 ```
 
-Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
+Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. `docker_prune` runs `docker system prune -a -f --filter label!=panel.preserve=true`; every panel-built image (`docker/*.Dockerfile`) carries `LABEL panel.preserve=true`, so unused panel images — the stopped rnsquadjs/restic sidecars' images and the previous release's images that `scripts/rollback-tk104.sh` restarts — survive it. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
 
 ## Authentication
 
@@ -130,11 +130,14 @@ The bridge composes (for a Squad server):
 
 ```
 docker run -d --network host --user 1001:1001 --read-only \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v squad-depot:/squad:ro \
   -v /var/lib/squad-panel/configs/{uuid}/ServerConfig:/squad/SquadGame/ServerConfig:rw \
   -v /var/lib/squad-panel/saved/{uuid}:/squad/SquadGame/Saved:rw \
   squad-server:latest
 ```
+
+Both `container_run` and `container_run_rnsquadjs` cap container logs at 10 MiB x 5 files, like the compose services' `x-logging`. Docker fixes log options at creation, so containers created before this change keep unbounded logs until they are recreated (reinstall or remove + start the server). The sidecar also gets `--label panel.preserve=true` so `docker_prune` spares it and its `--pull never` image.
 
 `forbidden` on:
 
@@ -152,15 +155,15 @@ Sends SIGTERM, waits up to `timeout` seconds, then SIGKILL.
 
 #### `container_inspect({ name })` → `ContainerInspectResult`
 
-Wraps `docker inspect <name>`. Returns `{ exists: false }` when the container is gone (not an error).
+Wraps `docker inspect <name>`. Returns `state: "not_found"` when the container is gone (not an error). Includes `oom_killed` (Docker `State.OOMKilled`) and, when non-empty, `error` (Docker `State.Error`), which the API's crash diagnostics read.
 
 #### `container_stats({ name })` → `{ cpu_pct, mem_bytes, net_rx_bytes, net_tx_bytes }`
 
 One-shot sample. The status-reconciler uses this every 4 s.
 
-#### `container_logs_follow({ name, since?, lines? })` → streams stdout/stderr, returns `{ exit_code }`
+#### `container_logs_follow({ name, tail? })` → streams stdout/stderr, returns `{ exit_code }`
 
-Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBridgeClient()`), not the shared `app.bridge`.
+Backfill is `tail` lines (0 = none, clamped to 5000); the bridge never follows without `--tail`, so the whole log history is never replayed. Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBridgeClient()`), not the shared `app.bridge`.
 
 ### Depot
 

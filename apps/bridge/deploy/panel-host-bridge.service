@@ -48,7 +48,11 @@ LogsDirectory=panel-host-bridge
 ReadWritePaths=/var/lib/squad-panel /var/log/panel-host-bridge /etc/ufw /run/docker.sock /run/panel-host-bridge /run/squad-panel
 DeviceAllow=
 
-CapabilityBoundingSet=CAP_NET_ADMIN
+# CAP_NET_ADMIN: ufw. CAP_CHOWN + CAP_FOWNER: container_run_rnsquadjs hands
+# the sidecar's sock/ dir to uid 1001 (fchown) and re-asserts its mode after
+# that (fchmod on a directory root no longer owns). Drop-ins only add to
+# this set; anything not listed is removed even for root.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER
 AmbientCapabilities=
 
 [Install]

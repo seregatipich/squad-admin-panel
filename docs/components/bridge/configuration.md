@@ -14,11 +14,11 @@ The bridge itself reads no env vars at runtime — its allowlists are compiled i
 
 - `Type=notify` — bridge signals readiness to systemd.
 - `ProtectHome=yes` — the bridge cannot read `/root/`. Harmless docker-CLI warnings about `/root/.docker/config.json` are expected.
-- `CapabilityBoundingSet=CAP_NET_ADMIN` — only what `ufw` needs.
+- `CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER` — `CAP_NET_ADMIN` for `ufw`; `CAP_CHOWN` + `CAP_FOWNER` so `container_run_rnsquadjs` can hand the sidecar's `sock/` directory to uid 1001 and re-assert its mode. The installer's drop-in adds `CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE`; drop-ins only add to the set. **After changing the unit, re-run `scripts/install-host-bridge.sh`** (it reinstalls the unit and reloads systemd).
 - `ReadWritePaths=` — limited to `/var/lib/squad-panel`, `/run`, and `/var/log/panel-host-bridge`.
 - Socket activation via [`apps/bridge/deploy/panel-host-bridge.socket`](../../../apps/bridge/deploy/panel-host-bridge.socket): `SocketMode=0660`, `SocketGroup=panel`, owned by root.
 
-`systemd-analyze security panel-host-bridge.service` target is **< 3.0**. Current score is **2.0 OK**.
+`systemd-analyze security panel-host-bridge.service` target is **< 3.0**. Offline score of the unit file (`systemd-analyze security --offline=true`, 2026-09-28): **2.7 OK** (2.5 before `CAP_CHOWN`/`CAP_FOWNER` were added).
 
 ## Filesystem layout
 

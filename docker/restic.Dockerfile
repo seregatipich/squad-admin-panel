@@ -5,4 +5,7 @@
 # RDB. The base image is Alpine 3.22, so these packages resolve from the main
 # repo. See docker/compose.yml `backup` service and scripts/restore.sh.
 FROM mazzolino/restic:latest
+# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
+# label!=panel.preserve=true`) from deleting this image while it is unused.
+LABEL panel.preserve=true
 RUN apk add --no-cache postgresql16-client redis

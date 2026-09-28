@@ -59,6 +59,9 @@ RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 RUN yarn build
 
 FROM node:22-bookworm-slim AS runtime
+# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
+# label!=panel.preserve=true`) from deleting this image while it is unused.
+LABEL panel.preserve=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*

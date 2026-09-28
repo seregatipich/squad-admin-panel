@@ -60,6 +60,9 @@ RUN pnpm turbo run build --filter=@squad/web... --cache=local:,remote: && \
     cp -a --parents packages/*/dist apps/web/.next apps/web/public apps/web/next.config.mjs /out/
 
 FROM base AS runtime
+# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
+# label!=panel.preserve=true`) from deleting this image while it is unused.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 ENV PORT=3000
 COPY --from=prod-deps /app /app

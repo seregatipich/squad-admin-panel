@@ -350,9 +350,13 @@ Runs `docker rm -f`. If the container does not exist the call succeeds silently.
   "image":         "squad-server:latest",
   "pid":           12345,
   "restart_count": 0,
-  "exit_code":     0
+  "exit_code":     137,
+  "oom_killed":    true,
+  "error":         "signal: killed"
 }
 ```
+
+`oom_killed` is Docker's `State.OOMKilled` (always present). `error` is Docker's `State.Error`, omitted when empty.
 
 ---
 
@@ -382,7 +386,7 @@ Runs `docker rm -f`. If the container does not exist the call succeeds silently.
 { "name": "squad-0190abcd-...", "tail": 50 }
 ```
 
-`tail`: number of historical lines to emit before live tailing. Default 0 (no history).
+`tail`: number of historical lines to emit before live tailing. Default 0 (no history). `--tail` is always passed to `docker logs`, so 0 or a negative value never replays the whole log; values above 5000 are clamped to 5000.
 
 **Streaming frames:** one per log line, `stream: "stdout"` or `"stderr"`.
 

@@ -1,5 +1,15 @@
 # `bridge-client` — changelog
 
+## 2026-09-28 — unused RPC wrappers removed (#45)
+
+### Removed
+
+- `BridgeClient.processInfo`, `fileReadTail` and `fileWrite`, with the `ProcessInfoParams`, `ProcessInfoResult`, `FileReadTailParams` and `FileReadTailResult` types. The bridge no longer serves `process_info`, `file_read_tail` or `file_write`; use `fileAtomicWrite` for writes.
+
+### Changed
+
+- `ContainerInspectResult.oom_killed` / `error` are now populated by the bridge (Docker `State.OOMKilled` / `State.Error`).
+
 ## 2026-07-07
 
 ### Added

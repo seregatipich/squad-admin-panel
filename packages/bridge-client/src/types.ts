@@ -175,12 +175,12 @@ export interface ContainerInspectResult {
   image: string;
   restart_count: number;
   labels: Record<string, string>;
-  /** Set by the bridge when Docker reports the container was OOM-killed. Older
-   *  bridge builds omit the field entirely; consumers must default to `false`. */
+  /** Docker's `State.OOMKilled`: the kernel OOM killer ended the container.
+   *  Bridge builds before #45 never sent it; consumers must default to `false`. */
   oom_killed?: boolean;
   /** Docker's `State.Error` string. Usually empty; populated with values like
-   *  `"signal: killed"` when the runtime sends the container a signal. Older
-   *  bridge builds omit the field; consumers must default to `null`. */
+   *  `"signal: killed"` when the runtime sends the container a signal. Omitted
+   *  when empty (and by bridge builds before #45); consumers must default to `null`. */
   error?: string;
 }
 

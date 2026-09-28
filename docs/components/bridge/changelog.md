@@ -1,5 +1,28 @@
 # `bridge` — changelog
 
+## 2026-09-28 — audit hardening (#45)
+
+### Removed
+
+- RPCs `process_info`, `file_read_tail` and `file_write` (and `fsx.Write`). None had a production caller; `process_info` returned `/proc/<pid>/cmdline` of any host process to every bridge peer. Calls now fail with `invalid_args: unknown method`. `scripts/verify-bridge.sh` probes `list_panel_dirs` instead of `process_info`.
+
+### Fixed
+
+- A failed `SO_PEERCRED` lookup (e.g. the shutdown closer closed the fd first) no longer dereferences a nil peer and crashes the daemon: `auth.ResolvePeer` always returns a non-nil `Peer`, and `serveConn` recovers panics.
+- `file_atomic_write` writes through a unique `os.CreateTemp` file instead of the fixed `<path>.new`, so concurrent writers of one config cannot interleave bytes, and it only chmods the directories it creates — the installer's `0750` on `configs/` and `saved/` is no longer widened to `0755`.
+- `panel_disk_usage`: every `du`/`docker` probe runs under a 2-minute deadline; the cache lock is no longer held while computing (one computation at a time, concurrent callers share it, cache hits never wait); `force` is rate-limited to one recompute per 30 s; the saved tree is walked once (`saved_total_bytes` = sum of `saved_per_server`); `docker volume inspect` failures other than "no such volume" now fail the request.
+- `host_metrics`: net rates sum per-interface positive deltas over physical interfaces only (`lo`, `veth*`, `docker*`, `br-*` skipped), so a vanished container veth no longer produces ~1.8e19 B/s; `cpu_percent` is clamped to 0–100.
+- `container_run` / `container_run_rnsquadjs` cap container logs (`json-file`, 10 MiB x 5). Existing containers keep their old log settings until recreated.
+- `container_logs_follow` always passes `--tail` (0 for `tail<=0`, clamped to 5000), so it can never replay a container's whole log history.
+- `container_inspect` now returns `oom_killed` and `error` from Docker's `State`.
+- `docker_prune` no longer deletes panel images: the rnsquadjs sidecar is started with `--label panel.preserve=true`, and the api, web, worker, rnsquadjs, restic and caddy-duckdns images carry `LABEL panel.preserve=true`.
+- `panel-host-bridge.service` adds `CAP_CHOWN CAP_FOWNER` to `CapabilityBoundingSet`, which `container_run_rnsquadjs` needs to hand the sidecar's `sock/` directory to uid 1001.
+
+### Upgrade notes
+
+- Re-run `scripts/install-host-bridge.sh` on the host to install the new unit (capability change); a binary-only redeploy leaves `container_run_rnsquadjs` failing with `EPERM`.
+- Images built before this change have no `panel.preserve` label, so the release that is live when this ships stays exposed to `docker_prune` until it is rebuilt or superseded; avoid running "clean up Docker" before the next release is deployed.
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed
