@@ -30,6 +30,8 @@ export const playerReports = pgTable(
   },
   (table) => ({
     statusCreatedIdx: index('player_reports_status_created_idx').on(table.status, table.createdAt),
+    // Report analytics filter by a created_at window across every status (#71).
+    createdAtIdx: index('player_reports_created_at_idx').on(table.createdAt),
     targetPlayerIdx: index('player_reports_target_player_idx').on(table.targetPlayerId),
     serverIdx: index('player_reports_server_idx').on(table.serverId),
     sourceCheck: check('player_reports_source_enum', sql`source IN ('ingame','ui')`),

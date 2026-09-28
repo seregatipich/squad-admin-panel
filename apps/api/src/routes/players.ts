@@ -16,6 +16,7 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({
@@ -98,13 +99,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const clauses: SQL[] = [];
       if (q) {
         const exactMatch = q.toLowerCase();
-        const nameMatch = normalizePlayerName(q);
+        // Escaped so `%`/`_` in the query match literally; the pattern is served
+        // by the pg_trgm indexes on both name columns (migration 0119).
+        const namePattern = `%${escapeLike(normalizePlayerName(q))}%`;
         const nameHistoryMatch = sql`EXISTS (
           SELECT 1 FROM player_name_history h
-          WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
+          WHERE h.player_id = players.id AND h.name_normalized LIKE ${namePattern}
         )`;
         const searchClause = or(
-          sql`canonical_name_normalized LIKE ${`%${nameMatch}%`}`,
+          sql`canonical_name_normalized LIKE ${namePattern}`,
           sql`steam_id64::text = ${exactMatch}`,
           sql`eos_id = ${exactMatch}`,
           nameHistoryMatch,
@@ -151,7 +154,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       }
       const q = req.query.q.trim();
       const exactMatch = q.toLowerCase();
-      const nameMatch = normalizePlayerName(q);
+      const namePattern = `%${escapeLike(normalizePlayerName(q))}%`;
       const rows = (await app.db.execute(sql`
         SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.eos_id,
                p.last_seen_at::text AS last_seen_at,
@@ -159,12 +162,12 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         FROM players p
         LEFT JOIN clan_members cm ON cm.player_id = p.id
         LEFT JOIN clans c ON c.id = cm.clan_id AND c.deleted_at IS NULL
-        WHERE p.canonical_name_normalized LIKE ${`%${nameMatch}%`}
+        WHERE p.canonical_name_normalized LIKE ${namePattern}
            OR p.steam_id64::text = ${exactMatch}
            OR p.eos_id = ${exactMatch}
            OR EXISTS (
              SELECT 1 FROM player_name_history h
-             WHERE h.player_id = p.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
+             WHERE h.player_id = p.id AND h.name_normalized LIKE ${namePattern}
            )
         ORDER BY p.last_seen_at DESC
         LIMIT 25
