@@ -30,8 +30,35 @@ export interface PermissionContext {
   isOwner: boolean;
 }
 
+/**
+ * Process-local permission cache keyed by player id. Entries live {@link TTL_MS};
+ * changes made outside this process (workers editing `players.role_id`) are
+ * therefore picked up within that window. Bounded twice so it cannot grow with
+ * every player who ever logged in: expired entries are swept when an entry is
+ * stored, and past {@link PERMISSION_CACHE_MAX_ENTRIES} the oldest entry is
+ * evicted. Every store re-inserts its key, so Map iteration order (insertion
+ * order) is also expiry order and both sweeps stop at the first live entry.
+ */
 const cache = new Map<string, { value: PermissionContext; expiresAt: number }>();
 const TTL_MS = 30_000;
+
+/** Upper bound on cached permission contexts. */
+export const PERMISSION_CACHE_MAX_ENTRIES = 5_000;
+
+function cachePermissions(playerId: string, value: PermissionContext): void {
+  const now = Date.now();
+  cache.delete(playerId);
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt > now && cache.size < PERMISSION_CACHE_MAX_ENTRIES) break;
+    cache.delete(key);
+  }
+  cache.set(playerId, { value, expiresAt: now + TTL_MS });
+}
+
+/** Number of cached permission contexts; exposed for tests and diagnostics. */
+export function permissionCacheSize(): number {
+  return cache.size;
+}
 
 const PANEL_PERMS_GATED_BY_ASSIGN: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'user:manage_roles',
@@ -118,6 +145,7 @@ export async function loadUserPermissions(
 ): Promise<PermissionContext> {
   const hit = cache.get(playerId);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
+  if (hit) cache.delete(playerId);
 
   const rows = await db.execute<RoleContextRow>(sql`
     SELECT
@@ -170,7 +198,7 @@ export async function loadUserPermissions(
       combatView: false,
       isOwner: false,
     };
-    cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
+    cachePermissions(playerId, empty);
     return empty;
   }
 
@@ -230,7 +258,7 @@ export async function loadUserPermissions(
     combatView,
     isOwner,
   };
-  cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
+  cachePermissions(playerId, value);
   return value;
 }
 

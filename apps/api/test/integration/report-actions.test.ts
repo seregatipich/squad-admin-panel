@@ -1,5 +1,6 @@
 import {
   auditLog,
+  events,
   moderationActions,
   playerReports,
   players,
@@ -7,7 +8,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -392,6 +393,36 @@ describeIfDb('POST /api/v1/reports/:id/actions', () => {
       .where(eq(moderationActions.reportId, reportId));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ actionType: 'ban', playerId: targetId });
+  });
+
+  it('keeps the applied ban recorded when the event-stream XADD fails afterwards (#66)', async () => {
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId, []));
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
+    const xadd = vi.spyOn(h.redis, 'xadd').mockRejectedValueOnce(new Error('redis down'));
+    const reportId = await insertReport();
+
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/reports/${reportId}/actions`,
+        headers: { cookie: await loginAsSteam(HANDLER_STEAM), 'content-type': 'application/json' },
+        payload: JSON.stringify({ action_type: 'ban', reason: 'Cheating', ban_length: '0' }),
+      });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      xadd.mockRestore();
+    }
+
+    const rows = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(eq(moderationActions.reportId, reportId));
+    expect(rows).toHaveLength(1);
+    const ledgerEvents = await h.db
+      .select({ id: events.eventId })
+      .from(events)
+      .where(sql`${events.payload}->>'moderation_action_id' = ${rows[0]?.id}`);
+    expect(ledgerEvents).toHaveLength(1);
   });
 
   it('502s and writes no ledger row when the RCON worker is unavailable', async () => {

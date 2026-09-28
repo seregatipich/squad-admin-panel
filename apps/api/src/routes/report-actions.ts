@@ -1,10 +1,4 @@
-import { events, moderationActions, playerReports, players } from '@squad/db/schema';
-import {
-  type EventEnvelope,
-  type EventType,
-  moderationActionPayload,
-  STREAM_NAME,
-} from '@squad/shared-types';
+import { moderationActions, playerReports, players } from '@squad/db/schema';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -13,6 +7,7 @@ import { z } from 'zod';
 import { raiseAltBanAlert } from '../lib/alt-ban-alert.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
+import { publishModerationEvent } from '../lib/moderation-enforce.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
@@ -41,14 +36,6 @@ const bulkResolveBody = z.object({
   status: z.enum(['resolved', 'rejected']),
   resolution_note: z.string().trim().min(1).max(RESOLUTION_NOTE_MAX),
 });
-
-type ReportModerationActionType = z.infer<typeof actionBody>['action_type'];
-
-const MODERATION_EVENT_TYPES: Record<ReportModerationActionType, EventType> = {
-  ban: 'moderation.ban',
-  kick: 'moderation.kick',
-  warn: 'moderation.warn',
-};
 
 interface ModerationActionApiRow {
   id: string;
@@ -105,68 +92,6 @@ interface PlayerIdentity {
   eosId: string | null;
   steamId64: string | null;
   name: string;
-}
-
-/** Persists and publishes the EVT-1 envelope consumed by discord-notify. */
-async function publishModerationEvent(
-  app: Parameters<FastifyPluginAsync>[0],
-  params: {
-    actionId: string;
-    actionType: ReportModerationActionType;
-    actorPlayerId: string;
-    actorName: string;
-    playerId: string;
-    player: PlayerIdentity;
-    serverId: string;
-    reportId: string;
-    reason: string;
-    duration: string | null;
-  },
-): Promise<EventEnvelope> {
-  const payload = moderationActionPayload.parse({
-    moderation_action_id: params.actionId,
-    action_type: params.actionType,
-    player_id: params.playerId,
-    steam_id64: params.player.steamId64,
-    eos_id: params.player.eosId,
-    name: params.player.name,
-    reason: params.reason,
-    duration: params.duration,
-    actor_name: params.actorName,
-    report_id: params.reportId,
-  });
-  const envelope: EventEnvelope = {
-    event_id: uuidv7(),
-    version: 1,
-    type: MODERATION_EVENT_TYPES[params.actionType],
-    server_id: params.serverId,
-    ts: new Date().toISOString(),
-    actor: { kind: 'user', id: params.actorPlayerId },
-    correlation_id: params.reportId,
-    payload,
-  };
-
-  await app.db.insert(events).values({
-    eventId: envelope.event_id,
-    serverId: envelope.server_id,
-    occurredAt: new Date(envelope.ts),
-    kind: envelope.type,
-    version: envelope.version,
-    actorKind: envelope.actor?.kind ?? null,
-    actorId: envelope.actor?.id ?? null,
-    correlationId: envelope.correlation_id,
-    payload: envelope.payload,
-  });
-  await app.redis.xadd(
-    STREAM_NAME.eventsServer(params.serverId),
-    'MAXLEN',
-    '~',
-    '10000',
-    '*',
-    'envelope',
-    JSON.stringify(envelope),
-  );
-  return envelope;
 }
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
