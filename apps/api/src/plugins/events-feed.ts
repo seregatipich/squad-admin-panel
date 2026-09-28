@@ -82,6 +82,10 @@ export interface EventsFeedOptions {
   databaseUrl: string;
   /** Coalescing window; defaults to 250ms. */
   debounceMs?: number;
+  /** First delay before retrying a failed LISTEN; doubles per attempt. Defaults to 1s. */
+  retryBaseMs?: number;
+  /** Upper bound for the LISTEN retry delay. Defaults to 60s. */
+  retryMaxMs?: number;
 }
 
 export default fp<EventsFeedOptions>(async (app, opts) => {
@@ -92,10 +96,14 @@ export default fp<EventsFeedOptions>(async (app, opts) => {
       data: batch,
     });
   }, opts.debounceMs ?? 250);
+  const retryBaseMs = opts.retryBaseMs ?? 1_000;
+  const retryMaxMs = opts.retryMaxMs ?? 60_000;
 
   // LISTEN pins its connection, so it gets its own single-connection client
   // instead of borrowing one from the query pool. postgres.js re-issues the
-  // LISTEN by itself after a reconnect.
+  // LISTEN by itself after a reconnect — but only once a first LISTEN has
+  // succeeded, so a failed initial LISTEN (Postgres not up yet at boot) is
+  // retried here with exponential backoff until it lands or the app closes.
   const sql = postgres(opts.databaseUrl, {
     max: 1,
     idle_timeout: 0,
@@ -103,18 +111,63 @@ export default fp<EventsFeedOptions>(async (app, opts) => {
     onnotice: () => undefined,
   });
   let unlisten: (() => Promise<void>) | null = null;
-  try {
-    const sub = await sql.listen(EVENTS_APPENDED_PG_CHANNEL, (payload) => coalescer.push(payload));
-    unlisten = sub.unlisten;
-  } catch (err) {
-    // The feed only speeds the event list up; the page still loads over REST.
-    app.log.warn(
-      { err: (err as Error).message },
-      'events-feed: LISTEN failed; the event list will not update live',
-    );
-  }
+  let retryTimer: NodeJS.Timeout | undefined;
+  let failedAttempts = 0;
+  let closed = false;
+
+  const subscribe = async (): Promise<void> => {
+    try {
+      const sub = await sql.listen(EVENTS_APPENDED_PG_CHANNEL, (payload) =>
+        coalescer.push(payload),
+      );
+      if (closed) {
+        await sub.unlisten().catch(() => undefined);
+        return;
+      }
+      unlisten = sub.unlisten;
+      if (failedAttempts > 0) {
+        app.log.info({ failedAttempts }, 'events-feed: LISTEN recovered; live updates resumed');
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'events_feed.listen_recovered',
+            severity: 'info',
+            message: `events feed LISTEN recovered after ${failedAttempts} failed attempts`,
+            payload: { failedAttempts },
+          })
+          .catch(() => undefined);
+      }
+      failedAttempts = 0;
+    } catch (err) {
+      if (closed) return;
+      failedAttempts++;
+      const delayMs = Math.min(retryBaseMs * 2 ** (failedAttempts - 1), retryMaxMs);
+      // The feed only speeds the event list up; the page still loads over REST.
+      // Report the outage once, not on every retry.
+      if (failedAttempts === 1) {
+        app.log.warn(
+          { err: (err as Error).message },
+          'events-feed: LISTEN failed; the event list will not update live until it recovers',
+        );
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'events_feed.listen_failed',
+            severity: 'warn',
+            message: `events feed LISTEN failed: ${(err as Error).message}`,
+            payload: { error: (err as Error).message },
+          })
+          .catch(() => undefined);
+      }
+      retryTimer = setTimeout(() => void subscribe(), delayMs);
+      retryTimer.unref();
+    }
+  };
+  await subscribe();
 
   app.addHook('onClose', async () => {
+    closed = true;
+    if (retryTimer) clearTimeout(retryTimer);
     coalescer.stop();
     await unlisten?.().catch(() => undefined);
     await sql.end({ timeout: 1 }).catch(() => undefined);
