@@ -141,6 +141,53 @@ describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
     });
   });
 
+  // Regression (#40, #1249/#216): the warning's "active ban" matched any
+  // action_type containing "ban", so an unbanned alt still showed as banned.
+  it('reports an alt as not banned once only unban/kick rows or a reverted ban remain', async () => {
+    await h.db.insert(moderationActions).values([
+      {
+        playerId: altId,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '0' },
+        revertedAt: new Date(),
+      },
+      { playerId: altId, actionType: 'unban', authorSystemLabel: 'test-fixture', context: {} },
+      {
+        playerId: altId,
+        actionType: 'external_ban_kick',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+      },
+    ]);
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: false }],
+    });
+  });
+
+  it('reports an alt with an active temporary ban as banned', async () => {
+    await h.db.insert(moderationActions).values({
+      playerId: altId,
+      actionType: 'ban',
+      authorSystemLabel: 'test-fixture',
+      context: { ban_length: '7d' },
+    });
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(response.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: true }],
+    });
+  });
+
   it('degrades to a count without leaking names without player:view_ips', async () => {
     const roleId = uuidv7();
     await h.db.insert(roles).values({
