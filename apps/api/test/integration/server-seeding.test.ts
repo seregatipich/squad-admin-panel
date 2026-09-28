@@ -170,6 +170,27 @@ describeIfDb('GET /api/v1/servers/:id/seeding', () => {
     });
   });
 
+  // #332: the Redis value is untrusted input — a shape that doesn't match
+  // the schema (e.g. `state` outside the seeding/live union) must degrade to
+  // state=unknown instead of leaking an arbitrary value into the response.
+  it('returns state=unknown for a value with an out-of-union state', async () => {
+    await h.redis.set(`seeding:state:${SERVER_ID}`, JSON.stringify({ state: 'corrupted' }));
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/seeding`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({
+      state: 'unknown',
+      current_players: null,
+      live_at: null,
+      progress_pct: null,
+      started_at: null,
+    });
+  });
+
   it('404s for a deleted/unknown server', async () => {
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
@@ -262,6 +283,41 @@ describeIfDb('PUT /api/v1/servers/:id/seeding-settings', () => {
       payload: { seed_hysteresis: -1 },
     });
     expect(resp.statusCode).toBe(400);
+  });
+
+  // #328: worker-rcon's live→seeding transition needs
+  // `playerCount < liveAt - hysteresis`; hysteresis >= live_at makes that
+  // threshold <= 0, so the server can never drop back into seeding.
+  it('rejects seed_hysteresis >= seed_live_at even though both pass their own bounds (400)', async () => {
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${SERVER_ID}/seeding-settings`,
+      headers: { cookie },
+      payload: { seed_live_at: 10, seed_hysteresis: 20 },
+    });
+    expect(resp.statusCode).toBe(400);
+    expect(resp.json()).toEqual({ error: 'hysteresis_must_be_below_live_at' });
+  });
+
+  it('rejects a partial update that would make hysteresis >= the current live_at (400)', async () => {
+    const cookie = await loginAsOwner(h);
+    const seeded = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${SERVER_ID}/seeding-settings`,
+      headers: { cookie },
+      payload: { seed_live_at: 30, seed_hysteresis: 5 },
+    });
+    expect(seeded.statusCode).toBe(200);
+
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${SERVER_ID}/seeding-settings`,
+      headers: { cookie },
+      payload: { seed_hysteresis: 30 },
+    });
+    expect(resp.statusCode).toBe(400);
+    expect(resp.json()).toEqual({ error: 'hysteresis_must_be_below_live_at' });
   });
 
   it('404s for a deleted/unknown server', async () => {
