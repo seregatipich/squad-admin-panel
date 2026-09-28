@@ -32,10 +32,15 @@ type Peer struct {
 
 // ResolvePeer calls getsockopt(SO_PEERCRED) and looks up whether the UID
 // is a member of PeerGroup. Returns ErrUntrustedPeer if not.
+//
+// The returned *Peer is never nil, even alongside an error: when the
+// credentials could not be read at all (closed fd, getsockopt failure) it is
+// the zero Peer, which is untrusted (InGroup=false). Callers may therefore
+// log the peer's fields on every error path.
 func ResolvePeer(conn *net.UnixConn) (*Peer, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return nil, fmt.Errorf("syscallconn: %w", err)
+		return &Peer{}, fmt.Errorf("syscallconn: %w", err)
 	}
 
 	var creds *unix.Ucred
@@ -44,10 +49,10 @@ func ResolvePeer(conn *net.UnixConn) (*Peer, error) {
 		creds, sockErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 	})
 	if controlErr != nil {
-		return nil, fmt.Errorf("control: %w", controlErr)
+		return &Peer{}, fmt.Errorf("control: %w", controlErr)
 	}
 	if sockErr != nil {
-		return nil, fmt.Errorf("getsockopt SO_PEERCRED: %w", sockErr)
+		return &Peer{}, fmt.Errorf("getsockopt SO_PEERCRED: %w", sockErr)
 	}
 
 	var username string
