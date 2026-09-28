@@ -268,7 +268,6 @@ SESSION_SECRET=${SESS}
 DATABASE_URL=postgres://admin:${PG_PW}@postgres:5432/admin
 REDIS_URL=redis://redis:6379
 BRIDGE_SOCKET=/run/panel-host-bridge/bridge.sock
-COOKIE_SECURE=false
 LOG_LEVEL=info
 PANEL_GID=${PANEL_GID}
 DATA_DIR=${DATA_DIR}

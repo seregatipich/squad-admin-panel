@@ -43,6 +43,7 @@ describe('DiscordIntegrationPage', () => {
       looksLikeWebhookUrl('https://discordapp.com/api/v10/webhooks/12345/tok_en-value.1'),
     ).toBe(true);
     expect(looksLikeWebhookUrl('https://evil.example/api/webhooks/1/2')).toBe(false);
+    expect(looksLikeWebhookUrl('http://discord.com/api/webhooks/12345/token')).toBe(false);
     expect(looksLikeWebhookUrl('not a url')).toBe(false);
     expect(looksLikeWebhookUrl('')).toBe(false);
   });

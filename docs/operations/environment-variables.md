@@ -27,8 +27,8 @@
 | `RCON_INFO_INTERVAL_MS` | no | `5000` | worker-rcon | Cadence of the server-info refresh (`ShowServerInfo` + `ShowNextMap`): map, next layer, mode, public queue, tickrate. Match boundaries also trigger an immediate refresh. | no |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | api | Sliding session lifetime in seconds. | no |
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | api | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |
-| `GLITCHTIP_DSN` | optional | — | all | Sentry-compatible error reporting. | yes |
-| `GLITCHTIP_SECRET_KEY` | optional | — | all | GlitchTip server-side ingest. | yes |
+| `GLITCHTIP_DSN` | optional | — | none | Reserved for Sentry-compatible error reporting; no service reads it yet. | yes |
+| `GLITCHTIP_SECRET_KEY` | optional | — | none | Reserved for GlitchTip server-side ingest; no service reads it yet. | yes |
 | `RESTIC_REPOSITORY` | optional | — | all | Where the (post-P0) backup worker writes snapshots. | no |
 | `RESTIC_PASSWORD` | optional | — | all | Restic encryption passphrase. | yes |
 | `LOG_LEVEL` | no | `info` | api / workers | `pino` log level. | no |

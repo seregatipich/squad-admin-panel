@@ -119,4 +119,52 @@ describe('rconSendOnce', () => {
       }),
     ).rejects.toThrow();
   });
+
+  describe('malformed packets from the RCON host (#66)', () => {
+    // A server that answers the AUTH packet with raw, hostile bytes.
+    function rawServer(reply: Buffer): Promise<{ port: number; close: () => Promise<void> }> {
+      return new Promise((resolve, reject) => {
+        const srv = createServer((sock) => {
+          sock.once('data', () => sock.write(reply));
+          sock.on('error', () => {});
+        });
+        srv.listen(0, '127.0.0.1', () => {
+          const addr = srv.address() as AddressInfo;
+          resolve({
+            port: addr.port,
+            close: () => new Promise<void>((ok) => srv.close(() => ok())),
+          });
+        });
+        srv.on('error', reject);
+      });
+    }
+
+    function header(size: number, extra: Buffer = Buffer.alloc(0)): Buffer {
+      const head = Buffer.alloc(4);
+      head.writeInt32LE(size, 0);
+      return Buffer.concat([head, extra]);
+    }
+
+    it.each([
+      ['a negative size (used to spin the event loop forever)', header(-4, Buffer.alloc(8))],
+      [
+        'a size below the 10-byte minimum (used to throw an uncaught RangeError)',
+        header(0, Buffer.alloc(1)),
+      ],
+      ['a size above the packet ceiling', header(0x7fffffff, Buffer.alloc(8))],
+    ])('rejects %s instead of hanging or crashing', async (_label, reply) => {
+      const srv = await rawServer(reply);
+      servers.push(srv);
+      await expect(
+        rconSendOnce({
+          host: '127.0.0.1',
+          port: srv.port,
+          password: 'x',
+          command: 'x',
+          connectTimeoutMs: 1000,
+          commandTimeoutMs: 1000,
+        }),
+      ).rejects.toThrow('rcon malformed packet');
+    });
+  });
 });

@@ -342,7 +342,6 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     APP_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     SESSION_SECRET: TEST_SESSION_SECRET,
     BRIDGE_SOCKET: '/dev/null',
-    COOKIE_SECURE: false,
     APP_DOMAIN: 'test.localhost',
     LOG_LEVEL: 'info',
     SESSION_TTL_SECONDS: 21600,

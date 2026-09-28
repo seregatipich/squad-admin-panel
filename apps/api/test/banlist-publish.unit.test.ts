@@ -61,6 +61,21 @@ describe('parseBanLengthToExpiry', () => {
     const result = parseBanLengthToExpiry('3', ISSUED_AT);
     expect(result).toEqual(new Date(ISSUED_AT.getTime() + 3 * 86_400_000));
   });
+
+  it('a ban_length too large for a Date is permanent, not an Invalid Date (#66)', () => {
+    expect(parseBanLengthToExpiry('300000y', ISSUED_AT)).toBeNull();
+    expect(parseBanLengthToExpiry('9'.repeat(400), ISSUED_AT)).toBeNull();
+  });
+
+  it('keeps publishing a ban whose ban_length overflows the Date range (#66)', () => {
+    const entries = buildBanlistEntries(
+      [row({ playerId: 'p1', banLength: '300000y' })],
+      'all_active',
+      new Date('2026-06-01T00:00:00.000Z'),
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.expiresAt).toBeNull();
+  });
 });
 
 describe('formatSquadBansCfg', () => {

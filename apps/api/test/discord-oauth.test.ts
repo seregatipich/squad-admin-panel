@@ -93,6 +93,18 @@ describe('exchangeCode', () => {
     );
   });
 
+  it('aborts a Discord request that never answers instead of holding the callback open (#66)', async () => {
+    const f = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    await expect(
+      exchangeCode('code-1', { ...deps, fetch: f as never, timeoutMs: 20 }),
+    ).rejects.toThrow(/timeout|abort/i);
+  }, 2000);
+
   it('throws when the token response carries no access_token', async () => {
     const f = vi.fn(async () => new Response(JSON.stringify({ token_type: 'Bearer' })));
     await expect(exchangeCode('code-1', { ...deps, fetch: f as never })).rejects.toThrow(
@@ -124,6 +136,18 @@ describe('fetchDiscordUser', () => {
     expect(url).toBe('https://discord.com/api/users/@me');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-1');
   });
+
+  it('aborts an identity request that never answers (#66)', async () => {
+    const f = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    await expect(fetchDiscordUser('tok-1', { fetch: f as never, timeoutMs: 20 })).rejects.toThrow(
+      /timeout|abort/i,
+    );
+  }, 2000);
 
   it('throws when the identity response has no id', async () => {
     const f = vi.fn(async () => new Response(JSON.stringify({ username: 'squaddie' })));

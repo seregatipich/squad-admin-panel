@@ -88,11 +88,17 @@ describe('loadConfig', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('COOKIE_SECURE defaults to true', async () => {
-    Object.assign(process.env, VALID_ENV);
+  it('does not expose the removed COOKIE_SECURE / GLITCHTIP_DSN settings (#66)', async () => {
+    // Cookies are always `Secure` (`__Host-` prefix); `COOKIE_SECURE=false` used to parse as
+    // `true` via z.coerce.boolean() and was never read, so the setting is gone entirely.
+    Object.assign(process.env, VALID_ENV, {
+      COOKIE_SECURE: 'false',
+      GLITCHTIP_DSN: 'https://x@y/1',
+    });
     const loadConfig = await freshLoadConfig();
-    const cfg = loadConfig();
-    expect(cfg.COOKIE_SECURE).toBe(true);
+    const cfg = loadConfig() as Record<string, unknown>;
+    expect(cfg).not.toHaveProperty('COOKIE_SECURE');
+    expect(cfg).not.toHaveProperty('GLITCHTIP_DSN');
   });
 
   it('SESSION_TTL_SECONDS defaults to 86400', async () => {
