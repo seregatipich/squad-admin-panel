@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -187,9 +187,13 @@ export function MatchesBrowser() {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
+      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
       .then((data) => {
-        if (!cancelled) setTotal(data.total);
+        // A failed count request leaves `total` at `null` ("…") rather than
+        // folding into 0 — a real 0 and "unknown" are different facts, and
+        // showing "всего: 0" for a request that never actually counted
+        // anything is misleading.
+        if (!cancelled && data) setTotal(data.total);
       })
       .catch(() => {});
     return () => {
@@ -272,6 +276,7 @@ export function MatchesBrowser() {
         nextCursor !== null,
       ) &&
       !loadingMore &&
+      !error &&
       scrollRestoreLoadAttemptsRef.current < 20
     ) {
       scrollRestoreLoadAttemptsRef.current += 1;
@@ -289,7 +294,7 @@ export function MatchesBrowser() {
       restoredScrollHrefRef.current = currentListHref;
       scrollRestoreFrameRef.current = null;
     });
-  }, [currentListHref, loadMore, loading, loadingMore, nextCursor]);
+  }, [currentListHref, error, loadMore, loading, loadingMore, nextCursor]);
 
   const refreshHead = useCallback(() => {
     if (filters.sort !== 'started_at' || filters.order !== 'desc') return;
@@ -622,56 +627,85 @@ function MatchTable({
         </tr>
       </TableHead>
       <TableBody>
-        {items.map((match) => {
-          const open = isOpenMatch(match);
-          const duration = open
-            ? liveDurationSeconds(match.started_at, now)
-            : match.duration_seconds;
-          return (
-            <TableRow key={match.id} interactive>
-              <Td>
-                <Link
-                  href={buildMatchDetailHref(match.id, listHref)}
-                  onClick={() => onOpen(match.id)}
-                  title={match.server_name ?? undefined}
-                  className="font-medium text-accent no-underline hover:brightness-110"
-                >
-                  {shortServerName(match)}
-                </Link>
-              </Td>
-              <Td>{match.layer ?? '—'}</Td>
-              <Td className="text-xs text-ink-3">{formatDateTime(match.started_at)}</Td>
-              <Td className="text-xs text-ink-3">
-                {open ? (
-                  <StatusBadge state="good" label="Идёт" pulse />
-                ) : (
-                  formatDateTime(match.ended_at)
-                )}
-              </Td>
-              <Td>
-                <TicketBadge
-                  team={1}
-                  faction={match.team1_faction}
-                  tickets={match.team1_tickets}
-                  winner={match.winner}
-                />
-              </Td>
-              <Td>
-                <TicketBadge
-                  team={2}
-                  faction={match.team2_faction}
-                  tickets={match.team2_tickets}
-                  winner={match.winner}
-                />
-              </Td>
-              <Td numeric className="text-xs">
-                {formatDuration(duration)}
-              </Td>
-              <Td className="text-xs">{winnerLabel(match)}</Td>
-            </TableRow>
-          );
-        })}
+        {items.map((match) => (
+          <MatchRow key={match.id} match={match} now={now} onOpen={onOpen} listHref={listHref} />
+        ))}
       </TableBody>
     </Table>
   );
 }
+
+/**
+ * One row of {@link MatchTable}, split out and memoized so the once-a-second
+ * `now` tick (kept alive while any match is still open) only re-renders the
+ * open match's own row instead of the whole table — a closed match's row
+ * never reads `now`, so its rendered output cannot change when it ticks.
+ */
+const MatchRow = memo(
+  function MatchRow({
+    match,
+    now,
+    onOpen,
+    listHref,
+  }: {
+    match: MatchListItem;
+    now: Date;
+    onOpen: (id: string) => void;
+    listHref: string;
+  }) {
+    const open = isOpenMatch(match);
+    const duration = open ? liveDurationSeconds(match.started_at, now) : match.duration_seconds;
+    return (
+      <TableRow interactive>
+        <Td>
+          <Link
+            href={buildMatchDetailHref(match.id, listHref)}
+            onClick={() => onOpen(match.id)}
+            title={match.server_name ?? undefined}
+            className="font-medium text-accent no-underline hover:brightness-110"
+          >
+            {shortServerName(match)}
+          </Link>
+        </Td>
+        <Td>{match.layer ?? '—'}</Td>
+        <Td className="text-xs text-ink-3">{formatDateTime(match.started_at)}</Td>
+        <Td className="text-xs text-ink-3">
+          {open ? <StatusBadge state="good" label="Идёт" pulse /> : formatDateTime(match.ended_at)}
+        </Td>
+        <Td>
+          <TicketBadge
+            team={1}
+            faction={match.team1_faction}
+            tickets={match.team1_tickets}
+            winner={match.winner}
+          />
+        </Td>
+        <Td>
+          <TicketBadge
+            team={2}
+            faction={match.team2_faction}
+            tickets={match.team2_tickets}
+            winner={match.winner}
+          />
+        </Td>
+        <Td numeric className="text-xs">
+          {formatDuration(duration)}
+        </Td>
+        <Td className="text-xs">{winnerLabel(match)}</Td>
+      </TableRow>
+    );
+  },
+  (prev, next) => {
+    if (
+      prev.match !== next.match ||
+      prev.onOpen !== next.onOpen ||
+      prev.listHref !== next.listHref
+    ) {
+      return false;
+    }
+    // A closed match's cells never depend on `now` — only an open one's
+    // "Идёт"/duration cell does, so only that row needs to re-render on tick.
+    if (!isOpenMatch(next.match)) return true;
+    return prev.now.getTime() === next.now.getTime();
+  },
+);
