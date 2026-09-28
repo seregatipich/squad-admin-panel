@@ -37,7 +37,11 @@ export const serverDailyStats = pgTable(
       .notNull()
       .references(() => servers.id, { onDelete: 'cascade' }),
     day: date('day', { mode: 'string' }).notNull(),
-    /** Time-weighted mean concurrent online players over the elapsed part of the day. */
+    /**
+     * Time-weighted mean concurrent online players over the elapsed part of the day.
+     * "Online" is every connected session mode (`online`, `boost`, `seed`); only
+     * `queue` is excluded and reported separately as `avg_queue`.
+     */
     avgOnline: integer('avg_online').notNull().default(0),
     /** Exact maximum of concurrent online sessions, from an interval sweep. */
     peakOnline: integer('peak_online').notNull().default(0),
@@ -51,6 +55,10 @@ export const serverDailyStats = pgTable(
     chatMessages: integer('chat_messages').notNull().default(0),
     teamkills: integer('teamkills').notNull().default(0),
     punishments: integer('punishments').notNull().default(0),
+    /**
+     * Online players whose role grants a Squad permission other than `reserve`
+     * (a priority slot alone — VIP, QueuePriority — is not an admin).
+     */
     avgAdmins: integer('avg_admins').notNull().default(0),
     peakAdmins: integer('peak_admins').notNull().default(0),
     computedAt: timestamp('computed_at', { withTimezone: true, mode: 'date' })
