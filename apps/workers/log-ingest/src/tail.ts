@@ -3,15 +3,32 @@ import type { Logger } from 'pino';
 
 export type TailStopReason = 'aborted' | 'stream-end' | 'stream-error';
 
+/**
+ * Follows `docker logs -f` of one container through the host bridge and feeds
+ * every complete stdout line to `onLine`.
+ *
+ * The bridge only stops a follow (and kills its `docker logs -f` child) when
+ * the connection carrying it closes; the protocol has no per-call cancel. The
+ * tail therefore opens its own client with `openBridge` and closes it both
+ * when stopped and when the stream ends, so a stopped tail leaves no pending
+ * call in a shared client and no follow running on the host.
+ *
+ * @param params.openBridge creates the tail's dedicated, not-yet-shared client.
+ * @returns a stop function; calling it more than once is harmless.
+ */
 export function tailContainerLogs(params: {
-  bridge: BridgeClient;
+  openBridge: () => BridgeClient;
   name: string;
   log: Logger;
   onLine: (line: string) => void;
   onStarted?: () => void;
   onStopped?: (info: { reason: TailStopReason; error?: string }) => void;
 }): () => void {
-  const { bridge, name, log, onLine, onStarted, onStopped } = params;
+  const { openBridge, name, log, onLine, onStarted, onStopped } = params;
+  const bridge = openBridge();
+  const closeBridge = () => {
+    bridge.close().catch(() => undefined);
+  };
   let buffer = '';
   let aborted = false;
   let bytesThisMinute = 0;
@@ -62,11 +79,13 @@ export function tailContainerLogs(params: {
       }
     } finally {
       clearInterval(reportTimer);
+      closeBridge();
     }
   })();
 
   return () => {
     aborted = true;
     clearInterval(reportTimer);
+    closeBridge();
   };
 }
