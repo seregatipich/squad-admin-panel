@@ -13,28 +13,29 @@ export default fp(async (app) => {
     }),
   );
 
+  // Operator-only dependency probe: the reverse proxy never exposes it (#47),
+  // and the body reports only ok/fail per check. The reason for a failure goes
+  // to the log, not to the caller.
   app.get(
     '/ready',
     { config: { public: true, audit: false }, schema: { hide: true } },
     async (_req, reply) => {
-      const checks: Record<string, 'ok' | string> = {};
-      try {
-        await app.db.execute(sql`SELECT 1`);
-        checks.postgres = 'ok';
-      } catch (err) {
-        checks.postgres = (err as Error).message;
-      }
-      try {
-        const pong = await app.redis.ping();
-        checks.redis = pong === 'PONG' ? 'ok' : pong;
-      } catch (err) {
-        checks.redis = (err as Error).message;
-      }
-      try {
-        const res = await app.bridge.ping();
-        checks.bridge = res.pong ? 'ok' : 'no pong';
-      } catch (err) {
-        checks.bridge = (err as Error).message;
+      const probes: Record<string, () => Promise<boolean>> = {
+        postgres: async () => {
+          await app.db.execute(sql`SELECT 1`);
+          return true;
+        },
+        redis: async () => (await app.redis.ping()) === 'PONG',
+        bridge: async () => (await app.bridge.ping()).pong,
+      };
+      const checks: Record<string, 'ok' | 'fail'> = {};
+      for (const [name, probe] of Object.entries(probes)) {
+        try {
+          checks[name] = (await probe()) ? 'ok' : 'fail';
+        } catch (err) {
+          app.log.warn({ err, check: name }, 'readiness check failed');
+          checks[name] = 'fail';
+        }
       }
       const ok = Object.values(checks).every((v) => v === 'ok');
       return reply.code(ok ? 200 : 503).send({ status: ok ? 'ok' : 'degraded', checks });

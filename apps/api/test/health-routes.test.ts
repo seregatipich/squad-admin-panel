@@ -77,7 +77,9 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.postgres).toBe('connection refused');
+    expect(body.checks.postgres).toBe('fail');
+    // #47: an anonymous probe never sees internal error text.
+    expect(res.body).not.toContain('connection refused');
   });
 
   it('returns 503 when redis fails', async () => {
@@ -86,7 +88,8 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.redis).toBe('ECONNREFUSED');
+    expect(body.checks.redis).toBe('fail');
+    expect(res.body).not.toContain('ECONNREFUSED');
   });
 
   it('returns 503 when bridge fails', async () => {
@@ -95,21 +98,23 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.bridge).toBe('socket: ENOENT');
+    expect(body.checks.bridge).toBe('fail');
+    expect(res.body).not.toContain('ENOENT');
   });
 
   it('returns degraded when bridge pong is false', async () => {
     fakes.bridge.ping.mockResolvedValueOnce({ pong: false });
     const res = await app.inject({ method: 'GET', url: '/ready' });
     expect(res.statusCode).toBe(503);
-    expect(res.json().checks.bridge).toBe('no pong');
+    expect(res.json().checks.bridge).toBe('fail');
   });
 
   it('returns degraded when redis ping is not PONG', async () => {
     fakes.redis.ping.mockResolvedValueOnce('LOADING');
     const res = await app.inject({ method: 'GET', url: '/ready' });
     expect(res.statusCode).toBe(503);
-    expect(res.json().checks.redis).toBe('LOADING');
+    expect(res.json().checks.redis).toBe('fail');
+    expect(res.body).not.toContain('LOADING');
   });
 });
 
