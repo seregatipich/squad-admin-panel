@@ -71,7 +71,7 @@ Static host snapshot.
 
 #### `host_metrics()` → `HostMetrics`
 
-Live sample. Internally takes two short-interval samples so CPU% and net rates are non-zero on first call.
+Live sample. CPU% and net rates are deltas against the previous `host_metrics` call's cached counters (the first call, or one within 200 ms of the previous, reports 0). Net rates sum only physical interfaces — `lo`, `veth*`, `docker*` and `br-*` are skipped so container traffic is not counted several times — and an interface that appeared, disappeared or reset its counters contributes 0 instead of wrapping around. `cpu_percent` is clamped to 0–100.
 
 ### Files
 
