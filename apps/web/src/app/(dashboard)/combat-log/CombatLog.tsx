@@ -114,6 +114,14 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const [rows, setRows] = useState<CombatApiRow[]>([]);
+  /**
+   * Live rows prepended via the `combat.event` live-bus subscription, kept in
+   * their own array separate from the paginated `rows` history. Capping this
+   * array on its own (instead of slicing the merged list) means an unattended
+   * Live view never drops history rows the loaded page's `nextCursor` still
+   * expects to find — see COMBAT-529.
+   */
+  const [liveRows, setLiveRows] = useState<CombatApiRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [approxTotal, setApproxTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -183,6 +191,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
       .then((data) => {
         if (!current()) return;
         setRows(data.rows);
+        setLiveRows([]);
         setNextCursor(data.nextCursor);
         setApproxTotal(data.approxTotal);
       })
@@ -190,6 +199,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
         if (!current()) return;
         setError((err as Error).message);
         setRows([]);
+        setLiveRows([]);
         setNextCursor(null);
       })
       .finally(() => {
@@ -238,15 +248,17 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     (event: Extract<LiveEvent, { type: 'combat.event' }>) => {
       if (!liveEnabled) return;
       if (lockedServerId && event.data.server_id !== lockedServerId) return;
-      setRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
+      setLiveRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
     },
     [liveEnabled, lockedServerId],
   );
   useLiveSubscription('combat.event', onCombat);
 
+  const combinedRows = useMemo(() => [...liveRows, ...rows], [liveRows, rows]);
+
   const displayRows = useMemo(
-    () => (damageVisible ? sortRowsByDamage(rows, damageSort) : rows),
-    [rows, damageVisible, damageSort],
+    () => (damageVisible ? sortRowsByDamage(combinedRows, damageSort) : combinedRows),
+    [combinedRows, damageVisible, damageSort],
   );
 
   const exportHref = `/api/v1/combat-events/export?${buildExportApiQuery(filters, { lockedServerId })}`;
