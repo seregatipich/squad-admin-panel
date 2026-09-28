@@ -1,5 +1,12 @@
 # Changelog — worker-discord
 
+## 2026-09-28
+
+### Fixed
+
+- #883: the notify loop discovers streams (`SCAN events:server:*`) and runs the `XAUTOCLAIM` sweep every 30 s instead of on every poll, and no longer writes a 24-hour dedup key for event types Discord never renders.
+- #1292: a failing `XGROUP CREATE` (e.g. `LOADING` after a Redis restart) no longer ends the notify or role-sync loop — it is retried, and a `NOGROUP` read error re-creates the group; if a loop still rejects, the worker exits 1 instead of heartbeating as healthy. The Redis client now waits for the ready check. New notify groups start at `0`, so events published before a stream was discovered are delivered.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed

@@ -131,11 +131,18 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
     now = Date.now,
   } = opts;
 
-  await redis
-    .xgroup('CREATE', DISCORD_ROLE_SYNC_STREAM, group, '$', 'MKSTREAM')
-    .catch((err: Error) => {
-      if (!String(err.message).includes('BUSYGROUP')) throw err;
-    });
+  // Created inside the loop, not once up front: a Redis that is still loading
+  // its dataset (or that lost the group) must delay the loop, not end it
+  // while the heartbeat keeps reporting the worker healthy (#1292).
+  let groupReady = false;
+  const ensureGroup = async (): Promise<void> => {
+    await redis
+      .xgroup('CREATE', DISCORD_ROLE_SYNC_STREAM, group, '$', 'MKSTREAM')
+      .catch((err: Error) => {
+        if (!String(err.message).includes('BUSYGROUP')) throw err;
+      });
+    groupReady = true;
+  };
 
   let nextReconcileAt =
     reconcileIntervalMs > 0 ? now() + reconcileIntervalMs : Number.POSITIVE_INFINITY;
@@ -179,6 +186,16 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
   };
 
   while (!shouldStop()) {
+    if (!groupReady) {
+      try {
+        await ensureGroup();
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'role-sync consumer group creation failed');
+        await sleepMs(1000);
+        continue;
+      }
+    }
+
     try {
       const claimed = (await redis.xautoclaim(
         DISCORD_ROLE_SYNC_STREAM,
@@ -223,7 +240,9 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
         }
       }
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'role-sync poll iteration failed');
+      const message = (err as Error).message;
+      log.error({ err: message }, 'role-sync poll iteration failed');
+      if (message.includes('NOGROUP')) groupReady = false;
       await sleepMs(1000);
     }
 

@@ -186,4 +186,27 @@ describe('runRoleSyncLoop', () => {
       'MKSTREAM',
     );
   });
+
+  it('keeps running and retries when the consumer group cannot be created yet (#1292)', async () => {
+    const redis = fakeRedis([]);
+    redis.xgroup.mockRejectedValueOnce(new Error('LOADING Redis is loading the dataset'));
+    let iterations = 0;
+
+    await expect(
+      runRoleSyncLoop(makeOpts(redis, { shouldStop: () => iterations++ > 1 })),
+    ).resolves.toBeUndefined();
+
+    expect(redis.xgroup).toHaveBeenCalledTimes(2);
+    expect(redis.xreadgroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-creates the consumer group after a NOGROUP read error (#1292)', async () => {
+    const redis = fakeRedis([]);
+    redis.xreadgroup.mockRejectedValueOnce(new Error('NOGROUP No such key or consumer group'));
+    let iterations = 0;
+
+    await runRoleSyncLoop(makeOpts(redis, { shouldStop: () => iterations++ > 1 }));
+
+    expect(redis.xgroup).toHaveBeenCalledTimes(2);
+  });
 });

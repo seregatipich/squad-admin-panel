@@ -5,11 +5,19 @@ affecting the others.
 
 ## Notify (DISCORD-2)
 
-Discover event streams → reclaim anything a dead consumer left pending →
-`XREADGROUP` → map the envelope type to a Discord event type → render the
-stored (or default) template → POST to every enabled matching webhook → set the
-dedup key → `XACK`. Delivery is at-least-once: the dedup key is only written
-after a successful send, and the `XACK` only after that.
+Discover event streams (a keyspace `SCAN`, every 30 s) → reclaim anything a
+dead consumer left pending (every 30 s and at boot) → `XREADGROUP` → map the
+envelope type to a Discord event type → render the stored (or default)
+template → POST to every enabled matching webhook → set the dedup key → `XACK`.
+Delivery is at-least-once: the dedup key is only written after a successful
+send, and the `XACK` only after that. An event type with no Discord mapping is
+acked without a dedup key. New consumer groups start at `0`, so a new server's
+events published before its stream was discovered are still delivered; a
+failing group creation skips the stream until the next iteration, and a
+`NOGROUP` read error re-creates the groups.
+
+If any of the three loops ever rejects, the process exits 1 so the container
+restarts, instead of heartbeating while that loop is dead.
 
 ## Role sync (DISCORD-5)
 
