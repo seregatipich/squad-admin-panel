@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge,
@@ -25,8 +26,17 @@ import { useIntlLocale } from '@/i18n/LocaleProvider';
 interface AuditEntry {
   id: string;
   created_at: string;
-  actor_user_id: string | null;
-  actor_kind: string;
+  /**
+   * `GET /api/v1/audit` never returns `actor_user_id`/`actor_kind: 'user'` —
+   * the `audit_log_actor_kind` check constraint only allows `'steam'` or
+   * `'system'` (packages/db/src/schema/audit-log.ts). Keying the "Кто" column
+   * off the wrong shape made every row read as `steam`/`system` verbatim and
+   * the actor search always miss (#484).
+   */
+  actor_kind: 'steam' | 'system';
+  actor_player_id: string | null;
+  actor_token_id: string | null;
+  actor_system_label: string | null;
   action_type: string;
   target_type: string | null;
   target_id: string | null;
@@ -108,7 +118,8 @@ export default function AuditPage() {
         r.action_type.toLowerCase().includes(needle) ||
         (r.target_type ?? '').toLowerCase().includes(needle) ||
         (r.target_id ?? '').toLowerCase().includes(needle) ||
-        (r.actor_user_id ?? '').toLowerCase().includes(needle),
+        (r.actor_player_id ?? '').toLowerCase().includes(needle) ||
+        (r.actor_system_label ?? '').toLowerCase().includes(needle),
     );
   }, [items, q]);
 
@@ -224,9 +235,20 @@ export default function AuditPage() {
                         <DateTime value={r.created_at} locale={locale} />
                       </Td>
                       <Td className="font-mono text-xs">
-                        {r.actor_kind === 'user'
-                          ? (r.actor_user_id?.slice(0, 8) ?? '—')
-                          : r.actor_kind}
+                        {r.actor_kind === 'steam' ? (
+                          r.actor_player_id ? (
+                            <Link
+                              href={`/all-players/${r.actor_player_id}`}
+                              className="text-accent no-underline hover:brightness-110"
+                            >
+                              {r.actor_player_id.slice(0, 8)}
+                            </Link>
+                          ) : (
+                            '—'
+                          )
+                        ) : (
+                          (r.actor_system_label ?? r.actor_kind)
+                        )}
                       </Td>
                       {/* Раскрытие подробностей — кнопка внутри ячейки, а не
                           `onClick` на строке: иначе до записи не добраться с

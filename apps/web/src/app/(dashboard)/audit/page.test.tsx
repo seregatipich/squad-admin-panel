@@ -14,8 +14,10 @@ import AuditPage from './page';
 const LIST_ITEM = {
   id: '1',
   created_at: '2026-07-23T10:00:00Z',
-  actor_user_id: null,
   actor_kind: 'system',
+  actor_player_id: null,
+  actor_token_id: null,
+  actor_system_label: 'panel',
   action_type: 'server.create',
   target_type: 'server',
   target_id: 'srv-1',
