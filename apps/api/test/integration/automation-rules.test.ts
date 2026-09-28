@@ -182,6 +182,44 @@ describeIfDb('automation-rules validation', () => {
     expect(statusCode).toBe(201);
     expect(body.action_type).toBe('rcon_command');
   });
+
+  // #53 (#1168): worker-rcon refuses these commands, yet each firing was
+  // recorded as executed; they must be rejected when the rule is saved.
+  it('rejects a kick action with an empty reason (400)', async () => {
+    const { statusCode } = await createRule(editorCookie, {
+      action_type: 'kick',
+      action: { reason: '  ' },
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it('rejects an rcon_command whose argument count the worker would refuse (400)', async () => {
+    const { statusCode } = await createRule(editorCookie, {
+      condition_type: 'player_count',
+      condition: { operator: 'gte', threshold: 60 },
+      action_type: 'rcon_command',
+      action: { command: 'AdminBroadcast', args: [] },
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  // #53 (#1177): an unknown zone saved fine and the rule silently never fired.
+  it('rejects a time_of_day condition with an unknown timezone (400)', async () => {
+    const { statusCode, body } = await createRule(editorCookie, {
+      condition_type: 'time_of_day',
+      condition: { startMinute: 0, endMinute: 60, timezone: 'Europe/Moskow' },
+    });
+    expect(statusCode).toBe(400);
+    expect(JSON.stringify(body)).toContain('unknown IANA timezone');
+  });
+
+  it('accepts a time_of_day condition with a valid IANA timezone', async () => {
+    const { statusCode } = await createRule(editorCookie, {
+      condition_type: 'time_of_day',
+      condition: { startMinute: 0, endMinute: 60, timezone: 'Europe/Moscow' },
+    });
+    expect(statusCode).toBe(201);
+  });
 });
 
 describeIfDb('automation-rules update / delete', () => {
