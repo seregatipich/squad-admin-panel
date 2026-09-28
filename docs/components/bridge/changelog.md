@@ -1,5 +1,11 @@
 # `bridge` — changelog
 
+## 2026-09-28 — `container_run` проверяет multihome (#52)
+
+### Security
+
+- `validate.Multihome`: адрес привязки должен разбираться `net.ParseIP`. Он подставляется в командную строку сервера Squad (`RCONIP=%s`, `MULTIHOME=%s`), и значение с пробелами могло добавить параметры запуска. `DockerRunner.Run` отклоняет такое значение с `ErrInvalidArgs`, не вызывая docker.
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed

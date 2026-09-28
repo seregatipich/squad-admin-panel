@@ -199,7 +199,7 @@ Input schema for `POST /api/v1/servers`. All required unless noted:
 | `query_port` | int, 1024–65535 |
 | `beacon_port` | int, 1024–65535 |
 | `rcon_port` | int, 1024–65535 |
-| `multihome` | string, default `'0.0.0.0'` |
+| `multihome` | IPv4/IPv6 literal (`z.string().ip()`), default `'0.0.0.0'` — the bridge puts it on the Squad command line |
 | `max_players` | int, 1–100, default 100 |
 | `tickrate` | int, 10–120, default 50 |
 | `extra_args` | string, default `''` |

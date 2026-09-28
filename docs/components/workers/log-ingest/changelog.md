@@ -1,5 +1,11 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-28
+
+### Security
+
+- `compileBannedNameRules` отбрасывает regex-правила ников, которые не проходят `validateBannedNamePattern` (в том числе шаблоны с катастрофическим backtracking, сохранённые до появления проверки), вместо того чтобы исполнять их на каждом нике (#52).
+
 ## 2026-09-27
 
 ### Fixed

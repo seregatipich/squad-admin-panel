@@ -18,12 +18,14 @@ Each tick (`MEDIA_PUBLISHER_INTERVAL_MS`, default 60 s) claims up to `MEDIA_PUBL
 WITH due AS (
   SELECT p.id FROM media_publications p
   JOIN media_files m ON m.id = p.media_id
-  WHERE p.status = 'queued' AND p.next_attempt_at <= now() AND m.deleted_at IS NULL
+  WHERE p.status IN ('queued', 'uploading') AND p.next_attempt_at <= now() AND m.deleted_at IS NULL
   ORDER BY p.next_attempt_at ASC LIMIT $n
   FOR UPDATE OF p SKIP LOCKED
 )
-UPDATE media_publications p SET status = 'uploading' ... RETURNING ...
+UPDATE media_publications p SET status = 'uploading', next_attempt_at = now() + lease ... RETURNING ...
 ```
+
+A claim is a lease (`MEDIA_PUBLISH_LEASE_MS`, 6 h): while a row is `uploading`, `next_attempt_at` is the lease expiry. A row still `uploading` past it belongs to a worker that died mid-upload (OOM, SIGKILL, deploy), so the next claim takes it back with `attempts + 1` and `error = 'upload_interrupted'`; once that exhausts the retry budget the row goes to `failed` without another upload (#52). The lease is far above any real upload, because reclaiming a live upload would publish the media twice.
 
 `FOR UPDATE ... SKIP LOCKED` plus the `status = 'queued'` re-check on the `UPDATE` is what makes a second replica — or a second tick overlapping a slow one — unable to take the same row.
 

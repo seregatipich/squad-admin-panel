@@ -29,7 +29,9 @@ reproducible, and `applied`/`failure_reason` record the outcome
 
 The worker also reads enabled `scheduled_tasks` rows (AUTO-2, #73) and appends
 one `scheduled_task_runs` row per attempt (`executed` / `skipped_depot_update` /
-`failed`), auditing with system actor label `task-scheduler`. `last_executed_at`
+`failed`), auditing with system actor label `task-scheduler`. The history is
+bounded by `worker-event-partition`: rows older than 90 days, and all but the
+newest 1000 rows of each task, are deleted every hour (#52). `last_executed_at`
 is the dedup cursor with the same semantics as `seed_schedule`.
 
 MSG-4 (#187) adds `scheduled_tasks.rotation_index integer NOT NULL DEFAULT 0`

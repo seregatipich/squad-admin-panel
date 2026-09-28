@@ -1,5 +1,10 @@
 # `shared-types` — changelog
 
+## 2026-09-28
+
+### Security
+- `serverCreateInput.multihome` и `serverSettingsUpdate.multihome` принимают только IP-литерал (`z.string().ip()`): bridge подставляет значение в командную строку сервера Squad (`RCONIP=`/`MULTIHOME=`), и строка с пробелами могла добавить параметры запуска (#52).
+
 ## 2026-07-27
 
 ### Added
