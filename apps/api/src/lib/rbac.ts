@@ -41,6 +41,15 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
   'role:edit',
   'role:delete',
 ]);
+/**
+ * Message templates were edited under `role:edit` before they had their own
+ * key, so a role holds `message_template:manage` implicitly only while it may
+ * edit roles; any other role gets it through an explicit `role_permissions`
+ * grant, without receiving role management with it.
+ */
+const PANEL_PERMS_GATED_BY_EDIT_OR_GRANT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'message_template:manage',
+]);
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
@@ -84,6 +93,7 @@ function derivePanelPermissions(
   for (const key of ALL_PANEL_PERMS) {
     if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
     if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
+    if (PANEL_PERMS_GATED_BY_EDIT_OR_GRANT.has(key) && !canEditRoles) continue;
     if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
     if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
     if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !squadPermissions.has('kick')) continue;

@@ -100,6 +100,11 @@ export const PERMISSIONS = [
   },
   { key: 'mod:unban', category: 'moderation', label: 'Unban' },
   {
+    key: 'message_template:manage',
+    category: 'moderation',
+    label: 'Управлять шаблонами сообщений',
+  },
+  {
     key: 'banlist:read',
     category: 'moderation',
     label: 'Читать публикуемый банлист (федерация)',

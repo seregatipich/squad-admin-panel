@@ -1,8 +1,11 @@
-import { messageTemplates, players, roles } from '@squad/db/schema';
+import { randomUUID } from 'node:crypto';
+import { messageTemplates, players, rolePermissions, roles } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { invalidatePermissionCache, loadUserPermissions } from '../src/lib/rbac.js';
+import { createSession } from '../src/lib/sessions.js';
 import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
+import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -171,7 +174,7 @@ describe('POST /api/v1/message-templates', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 403 without role:edit (acceptance #4)', async () => {
+  it('returns 403 without message_template:manage (acceptance #4)', async () => {
     const viewerCookie = await demoteToViewer();
     const res = await h.app.inject({
       method: 'POST',
@@ -231,7 +234,7 @@ describe('PATCH /api/v1/message-templates/:id', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 403 without role:edit', async () => {
+  it('returns 403 without message_template:manage', async () => {
     const created = (
       await createTemplate({ title: 'Guarded', body: 'ok', category: 'info', locale: 'en' })
     ).json() as { id: string };
@@ -282,7 +285,7 @@ describe('DELETE /api/v1/message-templates/:id', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('returns 403 without role:edit', async () => {
+  it('returns 403 without message_template:manage', async () => {
     const created = (
       await createTemplate({ title: 'Protected', body: 'ok', category: 'info', locale: 'en' })
     ).json() as { id: string };
@@ -293,5 +296,85 @@ describe('DELETE /api/v1/message-templates/:id', () => {
       headers: { cookie: viewerCookie },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('message_template:manage (#70)', () => {
+  async function playerWithRole(opts: {
+    steamId64: bigint;
+    canEditRoles: boolean;
+    grantTemplates: boolean;
+  }): Promise<{ playerId: string; cookie: string }> {
+    const [role] = await h.db
+      .insert(roles)
+      .values({
+        id: randomUUID(),
+        name: `Tmpl-${opts.steamId64}`,
+        color: 'sky',
+        isSystemRole: false,
+        panelAccess: true,
+        canEditRoles: opts.canEditRoles,
+      })
+      .returning({ id: roles.id });
+    if (!role) throw new Error('role insert failed');
+    if (opts.grantTemplates) {
+      await h.db
+        .insert(rolePermissions)
+        .values({ roleId: role.id, permissionKey: 'message_template:manage' });
+    }
+    const [player] = await h.db
+      .insert(players)
+      .values({
+        steamId64: opts.steamId64,
+        canonicalName: `tmpl-${opts.steamId64}`,
+        canonicalNameNormalized: `tmpl-${opts.steamId64}`,
+        roleId: role.id,
+      })
+      .returning({ id: players.id });
+    if (!player) throw new Error('player insert failed');
+    invalidatePermissionCache(player.id);
+    const { token } = await createSession(h.db, h.redis, {
+      playerId: player.id,
+      ip: null,
+      userAgent: 'message-templates-test',
+      ttlMs: 21_600_000,
+    });
+    return { playerId: player.id, cookie: `__Host-sid=${token}` };
+  }
+
+  function post(cookieHeader: string) {
+    return h.app.inject({
+      method: 'POST',
+      url: '/api/v1/message-templates',
+      headers: { cookie: cookieHeader },
+      payload: { title: 'Granted', body: 'hello', category: 'other', locale: 'en' },
+    });
+  }
+
+  it('lets a role granted only message_template:manage edit templates without role:edit', async () => {
+    const editor = await playerWithRole({
+      steamId64: testSteamId(870001),
+      canEditRoles: false,
+      grantTemplates: true,
+    });
+    expect((await post(editor.cookie)).statusCode).toBe(201);
+    const perms = await loadUserPermissions(h.db, editor.playerId);
+    expect(perms.permissions.has('role:edit')).toBe(false);
+  });
+
+  it('keeps template editing for role editors and denies other panel roles', async () => {
+    const roleEditor = await playerWithRole({
+      steamId64: testSteamId(870002),
+      canEditRoles: true,
+      grantTemplates: false,
+    });
+    expect((await post(roleEditor.cookie)).statusCode).toBe(201);
+
+    const moderator = await playerWithRole({
+      steamId64: testSteamId(870003),
+      canEditRoles: false,
+      grantTemplates: false,
+    });
+    expect((await post(moderator.cookie)).statusCode).toBe(403);
   });
 });

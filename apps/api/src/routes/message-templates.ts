@@ -88,7 +88,7 @@ const messageTemplatesRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: createBody },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['message_template:manage'],
         audit: { action: 'message_template.create', resource: 'message_template' },
       },
     },
@@ -122,7 +122,7 @@ const messageTemplatesRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { params: idParam, body: updateBody },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['message_template:manage'],
         audit: { action: 'message_template.update', resource: 'message_template' },
       },
     },
@@ -162,7 +162,7 @@ const messageTemplatesRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { params: idParam },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['message_template:manage'],
         audit: { action: 'message_template.delete', resource: 'message_template' },
       },
     },
