@@ -87,23 +87,14 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
       setLoading(true);
       setError(null);
       try {
-        const [listRes, countRes] = await Promise.all([
-          fetch(`/api/v1/chat/messages${buildChatQuery(playerId, next)}`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-          fetch(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-        ]);
+        const listRes = await fetch(`/api/v1/chat/messages${buildChatQuery(playerId, next)}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
         if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
         const page = (await listRes.json()) as ChatPage;
         setMessages(mergeChatPage([], page.items, false));
         setNextCursor(page.next_cursor);
-        if (countRes.ok) {
-          setMonthlyCount(((await countRes.json()) as { count: number }).count);
-        }
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -118,6 +109,25 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
     setFilters(EMPTY_CHAT_FILTERS);
     void load(EMPTY_CHAT_FILTERS);
   }, [load]);
+
+  // The 30-day badge is independent of the filters (#436): it does not need
+  // to be re-fetched on every "Применить"/"Сбросить"/search, only once per
+  // player. Live chat events keep it current after that (onLiveMessage).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { count: number } | null) => {
+        if (!cancelled && body) setMonthlyCount(body.count);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId]);
 
   async function loadMore() {
     if (!nextCursor || busy) return;
