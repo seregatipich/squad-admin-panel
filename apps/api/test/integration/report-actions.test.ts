@@ -8,6 +8,7 @@ import {
   servers,
 } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
+import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -672,5 +673,70 @@ describeIfDb('POST /api/v1/reports/bulk-resolve', () => {
       (e) => e.type === 'report.updated' && [idA1, idA2, idA3].includes(e.data.report.id),
     );
     expect(updatedEvents).toHaveLength(3);
+  });
+});
+
+describeIfDb('POST /api/v1/reports/bulk-resolve concurrency (#248)', () => {
+  it('never overwrites a report another handler closed after the bulk read, and audits the before state', async () => {
+    const idOpen = await insertReport({ status: 'pending' });
+    const idClosedElsewhere = await insertReport({ status: 'in_review' });
+
+    // An outside transaction row-locks both reports so the bulk request
+    // reads them as open, then queues on its write; before releasing, the
+    // "other handler" closes one of them.
+    const blocker = postgres(h.url, { max: 1, onnotice: () => undefined });
+    try {
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let signalLocked: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        signalLocked = resolve;
+      });
+      const holder = blocker.begin(async (tx) => {
+        await tx`SELECT id FROM player_reports WHERE id IN (${idOpen}, ${idClosedElsewhere}) FOR UPDATE`;
+        signalLocked();
+        await released;
+        await tx`UPDATE player_reports
+          SET status = 'rejected', resolution_note = 'Closed by another handler', resolved_at = now()
+          WHERE id = ${idClosedElsewhere}`;
+      });
+      await locked;
+      const bulk = h.app.inject({
+        method: 'POST',
+        url: '/api/v1/reports/bulk-resolve',
+        headers: { cookie: await loginAsSteam(HANDLER_STEAM), 'content-type': 'application/json' },
+        payload: JSON.stringify({
+          target_player_id: targetId,
+          status: 'resolved',
+          resolution_note: 'Bulk note',
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      release();
+      await holder;
+      const res = await bulk;
+
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { resolved_ids: string[] }).resolved_ids).toEqual([idOpen]);
+    } finally {
+      await blocker.end({ timeout: 5 });
+    }
+
+    const [closedElsewhere] = await h.db
+      .select()
+      .from(playerReports)
+      .where(eq(playerReports.id, idClosedElsewhere));
+    expect(closedElsewhere?.status).toBe('rejected');
+    expect(closedElsewhere?.resolutionNote).toBe('Closed by another handler');
+
+    const auditRows = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'report.update'), eq(auditLog.targetId, idOpen)));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]?.beforeSnapshot).toMatchObject({ status: 'pending' });
+    expect(auditRows[0]?.afterSnapshot).toMatchObject({ status: 'resolved' });
   });
 });
