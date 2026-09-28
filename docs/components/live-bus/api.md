@@ -29,13 +29,32 @@ Plus any `LiveEvent`:
 {"type": "worker.heartbeat",  "ts": "...", "data": {"worker": "rcon",   "healthy": true}}
 ```
 
+Subscription acknowledgements (see below) list the socket's current opt-in subscriptions:
+
+```json
+{"type": "subscribed",   "events": ["chat.message"]}
+{"type": "unsubscribed", "events": []}
+```
+
 #### Client → server frames
 
 ```json
 {"type": "pong"}
+{"type": "subscribe",   "events": ["chat.message", "combat.event"]}
+{"type": "unsubscribe", "events": ["chat.message"]}
 ```
 
-Any other JSON is silently ignored. Non-JSON is silently ignored.
+Any other JSON — including a subscription frame whose `events` is not an array of at most 64 non-empty strings of at most 64 characters — is silently ignored. Non-JSON is silently ignored.
+
+#### Event subscriptions (#69)
+
+Each modelled event type is either `broadcast` or `opt_in` (`EVENT_DELIVERY` in `apps/api/src/routes/live.ts`; the TypeScript `Record` forces a choice for every new `LiveEvent` type):
+
+- `broadcast` types reach every connection, subject to the per-event filters (`combat:view`, role assignment, own session/upload).
+- `opt_in` types — `chat.message`, `combat.event`, `rcon.roster`, `externalban.matched` — and every worker-published type the API union does not model (`banname.matched`, `bansync.*`, `match.*`, …) reach a socket only after it sent `subscribe` for that type, until `unsubscribe`.
+- Subscribing to `chat.message` replays the chat ring buffer (last 100 per server, all servers); subscribing to `combat.event` replays the combat buffer when the connection has `combat:view`. Nothing is replayed on connect. A `server.deleted` event drops that server's buffered tail.
+
+The web client (`apps/web/src/lib/live-bus.ts`) subscribes to every type a mounted `useLiveSubscription` consumer listens to, reference-counted, and re-sends the set after each reconnect.
 
 #### Heartbeats
 
@@ -51,7 +70,7 @@ The server never relies on the client to honour a revocation:
 - Every **30 s** (`DEFAULT_REVALIDATE_INTERVAL_MS`, the `revalidateIntervalMs` plugin option) the socket re-resolves its session (or, for a Bearer connection, its API token) and reloads the player's permissions:
   - session gone, expired or revoked, or token revoked → close `4001`, reason `"session revoked"`;
   - no `server:view` any more (for a `self_service` session: no `panel_access`) → close `4003`, reason `"forbidden"`;
-  - otherwise the `combat:view` and role-assignment filters are updated from the fresh permissions.
+  - otherwise the `combat:view` and role-assignment filters are updated from the fresh permissions — for a Bearer connection narrowed to the token's scopes (`narrowToTokenScopes`), so a token never gains `combat:view` or role-assignment alerts its scopes do not delegate.
 - A re-check that fails because Postgres or Redis is unavailable keeps the socket and retries on the next tick.
 
 ## Fastify decorations

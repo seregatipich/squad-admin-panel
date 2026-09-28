@@ -267,7 +267,7 @@ fallback — so a row carrying neither is rejected rather than mis-addressed.
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| WS | `/api/v1/ws/live` | Push channel for typed `LiveEvent` frames (`server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`). Server pings every 10 s; clients must reply `{"type":"pong"}` within 30 s or the socket is closed (code 4000). The server closes the socket itself when its session is revoked (code 4001) and re-checks the session/API token and `server:view` every 30 s (4001 / 4003). See [live-bus component](../live-bus/README.md) for wire formats and producer fan-out. | `server:view` |
+| WS | `/api/v1/ws/live` | Push channel for typed `LiveEvent` frames (`server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`). Server pings every 10 s; clients must reply `{"type":"pong"}` within 30 s or the socket is closed (code 4000). The server closes the socket itself when its session is revoked (code 4001) and re-checks the session/API token and `server:view` every 30 s (4001 / 4003). High-volume types (`chat.message`, `combat.event`, `rcon.roster`, …) are opt-in via a `{"type":"subscribe","events":[…]}` frame, which also replays the chat/combat tail. See [live-bus component](../live-bus/README.md) for wire formats and producer fan-out. | `server:view` |
 
 ## Players
 

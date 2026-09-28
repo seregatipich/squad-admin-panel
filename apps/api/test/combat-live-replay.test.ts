@@ -67,11 +67,16 @@ async function connect(combatView?: boolean): Promise<{ ws: WebSocket; received:
     combatView === undefined ? undefined : { [COMBAT_VIEW_HEADER]: String(combatView) };
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, { headers });
   const received: LiveEvent[] = [];
+  let subscribed = false;
   ws.on('message', (raw) => {
-    const frame = JSON.parse(raw.toString()) as LiveEvent;
+    const frame = JSON.parse(raw.toString()) as LiveEvent | { type: 'subscribed' };
+    if (frame.type === 'subscribed') subscribed = true;
     if (frame.type === 'combat.event') received.push(frame);
   });
   await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+  // combat.event is opt-in (#69): the client subscribes, and the tail is replayed then.
+  ws.send(JSON.stringify({ type: 'subscribe', events: ['combat.event'] }));
+  await waitFor(() => subscribed);
   return { ws, received };
 }
 
@@ -101,7 +106,7 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     await close(ws);
   });
 
-  it('replays the buffered combat tail to a socket that connects after events were sent', async () => {
+  it('replays the buffered combat tail to a socket that subscribes after events were sent', async () => {
     app.liveBus.publish(combat('2026-07-09T11:01:00.000Z'));
     app.liveBus.publish(combat('2026-07-09T11:01:01.000Z'));
 

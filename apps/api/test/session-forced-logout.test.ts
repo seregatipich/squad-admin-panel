@@ -260,6 +260,14 @@ async function connectIgnoringRevocation(
   return { ws, frames, closeCode: () => code };
 }
 
+/** Sends a live-bus subscription frame and waits for the server's acknowledgement. */
+async function subscribeTo(sock: ObservedSocket, events: string[]): Promise<void> {
+  const acks = () => sock.frames.filter((f) => (f.type as string) === 'subscribed').length;
+  const before = acks();
+  sock.ws.send(JSON.stringify({ type: 'subscribe', events }));
+  await waitFor(() => acks() > before);
+}
+
 /** A non-system panel role, so demoting its member never trips the last-Owner guard. */
 async function createPanelRole(
   // biome-ignore lint/suspicious/noExplicitAny: drizzle test handle
@@ -466,10 +474,48 @@ describe('server-side close of live sockets on revocation (#12)', () => {
       await waitFor(() => sock.closeCode() === 4001);
     });
 
+    it('keeps an API-token socket’s combat and role-alert filters narrowed to the token across revalidations', async () => {
+      const combatRoleId = await createPanelRole(h.db);
+      await h.db.update(roles).set({ canAssignRoles: true }).where(eq(roles.id, combatRoleId));
+      const player = await seedAuthedPlayer(h.db, h.redis, testSteamId(12016), combatRoleId);
+      invalidatePermissionCache(player.playerId);
+      const minted = mintApiToken();
+      await h.db.insert(playerApiTokens).values({
+        id: minted.id,
+        playerId: player.playerId,
+        name: 'ws-token-narrowing-test',
+        tokenHash: minted.tokenHash,
+        scopes: ['server:view'],
+      });
+      const sock = await connectIgnoringRevocation(h.port, { bearer: minted.plaintext });
+      await subscribeTo(sock, ['combat.event']);
+      // Several revalidation ticks: each reloads the owner's role, which does
+      // hold combat_view and can_assign_roles — the token delegates neither.
+      await new Promise((r) => setTimeout(r, 500));
+
+      h.app.liveBus.publish(combatEvent());
+      h.app.liveBus.publish({
+        type: 'alert.triggered',
+        ts: new Date().toISOString(),
+        data: { event_kind: 'role_expiring', player_id: player.playerId },
+      } as unknown as LiveEvent);
+      h.app.liveBus.publish(heartbeatMarker('ws-token-narrowing-marker'));
+      await waitFor(() =>
+        sock.frames.some(
+          (f) => f.type === 'worker.heartbeat' && f.data.worker === 'ws-token-narrowing-marker',
+        ),
+      );
+      expect(sock.frames.filter((f) => f.type === 'combat.event')).toHaveLength(0);
+      expect(sock.frames.filter((f) => f.type === 'alert.triggered')).toHaveLength(0);
+      expect(sock.closeCode()).toBeNull();
+      await closeWs(sock.ws);
+    });
+
     it('stops forwarding combat events once the role loses combat_view', async () => {
       const combatRoleId = await createPanelRole(h.db);
       const player = await seedAuthedPlayer(h.db, h.redis, testSteamId(12014), combatRoleId);
       const sock = await connectIgnoringRevocation(h.port, { cookieToken: player.token });
+      await subscribeTo(sock, ['combat.event']);
       const combatFrames = () => sock.frames.filter((f) => f.type === 'combat.event').length;
 
       h.app.liveBus.publish(combatEvent());

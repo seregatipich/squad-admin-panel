@@ -53,11 +53,16 @@ afterAll(async () => {
 async function connect(): Promise<{ ws: WebSocket; received: LiveEvent[] }> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
   const received: LiveEvent[] = [];
+  let subscribed = false;
   ws.on('message', (raw) => {
-    const frame = JSON.parse(raw.toString()) as LiveEvent;
+    const frame = JSON.parse(raw.toString()) as LiveEvent | { type: 'subscribed' };
+    if (frame.type === 'subscribed') subscribed = true;
     if (frame.type === 'chat.message') received.push(frame);
   });
   await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+  // chat.message is opt-in (#69): the client subscribes, and the tail is replayed then.
+  ws.send(JSON.stringify({ type: 'subscribe', events: ['chat.message'] }));
+  await waitFor(() => subscribed);
   return { ws, received };
 }
 
@@ -75,7 +80,7 @@ describe('/api/v1/ws/live chat replay buffer', () => {
     await close(ws);
   });
 
-  it('replays the buffered tail to a socket that connects after messages were sent', async () => {
+  it('replays the buffered tail to a socket that subscribes after messages were sent', async () => {
     app.liveBus.publish(chat('buf-1', 'first'));
     app.liveBus.publish(chat('buf-2', 'second'));
 
