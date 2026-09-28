@@ -13,6 +13,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
+import { isFileNotFoundError } from '../lib/bridge-file-errors.js';
 import { maskConfigSecrets, unmaskRconPassword } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
@@ -733,18 +734,6 @@ function driftGuardError(
   if (name === 'License.cfg') return 'panel_managed_file';
   if (MANAGED_SEGMENT_FILES.includes(name)) return 'managed_file';
   return null;
-}
-
-/** Matches both the fake harness bridge (`code: 'ENOENT'`) and the Go bridge's
- *  not-found variants (same patterns the config-sync worker tolerates). */
-function isFileNotFoundError(err: unknown): boolean {
-  const e = err as { code?: string; message?: string };
-  return (
-    e.code === 'ENOENT' ||
-    e.code === 'not_found' ||
-    e.code === 'no_such_file' ||
-    /no such file|not_found|enoent/i.test(e.message ?? '')
-  );
 }
 
 async function readTipVersion(
