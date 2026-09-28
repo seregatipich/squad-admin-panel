@@ -61,7 +61,7 @@ afterAll(async () => {
 });
 
 describe('persistEventEnvelope', () => {
-  it('writes a generic event envelope and processed marker', async () => {
+  it('writes a generic event envelope without a processed_events marker (#62)', async () => {
     const result = await persistEventEnvelope(db, makeEnvelope());
 
     expect(result).toEqual({ eventId: EVENT_ID, inserted: true });
@@ -80,9 +80,9 @@ describe('persistEventEnvelope', () => {
     expect(rows[0]?.occurredAt.toISOString()).toBe('2026-07-07T19:00:00.000Z');
     expect(rows[0]?.payload).toMatchObject({ name: 'PersistedPlayer' });
 
-    const processed = await processedRows();
-    expect(processed).toHaveLength(1);
-    expect(processed[0]?.groupName).toBe('worker-log-ingest:persist-events:v1');
+    // The events primary key already makes the insert idempotent; a
+    // processed_events row per log line only grew an unpruned table.
+    expect(await processedRows()).toHaveLength(0);
   });
 
   it('does not duplicate the event on replay of the same envelope', async () => {
@@ -91,6 +91,6 @@ describe('persistEventEnvelope', () => {
 
     expect(replay).toEqual({ eventId: EVENT_ID, inserted: false });
     expect(await eventRows()).toHaveLength(1);
-    expect(await processedRows()).toHaveLength(1);
+    expect(await processedRows()).toHaveLength(0);
   });
 });

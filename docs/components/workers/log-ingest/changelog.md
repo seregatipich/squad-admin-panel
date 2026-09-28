@@ -1,5 +1,15 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-28
+
+### Fixed
+
+- [#62](https://github.com/seregatipich/squad-admin-panel/issues/62): alt ban-evasion detection (`src/alt-ban/store.ts`) ignored `context.expires_at`, so a confirmed alt of a player whose temporary ban had expired raised `alt.ban_evasion_suspected` on every connect. Expired temporary bans no longer count as active. Regression test: `test/alt-ban-store.test.ts`.
+- #62: chat spam could fire automation and chat commands without limit. A `chat_keyword` rule now fires at most once per player per server per 60 s (`AUTOMATION_CHAT_COOLDOWN_SECONDS`, key `automation:chat-cooldown:<rule>:<server>:<player>`), and `!stats`/`!rules`/`!report` answer the same player at most once per command per 10 s (`CHAT_COMMAND_COOLDOWN_SECONDS`, key `chat-command:cooldown:<server>:<player>:<command>`). Calls inside the window write nothing to `automation_runs`, `audit_log`, `chat_command_invocations` or the RCON stream. Tests: `test/automation-chat.test.ts`, `test/chat-commands.test.ts`.
+- #62 (ReDoS): banned-name regex rules ran on the event loop with no bound, so a rule such as `^(a|a)*$` and a crafted nickname could block ingestion for every server. Each regex rule now runs in a `node:vm` sandbox with a 50 ms budget (`REGEX_MATCH_TIMEOUT_MS`); a rule that runs over is treated as not matching, logged as `banned-name regex rule exceeded its time budget`, and the rules after it are still evaluated. Test: `test/banname-matcher.test.ts`.
+- #62: a victim named by the log without ids was matched to an arbitrary player sharing the name. See [flows.md](flows.md#combat--vehicle-events-dossier-2) for the roster-based resolution and the `NULL` fallback. The attacker identity backfill no longer throws on a unique-index collision when the EOS id and SteamID belong to two rows, which used to drop every combat event of that attacker. Test: `test/combat-identity.regression.test.ts`.
+- #62: `persistEventEnvelope` no longer writes a `processed_events` row per persisted event; the `events` primary key already makes the insert idempotent, and the extra row grew an unpruned table. Test: `test/event-store.test.ts`.
+
 ## 2026-09-27
 
 ### Fixed

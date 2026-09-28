@@ -98,6 +98,25 @@ export async function ensureMonthlyPartitions(sql: postgres.Sql): Promise<void> 
   }
 }
 
+/**
+ * Deletes `processed_events` markers older than the `events` retention window.
+ * The table is an unpartitioned idempotency ledger nothing else prunes; a
+ * marker is only meaningful while the event it guards can still be replayed,
+ * which ends when its `events` partition is dropped (#62).
+ */
+export async function pruneProcessedEvents(sql: postgres.Sql): Promise<void> {
+  const now = new Date();
+  const cutoff = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - EVENTS_RETENTION_MONTHS, 1),
+  );
+  const deleted = await sql`
+    DELETE FROM processed_events WHERE processed_at < ${cutoff}
+  `;
+  if (deleted.count > 0) {
+    log.info({ deleted: deleted.count }, 'pruned stale processed_events markers');
+  }
+}
+
 function sessionPartitionName(date: Date): string {
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
@@ -221,6 +240,7 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
 
   const results = await Promise.allSettled([
     ensureMonthlyPartitions(sql),
+    pruneProcessedEvents(sql),
     ensureDiagPartitions(sql),
     ensurePlayerSessionPartitions(sql),
     ...DEFAULT_BACKED_MONTHLY_TABLES.map((table) =>

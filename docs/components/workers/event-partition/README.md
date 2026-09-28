@@ -20,6 +20,7 @@ Every rotation is fully implemented and idempotent (`CREATE TABLE IF NOT EXISTS`
 - Does not detach/archive dropped partitions before dropping them — a dropped partition's data is gone, not moved to cold storage.
 - Does not retain `diagnostic_events` data beyond ~48h (yesterday + today + 2 future days exist; any older child is dropped on the next hourly tick).
 - Does not retain `events` data beyond 24 months.
+- Does not keep `processed_events` markers older than the `events` retention cutoff: `pruneProcessedEvents` deletes them on every tick (#62).
 - Does not apply any retention to `player_sessions`, `chat_messages`, `bonus_transactions` or `combat_events`.
 
 ## Code location

@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { events, processedEvents } from '@squad/db/schema';
+import { events } from '@squad/db/schema';
 import { DEDUP_KEY, DEDUP_TTL_SECONDS, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
@@ -43,40 +43,32 @@ export function buildBansyncEnvelope(
 }
 
 /**
- * Persists an envelope to `events` (claimed via `processed_events` so a
- * retried call is a no-op), then publishes it to `events:global` (with
- * producer-side dedup, mirroring `log-ingest/src/publish.ts`) and to the
- * `live-bus` pub/sub channel the admin UI listens on.
+ * Persists an envelope to `events` (idempotent through the table's
+ * `(event_id, occurred_at)` primary key, so a retried call is a no-op; no
+ * `processed_events` row is written, see #62), then publishes it to
+ * `events:global` (with producer-side dedup, mirroring
+ * `log-ingest/src/publish.ts`) and to the `live-bus` pub/sub channel the admin
+ * UI listens on.
  */
 export async function persistAndPublish(
   db: DatabaseClient,
   redis: Pick<Redis, 'set' | 'xadd' | 'publish'>,
   envelope: EventEnvelope,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
-    const claimed = await tx
-      .insert(processedEvents)
-      .values({ eventId: envelope.event_id, groupName: EVENT_PERSIST_GROUP })
-      .onConflictDoNothing({ target: processedEvents.eventId })
-      .returning({ eventId: processedEvents.eventId });
-
-    if (claimed.length === 0) return;
-
-    await tx
-      .insert(events)
-      .values({
-        eventId: envelope.event_id,
-        serverId: envelope.server_id,
-        occurredAt: new Date(envelope.ts),
-        kind: envelope.type,
-        version: envelope.version,
-        actorKind: envelope.actor?.kind ?? null,
-        actorId: envelope.actor?.id ?? null,
-        correlationId: envelope.correlation_id,
-        payload: envelope.payload,
-      })
-      .onConflictDoNothing({ target: [events.eventId, events.occurredAt] });
-  });
+  await db
+    .insert(events)
+    .values({
+      eventId: envelope.event_id,
+      serverId: envelope.server_id,
+      occurredAt: new Date(envelope.ts),
+      kind: envelope.type,
+      version: envelope.version,
+      actorKind: envelope.actor?.kind ?? null,
+      actorId: envelope.actor?.id ?? null,
+      correlationId: envelope.correlation_id,
+      payload: envelope.payload,
+    })
+    .onConflictDoNothing({ target: [events.eventId, events.occurredAt] });
 
   const dedupKey = DEDUP_KEY(EVENT_PERSIST_GROUP, envelope.event_id);
   const claimedForPublish = await redis.set(dedupKey, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
