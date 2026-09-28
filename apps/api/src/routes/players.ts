@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -377,6 +378,11 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         if (target.isSystemRole && target.name === 'Owner') {
           reply.code(403);
           return { error: 'owner_assignment_forbidden' };
+        }
+        const beyond = await roleGrantBeyondActor(app.db, target.id, req.user?.permissions);
+        if (beyond.length > 0) {
+          reply.code(403);
+          return roleCeilingError(beyond);
         }
         newRolePanelAccess = target.panelAccess;
       }

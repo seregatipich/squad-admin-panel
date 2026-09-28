@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { type SessionScope, sessions } from '@squad/db/schema';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, gt, inArray, lt } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -155,23 +155,48 @@ export async function revokeAllForPlayer(
   playerId: string,
   publisher?: SessionRevokePublisher,
 ): Promise<void> {
+  await revokeAllForPlayers(db, redis, [playerId], publisher);
+}
+
+/** Redis `DEL` batch size: keeps each command's argument list bounded. */
+const REVOKE_REDIS_DEL_BATCH = 1_000;
+
+/**
+ * Bulk form of {@link revokeAllForPlayer}: one `DELETE … WHERE player_id =
+ * ANY(…) RETURNING` for every listed player, then batched Redis `DEL`s, so a
+ * role change touching thousands of players costs a handful of round trips
+ * instead of several per player.
+ *
+ * @param db - database handle.
+ * @param redis - session cache.
+ * @param playerIds - players whose sessions are revoked; may be empty.
+ * @param publisher - when given, receives one `session.revoked` event per
+ *   revoked session.
+ */
+export async function revokeAllForPlayers(
+  db: DatabaseClient,
+  redis: Redis,
+  playerIds: readonly string[],
+  publisher?: SessionRevokePublisher,
+): Promise<void> {
+  if (playerIds.length === 0) return;
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
-  if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.playerId, playerId));
-    await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
-    if (publisher) {
-      const ts = new Date().toISOString();
-      for (const r of rows) {
-        publisher.publish({
-          type: 'session.revoked',
-          ts,
-          data: { player_id: playerId, session_id: r.id },
-        });
-      }
-    }
+    .delete(sessions)
+    .where(inArray(sessions.playerId, [...playerIds]))
+    .returning({ id: sessions.id, playerId: sessions.playerId });
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += REVOKE_REDIS_DEL_BATCH) {
+    const batch = rows.slice(i, i + REVOKE_REDIS_DEL_BATCH);
+    await redis.del(...batch.map((r) => `${REDIS_PREFIX}${r.id}`));
+  }
+  if (!publisher) return;
+  const ts = new Date().toISOString();
+  for (const r of rows) {
+    publisher.publish({
+      type: 'session.revoked',
+      ts,
+      data: { player_id: r.playerId, session_id: r.id },
+    });
   }
 }
 

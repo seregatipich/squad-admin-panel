@@ -13,6 +13,13 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCacheForRole } from '../lib/rbac.js';
+import {
+  capabilitiesBeyondActor,
+  loadRoleGrant,
+  type RoleGrant,
+  roleCapabilities,
+  roleCeilingError,
+} from '../lib/role-guards.js';
 
 const colorSchema = z.string().refine(isRoleColor, { message: 'invalid color' });
 /** Role names become Admins.cfg group names verbatim, so they must not alter its syntax (#11). */
@@ -98,6 +105,12 @@ async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]>
   return rows as unknown as RoleWithCount[];
 }
 
+/** One role as `GET /api/v1/roles/:id` returns it; also the audit before/after snapshot. */
+async function loadRoleSnapshot(db: DatabaseClient, id: string): Promise<RoleWithCount | null> {
+  const all = await listRolesWithCounts(db);
+  return all.find((r) => r.id === id) ?? null;
+}
+
 function ensureFlagDependency(body: {
   panel_access?: boolean;
   can_assign_roles?: boolean;
@@ -145,6 +158,28 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       if (dep) {
         reply.code(400);
         return { error: dep };
+      }
+      const requested: RoleGrant = {
+        panelAccess: req.body.panel_access,
+        canViewIps: req.body.can_view_ips,
+        canAssignRoles: req.body.can_assign_roles,
+        canEditRoles: req.body.can_edit_roles,
+        canManageIssues: req.body.can_manage_issues,
+        canManageBanSources: req.body.can_manage_ban_sources,
+        canManageIntegrations: req.body.can_manage_integrations,
+        canManageClans: req.body.can_manage_clans,
+        canManageEconomy: req.body.can_manage_economy,
+        canManageMedia: false,
+        canHandleReports: req.body.can_handle_reports,
+        // roles.combat_view defaults to true and this route does not set it.
+        combatView: true,
+        squadPermissions: req.body.squad_permissions,
+        permissionKeys: [],
+      };
+      const beyond = capabilitiesBeyondActor(roleCapabilities(requested), req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
       }
       const id = uuidv7();
       try {
@@ -194,8 +229,9 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
       reply.code(201);
-      const fresh = await listRolesWithCounts(app.db);
-      return fresh.find((r) => r.id === id);
+      const created = await loadRoleSnapshot(app.db, id);
+      req.auditSnapshots = { before: null, after: created, targetId: id };
+      return created;
     },
   );
 
@@ -228,6 +264,39 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: dep };
       }
+      // Privilege ceiling (#1237): whatever this edit newly grants must already
+      // be held by the editor; capabilities the role had before are untouched.
+      const beforeGrant = await loadRoleGrant(app.db, req.params.id);
+      if (!beforeGrant) {
+        reply.code(404);
+        return { error: 'role_not_found' };
+      }
+      const afterGrant: RoleGrant = {
+        panelAccess: merged.panel_access,
+        canViewIps: merged.can_view_ips,
+        canAssignRoles: merged.can_assign_roles,
+        canEditRoles: merged.can_edit_roles,
+        canManageIssues: req.body.can_manage_issues ?? roleRow.canManageIssues,
+        canManageBanSources: req.body.can_manage_ban_sources ?? roleRow.canManageBanSources,
+        canManageIntegrations: req.body.can_manage_integrations ?? roleRow.canManageIntegrations,
+        canManageClans: req.body.can_manage_clans ?? roleRow.canManageClans,
+        canManageEconomy: req.body.can_manage_economy ?? roleRow.canManageEconomy,
+        canManageMedia: roleRow.canManageMedia,
+        canHandleReports: req.body.can_handle_reports ?? roleRow.canHandleReports,
+        combatView: roleRow.combatView,
+        squadPermissions: req.body.squad_permissions ?? beforeGrant.squadPermissions,
+        permissionKeys: beforeGrant.permissionKeys,
+      };
+      const alreadyGranted = roleCapabilities(beforeGrant);
+      const newlyGranted = [...roleCapabilities(afterGrant)].filter(
+        (capability) => !alreadyGranted.has(capability),
+      );
+      const beyond = capabilitiesBeyondActor(newlyGranted, req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
+      }
+      const before = await loadRoleSnapshot(app.db, req.params.id);
       try {
         await app.db.transaction(async (tx) => {
           const updates: Partial<typeof roles.$inferInsert> = {};
@@ -285,8 +354,9 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
       await invalidatePermissionCacheForRole(app.db, req.params.id);
-      const fresh = await listRolesWithCounts(app.db);
-      return fresh.find((r) => r.id === req.params.id);
+      const after = await loadRoleSnapshot(app.db, req.params.id);
+      req.auditSnapshots = { before, after };
+      return after;
     },
   );
 
@@ -324,6 +394,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'role_referenced_by_vip_tier' };
       }
+      const before = await loadRoleSnapshot(app.db, req.params.id);
       try {
         await app.db.transaction(async (tx) => {
           await tx
@@ -354,6 +425,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       // Players who lost their role no longer have panel_access; sweep
       // caches because we don't know exactly which sessions remain valid.
       invalidateAllPermissionCaches();
+      req.auditSnapshots = { before, after: null };
       return { ok: true };
     },
   );

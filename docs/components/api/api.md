@@ -124,9 +124,9 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 |---|---|---|---|
 | GET | `/api/v1/roles` | List all roles with `permissions[]` and `assigned_users_count`. Sorted `is_system_role DESC, name ASC`. | `role:view` |
 | GET | `/api/v1/roles/:id` | Single role detail. 404 if not found. | `role:view` |
-| POST | `/api/v1/roles` | Create role. Body: `{name, color, description?, permissions: PermissionKey[]}`. 409 `role_name_taken` on duplicate name. Returns 201 with the new role object. Audit: `role.create`. | `role:create` |
-| PUT | `/api/v1/roles/:id` | Update role (name, color, description, permissions). 400 `owner_role_immutable` for the system Owner role. 409 `role_name_taken` on duplicate name. Invalidates permission cache for all role carriers. Audit: `role.update`. | `role:edit` |
-| DELETE | `/api/v1/roles/:id` | Delete role. Cascades `players.role_id` to NULL. 400 `owner_role_immutable` for Owner. Invalidates permission cache before deletion. Audit: `role.delete`. | `role:delete` |
+| POST | `/api/v1/roles` | Create role. Body: `{name, color, description?, permissions: PermissionKey[]}`. 409 `role_name_taken` on duplicate name. 403 `role_exceeds_actor_permissions` (`capabilities[]`) when a non-Owner requests a flag or Squad permission they do not hold. Returns 201 with the new role object. Audit: `role.create` with `target_id` = new role id and `after` snapshot. | `role:create` |
+| PUT | `/api/v1/roles/:id` | Update role (name, color, description, permissions). 400 `owner_role_immutable` for the system Owner role. 403 `role_exceeds_actor_permissions` (`capabilities[]`) when the edit newly grants a flag or Squad permission a non-Owner editor does not hold (capabilities the role already had are unaffected). 409 `role_name_taken` on duplicate name. Invalidates permission cache for all role carriers. Audit: `role.update` with `before`/`after` snapshots (flags + `squad_permissions`). | `role:edit` |
+| DELETE | `/api/v1/roles/:id` | Delete role. Cascades `players.role_id` to NULL. 400 `owner_role_immutable` for Owner. Invalidates permission cache before deletion. Audit: `role.delete` with the `before` snapshot. | `role:delete` |
 
 ### Users
 
