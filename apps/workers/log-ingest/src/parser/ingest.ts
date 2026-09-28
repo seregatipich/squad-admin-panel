@@ -252,9 +252,16 @@ export class LogIngestor {
         const code = Number(exit[2]);
         const type = code === 143 || code === 0 ? 'server.stopped' : 'server.crashed';
         events.push(this.build(type, ts, { exit_code: code }));
-        if (type === 'server.crashed') {
-          this.feedMatch(this.matchAssembler.onServerDown('server_crashed', ts));
-        }
+        // Either exit path can leave a match assembled in memory (e.g. a
+        // clean stop mid-round); close it out for both, not only a crash,
+        // so a clean restart never leaves an open match record (#63 finding
+        // 933).
+        this.feedMatch(
+          this.matchAssembler.onServerDown(
+            type === 'server.crashed' ? 'server_crashed' : 'server_restarted',
+            ts,
+          ),
+        );
         this.feedVote(this.voteAssembler.onServerDown(ts));
       }
       return events;
