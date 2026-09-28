@@ -57,19 +57,28 @@ fi
 mkdir -p /opt/squad-servers
 chown squad:squad /opt/squad-servers
 
-# -------- 3. (re)build the Go binary ----------------------------------------
+# -------- 3. (re)build the Go binary if it's missing or stale --------------
 
-# Always rebuild when a Go toolchain is available so a `git pull` followed by
-# a re-run picks up code changes to the RPC allowlist (bridge-methods.ts /
-# client.ts / handlers.go must move in lockstep) instead of silently
-# reinstalling a stale binary left over from an earlier checkout.
-if command -v go >/dev/null; then
+# The old `if [[ ! -x "$BIN_SRC" ]]` guard skipped the build entirely once a
+# binary existed at all, so a re-run after `git pull` silently reinstalled a
+# stale binary — the RPC allowlist must move in lockstep across
+# bridge-methods.ts / client.ts / handlers.go, so an old binary against a new
+# API gives "forbidden"/"unknown method" errors. Rebuild whenever any bridge
+# source file is newer than the built binary, not only when it's absent.
+NEEDS_BUILD=0
+if [[ ! -x "$BIN_SRC" ]]; then
+  NEEDS_BUILD=1
+elif find "${REPO_DIR}/apps/bridge" -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+  -newer "$BIN_SRC" -print -quit 2>/dev/null | grep -q .; then
+  NEEDS_BUILD=1
+fi
+
+if [[ "$NEEDS_BUILD" -eq 1 ]]; then
   log "building Go bridge binary (CGO_ENABLED=0)"
+  if ! command -v go >/dev/null; then
+    die "Go toolchain not found. Install golang >= 1.22 or pre-build the binary."
+  fi
   (cd "${REPO_DIR}/apps/bridge" && make build)
-elif [[ ! -x "$BIN_SRC" ]]; then
-  die "Go toolchain not found. Install golang >= 1.22 or pre-build the binary."
-else
-  warn "Go toolchain not found — reusing pre-built binary at $BIN_SRC as-is"
 fi
 [[ -x "$BIN_SRC" ]] || die "bridge binary missing at $BIN_SRC after build"
 

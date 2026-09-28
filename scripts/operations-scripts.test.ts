@@ -1762,6 +1762,10 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'docker',
       [
         `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-45}"; fi`,
+        // rebuild.sh resolves each compose service's container id by name
+        // (docker compose ps -q <service>) rather than guessing a
+        // project-prefixed container name.
+        'if [[ "$1" == \'compose\' && "$2" == \'ps\' ]]; then printf \'fake-%s-id\\n\' "$4"; exit 0; fi',
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'Health.Status'* ]]; then printf 'healthy\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.Status'* ]]; then printf 'exited\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.ExitCode'* ]]; then printf '0\\n'; fi",
@@ -1829,7 +1833,9 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'APP_DOMAIN=panel.test\nSECRET=preserved\n',
     );
     assert.deepEqual(
-      logLines(fixture.log).filter((line) => line.startsWith('docker|compose|')),
+      logLines(fixture.log)
+        .filter((line) => line.startsWith('docker|compose|'))
+        .slice(0, 4),
       [
         'docker|compose|down|--remove-orphans',
         'docker|compose|down|-v',
@@ -1837,6 +1843,11 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
         'docker|compose|up|-d',
       ],
     );
+    // Health polling resolves each service's container id by name (docker
+    // compose ps -q <service>) instead of guessing a project-prefixed
+    // container name.
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|api'));
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|migrator'));
   });
 
   it('propagates image-build failure and never starts a partial stack', () => {
