@@ -14,6 +14,20 @@ const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const RESUMABLE_ENDPOINT =
   'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet%2Cstatus';
 
+/**
+ * Hard timeouts for every Google fetch. Without one, a hung TCP connection
+ * blocks a claimed job — and the whole sequential tick, since nothing else
+ * bounds concurrency (#63 finding 957) — indefinitely. The token and
+ * resumable-session calls are small metadata requests; the PUT upload can
+ * carry up to 2GiB (`readMedia`'s own cap), so it gets a much longer budget.
+ */
+export const YOUTUBE_METADATA_TIMEOUT_MS = Number(
+  process.env.YOUTUBE_METADATA_TIMEOUT_MS ?? 30_000,
+);
+export const YOUTUBE_UPLOAD_TIMEOUT_MS = Number(
+  process.env.YOUTUBE_UPLOAD_TIMEOUT_MS ?? 30 * 60 * 1000,
+);
+
 /** Reasons Google returns when the daily allowance (or its per-second burst) is spent. */
 const QUOTA_REASONS = new Set(['quotaExceeded', 'rateLimitExceeded', 'userRateLimitExceeded']);
 
@@ -106,6 +120,7 @@ export function createYouTubePublisher(config: YouTubePublisherConfig): MediaPub
           refresh_token: refreshToken,
           grant_type: 'refresh_token',
         }).toString(),
+        signal: AbortSignal.timeout(YOUTUBE_METADATA_TIMEOUT_MS),
       });
       if (tokenRes.status >= 500) {
         return {
@@ -152,6 +167,7 @@ export function createYouTubePublisher(config: YouTubePublisherConfig): MediaPub
           // searchable on the open web.
           status: { privacyStatus: 'unlisted' },
         }),
+        signal: AbortSignal.timeout(YOUTUBE_METADATA_TIMEOUT_MS),
       });
       const failure = await classifyFailure(initiateRes, quotaOutcome, scrub, 'youtube_initiate');
       if (failure) return failure;
@@ -176,6 +192,7 @@ export function createYouTubePublisher(config: YouTubePublisherConfig): MediaPub
         method: 'PUT',
         headers: { 'content-type': job.mimeType, 'content-length': String(bytes.byteLength) },
         body: bytes,
+        signal: AbortSignal.timeout(YOUTUBE_UPLOAD_TIMEOUT_MS),
       });
       const failure = await classifyFailure(uploadRes, quotaOutcome, scrub, 'youtube_upload');
       if (failure) return failure;

@@ -42,11 +42,14 @@ function jsonResponse(
 /** Fetch double driving the three-leg OAuth + resumable-upload conversation. */
 function scriptedFetch(
   overrides: { token?: () => Response; initiate?: () => Response; upload?: () => Response } = {},
-): { fetch: typeof fetch; requests: { url: string; method: string }[] } {
-  const requests: { url: string; method: string }[] = [];
+): {
+  fetch: typeof fetch;
+  requests: { url: string; method: string; hasSignal: boolean }[];
+} {
+  const requests: { url: string; method: string; hasSignal: boolean }[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    requests.push({ url, method: init?.method ?? 'GET' });
+    requests.push({ url, method: init?.method ?? 'GET', hasSignal: init?.signal != null });
     if (url.startsWith('https://oauth2.googleapis.com/token')) {
       return overrides.token?.() ?? jsonResponse(200, { access_token: ACCESS_TOKEN });
     }
@@ -340,5 +343,20 @@ describe('youtube publisher — request shape', () => {
     await publisher(makeJob({ title: null, description: null }));
 
     expect(initiateBody).toMatchObject({ snippet: { title: 'clip.mp4', description: '' } });
+  });
+});
+
+// Regression for #63 finding 957: none of the token/initiate/upload fetch
+// calls carried a signal, so a hung TCP connection to Google could block a
+// claimed job (and the whole sequential tick) indefinitely.
+describe('youtube publisher — request timeouts', () => {
+  it('attaches an abort signal to every Google fetch call', async () => {
+    const { fetch: fetchImpl, requests } = scriptedFetch();
+    const publisher = makePublisher(fetchImpl);
+
+    await publisher(makeJob());
+
+    expect(requests).toHaveLength(3);
+    expect(requests.every((r) => r.hasSignal)).toBe(true);
   });
 });
