@@ -1,5 +1,5 @@
 import { clanMembers, clans, playerDailyPresence, players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -209,6 +209,19 @@ describeIfDb('GET /api/v1/clans/:id/members', () => {
     const body = res.json() as { total: number; items: Array<{ player_id: string }> };
     expect(body.total).toBe(1);
     expect(body.items[0]?.player_id).toBe(clan.memberId);
+  });
+
+  it('treats LIKE wildcards in the roster search literally (#131)', async () => {
+    const clan = await seedClan();
+    for (const q of ['%', '_']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans/${clan.clanId}/members?q=${encodeURIComponent(q)}`,
+        headers: { cookie: managerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { total: number }).total).toBe(0);
+    }
   });
 
   it('rejects a user without panel access with 403', async () => {
@@ -462,6 +475,35 @@ describeIfDb('POST /api/v1/clans/:id/transfer-leadership', () => {
       resource: 'clan',
       targetId: clan.clanId,
     });
+  });
+
+  it('serialises concurrent transfers instead of failing one with a 500 (#130)', async () => {
+    const clan = await seedClan();
+    const transfer = (playerId: string) =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/clans/${clan.clanId}/transfer-leadership`,
+        headers: jsonHeaders(managerCookie),
+        payload: JSON.stringify({ player_id: playerId }),
+      });
+    // Hold the roster rows so both requests read the same current leader and
+    // then queue on the row update; releasing the lock lets them race to commit.
+    let pending: Promise<Array<{ statusCode: number }>> = Promise.resolve([]);
+    await h.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT player_id FROM clan_members WHERE clan_id = ${clan.clanId} FOR UPDATE`,
+      );
+      pending = Promise.all([transfer(clan.deputyId), transfer(clan.memberId)]);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+    const responses = await pending;
+    for (const res of responses) expect([200, 409]).toContain(res.statusCode);
+
+    const rows = await h.db
+      .select({ playerId: clanMembers.playerId, role: clanMembers.memberRole })
+      .from(clanMembers)
+      .where(eq(clanMembers.clanId, clan.clanId));
+    expect(rows.filter((r) => r.role === 'leader')).toHaveLength(1);
   });
 
   it('rejects transferring to a non-member with 404', async () => {

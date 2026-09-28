@@ -7,7 +7,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -280,6 +280,27 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
       .from(clanMembers)
       .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.memberId)));
     expect(row?.hasPriority).toBe(false);
+  });
+
+  it('checks the pool against a limit lowered while the toggle waited (#130)', async () => {
+    const clan = await seedClan({ maxPrioritySlots: 2, leaderHasPriority: true });
+    // Lower the limit while holding the clan row lock, so the toggle has
+    // already loaded the old limit when it queues on that lock.
+    let pending: Promise<{ statusCode: number; json: () => unknown }> | undefined;
+    await h.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM clans WHERE id = ${clan.clanId} FOR UPDATE`);
+      pending = h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}/priority`,
+        headers: jsonHeaders(managerCookie),
+        payload: JSON.stringify({ enabled: true }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await tx.update(clans).set({ maxPrioritySlots: 1 }).where(eq(clans.id, clan.clanId));
+    });
+    const res = await pending;
+    expect(res?.statusCode).toBe(409);
+    expect(res?.json()).toMatchObject({ error: 'priority_pool_limit', limit: 1, used: 1 });
   });
 
   it('rejects enabling when the clan priority window has expired with 409', async () => {
