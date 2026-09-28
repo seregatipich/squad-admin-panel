@@ -1897,7 +1897,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: fixture.env,
-      input: 'y\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(path.join(fixture.root, 'data')), false);
@@ -1917,7 +1917,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: { ...fixture.env, FAIL_SYSTEMCTL_MATCH: 'daemon-reload', FAIL_CODE: '48' },
-      input: 'y\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 48);
     const commands = logLines(fixture.log);
