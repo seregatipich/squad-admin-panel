@@ -172,13 +172,13 @@ Spawns a transient `squad-panel/depot-init` container that runs `steamcmd +app_u
 
 #### `panel_disk_usage({ force? })` → `PanelDiskUsageResult`
 
-Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced.
+Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced. Only one computation runs at a time: calls that arrive while one is in flight wait for its result instead of starting another walk, and calls the cache can answer never wait behind it. Every `du`/`docker` probe runs under a 2-minute deadline, and a `docker volume inspect` failure other than "no such volume" fails the request instead of being reported as a missing volume.
 
 Optional params:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`). The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
+| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`), unless the cached result is younger than 30 s (rate limit), in which case the cache answers. The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
 
 The wire input has no caller-controlled paths, so there is no path allowlist. The method's allowlist is internal:
 
@@ -191,7 +191,7 @@ Response shape:
 | Field | Type | Description |
 |---|---|---|
 | `configs_bytes` | int64 | `du -sb /var/lib/squad-panel/configs` |
-| `saved_total_bytes` | int64 | `du -sb /var/lib/squad-panel/saved` |
+| `saved_total_bytes` | int64 | Sum of `saved_per_server` (the saved tree is walked once, per server; loose files directly under `saved/` are not counted) |
 | `saved_per_server` | array of `{ uuid, bytes }` | Per-server `du` of each immediate subdir of `saved/`. Empty array when `saved/` is missing or has no children. |
 | `depot_volume_bytes` | int64 | Bytes attributed to the `squad-depot` Docker named volume. Already included in `docker_volumes`; surfaced separately for convenience. **Not added to `total_panel_bytes` to avoid double-counting.** |
 | `docker_volumes` | array of `{ name, bytes }` | Panel-owned Docker volume sizes. Always a non-null JSON array. |

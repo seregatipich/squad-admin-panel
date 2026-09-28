@@ -213,12 +213,12 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). Timeout: 30 s.
 
-Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute. The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
+Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute (rate-limited bridge-side: within 30 s of the last computation the cache answers, and concurrent forced calls share one computation). The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
 
 | Field | Type | Description |
 |---|---|---|
 | `configs_bytes` | `number` | Bytes used by `/var/lib/squad-panel/configs/` |
-| `saved_total_bytes` | `number` | Bytes used by `/var/lib/squad-panel/saved/` |
+| `saved_total_bytes` | `number` | Bytes used by the per-server directories under `/var/lib/squad-panel/saved/` (sum of `saved_per_server`) |
 | `saved_per_server` | `{ uuid: string; bytes: number }[]` | Per-server breakdown of `saved/` (one entry per uuid sub-directory) |
 | `depot_volume_bytes` | `number` | Size of the `squad-depot` named volume |
 | `docker_volumes` | `{ name: string; bytes: number }[]` | Other panel-owned Docker volumes |

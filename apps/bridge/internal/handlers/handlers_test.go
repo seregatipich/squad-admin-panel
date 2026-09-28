@@ -640,9 +640,9 @@ func newDiskUsageDispatcher(t *testing.T, root string) (*Dispatcher, *atomic.Int
 	var dockerCalls atomic.Int32
 	d := &Dispatcher{
 		panelRoot: root,
-		duFn: func(path string) (int64, error) {
+		duFn: func(ctx context.Context, path string) (int64, error) {
 			duCalls.Add(1)
-			return realDuBytes(path)
+			return realDuBytes(ctx, path)
 		},
 		statfsFn: func(path string, st *syscall.Statfs_t) error {
 			statfsCalls.Add(1)
@@ -651,7 +651,7 @@ func newDiskUsageDispatcher(t *testing.T, root string) (*Dispatcher, *atomic.Int
 			st.Bsize = 4096
 			return nil
 		},
-		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+		dockerDfFn: func(context.Context) ([]dockerVol, []dockerImg, int64, error) {
 			dockerCalls.Add(1)
 			return []dockerVol{
 					{Name: "squad-depot", Bytes: 1_000_000},
@@ -840,6 +840,9 @@ func TestPanelDiskUsage_ForceBypassesCache(t *testing.T) {
 		t.Fatalf("non-force call re-ran probes")
 	}
 
+	// force is rate-limited to one recompute per panelDiskForceMinInterval;
+	// step past that window (still inside the TTL) to exercise the bypass.
+	ageDiskUsageCache(panelDiskForceMinInterval + time.Second)
 	forceReq := &rpc.Request{ID: "req-2", Method: "panel_disk_usage", Params: []byte(`{"force":true}`)}
 	respForce := d.Handle(context.Background(), forceReq, func(rpc.StreamFrame) {})
 	if !respForce.OK {
@@ -951,9 +954,9 @@ func TestDispatcher_PanicEmitsDiagAndReturnsInternalError(t *testing.T) {
 	t.Cleanup(resetPanelDiskUsageCache)
 
 	d := &Dispatcher{
-		duFn:     func(string) (int64, error) { panic("synthetic-du-panic") },
+		duFn:     func(context.Context, string) (int64, error) { panic("synthetic-du-panic") },
 		statfsFn: func(string, *syscall.Statfs_t) error { return nil },
-		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+		dockerDfFn: func(context.Context) ([]dockerVol, []dockerImg, int64, error) {
 			return []dockerVol{}, []dockerImg{}, 0, nil
 		},
 		panelRoot: t.TempDir(),
@@ -1043,7 +1046,7 @@ func TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize(t *testing.T) {
 		_ = exec.Command("docker", "volume", "rm", volName).Run()
 	})
 
-	got, err := volumeOnDiskBytes(volName)
+	got, err := volumeOnDiskBytes(context.Background(), volName)
 	if err != nil {
 		t.Fatalf("volumeOnDiskBytes: %v", err)
 	}
