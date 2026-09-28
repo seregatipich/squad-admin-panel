@@ -807,4 +807,44 @@ describeIfDb('matches API (MATCH-4)', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it.each([
+    ['started_at', { s: 'started_at', v: 'abc', id: '00000000-0000-7000-8000-000000000000' }],
+    ['started_at', { s: 'started_at', v: 1e20, id: '00000000-0000-7000-8000-000000000000' }],
+    [
+      'duration_seconds',
+      { s: 'duration_seconds', v: 'abc', id: '00000000-0000-7000-8000-000000000000' },
+    ],
+    ['layer', { s: 'layer', v: 42, id: '00000000-0000-7000-8000-000000000000' }],
+  ])(
+    'rejects a forged %s cursor with a wrong-typed value with 400, not 500 (#70)',
+    async (sort, forged) => {
+      const cursor = Buffer.from(JSON.stringify(forged), 'utf-8').toString('base64url');
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/matches?sort=${sort}&cursor=${cursor}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'invalid_cursor' });
+    },
+  );
+
+  it('CSV export neutralises cells a spreadsheet would run as formulas (#70)', async () => {
+    const srv = await seedServer(h.db, 'CsvFormulaSrv');
+    await seedMatch(h.db, {
+      serverId: srv,
+      startedAt: new Date('2026-05-23T10:00:00.000Z'),
+      layer: '=1+1',
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/matches/export?serverIds=${srv}&format=csv`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.body.split('\r\n')[1] ?? '';
+    expect(row.split(',')).toContain("'=1+1");
+    expect(row.split(',')).not.toContain('=1+1');
+  });
 });

@@ -20,6 +20,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
+import { csvCell } from '../lib/csv.js';
 
 const NAME_MAX = 32;
 const TAG_MAX = 32;
@@ -52,7 +53,9 @@ function parseMatchesCursor(raw: string): MatchesCursor | null {
   try {
     const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8')) as MatchesCursor;
     if (!decoded || typeof decoded !== 'object') return null;
-    if (typeof decoded.v !== 'number' || !Number.isFinite(decoded.v)) return null;
+    // Beyond ±8.64e15 ms `new Date(v)` is an Invalid Date and the query throws.
+    if (typeof decoded.v !== 'number' || !Number.isInteger(decoded.v)) return null;
+    if (Math.abs(decoded.v) > 8.64e15) return null;
     if (typeof decoded.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(decoded.id)) return null;
     return decoded;
   } catch {
@@ -141,12 +144,6 @@ const setPriorityBody = z.object({ enabled: z.boolean() });
 const rosterExportQuery = z.object({ format: z.literal('csv').default('csv') });
 
 /** Escapes a CSV field per RFC 4180 when it contains a comma, quote, or newline. */
-function csvEscape(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
 
 interface RosterRow {
   player_id: string;
@@ -1429,7 +1426,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         'canonical_name,steam_id64,member_role,has_priority,joined_at,last_seen_at',
         ...rows.map((row) =>
           [
-            csvEscape(row.canonicalName),
+            csvCell(row.canonicalName),
             row.steamId64 ? row.steamId64.toString() : '',
             row.memberRole,
             row.hasPriority ? 'true' : 'false',

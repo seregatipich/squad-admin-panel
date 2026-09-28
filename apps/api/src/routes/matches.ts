@@ -4,6 +4,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const LIMIT_DEFAULT = 50;
@@ -80,29 +81,47 @@ function buildFilters(query: FilterInput): SQL[] {
   return clauses;
 }
 
-interface Cursor {
-  s: SortField;
-  v: string | number | null;
-  id: string;
-}
+const cursorId = z.string().regex(/^[0-9a-f-]{36}$/i);
+/** Largest epoch-ms value a JS `Date` can hold (ECMA-262 time value range). */
+const MAX_DATE_MS = 8.64e15;
+const PG_INT_MIN = -2_147_483_648;
+const PG_INT_MAX = 2_147_483_647;
+
+/**
+ * Keyset cursor, validated per sort field so a forged cursor is a 400
+ * `invalid_cursor`, never an Invalid Date or a type error inside Postgres.
+ * `started_at` is NOT NULL and travels as epoch milliseconds; the other two
+ * sort columns are nullable.
+ */
+const cursorSchema = z.discriminatedUnion('s', [
+  z.object({
+    s: z.literal('started_at'),
+    v: z.number().int().min(0).max(MAX_DATE_MS),
+    id: cursorId,
+  }),
+  z.object({
+    s: z.literal('duration_seconds'),
+    v: z.number().int().min(PG_INT_MIN).max(PG_INT_MAX).nullable(),
+    id: cursorId,
+  }),
+  z.object({ s: z.literal('layer'), v: z.string().max(LAYER_MAX).nullable(), id: cursorId }),
+]);
+
+type Cursor = z.infer<typeof cursorSchema>;
 
 function encodeCursor(cursor: Cursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf-8').toString('base64url');
 }
 
 function parseCursor(raw: string): Cursor | null {
+  let decoded: unknown;
   try {
-    const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8')) as Cursor;
-    if (!decoded || typeof decoded !== 'object') return null;
-    if (!sortFieldSchema.safeParse(decoded.s).success) return null;
-    if (typeof decoded.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(decoded.id)) return null;
-    if (!(decoded.v === null || typeof decoded.v === 'string' || typeof decoded.v === 'number')) {
-      return null;
-    }
-    return decoded;
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8'));
   } catch {
     return null;
   }
+  const parsed = cursorSchema.safeParse(decoded);
+  return parsed.success ? parsed.data : null;
 }
 
 function sortColumn(sort: SortField) {
@@ -111,26 +130,36 @@ function sortColumn(sort: SortField) {
   return matches.startedAt;
 }
 
-function cursorValueFor(sort: SortField, row: MatchListRow): string | number | null {
-  if (sort === 'duration_seconds') return row.durationSeconds;
-  if (sort === 'layer') return row.layer;
-  return row.startedAt.getTime();
+function cursorFor(sort: SortField, row: MatchListRow): Cursor {
+  if (sort === 'duration_seconds') return { s: sort, v: row.durationSeconds, id: row.id };
+  if (sort === 'layer') return { s: sort, v: row.layer, id: row.id };
+  return { s: sort, v: row.startedAt.getTime(), id: row.id };
 }
 
-function comparableCursorValue(sort: SortField, value: string | number | null) {
-  if (value === null) return null;
-  if (sort === 'started_at') return new Date(value as number);
-  return value;
-}
-
-function keysetPredicate(sort: SortField, order: OrderDir, cursor: Cursor): SQL {
-  const column = sortColumn(sort);
+/**
+ * Rows strictly after `cursor` in `(column, id)` order, with NULL sort values
+ * last (matching {@link orderByClause}'s `NULLS LAST`).
+ */
+function keysetPredicate(order: OrderDir, cursor: Cursor): SQL {
   const beyond = order === 'desc' ? lt : gt;
-  const value = comparableCursorValue(sort, cursor.v);
-  if (value !== null) {
-    return sql`(${beyond(column, value as never)} OR (${eq(column, value as never)} AND ${beyond(matches.id, cursor.id)}) OR ${column} IS NULL)`;
+  const tieOrBeyond = (column: SQL, sameValue: SQL): SQL =>
+    sql`(${column} OR (${sameValue} AND ${beyond(matches.id, cursor.id)}))`;
+  switch (cursor.s) {
+    case 'started_at': {
+      const value = new Date(cursor.v);
+      return tieOrBeyond(beyond(matches.startedAt, value), eq(matches.startedAt, value));
+    }
+    case 'duration_seconds': {
+      const column = matches.durationSeconds;
+      if (cursor.v === null) return sql`(${column} IS NULL AND ${beyond(matches.id, cursor.id)})`;
+      return sql`(${tieOrBeyond(beyond(column, cursor.v), eq(column, cursor.v))} OR ${column} IS NULL)`;
+    }
+    case 'layer': {
+      const column = matches.layer;
+      if (cursor.v === null) return sql`(${column} IS NULL AND ${beyond(matches.id, cursor.id)})`;
+      return sql`(${tieOrBeyond(beyond(column, cursor.v), eq(column, cursor.v))} OR ${column} IS NULL)`;
+    }
   }
-  return sql`(${column} IS NULL AND ${beyond(matches.id, cursor.id)})`;
 }
 
 function orderByClause(sort: SortField, order: OrderDir): SQL[] {
@@ -251,13 +280,6 @@ function sumNullableStat(rows: Array<Record<StatKey, number | null>>, key: StatK
   return hasValue ? total : null;
 }
 
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
-
 const CSV_COLUMNS = [
   'id',
   'server_id',
@@ -345,7 +367,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'invalid_cursor' };
         }
-        clauses.push(keysetPredicate(sort, order, cursor));
+        clauses.push(keysetPredicate(order, cursor));
       }
 
       const rows = await listSelection()
@@ -356,10 +378,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
       const hasMore = rows.length > limit;
       const page = hasMore ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
-      const nextCursor =
-        hasMore && last
-          ? encodeCursor({ s: sort, v: cursorValueFor(sort, last), id: last.id })
-          : null;
+      const nextCursor = hasMore && last ? encodeCursor(cursorFor(sort, last)) : null;
 
       return {
         items: page.map(serializeMatch),

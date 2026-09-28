@@ -8,7 +8,6 @@ import {
   ilike,
   isNotNull,
   isNull,
-  lt,
   lte,
   or,
   type SQL,
@@ -18,6 +17,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const PAGE_SIZE_DEFAULT = 50;
@@ -98,6 +98,10 @@ function toDto(row: FeedRow): FeedDto {
   };
 }
 
+/**
+ * Opaque `<epoch-ms>_<note id>` cursor. The id is what the keyset uses; the
+ * millisecond timestamp only covers a cursor row that no longer exists.
+ */
 function encodeCursor(row: { createdAt: Date; id: string }): string {
   return `${row.createdAt.getTime()}_${row.id}`;
 }
@@ -107,7 +111,8 @@ function parseCursor(raw: string): { createdAt: Date; id: string } | null {
   if (sep === -1) return null;
   const millis = Number(raw.slice(0, sep));
   const id = raw.slice(sep + 1);
-  if (!Number.isFinite(millis) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  if (!Number.isInteger(millis) || Math.abs(millis) > 8.64e15) return null;
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   return { createdAt: new Date(millis), id };
 }
 
@@ -127,13 +132,6 @@ const CSV_COLUMNS = [
   'deleted_at',
   'deleted_by',
 ] as const;
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
 
 function csvRow(dto: FeedDto): string {
   const cells = [
@@ -226,11 +224,12 @@ const notesFeedRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'invalid_cursor' };
         }
+        // The cursor's millisecond timestamp cannot represent `created_at`'s
+        // microseconds, so the cursor row's own timestamp is read back from
+        // the table; the millisecond value is only a fallback for a vanished
+        // row.
         clauses.push(
-          or(
-            lt(playerNotes.createdAt, parsed.createdAt),
-            and(eq(playerNotes.createdAt, parsed.createdAt), lt(playerNotes.id, parsed.id)),
-          ) as SQL,
+          sql`(${playerNotes.createdAt}, ${playerNotes.id}) < (COALESCE((SELECT created_at FROM player_notes WHERE id = ${parsed.id}), ${parsed.createdAt.toISOString()}::timestamptz), ${parsed.id}::uuid)`,
         );
       }
 
