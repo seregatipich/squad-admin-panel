@@ -7,8 +7,8 @@
 | `DATABASE_URL` | yes | — | all | Postgres URL. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Redis URL. | no |
 | `BRIDGE_SOCKET` | yes | `/run/panel-host-bridge/bridge.sock` | all | Path to the bridge unix socket. | no |
-| `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. Used for CSRF/cookie/redirect URLs. | no |
-| `PANEL_PUBLIC_URL` | yes | — | all | Full public URL of the panel (e.g. `https://panel.example`). Used as the `openid.return_to` and `openid.realm` base for Steam OpenID callbacks. | no |
+| `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel; also the comment of generated log-source SSH keys. | no |
+| `PANEL_PUBLIC_URL` | yes | — | all | Full public URL of the panel (e.g. `https://panel.example`). Used as the `openid.return_to` and `openid.realm` base for Steam OpenID callbacks, and as the trusted `Origin` of cookie-authenticated mutations and WebSocket handshakes (`plugins/csrf.ts`). | no |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64. AES-256-GCM key for `server_credentials.*_encrypted`. | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. | yes |
 | `BALANCER_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default team-balancer proposal endpoint. Shared with the SquadJS balancer exporter. Ingestion only — the panel never executes a team change. | yes |

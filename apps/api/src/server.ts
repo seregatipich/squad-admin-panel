@@ -21,6 +21,7 @@ import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
 import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
+import csrfPlugin from './plugins/csrf.js';
 import databasePlugin from './plugins/database.js';
 import dbHealthPlugin from './plugins/db-health.js';
 import errorDiagPlugin from './plugins/error-diag.js';
@@ -98,6 +99,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
+  await app.register(csrfPlugin);
   await app.register(authPlugin);
   await app.register(auditPlugin);
   await app.register(installProgressPlugin);
