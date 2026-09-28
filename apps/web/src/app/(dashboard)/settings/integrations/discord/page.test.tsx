@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -248,6 +248,63 @@ describe('Синхронизация ролей', () => {
 
     expect(await screen.findByText('Синхронизация ролей')).toBeInTheDocument();
     expect(await screen.findByText('Маппингов пока нет')).toBeInTheDocument();
+  });
+});
+
+describe('фоновый опрос не затирает несохранённые правки формы бота (#705)', () => {
+  it('keeps an in-progress Guild ID edit across a background poll', async () => {
+    // Fake timers must be installed before the component mounts, so the
+    // page's own `setInterval(load, POLL_MS)` is the one advanced below —
+    // installing them after mount would leave that interval running on the
+    // real clock and the test would pass regardless of the fix.
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', mockFetch());
+      render(<DiscordIntegrationPage />);
+      // The initial load is two `Promise.all`-ed fetches already resolved by
+      // the mock; flush their microtasks without relying on real-timer-based
+      // `findBy*` polling.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const guildIdInput = screen.getByLabelText('Guild ID');
+
+      fireEvent.change(guildIdInput, { target: { value: '123456789012345678' } });
+      expect(guildIdInput).toHaveValue('123456789012345678');
+
+      // The poll fires (still returning guild_id: null from the mock) while
+      // the edit has not been saved yet.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(guildIdInput).toHaveValue('123456789012345678');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an in-progress "enabled" toggle across a background poll', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', mockFetch());
+      render(<DiscordIntegrationPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const enabledCheckbox = screen.getByLabelText('Интеграция включена');
+
+      fireEvent.click(enabledCheckbox);
+      expect(enabledCheckbox).toBeChecked();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(enabledCheckbox).toBeChecked();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
