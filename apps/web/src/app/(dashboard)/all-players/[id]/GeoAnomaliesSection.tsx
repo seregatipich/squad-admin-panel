@@ -4,22 +4,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, DateTime, InlineBanner, Skeleton, StatusBadge } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { CHART_FRAME, CHART_GRID, CHART_SURFACE } from '@/lib/chart-tokens';
+import { flagEmoji } from './geo';
 
 interface CountrySwitch {
   from_country_code: string;
   from_country_name: string | null;
   to_country_code: string;
   to_country_name: string | null;
-  from_observed_at: string;
   to_observed_at: string;
   gap_hours: number;
   within_window: boolean;
-}
-
-interface DistinctCountry {
-  country_code: string;
-  country_name: string | null;
-  observation_count: number;
 }
 
 interface GeoPoint {
@@ -37,23 +31,12 @@ interface GeoAnomalies {
   multi_country: boolean;
   has_recent_switch: boolean;
   switches: CountrySwitch[];
-  distinct_countries: DistinctCountry[];
   points: GeoPoint[];
 }
 
 /** Точки на карте: свежая — янтарная, остальные — синие; легенда рядом с картой. */
 const POINT_LATEST = '#ff9f0a';
 const POINT_TRAIL = '#409cff';
-
-function flagEmoji(countryCode: string | null): string {
-  if (!countryCode || countryCode.length !== 2) return '🏳️';
-  const base = 0x1f1e6;
-  const upper = countryCode.toUpperCase();
-  const first = upper.charCodeAt(0) - 65;
-  const second = upper.charCodeAt(1) - 65;
-  if (first < 0 || first > 25 || second < 0 || second > 25) return '🏳️';
-  return String.fromCodePoint(base + first) + String.fromCodePoint(base + second);
-}
 
 function formatGap(gapHours: number): string {
   if (gapHours < 1) return `${Math.round(gapHours * 60)} мин`;

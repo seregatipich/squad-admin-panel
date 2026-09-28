@@ -56,6 +56,7 @@ import { DiscordLinkSection } from './DiscordLinkSection';
 import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
+import { flagEmoji } from './geo';
 import { IssueLinksSection } from './IssueLinksSection';
 import { ModerationHistorySection } from './ModerationHistorySection';
 import { NickBanSection } from './NickBanSection';
@@ -805,16 +806,6 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
       ) : null}
     </Card>
   );
-}
-
-function flagEmoji(countryCode: string | null): string {
-  if (!countryCode || countryCode.length !== 2) return '🏳️';
-  const base = 0x1f1e6;
-  const upper = countryCode.toUpperCase();
-  const first = upper.charCodeAt(0) - 65;
-  const second = upper.charCodeAt(1) - 65;
-  if (first < 0 || first > 25 || second < 0 || second > 25) return '🏳️';
-  return String.fromCodePoint(base + first) + String.fromCodePoint(base + second);
 }
 
 function locationLabel(ip: IpHistory): string {
