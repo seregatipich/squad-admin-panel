@@ -1,5 +1,12 @@
 # `bridge` — changelog
 
+## 2026-09-28 — `container_run` validates `multihome`, drops `extra_args` (#53)
+
+### Security
+
+- `container_run` rejects a `multihome` that is not an IP literal (`validate.Multihome`, `forbidden`) before building `docker run`: the value becomes the `RCONIP=`/`MULTIHOME=` Squad arguments and Unreal re-tokenises its argv, so spaces or quotes could inject engine startup arguments.
+- The unvalidated `extra_args` parameter is removed; no caller ever sent it, and it appended free-form arguments to the Squad command line.
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed
