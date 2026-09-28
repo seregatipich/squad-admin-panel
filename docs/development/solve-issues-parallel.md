@@ -32,9 +32,9 @@ Run `pnpm solve:issues -- --help` for the full flag list (`--timeout-min`, `--re
 
 1. **Issue selection** — explicit numbers or `--label`, fetched via `gh` from the current repository (override with `--repo owner/name`).
 2. **Agent + environment** — a reusable agent (`squad-admin-panel issue solver`, full `agent_toolset_20260401` toolset) and a cloud environment are found by name or created on first run. `--model` applies per session through an `agent_with_overrides` reference, so runs with different models share one agent resource.
-3. **One session per issue** — each session mounts the repo with `checkout: dev`, receives a task prompt encoding the `CLAUDE.md` rules (work branch off `dev`, mandatory tests, local gate, conventional commit referencing the issue, `verify-done.sh --feature`, a visible handoff evidence comment, no merges/PRs), and streams events until `session.status_idle`.
+3. **One session per issue** — each session mounts the repo with `checkout: dev`, receives a task prompt encoding the `CLAUDE.md` rules (work branch off `dev`, mandatory tests, local gate, conventional commit referencing the issue, `verify-done.sh --feature`, a visible handoff evidence comment, no merges/PRs), and streams events until `session.status_idle`. A `session.error` whose `retry_status` is `retrying` (model overloaded, rate limited) is transient — the server retries on its own, so the stream keeps being read; an `exhausted` or `terminal` error ends the session as `failed`.
 4. **Concurrency pool** — at most `--concurrency` sessions run at once; each has a `--timeout-min` wall-clock budget (default 45 min), after which the stream is aborted and the session reported as timed out (it keeps its state server-side and can be inspected or resumed in the [Console](https://platform.claude.com)).
-5. **Report** — per-issue status (`solved` / `failed` / `timed-out`), session ID, expected branch name, and the agent's final message. Exit code is non-zero if any session did not finish cleanly.
+5. **Report** — per-issue status (`solved` / `failed` / `timed-out`; only an idle status with `stop_reason: end_turn` is `solved`, while `retries_exhausted` and `requires_action` are `failed`), session ID, expected branch name, and the agent's final message. Exit code is non-zero if any session did not finish cleanly.
 
 ## After a run
 
