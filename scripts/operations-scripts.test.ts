@@ -1504,6 +1504,35 @@ describe('the stand host rollback', { concurrency: true }, () => {
     assert.match(onto.stderr, /already the running release/);
     assert.deepEqual(logLines(same.log), []);
   });
+
+  it('warns instead of silently redeploying a release it just rolled back away from (#76)', async () => {
+    const fixture = rollbackFixture();
+    assert.equal((await deploy(fixture)).status, 0);
+    const second = releaseImages('2');
+    assert.equal((await deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA })).status, 0);
+
+    // Roll back NEXT_SHA -> RELEASE_SHA. deploy-stand.sh's unconditional
+    // release-file swap now leaves .release.prev.env holding NEXT_SHA (the
+    // release just left), so a follow-up rollback would read it straight
+    // back out with no signal that it was ever rolled away from.
+    const first = await deploy(
+      fixture,
+      { DOCKER_PRESENT: Object.values(second).join(',') },
+      fixture.rollback,
+    );
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(releaseFile(fixture, '.release.bad.env'), { RELEASE_SHA: NEXT_SHA });
+
+    // A second rollback (the documented, tested round trip) targets
+    // .release.prev.env, which now holds NEXT_SHA — exactly the release
+    // .release.bad.env just recorded. It must still succeed (this round
+    // trip is intended), but it must no longer be silent about redeploying
+    // a release this script itself rolled away from.
+    const second_rollback = await deploy(fixture, {}, fixture.rollback);
+    assert.equal(second_rollback.status, 0, second_rollback.stderr);
+    assert.match(second_rollback.stderr, /rolled back away from previously/);
+    assert.deepEqual(releaseFile(fixture).APP_VERSION, NEXT_SHA);
+  });
 });
 
 describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
