@@ -102,6 +102,10 @@ export const balancerProposals = pgTable(
       table.generatedAt.desc(),
     ),
     statusIdx: index('balancer_proposals_status_idx').on(table.status, table.generatedAt.desc()),
+    generatedIdx: index('balancer_proposals_generated_idx').on(
+      table.generatedAt.desc(),
+      table.id.desc(),
+    ),
   }),
 );
 

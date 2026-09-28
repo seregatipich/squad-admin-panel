@@ -64,7 +64,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. | HMAC only |
+| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. A new snapshot supersedes the open one for the same server and mode and prunes that server's `superseded`/`dismissed` snapshots received more than 30 days ago. | HMAC only |
 
 Required headers:
 
@@ -108,7 +108,7 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 | PUT | `/api/v1/balancer/settings` | Partial upsert of the singleton. Body accepts any subset of `enabled`, `win_streak_threshold` (≥1), `ticket_diff_threshold` (≥0), `one_sided_rounds_threshold` (≥1), `quorum` (≥0), `pass_threshold_pct` (0–100), `require_moderator_veto`, `prefer_squad_grouping`, `player_level_enabled`; an empty body is 400. Audit: `balancer.settings.update`. | `balancer:edit` |
 | GET | `/api/v1/balancer/proposals` | Cursor page of stored snapshots, newest `generated_at` first. Query: `server_id` (uuid or `all`), `status`, `mode`, `cursor`, `limit` (≤100). Each item carries the raw `signals`/`proposal` blobs plus an `evaluation` verdict (`{triggered, reasons[]}`) computed from the current thresholds. Returns `{ items: [], next_cursor: null }` with HTTP 200 when no snapshot has ever arrived. Malformed cursor → 400 `invalid_cursor`. | `balancer:view` |
 | GET | `/api/v1/balancer/proposals/:id` | One snapshot plus its `decisions[]` history, newest first. 404 `proposal_not_found`. | `balancer:view` |
-| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
+| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`; a `superseded` snapshot is 409 `proposal_superseded` and keeps its status. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
 
 ## RBAC reference
 

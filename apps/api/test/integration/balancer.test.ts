@@ -7,7 +7,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createBalancerProposalSignature } from '../../src/lib/balancer-proposal-signature.js';
@@ -412,6 +412,36 @@ describeIfDb('POST /api/v1/integrations/balancer/proposals', () => {
     expect(byKey.get('balancer-snapshot-player')?.status).toBe('open');
   });
 
+  it("prunes the server's aged superseded and dismissed snapshots (#108)", async () => {
+    const old = new Date(Date.now() - 45 * 86_400_000);
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'old-superseded' }));
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'old-dismissed', mode: 'player' }));
+    await postSnapshot(
+      snapshotPayload({ source_snapshot_id: 'other-server-old', server_id: OTHER_SERVER_ID }),
+    );
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'recent-superseded' }));
+    await h.db
+      .update(balancerProposals)
+      .set({ status: 'dismissed' })
+      .where(eq(balancerProposals.sourceSnapshotId, 'old-dismissed'));
+    await h.db
+      .update(balancerProposals)
+      .set({ receivedAt: old })
+      .where(
+        inArray(balancerProposals.sourceSnapshotId, [
+          'old-superseded',
+          'old-dismissed',
+          'other-server-old',
+        ]),
+      );
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'current' }));
+
+    const keys = (await h.db.select().from(balancerProposals)).map((row) => row.sourceSnapshotId);
+    // Only this server's aged superseded/dismissed rows go; the other server's
+    // row and the recently superseded one stay.
+    expect(keys.sort()).toEqual(['current', 'other-server-old', 'recent-superseded']);
+  });
+
   it('accepts a snapshot that omits the optional team fields', async () => {
     // Regression: a Zod `.default(null)` on current_team/target_team rewrites
     // req.body, so the HMAC would be checked against a value the exporter never
@@ -636,6 +666,14 @@ describeIfDb('GET /api/v1/balancer/proposals', () => {
     expect(new Set(seen).size).toBe(4);
   });
 
+  it('backs the unfiltered keyset listing with a (generated_at, id) index (#108)', async () => {
+    const rows = await h.db.execute<{ indexdef: string }>(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND indexname = 'balancer_proposals_generated_idx'
+    `);
+    expect(rows[0]?.indexdef).toContain('(generated_at DESC, id DESC)');
+  });
+
   it('rejects a malformed cursor with 400', async () => {
     const res = await h.app.inject({
       method: 'GET',
@@ -798,6 +836,27 @@ describeIfDb('POST /api/v1/balancer/proposals/:id/decision', () => {
       veto_reason_kind: 'clan_match',
       veto_reason: 'Клановый матч, состав менять нельзя',
     });
+  });
+
+  it('refuses a decision on a superseded snapshot with 409 and keeps it superseded (#106)', async () => {
+    const proposalId = await seedProposal();
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'balancer-snapshot-newer' }));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/balancer/proposals/${proposalId}/decision`,
+      headers: { cookie: ownerCookie },
+      payload: { decision: 'acknowledge' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'proposal_superseded' });
+    const [row] = await h.db
+      .select()
+      .from(balancerProposals)
+      .where(eq(balancerProposals.id, proposalId));
+    expect(row?.status).toBe('superseded');
+    expect(await h.db.select().from(balancerDecisions)).toHaveLength(0);
   });
 
   it('rejects an unknown decision verb with 400', async () => {
