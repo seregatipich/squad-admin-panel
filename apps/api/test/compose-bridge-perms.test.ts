@@ -61,7 +61,9 @@ describe('docker/compose.yml — bridge socket permissions contract', () => {
 
   for (const svc of bridgeUsers) {
     it(`${svc.name}: declares panel GID via user: (not group_add:)`, () => {
-      const userMatch = /^\s*user:\s*"0:\$\{PANEL_GID:-987\}"/m.exec(svc.body);
+      // Any uid works for SO_PEERCRED; the primary GID is what the bridge checks.
+      // Only the api keeps uid 0 (#47, see compose-hardening.test.ts).
+      const userMatch = /^\s*user:\s*"\d+:\$\{PANEL_GID:-987\}"/m.exec(svc.body);
       const groupAddMatch = /^\s*group_add:\s*$/m.exec(svc.body);
 
       expect(
@@ -70,14 +72,14 @@ describe('docker/compose.yml — bridge socket permissions contract', () => {
           `Service "${svc.name}" mounts ${BRIDGE_PATH_PREFIX} but does not set primary GID via user: directive.`,
           `The bridge SO_PEERCRED check inspects only the primary GID; group_add adds`,
           `to the supplementary list which is NOT checked. Fix:`,
-          `  user: "0:\${PANEL_GID:-987}"`,
+          `  user: "<uid>:\${PANEL_GID:-987}"`,
           `See docs/components/bridge/troubleshooting.md.`,
         ].join('\n'),
       ).not.toBeNull();
 
       expect(
         groupAddMatch,
-        `Service "${svc.name}" mounts the bridge socket and uses group_add: — this fails SO_PEERCRED. Use user: "0:\${PANEL_GID:-987}" instead.`,
+        `Service "${svc.name}" mounts the bridge socket and uses group_add: — this fails SO_PEERCRED. Use user: "<uid>:\${PANEL_GID:-987}" instead.`,
       ).toBeNull();
     });
 

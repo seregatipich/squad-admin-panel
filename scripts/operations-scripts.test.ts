@@ -2121,3 +2121,45 @@ describe('backup-restore postgres readiness (#291)', () => {
     );
   });
 });
+
+describe('infra hardening contracts (#47)', () => {
+  const read = (relativePath: string) =>
+    readFileSync(path.join(REPOSITORY_ROOT, relativePath), 'utf8');
+
+  it('install-host-bridge points the bridge backup RPCs at the deploy directory and its compose file', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    const dropIn = installer.slice(
+      installer.indexOf('panel-host-bridge.service.d/install.conf" <<EOF'),
+    );
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_DIR=\$\{REPO_DIR\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_FILE=\$\{PANEL_COMPOSE_FILE\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_ENV_FILES=\$\{PANEL_COMPOSE_ENV_FILES\}\n/);
+    assert.match(installer, /PANEL_COMPOSE_FILE="\$\{PANEL_COMPOSE_FILE:-docker\/compose\.yml\}"/);
+    assert.match(installer, /PANEL_COMPOSE_ENV_FILES="\$\{PANEL_COMPOSE_ENV_FILES:-\.env\}"/);
+  });
+
+  it('install-host-bridge creates the media directory the api and media-publisher bind', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    assert.match(installer, /"\$\{DATA_DIR\}\/media" \\/);
+  });
+
+  it('bootstrap generates the restic password and the least-privilege database login', () => {
+    const bootstrap = read('scripts/bootstrap.sh');
+    const envBlock = bootstrap.slice(bootstrap.indexOf('cat > "${REPO}/.env" <<EOF'));
+    assert.match(envBlock, /\nRESTIC_PASSWORD=\$\{RESTIC_PW\}\n/);
+    assert.match(envBlock, /\nPANEL_DB_USER=panel_app\n/);
+    assert.match(envBlock, /\nPANEL_DB_PASSWORD=\$\{APP_DB_PW\}\n/);
+    assert.match(bootstrap, /RESTIC_PW=\$\(openssl rand -hex 32\)/);
+    assert.match(bootstrap, /APP_DB_PW=\$\(openssl rand -hex 32\)/);
+  });
+
+  it('restore.sh rewrites the Redis dataset inside the redis volume, whichever compose file owns it', () => {
+    const restore = read('scripts/restore.sh');
+    assert.doesNotMatch(restore, /rm -rf "\$\{DATA_DIR\}\/redis/);
+    assert.doesNotMatch(
+      restore,
+      /cp "\$\{DATA_DIR\}\/backup-dump\/redis\/dump\.rdb" "\$\{DATA_DIR\}\/redis/,
+    );
+    assert.match(restore, /-v "\$\{DATA_DIR\}\/backup-dump\/redis:\/restore:ro" redis sh -c/);
+  });
+});

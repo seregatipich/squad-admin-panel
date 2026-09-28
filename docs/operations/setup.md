@@ -85,7 +85,7 @@ force.
 ```bash
 sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-tests every bridge method
 curl -sk https://${APP_DOMAIN}/health         # {"status":"ok"}
-curl -sk https://${APP_DOMAIN}/ready          # {"status":"ok","checks":{...}}
+docker compose exec api wget -qO- http://localhost:3000/ready   # {"status":"ok","checks":{...}} — not proxied by Caddy
 curl -skI https://${APP_DOMAIN}/api/docs       # API docs UI responds
 ```
 

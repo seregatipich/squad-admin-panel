@@ -257,6 +257,9 @@ else
   PG_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
   ENC_KEY=$(openssl rand -base64 32)
   SESS=$(openssl rand -base64 32)
+  # Hex: both are embedded verbatim (restic env, DATABASE_URL), so no URL escaping.
+  RESTIC_PW=$(openssl rand -hex 32)
+  APP_DB_PW=$(openssl rand -hex 32)
   PANEL_GID=$(getent group panel | cut -d: -f3)
   cat > "${REPO}/.env" <<EOF
 APP_DOMAIN=${APP_DOMAIN_DEFAULT}
@@ -265,6 +268,9 @@ ACME_EMAIL=admin@example.com
 POSTGRES_PASSWORD=${PG_PW}
 APP_ENCRYPTION_KEY=${ENC_KEY}
 SESSION_SECRET=${SESS}
+RESTIC_PASSWORD=${RESTIC_PW}
+PANEL_DB_USER=panel_app
+PANEL_DB_PASSWORD=${APP_DB_PW}
 DATABASE_URL=postgres://admin:${PG_PW}@postgres:5432/admin
 REDIS_URL=redis://redis:6379
 BRIDGE_SOCKET=/run/panel-host-bridge/bridge.sock

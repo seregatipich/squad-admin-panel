@@ -122,7 +122,8 @@ describe('runtime paths the compose files depend on', () => {
     expect(collect).toContain('apps/web/next.config.mjs');
     const runtime = stage(dockerfile, 'runtime');
     expect(runtime).toContain('WORKDIR /app/apps/web');
-    expect(runtime).toContain('CMD ["pnpm", "start"]');
+    // Started directly as the node user, not through corepack's pnpm (#47).
+    expect(runtime).toContain('CMD ["node_modules/.bin/next", "start", "--port", "3000"]');
   });
 
   it('workers: every worker dist, selected by WORKER, exiting 64 without it', () => {

@@ -11,7 +11,7 @@
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
 | `DUCKDNS_TOKEN` | only for the stand host | — | caddy (the stand host) | DuckDNS API token for DNS-01 TLS (`docker/compose.stand.yml` / `docker/Caddyfile.stand`) when port 80 is not forwarded. | yes |
-| `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
+| `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role (the superuser that owns the schema). Both compose files refuse to start while it is empty. Generate with `openssl rand -base64 32`. | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
 | `BALANCER_WEBHOOK_SECRET` | no | — | api | Enables the signed team-balancer endpoint the SquadJS exporter pushes dry-run proposal snapshots to. Leave unset to disable the endpoint (it then returns 503). | yes |
@@ -30,7 +30,10 @@
 | `GLITCHTIP_DSN` | optional | — | all | Sentry-compatible error reporting. | yes |
 | `GLITCHTIP_SECRET_KEY` | optional | — | all | GlitchTip server-side ingest. | yes |
 | `RESTIC_REPOSITORY` | optional | — | all | Where the (post-P0) backup worker writes snapshots. | no |
-| `RESTIC_PASSWORD` | optional | — | all | Restic encryption passphrase. | yes |
+| `RESTIC_PASSWORD` | yes (`docker/compose.yml`) | — | backup | Restic encryption passphrase. `docker/compose.yml` refuses to start while it is empty (there is no `changeme` fallback any more); the stand's backup service leaves it empty-able and restic then refuses to run. Generate with `openssl rand -hex 32`; `scripts/bootstrap.sh` does. | yes |
+| `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | recommended | — | migrator → api / workers | Least-privilege Postgres login (#47). When both are set, the migrator creates or updates the role on every run (no SUPERUSER, owns nothing, only SELECT/INSERT on `audit_log` and `config_versions`) and every service except `migrator` and `worker-event-partition` connects as it. Blank = everything connects as `admin`. Password: 16+ chars of `[A-Za-z0-9_-]` (`openssl rand -hex 32`). Run the migrator once after setting them. | yes |
+| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional | — | api | Discord OAuth2 application for the account link (DISCORD-4). Blank = `/api/v1/auth/discord/login` answers 503. | yes (secret) |
+| `DISCORD_PUBLIC_KEY` | optional | — | api | Ed25519 public key of the Discord application; verifies signed interactions. Blank = `/api/v1/integrations/discord/interactions` answers 503. | no |
 | `LOG_LEVEL` | no | `info` | api / workers | `pino` log level. | no |
 | `NODE_ENV` | no | `production` | api / web / workers | `production` disables pretty logs. Swagger UI is registered at `/api/docs` for API smoke checks. | no |
 

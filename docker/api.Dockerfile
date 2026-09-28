@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS base
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS base
 ARG PNPM_VERSION=9.15.0
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -68,6 +68,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certifi
 COPY --from=prod-deps /app /app
 COPY --from=builder /out /app
 WORKDIR /app/apps/api
+# Unprivileged by default (#47): the migrator runs as `node`. The api service
+# overrides this with `user: "0:<panel gid>"` in compose, and says why there.
+USER node
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
   CMD wget -qO- http://localhost:3000/health || exit 1
