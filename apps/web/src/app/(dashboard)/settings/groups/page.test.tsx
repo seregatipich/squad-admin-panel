@@ -114,6 +114,56 @@ describe('GroupsPage', () => {
   });
 });
 
+describe('load failures (#696)', () => {
+  it('shows an error banner with a retry button instead of an endless skeleton on a 403', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/api/v1/roles')) {
+          return Promise.resolve(new Response(null, { status: 403 }));
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: [] }), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }),
+    );
+    render(<GroupsPage />);
+    expect(await screen.findByText('Не удалось загрузить список ролей: 403')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+  });
+
+  it('shows an error banner instead of an unhandled rejection on a network failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('network down'))),
+    );
+    render(<GroupsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить список ролей: ошибка сети.'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('Owner banner text (#702)', () => {
+  it('derives the flag and permission counts instead of hardcoding them', async () => {
+    stubFetch({
+      roles: [
+        makeRole({ id: 'r-owner', name: 'Owner', squad_permissions: [], is_system_role: true }),
+      ],
+    });
+    render(<GroupsPage />);
+    expect(
+      await screen.findByText(
+        /Owner всегда имеет все 7 флагов доступа и все \d+ Squad permissions\./,
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('preset dropdown — copy permissions from another role (ROLE-6)', () => {
   it('lists every existing role as a copy-from preset option', async () => {
     stubFetch({
@@ -238,6 +288,57 @@ describe('access flags — real switches (§6)', () => {
 
     await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
     expect(puts[0]).toMatchObject({ panel_access: false, can_view_ips: false });
+  });
+});
+
+describe('role name editing (#695)', () => {
+  it('does not send an empty name to the server while the field is cleared', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const nameInput = (await screen.findByLabelText('Название')) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: '' } });
+    expect(nameInput.value).toBe('');
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(puts).toHaveLength(0);
+  });
+
+  it('saves a valid name once it is retyped', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const nameInput = (await screen.findByLabelText('Название')) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: '' } });
+    fireEvent.change(nameInput, { target: { value: 'Moderator' } });
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ name: 'Moderator' });
+  });
+});
+
+describe('role color editing (#703)', () => {
+  it('persists a palette color name typed into the HEX field', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const hexInput = (await screen.findByLabelText('HEX')) as HTMLInputElement;
+    fireEvent.change(hexInput, { target: { value: 'red' } });
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ color: 'red' });
   });
 });
 

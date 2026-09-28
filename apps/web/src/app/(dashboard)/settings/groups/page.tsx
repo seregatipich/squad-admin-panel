@@ -1,7 +1,7 @@
 'use client';
 
 import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
-import type { RoleColor } from '@squad/shared-config/role-colors';
+import { isRoleColor, type RoleColor, roleColorToHex } from '@squad/shared-config/role-colors';
 import {
   SQUAD_PERMISSIONS,
   type SquadPermissionDef,
@@ -32,7 +32,6 @@ import {
   TrashIcon,
 } from '@/components/ui';
 
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const SAVE_DEBOUNCE_MS = 500;
 
 interface RoleRow {
@@ -100,12 +99,26 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [rolesRes, meRes] = await Promise.all([
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (rolesRes.ok) setRows((await rolesRes.json()) as RoleRow[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
+    try {
+      const [rolesRes, meRes] = await Promise.all([
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      let loadErr: string | null = null;
+      if (rolesRes.ok) {
+        setRows((await rolesRes.json()) as RoleRow[]);
+      } else {
+        loadErr = `Не удалось загрузить список ролей: ${rolesRes.status}`;
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.status}`;
+      }
+      setGlobalErr(loadErr);
+    } catch {
+      setGlobalErr('Не удалось загрузить список ролей: ошибка сети.');
+    }
   }, []);
 
   useEffect(() => {
@@ -268,6 +281,13 @@ export default function GroupsPage() {
           title={globalErr}
           onDismiss={() => setGlobalErr(null)}
           dismissLabel="Скрыть сообщение"
+          action={
+            !rows || !me ? (
+              <Button size="sm" onClick={() => void refresh()}>
+                Повторить
+              </Button>
+            ) : undefined
+          }
         />
       ) : null}
 
@@ -411,12 +431,18 @@ function RoleCard({
   const setName = (name: string) => {
     if (!canEdit) return;
     onLocal({ name });
+    if (!name.trim() || name.length > 64) {
+      // Invalid intermediate value — the server would reject it (400/409),
+      // which would bounce back through refresh() mid-edit. Show it locally
+      // only; persisting happens once the name is valid again.
+      return;
+    }
     debounce({ name });
   };
 
   const setColor = (color: string) => {
     if (!canEdit) return;
-    if (!HEX_RE.test(color)) {
+    if (!isRoleColor(color)) {
       // intermediate keystroke (e.g. user is typing a hex value) — show
       // it locally without persisting.
       onLocal({ color });
@@ -461,7 +487,7 @@ function RoleCard({
           <InlineBanner
             tone="warn"
             title="Системная роль"
-            description="Имя, цвет и права нельзя редактировать через интерфейс — Owner всегда имеет все 3 флага доступа и все 21 Squad permission."
+            description={`Имя, цвет и права нельзя редактировать через интерфейс — Owner всегда имеет все ${ACCESS_FLAGS.length} флагов доступа и все ${SQUAD_PERMISSIONS.length} Squad permissions.`}
           />
         ) : null}
 
@@ -482,7 +508,7 @@ function RoleCard({
             <input
               id={colorInputId}
               type="color"
-              value={HEX_RE.test(role.color) ? role.color : '#737373'}
+              value={roleColorToHex(role.color)}
               disabled={!canEdit}
               onChange={(e) => setColor(e.target.value.toUpperCase())}
               className="h-8 w-12 cursor-pointer rounded-ctl border border-line bg-raised disabled:cursor-not-allowed disabled:opacity-40"
