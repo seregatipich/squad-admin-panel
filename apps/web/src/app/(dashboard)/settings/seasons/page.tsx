@@ -137,6 +137,11 @@ export default function SeasonsSettingsPage() {
   }
 
   function startEdit(season: Season) {
+    // A closed season isn't editable through this form (see the "Изменить"
+    // button's condition below): the status Select only offers
+    // Запланирован/Активный, so silently coercing 'closed' to 'upcoming'
+    // here would reopen the season the moment its name was edited (#721).
+    if (season.status === 'closed') return;
     setEditingId(season.id);
     setError(null);
     setNotice(null);
@@ -144,7 +149,7 @@ export default function SeasonsSettingsPage() {
       name: season.name,
       startsAt: isoToDay(season.starts_at),
       endsAt: isoToDay(season.ends_at),
-      status: season.status === 'closed' ? 'upcoming' : season.status,
+      status: season.status,
     });
   }
 
@@ -258,7 +263,7 @@ export default function SeasonsSettingsPage() {
                     </span>
                   </Td>
                   <Td align="right">
-                    {canManage && !season.finalized ? (
+                    {canManage && !season.finalized && season.status !== 'closed' ? (
                       <span className="flex justify-end gap-2">
                         <Button size="sm" onClick={() => startEdit(season)}>
                           Изменить
@@ -270,7 +275,9 @@ export default function SeasonsSettingsPage() {
                         ) : null}
                       </span>
                     ) : (
-                      <span className="text-xs text-ink-3">только просмотр</span>
+                      <span className="text-xs text-ink-3">
+                        {season.status === 'closed' ? 'сезон закрыт' : 'только просмотр'}
+                      </span>
                     )}
                   </Td>
                 </TableRow>
