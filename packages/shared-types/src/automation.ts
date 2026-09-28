@@ -8,7 +8,8 @@ import { rconOperatorCommandNameSchema } from './rcon-commands.js';
  * action (of {@link AUTOMATION_ACTION_TYPES}). The `condition`/`action` jsonb
  * columns are validated against the discriminated schemas below both at the API
  * boundary (`apps/api/src/routes/automation-rules.ts`) and by the evaluation
- * engine (`apps/workers/automation/src/rules/engine.ts`).
+ * engine (`evaluate` in `./automation-engine.js`, re-exported by
+ * `apps/workers/automation/src/rules/engine.ts`).
  */
 
 export const AUTOMATION_CONDITION_TYPES = [
