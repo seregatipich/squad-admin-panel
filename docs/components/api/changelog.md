@@ -1,5 +1,27 @@
 # `api` — changelog
 
+
+## 2026-09-28 — Редактор конфигов, установка, логи и force-stop (#42)
+
+### Security
+
+- Запись `Bans.cfg`/`RemoteBanListHosts.cfg` через редактор конфигов (PUT, restore, drift accept/revert, reset-default) требует ещё и `mod:ban_perm`, а `Admins.cfg`/`RemoteAdminListHosts.cfg` — `user:manage_roles`; без них `403 { error: 'forbidden', required_permission }` (#1236).
+- Запись конфига для неизвестного или удалённого сервера отвечает `404` до любого обращения к bridge; сообщение версии не может начинаться с `deletion-backup-marker` (`400`) (#281).
+- `Password=`/`Port=` в `Rcon.cfg` должны совпадать с `server_credentials`, иначе `422 rcon_credentials_managed`; маска пароля всегда заполняется паролем панели (#280).
+- `WS /api/v1/servers/:id/logs/ws` требует `server:download_logs`, как и файлы логов (#1239).
+- `logs/ws` и `depot/progress/ws`: не больше 4 сокетов на пользователя и 32 на процесс, дальше `{error:'too_many_streams'}` и код закрытия 1013 (#1298).
+
+### Fixed
+
+- Запись конфига идёт в одной транзакции под advisory-блокировкой (server, file): строка истории вставляется до записи на диск, tip в БД всегда описывает байты на диске (#282).
+- `history` считает размер через `octet_length`, `diff` читает только две версии (#284); `diff`, `drift/diff` и `blame` ограничены 2 с и отвечают `422 diff_too_large`, blame берёт последние 100 версий (#283).
+- `configs/drift` читает по одной последней версии на файл (`DISTINCT ON`) (#1335).
+- `POST /servers/:id/install` атомарно переводит сервер в `installing` только из `pending`/`failed` (`409 install_in_progress` / `409 server_not_installable`), во время установки обновляет `updated_at` раз в минуту; установка больше не пишет `.keep` под `saved/`, который отвергает bridge, и сайдкар запускается (#290, #1352).
+- `install/ws` отдаёт `{done:true, final}` и закрывается, если установка уже закончилась до подключения; новая попытка очищает буфер прогресса (#292).
+- Скачивание логов приостанавливает чтение из bridge, пока клиент не заберёт данные, и закрывает соединение с bridge при обрыве (#291).
+- `POST /servers/:id/force-stop` ставит `stop:requested:<id>`, останавливает сайдкар RNSquadJS и не перезаписывает статус, изменившийся за время `container_rm` (`409 server_status_changed`) (#285).
+- Предпросмотр map vote отбрасывает матчи без слоя так же, как scheduler (#301).
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

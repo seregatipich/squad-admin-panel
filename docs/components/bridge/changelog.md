@@ -1,5 +1,12 @@
 # `bridge` — changelog
 
+
+## 2026-09-28 — Лимит одновременных `container_logs_follow` (#42)
+
+### Changed
+
+- Не больше 64 одновременных `container_logs_follow` на процесс bridge; сверх лимита `runtime_error` `too many concurrent log follows (limit 64)` (#1298).
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed
