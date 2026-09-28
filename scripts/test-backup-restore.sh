@@ -193,10 +193,22 @@ docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" "$RD_IMG" -c 
   set -e
   redis-server --dir /data --dbfilename dump.rdb --appendonly no --save "" &
   pid=$!
-  until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.3; done
+  # Bounded (30s / 20s at 0.3s steps) so a wedged redis-server fails this
+  # step with a clear message instead of hanging until the CI job timeout.
+  tries=0
+  until redis-cli ping 2>/dev/null | grep -q PONG; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 100 ] || { echo "redis-server did not answer ping within 30s" >&2; exit 1; }
+    sleep 0.3
+  done
   redis-cli config set appendonly yes >/dev/null
   sleep 1
-  until [ "$(redis-cli info persistence | tr -d "\r" | awk -F: "/^aof_rewrite_in_progress:/{print \$2}")" = "0" ]; do sleep 0.3; done
+  tries=0
+  until [ "$(redis-cli info persistence | tr -d "\r" | awk -F: "/^aof_rewrite_in_progress:/{print \$2}")" = "0" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 67 ] || { echo "AOF rewrite did not finish within 20s" >&2; exit 1; }
+    sleep 0.3
+  done
   status="$(redis-cli info persistence | tr -d "\r" | awk -F: "/^aof_last_bgrewrite_status:/{print \$2}")"
   [ "$status" = "ok" ] || { echo "aof rewrite failed: $status" >&2; exit 1; }
   redis-cli shutdown nosave || true
