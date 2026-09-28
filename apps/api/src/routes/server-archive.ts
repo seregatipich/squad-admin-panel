@@ -1,14 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, desc, eq, isNotNull, isNull, like } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { encrypt, serialize } from '../lib/crypto.js';
-import { restoreConfigsFromArchive } from '../lib/server-restore.js';
+import { deletionBackupRows, restoreConfigsFromArchive } from '../lib/server-restore.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -96,12 +96,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           author_label: configVersions.authorLabel,
         })
         .from(configVersions)
-        .where(
-          and(
-            eq(configVersions.serverId, row.id),
-            like(configVersions.message, 'deletion-backup-marker%'),
-          ),
-        )
+        .where(deletionBackupRows(row.id, row.deletionBackupMarkerId))
         .orderBy(desc(configVersions.createdAt));
 
       const dedup = new Map<string, (typeof backups)[number]>();
@@ -170,9 +165,8 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         .from(configVersions)
         .where(
           and(
-            eq(configVersions.serverId, req.params.id),
+            deletionBackupRows(req.params.id, archive.deletionBackupMarkerId),
             eq(configVersions.filename, req.params.filename),
-            like(configVersions.message, 'deletion-backup-marker%'),
           ),
         )
         .orderBy(desc(configVersions.createdAt))

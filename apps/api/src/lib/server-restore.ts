@@ -3,7 +3,7 @@ import type { BridgeClient } from '@squad/bridge-client';
 import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, asc, eq, isNotNull, like } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -33,20 +33,50 @@ export interface RestoreContext {
   actorLabel: string;
 }
 
+/**
+ * Selects exactly the `config_versions` rows `softDeleteServer` wrote as the
+ * server's deletion backup: the batch that shares the message and `created_at`
+ * of `servers.deletion_backup_marker_id` (one multi-row INSERT, so one
+ * transaction timestamp). Matching on the `deletion-backup-marker` message
+ * prefix alone is not enough — any config:edit user can choose that message
+ * for an ordinary version. A server without a marker has no backup.
+ *
+ * Use in a query `FROM config_versions` (the outer columns are referenced by
+ * table name, so the subquery cannot rebind them).
+ *
+ * @param serverId - The archived server.
+ * @param markerId - Its `servers.deletion_backup_marker_id`.
+ */
+export function deletionBackupRows(serverId: string, markerId: string | null): SQL {
+  if (!markerId) return sql`false`;
+  return and(
+    eq(configVersions.serverId, serverId),
+    sql`(config_versions.message, config_versions.created_at) = (
+      SELECT marker.message, marker.created_at
+      FROM config_versions marker
+      WHERE marker.id = ${markerId} AND marker.server_id = ${serverId}
+    )`,
+  ) as SQL;
+}
+
+/**
+ * Overlays an archived server's deletion backup onto `newServerId`'s
+ * ServerConfig directory (except {@link SKIPPED_FILES}), recording a
+ * `config_versions` row per restored file.
+ */
 export async function restoreConfigsFromArchive(
   ctx: RestoreContext,
   newServerId: string,
   archiveServerId: string,
 ): Promise<RestoreConfigsResult> {
+  const archive = await ctx.db.query.servers.findFirst({
+    columns: { deletionBackupMarkerId: true },
+    where: eq(servers.id, archiveServerId),
+  });
   const allBackup = await ctx.db
     .select()
     .from(configVersions)
-    .where(
-      and(
-        eq(configVersions.serverId, archiveServerId),
-        like(configVersions.message, 'deletion-backup-marker%'),
-      ),
-    )
+    .where(deletionBackupRows(archiveServerId, archive?.deletionBackupMarkerId ?? null))
     .orderBy(asc(configVersions.createdAt));
 
   const byFile = new Map<string, (typeof allBackup)[number]>();

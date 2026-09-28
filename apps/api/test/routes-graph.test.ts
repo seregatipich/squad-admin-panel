@@ -150,6 +150,7 @@ vi.mock('../src/lib/server-delete.js', () => ({
 
 vi.mock('../src/lib/server-restore.js', () => ({
   restoreConfigsFromArchive: vi.fn(),
+  deletionBackupRows: vi.fn(),
 }));
 
 vi.mock('../src/lib/audit.js', () => ({
