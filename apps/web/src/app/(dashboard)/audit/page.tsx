@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -75,9 +75,16 @@ export default function AuditPage() {
     }
   }
 
+  // Один запрос в полёте одновременно: тик опроса, догнавший ещё не
+  // завершённый предыдущий, пропускается вместо того, чтобы удвоить нагрузку
+  // на append-only таблицу (#488).
+  const inFlightRef = useRef(false);
+
   // Вынесено из эффекта, чтобы «Повторить» на полосе ошибки звало ровно тот же
   // запрос, что и опрос по таймеру, а не его копию.
   const load = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const r = await fetch('/api/v1/audit?page=1&page_size=200', {
         credentials: 'include',
@@ -91,13 +98,26 @@ export default function AuditPage() {
       setErr((e as Error).message);
     } finally {
       setLoaded(true);
+      inFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      // A hidden tab's journal isn't visible anyway, so skip the tick
+      // entirely; the effect below catches up once it becomes visible again.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load();
+    }, POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [load]);
 
   const rows = useMemo(() => {
