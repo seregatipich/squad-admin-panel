@@ -229,9 +229,22 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
           .set({ bonusBalance: nextBalance, updatedAt: new Date() })
           .where(eq(players.id, playerId));
 
+        // Inside the transaction: a failed audit insert rolls the balance change
+        // back, so no adjustment is ever committed without its audit row.
+        await writeAuditEntry(tx, {
+          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
+          actorIp: req.ip ?? null,
+          actionType: 'player.bonus.adjust',
+          targetType: 'player',
+          targetId: playerId,
+          before: { bonus_balance: current.balance },
+          after: { bonus_balance: nextBalance },
+          context: { player_id: playerId, amount, request_id: req.id },
+          statusCode: 201,
+        });
+
         return {
           status: 'ok' as const,
-          before: current.balance,
           after: nextBalance,
           ledgerRow,
         };
@@ -245,18 +258,6 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'insufficient_balance', balance: outcome.balance };
       }
-
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player.bonus.adjust',
-        targetType: 'player',
-        targetId: playerId,
-        before: { bonus_balance: outcome.before },
-        after: { bonus_balance: outcome.after },
-        context: { player_id: playerId, amount, request_id: req.id },
-        statusCode: 201,
-      });
 
       reply.code(201);
       return {
@@ -320,6 +321,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
           roleId: vipTiers.roleId,
           defaultDays: vipTiers.defaultDays,
           priceBonuses: vipTiers.priceBonuses,
+          isActive: vipTiers.isActive,
           rolePanelAccess: roles.panelAccess,
           roleIsSystem: roles.isSystemRole,
         })
@@ -330,6 +332,12 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
       if (!tier) {
         reply.code(404);
         return { error: 'tier_not_found' };
+      }
+      // A deactivated tier is hidden from /bonus-shop/tiers and must not stay
+      // purchasable by id at its old price.
+      if (!tier.isActive) {
+        reply.code(409);
+        return { error: 'tier_not_purchasable' };
       }
       // default_days is guaranteed by vip_tiers_price_requires_days_chk when a
       // price is set; the second condition is a defensive narrowing for TS.

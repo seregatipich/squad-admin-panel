@@ -146,7 +146,7 @@ export function canAfford(balance: number | null, price: number | null | undefin
 const PURCHASE_ERROR_TEXT: Record<string, string> = {
   economy_disabled: 'Экономика отключена в настройках.',
   tier_not_found: 'Привилегия не найдена — обновите список.',
-  tier_not_purchasable: 'У привилегии не задана цена, покупка недоступна.',
+  tier_not_purchasable: 'Привилегия недоступна для покупки: не задана цена или она отключена.',
   role_grants_panel_access: 'Роль привилегии даёт доступ к панели — покупка запрещена.',
   insufficient_balance: 'Недостаточно бонусов для покупки.',
   role_permanent: 'У игрока бессрочная роль — покупка не требуется.',
