@@ -8,6 +8,15 @@ interface RconRequestBody {
   args?: unknown;
 }
 
+// Only reachable over the unix socket bind-mounted into the api container
+// (no network exposure), but nothing on that path authenticates the caller
+// beyond filesystem permissions, so the transport itself stays defensive:
+// a bounded body and a method shaped like a single RCON verb (no embedded
+// whitespace/newlines that could be used to smuggle a second command into
+// whatever assembles the final RCON line downstream).
+const MAX_BODY_BYTES = 16 * 1024;
+const METHOD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
+
 export class RconUnixServer {
   private server?: Server;
 
@@ -24,17 +33,40 @@ export class RconUnixServer {
         return;
       }
       const chunks: Buffer[] = [];
-      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let size = 0;
+      let rejected = false;
+      req.on('data', (chunk: Buffer) => {
+        if (rejected) return;
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) {
+          rejected = true;
+          res
+            .writeHead(413, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ ok: false, error: 'body too large' }));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
       req.on('end', async () => {
+        if (rejected) return;
+        let body: RconRequestBody;
         try {
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as RconRequestBody;
-          if (typeof body.method !== 'string') {
-            res
-              .writeHead(400, { 'content-type': 'application/json' })
-              .end(JSON.stringify({ ok: false, error: 'missing method' }));
-            return;
-          }
-          const args = Array.isArray(body.args) ? body.args : [];
+          body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as RconRequestBody;
+        } catch {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ ok: false, error: 'invalid JSON' }));
+          return;
+        }
+        if (typeof body.method !== 'string' || !METHOD_PATTERN.test(body.method)) {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ ok: false, error: 'missing or malformed method' }));
+          return;
+        }
+        const args = Array.isArray(body.args) ? body.args : [];
+        try {
           const response = await this.exec(body.method, args);
           res
             .writeHead(200, { 'content-type': 'application/json' })
