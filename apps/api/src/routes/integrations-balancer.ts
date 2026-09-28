@@ -5,11 +5,14 @@ import {
   BALANCER_SCHEMA_VERSION,
   BALANCER_SUBJECT_TYPES,
 } from '@squad/shared-types';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { verifyBalancerProposalSignature } from '../lib/balancer-proposal-signature.js';
+import {
+  isBalancerTimestampFresh,
+  verifyBalancerProposalSignature,
+} from '../lib/balancer-proposal-signature.js';
 
 const SNAPSHOT_ID_MAX = 160;
 const LABEL_MAX = 160;
@@ -63,11 +66,19 @@ function headerValue(value: string | string[] | undefined): string | undefined {
  * panel's Redis or credentials. Disabled outright without
  * `BALANCER_WEBHOOK_SECRET`, so an unconfigured deployment cannot be written to.
  *
- * Delivery is idempotent on `source_snapshot_id`: a redelivered snapshot
- * refreshes the stored row instead of duplicating it. A genuinely new snapshot
- * additionally marks the previous still-`open` snapshot for the same
- * `(server_id, mode)` pair as `superseded`, so the review UI never shows two
- * competing "current" proposals.
+ * A signed delivery is accepted only while `x-balancer-timestamp` is within
+ * ±5 minutes of the panel clock (401 `stale_timestamp` otherwise), so a
+ * captured request cannot be replayed later — e.g. after its row was purged.
+ *
+ * Delivery is idempotent on `source_snapshot_id`: a redelivered snapshot only
+ * refreshes `received_at` of a still-`open` row and never rewrites its content,
+ * so an operator's decision keeps matching what they reviewed; a redelivery
+ * that names a different `(server_id, mode)` is refused with 409. A genuinely
+ * new snapshot additionally marks the previous still-`open` snapshot for the
+ * same `(server_id, mode)` pair as `superseded`. Deliveries for one pair are
+ * serialised with a transaction-scoped advisory lock, so concurrent snapshots
+ * cannot both stay `open` and the review UI never shows two competing
+ * "current" proposals.
  *
  * `config: { audit: false }` matches the VIP lifecycle precedent — this is a
  * machine-to-machine ingestion endpoint carrying no operator action, and its
@@ -96,12 +107,16 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
         reply.code(401);
         return { error: 'invalid_signature' };
       }
+      if (!isBalancerTimestampFresh(timestamp, Date.now())) {
+        reply.code(401);
+        return { error: 'stale_timestamp' };
+      }
 
       const body = req.body;
       const [server] = await app.db
         .select({ id: servers.id })
         .from(servers)
-        .where(eq(servers.id, body.server_id))
+        .where(and(eq(servers.id, body.server_id), isNull(servers.deletedAt)))
         .limit(1);
       if (!server) {
         reply.code(404);
@@ -133,6 +148,13 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
       };
 
       const result = await app.db.transaction(async (tx) => {
+        // Serialise deliveries per (server_id, mode): under READ COMMITTED two
+        // concurrent new snapshots would each miss the other's uncommitted row
+        // and both stay open.
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext(${`balancer-proposal:${body.server_id}:${body.mode}`}))`,
+        );
+
         const inserted = await tx
           .insert(balancerProposals)
           .values(values)
@@ -141,12 +163,27 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
 
         const created = inserted[0];
         if (!created) {
-          const updated = await tx
-            .update(balancerProposals)
-            .set(values)
+          const [existing] = await tx
+            .select({
+              id: balancerProposals.id,
+              serverId: balancerProposals.serverId,
+              mode: balancerProposals.mode,
+            })
+            .from(balancerProposals)
             .where(eq(balancerProposals.sourceSnapshotId, body.source_snapshot_id))
-            .returning({ id: balancerProposals.id });
-          return { duplicate: true as const, id: updated[0]?.id ?? null };
+            .for('update')
+            .limit(1);
+          if (!existing) throw new Error('balancer proposal vanished after insert conflict');
+          if (existing.serverId !== body.server_id || existing.mode !== body.mode) {
+            return { conflict: true as const };
+          }
+          await tx
+            .update(balancerProposals)
+            .set({ receivedAt: now })
+            .where(
+              and(eq(balancerProposals.id, existing.id), eq(balancerProposals.status, 'open')),
+            );
+          return { conflict: false as const, duplicate: true as const, id: existing.id };
         }
 
         await tx
@@ -160,9 +197,13 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
               ne(balancerProposals.id, created.id),
             ),
           );
-        return { duplicate: false as const, id: created.id };
+        return { conflict: false as const, duplicate: false as const, id: created.id };
       });
 
+      if (result.conflict) {
+        reply.code(409);
+        return { error: 'snapshot_identity_mismatch' };
+      }
       reply.code(result.duplicate ? 200 : 202);
       return { ok: true, duplicate: result.duplicate, proposal_id: result.id };
     },

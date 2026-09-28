@@ -8,8 +8,28 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * Canonicalisation (recursively sorted object keys, array order preserved)
  * makes the digest independent of the producer's JSON key ordering, and
  * binding the timestamp into the MAC means a captured signature cannot be
- * replayed under a different one.
+ * replayed under a different one. {@link isBalancerTimestampFresh} bounds how
+ * long a captured request stays replayable at all.
  */
+
+/** Maximum allowed skew between `x-balancer-timestamp` and the panel clock. */
+export const BALANCER_TIMESTAMP_TOLERANCE_MS = 5 * 60_000;
+
+/**
+ * Whether a signed delivery's timestamp is within
+ * {@link BALANCER_TIMESTAMP_TOLERANCE_MS} of `now`, in either direction.
+ *
+ * @param timestamp - The `x-balancer-timestamp` header: an ISO-8601 string or
+ *   whole unix seconds.
+ * @param now - Reference time in epoch milliseconds.
+ * @returns `false` for a missing, unparsable or out-of-window timestamp.
+ */
+export function isBalancerTimestampFresh(timestamp: string | undefined, now: number): boolean {
+  if (!timestamp) return false;
+  const signedAtMs = /^\d+$/.test(timestamp) ? Number(timestamp) * 1000 : Date.parse(timestamp);
+  if (!Number.isFinite(signedAtMs)) return false;
+  return Math.abs(now - signedAtMs) <= BALANCER_TIMESTAMP_TOLERANCE_MS;
+}
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;

@@ -26,10 +26,10 @@ const OWNER_STEAM = testSteamId(983001);
 const NO_PANEL_STEAM = testSteamId(983002);
 
 const SECRET = 'balancer-webhook-integration-secret-entropy';
-const SIGNED_AT = '2026-07-27T09:00:00.000Z';
 
 const SERVER_ID = '019e0083-0000-7000-8000-0000000000a1';
 const OTHER_SERVER_ID = '019e0083-0000-7000-8000-0000000000b2';
+const DELETED_SERVER_ID = '019e0083-0000-7000-8000-0000000000c3';
 
 let h: IntegrationHarness;
 let ownerCookie: string;
@@ -119,15 +119,19 @@ function snapshotPayload(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-function postSnapshot(payload: Record<string, unknown>, signature?: string) {
+function postSnapshot(
+  payload: Record<string, unknown>,
+  signature?: string,
+  signedAt: string = new Date().toISOString(),
+) {
   return h.app.inject({
     method: 'POST',
     url: '/api/v1/integrations/balancer/proposals',
     headers: {
       'content-type': 'application/json',
-      'x-balancer-timestamp': SIGNED_AT,
+      'x-balancer-timestamp': signedAt,
       'x-balancer-signature':
-        signature ?? createBalancerProposalSignature(SECRET, SIGNED_AT, payload),
+        signature ?? createBalancerProposalSignature(SECRET, signedAt, payload),
     },
     payload: JSON.stringify(payload),
   });
@@ -200,6 +204,12 @@ beforeAll(async () => {
   await h.db.insert(servers).values([
     { id: SERVER_ID, displayName: 'Balancer server', slug: 'balancer-server' },
     { id: OTHER_SERVER_ID, displayName: 'Balancer other', slug: 'balancer-other' },
+    {
+      id: DELETED_SERVER_ID,
+      displayName: 'Balancer deleted',
+      slug: 'balancer-deleted',
+      deletedAt: new Date(),
+    },
   ]);
 }, 60_000);
 
@@ -373,6 +383,92 @@ describeIfDb('POST /api/v1/integrations/balancer/proposals', () => {
     const res = await postSnapshot(payload);
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'server_not_found' });
+  });
+
+  it('rejects a correctly signed delivery whose timestamp is outside the ±5 minute window', async () => {
+    const minutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString();
+    for (const signedAt of [minutes(-10), minutes(10)]) {
+      const res = await postSnapshot(snapshotPayload(), undefined, signedAt);
+      expect(res.statusCode, signedAt).toBe(401);
+      expect(res.json()).toEqual({ error: 'stale_timestamp' });
+    }
+    const unparsable = await postSnapshot(snapshotPayload(), undefined, 'not-a-time');
+    expect(unparsable.statusCode).toBe(401);
+    expect(await h.db.select().from(balancerProposals)).toHaveLength(0);
+  });
+
+  it('accepts a timestamp given as unix seconds inside the window', async () => {
+    const res = await postSnapshot(
+      snapshotPayload(),
+      undefined,
+      String(Math.floor(Date.now() / 1000) - 30),
+    );
+    expect(res.statusCode).toBe(202);
+  });
+
+  it('rejects a snapshot for a soft-deleted server with 404', async () => {
+    const res = await postSnapshot(snapshotPayload({ server_id: DELETED_SERVER_ID }));
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'server_not_found' });
+    expect(await h.db.select().from(balancerProposals)).toHaveLength(0);
+  });
+
+  it('does not rewrite an already reviewed snapshot when it is redelivered', async () => {
+    const original = snapshotPayload();
+    expect((await postSnapshot(original)).statusCode).toBe(202);
+    await h.db
+      .update(balancerProposals)
+      .set({ status: 'reviewed' })
+      .where(eq(balancerProposals.sourceSnapshotId, 'balancer-snapshot-001'));
+
+    const altered = snapshotPayload({
+      signals: { win_streak: 99 },
+      proposal: [],
+    });
+    const res = await postSnapshot(altered);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, duplicate: true });
+
+    const [row] = await h.db
+      .select()
+      .from(balancerProposals)
+      .where(eq(balancerProposals.sourceSnapshotId, 'balancer-snapshot-001'));
+    expect(row?.status).toBe('reviewed');
+    expect(row?.signals).toMatchObject({ win_streak: 4 });
+    expect(row?.proposal).toHaveLength(2);
+  });
+
+  it('refuses a redelivery that moves a snapshot to another server or mode with 409', async () => {
+    expect((await postSnapshot(snapshotPayload())).statusCode).toBe(202);
+    for (const change of [{ server_id: OTHER_SERVER_ID }, { mode: 'player' }]) {
+      const res = await postSnapshot(snapshotPayload(change));
+      expect(res.statusCode, JSON.stringify(change)).toBe(409);
+      expect(res.json()).toEqual({ error: 'snapshot_identity_mismatch' });
+    }
+    const rows = await h.db.select().from(balancerProposals);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.serverId).toBe(SERVER_ID);
+    expect(rows[0]?.mode).toBe('squad');
+  });
+
+  it('leaves exactly one open snapshot when several new ones for the same pair arrive at once', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        postSnapshot(snapshotPayload({ source_snapshot_id: `balancer-race-${i}` })),
+      ),
+    );
+    for (const res of results) expect(res.statusCode).toBe(202);
+    const open = await h.db
+      .select()
+      .from(balancerProposals)
+      .where(
+        and(
+          eq(balancerProposals.serverId, SERVER_ID),
+          eq(balancerProposals.mode, 'squad'),
+          eq(balancerProposals.status, 'open'),
+        ),
+      );
+    expect(open).toHaveLength(1);
   });
 
   it('stores a signed snapshot and is idempotent on the same source_snapshot_id', async () => {

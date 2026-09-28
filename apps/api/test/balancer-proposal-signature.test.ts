@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalJson,
   createBalancerProposalSignature,
+  isBalancerTimestampFresh,
   verifyBalancerProposalSignature,
 } from '../src/lib/balancer-proposal-signature.js';
 
@@ -91,5 +92,28 @@ describe('verifyBalancerProposalSignature', () => {
 
   it('rejects a non-hex signature instead of throwing', () => {
     expect(verifyBalancerProposalSignature(SECRET, TIMESTAMP, 'sha256=zzzz', PAYLOAD)).toBe(false);
+  });
+});
+
+describe('isBalancerTimestampFresh', () => {
+  const now = Date.parse(TIMESTAMP);
+
+  it('accepts ISO and unix-second timestamps inside the ±5 minute window, edges included', () => {
+    expect(isBalancerTimestampFresh(TIMESTAMP, now)).toBe(true);
+    expect(isBalancerTimestampFresh(new Date(now - 5 * 60_000).toISOString(), now)).toBe(true);
+    expect(isBalancerTimestampFresh(new Date(now + 5 * 60_000).toISOString(), now)).toBe(true);
+    expect(isBalancerTimestampFresh(String(now / 1000 - 60), now)).toBe(true);
+  });
+
+  it('rejects timestamps just outside the window in either direction', () => {
+    expect(isBalancerTimestampFresh(new Date(now - 5 * 60_000 - 1).toISOString(), now)).toBe(false);
+    expect(isBalancerTimestampFresh(new Date(now + 5 * 60_000 + 1).toISOString(), now)).toBe(false);
+    expect(isBalancerTimestampFresh(String(now / 1000 - 3600), now)).toBe(false);
+  });
+
+  it('rejects missing and unparsable timestamps', () => {
+    expect(isBalancerTimestampFresh(undefined, now)).toBe(false);
+    expect(isBalancerTimestampFresh('', now)).toBe(false);
+    expect(isBalancerTimestampFresh('yesterday', now)).toBe(false);
   });
 });
