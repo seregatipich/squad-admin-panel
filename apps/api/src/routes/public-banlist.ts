@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
+import type { DatabaseClient } from '@squad/db';
 import { banlistPublicationSettings, moderationActions, players } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
+  BAN_LENGTH_UNIT_MILLISECONDS,
   type BanlistEntry,
   buildBanlistEntries,
   formatSquadBansCfg,
@@ -19,32 +21,73 @@ const querystring = z.object({
   format: z.enum(['squad_cfg', 'json']).default('squad_cfg'),
 });
 
-interface BanRow {
-  playerId: string;
-  steamId64: bigint | null;
-  eosId: string | null;
-  nickname: string;
-  reason: string | null;
-  context: unknown;
-  createdAt: Date;
-  revertedAt: Date | null;
-  authorName: string | null;
-  authorSystemLabel: string | null;
-}
+const author = alias(players, 'banlist_author');
+const banLength = sql`btrim(${moderationActions.context} ->> 'ban_length')`;
+const banLengthAmount = sql`substring(${banLength} from '^([0-9]+)')::numeric`;
+const banLengthUnitMs = sql`CASE substring(${banLength} from '[smhdwMy]$') ${sql.join(
+  Object.entries(BAN_LENGTH_UNIT_MILLISECONDS).map(
+    ([unit, ms]) => sql`WHEN ${sql.raw(`'${unit}'`)} THEN ${sql.raw(String(ms))}`,
+  ),
+  sql` `,
+)} ELSE ${sql.raw(String(BAN_LENGTH_UNIT_MILLISECONDS.d))} END`;
 
-function toModerationBanRow(row: BanRow): ModerationBanRow {
-  const context = (row.context ?? {}) as { ban_length?: unknown };
-  return {
-    playerId: row.playerId,
-    steamId64: row.steamId64 != null ? String(row.steamId64) : null,
-    eosId: row.eosId,
-    nickname: row.nickname,
-    reason: row.reason,
-    banLength: typeof context.ban_length === 'string' ? context.ban_length : null,
-    issuedAt: row.createdAt,
-    revertedAt: row.revertedAt,
-    admin: row.authorName ?? row.authorSystemLabel,
-  };
+/**
+ * Loads the unreverted `ban` rows that can still be published at `now`.
+ *
+ * Temporary bans that already expired are dropped in SQL — they never get a
+ * `reverted_at`, so without this prefilter every request loaded the whole ban
+ * history. The predicate mirrors `parseBanLengthToExpiry` (same grammar, same
+ * unit table); a value it cannot parse is kept and left to
+ * `buildBanlistEntries`, which stays the authority on what is published.
+ * `numeric` arithmetic keeps absurdly long durations from overflowing.
+ */
+export async function loadPublishableBanRows(
+  db: DatabaseClient,
+  now: Date,
+): Promise<ModerationBanRow[]> {
+  const expired = sql`(
+    ${banLength} ~ '^[0-9]+[smhdwMy]?$'
+    AND ${banLengthAmount} > 0
+    AND ${banLengthAmount} * ${banLengthUnitMs}
+      <= extract(epoch FROM (${now.toISOString()}::timestamptz - ${moderationActions.createdAt})) * 1000
+  )`;
+  const rows = await db
+    .select({
+      playerId: players.id,
+      steamId64: players.steamId64,
+      eosId: players.eosId,
+      nickname: players.canonicalName,
+      reason: moderationActions.reason,
+      context: moderationActions.context,
+      createdAt: moderationActions.createdAt,
+      revertedAt: moderationActions.revertedAt,
+      authorName: author.canonicalName,
+      authorSystemLabel: moderationActions.authorSystemLabel,
+    })
+    .from(moderationActions)
+    .innerJoin(players, eq(players.id, moderationActions.playerId))
+    .leftJoin(author, eq(author.id, moderationActions.authorPlayerId))
+    .where(
+      and(
+        eq(moderationActions.actionType, 'ban'),
+        isNull(moderationActions.revertedAt),
+        sql`NOT coalesce(${expired}, false)`,
+      ),
+    );
+  return rows.map((row) => {
+    const context = (row.context ?? {}) as { ban_length?: unknown };
+    return {
+      playerId: row.playerId,
+      steamId64: row.steamId64 != null ? String(row.steamId64) : null,
+      eosId: row.eosId,
+      nickname: row.nickname,
+      reason: row.reason,
+      banLength: typeof context.ban_length === 'string' ? context.ban_length : null,
+      issuedAt: row.createdAt,
+      revertedAt: row.revertedAt,
+      admin: row.authorName ?? row.authorSystemLabel,
+    };
+  });
 }
 
 interface JsonBanEntry {
@@ -86,7 +129,6 @@ function computeEtag(body: string): string {
  */
 const publicBanlistRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
-  const author = alias(players, 'banlist_author');
 
   fast.get(
     '/api/v1/public/banlist',
@@ -129,31 +171,14 @@ const publicBanlistRoutes: FastifyPluginAsync = async (app) => {
       }
       const scope = settings.publishScope === 'permanent_only' ? 'permanent_only' : 'all_active';
 
-      const rows = (await app.db
-        .select({
-          playerId: players.id,
-          steamId64: players.steamId64,
-          eosId: players.eosId,
-          nickname: players.canonicalName,
-          reason: moderationActions.reason,
-          context: moderationActions.context,
-          createdAt: moderationActions.createdAt,
-          revertedAt: moderationActions.revertedAt,
-          authorName: author.canonicalName,
-          authorSystemLabel: moderationActions.authorSystemLabel,
-        })
-        .from(moderationActions)
-        .innerJoin(players, eq(players.id, moderationActions.playerId))
-        .leftJoin(author, eq(author.id, moderationActions.authorPlayerId))
-        .where(
-          and(eq(moderationActions.actionType, 'ban'), isNull(moderationActions.revertedAt)),
-        )) as unknown as BanRow[];
+      const now = new Date();
+      const banRows = await loadPublishableBanRows(app.db, now);
+      const entries = buildBanlistEntries(banRows, scope, now);
 
-      const banRows = rows.map(toModerationBanRow);
-      const entries = buildBanlistEntries(banRows, scope, new Date());
-
-      const lastModifiedMs =
-        entries.length > 0 ? Math.max(...entries.map((entry) => entry.issuedAt.getTime())) : 0;
+      const lastModifiedMs = entries.reduce(
+        (latest, entry) => Math.max(latest, entry.issuedAt.getTime()),
+        0,
+      );
       const lastModified = new Date(lastModifiedMs).toUTCString();
 
       if (req.query.format === 'json') {

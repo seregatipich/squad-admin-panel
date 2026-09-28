@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
+import path from 'node:path';
 import {
   auditLog,
   mediaFiles,
@@ -15,6 +17,7 @@ import {
   PUBLIC_MEDIA_RATE_LIMIT_PREFIX,
   PUBLIC_MEDIA_UPLOADS_PER_HOUR,
 } from '../../src/routes/public-media.js';
+import { withFailingAuditInsert } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -48,6 +51,14 @@ function buildMultipartPayload(file: { filename: string; contentType: string; co
     body: Buffer.concat([head, file.content, tail]),
     contentType: `multipart/form-data; boundary=${boundary}`,
   };
+}
+
+/** Every regular file under the media storage root, relative to it. */
+async function listStoredFiles(root: string): Promise<string[]> {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)));
 }
 
 let h: IntegrationHarness;
@@ -361,5 +372,42 @@ describe('POST /api/v1/public/media', () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe('POST /api/v1/public/media — atomic redemption (audit #71, #241)', () => {
+  it('keeps the token redeemable and leaves no rows or file behind when persisting fails', async () => {
+    const minted = await mintToken({
+      target_entity_type: 'player',
+      target_entity_id: targetPlayerId,
+    });
+    const content = pngBytes(97);
+    const storedBefore = await listStoredFiles(h.mediaDir);
+
+    const failed = await withFailingAuditInsert(h.db, 'media.public_upload', () =>
+      uploadWithToken(minted.token, content),
+    );
+    expect(failed.statusCode).toBe(500);
+
+    const [tokenRow] = await h.db
+      .select({ usedAt: mediaUploadTokens.usedAt })
+      .from(mediaUploadTokens)
+      .where(eq(mediaUploadTokens.id, minted.id));
+    expect(tokenRow?.usedAt).toBeNull();
+    const files = await h.db
+      .select({ id: mediaFiles.id })
+      .from(mediaFiles)
+      .where(eq(mediaFiles.uploadTokenId, minted.id));
+    expect(files).toHaveLength(0);
+    expect(await listStoredFiles(h.mediaDir)).toEqual(storedBefore);
+
+    const retried = await uploadWithToken(minted.token, content);
+    expect(retried.statusCode).toBe(201);
+    const mediaId = (retried.json() as { media_id: string }).media_id;
+    const links = await h.db
+      .select({ id: mediaLinks.id })
+      .from(mediaLinks)
+      .where(eq(mediaLinks.mediaId, mediaId));
+    expect(links).toHaveLength(1);
   });
 });
