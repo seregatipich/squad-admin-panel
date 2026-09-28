@@ -4,6 +4,7 @@ import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { softDeleteServer } from '../src/lib/server-delete.js';
+import { raceAgainstOpenTransaction } from './helpers/row-lock.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -209,6 +210,28 @@ describe('POST /api/v1/servers/archive/:id/restore', () => {
     expect(body.error).toBe('slug_in_use');
   });
 
+  it('answers 409 slug_in_use when a concurrent create takes the slug mid-restore (#270)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-race');
+    const cookie = await loginAsOwner(h);
+    const res = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx
+          .insert(servers)
+          .values({ id: uuidv7(), displayName: 'Concurrent', slug: 'raced-slug' });
+      },
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: `/api/v1/servers/archive/${archived.id}/restore`,
+          headers: { cookie },
+          payload: { slug: 'raced-slug' },
+        }),
+    );
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('slug_in_use');
+  });
+
   it('creates a new pending server and returns next_steps', async () => {
     const archived = await seedAndSoftDelete(h, 'archived-restore');
     const cookie = await loginAsOwner(h);
@@ -314,6 +337,35 @@ describe('POST /api/v1/servers/:newId/restore-configs', () => {
     expect(restoredRows.length).toBe(ALLOWED_CONFIG_FILES.length - 2);
     expect(restoredRows.find((r) => r.filename === 'Rcon.cfg')).toBeUndefined();
     expect(restoredRows.find((r) => r.filename === 'License.cfg')).toBeUndefined();
+  });
+
+  it('rejects an external-runtime target with 409 external_server and writes nothing (#271)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-external-target');
+    const externalId = uuidv7();
+    await h.db.insert(servers).values({
+      id: externalId,
+      displayName: 'Remote box',
+      slug: 'external-restore-target',
+      status: 'running',
+      runtime: 'external',
+    });
+    const fileAtomicWrite = vi.fn(async () => ({ status: 'ok' }));
+    h.bridge.fileAtomicWrite = fileAtomicWrite;
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${externalId}/restore-configs`,
+      headers: { cookie: await loginAsOwner(h) },
+      payload: { from_archive_id: archived.id },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('external_server');
+    expect(fileAtomicWrite).not.toHaveBeenCalled();
+    const rows = await h.db
+      .select({ id: configVersions.id })
+      .from(configVersions)
+      .where(eq(configVersions.serverId, externalId));
+    expect(rows).toHaveLength(0);
   });
 
   it('returns 404 when from_archive_id is not soft-deleted', async () => {

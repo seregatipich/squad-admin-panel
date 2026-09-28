@@ -10,6 +10,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { raceAgainstOpenTransaction } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -370,6 +371,30 @@ describeIfDb('PATCH /api/v1/seasons/:id', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toEqual({ error: 'season_finalized' });
+  });
+
+  it('refuses a PATCH that races the finalize tick with 422 and leaves the season closed (#274)', async () => {
+    const season = await makeSeason({ name: 'RacingFinalize' });
+    const res = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx
+          .update(seasons)
+          .set({ status: 'closed', finalized: true })
+          .where(eq(seasons.id, season.id));
+      },
+      () =>
+        h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/seasons/${season.id}`,
+          headers: { cookie: editorCookie },
+          payload: { status: 'active', name: 'RacingFinalizeReopened' },
+        }),
+    );
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: 'season_finalized' });
+    const [stored] = await h.db.select().from(seasons).where(eq(seasons.id, season.id));
+    expect(stored).toMatchObject({ name: 'RacingFinalize', status: 'closed', finalized: true });
   });
 
   it('writes an audit row carrying both the before and the after snapshot', async () => {

@@ -8,8 +8,9 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { encrypt, serialize } from '../lib/crypto.js';
+import { uniqueViolationConstraint } from '../lib/pg-errors.js';
 import { restoreConfigsFromArchive } from '../lib/server-restore.js';
-import { isExternalRuntime } from '../lib/server-runtime.js';
+import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 const idAndFilename = z.object({
@@ -257,44 +258,55 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       const beaconPort = req.body.beacon_port ?? archiveSettings.beaconPort;
       const rconPort = req.body.rcon_port ?? archiveSettings.rconPort;
 
-      await app.db.transaction(async (tx) => {
-        await tx.insert(servers).values({
-          id: newId,
-          displayName,
-          slug,
-          description: archive.description,
-          status: 'pending',
-          runtime: 'container',
-          tags: archive.tags,
-          timezone: archive.timezone,
+      // The pre-check above is only the fast path: a concurrent create or
+      // restore can still take the slug before this insert, which the partial
+      // unique index servers_slug_active_key then rejects — same 409.
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(servers).values({
+            id: newId,
+            displayName,
+            slug,
+            description: archive.description,
+            status: 'pending',
+            runtime: 'container',
+            tags: archive.tags,
+            timezone: archive.timezone,
+          });
+          await tx.insert(serverSettings).values({
+            serverId: newId,
+            installPath: `${PANEL_CONFIGS_ROOT}/${newId}`,
+            gamePort,
+            queryPort,
+            beaconPort,
+            rconPort,
+            maxPlayers: archiveSettings.maxPlayers,
+            tickrate: archiveSettings.tickrate,
+            multihome: archiveSettings.multihome,
+            extraArgs: archiveSettings.extraArgs,
+            launchArgsOverride: archiveSettings.launchArgsOverride,
+            cpuAffinity: archiveSettings.cpuAffinity,
+            cpuWeight: archiveSettings.cpuWeight,
+            niceness: archiveSettings.niceness,
+            memoryHighMb: archiveSettings.memoryHighMb,
+            memoryMaxMb: archiveSettings.memoryMaxMb,
+            ioWeight: archiveSettings.ioWeight,
+          });
+          const rconPassword = randomBytes(24).toString('base64url');
+          const blob = encrypt(app.encryptionKey, rconPassword);
+          await tx.insert(serverCredentials).values({
+            serverId: newId,
+            rconPort,
+            rconPasswordEncrypted: serialize(blob),
+          });
         });
-        await tx.insert(serverSettings).values({
-          serverId: newId,
-          installPath: `${PANEL_CONFIGS_ROOT}/${newId}`,
-          gamePort,
-          queryPort,
-          beaconPort,
-          rconPort,
-          maxPlayers: archiveSettings.maxPlayers,
-          tickrate: archiveSettings.tickrate,
-          multihome: archiveSettings.multihome,
-          extraArgs: archiveSettings.extraArgs,
-          launchArgsOverride: archiveSettings.launchArgsOverride,
-          cpuAffinity: archiveSettings.cpuAffinity,
-          cpuWeight: archiveSettings.cpuWeight,
-          niceness: archiveSettings.niceness,
-          memoryHighMb: archiveSettings.memoryHighMb,
-          memoryMaxMb: archiveSettings.memoryMaxMb,
-          ioWeight: archiveSettings.ioWeight,
-        });
-        const rconPassword = randomBytes(24).toString('base64url');
-        const blob = encrypt(app.encryptionKey, rconPassword);
-        await tx.insert(serverCredentials).values({
-          serverId: newId,
-          rconPort,
-          rconPasswordEncrypted: serialize(blob),
-        });
-      });
+      } catch (err) {
+        if (uniqueViolationConstraint(err) === 'servers_slug_active_key') {
+          reply.code(409);
+          return { error: 'slug_in_use' };
+        }
+        throw err;
+      }
 
       app.liveBus.publish({
         type: 'server.restored',
@@ -356,6 +368,10 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      // An external server's configs live on its remote host: overlaying an
+      // archive would write local files it never reads and record
+      // config_versions that describe nothing (same rule as server-configs.ts).
+      if (isExternalRuntime(target.runtime)) return rejectExternalServer(reply);
       const archive = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.body.from_archive_id), isNotNull(servers.deletedAt)),
       });

@@ -1,9 +1,10 @@
 import { type SeasonRow, seasons } from '@squad/db/schema';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { uniqueViolationConstraint } from '../lib/pg-errors.js';
 
 const NAME_MAX = 120;
 
@@ -82,25 +83,6 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   if (!req.user.permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
-  }
-  return null;
-}
-
-/**
- * Resolves the constraint a unique violation broke.
- *
- * drizzle-orm 0.45.2 wraps driver errors: the wrapper carries only a
- * "Failed query: ..." message, while SQLSTATE and `constraint_name` sit on
- * `err.cause`. Both season conflicts are 23505, so the constraint name is the
- * only way to tell "second active season" from "duplicate name" — matching on
- * the message would silently mislabel one as the other.
- */
-function uniqueViolationConstraint(err: unknown): string | null {
-  let current: unknown = err;
-  for (let depth = 0; depth < 6 && current; depth += 1) {
-    const candidate = current as { code?: string; constraint_name?: string; cause?: unknown };
-    if (candidate.code === '23505') return candidate.constraint_name ?? '';
-    current = candidate.cause;
   }
   return null;
 }
@@ -238,14 +220,27 @@ const seasonsRoutes: FastifyPluginAsync = async (app) => {
       if (body.ends_at !== undefined) updates.endsAt = nextEndsAt;
       if (body.status !== undefined) updates.status = body.status;
 
+      // `finalized = false` in the WHERE closes the race with the scheduler's
+      // finalize tick: a season finalized after the check above is left alone
+      // instead of being reopened as active + finalized, a state that would pin
+      // the seasons_one_active slot with no API path to undo it.
+      let updatedRows: Array<{ id: string }>;
       try {
-        await app.db.update(seasons).set(updates).where(eq(seasons.id, req.params.id));
+        updatedRows = await app.db
+          .update(seasons)
+          .set(updates)
+          .where(and(eq(seasons.id, req.params.id), eq(seasons.finalized, false)))
+          .returning({ id: seasons.id });
       } catch (err) {
         const constraint = uniqueViolationConstraint(err);
         if (constraint === null) throw err;
         const conflict = conflictFor(constraint);
         reply.code(conflict.code);
         return { error: conflict.error };
+      }
+      if (updatedRows.length === 0) {
+        reply.code(422);
+        return { error: 'season_finalized' };
       }
 
       const after = await loadRow(req.params.id);
