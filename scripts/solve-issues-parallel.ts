@@ -455,10 +455,26 @@ async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueR
     const aborted =
       error instanceof Error && (error.name === 'AbortError' || /abort/i.test(error.message));
     if (aborted) {
+      // controller.abort() only tore down our local event stream — the
+      // remote session (with its own push token and unrestricted network
+      // access) otherwise keeps running after we've already reported the
+      // issue as timed-out, wasting resources and able to push after the
+      // fact. Best-effort archive it so the remote side actually stops.
+      let archiveNote = '';
+      if (sessionId) {
+        try {
+          await ctx.client.beta.sessions.archive(sessionId);
+          archiveNote = ' (session archived)';
+        } catch (archiveError) {
+          const archiveMessage =
+            archiveError instanceof Error ? archiveError.message : String(archiveError);
+          archiveNote = ` (failed to archive session: ${archiveMessage})`;
+        }
+      }
       return {
         issue,
         status: 'timed-out',
-        summary: `no idle status within ${ctx.timeoutMin} min — inspect session ${sessionId ?? '?'} in the Console`,
+        summary: `no idle status within ${ctx.timeoutMin} min — inspect session ${sessionId ?? '?'} in the Console${archiveNote}`,
         sessionId,
       };
     }
