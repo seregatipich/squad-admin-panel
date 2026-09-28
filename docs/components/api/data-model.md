@@ -430,4 +430,4 @@ The `context` column in `audit_log` is a JSON object. Its contents depend on `ac
 | `player.role.assign` | `{steam_id64, role_id, role_name}` |
 | `player.role.revoke` | `{steam_id64, former_role_id}` |
 
-All mutating routes must declare `config.audit: {action, resource}` in the Fastify route config. The `apps/api/test/audit-coverage.test.ts` suite scans all registered routes at startup and fails if any POST/PUT/PATCH/DELETE lacks an audit declaration.
+All mutating routes must declare `config.audit` in the Fastify route config: `{action, resource}` for the declarative `onResponse` hook, or `'manual'` when the handler writes its own rows with `writeAuditEntry`. `false` is reserved for reads and an allowlist of machine-integration endpoints. The `apps/api/test/audit-coverage.test.ts` suite scans every route `registerRoutes()` registers and fails if any POST/PUT/PATCH/DELETE lacks an audit declaration, uses `false` off the allowlist, or declares `'manual'` in a module that never calls `writeAuditEntry`.

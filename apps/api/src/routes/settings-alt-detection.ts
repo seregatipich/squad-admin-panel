@@ -164,7 +164,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/settings/alt-detection',
-    { schema: { body: putBody }, config: { permissions: ['player:view_ips'], audit: false } },
+    { schema: { body: putBody }, config: { permissions: ['player:view_ips'], audit: 'manual' } },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
       const actorId = req.user!.playerId;
@@ -218,7 +218,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips',
     {
       schema: { body: createIgnoredIpBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
@@ -265,7 +265,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/settings/alt-detection/ignored-ips/:id',
-    { schema: { params: idParam }, config: { permissions: ['player:view_ips'], audit: false } },
+    { schema: { params: idParam }, config: { permissions: ['player:view_ips'], audit: 'manual' } },
     async (req, reply) => {
       const existingRows = await app.db
         .select()

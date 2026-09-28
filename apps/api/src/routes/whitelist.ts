@@ -171,7 +171,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/settings',
     {
       schema: { body: putSettingsBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const before = await settingsView();
@@ -222,7 +222,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members',
     {
       schema: { body: memberBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -265,7 +265,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members/:playerId',
     {
       schema: { params: memberParam },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -313,7 +313,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/import',
     {
       schema: { body: importBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();

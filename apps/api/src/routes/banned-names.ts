@@ -242,7 +242,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/banned-names',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -303,7 +303,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/banned-names/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -381,7 +381,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/banned-names/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

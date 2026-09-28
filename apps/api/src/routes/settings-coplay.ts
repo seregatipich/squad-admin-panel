@@ -83,7 +83,7 @@ const settingsCoplayRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/coplay',
     {
       schema: { body: putBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate

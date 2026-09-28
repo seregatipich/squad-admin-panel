@@ -199,7 +199,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord',
     {
       schema: { body: putIntegrationBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -274,7 +274,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks',
     {
       schema: { body: createWebhookBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -322,7 +322,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id',
     {
       schema: { params: idParam, body: updateWebhookBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -385,7 +385,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id',
     {
       schema: { params: idParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -418,7 +418,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id/test',
     {
       schema: { params: idParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -536,7 +536,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType',
     {
       schema: { params: eventTypeParam, body: putTemplateBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -585,7 +585,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType/reset',
     {
       schema: { params: eventTypeParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -635,7 +635,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType/preview',
     {
       schema: { params: eventTypeParam, body: previewBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;
@@ -691,7 +691,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
             .nullable(),
         }),
       },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       const [before] = await app.db

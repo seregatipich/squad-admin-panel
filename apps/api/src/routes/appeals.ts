@@ -223,7 +223,7 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/appeals/:id',
     {
       schema: { params: idParams, body: patchBody },
-      config: { permissions: ['mod:unban'], audit: false },
+      config: { permissions: ['mod:unban'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: the mod:unban gate guarantees req.user

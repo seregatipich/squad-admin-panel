@@ -87,7 +87,7 @@ const settingsBanlistPublicationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/settings/banlist-publication',
-    { schema: { body: putBody }, config: { audit: false } },
+    { schema: { body: putBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
       if (denied) return denied;

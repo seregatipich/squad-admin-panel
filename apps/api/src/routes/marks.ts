@@ -217,7 +217,7 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/players/:playerId/marks',
-    { schema: { params: playerIdParams, body: createMarkBody }, config: { audit: false } },
+    { schema: { params: playerIdParams, body: createMarkBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -314,7 +314,7 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/players/:playerId/marks/:markId',
-    { schema: { params: markParams, body: clearMarkBody }, config: { audit: false } },
+    { schema: { params: markParams, body: clearMarkBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

@@ -327,7 +327,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/reports',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -417,7 +417,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/reports/:id',
-    { schema: { params: idParam, body: patchBody }, config: { audit: false } },
+    { schema: { params: idParam, body: patchBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

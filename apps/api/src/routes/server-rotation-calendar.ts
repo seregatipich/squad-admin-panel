@@ -273,7 +273,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/rotation-schedule',
-    { config: { audit: false }, schema: { params: serverIdParams, body: scheduleBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: scheduleBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -322,7 +322,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams, body: scheduleUpdateBody } },
+    { config: { audit: 'manual' }, schema: { params: entryParams, body: scheduleUpdateBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -383,7 +383,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams } },
+    { config: { audit: 'manual' }, schema: { params: entryParams } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -420,7 +420,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/rotation-profiles',
-    { config: { audit: false }, schema: { params: serverIdParams, body: profilesBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: profilesBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;

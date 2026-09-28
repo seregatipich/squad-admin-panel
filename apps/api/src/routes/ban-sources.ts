@@ -200,7 +200,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/ban-sources',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       if (req.body.on_match === 'kick' && req.body.trust_level !== 'trusted') {
@@ -249,7 +249,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db
@@ -318,7 +318,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db
@@ -349,7 +349,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/ban-sources/:id/sync',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db

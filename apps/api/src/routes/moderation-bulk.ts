@@ -118,7 +118,7 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/moderation-actions/bulk',
-    { schema: { body: bulkBody }, config: { audit: false } },
+    { schema: { body: bulkBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

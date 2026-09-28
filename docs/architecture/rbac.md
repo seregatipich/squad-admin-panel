@@ -97,4 +97,4 @@ Raw player IPs, and the per-IP coordinates derived from them, are gated by `play
 
 ## Audit-coverage CI gate
 
-`apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.
+`apps/api/test/audit-coverage.test.ts` walks every route `registerRoutes()` registers and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. The entry is `{ action, resource }` (written by `plugins/audit.ts`), `'manual'` (the handler calls `writeAuditEntry` itself — the test checks its module does), or `false`, which a mutating route may use only if it is on the test's allowlist of machine integrations. New mutating routes therefore cannot ship without an audit trail.

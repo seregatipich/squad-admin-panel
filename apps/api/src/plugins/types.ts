@@ -9,7 +9,16 @@ import type { PermissionContext } from '../lib/rbac.js';
 declare module 'fastify' {
   interface FastifyContextConfig {
     permissions?: readonly PermissionKey[];
-    audit?: { action: string; resource: string } | false;
+    /**
+     * Audit policy of the route (TZ §17.12, enforced by
+     * `test/audit-coverage.test.ts` for every mutating route):
+     * - `{ action, resource }` — `plugins/audit.ts` writes one audit_log row
+     *   after the response;
+     * - `'manual'` — the handler writes its own audit_log rows with
+     *   `writeAuditEntry` (e.g. several rows, or only on success);
+     * - `false` — not audited: reads, or an allowlisted machine integration.
+     */
+    audit?: { action: string; resource: string } | 'manual' | false;
     requireSetupComplete?: boolean;
     /**
      * Opts the route into being reachable by a `self_service`-scoped session
@@ -56,8 +65,8 @@ declare module 'fastify' {
      *
      * This exists so a route can satisfy "the change is visible in audit_log
      * with before/after" without opting out of `config.audit` — the CI guard in
-     * `test/audit-coverage.test.ts` only accepts `audit: false` for a short
-     * allowlist of auth callbacks and self-audited service endpoints.
+     * `test/audit-coverage.test.ts` only accepts `audit: false` on a mutating
+     * route for its short allowlist of machine integrations.
      *
      * `targetId` overrides the id the hook derives from route params, which is
      * how a POST (no `:id` param) can still name the row it created.

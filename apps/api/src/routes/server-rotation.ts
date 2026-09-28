@@ -145,7 +145,7 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/rotation',
-    { config: { audit: false }, schema: { params: idParams, body: putBody } },
+    { config: { audit: 'manual' }, schema: { params: idParams, body: putBody } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

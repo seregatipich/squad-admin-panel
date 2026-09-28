@@ -5,7 +5,7 @@ export default fp(async (app) => {
   app.addHook('onResponse', async (req, reply) => {
     const auditCfg = req.routeOptions?.config?.audit;
     if (auditCfg === undefined) return;
-    if (auditCfg === false) return;
+    if (auditCfg === false || auditCfg === 'manual') return;
     const actor: AuditActor = req.user
       ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
       : { kind: 'system', label: 'http-anonymous' };

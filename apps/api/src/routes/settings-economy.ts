@@ -163,7 +163,7 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/settings/economy',
-    { schema: { body: putBody }, config: { audit: false } },
+    { schema: { body: putBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = updateGuard(req, reply, req.body);
       if (denied) return denied;

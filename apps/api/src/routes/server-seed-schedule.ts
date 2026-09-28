@@ -236,7 +236,7 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/seed-schedule',
-    { config: { audit: false }, schema: { params: serverIdParams, body: createBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: createBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -291,7 +291,7 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/servers/:id/seed-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams, body: updateBody } },
+    { config: { audit: 'manual' }, schema: { params: entryParams, body: updateBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -359,7 +359,7 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/seed-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams } },
+    { config: { audit: 'manual' }, schema: { params: entryParams } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
