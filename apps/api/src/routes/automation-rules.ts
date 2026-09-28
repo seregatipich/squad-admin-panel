@@ -20,6 +20,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { requestUser } from '../lib/request-user.js';
 
 const configObject = z.record(z.unknown());
 
@@ -166,8 +167,7 @@ function missingActionRights(
   actionType: AutomationActionType,
   action: unknown,
 ): string[] {
-  const context = req.user?.permissions;
-  if (!context) return ['unauthenticated'];
+  const context = requestUser(req).permissions;
   const needs = (key: PermissionKey): string[] => (context.permissions.has(key) ? [] : [key]);
   switch (actionType) {
     case 'kick':
