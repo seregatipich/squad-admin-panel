@@ -145,37 +145,45 @@ export function AppealsBrowser() {
   );
 
   const { status: filterStatus, page: filterPage } = filters;
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/v1/appeals?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
-        { credentials: 'include', cache: 'no-store' },
-      );
-      if (res.status === 403 || res.status === 401) {
-        setForbidden(true);
-        setItems([]);
-        return;
+  const load = useCallback(
+    async (options?: { silent?: boolean }) => {
+      // A background refresh (a live event, or the reload after deciding one
+      // appeal) must not swap the whole list for a Skeleton: that unmounts
+      // every note-input field, losing focus/cursor in an operator's unrelated
+      // in-progress reply for no reason (#486). Only a real first load — or an
+      // explicit filter/page change — shows the loading skeleton.
+      if (!options?.silent) setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/appeals?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
+          { credentials: 'include', cache: 'no-store' },
+        );
+        if (res.status === 403 || res.status === 401) {
+          setForbidden(true);
+          setItems([]);
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as AppealListResponse;
+        setForbidden(false);
+        setItems(data.items);
+        setTotal(data.total);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setLoading(false);
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as AppealListResponse;
-      setForbidden(false);
-      setItems(data.items);
-      setTotal(data.total);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [filterStatus, filterPage]);
+    },
+    [filterStatus, filterPage],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const onAppealChanged = useCallback(() => {
-    void load();
+    void load({ silent: true });
   }, [load]);
   useLiveSubscription('appeal.created', onAppealChanged);
   useLiveSubscription('appeal.updated', onAppealChanged);
@@ -201,7 +209,7 @@ export function AppealsBrowser() {
         setError(`Не удалось обработать апелляцию: ${data.error ?? res.status}`);
         return;
       }
-      await load();
+      await load({ silent: true });
     } catch (e) {
       setError(`Ошибка сети: ${(e as Error).message}`);
     } finally {
