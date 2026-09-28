@@ -518,11 +518,21 @@ function metricValue(row: LeaderboardRow, metric: Metric): number {
       return row.secondary.deaths;
     case 'kd':
       return row.secondary.kd;
+    case 'revives':
+      return row.secondary.revives;
+    case 'teamkills':
+      return row.secondary.teamkills;
     case 'bonus':
-      return row.secondary.bonus_points ?? row.metric_value;
+      return row.secondary.bonus_points ?? 0;
     case 'boost':
-      return row.secondary.boost_seconds ?? row.metric_value;
-    default:
-      return row.metric_value;
+      return row.secondary.boost_seconds ?? 0;
+    default: {
+      // Exhaustive: a column whose metric isn't handled above must not
+      // silently fall back to `row.metric_value` (LEAD-572) — the value of
+      // whichever metric the table is currently sorted by, shown under an
+      // unrelated column's label.
+      const exhaustive: never = metric;
+      throw new Error(`Unhandled leaderboard metric: ${String(exhaustive)}`);
+    }
   }
 }

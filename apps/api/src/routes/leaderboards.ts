@@ -256,6 +256,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         seedingSeconds: number;
         kills: number;
         deaths: number;
+        revives: number;
+        teamkills: number;
         kdRatio: number;
         matchesPlayed: number;
         boostSeconds: number;
@@ -274,6 +276,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
             seedingSeconds: playerStatPeriods.seedingSeconds,
             kills: playerStatPeriods.kills,
             deaths: playerStatPeriods.deaths,
+            revives: playerStatPeriods.revives,
+            teamkills: playerStatPeriods.teamkills,
             kdRatio: playerStatPeriods.kdRatio,
             matchesPlayed: playerStatPeriods.matchesPlayed,
             boostSeconds: playerStatPeriods.boostSeconds,
@@ -325,6 +329,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
             seeding_seconds: row.seedingSeconds,
             kills: row.kills,
             deaths: row.deaths,
+            revives: row.revives,
+            teamkills: row.teamkills,
             kd: Number(row.kdRatio),
             matches_played: row.matchesPlayed,
             ...(economyEnabled
