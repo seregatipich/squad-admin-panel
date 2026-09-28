@@ -64,8 +64,28 @@ command -v jq >/dev/null 2>&1 || fail 'jq is required'
 
 HOSTED_IMAGE='ubuntu-24.04'
 
+# A `runs-on: { group: ... }` inline mapping or a `runs-on:` block followed by
+# a `group:` key both select a runner group — as does the bare `runs-on:`
+# (empty value) case already caught above by the plain grep. This is checked
+# separately (not by the single grep below) so it doesn't also match an
+# unrelated `concurrency: { group: ... }` block.
+runs_on_selects_group() {
+  awk '
+    /^[[:space:]]*runs-on:[[:space:]]*\{.*group[[:space:]]*:/ { found=1 }
+    /^[[:space:]]*runs-on:[[:space:]]*$/ { pending=1; next }
+    pending && /^[[:space:]]*group[[:space:]]*:/ { found=1 }
+    pending { pending=0 }
+    END { exit(found ? 0 : 1) }
+  ' "$1"
+}
+
 # --- Runners: hosted everywhere, never self-hosted, never a runner group. ---
-for workflow in "$ci_workflow" "$deploy_workflow"; do
+# This policy applies to every workflow file, not just the two known ones —
+# a new workflow file must be caught here too, not silently skip the check.
+shopt -s nullglob
+all_workflows=("$repo_root"/.github/workflows/*.yml "$repo_root"/.github/workflows/*.yaml)
+[ ${#all_workflows[@]} -gt 0 ] || fail 'no workflow files found under .github/workflows/'
+for workflow in "${all_workflows[@]}"; do
   name=$(basename "$workflow")
   if grep -Eq '^[[:space:]]*runs-on:.*self-hosted|^[[:space:]]*-[[:space:]]*self-hosted' "$workflow"; then
     fail "$name still references a self-hosted runner"
@@ -73,6 +93,9 @@ for workflow in "$ci_workflow" "$deploy_workflow"; do
   # A personal-account repository has no runner groups: a job that selects one
   # waits in the queue forever without an error.
   if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*$' "$workflow"; then
+    fail "$name selects a runner group instead of a hosted image"
+  fi
+  if runs_on_selects_group "$workflow"; then
     fail "$name selects a runner group instead of a hosted image"
   fi
   if sed -n '/^on:/,/^[a-z]/p' "$workflow" | grep -Eq '^[[:space:]]+pull_request(_target)?:'; then
