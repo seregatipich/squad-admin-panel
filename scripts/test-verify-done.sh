@@ -48,6 +48,23 @@ assert_feature() {
   fi
 }
 
+# Like assert_feature, but passes an explicit branch argument: `--feature <branch>`.
+assert_feature_arg() {
+  local expected=$1 desc=$2 branch_arg=$3 out rc got
+  out=$(cd "$REPO" && "$REPO/scripts/verify-done.sh" --feature "$branch_arg" 2>&1)
+  rc=$?
+  got=pass
+  [ $rc -ne 0 ] && got=fail
+  if [ "$got" = "$expected" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $desc"
+    echo "      expected=$expected got=$got (rc=$rc)"
+    printf '%s\n' "$out" | sed 's/^/      | /'
+  fi
+}
+
 # --- gh stub: canned `gh run list --json ...` output per workflow ---------
 # GH_DEPLOY_MODE answers for deploy.yml (runs on dev), GH_CI_MODE for
 # ci.yml (runs on master). GH_STUB_SHA is the tip under test; the `docs` deploy
@@ -141,6 +158,18 @@ git branch -q main
 assert fail "doctor warning: a main branch exists"
 git branch -qD main
 
+# A broken/crashing git-guard.sh must FAIL, not silently read as clean just
+# because its output happens to contain no "WARN" (#76 / #1227). Committed
+# (not left dirty) so the working-tree-clean check doesn't mask the doctor
+# check this is meant to isolate.
+printf '#!/bin/sh\nexit 7\n' >scripts/git-guard.sh
+git add scripts/git-guard.sh && git commit -q -m "break git-guard for test"
+git push -q origin dev dev:master
+GH_STUB_SHA=$(git rev-parse origin/dev) assert fail "git-guard.sh doctor crashing must not read as a silent PASS"
+git revert --no-edit HEAD >/dev/null
+git push -q origin dev dev:master
+export GH_STUB_SHA=$(git rev-parse origin/dev)
+
 assert pass "back to a fully done state"
 
 # --- --feature (parallel-wave handoff) mode --------------------------------
@@ -166,6 +195,34 @@ assert_feature pass "feature branch pushed again -> ready"
 
 git switch -q dev
 git branch -qD feature/wave-task
+
+# --- --feature <branch> checks the NAMED branch, not whatever is checked out (#76 / #1226) ---
+# feature/named is left pointing at the SAME commit as dev's current tip (no
+# extra commit): this is exactly the case the bug missed — comparing HEAD
+# (dev's, since that's what's actually checked out) against
+# origin/feature/named happens to match by coincidence, so the old code
+# reported a false PASS for a branch that was never actually checked out.
+git branch feature/named
+git push -q origin feature/named
+assert_feature_arg fail "--feature <branch> run from a different checkout is rejected, even when HEAD happens to match the named branch's SHA" feature/named
+git switch -q feature/named
+assert_feature_arg pass "--feature <branch> passes once that branch is actually checked out" feature/named
+git switch -q dev
+git branch -qD feature/named
+
+# --- "branched off dev" must fail for a branch forked from master once dev
+# --- has diverged from it, not just because they share history (#76 / #1225) ---
+echo diverge >>code.ts && git add code.ts && git commit -q -m "dev-only work, not promoted" && git push -q origin dev
+git fetch -q origin
+git switch -qc fix/from-master origin/master
+echo from-master >from-master.txt && git add from-master.txt && git commit -q -m "forked from master, not dev"
+git push -q origin fix/from-master
+assert_feature_arg fail "branch forked from master (dev has since diverged) is rejected" fix/from-master
+git switch -q dev
+git branch -qD fix/from-master
+git push -q origin --delete fix/from-master
+git push -q origin dev:master
+git fetch -q origin
 
 echo
 echo "verify-done tests: $PASS passed, $FAIL failed"

@@ -86,6 +86,21 @@ if [ "$MODE" = feature ]; then
   esac
   pass "on work branch '$branch'"
 
+  # When an explicit branch argument is given, every later check below must
+  # be about THAT branch, not whatever happens to be checked out — otherwise
+  # `verify-done.sh --feature other-branch` run from a different checkout
+  # silently verifies the wrong commit (working tree cleanliness, HEAD vs.
+  # origin/<branch>, and the fork point were all previously computed from
+  # HEAD regardless of the argument).
+  if [ -n "$FEATURE_BRANCH" ]; then
+    checked_out=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [ "$checked_out" != "$FEATURE_BRANCH" ]; then
+      fail "checked-out branch '$checked_out' != --feature $FEATURE_BRANCH — switch to it first (git switch $FEATURE_BRANCH)"
+      echo "verify-done: FAILED — not on the requested branch."
+      exit 1
+    fi
+  fi
+
   if [ -z "$(git status --porcelain)" ]; then
     pass "working tree clean"
   else
@@ -94,7 +109,7 @@ if [ "$MODE" = feature ]; then
 
   git fetch --quiet origin || fail "git fetch origin failed"
 
-  head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+  head_sha=$(git rev-parse "$branch" 2>/dev/null || echo "")
   remote_sha=$(git rev-parse "origin/$branch" 2>/dev/null || echo "")
   if [ -z "$remote_sha" ]; then
     fail "origin/$branch does not exist — push it: git push -u origin $branch"
@@ -104,10 +119,22 @@ if [ "$MODE" = feature ]; then
     fail "HEAD ($head_sha) != origin/$branch ($remote_sha) — push your latest commits"
   fi
 
-  if git merge-base origin/dev HEAD >/dev/null 2>&1; then
-    pass "branch shares history with origin/dev (branched off dev)"
-  else
+  # `git merge-base origin/dev HEAD` succeeds for ANY branch that shares
+  # repository history with dev — including one branched from master, since
+  # master is itself an ancestor of dev here. That only proves shared
+  # history, not that the branch was created from dev specifically. Require
+  # instead that the fork point is not reachable from origin/master alone,
+  # whenever dev is actually ahead of master (when it isn't, nothing has
+  # diverged yet and there is nothing to distinguish).
+  base=$(git merge-base origin/dev "$branch" 2>/dev/null || true)
+  if [ -z "$base" ]; then
     fail "branch has no common history with origin/dev — work branches must be created from dev"
+  elif git rev-parse origin/master >/dev/null 2>&1 &&
+    ! git merge-base --is-ancestor origin/dev origin/master 2>/dev/null &&
+    git merge-base --is-ancestor "$base" origin/master 2>/dev/null; then
+    fail "branch forked from a commit already on master, not from dev's own history — work branches must be created from an up-to-date dev"
+  else
+    pass "branch's fork point (${base:0:12}) is dev-specific, not just shared history with master"
   fi
 
   echo
@@ -129,6 +156,16 @@ for tool in git gh jq; do
     exit 1
   fi
 done
+
+# Every gh call below (run_for_sha) redirects stderr to /dev/null so an empty
+# result reads the same whether the run genuinely doesn't exist yet or gh
+# simply isn't authenticated / can't reach the API — surface the real cause
+# once, up front, instead of the misleading "no run found" from steps 4-5.
+gh_auth_out=""
+if ! gh_auth_out=$(gh auth status 2>&1); then
+  fail "gh is not authenticated (gh auth status) — cannot verify deploy/ci runs below:"
+  printf '%s\n' "$gh_auth_out" | sed 's/^/       /'
+fi
 
 # --- 1. everything committed -------------------------------------------------
 if [ -z "$(git status --porcelain)" ]; then
@@ -156,12 +193,24 @@ else
 fi
 
 # --- 3. branch model intact ---------------------------------------------------
-doctor_out=$("$(cd "$(dirname "$0")" && pwd)/git-guard.sh" doctor 2>&1 || true)
-if printf '%s' "$doctor_out" | grep -q 'WARN'; then
+# Checked positively (the doctor's own "OK" marker), not just by the absence
+# of "WARN" — if git-guard.sh is missing, not executable, or crashes before
+# printing anything, the combined output contains neither WARN nor an error
+# for `grep -q 'WARN'` to catch, and a missing check silently read as PASS.
+doctor_script="$(cd "$(dirname "$0")" && pwd)/git-guard.sh"
+doctor_out=$("$doctor_script" doctor 2>&1)
+doctor_rc=$?
+if [ $doctor_rc -ne 0 ]; then
+  fail "git-guard.sh doctor exited $doctor_rc — could not verify the branch model:"
+  printf '%s\n' "$doctor_out" | sed 's/^/       /'
+elif printf '%s' "$doctor_out" | grep -q 'WARN'; then
   fail "git-guard doctor reports problems:"
   printf '%s\n' "$doctor_out" | grep 'WARN' | sed 's/^/       /'
-else
+elif printf '%s' "$doctor_out" | grep -q 'OK no branch-model problems detected'; then
   pass "git-guard doctor clean"
+else
+  fail "git-guard doctor produced unexpected output (no WARN, and no OK marker either):"
+  printf '%s\n' "$doctor_out" | sed 's/^/       /'
 fi
 
 # Prints "<status> <conclusion> <run id>" for the newest run of a workflow on
