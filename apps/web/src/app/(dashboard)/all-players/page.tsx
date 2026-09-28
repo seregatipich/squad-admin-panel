@@ -143,7 +143,7 @@ export default function PlayersPage() {
     }
   }, []);
 
-  const listQuery = buildPlayersListQuery(sortState, onlyNew);
+  const listQuery = buildPlayersListQuery(sortState, onlyNew, q);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,16 +192,11 @@ export default function PlayersPage() {
 
   const rows = useMemo(() => {
     if (!data) return [];
-    const needle = q.trim().toLowerCase();
-    const filtered = data.items.filter((p) => {
-      if (onlyOnline && !isOnline(p)) return false;
-      if (!needle) return true;
-      return (
-        p.canonical_name.toLowerCase().includes(needle) ||
-        (p.steam_id64 ?? '').includes(needle) ||
-        (p.eos_id ?? '').toLowerCase().includes(needle)
-      );
-    });
+    // The search text is already applied server-side via `q` (#485) — the
+    // items here are exactly the server's matches, including a name-history
+    // match whose canonical_name may not itself contain the query. Only
+    // "только онлайн" and the online/offline sort remain client-side.
+    const filtered = onlyOnline ? data.items.filter((p) => isOnline(p)) : data.items;
     if (sortOnline === 'none') return filtered;
     const onlineFirst = sortOnline === 'online';
     return [...filtered].sort((a, b) => {
@@ -210,12 +205,13 @@ export default function PlayersPage() {
       if (ao === bo) return 0;
       return onlineFirst ? bo - ao : ao - bo;
     });
-  }, [data, q, onlyOnline, sortOnline, isOnline]);
+  }, [data, onlyOnline, sortOnline, isOnline]);
 
-  const onlineCount = useMemo(
-    () => (data ? data.items.filter((p) => isOnline(p)).length : 0),
-    [data, isOnline],
-  );
+  // Counts every online player the panel knows about, not just those on the
+  // server's (at most 200-row, possibly search-filtered) current page (#485).
+  const onlineCount = onlineLoaded
+    ? onlineIds.size
+    : (data?.items.filter((p) => isOnline(p)).length ?? 0);
 
   const toggleSort = useCallback(() => {
     setSortOnline((s) => (s === 'none' ? 'online' : s === 'online' ? 'offline' : 'none'));

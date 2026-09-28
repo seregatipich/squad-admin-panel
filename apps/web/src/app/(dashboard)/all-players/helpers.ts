@@ -53,14 +53,28 @@ export function sortIndicator(current: PlayerSortState, column: PlayerSortKey): 
 /**
  * Querystring for `GET /api/v1/players`, without the leading `?`.
  *
+ * The server caps the result at 200 rows and searches nickname (including
+ * name history), SteamID64 and EOS ID — sending `q` here is what makes that
+ * search actually run server-side, instead of the page re-filtering only the
+ * 200 rows it happened to fetch and missing every player beyond that page
+ * (#485).
+ *
  * @param state - The sort to request from the server.
  * @param onlyNew - When true, appends `filter=new` (players first seen in the last 7 days).
- * @returns The encoded querystring, always `sort` then `dir`, then optional `filter`.
+ * @param q - Free-text search; sent only when it is 1–64 characters after trimming,
+ *   matching the API's `q` validation.
+ * @returns The encoded querystring, always `sort` then `dir`, then optional `filter`/`q`.
  */
-export function buildPlayersListQuery(state: PlayerSortState, onlyNew: boolean): string {
+export function buildPlayersListQuery(
+  state: PlayerSortState,
+  onlyNew: boolean,
+  q: string = '',
+): string {
   const params = new URLSearchParams();
   params.set('sort', state.key);
   params.set('dir', state.dir);
   if (onlyNew) params.set('filter', 'new');
+  const trimmed = q.trim();
+  if (trimmed.length > 0 && trimmed.length <= 64) params.set('q', trimmed);
   return params.toString();
 }

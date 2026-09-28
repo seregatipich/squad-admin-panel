@@ -75,4 +75,24 @@ describe('buildPlayersListQuery', () => {
       'sort=nickname&dir=asc',
     );
   });
+
+  it('sends q so the search runs server-side instead of over only the loaded page (#485)', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 'Alpha')).toBe(
+      'sort=last_seen&dir=desc&q=Alpha',
+    );
+  });
+
+  it('trims q and omits it when empty', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, '   ')).toBe('sort=last_seen&dir=desc');
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, '  Bravo  ')).toBe(
+      'sort=last_seen&dir=desc&q=Bravo',
+    );
+  });
+
+  it('omits q longer than the API accepts (64 chars)', () => {
+    const tooLong = 'x'.repeat(65);
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, tooLong)).toBe(
+      'sort=last_seen&dir=desc',
+    );
+  });
 });
