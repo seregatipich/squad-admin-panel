@@ -40,6 +40,7 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 const OWNER_STEAM = testSteamId(954000);
 const HANDLER_STEAM = testSteamId(954001);
 const PANEL_ONLY_STEAM = testSteamId(954002);
+const REPORTS_NO_PANEL_STEAM = testSteamId(954003);
 const REPORTER_A_STEAM = testSteamId(954011);
 const REPORTER_SPAM_STEAM = testSteamId(954012);
 const TARGET_A_STEAM = testSteamId(954021);
@@ -178,6 +179,12 @@ beforeAll(async () => {
     panelAccess: true,
     canHandleReports: false,
   });
+  await seedRoleWithPlayer({
+    roleName: `RA-ReportsNoPanel-${uuidv7()}`,
+    steamId64: REPORTS_NO_PANEL_STEAM,
+    panelAccess: false,
+    canHandleReports: true,
+  });
   handlerId = (
     await h.db.select({ id: players.id }).from(players).where(eq(players.steamId64, HANDLER_STEAM))
   )[0]?.id as string;
@@ -219,6 +226,69 @@ describeIfDb('GET /api/v1/analytics/reports', () => {
   it('rejects a panel user without can_handle_reports', async () => {
     const res = await fetchAnalytics('', await loginAsSteam(PANEL_ONLY_STEAM));
     expect(res.statusCode).toBe(403);
+  });
+
+  it('rejects a role that keeps can_handle_reports but lost panel_access (#250)', async () => {
+    const res = await fetchAnalytics('', await loginAsSteam(REPORTS_NO_PANEL_STEAM));
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('ranks top_reporters within the requested server_id and window (#251)', async () => {
+    const inWindow = new Date('2026-06-12T00:00:00.000Z');
+    const outOfWindow = new Date('2026-03-01T00:00:00.000Z');
+    // ReporterA: two reports on server A inside the window.
+    for (let i = 0; i < 2; i += 1) {
+      await seedReport({
+        serverId: serverAId,
+        reporterPlayerId: reporterAId,
+        targetPlayerId: targetAId,
+        status: 'pending',
+        createdAt: inWindow,
+      });
+    }
+    // ReporterSpam: many reports, but only on server B or outside the window.
+    for (let i = 0; i < 3; i += 1) {
+      await seedReport({
+        serverId: serverBId,
+        reporterPlayerId: reporterSpamId,
+        targetPlayerId: targetBId,
+        status: 'rejected',
+        createdAt: inWindow,
+      });
+      await seedReport({
+        serverId: serverAId,
+        reporterPlayerId: reporterSpamId,
+        targetPlayerId: targetBId,
+        status: 'rejected',
+        createdAt: outOfWindow,
+      });
+    }
+    await h.db.insert(reporterStats).values([
+      { playerId: reporterAId, totalReports: 2, accuracy: 0.75, trusted: true },
+      { playerId: reporterSpamId, totalReports: 6, rejectedReports: 6, spamFlaggedAt: new Date() },
+    ]);
+
+    const res = await fetchAnalytics(
+      `?server_id=${serverAId}&from=2026-06-01T00:00:00.000Z&to=2026-06-20T00:00:00.000Z`,
+      ownerCookie,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      top_reporters: Array<{
+        player_id: string;
+        total: number;
+        accuracy: number;
+        trusted: boolean;
+        spam_flagged: boolean;
+      }>;
+    };
+    expect(body.top_reporters.map((r) => r.player_id)).toEqual([reporterAId]);
+    expect(body.top_reporters[0]).toMatchObject({
+      total: 2,
+      accuracy: 0.75,
+      trusted: true,
+      spam_flagged: false,
+    });
   });
 
   it('computes exact by_status counts, avg/median resolution seconds, and trend buckets against a control sample', async () => {

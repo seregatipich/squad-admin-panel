@@ -62,18 +62,29 @@ export interface ResolvedWindow {
   to: Date;
 }
 
+/** Default length and hard cap, in days, of an analytics window. */
+export interface WindowBounds {
+  defaultDays: number;
+  maxDays: number;
+}
+
 /**
  * Resolves a `from`/`to` analytics window from optional ISO datetime strings,
- * defaulting to the last {@link DEFAULT_WINDOW_DAYS} days and clamping the
- * span to {@link MAX_WINDOW_DAYS}.
+ * defaulting to the last `bounds.defaultDays` days and clamping the span to
+ * `bounds.maxDays` — by default {@link DEFAULT_WINDOW_DAYS} and
+ * {@link MAX_WINDOW_DAYS}; report analytics passes its own wider bounds.
  */
-export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow {
+export function resolveWindow(
+  fromRaw?: string,
+  toRaw?: string,
+  bounds: WindowBounds = { defaultDays: DEFAULT_WINDOW_DAYS, maxDays: MAX_WINDOW_DAYS },
+): ResolvedWindow {
   const to = toRaw ? new Date(toRaw) : new Date();
-  const from = fromRaw ? new Date(fromRaw) : new Date(to.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS);
+  const from = fromRaw ? new Date(fromRaw) : new Date(to.getTime() - bounds.defaultDays * DAY_MS);
   const span = to.getTime() - from.getTime();
   if (span < 0) return { from: to, to };
-  if (span > MAX_WINDOW_DAYS * DAY_MS) {
-    return { from: new Date(to.getTime() - MAX_WINDOW_DAYS * DAY_MS), to };
+  if (span > bounds.maxDays * DAY_MS) {
+    return { from: new Date(to.getTime() - bounds.maxDays * DAY_MS), to };
   }
   return { from, to };
 }
