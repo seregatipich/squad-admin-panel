@@ -1,5 +1,5 @@
 import { playerDiscordLinks, players, roles, servers } from '@squad/db/schema';
-import { eq, ilike, inArray, isNull } from 'drizzle-orm';
+import { and, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
@@ -9,6 +9,8 @@ import {
   type StatusSnapshot,
   verifyInteractionSignature,
 } from '../lib/discord-interactions.js';
+import { loadUserPermissions } from '../lib/rbac.js';
+import { containsPattern } from '../lib/sql-like.js';
 
 /**
  * DISCORD-6 (#153): Discord's HTTP interactions transport.
@@ -107,17 +109,14 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
         return ephemeral('Аккаунт не привязан — привяжите Discord на своей странице в панели.');
       }
 
-      const [actor] = await app.db
-        .select({ id: players.id, panelAccess: roles.panelAccess })
-        .from(players)
-        .leftJoin(roles, eq(roles.id, players.roleId))
-        .where(eq(players.id, link.playerId))
-        .limit(1);
-      if (!actor?.panelAccess) {
+      // Same gate as a panel session: loadUserPermissions ignores a role whose
+      // role_expires_at has passed even before the role-expirer tick strips it.
+      const actorPermissions = await loadUserPermissions(app.db, link.playerId);
+      if (!actorPermissions.panelAccess) {
         return ephemeral('У вашей роли нет доступа к панели.');
       }
 
-      const auditActor: AuditActor = { kind: 'steam', playerId: actor.id, tokenId: null };
+      const auditActor: AuditActor = { kind: 'steam', playerId: link.playerId, tokenId: null };
       const name = body.data?.name ?? '';
 
       const audit = async (actionType: string) => {
@@ -176,7 +175,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
                 steamId64: players.steamId64,
               })
               .from(players)
-              .where(ilike(players.canonicalName, `%${query}%`))
+              .where(ilike(players.canonicalName, containsPattern(query)))
               .limit(1);
         await audit('discord.command.player');
         if (!found) return ephemeral('Игрок не найден.');
@@ -198,8 +197,9 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
           .from(servers)
           .where(isNull(servers.deletedAt));
         const rosterNames = new Map<string, string>();
-        for (const s2 of rows) {
-          const raw = await app.redis.get(`rcon:roster:${s2.id}`);
+        const rosters =
+          rows.length > 0 ? await app.redis.mget(rows.map((s2) => `rcon:roster:${s2.id}`)) : [];
+        for (const raw of rosters) {
           if (!raw) continue;
           try {
             const roster = JSON.parse(raw) as {
@@ -218,10 +218,17 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
         if (rosterNames.size === 0) return ephemeral('Админов онлайн нет.');
         // innerJoin on roles + panelAccess: only roster players whose role grants
         // panel access count as admins, so a plain player on the server is not listed.
+        // A lapsed role_expires_at counts as no role, matching lib/rbac.ts.
         const admins = await app.db
           .select({ steamId64: players.steamId64, panelAccess: roles.panelAccess })
           .from(players)
-          .innerJoin(roles, eq(roles.id, players.roleId))
+          .innerJoin(
+            roles,
+            and(
+              eq(roles.id, players.roleId),
+              or(isNull(players.roleExpiresAt), gt(players.roleExpiresAt, sql`now()`)),
+            ),
+          )
           .where(
             inArray(
               players.steamId64,
