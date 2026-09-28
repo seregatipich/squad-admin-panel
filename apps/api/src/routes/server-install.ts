@@ -431,6 +431,8 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         message: 'install requested',
         payload: { display_name: srv.displayName, kind: 'install' },
       });
+      // A retry must not replay the previous attempt's lines (its old `error`).
+      app.installProgress.reset(id);
       (async () => {
         const startedAt = Date.now();
         try {

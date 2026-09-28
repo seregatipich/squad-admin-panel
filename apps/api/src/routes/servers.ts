@@ -1113,6 +1113,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           },
           row.id,
         );
+        app.installProgress.reset(row.id);
         app.liveBus.publish({
           type: 'server.deleted',
           ts: new Date().toISOString(),
