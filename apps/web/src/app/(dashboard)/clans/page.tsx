@@ -31,7 +31,13 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
-import type { ClanSortField, BadgeTone as PriorityTone, SortOrder } from './helpers';
+import type {
+  ClanSortField,
+  MeResponse,
+  BadgeTone as PriorityTone,
+  ServerOption,
+  SortOrder,
+} from './helpers';
 import { paginate, priorityBadge, sortClans } from './helpers';
 
 interface Clan {
@@ -51,15 +57,6 @@ interface Clan {
 interface ClansResponse {
   items: Clan[];
   total: number;
-}
-
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
-
-interface MeResponse {
-  can_manage_clans: boolean;
 }
 
 const PAGE_SIZE = 25;

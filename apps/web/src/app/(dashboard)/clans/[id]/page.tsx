@@ -22,7 +22,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
-import type { BadgeTone as PriorityTone } from '../helpers';
+import type { MeResponse, BadgeTone as PriorityTone, ServerOption } from '../helpers';
 import { priorityBadge } from '../helpers';
 import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
@@ -40,15 +40,6 @@ interface ClanDetail {
   priority_count: number;
   priority_expires_at: string | null;
   primary_server_id: string | null;
-}
-
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
-
-interface MeResponse {
-  can_manage_clans: boolean;
 }
 
 /** Тон срока приоритета из `helpers.ts` в тонах дизайн-системы. */
