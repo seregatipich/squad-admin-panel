@@ -16,10 +16,28 @@ import { validateLayerName } from '../lib/rotation-segment.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 const entryParams = z.object({ id: z.string().uuid(), entryId: z.string().uuid() });
-const calendarQuery = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-});
+// #314: the raw querystring had no from<=to check and no maximum window, so
+// e.g. ?from=2000-01-01&to=2100-01-01 requested the server's entire match
+// history in one unbounded response.
+const CALENDAR_MAX_WINDOW_DAYS = 90;
+const CALENDAR_MATCH_HISTORY_LIMIT = 500;
+const calendarQuery = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .refine((query) => !query.from || !query.to || new Date(query.from) <= new Date(query.to), {
+    message: 'from must not be after to',
+    path: ['from'],
+  })
+  .refine(
+    (query) => {
+      if (!query.from || !query.to) return true;
+      const spanMs = new Date(query.to).getTime() - new Date(query.from).getTime();
+      return spanMs <= CALENDAR_MAX_WINDOW_DAYS * 86_400_000;
+    },
+    { message: `from..to must not span more than ${CALENDAR_MAX_WINDOW_DAYS} days`, path: ['to'] },
+  );
 const scheduleBody = z.object({
   scheduled_at: z.string().datetime(),
   layer: z.string().min(1).max(128),
@@ -239,7 +257,8 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
               lte(matches.startedAt, range.to),
             ),
           )
-          .orderBy(desc(matches.startedAt)),
+          .orderBy(desc(matches.startedAt))
+          .limit(CALENDAR_MATCH_HISTORY_LIMIT),
         app.db
           .select()
           .from(rotationProfiles)
@@ -305,6 +324,11 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         .returning();
       if (!row) throw new Error('rotation_schedule insert returned no row');
       const warnings = await scheduleWarnings(app, req.params.id, row.scheduledAt);
+      // #316: writeAuditEntry used to run before reply.code(201), so
+      // audit_log recorded statusCode 200 for a route that actually replied
+      // 201 — reply.code() must be called first for statusCode to reflect
+      // what the client received.
+      reply.code(201);
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,
@@ -315,7 +339,6 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         context: { server_id: req.params.id, warnings },
         statusCode: reply.statusCode,
       });
-      reply.code(201);
       return { ...serializeSchedule(row), warnings };
     },
   );
@@ -359,6 +382,18 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.layer !== undefined) updates.layer = req.body.layer;
       if (req.body.mode !== undefined) updates.mode = req.body.mode;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
+      // #312: resolveDueRotationSchedule (worker-scheduler) skips any entry
+      // with lastExecutedAt !== null. Without resetting it here, rescheduling
+      // an already-fired one-off entry to a new date left it visible on the
+      // calendar as "planned" but silently un-fireable, with no error.
+      if (
+        existing.lastExecutedAt !== null &&
+        (req.body.scheduled_at !== undefined ||
+          req.body.layer !== undefined ||
+          req.body.mode !== undefined)
+      ) {
+        updates.lastExecutedAt = null;
+      }
       const [row] = await app.db
         .update(rotationSchedule)
         .set(updates)

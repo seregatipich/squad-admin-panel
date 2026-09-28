@@ -1,4 +1,12 @@
-import { events, matches, players, roles, seedSchedule, servers } from '@squad/db/schema';
+import {
+  events,
+  matches,
+  players,
+  roles,
+  rotationSchedule,
+  seedSchedule,
+  servers,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -116,11 +124,77 @@ describe('ROT-4 rotation calendar API', () => {
     expect(body.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'seed_schedule_overlap' })]),
     );
-    await assertAuditRow(h, {
+    // #316: writeAuditEntry used to run before reply.code(201), recording
+    // statusCode 200 in the immutable hash chain for a route that actually
+    // replied 201.
+    const audit = await assertAuditRow(h, {
       action: 'server.rotation_schedule.create',
       resource: 'rotation_schedule',
       targetId: body.id,
     });
+    expect(audit.statusCode).toBe(201);
+  });
+
+  // #314: an unbounded ?from/?to window let a caller request the server's
+  // entire match history in one response; the schema now rejects a window
+  // wider than the configured maximum and from > to.
+  it('rejects a calendar window wider than 90 days', async () => {
+    const cookie = await loginAsOwner(h);
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/rotation-schedule?from=2000-01-01T00:00:00.000Z&to=2100-01-01T00:00:00.000Z`,
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('rejects a calendar window where from is after to', async () => {
+    const cookie = await loginAsOwner(h);
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${SERVER_ID}/rotation-schedule?from=2026-07-15T00:00:00.000Z&to=2026-07-13T00:00:00.000Z`,
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  // #312: rescheduling an already-executed one-off entry used to leave
+  // lastExecutedAt set, so worker-scheduler's resolveDueRotationSchedule
+  // (which skips any entry with lastExecutedAt !== null) would never fire it
+  // again — the calendar showed it as "planned" with no error.
+  it('resets lastExecutedAt when an already-executed entry is rescheduled', async () => {
+    const cookie = await loginAsOwner(h);
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/rotation-schedule`,
+      headers: { cookie },
+      payload: {
+        scheduled_at: '2026-07-16T10:00:00.000Z',
+        layer: KNOWN_LAYER,
+        mode: 'set_next',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const entryId = created.json<{ id: string }>().id;
+
+    await h.db
+      .update(rotationSchedule)
+      .set({ lastExecutedAt: new Date('2026-07-16T10:00:05.000Z') })
+      .where(eq(rotationSchedule.id, entryId));
+
+    const patched = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/servers/${SERVER_ID}/rotation-schedule/${entryId}`,
+      headers: { cookie },
+      payload: { scheduled_at: '2026-07-20T10:00:00.000Z' },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const [row] = await h.db
+      .select({ lastExecutedAt: rotationSchedule.lastExecutedAt })
+      .from(rotationSchedule)
+      .where(eq(rotationSchedule.id, entryId));
+    expect(row?.lastExecutedAt).toBeNull();
   });
 
   it('persists weekly default and weekday profiles and audits the replacement', async () => {

@@ -85,6 +85,23 @@ describe('parseStoredRoster', () => {
     const parsed = parseStoredRoster(JSON.stringify(storedRoster([entry({})])));
     expect(parsed?.players).toHaveLength(1);
   });
+
+  // #318: a bare `JSON.parse(raw) as StoredRoster` accepted any shape; the
+  // route reads `stored.players.length` immediately and
+  // collectRosterLookups calls `BigInt(steam_id64)`, so a snapshot missing
+  // `players` (unlike parseStoredSquads, which checks Array.isArray on
+  // `squads`) or with a non-numeric steam_id64 used to 500 instead of
+  // degrading to an empty roster.
+  it('returns null when players is missing', () => {
+    expect(parseStoredRoster(JSON.stringify({ server_id: 'srv' }))).toBeNull();
+  });
+
+  it('returns null when steam_id64 is not a numeric string', () => {
+    const parsed = parseStoredRoster(
+      JSON.stringify(storedRoster([entry({ steam_id64: 'not-a-steamid' })])),
+    );
+    expect(parsed).toBeNull();
+  });
 });
 
 describe('parseStoredSquads', () => {
