@@ -10,6 +10,7 @@ import {
   CardHeader,
   EmptyState,
   InlineBanner,
+  SafeExternalLink,
   Skeleton,
 } from '@/components/ui';
 import {
@@ -48,14 +49,7 @@ function EvidenceBody({ item }: { item: ModerationEvidence }) {
   if (item.kind === 'external_link') {
     if (!item.external_url) return null;
     return (
-      <a
-        href={item.external_url}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 block break-all text-accent"
-      >
-        {item.external_url}
-      </a>
+      <SafeExternalLink href={item.external_url} className="mt-2 block break-all text-accent" />
     );
   }
   if (item.kind === 'image') {

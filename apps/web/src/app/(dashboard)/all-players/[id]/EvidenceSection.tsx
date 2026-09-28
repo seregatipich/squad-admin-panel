@@ -10,6 +10,7 @@ import {
   DateTime,
   EmptyState,
   InlineBanner,
+  SafeExternalLink,
   Skeleton,
   TextInput,
 } from '@/components/ui';
@@ -222,14 +223,10 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
                 ) : null}
                 {media.kind === 'external_link' ? (
                   media.external_url && (
-                    <a
+                    <SafeExternalLink
                       href={media.external_url}
-                      target="_blank"
-                      rel="noreferrer"
                       className="mt-2 block text-accent no-underline hover:brightness-110"
-                    >
-                      {media.external_url}
-                    </a>
+                    />
                   )
                 ) : media.kind === 'image' ? (
                   <img

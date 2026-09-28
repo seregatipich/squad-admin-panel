@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { httpUrl } from './url.js';
 
 /** Media allowlisted MIME types accepted by `POST /api/v1/media` uploads. */
 export const MEDIA_UPLOAD_MIME_TYPES = [
@@ -24,7 +25,9 @@ export type MediaUploadMetadata = z.infer<typeof mediaUploadMetadata>;
 /** Request body for `POST /api/v1/media/link` — registers an external URL. */
 export const mediaLinkInput = z
   .object({
-    external_url: z.string().url().max(2000),
+    // http(s) only (#445): a javascript:/data: URL here would later be
+    // rendered in an operator-facing <a href>.
+    external_url: httpUrl(2000),
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).optional(),
   })

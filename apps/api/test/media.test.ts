@@ -348,6 +348,16 @@ describe('POST /api/v1/media/link', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('rejects a javascript: URL even though it is well-formed (#445)', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/media/link',
+      headers: { cookie: ownerCookie },
+      payload: { external_url: 'javascript:alert(document.cookie)' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
 
 describe('GET /api/v1/media/:id and /stream', () => {
