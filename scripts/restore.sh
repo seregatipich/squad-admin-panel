@@ -32,6 +32,9 @@ cd "$REPO"
 # docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
 export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 
+# The file DATA_DIR is read from. The host bridge sets it, COMPOSE_FILE and
+# COMPOSE_ENV_FILES from its PANEL_COMPOSE_* configuration (the stand:
+# docker/compose.stand.yml with .env.stand,.release.env).
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE=(docker compose --profile backup)
 
@@ -90,7 +93,7 @@ if [[ "$APPLY" -eq 0 ]]; then
     2. restic restore ${SNAPSHOT} into the backup container.
     3. pg_restore --clean --if-exists -h postgres -U admin -d admin admin.dump
        (drops and recreates every object, then loads the dumped data).
-    4. Stop redis, replace ${DATA_DIR}/redis with the restored dump.rdb,
+    4. Stop redis, replace its dataset with the restored dump.rdb,
        convert it to an AOF, and start redis again.
 
   This OVERWRITES the live database and Redis dataset. Take a fresh snapshot
@@ -138,15 +141,17 @@ log "Postgres restored (pg_restore --clean --if-exists)"
 
 step "Restoring Redis from the restored dump.rdb"
 "${COMPOSE[@]}" stop redis >/dev/null
-rm -rf "${DATA_DIR}/redis/appendonlydir" "${DATA_DIR}/redis/dump.rdb"
 [[ -f "${DATA_DIR}/backup-dump/redis/dump.rdb" ]] || die "restored dump.rdb missing at ${DATA_DIR}/backup-dump/redis/dump.rdb"
-cp "${DATA_DIR}/backup-dump/redis/dump.rdb" "${DATA_DIR}/redis/dump.rdb"
 
 # The redis service runs with --appendonly yes, so it loads its dataset from the
-# AOF, not from dump.rdb. Boot a one-off server with AOF off to load the RDB,
+# AOF, not from dump.rdb. In a one-off container on the redis service's own
+# volume (a DATA_DIR bind in docker/compose.yml, a named volume on the stand):
+# drop the old dataset, boot a server with AOF off to load the restored RDB,
 # then CONFIG SET appendonly yes to rewrite the dataset into a fresh AOF.
-"${COMPOSE[@]}" run --rm --no-deps -T redis sh -c '
+"${COMPOSE[@]}" run --rm --no-deps -T -v "${DATA_DIR}/backup-dump/redis:/restore:ro" redis sh -c '
   set -e
+  rm -rf /data/appendonlydir /data/dump.rdb
+  cp /restore/dump.rdb /data/dump.rdb
   redis-server --dir /data --dbfilename dump.rdb --appendonly no --save "" &
   pid=$!
   until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.3; done

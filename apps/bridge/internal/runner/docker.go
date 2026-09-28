@@ -22,12 +22,17 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
-	// ComposeDir is the panel deploy directory that holds docker/compose.yml,
-	// .env and scripts/restore.sh. The backup RPCs run `docker compose` (and the
-	// restore script) from here so they inherit RESTIC_PASSWORD/POSTGRES_PASSWORD
-	// from .env instead of the bridge having to hold those secrets. Empty falls
-	// back to the PANEL_COMPOSE_DIR env var; it is never accepted from RPC
-	// params. Tests inject a t.TempDir.
+	// ComposeDir is the panel deploy directory that holds the compose file,
+	// its env files and scripts/restore.sh. The backup RPCs run `docker compose`
+	// (and the restore script) from here so they inherit RESTIC_PASSWORD/
+	// POSTGRES_PASSWORD from the env files instead of the bridge having to hold
+	// those secrets. Empty falls back to the PANEL_COMPOSE_DIR env var; it is
+	// never accepted from RPC params. Tests inject a t.TempDir.
+	//
+	// The compose file and env files inside it come from PANEL_COMPOSE_FILE
+	// (default docker/compose.yml) and PANEL_COMPOSE_ENV_FILES (comma-separated,
+	// default .env), which the install-host-bridge.sh drop-in writes: the stand
+	// runs docker/compose.stand.yml with .env.stand,.release.env.
 	ComposeDir string
 }
 
@@ -772,36 +777,82 @@ func (d *DockerRunner) SystemPrune(
 
 // --- restic backup / restore (INFRA-8-P1) ---
 
-// composeDir resolves the panel deploy directory the backup RPCs shell out in.
-// It must be an absolute path, from the ComposeDir field or PANEL_COMPOSE_DIR;
-// an unset or relative value is a policy error (ErrForbidden) so the RPC fails
-// closed rather than running `docker compose` from an unexpected cwd.
-func (d *DockerRunner) composeDir() (string, error) {
+// Defaults for the compose target when the host sets neither
+// PANEL_COMPOSE_FILE nor PANEL_COMPOSE_ENV_FILES: the base install layout.
+const (
+	defaultComposeFile     = "docker/compose.yml"
+	defaultComposeEnvFiles = ".env"
+)
+
+// composeTarget is the compose file and env files the backup RPCs run
+// against, all as absolute paths inside the deploy directory.
+type composeTarget struct {
+	dir      string
+	file     string
+	envFiles []string
+}
+
+// composeTarget resolves the deploy directory from the ComposeDir field or
+// PANEL_COMPOSE_DIR, and the compose file and env files inside it from
+// PANEL_COMPOSE_FILE / PANEL_COMPOSE_ENV_FILES. The directory must be
+// absolute and every file a local path inside it; anything else (unset
+// directory, a relative directory, an absolute or `..`-escaping file, an empty
+// list entry) is a policy error (ErrForbidden), so the RPC fails closed
+// rather than running `docker compose` against an unexpected file.
+func (d *DockerRunner) composeTarget() (composeTarget, error) {
 	dir := d.ComposeDir
 	if dir == "" {
 		dir = os.Getenv("PANEL_COMPOSE_DIR")
 	}
 	if dir == "" {
-		return "", fmt.Errorf("%w: compose directory not configured (set PANEL_COMPOSE_DIR)", validate.ErrForbidden)
+		return composeTarget{}, fmt.Errorf("%w: compose directory not configured (set PANEL_COMPOSE_DIR)", validate.ErrForbidden)
 	}
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("%w: compose directory %q must be absolute", validate.ErrForbidden, dir)
+		return composeTarget{}, fmt.Errorf("%w: compose directory %q must be absolute", validate.ErrForbidden, dir)
 	}
-	return dir, nil
+	file := os.Getenv("PANEL_COMPOSE_FILE")
+	if file == "" {
+		file = defaultComposeFile
+	}
+	envList := os.Getenv("PANEL_COMPOSE_ENV_FILES")
+	if envList == "" {
+		envList = defaultComposeEnvFiles
+	}
+	target := composeTarget{dir: dir}
+	for _, rel := range append([]string{file}, strings.Split(envList, ",")...) {
+		if !filepath.IsLocal(rel) {
+			return composeTarget{}, fmt.Errorf("%w: compose path %q must be a relative path inside %s", validate.ErrForbidden, rel, dir)
+		}
+	}
+	target.file = filepath.Join(dir, file)
+	for _, rel := range strings.Split(envList, ",") {
+		target.envFiles = append(target.envFiles, filepath.Join(dir, rel))
+	}
+	return target, nil
 }
 
 // composeBackupArgs builds the `docker compose` prefix that targets the
-// backup-profile service from the resolved deploy directory. The compose file
-// and .env are pinned explicitly so the invocation is independent of the
-// bridge's cwd; the file resolves its own paths from docker/ and pins the
-// project name, so no --project-directory is needed.
-func composeBackupArgs(dir string) []string {
-	return []string{
-		"compose",
-		"-f", filepath.Join(dir, "docker", "compose.yml"),
-		"--env-file", filepath.Join(dir, ".env"),
-		"--profile", "backup",
+// backup-profile service. The compose file and env files are pinned
+// explicitly so the invocation is independent of the bridge's cwd; the file
+// resolves its own paths from its directory and pins the project name, so no
+// --project-directory is needed.
+func composeBackupArgs(target composeTarget) []string {
+	args := []string{"compose", "-f", target.file}
+	for _, envFile := range target.envFiles {
+		args = append(args, "--env-file", envFile)
 	}
+	return append(args, "--profile", "backup")
+}
+
+// restoreEnv is the bridge environment plus the compose target, in the
+// variables scripts/restore.sh and docker compose read: COMPOSE_FILE,
+// COMPOSE_ENV_FILES, and ENV_FILE (the first env file, which holds DATA_DIR).
+func restoreEnv(target composeTarget) []string {
+	return append(os.Environ(),
+		"COMPOSE_FILE="+target.file,
+		"COMPOSE_ENV_FILES="+strings.Join(target.envFiles, ","),
+		"ENV_FILE="+target.envFiles[0],
+	)
 }
 
 // BackupSnapshot is one restic snapshot as surfaced to the panel UI. It is the
@@ -821,11 +872,11 @@ type BackupSnapshot struct {
 // resticker entrypoint is overridden so the args are not treated as a restic
 // subcommand). An empty repository yields an empty slice, not an error.
 func (d *DockerRunner) BackupSnapshots(ctx context.Context) ([]BackupSnapshot, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return nil, err
 	}
-	args := append(composeBackupArgs(dir),
+	args := append(composeBackupArgs(target),
 		"run", "--rm", "--no-TTY",
 		"--entrypoint", "/bin/sh", "backup",
 		"-c", "restic snapshots --json",
@@ -857,11 +908,11 @@ func (d *DockerRunner) BackupRun(
 	ctx context.Context,
 	onStdout, onStderr func([]byte),
 ) (int, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return 0, err
 	}
-	args := append(composeBackupArgs(dir), "run", "--rm", "backup", "backup")
+	args := append(composeBackupArgs(target), "run", "--rm", "backup", "backup")
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
 
@@ -869,21 +920,22 @@ func (d *DockerRunner) BackupRun(
 // snapshot by invoking the proven scripts/restore.sh from the deploy directory
 // with --apply. This is DESTRUCTIVE: it overwrites the live database and Redis
 // dataset. The snapshot id is validated to a restic id (or "latest") before it
-// reaches the shell, so it cannot smuggle extra arguments. Streams progress;
-// returns the script exit code.
+// reaches the shell, so it cannot smuggle extra arguments. The script gets the
+// same compose file and env files as the other backup RPCs (see restoreEnv).
+// Streams progress; returns the script exit code.
 func (d *DockerRunner) BackupRestore(
 	ctx context.Context,
 	snapshotID string,
 	onStdout, onStderr func([]byte),
 ) (int, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return 0, err
 	}
 	if err := validate.ResticSnapshotID(snapshotID); err != nil {
 		return 0, err
 	}
-	script := filepath.Join(dir, "scripts", "restore.sh")
+	script := filepath.Join(target.dir, "scripts", "restore.sh")
 	args := []string{script, "--apply", "--snapshot", snapshotID}
-	return d.R.Stream(ctx, "bash", args, nil, onStdout, onStderr)
+	return d.R.Stream(ctx, "bash", args, restoreEnv(target), onStdout, onStderr)
 }
