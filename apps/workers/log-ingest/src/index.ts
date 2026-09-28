@@ -112,6 +112,10 @@ async function main() {
     log.info({ serverId, beaconPort, source: wanted.source.kind }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
     let voteChain: Promise<void> = Promise.resolve();
+    // Serialized like voteChain/matchChain: two duplicate !report lines
+    // handled concurrently would otherwise race the dedup read-then-write
+    // in report/store.ts (#63 finding 941).
+    let reportChain: Promise<void> = Promise.resolve();
     // Combat/vehicle lines are by far the highest-volume kind on a busy
     // server; cap the backlog instead of letting it grow without bound
     // (#63 finding 916).
@@ -155,9 +159,10 @@ async function main() {
           .catch(() => undefined);
       },
       onReport: (report) => {
-        handleReport(db, redis, { serverId, report }).catch((err) =>
-          log.error({ err: (err as Error).message }, 'report handling failed'),
-        );
+        reportChain = reportChain
+          .then(() => handleReport(db, redis, { serverId, report }))
+          .then(() => undefined)
+          .catch((err) => log.error({ err: (err as Error).message }, 'report handling failed'));
       },
       onMatch: (command) => {
         matchChain = matchChain

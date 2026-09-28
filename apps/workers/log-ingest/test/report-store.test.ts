@@ -199,6 +199,32 @@ describe('handleReport', () => {
     expect(eventRows).toHaveLength(2);
   });
 
+  // Regression for #63 finding 941: the dedup append used to read the
+  // duplicate row's body once in JS, then write `${read}\n${new}` — two
+  // concurrent duplicate reports racing that read-then-write could lose one
+  // body to the other's overwrite. The append must happen in SQL against the
+  // row's live value so no concurrent append is lost.
+  it('loses no line when concurrent duplicate reports race the dedup append', async () => {
+    await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: makeReport({ body: 'first line' }),
+    });
+
+    const concurrentLines = Array.from({ length: 8 }, (_, i) => `concurrent-${i}`);
+    await Promise.all(
+      concurrentLines.map((body) =>
+        handleReport(db, makePublisher(), { serverId: SERVER_ID, report: makeReport({ body }) }),
+      ),
+    );
+
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    const lines = rows[0].body.split('\n');
+    expect(lines).toContain('first line');
+    for (const body of concurrentLines) expect(lines).toContain(body);
+    expect(lines).toHaveLength(1 + concurrentLines.length);
+  });
+
   it('creates a new row when the previous report is older than the dedup window', async () => {
     const first = await handleReport(db, makePublisher(), {
       serverId: SERVER_ID,

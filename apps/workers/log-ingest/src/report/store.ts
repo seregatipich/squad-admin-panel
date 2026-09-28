@@ -1,7 +1,7 @@
 import { type DatabaseClient, events, playerNameHistory, playerReports, players } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { type EventEnvelope, playerReportPayload, STREAM_NAME } from '@squad/shared-types';
-import { and, desc, eq, gte, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedReport } from '../parser/report.js';
 
@@ -189,9 +189,13 @@ export async function handleReport(
   });
 
   if (duplicate) {
+    // Appended in SQL against the row's current value, not the JS-side
+    // `duplicate.body` snapshot: two concurrent duplicate reports doing a
+    // read-then-write string concatenation here could otherwise lose one
+    // body to the other's overwrite (#63 finding 941).
     await db
       .update(playerReports)
-      .set({ body: `${duplicate.body}\n${report.body}` })
+      .set({ body: sql`${playerReports.body} || ${`\n${report.body}`}` })
       .where(eq(playerReports.id, duplicate.id));
     const envelope = await writeEvent(db, {
       serverId,
