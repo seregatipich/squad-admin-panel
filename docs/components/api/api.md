@@ -26,8 +26,8 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | GET | `/api/v1/me/sessions` | List own **unexpired** sessions (`expires_at > now()`); `current: true` on the request's session, which is always returned first, the rest ordered by `last_activity_at` descending. | session |
 | DELETE | `/api/v1/me/sessions/:id` | Revoke own session by id. 404 for foreign session. | session |
 | DELETE | `/api/v1/me/sessions` | Revoke all own sessions. | session |
-| GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at). Never returns plaintext or hash. | session |
-| POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`). Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
+| GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at): every active token plus the 50 most recently revoked ones. Never returns plaintext or hash. | session |
+| POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`), enforced under a per-player advisory lock so parallel creates cannot exceed it. Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
 | DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
 
 Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
