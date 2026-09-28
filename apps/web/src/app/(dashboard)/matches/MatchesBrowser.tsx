@@ -152,6 +152,11 @@ export function MatchesBrowser() {
     const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
+    // Invalidates any loadMore/refreshHead started under the previous
+    // filters/sort immediately, instead of waiting for this request to
+    // resolve: their stale cursor or off-filter rows must never reach the
+    // list this new first page is about to replace (MATCHES-582).
+    setNextCursor(null);
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -226,6 +231,7 @@ export function MatchesBrowser() {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    const requestId = listRequestRef.current;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -234,12 +240,18 @@ export function MatchesBrowser() {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as MatchListResponse;
+      // filters/sort changed (a new first page started) while this request
+      // was in flight: its cursor and rows belong to the superseded query
+      // and must not be spliced onto the list loadFirstPage already replaced
+      // (MATCHES-582).
+      if (listRequestRef.current !== requestId) return;
       setItems((prev) => appendMatchPage(prev, data.items));
       setNextCursor(data.next_cursor);
     } catch (err) {
+      if (listRequestRef.current !== requestId) return;
       setError((err as Error).message);
     } finally {
-      setLoadingMore(false);
+      if (listRequestRef.current === requestId) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore]);
 
@@ -293,6 +305,7 @@ export function MatchesBrowser() {
 
   const refreshHead = useCallback(() => {
     if (filters.sort !== 'started_at' || filters.order !== 'desc') return;
+    const requestId = listRequestRef.current;
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -300,12 +313,30 @@ export function MatchesBrowser() {
       .then(async (res) => (res.ok ? ((await res.json()) as MatchListResponse) : null))
       .then((data) => {
         if (!data) return;
+        // filters/sort changed while this refresh was in flight: it must not
+        // add rows from the superseded query onto the list loadFirstPage
+        // already replaced (MATCHES-582).
+        if (listRequestRef.current !== requestId) return;
         setItems((prev) => mergeMatchPage(data.items, prev));
       })
       .catch(() => {});
   }, [filters]);
-  useLiveSubscription('match.started', refreshHead);
-  useLiveSubscription('match.ended', refreshHead);
+  /*
+   * There is no `match.started`/`match.ended` live-bus event: nothing
+   * publishes it (log-ingest only writes match.* rows to Redis Streams and
+   * the `events` table), so subscribing to it here was a dead listener
+   * (MATCHES-1296). New matches do reach the browser as
+   * `server.events.appended` batches, the same signal EventsBrowser uses.
+   */
+  const onEventsAppended = useCallback(
+    (event: { data: { server_id: string | null; kinds: string[] } }) => {
+      if (event.data.kinds.some((kind) => kind === 'match.started' || kind === 'match.ended')) {
+        refreshHead();
+      }
+    },
+    [refreshHead],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   const serverOptions = useMemo(() => {
     const merged = new Map<string, ServerOption>();

@@ -133,9 +133,23 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
     [serverId, load],
   );
   useLiveSubscription('server.map.changed', onMapChanged);
-  useLiveSubscription('match.started', onMapChanged);
-  useLiveSubscription('match.ended', onMapChanged);
   useLiveSubscription('rcon.status', onMapChanged);
+  /*
+   * There is no `match.started`/`match.ended` live-bus event: nothing
+   * publishes it, so subscribing to it here was a dead listener
+   * (MATCHES-1296). A match starting or ending does reach the browser as a
+   * `server.events.appended` batch.
+   */
+  const onEventsAppended = useCallback(
+    (event: { data: { server_id: string | null; kinds: string[] } }) => {
+      if (event.data.server_id !== serverId) return;
+      if (event.data.kinds.some((kind) => kind === 'match.started' || kind === 'match.ended')) {
+        void load();
+      }
+    },
+    [serverId, load],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   const filteredCatalog = useMemo(() => filterLayers(catalog, pickerQuery), [catalog, pickerQuery]);
 
