@@ -132,6 +132,7 @@ interface Me {
   player_id: string;
   permissions: string[];
   squad_permissions?: string[];
+  can_manage_economy?: boolean;
 }
 
 const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку игроков' } as const;
@@ -207,6 +208,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canChat = me?.squad_permissions?.includes('chat') ?? false;
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
+  const canManageEconomy = me?.can_manage_economy ?? false;
 
   async function copyEosId() {
     if (!player.eos_id) return;
@@ -329,7 +331,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <DiscordLinkSection playerId={playerId} me={me} />
 
-      <BonusSection playerId={playerId} />
+      <BonusSection playerId={playerId} canManage={canManageEconomy} canAssign={canManageRoles} />
 
       <SubscriptionGrantSection playerId={playerId} />
 
