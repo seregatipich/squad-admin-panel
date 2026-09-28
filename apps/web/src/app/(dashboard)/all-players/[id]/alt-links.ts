@@ -105,6 +105,38 @@ export function formatRejectedMark(link: CandidateLinkAnnotation): string {
   return `Отклонено админом ${name} ${formatDecisionDate(link.decided_at)}`;
 }
 
+/** Response shape of `GET /players/:id/links`. */
+export interface LinksResponse {
+  links: PlayerLink[];
+}
+
+/** Response shape of `GET /players/:id/alt-candidates`. */
+export interface CandidateResponse {
+  candidates: AltCandidate[];
+  total: number;
+}
+
+/**
+ * Narrows an untyped `.json()` result to {@link LinksResponse} (#438) — a
+ * shallow shape check, not a full schema, matching `parseDiscordLink`'s
+ * depth: enough to catch a proxy error page or a changed API contract before
+ * it reaches `.map`/`.filter` and crashes the whole player card.
+ */
+export function parseLinksResponse(json: unknown): LinksResponse | null {
+  if (!json || typeof json !== 'object') return null;
+  const value = json as Record<string, unknown>;
+  if (!Array.isArray(value.links)) return null;
+  return { links: value.links as PlayerLink[] };
+}
+
+/** Narrows an untyped `.json()` result to {@link CandidateResponse} (#438). */
+export function parseCandidateResponse(json: unknown): CandidateResponse | null {
+  if (!json || typeof json !== 'object') return null;
+  const value = json as Record<string, unknown>;
+  if (!Array.isArray(value.candidates) || typeof value.total !== 'number') return null;
+  return { candidates: value.candidates as AltCandidate[], total: value.total };
+}
+
 /**
  * Builds the POST /players/:id/links request body for confirming/rejecting
  * a candidate, snapshotting the ALT-1 signals already fetched into

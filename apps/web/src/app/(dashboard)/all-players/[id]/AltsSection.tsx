@@ -24,6 +24,8 @@ import {
   formatRejectedMark,
   LINK_TYPE_LABELS_RU,
   type PlayerLink,
+  parseCandidateResponse,
+  parseLinksResponse,
   splitCandidates,
 } from './alt-links';
 import { SteamFriendCheck, type SteamFriendCheckResult } from './SteamFriendCheck';
@@ -40,15 +42,6 @@ const CONFIDENCE_TONE: Record<AltCandidate['confidence'], BadgeTone> = {
   medium: 'warn',
   low: 'neutral',
 };
-
-interface CandidateResponse {
-  candidates: AltCandidate[];
-  total: number;
-}
-
-interface LinksResponse {
-  links: PlayerLink[];
-}
 
 function formatElapsed(seconds: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -104,8 +97,9 @@ export function AltsSection({ playerId }: { playerId: string }) {
         }
         if (!linksRes.ok) throw new Error(`HTTP ${linksRes.status}`);
         if (!candidatesRes.ok) throw new Error(`HTTP ${candidatesRes.status}`);
-        const linksBody = (await linksRes.json()) as LinksResponse;
-        const candidatesBody = (await candidatesRes.json()) as CandidateResponse;
+        const linksBody = parseLinksResponse(await linksRes.json());
+        const candidatesBody = parseCandidateResponse(await candidatesRes.json());
+        if (!linksBody || !candidatesBody) throw new Error('invalid response shape');
         setLinks(linksBody.links);
         setCandidates(candidatesBody.candidates);
         setLoaded(true);
