@@ -280,8 +280,30 @@ describe('AccountPage', () => {
     expect(screen.queryByTestId('recent-matches')).not.toBeInTheDocument();
   });
 
-  it('polls the profile, the names and the session list on the interval', async () => {
+  it('loads the profile and names once, then polls only the session list (#426)', async () => {
     vi.useFakeTimers();
+    try {
+      const fetchMock = installFetch();
+      render(<AccountPage />);
+      // Initial mount: /me, /me/sessions and /me/names, once each.
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      // The poll tick re-fetches only /me/sessions, not /me or /me/names.
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.filter((url) => url === '/api/v1/me')).toHaveLength(1);
+      expect(urls.filter((url) => url === '/api/v1/me/names')).toHaveLength(1);
+      expect(urls.filter((url) => url === '/api/v1/me/sessions')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips the session poll tick while the tab is hidden (#426)', async () => {
+    vi.useFakeTimers();
+    const visibilitySpy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     try {
       const fetchMock = installFetch();
       render(<AccountPage />);
@@ -289,7 +311,71 @@ describe('AccountPage', () => {
       act(() => {
         vi.advanceTimersByTime(30_000);
       });
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
+      // No extra call: the tick observed a hidden tab and skipped itself.
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    } finally {
+      visibilitySpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not resurrect a session that revokeOne just removed via a stale poll (#427)', async () => {
+    vi.useFakeTimers();
+    try {
+      let sessionsCallCount = 0;
+      let resolveStalePoll!: (response: Response) => void;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'DELETE') return Promise.resolve(new Response('{}', { status: 200 }));
+        if (url === '/api/v1/me') return Promise.resolve(new Response(JSON.stringify(ME)));
+        if (url === '/api/v1/me/names') return Promise.resolve(new Response(JSON.stringify(NAMES)));
+        if (url === '/api/v1/me/sessions') {
+          sessionsCallCount += 1;
+          // The first (mount) fetch resolves immediately; the second (the
+          // 30s poll, triggered below) stays pending until the test
+          // resolves it explicitly, *after* revokeOne has already landed —
+          // reproducing a poll that started before the mutation.
+          if (sessionsCallCount === 1) {
+            return Promise.resolve(new Response(JSON.stringify(SESSIONS)));
+          }
+          return new Promise<Response>((resolve) => {
+            resolveStalePoll = resolve;
+          });
+        }
+        return Promise.resolve(new Response('{}'));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await act(async () => {
+        render(<AccountPage />);
+      });
+      expect(screen.getByText('10.0.0.1')).toBeInTheDocument();
+
+      // Fire the 30s poll: it starts a second /me/sessions request that we
+      // hold pending via resolveStalePoll.
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(sessionsCallCount).toBe(2);
+
+      // Revoke sess-other through the UI while that poll is still in flight.
+      fireEvent.click(screen.getByRole('button', { name: 'Завершить' }));
+      const dialog = screen.getByRole('dialog', { name: 'Завершить сессию' });
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Завершить сессию' }));
+      });
+      expect(screen.getByText('Сессия завершена.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Завершить' })).not.toBeInTheDocument();
+
+      // The stale poll finally resolves with the pre-revoke list, which
+      // still contains sess-other.
+      await act(async () => {
+        resolveStalePoll(new Response(JSON.stringify(SESSIONS)));
+      });
+
+      expect(screen.queryByRole('button', { name: 'Завершить' })).not.toBeInTheDocument();
+      expect(screen.getByText('текущая')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
