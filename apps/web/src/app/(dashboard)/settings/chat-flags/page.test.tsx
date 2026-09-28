@@ -31,6 +31,11 @@ function mockFetch(opts: { permissions?: string[] } = {}) {
     if (url.includes('/api/v1/settings/chat-flag-rules/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
+    if (url.endsWith('/api/v1/settings/chat-flag-rules/reindex')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ scanned: 0, flagged: 0 }), { status: 200 }),
+      );
+    }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
   });
   return { fn, calls };
@@ -92,6 +97,51 @@ describe('ChatFlagsPage', () => {
       await screen.findByText('мудак');
       expect(screen.queryByRole('button', { name: 'Удалить' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Переиндексировать' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the reindex days field stay empty while typing instead of snapping to 1',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+
+      const input = screen.getByLabelText('Дней назад') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: '30' } });
+      expect(input.value).toBe('30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Переиндексировать' }));
+
+      await waitFor(() => {
+        const reindexCall = calls.find((c) => c.url.endsWith('/reindex'));
+        expect(reindexCall).toBeDefined();
+        expect(JSON.parse(String(reindexCall?.init?.body))).toEqual({ days: 30 });
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'clamps an out-of-range reindex days value on blur',
+    async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+
+      const input = screen.getByLabelText('Дней назад') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '9000' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('365');
+
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('1');
     },
     TEST_TIMEOUT_MS,
   );
