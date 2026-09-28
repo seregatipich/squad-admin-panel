@@ -3,7 +3,7 @@ import { Redis } from 'ioredis';
 import { mapEvent } from './eventMap';
 import { Heartbeat } from './heartbeat';
 import { RconUnixServer } from './rconUnixServer';
-import { type Mode, RedisPublisher } from './redisPublisher';
+import { type Mode, type RconStatus, RedisPublisher } from './redisPublisher';
 
 export interface PanelBridgeContext {
   serverId: string;
@@ -45,6 +45,15 @@ const PRODUCTION_TYPES = new Set([
   'match.ended',
 ]);
 
+/**
+ * How often the last known RCON status is rewritten. RCON only reports state
+ * *changes*, so without a periodic rewrite the status key (TTL
+ * `STATUS_TTL_SECONDS`, see `./redisPublisher`) would lapse on any connection
+ * stable for longer than its TTL, and the panel would report a healthy sidecar
+ * as gone.
+ */
+const STATUS_REFRESH_MS = 10_000;
+
 export async function startPanelBridge(
   ctx: PanelBridgeContext,
 ): Promise<{ stop: () => Promise<void> }> {
@@ -70,12 +79,25 @@ export async function startPanelBridge(
     eventHandlers.push([evt, handler]);
   }
 
-  const unsubscribeStatus = ctx.onStatus((state) => {
-    if (stopped) return;
-    publisher.publishRconStatus({ state, lastChange: new Date().toISOString() }).catch((err) => {
+  let lastStatus: RconStatus | undefined;
+  const publishStatus = (status: RconStatus): void => {
+    publisher.publishRconStatus(status).catch((err) => {
       console.error('panelBridge publishRconStatus', err);
     });
+  };
+
+  const unsubscribeStatus = ctx.onStatus((state) => {
+    if (stopped) return;
+    lastStatus = { state, lastChange: new Date().toISOString() };
+    publishStatus(lastStatus);
   });
+
+  // Keeps the key alive between changes; `lastChange` is left untouched so a
+  // refresh never looks like a state transition.
+  const statusRefresh = setInterval(() => {
+    if (stopped || !lastStatus) return;
+    publishStatus(lastStatus);
+  }, STATUS_REFRESH_MS);
 
   let rconServer: RconUnixServer | undefined;
   if (mode === 'production') {
@@ -96,6 +118,7 @@ export async function startPanelBridge(
       }
       eventHandlers.length = 0;
       unsubscribeStatus?.();
+      clearInterval(statusRefresh);
       heartbeat.stop();
       await rconServer?.close();
       await redis.quit();

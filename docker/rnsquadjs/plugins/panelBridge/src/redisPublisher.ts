@@ -16,6 +16,12 @@ export interface RconStatus {
  */
 export const EVENT_STREAM_MAXLEN = '10000';
 
+/**
+ * TTL of the `rnsquadjs:status:{id}[:shadow]` key. `startPanelBridge` rewrites
+ * the key every 10 s, so it lapses only when the sidecar itself is gone.
+ */
+export const STATUS_TTL_SECONDS = 300;
+
 export class RedisPublisher {
   constructor(
     private readonly redis: Redis,
@@ -50,6 +56,6 @@ export class RedisPublisher {
   }
 
   async publishRconStatus(status: RconStatus): Promise<void> {
-    await this.redis.set(this.statusKey(), JSON.stringify(status), 'EX', 300);
+    await this.redis.set(this.statusKey(), JSON.stringify(status), 'EX', STATUS_TTL_SECONDS);
   }
 }

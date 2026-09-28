@@ -32,7 +32,8 @@ export type SidecarMode = 'production' | 'shadow' | 'legacy';
  *
  * @param serverId - Server the sidecar belongs to.
  * @param mode - Sidecar launch mode whose key is wanted.
- * @returns The full Redis key (written with `SET ... EX 300`).
+ * @returns The full Redis key (written with `SET ... EX 300` and rewritten
+ *   every 10 s while the sidecar runs, whether or not RCON changed state).
  */
 export function sidecarStatusKey(serverId: string, mode: 'production' | 'shadow'): string {
   return `rnsquadjs:status:${serverId}${mode === 'shadow' ? ':shadow' : ''}`;
@@ -52,9 +53,10 @@ export interface SidecarStatus {
 /**
  * Decodes a stored heartbeat into the route's snake_case shape.
  *
- * Returns null for an absent key (the 300s TTL lapsed — a first-class
- * "no heartbeat" state, not an error) and also for a malformed payload, so a
- * sidecar writing an unexpected shape degrades to "no signal" rather than 500.
+ * Returns null for an absent key (the sidecar stopped refreshing it and the
+ * 300s TTL lapsed — a first-class "no heartbeat" state, not an error) and
+ * also for a malformed payload, so a sidecar writing an unexpected shape
+ * degrades to "no signal" rather than 500.
  */
 function parseHeartbeat(raw: string | null | undefined): SidecarStatus | null {
   if (raw == null) return null;

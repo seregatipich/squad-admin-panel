@@ -129,3 +129,65 @@ describe('production-mode type filter', () => {
     await prodBridge.stop();
   });
 });
+
+describe('RCON status key refresh', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    redis.xadd.mockResolvedValue('0-1');
+    redis.set.mockResolvedValue('OK');
+    redis.quit.mockResolvedValue('OK');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    delete process.env.PANEL_BRIDGE_MODE;
+  });
+
+  const statusWrites = (key: string) => redis.set.mock.calls.filter((call) => call[0] === key);
+
+  it('rewrites the status key while RCON stays connected, so the 300s TTL never lapses', async () => {
+    process.env.PANEL_BRIDGE_MODE = 'shadow';
+    const statusKey = `rnsquadjs:status:${SERVER_ID}:shadow`;
+    const bridge = await startPanelBridge({
+      serverId: SERVER_ID,
+      emitter: new EventEmitter(),
+      rconExec: vi.fn(async () => 'ok'),
+      onStatus: (onChange) => {
+        onChange('connected');
+        return () => {};
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const [first] = statusWrites(statusKey);
+    expect(first?.slice(2)).toEqual(['EX', 300]);
+    const initial = JSON.parse(first?.[1] as string);
+
+    // Well past the 300s TTL with no RCON state change at all.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    const writes = statusWrites(statusKey);
+    expect(writes.length).toBeGreaterThanOrEqual(60);
+    const lastWrite = writes[writes.length - 1];
+    expect(lastWrite?.slice(2)).toEqual(['EX', 300]);
+    // A refresh keeps the key alive but does not pretend the state changed.
+    expect(JSON.parse(lastWrite?.[1] as string)).toEqual(initial);
+
+    await bridge.stop();
+    const afterStop = statusWrites(statusKey).length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(statusWrites(statusKey).length).toBe(afterStop);
+  });
+
+  it('refreshes nothing before the first RCON status is known', async () => {
+    process.env.PANEL_BRIDGE_MODE = 'shadow';
+    const bridge = await startPanelBridge({
+      serverId: SERVER_ID,
+      emitter: new EventEmitter(),
+      rconExec: vi.fn(async () => 'ok'),
+      onStatus: () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(statusWrites(`rnsquadjs:status:${SERVER_ID}:shadow`)).toHaveLength(0);
+    await bridge.stop();
+  });
+});
