@@ -257,7 +257,10 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           victim: row.victimId ? { player_id: row.victimId, current_name: row.victimName } : null,
         })),
         nextCursor: last ? encodeCursor(last.occurredAt, last.id) : null,
-        approxTotal: await approxTotal(query, baseWhere),
+        // The count is the same for every page of one filter set, so it is
+        // computed for the first page only; cursor pages answer null and the
+        // client keeps the first page's value (#144).
+        approxTotal: query.cursor ? null : await approxTotal(query, baseWhere),
       };
     },
   );

@@ -333,7 +333,8 @@ export interface CombatApiRow {
 export interface CombatListResponse {
   rows: CombatApiRow[];
   nextCursor: string | null;
-  approxTotal: number;
+  /** Counted for the first page only; cursor pages carry null. */
+  approxTotal: number | null;
 }
 
 export function playerHref(player: CombatPlayer | null): string | null {

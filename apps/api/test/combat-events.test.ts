@@ -96,7 +96,7 @@ interface CombatRow {
 interface ListResponse {
   rows: CombatRow[];
   nextCursor: string | null;
-  approxTotal: number;
+  approxTotal: number | null;
 }
 
 const BASE = new Date();
@@ -273,6 +273,17 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
 
     expect(seen).toHaveLength(4000);
     expect(new Set(seen).size).toBe(4000);
+  });
+
+  it('counts approxTotal on the first page only, not on cursor pages (#144)', async () => {
+    const first = await list(`?serverId=${serverA}&type=death&limit=10`);
+    expect(first.approxTotal).toBe(1000);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await list(
+      `?serverId=${serverA}&type=death&limit=10&cursor=${encodeURIComponent(first.nextCursor ?? '')}`,
+    );
+    expect(second.rows).toHaveLength(10);
+    expect(second.approxTotal).toBeNull();
   });
 
   it('reports an exact approxTotal when filters are active', async () => {
