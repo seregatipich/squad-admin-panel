@@ -1,9 +1,10 @@
 import { detectGeoAnomalies, type GeoObservation } from '@squad/db';
 import { geoipSettings, playerIpHistory } from '@squad/db/schema';
-import { desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { desc, eq, isNotNull, lte, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { uuidArrayParam } from '../lib/sql-params.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const feedQuery = z.object({
@@ -168,21 +169,47 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         .having(sql`COUNT(DISTINCT ${playerIpHistory.countryCode}) > 1`)
         .limit(FEED_CANDIDATE_CAP);
 
+      // One windowed query for every candidate's newest IP_HISTORY_CAP rows,
+      // instead of one query per candidate (#40, #225).
+      const ranked = app.db
+        .select({
+          playerId: playerIpHistory.playerId,
+          ip: playerIpHistory.ip,
+          countryCode: playerIpHistory.countryCode,
+          countryName: playerIpHistory.countryName,
+          latitude: playerIpHistory.latitude,
+          longitude: playerIpHistory.longitude,
+          lastSeenAt: playerIpHistory.lastSeenAt,
+          rank: sql<number>`row_number() OVER (
+            PARTITION BY ${playerIpHistory.playerId}
+            ORDER BY ${playerIpHistory.lastSeenAt} DESC
+          )`.as('rank'),
+        })
+        .from(playerIpHistory)
+        .where(
+          sql`${playerIpHistory.playerId} = ANY(${uuidArrayParam(
+            candidates.map((candidate) => candidate.playerId),
+          )})`,
+        )
+        .as('ranked');
+      const historyRows =
+        candidates.length === 0
+          ? []
+          : await app.db
+              .select()
+              .from(ranked)
+              .where(lte(ranked.rank, IP_HISTORY_CAP))
+              .orderBy(ranked.playerId, desc(ranked.lastSeenAt));
+      const historyByPlayer = new Map<string, IpRow[]>();
+      for (const row of historyRows) {
+        const rows = historyByPlayer.get(row.playerId) ?? [];
+        rows.push(row as IpRow);
+        historyByPlayer.set(row.playerId, rows);
+      }
+
       const items: Array<{ player_id: string } & ReturnType<typeof serializeAnomalies>> = [];
       for (const candidate of candidates) {
-        const rows = (await app.db
-          .select({
-            ip: playerIpHistory.ip,
-            countryCode: playerIpHistory.countryCode,
-            countryName: playerIpHistory.countryName,
-            latitude: playerIpHistory.latitude,
-            longitude: playerIpHistory.longitude,
-            lastSeenAt: playerIpHistory.lastSeenAt,
-          })
-          .from(playerIpHistory)
-          .where(eq(playerIpHistory.playerId, candidate.playerId))
-          .orderBy(desc(playerIpHistory.lastSeenAt))
-          .limit(IP_HISTORY_CAP)) as IpRow[];
+        const rows = historyByPlayer.get(candidate.playerId) ?? [];
         const serialized = serializeAnomalies(rows, config, includePoints);
         if (!serialized.multi_country && !serialized.has_recent_switch) continue;
         items.push({ player_id: candidate.playerId, ...serialized });

@@ -2,7 +2,8 @@ import { findConfirmedAltLinks } from '@squad/db';
 import { playerSessions, players } from '@squad/db/schema';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { loadModerationBanStates, uuidArrayParam } from './moderation-ban-state.js';
+import { loadModerationBanStates } from './moderation-ban-state.js';
+import { uuidArrayParam } from './sql-params.js';
 
 export interface BanAltWarningItem {
   player_id: string;

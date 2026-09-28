@@ -14,7 +14,8 @@ import {
   confidenceFor,
   DEFAULT_ALT_SCORE_WEIGHTS,
 } from '../lib/alt-score.js';
-import { loadModerationBanStates, uuidArrayParam } from '../lib/moderation-ban-state.js';
+import { loadModerationBanStates } from '../lib/moderation-ban-state.js';
+import { uuidArrayParam } from '../lib/sql-params.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
