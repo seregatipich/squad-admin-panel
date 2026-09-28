@@ -12,7 +12,7 @@ Every Fastify API log line, worker log line, and bridge log line is written to t
 
 - **UI**: `/logs` page — filterable by source, level, server, and free text. Paginated, live-polling.
 - **API**: `GET /api/v1/logs` — query params: `src`, `lvl`, `srv`, `q`, `before`, `after`, `limit` (max 2000). Requires `host:view` permission.
-- **Export**: `GET /api/v1/logs/export` — streams a gzip-compressed bundle (recent entries + latest audit slice). Requires `host:metrics` permission. Attach to support requests.
+- **Export**: `GET /api/v1/logs/export` — streams a gzip-compressed bundle (recent entries + latest audit slice). Requires `host:view`, `host:metrics`, `audit:view` and `server:download_logs` together, because the bundle carries panel logs, the audit slice and game-server stdout tails (player IPs); an API token needs all four scopes. Attach to support requests.
 
 Source codes: `B` = bridge, `R` = rcon, `L` = log-ingest, `W` = worker, `D` = depot, `I` = install, `A` = api.
 

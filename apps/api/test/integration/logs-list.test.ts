@@ -135,4 +135,13 @@ describe('GET /api/v1/logs', () => {
     const body = res.json() as { entries: Array<{ id: string }> };
     expect(body.entries[0]?.id).toMatch(/^\d+-\d+$/);
   });
+
+  it('rejects an oversized src filter with 400 (#70)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/logs?src=${'B,'.repeat(100)}B`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
