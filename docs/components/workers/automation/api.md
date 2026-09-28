@@ -4,8 +4,8 @@ No HTTP surface of its own. AUTO-1 (#72) rules are **managed** over HTTP by the 
 
 | Endpoint (in `@squad/api`) | Purpose |
 |---|---|
-| `GET/POST /api/v1/automation-rules`, `PUT/DELETE /api/v1/automation-rules/:id` | CRUD for rules (gated on `role:edit`; every mutation audited) |
-| `POST /api/v1/automation-rules/:id/dry-run` | Evaluate a rule against a sample **without executing the action**; persists an `automation_runs` row with `dry_run=true` |
+| `GET/POST /api/v1/automation-rules`, `PUT/DELETE /api/v1/automation-rules/:id` | CRUD for rules. Reads need `trigger:view`; writes need `trigger:edit` (held by role editors or granted explicitly) **plus** the right to perform the rule's action yourself: `mod:kick`/`mod:warn` for `kick`/`warn`; for `rcon_command` `mod:ban_perm` (AdminBan), `mod:kick`, `mod:warn`, or the Squad right `chat` (AdminBroadcast), `changemap` (AdminChangeLayer/AdminSetNextLayer/AdminEndMatch), `manageserver` (AdminReloadServerConfig) — otherwise `403 { error: 'forbidden', required }` (#111). An unknown `server_id` is `404 server_not_found`. Every mutation is audited with before/after snapshots |
+| `POST /api/v1/automation-rules/:id/dry-run` | Evaluate a rule against a sample **without executing the action** (`trigger:edit`); persists an `automation_runs` row with `dry_run=true`. The API has no path onto `rcon:commands:*`: the dry-run `enqueueRcon` dependency throws |
 | `GET /api/v1/automation-runs` | Firing history (real firings + dry-runs) |
 
 The worker loads the enabled rules from `automation_rules` and evaluates them per event (see [flows.md](./flows.md)). The pure `evaluate`/`runMatch` shared with the dry-run route live in `@squad/shared-types`.

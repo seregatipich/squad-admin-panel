@@ -1,4 +1,12 @@
-import { automationRules, automationRuns, players, roles, servers } from '@squad/db/schema';
+import {
+  automationRules,
+  automationRuns,
+  players,
+  rolePermissions,
+  roleSquadPermissions,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { rconCommandStream } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
@@ -17,11 +25,15 @@ import {
 const OWNER_STEAM = testSteamId(943001);
 const EDITOR_STEAM = testSteamId(943002);
 const VIEWER_STEAM = testSteamId(943003);
+const BARE_EDITOR_STEAM = testSteamId(943004);
+const AUTOMATOR_STEAM = testSteamId(943005);
 
 let h: IntegrationHarness;
 let ownerCookie: string;
 let editorCookie: string;
 let viewerCookie: string;
+let bareEditorCookie: string;
+let automatorCookie: string;
 let serverId: string;
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
@@ -47,6 +59,8 @@ async function seedRoleWithPlayer(opts: {
   roleName: string;
   steamId64: bigint;
   canEditRoles: boolean;
+  squadPermissions?: string[];
+  explicitPermissions?: string[];
 }): Promise<void> {
   const roleId = uuidv7();
   await h.db.insert(roles).values({
@@ -56,6 +70,12 @@ async function seedRoleWithPlayer(opts: {
     panelAccess: true,
     canEditRoles: opts.canEditRoles,
   });
+  for (const key of opts.squadPermissions ?? []) {
+    await h.db.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: key });
+  }
+  for (const key of opts.explicitPermissions ?? []) {
+    await h.db.insert(rolePermissions).values({ roleId, permissionKey: key });
+  }
   const stub = `Player${String(opts.steamId64).slice(-4)}`;
   await h.db.insert(players).values({
     steamId64: opts.steamId64,
@@ -70,7 +90,25 @@ beforeAll(async () => {
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
-  await seedRoleWithPlayer({ roleName: 'AutoEditor', steamId64: EDITOR_STEAM, canEditRoles: true });
+  // The editor may plan every action the fixtures use: warn/kick (squad
+  // `kick` → mod:warn/mod:kick) and AdminBroadcast (squad `chat`).
+  await seedRoleWithPlayer({
+    roleName: 'AutoEditor',
+    steamId64: EDITOR_STEAM,
+    canEditRoles: true,
+    squadPermissions: ['kick', 'chat'],
+  });
+  await seedRoleWithPlayer({
+    roleName: 'AutoBareEditor',
+    steamId64: BARE_EDITOR_STEAM,
+    canEditRoles: true,
+  });
+  await seedRoleWithPlayer({
+    roleName: 'AutoAutomator',
+    steamId64: AUTOMATOR_STEAM,
+    canEditRoles: false,
+    explicitPermissions: ['trigger:edit'],
+  });
   await seedRoleWithPlayer({
     roleName: 'AutoViewer',
     steamId64: VIEWER_STEAM,
@@ -79,6 +117,8 @@ beforeAll(async () => {
   ownerCookie = await loginAsOwner(h);
   editorCookie = await loginAsSteam(EDITOR_STEAM, 'auto-editor');
   viewerCookie = await loginAsSteam(VIEWER_STEAM, 'auto-viewer');
+  bareEditorCookie = await loginAsSteam(BARE_EDITOR_STEAM, 'auto-bare-editor');
+  automatorCookie = await loginAsSteam(AUTOMATOR_STEAM, 'auto-automator');
 
   serverId = uuidv7();
   await h.db.insert(servers).values({
@@ -438,5 +478,106 @@ describeIfDb('deleting a rule cascades its runs', () => {
       .from(automationRules)
       .where(eq(automationRules.id, ruleId));
     expect(rows).toHaveLength(0);
+  });
+});
+
+describeIfDb('automation-rules action permissions (#111)', () => {
+  it('refuses a warn rule to a role editor without the mod:warn right', async () => {
+    const res = await createRule(bareEditorCookie);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: 'forbidden', required: ['mod:warn'] });
+  });
+
+  it('refuses an AdminBan rcon rule without mod:ban_perm', async () => {
+    const res = await createRule(editorCookie, {
+      condition_type: 'player_count',
+      condition: { operator: 'gte', threshold: 60 },
+      action_type: 'rcon_command',
+      action: { command: 'AdminBan', args: ['76561190000000001', '0', 'auto'] },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ required: ['mod:ban_perm'] });
+  });
+
+  it('refuses a PUT that turns a broadcast into AdminEndMatch without changemap', async () => {
+    const { body } = await createRule(editorCookie, {
+      condition_type: 'player_count',
+      condition: { operator: 'gte', threshold: 60 },
+      action_type: 'rcon_command',
+      action: { command: 'AdminBroadcast', args: ['hi'] },
+    });
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/automation-rules/${body.id as string}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ action: { command: 'AdminEndMatch' } }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ required: ['squad:changemap'] });
+  });
+
+  it('grants automation separately from role editing via trigger:edit', async () => {
+    const res = await createRule(automatorCookie, {
+      action_type: 'notify_admin',
+      action: { message: 'heads up' },
+    });
+    expect(res.statusCode).toBe(201);
+    const roleEdit = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/alert-rules',
+      headers: { cookie: automatorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ name: 'x', type: 'server_crashed' }),
+    });
+    expect(roleEdit.statusCode).toBe(403);
+  });
+
+  it('records before/after snapshots for update and delete', async () => {
+    const { body } = await createRule(editorCookie);
+    const id = body.id as string;
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/automation-rules/${id}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ action: { message: 'changed' } }),
+    });
+    const update = await assertAuditRow(h, {
+      action: 'automation_rule.update',
+      resource: 'automation_rule',
+      targetId: id,
+    });
+    expect(update.beforeSnapshot).toMatchObject({ action: { message: 'no greetings' } });
+    expect(update.afterSnapshot).toMatchObject({ action: { message: 'changed' } });
+
+    await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/automation-rules/${id}`,
+      headers: { cookie: editorCookie },
+    });
+    const del = await assertAuditRow(h, {
+      action: 'automation_rule.delete',
+      resource: 'automation_rule',
+      targetId: id,
+    });
+    expect(del.beforeSnapshot).toMatchObject({ id, action: { message: 'changed' } });
+  });
+});
+
+describeIfDb('automation-rules server_id must exist (#105)', () => {
+  it('answers 404 server_not_found on create with an unknown server', async () => {
+    const res = await createRule(editorCookie, { server_id: uuidv7() });
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: 'server_not_found' });
+  });
+
+  it('answers 404 server_not_found on update with an unknown server', async () => {
+    const { body } = await createRule(editorCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/automation-rules/${body.id as string}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ server_id: uuidv7() }),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'server_not_found' });
   });
 });

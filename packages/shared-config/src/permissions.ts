@@ -155,12 +155,12 @@ export const PERMISSIONS = [
     label: 'Управлять интеграциями (Discord)',
     dangerous: true,
   },
-  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила', unimplemented: true },
+  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила' },
   {
     key: 'trigger:edit',
     category: 'triggers',
     label: 'Редактировать авто-правила',
-    unimplemented: true,
+    dangerous: true,
   },
   {
     key: 'scheduler:view',

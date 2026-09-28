@@ -41,6 +41,16 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
   'role:edit',
   'role:delete',
 ]);
+/**
+ * Automation rules run RCON actions as the system actor on every server
+ * (#111), so `trigger:edit` is never handed to every `panel_access` user.
+ * Role editors keep it (the rules used to be gated by `role:edit`); any other
+ * role gets it only through an explicit `role_permissions` row, and an API
+ * token only when `trigger:edit` itself is a delegated scope.
+ */
+const PANEL_PERMS_GATED_BY_TRIGGER_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'trigger:edit',
+]);
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
@@ -84,6 +94,7 @@ function derivePanelPermissions(
   for (const key of ALL_PANEL_PERMS) {
     if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
     if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
+    if (PANEL_PERMS_GATED_BY_TRIGGER_EDIT.has(key) && !canEditRoles) continue;
     if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
     if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
     if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !squadPermissions.has('kick')) continue;

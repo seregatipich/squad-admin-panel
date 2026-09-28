@@ -224,7 +224,7 @@ export default function AutomationPage() {
     void refresh();
   }, [refresh]);
 
-  const canManage = me?.permissions.includes('role:edit') ?? false;
+  const canManage = me?.permissions.includes('trigger:edit') ?? false;
 
   async function createRule(event: React.FormEvent) {
     event.preventDefault();

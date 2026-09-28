@@ -1,4 +1,5 @@
-import { automationRules, automationRuns } from '@squad/db/schema';
+import { type AutomationRuleRow, automationRules, automationRuns, servers } from '@squad/db/schema';
+import type { PermissionKey, SquadPermissionKey } from '@squad/shared-config';
 import {
   AUTOMATION_ACTION_TYPES,
   AUTOMATION_CONDITION_TYPES,
@@ -11,18 +12,14 @@ import {
   parseAutomationCondition,
   type RconOperatorCommandName,
   type RunMatchDeps,
-  rconCommandRequestSchema,
-  rconCommandStream,
+  rconCommandActionSchema,
   runMatch,
 } from '@squad/shared-types';
 import { desc, eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-
-const RCON_STREAM_MAXLEN = 500;
 
 const configObject = z.record(z.unknown());
 
@@ -104,21 +101,7 @@ const runsQuery = z.object({
   rule_id: z.string().uuid().optional(),
 });
 
-interface RuleRow {
-  id: string;
-  serverId: string | null;
-  name: string;
-  conditionType: AutomationConditionType;
-  condition: unknown;
-  actionType: AutomationActionType;
-  action: unknown;
-  enabled: boolean;
-  createdBy: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-function serializeRule(row: RuleRow) {
+function serializeRule(row: AutomationRuleRow) {
   return {
     id: row.id,
     server_id: row.serverId,
@@ -134,7 +117,7 @@ function serializeRule(row: RuleRow) {
   };
 }
 
-function toRuleInput(row: RuleRow): AutomationRuleInput {
+function toRuleInput(row: AutomationRuleRow): AutomationRuleInput {
   return {
     id: row.id,
     serverId: row.serverId,
@@ -147,83 +130,141 @@ function toRuleInput(row: RuleRow): AutomationRuleInput {
   };
 }
 
-function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
+/**
+ * Live-Squad rights an RCON command needs when a panel operator sends it by
+ * hand (mirrors `requireChangemap`, `server-messaging.ts` and
+ * `server-seeding.ts`). Squad rights have no catalogue key, so they are
+ * reported as `squad:<key>` in a 403's `required` list.
+ */
+const RCON_COMMAND_REQUIREMENTS: Record<
+  RconOperatorCommandName,
+  { permission: PermissionKey } | { squad: SquadPermissionKey }
+> = {
+  AdminBan: { permission: 'mod:ban_perm' },
+  AdminKick: { permission: 'mod:kick' },
+  AdminWarn: { permission: 'mod:warn' },
+  AdminBroadcast: { squad: 'chat' },
+  AdminChangeLayer: { squad: 'changemap' },
+  AdminSetNextLayer: { squad: 'changemap' },
+  AdminEndMatch: { squad: 'changemap' },
+  AdminReloadServerConfig: { squad: 'manageserver' },
+};
+
+/**
+ * Rights missing for the caller to plan a rule's action (#111). A rule runs
+ * its action as the system actor on every matching server, so `trigger:edit`
+ * alone must not let a caller schedule a ban, kick or map change they could
+ * not perform themselves.
+ *
+ * @param req - the authenticated request (the global auth hook has run).
+ * @param actionType - the rule's action type.
+ * @param action - the rule's (already validated) action config.
+ * @returns the missing rights; empty when the caller may plan the action.
+ */
+function missingActionRights(
+  req: FastifyRequest,
+  actionType: AutomationActionType,
+  action: unknown,
+): string[] {
+  const context = req.user?.permissions;
+  if (!context) return ['unauthenticated'];
+  const needs = (key: PermissionKey): string[] => (context.permissions.has(key) ? [] : [key]);
+  switch (actionType) {
+    case 'kick':
+      return needs('mod:kick');
+    case 'warn':
+      return needs('mod:warn');
+    case 'notify_admin':
+      return [];
+    case 'rcon_command': {
+      const parsed = rconCommandActionSchema.safeParse(action);
+      if (!parsed.success) return [];
+      const requirement = RCON_COMMAND_REQUIREMENTS[parsed.data.command];
+      if ('permission' in requirement) return needs(requirement.permission);
+      return context.squadPermissions.has(requirement.squad) ? [] : [`squad:${requirement.squad}`];
+    }
   }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403).send({ error: 'forbidden' });
-    return true;
-  }
-  return false;
 }
 
-/** Fire-and-forget enqueue onto worker-rcon's command stream (never used by dry-run). */
-async function enqueueRcon(
-  redis: Redis,
-  dispatch: { serverId: string; command: RconOperatorCommandName; args: string[] },
-): Promise<void> {
-  const request = rconCommandRequestSchema.parse({
-    request_id: uuidv7(),
-    command: dispatch.command,
-    args: dispatch.args,
-    actor_player_id: null,
-    enqueued_at: new Date().toISOString(),
-  });
-  await redis.xadd(
-    rconCommandStream(dispatch.serverId),
-    'MAXLEN',
-    '~',
-    String(RCON_STREAM_MAXLEN),
-    '*',
-    'request',
-    JSON.stringify(request),
-  );
+/** True for a Postgres foreign-key violation (SQLSTATE 23503), bare or drizzle-wrapped. */
+function isForeignKeyViolation(err: unknown): boolean {
+  const code =
+    (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
+  return code === '23503';
 }
 
 const automationRulesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get('/api/v1/automation-rules', { config: { audit: false } }, async (req, reply) => {
-    if (denyRead(req, reply)) return;
-    const rows = (await app.db
-      .select()
-      .from(automationRules)
-      .orderBy(desc(automationRules.createdAt))) as unknown as RuleRow[];
-    return rows.map(serializeRule);
-  });
+  /** False when `serverId` names no server (a null id is a global rule). */
+  async function serverExists(serverId: string | null): Promise<boolean> {
+    if (serverId === null) return true;
+    const [row] = await app.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(eq(servers.id, serverId))
+      .limit(1);
+    return row !== undefined;
+  }
+
+  fast.get(
+    '/api/v1/automation-rules',
+    { config: { permissions: ['trigger:view'], audit: false } },
+    async () => {
+      const rows = await app.db
+        .select()
+        .from(automationRules)
+        .orderBy(desc(automationRules.createdAt));
+      return rows.map(serializeRule);
+    },
+  );
 
   fast.post(
     '/api/v1/automation-rules',
     {
       schema: { body: createBody },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['trigger:edit'],
         audit: { action: 'automation_rule.create', resource: 'automation_rule' },
       },
     },
     async (req, reply) => {
+      const required = missingActionRights(req, req.body.action_type, req.body.action);
+      if (required.length > 0) {
+        reply.code(403);
+        return { error: 'forbidden', required };
+      }
+      if (!(await serverExists(req.body.server_id))) {
+        reply.code(404);
+        return { error: 'server_not_found' };
+      }
       const id = uuidv7();
-      const inserted = (await app.db
-        .insert(automationRules)
-        .values({
-          id,
-          serverId: req.body.server_id,
-          name: req.body.name,
-          conditionType: req.body.condition_type,
-          condition: req.body.condition,
-          actionType: req.body.action_type,
-          action: req.body.action,
-          enabled: req.body.enabled,
-          createdBy: req.user?.playerId ?? null,
-        })
-        .returning()) as unknown as RuleRow[];
-      const row = inserted[0];
+      let row: AutomationRuleRow | undefined;
+      try {
+        [row] = await app.db
+          .insert(automationRules)
+          .values({
+            id,
+            serverId: req.body.server_id,
+            name: req.body.name,
+            conditionType: req.body.condition_type,
+            condition: req.body.condition,
+            actionType: req.body.action_type,
+            action: req.body.action,
+            enabled: req.body.enabled,
+            createdBy: req.user?.playerId ?? null,
+          })
+          .returning();
+      } catch (err) {
+        if (!isForeignKeyViolation(err)) throw err;
+        reply.code(404);
+        return { error: 'server_not_found' };
+      }
       if (!row) {
         reply.code(500);
         return { error: 'insert_failed' };
       }
+      req.auditSnapshots = { before: null, after: serializeRule(row), targetId: row.id };
       reply.code(201);
       return serializeRule(row);
     },
@@ -245,17 +286,16 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
           .strict(),
       },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['trigger:edit'],
         audit: { action: 'automation_rule.update', resource: 'automation_rule' },
       },
     },
     async (req, reply) => {
-      const existing = (await app.db
+      const [current] = await app.db
         .select()
         .from(automationRules)
         .where(eq(automationRules.id, req.params.id))
-        .limit(1)) as unknown as RuleRow[];
-      const current = existing[0];
+        .limit(1);
       if (!current) {
         reply.code(404);
         return { error: 'automation_rule_not_found' };
@@ -275,23 +315,43 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'invalid_action', detail: parsed.error.issues[0]?.message };
         }
       }
+      const required = missingActionRights(
+        req,
+        current.actionType,
+        req.body.action ?? current.action,
+      );
+      if (required.length > 0) {
+        reply.code(403);
+        return { error: 'forbidden', required };
+      }
+      if (req.body.server_id !== undefined && !(await serverExists(req.body.server_id))) {
+        reply.code(404);
+        return { error: 'server_not_found' };
+      }
 
-      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      const updates: Partial<typeof automationRules.$inferInsert> = { updatedAt: new Date() };
       if (req.body.name !== undefined) updates.name = req.body.name;
       if (req.body.server_id !== undefined) updates.serverId = req.body.server_id;
       if (req.body.condition !== undefined) updates.condition = req.body.condition;
       if (req.body.action !== undefined) updates.action = req.body.action;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
-      const updated = (await app.db
-        .update(automationRules)
-        .set(updates)
-        .where(eq(automationRules.id, req.params.id))
-        .returning()) as unknown as RuleRow[];
-      const row = updated[0];
+      let row: AutomationRuleRow | undefined;
+      try {
+        [row] = await app.db
+          .update(automationRules)
+          .set(updates)
+          .where(eq(automationRules.id, req.params.id))
+          .returning();
+      } catch (err) {
+        if (!isForeignKeyViolation(err)) throw err;
+        reply.code(404);
+        return { error: 'server_not_found' };
+      }
       if (!row) {
         reply.code(404);
         return { error: 'automation_rule_not_found' };
       }
+      req.auditSnapshots = { before: serializeRule(current), after: serializeRule(row) };
       return serializeRule(row);
     },
   );
@@ -301,19 +361,20 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { params: idParam },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['trigger:edit'],
         audit: { action: 'automation_rule.delete', resource: 'automation_rule' },
       },
     },
     async (req, reply) => {
-      const deleted = await app.db
+      const [deleted] = await app.db
         .delete(automationRules)
         .where(eq(automationRules.id, req.params.id))
-        .returning({ id: automationRules.id });
-      if (deleted.length === 0) {
+        .returning();
+      if (!deleted) {
         reply.code(404);
         return { error: 'automation_rule_not_found' };
       }
+      req.auditSnapshots = { before: serializeRule(deleted), after: null };
       return { ok: true };
     },
   );
@@ -323,17 +384,16 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { params: idParam, body: dryRunBody },
       config: {
-        permissions: ['role:edit'],
+        permissions: ['trigger:edit'],
         audit: { action: 'automation_rule.dry_run', resource: 'automation_rule' },
       },
     },
     async (req, reply) => {
-      const existing = (await app.db
+      const [row] = await app.db
         .select()
         .from(automationRules)
         .where(eq(automationRules.id, req.params.id))
-        .limit(1)) as unknown as RuleRow[];
-      const row = existing[0];
+        .limit(1);
       if (!row) {
         reply.code(404);
         return { error: 'automation_rule_not_found' };
@@ -360,11 +420,15 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
       // Evaluate ONLY this rule, forcing enabled so a disabled draft can be tested.
       const matches = evaluate(input, [{ ...toRuleInput(row), enabled: true }]);
 
-      // Dry-run deps: enqueueRcon is wired to the real stream, but runMatch's
-      // dry-run guard guarantees it is never invoked. writeAudit is a no-op here
-      // because the route-level config.audit already records the dry-run.
+      // Dry-run deps: runMatch's dry-run guard never dispatches, and the API
+      // deliberately holds no path onto worker-rcon's stream (#109) — should
+      // that guard ever regress, the dry-run fails loudly instead of sending a
+      // real AdminBan/AdminEndMatch. writeAudit is a no-op here because the
+      // route-level config.audit already records the dry-run.
       const deps: RunMatchDeps = {
-        enqueueRcon: (dispatch) => enqueueRcon(app.redis, dispatch),
+        enqueueRcon: async () => {
+          throw new Error('enqueueRcon must not be called in dry-run');
+        },
         notifyAdmin: async () => ({ delivered: false, detail: { dryRun: true } }),
         recordRun: async (draft) => {
           await app.db.insert(automationRuns).values({
@@ -402,9 +466,8 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/automation-runs',
-    { schema: { querystring: runsQuery }, config: { audit: false } },
-    async (req, reply) => {
-      if (denyRead(req, reply)) return;
+    { schema: { querystring: runsQuery }, config: { permissions: ['trigger:view'], audit: false } },
+    async (req) => {
       const conditions = req.query.rule_id
         ? eq(automationRuns.ruleId, req.query.rule_id)
         : undefined;

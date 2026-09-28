@@ -40,7 +40,7 @@ const RUN = {
 };
 
 function mockFetch(opts: { permissions?: string[]; rules?: unknown[]; runs?: unknown[] } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+  const permissions = opts.permissions ?? ['trigger:edit'];
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -101,7 +101,7 @@ describe('AutomationPage', () => {
   );
 
   it(
-    'hides management controls without the role:edit permission',
+    'hides management controls without the trigger:edit permission',
     async () => {
       mockFetch({ permissions: [] });
       render(<AutomationPage />);
@@ -109,6 +109,17 @@ describe('AutomationPage', () => {
       expect(await screen.findByText('Только просмотр')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Тест' })).not.toBeInTheDocument();
       expect(screen.getByRole('switch', { name: 'Включить правило Кик за спам' })).toBeDisabled();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides management controls for a role editor without trigger:edit (#111)',
+    async () => {
+      mockFetch({ permissions: ['role:edit'] });
+      render(<AutomationPage />);
+
+      expect(await screen.findByText('Только просмотр')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
