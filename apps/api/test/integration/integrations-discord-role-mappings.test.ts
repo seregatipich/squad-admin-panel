@@ -169,9 +169,15 @@ describeIfDb('Discord role mappings — CRUD', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.discordRoleId).toBe(DISCORD_ROLE_VIP);
 
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'discord.role_mapping.create',
       resource: 'discord_role_mapping',
+      targetId: rows[0]?.id,
+    });
+    expect(audit.afterSnapshot).toMatchObject({
+      role_id: vipRoleId,
+      discord_role_id: DISCORD_ROLE_VIP,
+      enabled: true,
     });
   });
 
@@ -246,10 +252,20 @@ describeIfDb('Discord role mappings — CRUD', () => {
       discord_role_id: DISCORD_ROLE_MOD,
       enabled: false,
     });
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'discord.role_mapping.update',
       resource: 'discord_role_mapping',
       targetId: id,
+    });
+    expect(audit.beforeSnapshot).toMatchObject({
+      role_id: vipRoleId,
+      discord_role_id: DISCORD_ROLE_VIP,
+      enabled: true,
+    });
+    expect(audit.afterSnapshot).toMatchObject({
+      role_id: vipRoleId,
+      discord_role_id: DISCORD_ROLE_MOD,
+      enabled: false,
     });
   });
 
@@ -283,11 +299,19 @@ describeIfDb('Discord role mappings — CRUD', () => {
     expect(
       await h.db.select().from(discordRoleMappings).where(eq(discordRoleMappings.id, id)),
     ).toHaveLength(0);
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'discord.role_mapping.delete',
       resource: 'discord_role_mapping',
       targetId: id,
     });
+    // The row is gone, so the audit snapshot is the only record of which
+    // Discord role the panel role was mapped to.
+    expect(audit.beforeSnapshot).toMatchObject({
+      id,
+      role_id: vipRoleId,
+      discord_role_id: DISCORD_ROLE_VIP,
+    });
+    expect(audit.afterSnapshot).toBeNull();
   });
 
   it('answers 404 mapping_not_found when deleting an unknown id', async () => {
