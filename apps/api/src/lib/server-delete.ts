@@ -22,7 +22,7 @@ export interface DeleteResult {
   container_removed: boolean;
   configs_dir_removed: boolean;
   saved_dir_removed: boolean;
-  /** True when both sidecar engines' per-server config dirs are gone. */
+  /** True when the RNSquadJS sidecar's per-server config dir is gone. */
   sidecar_dirs_removed: boolean;
   ufw_rules_removed: number;
   /** True when the per-server Redis sync queue cleanup ran (requires `redis`). */
@@ -171,11 +171,16 @@ export async function softDeleteServer(
     }
 
     // Tear down the sidecar. It is best-effort: a missing or never-launched
-    // sidecar must not block the server deletion.
-    await removeSidecar(ctx.bridge, serverId);
+    // sidecar must not block the server deletion, but any other failure is
+    // recorded so the operator learns what was left behind.
+    await removeSidecar(ctx.bridge, serverId, (err) => {
+      result.errors.push({ phase: 'sidecar_rm', error: (err as Error).message });
+    });
     // Its config dir holds the rendered config with the server's plaintext RCON
     // password, so it must not outlive the server.
-    result.sidecar_dirs_removed = await purgeSidecarDir(ctx.bridge, serverId);
+    result.sidecar_dirs_removed = await purgeSidecarDir(ctx.bridge, serverId, (err) => {
+      result.errors.push({ phase: 'sidecar_dir_delete', error: (err as Error).message });
+    });
 
     try {
       const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });

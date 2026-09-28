@@ -36,10 +36,23 @@ describe('removeSidecar', () => {
 
   it('swallows a missing container', async () => {
     const containerRm = vi.fn().mockRejectedValue(new Error('No such container'));
+    const onError = vi.fn();
 
     await expect(
-      removeSidecar({ containerRm } as unknown as BridgeClient, SERVER_ID),
+      removeSidecar({ containerRm } as unknown as BridgeClient, SERVER_ID, onError),
     ).resolves.toBeUndefined();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('reports any other removal failure without throwing (#58)', async () => {
+    const failure = new Error('bridge transport closed');
+    const containerRm = vi.fn().mockRejectedValue(failure);
+    const onError = vi.fn();
+
+    await expect(
+      removeSidecar({ containerRm } as unknown as BridgeClient, SERVER_ID, onError),
+    ).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledWith(failure);
   });
 });
 
@@ -55,11 +68,14 @@ describe('purgeSidecarDir', () => {
     });
   });
 
-  it('reports false when the directory could not be removed', async () => {
-    const directoryDelete = vi.fn().mockRejectedValue(new Error('forbidden'));
+  it('reports false and the error when the directory could not be removed (#58)', async () => {
+    const failure = new Error('forbidden');
+    const directoryDelete = vi.fn().mockRejectedValue(failure);
+    const onError = vi.fn();
 
     await expect(
-      purgeSidecarDir({ directoryDelete } as unknown as BridgeClient, SERVER_ID),
+      purgeSidecarDir({ directoryDelete } as unknown as BridgeClient, SERVER_ID, onError),
     ).resolves.toBe(false);
+    expect(onError).toHaveBeenCalledWith(failure);
   });
 });

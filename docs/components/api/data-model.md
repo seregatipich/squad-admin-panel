@@ -229,7 +229,7 @@ Returned by `DELETE /api/v1/servers/:id`. Source: `DeleteResult` in [`apps/api/s
 }
 ```
 
-Each entry in `errors[]` is `{phase: 'container_stop'|'container_rm'|'configs_dir_delete'|'saved_dir_delete'|'ufw_<proto>_<port>', error: string}`. Phases 2-4 are best-effort: a non-empty `errors[]` does NOT roll back the soft-delete UPDATE on `servers`. If phase 1 (the config backup) reads zero files the route returns 500 `{ error: 'delete_failed', message: '...' }` and the row stays alive.
+Each entry in `errors[]` is `{phase: 'container_stop'|'container_rm'|'sidecar_rm'|'sidecar_dir_delete'|'configs_dir_delete'|'saved_dir_delete'|'ufw_<proto>_<port>'|'sync_queue_cleanup', error: string}`. Phases 2-4 are best-effort: a non-empty `errors[]` does NOT roll back the soft-delete UPDATE on `servers`. If phase 1 (the config backup) reads zero files the route returns 500 `{ error: 'delete_failed', message: '...' }` and the row stays alive.
 
 ### Server restore result
 
