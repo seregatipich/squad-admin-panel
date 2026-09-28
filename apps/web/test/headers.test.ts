@@ -1,10 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import nextConfig from '../next.config.mjs';
-
-const CONFIGS_ROUTE = '/servers/:id/configs';
-const BASE_ROUTE = '/(.*)';
-const MONACO_CDN = 'https://cdn.jsdelivr.net';
 
 async function getHeaderEntries() {
   if (typeof nextConfig.headers !== 'function') {
@@ -13,114 +9,29 @@ async function getHeaderEntries() {
   return nextConfig.headers();
 }
 
-function findEntry(entries: Awaited<ReturnType<typeof getHeaderEntries>>, source: string) {
-  return entries.find((entry) => entry.source === source);
-}
-
-function findHeader(entry: { headers: { key: string; value: string }[] } | undefined, key: string) {
-  return entry?.headers.find((header) => header.key === key);
-}
-
-async function cspFor(source: string) {
-  const entries = await getHeaderEntries();
-  return findHeader(findEntry(entries, source), 'Content-Security-Policy')?.value ?? '';
-}
-
 describe('next.config.mjs headers()', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("sets Content-Security-Policy, X-Content-Type-Options, and X-Frame-Options on the base '/(.*)' route", async () => {
+  it("sets X-Content-Type-Options and X-Frame-Options on every route '/(.*)'", async () => {
     const entries = await getHeaderEntries();
-    const baseEntry = findEntry(entries, BASE_ROUTE);
+    const base = entries.find((entry) => entry.source === '/(.*)');
 
-    expect(baseEntry).toBeDefined();
-    expect(findHeader(baseEntry, 'Content-Security-Policy')?.value).toContain("default-src 'self'");
-    expect(findHeader(baseEntry, 'X-Content-Type-Options')?.value).toBe('nosniff');
-    expect(findHeader(baseEntry, 'X-Frame-Options')?.value).toBe('DENY');
-  });
-
-  it('excludes cdn.jsdelivr.net from the base route policy', async () => {
-    const entries = await getHeaderEntries();
-    const baseEntry = findEntry(entries, BASE_ROUTE);
-    const csp = findHeader(baseEntry, 'Content-Security-Policy')?.value ?? '';
-
-    expect(csp).not.toContain(MONACO_CDN);
-  });
-
-  // Monaco is vendored into public/monaco/vs, so the config editor route must
-  // not reach for a CDN either — a client that cannot resolve cdn.jsdelivr.net
-  // is exactly the case that left the editor stuck on "Loading..." forever.
-  it('excludes cdn.jsdelivr.net from the /servers/:id/configs route policy', async () => {
-    const entries = await getHeaderEntries();
-    const configsEntry = findEntry(entries, CONFIGS_ROUTE);
-    const csp = findHeader(configsEntry, 'Content-Security-Policy')?.value ?? '';
-
-    expect(configsEntry).toBeDefined();
-    expect(csp).not.toContain(MONACO_CDN);
-    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
-    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
-    expect(csp).toContain("connect-src 'self'");
-  });
-
-  // Monaco inlines its codicon icon font as a data: URI. Without an explicit
-  // font-src it falls back to default-src 'self', which refuses data: and
-  // leaves every editor icon a blank box.
-  it('allows the data: codicon font and blob: workers monaco needs', async () => {
-    const csp = await cspFor(CONFIGS_ROUTE);
-
-    expect(csp).toContain("font-src 'self' data:");
-    expect(csp).toContain("worker-src 'self' blob:");
-  });
-
-  it('keeps X-Content-Type-Options and X-Frame-Options on the /servers/:id/configs route too', async () => {
-    const entries = await getHeaderEntries();
-    const configsEntry = findEntry(entries, CONFIGS_ROUTE);
-
-    expect(findHeader(configsEntry, 'X-Content-Type-Options')?.value).toBe('nosniff');
-    expect(findHeader(configsEntry, 'X-Frame-Options')?.value).toBe('DENY');
-  });
-
-  // `next dev` compiles client chunks with an eval-based devtool. Without
-  // 'unsafe-eval' the framework runtime is blocked outright, so every page
-  // hangs on its unhydrated server fallback — production must not pay for it.
-  describe.each([
-    ['the base route', BASE_ROUTE],
-    ['the /servers/:id/configs route', CONFIGS_ROUTE],
-  ])("script-src 'unsafe-eval' on %s", (_label, route) => {
-    it('is absent in production', async () => {
-      vi.stubEnv('NODE_ENV', 'production');
-
-      expect(await cspFor(route)).not.toContain("'unsafe-eval'");
-    });
-
-    it('is present in development', async () => {
-      vi.stubEnv('NODE_ENV', 'development');
-
-      expect(await cspFor(route)).toMatch(/script-src [^;]*'unsafe-eval'/);
-    });
-
-    it('is present when NODE_ENV is unset', async () => {
-      vi.stubEnv('NODE_ENV', undefined);
-
-      expect(await cspFor(route)).toContain("'unsafe-eval'");
-    });
-  });
-
-  it('leaves the production base policy byte-for-byte unchanged', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-
-    expect(await cspFor(BASE_ROUTE)).toBe(
-      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+    expect(base?.headers).toEqual(
+      expect.arrayContaining([
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'X-Frame-Options', value: 'DENY' },
+      ]),
     );
   });
 
-  it('leaves the production configs policy byte-for-byte unchanged', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-
-    expect(await cspFor(CONFIGS_ROUTE)).toBe(
-      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'",
+  // The policy carries a per-request nonce, so middleware owns it
+  // (src/lib/csp.ts, test/middleware.test.ts). A static policy here would be
+  // enforced alongside it, and one with 'unsafe-inline' is what #60 (finding
+  // 424) removed.
+  it('sets no static Content-Security-Policy', async () => {
+    const entries = await getHeaderEntries();
+    const keys = entries.flatMap((entry) =>
+      entry.headers.map((header) => header.key.toLowerCase()),
     );
+
+    expect(keys).not.toContain('content-security-policy');
   });
 });
