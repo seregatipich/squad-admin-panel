@@ -451,7 +451,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
         can_restore: req.user.permissions.squadPermissions.has('changemap'),
         versions: rows.map((row) => ({
           id: row.id,
-          sha256: Buffer.from(row.sha256 as unknown as Buffer).toString('hex'),
+          sha256: Buffer.from(row.sha256).toString('hex'),
           parent_version_id: row.parent_version_id,
           author: row.author_name ?? row.author_label ?? null,
           message: row.message,

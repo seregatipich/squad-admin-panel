@@ -206,7 +206,7 @@ async function runInstall(
 
   const rconPassword = decryptString(
     app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    deserialize(Buffer.from(creds.rconPasswordEncrypted)),
   );
   const seedT0 = Date.now();
   const { seededCount } = await seedConfigs(

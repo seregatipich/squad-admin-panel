@@ -9,7 +9,7 @@ import {
   looksLikeApiToken,
 } from '../lib/api-tokens.js';
 import { loadUserPermissions, narrowToTokenScopes } from '../lib/rbac.js';
-import { resolveSession, touchSession } from '../lib/sessions.js';
+import { invalidateSessionCache, resolveSession, touchSession } from '../lib/sessions.js';
 
 export const SESSION_COOKIE = '__Host-sid';
 
@@ -52,6 +52,8 @@ export default fp(async (app) => {
                 .update(sessionsTable)
                 .set({ expiresAt, lastActivityAt: lastActivity })
                 .where(eq(sessionsTable.id, session.id));
+              // The cached entry still carries the pre-touch deadline (#52).
+              await invalidateSessionCache(app.redis, session.id);
             },
           });
           if (touched) {
@@ -163,13 +165,7 @@ export default fp(async (app) => {
 
 async function touchApiTokenLastUsed(app: FastifyInstance, tokenId: string): Promise<void> {
   const lockKey = `api-token-touch:${tokenId}`;
-  const ok = await app.redis.set(
-    lockKey,
-    '1',
-    'EX' as never,
-    API_TOKEN_TOUCH_THROTTLE_SECONDS as never,
-    'NX' as never,
-  );
+  const ok = await app.redis.set(lockKey, '1', 'EX', API_TOKEN_TOUCH_THROTTLE_SECONDS, 'NX');
   if (ok !== 'OK') return;
   await app.db
     .update(playerApiTokens)

@@ -55,8 +55,7 @@ export async function establishAuthenticatedPlayerSession(
     return { ok: false, error: 'identity_persist_failed' };
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: SentinelBridge structural subtype
-  const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, identity.steamId64);
+  const claim = await claimFirstOwner(app.db, app.bridge, playerId, identity.steamId64);
   if (claim === 'no_owner_role') {
     req.log.error('Owner role missing — system roles not seeded?');
     if (sendErrorResponse) reply.code(500).send({ error: 'owner_role_missing' });

@@ -75,10 +75,7 @@ async function credentialsRconPassword(
     where: eq(serverCredentials.serverId, serverId),
   });
   if (!creds?.rconPasswordEncrypted) return null;
-  return decryptString(
-    app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
-  );
+  return decryptString(app.encryptionKey, deserialize(Buffer.from(creds.rconPasswordEncrypted)));
 }
 
 /** Thrown when a masked `Rcon.cfg` is written but no real password is known. */

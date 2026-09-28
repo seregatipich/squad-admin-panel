@@ -115,8 +115,8 @@ export async function fetchSteamProfiles(
       await deps.redis.set(
         `${PROFILE_CACHE_PREFIX}${raw.steamid}`,
         JSON.stringify(profile),
-        'EX' as never,
-        PROFILE_CACHE_TTL_SECONDS as never,
+        'EX',
+        PROFILE_CACHE_TTL_SECONDS,
       );
     }
   }
@@ -190,8 +190,8 @@ export async function fetchSteamBans(
       await deps.redis.set(
         `${BANS_CACHE_PREFIX}${info.steamId64}`,
         JSON.stringify(info),
-        'EX' as never,
-        BANS_CACHE_TTL_SECONDS as never,
+        'EX',
+        BANS_CACHE_TTL_SECONDS,
       );
     }
   }
@@ -237,11 +237,6 @@ export async function fetchSteamOwnedGames(
       }
     : { ownsSquad: null, playtimeMinutes: null };
 
-  await deps.redis.set(
-    key,
-    JSON.stringify(result),
-    'EX' as never,
-    OWNED_GAMES_CACHE_TTL_SECONDS as never,
-  );
+  await deps.redis.set(key, JSON.stringify(result), 'EX', OWNED_GAMES_CACHE_TTL_SECONDS);
   return result;
 }

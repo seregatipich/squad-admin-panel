@@ -123,6 +123,34 @@ describe('GET /api/v1/me', () => {
     expect(body.canonical_name).toBe('TestPlayer');
     expect(body.permissions.length).toBeGreaterThan(0);
   });
+
+  it('a session touch replaces the cached pre-touch deadline with the extended one (#52)', async () => {
+    const { token, sessionId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000302n);
+    const cacheKey = `session:${sessionId}`;
+    const nearExpiry = new Date(Date.now() + 60_000);
+    await h.db
+      .update(sessionsTable)
+      .set({ expiresAt: nearExpiry })
+      .where(eq(sessionsTable.id, sessionId));
+    await h.redis.del(cacheKey);
+
+    const first = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(first.statusCode).toBe(200);
+    // The touch extended the row, so the cache must not keep the old deadline.
+    const cachedRaw = await h.redis.get(cacheKey);
+    if (cachedRaw) {
+      const cached = JSON.parse(cachedRaw) as { expiresAt: string };
+      expect(new Date(cached.expiresAt).getTime()).toBeGreaterThan(nearExpiry.getTime());
+    }
+
+    await h.app.inject({ method: 'GET', url: '/api/v1/me', cookies: { [SESSION_COOKIE]: token } });
+    const refreshed = JSON.parse((await h.redis.get(cacheKey)) ?? '{}') as { expiresAt?: string };
+    expect(new Date(refreshed.expiresAt ?? 0).getTime()).toBeGreaterThan(nearExpiry.getTime());
+  });
 });
 
 describe('POST /api/v1/auth/logout', () => {

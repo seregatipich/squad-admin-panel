@@ -118,9 +118,7 @@ async function main() {
     for (const row of rows) {
       if (row.status !== 'running' && row.status !== 'starting') continue;
       try {
-        const blob = JSON.parse(
-          Buffer.from(row.blob as unknown as Buffer).toString('utf-8'),
-        ) as Blob;
+        const blob = JSON.parse(Buffer.from(row.blob).toString('utf-8')) as Blob;
         targets.push({
           serverId: row.serverId,
           host: resolveRconHost(row.host),

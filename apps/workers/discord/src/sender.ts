@@ -222,7 +222,7 @@ export async function deliverEnvelope(
     try {
       const url = decryptString(
         deps.encryptionKey,
-        deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
+        deserialize(Buffer.from(row.webhookUrlEncrypted)),
       );
       const outcome = await postWebhook(deps, url, buildPayload(embed, row.mentionEveryone));
       if (outcome.rateLimited) result.rateLimited++;

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { type SessionScope, sessions } from '@squad/db/schema';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -97,6 +97,17 @@ export async function createSession(
   return { token, session: record };
 }
 
+/**
+ * Resolves a cookie token to its live session, serving from the Redis cache
+ * when the cached entry is still within its deadline.
+ *
+ * A cached entry past its `expiresAt` is never trusted to revoke on its own:
+ * `touchSession` extends the row in Postgres, so the cache can lag behind a
+ * session that is still valid. Such an entry is dropped and the row re-read;
+ * only a row that is expired in the database too is deleted (#52).
+ *
+ * @returns The session, or `null` when the token is unknown or expired.
+ */
 export async function resolveSession(
   db: DatabaseClient,
   redis: Redis,
@@ -106,19 +117,16 @@ export async function resolveSession(
   const tokenId = tokenIdFromToken(token);
   const cached = await cacheGet(redis, tokenId);
   if (cached) {
-    if (cached.expiresAt.getTime() < Date.now()) {
-      await revokeSession(db, redis, tokenId);
-      return null;
-    }
-    return cached;
+    if (cached.expiresAt.getTime() >= Date.now()) return cached;
+    await invalidateSessionCache(redis, tokenId);
   }
-  const rows = await db
-    .select()
-    .from(sessions)
-    .where(and(eq(sessions.id, tokenId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
+  const rows = await db.select().from(sessions).where(eq(sessions.id, tokenId)).limit(1);
   const row = rows[0];
   if (!row) return null;
+  if (row.expiresAt.getTime() <= Date.now()) {
+    await revokeSession(db, redis, tokenId);
+    return null;
+  }
   const record: SessionRecord = {
     id: row.id,
     playerId: row.playerId,
@@ -130,6 +138,20 @@ export async function resolveSession(
   };
   await cachePut(redis, record);
   return record;
+}
+
+/**
+ * Drops the Redis cache entry of one session so the next `resolveSession`
+ * reads the authoritative row from Postgres.
+ *
+ * @param redis - Redis client holding the `session:<id>` cache.
+ * @param tokenId - Session id (SHA-256 of the cookie token).
+ */
+export async function invalidateSessionCache(
+  redis: Pick<Redis, 'del'>,
+  tokenId: string,
+): Promise<void> {
+  await redis.del(`${REDIS_PREFIX}${tokenId}`);
 }
 
 export async function revokeSession(
@@ -155,12 +177,14 @@ export async function revokeAllForPlayer(
   playerId: string,
   publisher?: SessionRevokePublisher,
 ): Promise<void> {
+  // One DELETE … RETURNING, so a session inserted by a concurrent login is
+  // either untouched or both deleted and evicted from the cache — never
+  // deleted from the table while its cache entry lives on (#53).
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
+    .delete(sessions)
+    .where(eq(sessions.playerId, playerId))
+    .returning({ id: sessions.id });
   if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.playerId, playerId));
     await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
     if (publisher) {
       const ts = new Date().toISOString();
@@ -193,9 +217,9 @@ export async function touchSession(input: TouchSessionInput): Promise<boolean> {
   const ok = await input.redis.set(
     `session-touch:${input.sessionId}`,
     '1',
-    'EX' as never,
-    input.throttleSeconds as never,
-    'NX' as never,
+    'EX',
+    input.throttleSeconds,
+    'NX',
   );
   if (ok !== 'OK') return false;
   const newExpiresAt = new Date(input.now.getTime() + input.ttlSeconds * 1000);
