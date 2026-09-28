@@ -18,6 +18,7 @@ import diagPlugin from './lib/diag.js';
 import { buildLogger, shouldDisableSensitiveAuthRequestLogging } from './lib/logger.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from './lib/media-storage.js';
 import { createRconClient } from './lib/rcon.js';
+import { resolveRequestId } from './lib/request-id.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
@@ -46,9 +47,7 @@ export async function buildServer(config: AppConfig) {
     loggerInstance: logger,
     trustProxy: true,
     disableRequestLogging: shouldDisableSensitiveAuthRequestLogging,
-    genReqId: (req) =>
-      (req.headers['x-request-id'] as string | undefined) ??
-      `req-${Math.random().toString(36).slice(2)}`,
+    genReqId: (req) => resolveRequestId(req.headers['x-request-id'] as string | undefined),
   });
 
   app.setValidatorCompiler(validatorCompiler);
