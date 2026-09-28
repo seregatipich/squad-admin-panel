@@ -4,7 +4,6 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import websocket from '@fastify/websocket';
 import { redisSinkStream } from '@squad/shared-config';
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
@@ -35,6 +34,7 @@ import orphanSweepPlugin from './plugins/orphan-sweep.js';
 import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
+import websocketPlugin from './plugins/websocket.js';
 import { registerRoutes } from './routes/index.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
@@ -83,7 +83,7 @@ export async function buildServer(config: AppConfig) {
   // `config.permissions`, so they fall through to the fail-closed default and
   // require a session like the rest of the API.
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
-  await app.register(websocket);
+  await app.register(websocketPlugin, { allowedOrigin: config.PANEL_PUBLIC_URL });
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
 
   await app.register(requestContextPlugin);
