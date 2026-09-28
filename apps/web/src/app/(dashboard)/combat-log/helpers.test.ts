@@ -16,6 +16,7 @@ import {
   formatDamage,
   formatEventTime,
   LIVE_CAP,
+  matchesLiveFilters,
   parseFilters,
   playerHref,
   prependLiveRow,
@@ -393,5 +394,100 @@ describe('prependLiveRow', () => {
     for (let i = 0; i < LIVE_CAP + 5; i++) rows = prependLiveRow(rows, makeRow({ id: i }));
     expect(rows).toHaveLength(LIVE_CAP);
     expect(rows[0]?.id).toBe(LIVE_CAP + 4);
+  });
+});
+
+describe('matchesLiveFilters (#528)', () => {
+  it('rejects a row whose type does not match the selected facet', () => {
+    const filters: CombatFilters = { ...defaultFilters(), facet: 'revives' };
+    expect(matchesLiveFilters(makeRow({ eventType: 'damage' }), filters, undefined)).toBe(false);
+    expect(matchesLiveFilters(makeRow({ eventType: 'revive' }), filters, undefined)).toBe(true);
+  });
+
+  it('rejects a non-teamkill row under the teamkills facet', () => {
+    const filters: CombatFilters = { ...defaultFilters(), facet: 'teamkills' };
+    expect(matchesLiveFilters(makeRow({ isTeamkill: false }), filters, undefined)).toBe(false);
+    expect(matchesLiveFilters(makeRow({ isTeamkill: true }), filters, undefined)).toBe(true);
+  });
+
+  it('honors the selected servers filter (or the locked server, when set)', () => {
+    const filters: CombatFilters = {
+      ...defaultFilters(),
+      serverIds: ['00000000-0000-0000-0000-0000000000aa'],
+    };
+    expect(
+      matchesLiveFilters(
+        makeRow({ serverId: '00000000-0000-0000-0000-0000000000bb' }),
+        filters,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      matchesLiveFilters(
+        makeRow({ serverId: '00000000-0000-0000-0000-0000000000aa' }),
+        filters,
+        undefined,
+      ),
+    ).toBe(true);
+
+    expect(
+      matchesLiveFilters(
+        makeRow({ serverId: '00000000-0000-0000-0000-0000000000bb' }),
+        defaultFilters(),
+        '00000000-0000-0000-0000-0000000000aa',
+      ),
+    ).toBe(false);
+  });
+
+  it('honors a resolved attacker/victim player id filter', () => {
+    const byAttacker: CombatFilters = { ...defaultFilters(), attackerPlayerId: 'attacker-1' };
+    expect(
+      matchesLiveFilters(
+        makeRow({ attacker: { player_id: 'someone-else', current_name: null } }),
+        byAttacker,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      matchesLiveFilters(
+        makeRow({ attacker: { player_id: 'attacker-1', current_name: null } }),
+        byAttacker,
+        undefined,
+      ),
+    ).toBe(true);
+
+    const byVictim: CombatFilters = { ...defaultFilters(), victimPlayerId: 'victim-1' };
+    expect(
+      matchesLiveFilters(
+        makeRow({ victim: { player_id: 'someone-else', current_name: null } }),
+        byVictim,
+        undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('excludes a row while a weapon or unresolved name filter is active — cannot be matched on the live payload', () => {
+    expect(matchesLiveFilters(makeRow(), { ...defaultFilters(), weapon: 'AK74' }, undefined)).toBe(
+      false,
+    );
+    expect(
+      matchesLiveFilters(makeRow(), { ...defaultFilters(), attackerQuery: 'Rambo' }, undefined),
+    ).toBe(false);
+    expect(
+      matchesLiveFilters(makeRow(), { ...defaultFilters(), victimQuery: 'Target' }, undefined),
+    ).toBe(false);
+  });
+
+  it('excludes every row under a custom or yesterday period — a live row can never fall inside a past-bounded range', () => {
+    expect(
+      matchesLiveFilters(makeRow(), { ...defaultFilters(), preset: 'custom' }, undefined),
+    ).toBe(false);
+    expect(
+      matchesLiveFilters(makeRow(), { ...defaultFilters(), preset: 'yesterday' }, undefined),
+    ).toBe(false);
+  });
+
+  it('accepts a row matching an unrestricted (all-time, no facet-narrowing) view', () => {
+    expect(matchesLiveFilters(makeRow(), defaultFilters(), undefined)).toBe(true);
   });
 });

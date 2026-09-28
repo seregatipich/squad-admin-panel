@@ -458,6 +458,52 @@ export function combatEventToRow(data: CombatLiveEventData): CombatApiRow {
 }
 
 /**
+ * Whether a live `combat.event` row belongs under the currently selected
+ * facet/filters — `onCombat` used to only check `liveEnabled` and
+ * `lockedServerId`, so enabling Live under a narrow facet (e.g. «Тимкиллы»)
+ * flooded the table with every other event type from every server (#528).
+ *
+ * Weapon and name-text filters (`filters.weapon`, an unresolved
+ * `attackerQuery`/`victimQuery`) can't be checked against the live payload —
+ * it carries only ids, not names or weapon strings resolved server-side in
+ * the same way the REST filter does — so a row is excluded whenever one of
+ * those is active, rather than risk a false match. A `custom`/`yesterday`
+ * period has an upper bound in the past, which a live (always "now") row can
+ * never fall inside, so no live row ever matches under those presets either.
+ */
+export function matchesLiveFilters(
+  row: CombatApiRow,
+  filters: CombatFilters,
+  lockedServerId: string | undefined,
+): boolean {
+  if (filters.preset === 'custom' || filters.preset === 'yesterday') return false;
+
+  const facetParams = facetToApiParams(filters.facet);
+  if (facetParams.type && !(facetParams.type as string[]).includes(row.eventType)) {
+    return false;
+  }
+  if (facetParams.teamkillsOnly && !row.isTeamkill) return false;
+
+  if (lockedServerId) {
+    if (row.serverId !== lockedServerId) return false;
+  } else if (filters.serverIds.length > 0 && !filters.serverIds.includes(row.serverId)) {
+    return false;
+  }
+
+  if (filters.attackerPlayerId && row.attacker?.player_id !== filters.attackerPlayerId) {
+    return false;
+  }
+  if (filters.victimPlayerId && row.victim?.player_id !== filters.victimPlayerId) {
+    return false;
+  }
+  if (filters.weapon) return false;
+  if (!filters.attackerPlayerId && filters.attackerQuery) return false;
+  if (!filters.victimPlayerId && filters.victimQuery) return false;
+
+  return true;
+}
+
+/**
  * Prepends a live combat row to the currently rendered list, deduping by id
  * and capping the list so an unattended Live view doesn't grow unbounded.
  */

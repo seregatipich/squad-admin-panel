@@ -47,6 +47,7 @@ import {
   formatDamage,
   formatEventTime,
   hasActiveFilters,
+  matchesLiveFilters,
   PAGE_LIMIT,
   parseFilters,
   playerHref,
@@ -237,10 +238,11 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const onCombat = useCallback(
     (event: Extract<LiveEvent, { type: 'combat.event' }>) => {
       if (!liveEnabled) return;
-      if (lockedServerId && event.data.server_id !== lockedServerId) return;
-      setRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
+      const row = combatEventToRow(event.data);
+      if (!matchesLiveFilters(row, filters, lockedServerId)) return;
+      setRows((prev) => prependLiveRow(prev, row));
     },
-    [liveEnabled, lockedServerId],
+    [liveEnabled, lockedServerId, filters],
   );
   useLiveSubscription('combat.event', onCombat);
 
@@ -692,7 +694,14 @@ function PlayerAutocomplete({
           list={listId}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => onCommit(draft.trim())}
+          onBlur={() => {
+            // Only commit when the draft actually changed. A deep link sets
+            // attackerPlayerId/victimPlayerId with an empty query — a blur
+            // with nothing typed (e.g. Tab past the field) must not fire
+            // onCommit and silently clear that id-based filter (#530).
+            const trimmed = draft.trim();
+            if (trimmed !== value) onCommit(trimmed);
+          }}
           placeholder={placeholder}
         />
       </FieldRow>
