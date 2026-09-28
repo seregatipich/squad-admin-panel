@@ -525,6 +525,17 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      req.auditSnapshots = {
+        targetId: req.params.playerId,
+        after: {
+          moderation_action_id: result.actionId,
+          action_type: req.body.action_type,
+          reason: req.body.reason,
+          ban_length: req.body.action_type === 'ban' ? req.body.ban_length : null,
+          server_id: server.id,
+        },
+      };
+
       const rows = await fetchActionRows(app, eq(moderationActions.id, result.actionId), 1);
       const row = rows[0];
       if (!row) throw new Error('moderation action row missing immediately after insert');

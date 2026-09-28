@@ -318,7 +318,17 @@ describe('POST /api/v1/players/:playerId/moderation-actions', () => {
     expect(row?.actionType).toBe('ban');
     expect(row?.context).toMatchObject({ ban_length: '0', rcon_request_id: 'req-ban-1' });
 
-    await assertAuditRow(h, { action: 'moderation.action', resource: 'player', targetId });
+    const audit = await assertAuditRow(h, {
+      action: 'moderation.action',
+      resource: 'player',
+      targetId,
+    });
+    expect(audit.afterSnapshot).toMatchObject({
+      moderation_action_id: body.action.id,
+      action_type: 'ban',
+      reason: 'aimbot',
+      ban_length: '0',
+    });
   });
 
   it('POST ban is rejected for a user without the ban squad permission', async () => {
