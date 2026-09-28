@@ -1,7 +1,7 @@
 import { servers } from '@squad/db/schema';
 import { RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
@@ -17,6 +17,14 @@ const bodySchema = z.object({ mode: z.enum(['production', 'shadow']) });
 // full tick before launching the production sidecar so the legacy tailer and
 // the sidecar never publish to the real stream at the same time (duplicates).
 export const CUTOVER_TICK_MS = 16_000;
+
+/**
+ * Redis hash of in-flight production cutovers (field = server id, value = the
+ * ISO start time). HSETNX on it serialises cutovers per server, and the API
+ * resumes every field on startup, so a cutover interrupted by an API restart
+ * after its SADD still ends with a production sidecar.
+ */
+export const RNSQUADJS_CUTOVER_PENDING_KEY = 'rnsquadjs:cutover:pending';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -74,6 +82,54 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
   // Every `:id` in this plugin is a server id; an external server has no
   // container/config tree here, so refuse up front with 409 external_server.
   fast.addHook('preHandler', containerOnlyPreHandler(app));
+
+  /**
+   * Finishes a production cutover whose SADD has already happened: waits one
+   * log-ingest reconcile tick, then swaps the sidecar for a production-mode one.
+   * Never rejects — a genuine failure rolls the desired state back to legacy
+   * (SREM) and is logged. The pending marker is always cleared at the end.
+   *
+   * @param serverId - Server being cut over.
+   * @param log - Logger for the failure path.
+   */
+  async function completeCutover(serverId: string, log: FastifyBaseLogger): Promise<void> {
+    try {
+      await sleep(CUTOVER_TICK_MS);
+      // The cutover set is the desired-state token: a concurrent shadow
+      // rollback SREMs it. Bail early if it was superseded during the wait
+      // so we skip the redundant config/rm churn entirely.
+      if ((await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) !== 1) return;
+      await writeSidecarConfig(app, serverId);
+      await removeSidecar(app.bridge, serverId);
+      // Re-confirm membership immediately before launch (no await between
+      // this check and the run): never start a production-mode sidecar once
+      // a rollback has SREM'd, or the resumed legacy tailer and the sidecar
+      // would both publish to the real stream (duplicates).
+      if ((await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) !== 1) return;
+      await app.bridge.containerRunRnsquadjs({
+        server_id: serverId,
+        env: { ...buildSidecarEnv(serverId, 'production', resolveSidecarRedisUrl()) },
+      });
+    } catch (err) {
+      // A supersession abort resolves (early `return`) and never lands here,
+      // so this only fires on a genuine failure. log-ingest already dropped
+      // this server's legacy tailer on SADD; without the SREM it would be
+      // stranded with no publisher. Roll the desired state back to legacy.
+      await app.redis.srem(RNSQUADJS_CUTOVER_SET, serverId).catch(() => undefined);
+      log.error({ err, id: serverId }, 'rnsquadjs cutover failed; rolled back to legacy');
+    } finally {
+      await app.redis.hdel(RNSQUADJS_CUTOVER_PENDING_KEY, serverId).catch(() => undefined);
+    }
+  }
+
+  // A cutover still pending at startup was interrupted by an API restart after
+  // its SADD (the legacy tailer is already off): finish it now.
+  app.addHook('onReady', async () => {
+    const pending = await app.redis.hkeys(RNSQUADJS_CUTOVER_PENDING_KEY);
+    for (const serverId of pending) {
+      void completeCutover(serverId, app.log);
+    }
+  });
 
   // Shares its URL with the cutover POST below; Fastify routes on method+URL,
   // so the two never collide.
@@ -140,36 +196,28 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
       const redisUrl = resolveSidecarRedisUrl();
 
       if (req.body.mode === 'production') {
-        const log = req.log;
-        await app.redis.sadd(RNSQUADJS_CUTOVER_SET, serverId);
+        const claimed = await app.redis.hsetnx(
+          RNSQUADJS_CUTOVER_PENDING_KEY,
+          serverId,
+          new Date().toISOString(),
+        );
+        // A cutover for this server is already in flight: report it rather than
+        // racing a second task (two `docker run`s under one name).
+        if (claimed !== 1) {
+          reply.code(202);
+          return { server_id: serverId, mode: 'production', status: 'switching' };
+        }
+        const added = await app.redis.sadd(RNSQUADJS_CUTOVER_SET, serverId);
+        if (added !== 1) {
+          // Already cut over: the production sidecar is running (a server
+          // start/restart relaunches it), so recreating it is pure churn.
+          await app.redis.hdel(RNSQUADJS_CUTOVER_PENDING_KEY, serverId);
+          return { server_id: serverId, mode: 'production', status: 'active' };
+        }
         // Fire-and-forget: a 16s in-handler wait would risk client/proxy
         // timeouts (mirrors server-install's detached runInstall). The 202 is
-        // returned now; the cutover finishes after the reconcile tick below.
-        (async () => {
-          await sleep(CUTOVER_TICK_MS);
-          // The cutover set is the desired-state token: a concurrent shadow
-          // rollback SREMs it. Bail early if it was superseded during the wait
-          // so we skip the redundant config/rm churn entirely.
-          if ((await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) !== 1) return;
-          await writeSidecarConfig(app, serverId);
-          await removeSidecar(app.bridge, serverId);
-          // Re-confirm membership immediately before launch (no await between
-          // this check and the run): never start a production-mode sidecar once
-          // a rollback has SREM'd, or the resumed legacy tailer and the sidecar
-          // would both publish to the real stream (duplicates).
-          if ((await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) !== 1) return;
-          await app.bridge.containerRunRnsquadjs({
-            server_id: serverId,
-            env: { ...buildSidecarEnv(serverId, 'production', redisUrl) },
-          });
-        })().catch(async (err) => {
-          // A supersession abort resolves (early `return`) and never lands here,
-          // so this only fires on a genuine failure. log-ingest already dropped
-          // this server's legacy tailer on SADD; without the SREM it would be
-          // stranded with no publisher. Roll the desired state back to legacy.
-          await app.redis.srem(RNSQUADJS_CUTOVER_SET, serverId).catch(() => undefined);
-          log.error({ err, id: serverId }, 'rnsquadjs cutover failed; rolled back to legacy');
-        });
+        // returned now; the cutover finishes after the reconcile tick.
+        void completeCutover(serverId, req.log);
         reply.code(202);
         return { server_id: serverId, mode: 'production', status: 'switching' };
       }
