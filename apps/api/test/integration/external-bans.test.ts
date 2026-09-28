@@ -501,6 +501,30 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
     expect(body2.total).toBe(3);
   });
 
+  it('reports the real total when offset runs past the last page', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/external-bans?q=Cban3PagingNick&limit=2&offset=10',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.rows).toHaveLength(0);
+    expect(body.total).toBe(3);
+  });
+
+  it('treats % and _ in q literally instead of as ILIKE wildcards', async () => {
+    for (const q of ['Cban3Paging%Nick', 'Cban3Paging_ick']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/external-bans?q=${encodeURIComponent(q)}`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().total, q).toBe(0);
+    }
+  });
+
   it('attaches player_id/panel_nickname when the identity is known to the panel, null otherwise', async () => {
     const known = await h.app.inject({
       method: 'GET',

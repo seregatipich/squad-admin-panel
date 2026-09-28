@@ -14,6 +14,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
+import { containsPattern } from '../lib/sql-like.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const localBanParams = z.object({
@@ -428,7 +429,7 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
 
       const conditions: SQL[] = [];
       if (q) {
-        const pattern = `%${q}%`;
+        const pattern = containsPattern(q);
         conditions.push(
           sql`(eb.nickname ILIKE ${pattern} OR eb.reason ILIKE ${pattern} OR eb.steam_id64 ILIKE ${pattern} OR eb.eos_id ILIKE ${pattern})`,
         );
@@ -442,7 +443,8 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
       const whereClause =
         conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
 
-      const rows = (await app.db.execute(sql`
+      // One identity per (steam_id64, eos_id) pair, joined to the panel player.
+      const registry = sql`
         WITH filtered AS (
           SELECT eb.id, eb.source_id, ebs.name AS source_name, ebs.trust_level, ebs.discord_url,
                  eb.steam_id64, eb.eos_id, eb.nickname, eb.reason, eb.admin_name,
@@ -475,23 +477,41 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
             ) AS bans
           FROM filtered
           GROUP BY identity_steam_key, identity_eos_key
+        ),
+        joined AS (
+          SELECT
+            g.steam_id64,
+            g.eos_id,
+            g.bans,
+            g.last_imported_at,
+            p.id AS player_id,
+            p.canonical_name AS panel_nickname
+          FROM grouped g
+          LEFT JOIN players p
+            ON (g.steam_id64 IS NOT NULL AND p.steam_id64::text = g.steam_id64)
+            OR (g.eos_id IS NOT NULL AND p.eos_id = g.eos_id)
         )
-        SELECT
-          g.steam_id64,
-          g.eos_id,
-          g.bans,
-          p.id AS player_id,
-          p.canonical_name AS panel_nickname,
-          count(*) OVER () AS total_count
-        FROM grouped g
-        LEFT JOIN players p
-          ON (g.steam_id64 IS NOT NULL AND p.steam_id64::text = g.steam_id64)
-          OR (g.eos_id IS NOT NULL AND p.eos_id = g.eos_id)
-        ORDER BY g.last_imported_at DESC
+      `;
+
+      const rows = (await app.db.execute(sql`
+        ${registry}
+        SELECT steam_id64, eos_id, bans, player_id, panel_nickname,
+               count(*) OVER () AS total_count
+        FROM joined
+        ORDER BY last_imported_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `)) as unknown as RegistryRow[];
 
-      const total = rows.length > 0 ? Number(rows[0]?.total_count ?? 0) : 0;
+      // count(*) OVER () only exists on returned rows; a page past the end has
+      // none, so the total then needs its own count.
+      let total = Number(rows[0]?.total_count ?? 0);
+      if (rows.length === 0 && offset > 0) {
+        const [counted] = (await app.db.execute(sql`
+          ${registry}
+          SELECT count(*)::int AS total FROM joined
+        `)) as unknown as Array<{ total: number }>;
+        total = Number(counted?.total ?? 0);
+      }
 
       const items = rows.map((row) => {
         const bans = row.bans.map((ban) => {
