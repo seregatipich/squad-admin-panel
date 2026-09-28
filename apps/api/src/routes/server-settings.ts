@@ -17,6 +17,59 @@ const PORT_CHANGEABLE_STATUSES = new Set(['stopped', 'ready', 'pending', 'failed
 const PORT_FIELDS = ['game_port', 'query_port', 'beacon_port', 'rcon_port'] as const;
 type PortField = (typeof PORT_FIELDS)[number];
 
+/** Firewall protocol of each port field. */
+const PORT_PROTO: Record<PortField, 'udp' | 'tcp'> = {
+  game_port: 'udp',
+  query_port: 'udp',
+  beacon_port: 'udp',
+  rcon_port: 'tcp',
+};
+
+/** Port column of each port field. */
+const PORT_COLUMN = {
+  game_port: 'gamePort',
+  query_port: 'queryPort',
+  beacon_port: 'beaconPort',
+  rcon_port: 'rconPort',
+} as const satisfies Record<PortField, keyof typeof serverSettings.$inferSelect>;
+
+/** One UFW rule as the bridge `ufw_rule` call takes it (minus the action). */
+interface UfwRuleSpec {
+  port: number;
+  proto: 'udp' | 'tcp';
+}
+
+/**
+ * Rules a port change must add and remove. A rule both the old and the new
+ * port set need (a port moved from one field to another with the same
+ * protocol) is neither added nor removed, so closing the old ports never
+ * closes one the server still uses and a rollback never closes a rule that
+ * existed before.
+ *
+ * @param current - The settings row before the change.
+ * @param portChange - Fields whose port actually changes, with the new value.
+ */
+function ufwRuleChanges(
+  current: typeof serverSettings.$inferSelect,
+  portChange: Partial<Record<PortField, number>>,
+): { toAdd: UfwRuleSpec[]; toRemove: UfwRuleSpec[] } {
+  const key = (rule: UfwRuleSpec) => `${rule.port}/${rule.proto}`;
+  const oldRules = PORT_FIELDS.map((field) => ({
+    port: current[PORT_COLUMN[field]],
+    proto: PORT_PROTO[field],
+  }));
+  const newRules = PORT_FIELDS.map((field) => ({
+    port: portChange[field] ?? current[PORT_COLUMN[field]],
+    proto: PORT_PROTO[field],
+  }));
+  const oldKeys = new Set(oldRules.map(key));
+  const newKeys = new Set(newRules.map(key));
+  return {
+    toAdd: newRules.filter((rule) => !oldKeys.has(key(rule))),
+    toRemove: oldRules.filter((rule) => !newKeys.has(key(rule))),
+  };
+}
+
 const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -30,7 +83,9 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
    *   effect on the running server.
    * - New ports must not conflict with other active servers' ports.
    * - Same-server ports (across all four port fields) must all be distinct.
-   * - If ports change, UFW rules are updated via the bridge.
+   * - If ports change, the new UFW rules are added first (a failure rolls
+   *   them back and answers 502 `ufw_update_failed` with nothing saved), then
+   *   the row is saved, then the old rules are removed.
    */
   fast.put(
     '/api/v1/servers/:id/settings',
@@ -66,19 +121,8 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       const portChange: Partial<Record<PortField, number>> = {};
       for (const field of PORT_FIELDS) {
         const newVal = body[field];
-        if (newVal !== undefined) {
-          const currentVal = currentSettings[
-            field === 'game_port'
-              ? 'gamePort'
-              : field === 'query_port'
-                ? 'queryPort'
-                : field === 'beacon_port'
-                  ? 'beaconPort'
-                  : 'rconPort'
-          ] as number;
-          if (newVal !== currentVal) {
-            portChange[field] = newVal;
-          }
+        if (newVal !== undefined && newVal !== currentSettings[PORT_COLUMN[field]]) {
+          portChange[field] = newVal;
         }
       }
 
@@ -180,43 +224,39 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if (body.archive_logs_to_backup !== undefined)
         updateSet.archiveLogsToBackup = body.archive_logs_to_backup;
 
-      // --- apply UFW rule updates for changed ports (remove old, add new) ---
-      if (hasPortChange) {
-        // Remove old port rules for changed ports
-        const portToProto: Record<PortField, 'udp' | 'tcp'> = {
-          game_port: 'udp',
-          query_port: 'udp',
-          beacon_port: 'udp',
-          rcon_port: 'tcp',
+      // --- open new ports, persist, then close old ports ---
+      // Order matters: until the DB points at the new ports the old ones must
+      // stay open, and a failed `add` must leave host and DB as they were.
+      const { toAdd, toRemove } = ufwRuleChanges(currentSettings, portChange);
+      const added: UfwRuleSpec[] = [];
+      try {
+        for (const rule of toAdd) {
+          await app.bridge.ufwRule({ action: 'add', ...rule });
+          added.push(rule);
+        }
+      } catch (err) {
+        for (const rule of added) {
+          await app.bridge.ufwRule({ action: 'remove', ...rule }).catch((rollbackErr) => {
+            req.log.warn({ err: rollbackErr, rule }, 'ufw rollback of added rule failed');
+          });
+        }
+        req.log.error({ err, id }, 'ufw rule add failed; port change aborted');
+        reply.code(502);
+        return {
+          error: 'ufw_update_failed',
+          message: 'Opening the new ports failed; the previous ports are unchanged.',
         };
-        for (const field of PORT_FIELDS) {
-          if (portChange[field] !== undefined) {
-            const oldPort =
-              field === 'game_port'
-                ? currentSettings.gamePort
-                : field === 'query_port'
-                  ? currentSettings.queryPort
-                  : field === 'beacon_port'
-                    ? currentSettings.beaconPort
-                    : currentSettings.rconPort;
-            await app.bridge.ufwRule({
-              action: 'remove',
-              port: oldPort,
-              proto: portToProto[field],
-            });
-          }
-        }
-        // Add new port rules for changed ports
-        for (const field of PORT_FIELDS) {
-          const newPort = portChange[field];
-          if (newPort !== undefined) {
-            await app.bridge.ufwRule({ action: 'add', port: newPort, proto: portToProto[field] });
-          }
-        }
       }
 
-      // --- persist ---
       await app.db.update(serverSettings).set(updateSet).where(eq(serverSettings.serverId, id));
+
+      for (const rule of toRemove) {
+        await app.bridge.ufwRule({ action: 'remove', ...rule }).catch((err) => {
+          // The server already uses the new ports; a leftover rule only keeps
+          // an unused port open, which must not fail the saved change.
+          req.log.warn({ err, rule, id }, 'ufw removal of old port rule failed');
+        });
+      }
 
       // --- return updated settings ---
       const updated = await app.db.query.serverSettings.findFirst({

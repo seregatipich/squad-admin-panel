@@ -208,6 +208,63 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(ufwCalls).toContainEqual({ action: 'add', port: 7799, proto: 'udp' });
   });
 
+  // Regression (#43 finding 323): old rules were removed before the new ones
+  // were added and before the DB was written, so a failing `add` left the old
+  // ports closed, some new ones open and server_settings on the old ports.
+  it('keeps the old ports open and rolls back added rules when a ufw add fails', async () => {
+    const serverId = await seedServer({ slug: 'settings-ufw-fail', status: 'stopped' });
+    const ufwCalls: Array<{ action: string; port: number; proto: string }> = [];
+    h.bridge.ufwRule = vi.fn(async (p) => {
+      ufwCalls.push({ action: p.action, port: p.port, proto: p.proto });
+      if (p.action === 'add' && p.port === 27199) throw new Error('ufw: exit status 1');
+      return { output: '', status: 'ok' };
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { game_port: 7799, query_port: 27199 },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'ufw_update_failed' });
+    expect(ufwCalls.filter((c) => c.action === 'remove' && c.port === 7787)).toHaveLength(0);
+    expect(ufwCalls.filter((c) => c.action === 'remove' && c.port === 27165)).toHaveLength(0);
+    // The rule that did get added is taken back out.
+    expect(ufwCalls).toContainEqual({ action: 'remove', port: 7799, proto: 'udp' });
+    const [row] = await h.db
+      .select({ gamePort: serverSettings.gamePort, queryPort: serverSettings.queryPort })
+      .from(serverSettings)
+      .where(eq(serverSettings.serverId, serverId));
+    expect(row).toEqual({ gamePort: 7787, queryPort: 27165 });
+  });
+
+  it('adds new rules before removing old ones and keeps a rule a swapped port still needs', async () => {
+    const serverId = await seedServer({ slug: 'settings-ufw-swap', status: 'stopped' });
+    const ufwCalls: Array<{ action: string; port: number; proto: string }> = [];
+    h.bridge.ufwRule = vi.fn(async (p) => {
+      ufwCalls.push({ action: p.action, port: p.port, proto: p.proto });
+      return { output: '', status: 'ok' };
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      // game 7787 → 27165 and query 27165 → 7787: both udp rules stay needed.
+      payload: { game_port: 27165, query_port: 7787, beacon_port: 15001 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ufwCalls).toEqual([
+      { action: 'add', port: 15001, proto: 'udp' },
+      { action: 'remove', port: 15000, proto: 'udp' },
+    ]);
+  });
+
   it('returns 404 for an unknown server id', async () => {
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({
