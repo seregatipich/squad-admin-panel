@@ -189,6 +189,36 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
       first.filter((j) => j.id === pubId).length + second.filter((j) => j.id === pubId).length;
     expect(wins).toBe(1);
   });
+
+  // Regression for #63 finding 942: nothing ever reclaimed a row a crashed
+  // worker left stuck in 'uploading' — it was claimed forever.
+  it('reclaims a publication stuck in uploading past the lease (crashed worker)', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/stuck.mp4' });
+    const pubId = await insertPublication({ mediaId });
+    await requireDb()
+      .update(mediaPublications)
+      .set({ status: 'uploading', updatedAt: new Date(NOW.getTime() - 20 * 60_000) })
+      .where(eq(mediaPublications.id, pubId));
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).toContain(pubId);
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+  });
+
+  it('does not reclaim a publication still within the uploading lease', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/inflight.mp4' });
+    const pubId = await insertPublication({ mediaId });
+    await requireDb()
+      .update(mediaPublications)
+      .set({ status: 'uploading', updatedAt: new Date(NOW.getTime() - 60_000) })
+      .where(eq(mediaPublications.id, pubId));
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).not.toContain(pubId);
+  });
 });
 
 describeIfDb('createMediaPublisherDeps — status transitions', () => {

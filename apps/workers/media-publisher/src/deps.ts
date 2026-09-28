@@ -32,6 +32,17 @@ export interface MediaPublisherDepsOptions {
 /** The DB/IO half of the tick's dependencies — everything except `diag` and the clock. */
 export type MediaPublisherRuntimeDeps = Omit<MediaPublisherTickDeps, 'diag' | 'now' | 'batchSize'>;
 
+/**
+ * How long a row may sit in `uploading` before claimDue treats it as
+ * abandoned and reclaims it. Nothing else in this package ever transitions
+ * `uploading` back to `queued` — a worker killed (crash/OOM/restart) mid
+ * upload left the row claimed forever (#63 finding 942). This is a coarse
+ * lease, not a per-attempt heartbeat: a claim still bumps `updated_at`, so
+ * only a row whose owner never finished — crashed, not merely slow — is
+ * ever reclaimed.
+ */
+export const UPLOAD_LEASE_MS = Number(process.env.MEDIA_PUBLISHER_LEASE_MS ?? 15 * 60 * 1000);
+
 /** Raw row shape of the claim statement, in snake_case as Postgres returns it. */
 interface ClaimedRow {
   id: string;
@@ -86,16 +97,22 @@ export function createMediaPublisherDeps(
      * locked row or finds it no longer queued.
      */
     async claimDue(now: Date, limit: number): Promise<MediaPublicationJob[]> {
+      const leaseCutoff = new Date(now.getTime() - UPLOAD_LEASE_MS).toISOString();
       const rows = (await db.execute(sql`
         WITH due AS (
           SELECT p.id
           FROM media_publications p
           JOIN media_files m ON m.id = p.media_id
-          WHERE p.status = 'queued'
-            AND p.next_attempt_at IS NOT NULL
-            AND p.next_attempt_at <= ${now.toISOString()}::timestamptz
+          WHERE (
+              (p.status = 'queued'
+                AND p.next_attempt_at IS NOT NULL
+                AND p.next_attempt_at <= ${now.toISOString()}::timestamptz)
+              -- Reclaims a row a crashed/OOM-killed/restarted worker left
+              -- stuck in 'uploading' past the lease (#63 finding 942).
+              OR (p.status = 'uploading' AND p.updated_at <= ${leaseCutoff}::timestamptz)
+            )
             AND m.deleted_at IS NULL
-          ORDER BY p.next_attempt_at ASC
+          ORDER BY p.next_attempt_at ASC NULLS LAST, p.updated_at ASC
           LIMIT ${limit}
           FOR UPDATE OF p SKIP LOCKED
         )
@@ -104,7 +121,7 @@ export function createMediaPublisherDeps(
         FROM due, media_files m
         WHERE p.id = due.id
           AND m.id = p.media_id
-          AND p.status = 'queued'
+          AND (p.status = 'queued' OR p.status = 'uploading')
         RETURNING
           p.id,
           p.media_id,
