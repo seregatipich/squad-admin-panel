@@ -198,4 +198,27 @@ describe('UpdateProgressModal', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  // #797: a long SteamCMD run must not grow the client buffer without bound.
+  it('keeps only the most recent 2000 progress lines', () => {
+    render(
+      <UpdateProgressModal
+        open
+        onOpenChange={() => {}}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление"
+      />,
+    );
+    act(() => latestSocket().emitOpen());
+    act(() => {
+      for (let i = 0; i < 2100; i += 1) {
+        latestSocket().emitMessage({ stream: 'stdout', message: `progress line ${i}` });
+      }
+    });
+
+    const log = screen.getByRole('log');
+    expect(log.childElementCount).toBe(2000);
+    expect(log.firstElementChild).toHaveTextContent('progress line 100');
+    expect(log.lastElementChild).toHaveTextContent('progress line 2099');
+  });
 });
