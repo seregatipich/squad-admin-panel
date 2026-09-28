@@ -1,5 +1,5 @@
 import { externalBanSources, externalBans } from '@squad/db/schema';
-import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
+import { EXTERNAL_BAN_CACHE_VERSION_KEY, httpUrlSchema } from '@squad/shared-types';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -14,11 +14,11 @@ const ON_MATCH_ACTIONS = ['none', 'alert', 'kick'] as const;
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
-  url: z.string().url().max(2048),
+  url: httpUrlSchema(2048),
   format: z.enum(BAN_SOURCE_FORMATS),
   trust_level: z.enum(TRUST_LEVELS).default('normal'),
   on_match: z.enum(ON_MATCH_ACTIONS).default('alert'),
-  discord_url: z.string().url().max(2048).nullable().optional(),
+  discord_url: httpUrlSchema(2048).nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().default(true),
   poll_interval_minutes: z.number().int().min(15).max(10080).default(60),
@@ -27,11 +27,11 @@ const createBody = z.object({
 
 const updateBody = z.object({
   name: z.string().trim().min(1).max(128).optional(),
-  url: z.string().url().max(2048).optional(),
+  url: httpUrlSchema(2048).optional(),
   format: z.enum(BAN_SOURCE_FORMATS).optional(),
   trust_level: z.enum(TRUST_LEVELS).optional(),
   on_match: z.enum(ON_MATCH_ACTIONS).optional(),
-  discord_url: z.string().url().max(2048).nullable().optional(),
+  discord_url: httpUrlSchema(2048).nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().optional(),
   poll_interval_minutes: z.number().int().min(15).max(10080).optional(),
