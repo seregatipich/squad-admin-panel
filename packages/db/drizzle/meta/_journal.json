@@ -729,6 +729,27 @@
       "when": 1788473460000,
       "tag": "0118_clan_members_release_disbanded",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1788473500000,
+      "tag": "0119_events_seeding_kind_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788473600000,
+      "tag": "0120_events_notify_per_statement",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1788473700000,
+      "tag": "0121_clan_tags_normalized_uniqueness",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,14 @@
 -- triggers. This file is idempotent (CREATE OR REPLACE + DROP TRIGGER IF
 -- EXISTS) and is applied on top of the generated migration.
 
+-- Normalizes a clan tag the same way worker-clan-guard's matchProtectedTag
+-- does (case-insensitive, and blind to the bracket/paren/brace/angle wrapper a
+-- clan wears its tag in), so "ABC", "[ABC]" and "(abc)" are recognized as the
+-- one protected tag they behave as from the guard's point of view (#1088).
+CREATE OR REPLACE FUNCTION clans_normalize_tag(tag text) RETURNS text AS $$
+  SELECT lower(trim(both '[](){}<>' from trim(tag)));
+$$ LANGUAGE sql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION clans_enforce_unique_tags() RETURNS trigger AS $$
 DECLARE
   taken text;
@@ -12,11 +20,18 @@ BEGIN
   IF array_length(NEW.tags, 1) IS NULL THEN
     RETURN NEW;
   END IF;
+  -- Serialize concurrent inserts/updates against this same check: at READ
+  -- COMMITTED, two concurrent transactions each fail to see the other's
+  -- uncommitted tag and both pass, so both clans end up sharing a tag the
+  -- unique_violation was supposed to prevent.
+  PERFORM pg_advisory_xact_lock(hashtext('clans-tags'));
   SELECT other_tag INTO taken
   FROM clans AS other, unnest(other.tags) AS other_tag
   WHERE other.deleted_at IS NULL
     AND other.id <> NEW.id
-    AND other_tag = ANY (NEW.tags)
+    AND clans_normalize_tag(other_tag) IN (
+      SELECT clans_normalize_tag(t) FROM unnest(NEW.tags) AS t
+    )
   LIMIT 1;
   IF taken IS NOT NULL THEN
     RAISE EXCEPTION 'clan tag "%" already belongs to another clan', taken

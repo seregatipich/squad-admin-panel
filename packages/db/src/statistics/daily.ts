@@ -1,4 +1,5 @@
 import type postgres from 'postgres';
+import { SESSION_PRUNE_LOOKBACK_SECONDS } from '../session-window.js';
 
 const DAY_MS = 86_400_000;
 const DAY_SECONDS = 86_400;
@@ -114,6 +115,8 @@ export async function recomputeServerDailyStats(
         ) AS gd(day_number)
         WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
           AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
+          AND (ps.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
+               OR ps.disconnected_at IS NULL)
           AND gd.day_number BETWEEN ${fromDayNumber} AND ${toDayNumber}
       ),
       seconds AS (

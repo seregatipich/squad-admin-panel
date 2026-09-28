@@ -1,5 +1,6 @@
 import type postgres from 'postgres';
 import { splitSessionSecondsByUtcDay, utcDayKey } from '../presence/daily.js';
+import { SESSION_PRUNE_LOOKBACK_SECONDS } from '../session-window.js';
 
 const DAY_MS = 86_400_000;
 const DAY_SECONDS = 86_400;
@@ -115,8 +116,12 @@ export async function recomputeCoplayWindow(
            AND sb.connected_at < COALESCE(sa.disconnected_at, ${now}::timestamptz)
           WHERE sa.connected_at < to_timestamp(${windowEndEpoch})
             AND COALESCE(sa.disconnected_at, ${now}::timestamptz) > to_timestamp(${windowStartEpoch})
+            AND (sa.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
+                 OR sa.disconnected_at IS NULL)
             AND sb.connected_at < to_timestamp(${windowEndEpoch})
             AND COALESCE(sb.disconnected_at, ${now}::timestamptz) > to_timestamp(${windowStartEpoch})
+            AND (sb.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
+                 OR sb.disconnected_at IS NULL)
         ) pairs
         CROSS JOIN LATERAL generate_series(
           FLOOR(pairs.ov_start / ${DAY_SECONDS})::bigint,

@@ -1,5 +1,6 @@
 import type postgres from 'postgres';
 import type { SessionMode } from '../schema/player-sessions.js';
+import { SESSION_PRUNE_LOOKBACK_SECONDS } from '../session-window.js';
 
 const DAY_MS = 86_400_000;
 const DAY_SECONDS = 86_400;
@@ -146,6 +147,8 @@ export async function recomputeDailyPresence(
         ) AS gd(day_number)
         WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
           AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
+          AND (ps.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
+               OR ps.disconnected_at IS NULL)
           AND gd.day_number BETWEEN ${fromDayNumber} AND ${toDayNumber}
       ) seg
       WHERE seg.seconds > 0
@@ -155,18 +158,24 @@ export async function recomputeDailyPresence(
 
     await tx`
       UPDATE players p
-      SET total_time_played_seconds = COALESCE((
-            SELECT SUM(s.duration_seconds)
-            FROM player_sessions s
-            WHERE s.player_id = p.id AND s.duration_seconds IS NOT NULL
-          ), 0),
+      SET total_time_played_seconds = totals.total,
           updated_at = now()
-      WHERE p.id IN (
-        SELECT DISTINCT ps.player_id
-        FROM player_sessions ps
-        WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
-          AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
-      )
+      FROM (
+        SELECT touched.player_id, COALESCE(SUM(s.duration_seconds), 0)::bigint AS total
+        FROM (
+          SELECT DISTINCT ps.player_id
+          FROM player_sessions ps
+          WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
+            AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
+            AND (ps.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
+                 OR ps.disconnected_at IS NULL)
+        ) touched
+        LEFT JOIN player_sessions s
+          ON s.player_id = touched.player_id AND s.duration_seconds IS NOT NULL
+        GROUP BY touched.player_id
+      ) totals
+      WHERE p.id = totals.player_id
+        AND p.total_time_played_seconds IS DISTINCT FROM totals.total
     `;
 
     return inserted.length;

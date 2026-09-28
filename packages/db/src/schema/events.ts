@@ -26,7 +26,14 @@ export const events = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.eventId, table.occurredAt] }),
     serverOccurredIdx: index('events_server_occurred_idx').on(table.serverId, table.occurredAt),
-    kindOccurredIdx: index('events_kind_occurred_idx').on(table.kind, table.occurredAt),
+    // Matches the partial index actually created by 0000_init.sql: it only
+    // covers the RCON-poll/connect/disconnect kinds it was built for, not every
+    // `kind`. Declaring it as a full index here drifted from that DDL and hid
+    // the fact that seeding lookups (SEEDING_EVENT_KINDS) were never indexed
+    // (#1324); see events-seeding-kind.sql for their own partial index.
+    kindOccurredIdx: index('events_kind_occurred_idx')
+      .on(table.kind, table.occurredAt)
+      .where(sql`kind IN ('player.connected','player.disconnected','rcon.players_polled')`),
     actorOccurredIdx: index('events_actor_occurred_idx')
       .on(table.actorId, table.occurredAt.desc())
       .where(sql`${table.actorId} IS NOT NULL`),
