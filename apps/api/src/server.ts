@@ -82,7 +82,14 @@ export async function buildServer(config: AppConfig) {
   // `config.permissions`, so they fall through to the fail-closed default and
   // require a session like the rest of the API.
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
-  await app.register(websocket);
+  await app.register(websocket, {
+    // The client-side WebSocket frames are tiny ({type:'pong'}, JSON control
+    // messages); ws's 100 MiB default maxPayload would let an authenticated
+    // caller buffer and JSON.parse an unnecessarily huge frame on every
+    // websocket route (live, logs, install, depot) for no legitimate reason
+    // (finding #1302).
+    options: { maxPayload: 4096 },
+  });
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
 
   await app.register(requestContextPlugin);
