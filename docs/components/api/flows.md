@@ -750,18 +750,18 @@ bridge.on('rpc-error', {method, code, message}:
     payload: {method, code, message},
   }).catch(() => undefined)
 
-bridge.on('rtt', rttMs:
-  if rttMs > 50:
+bridge.on('rtt', rttMs, method:
+  if method == 'ping' and rttMs > 50 and no outlier emitted in the last 60 s:
     app.diag.emit({
       component: 'api', kind: 'bridge.rtt.outlier', severity: 'warn',
-      message: `bridge RTT ${rttMs}ms exceeds 50ms threshold`,
-      payload: {rttMs, thresholdMs: 50},
+      message: `bridge ping RTT ${rttMs}ms exceeds 50ms threshold`,
+      payload: {rttMs, thresholdMs: 50, method},
     }).catch(() => undefined)
 ```
 
 The `.catch(() => undefined)` swallow is load-bearing: if Redis is unavailable the diag emit rejects, but the bridge plugin must never propagate that back into the underlying `EventEmitter` cycle (a thrown exception inside a listener would unwind the dispatcher mid-frame). The emit is fire-and-forget; the diag worker reads the stream and persists rows out-of-band.
 
-`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` is gated at 50 ms (constant `RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`); below that, `rtt` events from the BridgeClient are ignored.
+`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` only considers `ping` calls — every other method's `rtt` is the operation's own duration (a container stop, an install), not transport latency — is gated at 50 ms (`RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`) and throttled to one event per 60 s (`RTT_OUTLIER_THROTTLE_MS`).
 
 #### Connector listeners (background, on every state change)
 

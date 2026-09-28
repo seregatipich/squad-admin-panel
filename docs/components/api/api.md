@@ -495,7 +495,7 @@ The bridge plugin ([`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plug
 | `bridge.client.connected` | First successful `ping()` response on a freshly-opened socket. Fires at most once per socket lifetime. | `info` | `{ rttMs, version, hostname }` |
 | `bridge.client.disconnected` | Underlying socket closed/errored, or `BridgeClient.close()` called on a previously-connected client. Fires only if a `bridge.client.connected` was previously emitted for that socket. | `error` | `{ reason }` where `reason ∈ { 'socket-error', 'socket-closed', 'frame-decode-error', 'client-closed' }` |
 | `bridge.rpc.error` | Any RPC response with `ok: false` (path/image allowlist violation, runtime error, etc.). | `warn` | `{ method, code, message }` mirrors the `BridgeError` thrown to the caller. |
-| `bridge.rtt.outlier` | Successful RPC where `rttMs > 50`. The threshold is fixed in `apps/api/src/plugins/bridge.ts` (`RTT_OUTLIER_THRESHOLD_MS`). | `warn` | `{ rttMs, thresholdMs }` |
+| `bridge.rtt.outlier` | Successful `ping` where `rttMs > 50`, at most once per 60 s. Other methods are ignored: their `rtt` is the operation's duration, not network latency. Threshold and window are fixed in `apps/api/src/plugins/bridge.ts` (`RTT_OUTLIER_THRESHOLD_MS`, `RTT_OUTLIER_THROTTLE_MS`). | `warn` | `{ rttMs, thresholdMs, method }` |
 
 ### Connector listener event kinds
 

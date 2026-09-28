@@ -651,16 +651,17 @@ describe('event emission', () => {
     });
 
     const client = new BridgeClient({ socketPath });
-    const rttSamples: number[] = [];
-    client.on('rtt', (ms) => rttSamples.push(ms));
+    const rttSamples: Array<{ ms: number; method: string }> = [];
+    client.on('rtt', (ms, method) => rttSamples.push({ ms, method }));
 
     try {
       await client.ping();
       await client.ping();
       expect(rttSamples).toHaveLength(2);
       for (const sample of rttSamples) {
-        expect(typeof sample).toBe('number');
-        expect(sample).toBeGreaterThanOrEqual(0);
+        expect(typeof sample.ms).toBe('number');
+        expect(sample.ms).toBeGreaterThanOrEqual(0);
+        expect(sample.method).toBe('ping');
       }
     } finally {
       await client.close();

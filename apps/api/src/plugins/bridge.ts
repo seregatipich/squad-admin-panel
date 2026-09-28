@@ -3,6 +3,8 @@ import fp from 'fastify-plugin';
 import type { AppConfig } from '../config.js';
 
 const RTT_OUTLIER_THRESHOLD_MS = 50;
+/** At most one `bridge.rtt.outlier` per window, so a slow socket cannot flood diagnostics. */
+const RTT_OUTLIER_THROTTLE_MS = 60_000;
 
 export default fp<{ config: AppConfig }>(async (app, opts) => {
   const bridge = new BridgeClient({
@@ -46,18 +48,23 @@ export default fp<{ config: AppConfig }>(async (app, opts) => {
       })
       .catch(() => undefined);
   });
-  bridge.on('rtt', (rttMs) => {
-    if (rttMs > RTT_OUTLIER_THRESHOLD_MS) {
-      app.diag
-        .emit({
-          component: 'api',
-          kind: 'bridge.rtt.outlier',
-          severity: 'warn',
-          message: `bridge RTT ${rttMs}ms exceeds ${RTT_OUTLIER_THRESHOLD_MS}ms threshold`,
-          payload: { rttMs, thresholdMs: RTT_OUTLIER_THRESHOLD_MS },
-        })
-        .catch(() => undefined);
-    }
+  // Only a `ping` round trip measures the socket: every other method's duration
+  // is its own work (a container stop, an install), not transport latency.
+  let lastOutlierAt = Number.NEGATIVE_INFINITY;
+  bridge.on('rtt', (rttMs, method) => {
+    if (method !== 'ping' || rttMs <= RTT_OUTLIER_THRESHOLD_MS) return;
+    const now = Date.now();
+    if (now - lastOutlierAt < RTT_OUTLIER_THROTTLE_MS) return;
+    lastOutlierAt = now;
+    app.diag
+      .emit({
+        component: 'api',
+        kind: 'bridge.rtt.outlier',
+        severity: 'warn',
+        message: `bridge ${method} RTT ${rttMs}ms exceeds ${RTT_OUTLIER_THRESHOLD_MS}ms threshold`,
+        payload: { rttMs, thresholdMs: RTT_OUTLIER_THRESHOLD_MS, method },
+      })
+      .catch(() => undefined);
   });
   app.decorate('bridge', bridge);
   app.decorate(

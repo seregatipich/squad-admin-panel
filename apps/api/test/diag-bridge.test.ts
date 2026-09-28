@@ -127,19 +127,46 @@ describe('bridge plugin → diag listeners', () => {
     }
   });
 
-  it('emits bridge.rtt.outlier only when RTT exceeds 50ms', async () => {
+  it('emits bridge.rtt.outlier only for a ping slower than 50ms, naming the method (#67)', async () => {
     const { app, captured } = await buildApp();
     try {
       const bridge = (app as unknown as { bridge: BridgeClient }).bridge;
-      bridge.emit('rtt', 12);
-      bridge.emit('rtt', 50);
-      bridge.emit('rtt', 75);
+      bridge.emit('rtt', 12, 'ping');
+      bridge.emit('rtt', 50, 'ping');
+      bridge.emit('rtt', 75, 'ping');
       await flushMicrotasks();
 
       const outliers = captured.filter((e) => e.kind === 'bridge.rtt.outlier');
       expect(outliers).toHaveLength(1);
       expect(outliers[0]?.severity).toBe('warn');
-      expect(outliers[0]?.payload).toEqual({ rttMs: 75, thresholdMs: 50 });
+      expect(outliers[0]?.payload).toEqual({ rttMs: 75, thresholdMs: 50, method: 'ping' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('ignores the duration of long-running RPCs, which is not a network RTT (#67)', async () => {
+    const { app, captured } = await buildApp();
+    try {
+      const bridge = (app as unknown as { bridge: BridgeClient }).bridge;
+      bridge.emit('rtt', 45_000, 'container_stop');
+      bridge.emit('rtt', 600_000, 'depot_update');
+      await flushMicrotasks();
+
+      expect(captured.filter((e) => e.kind === 'bridge.rtt.outlier')).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('throttles repeated ping outliers to one diag event per window (#67)', async () => {
+    const { app, captured } = await buildApp();
+    try {
+      const bridge = (app as unknown as { bridge: BridgeClient }).bridge;
+      for (let i = 0; i < 20; i++) bridge.emit('rtt', 120, 'ping');
+      await flushMicrotasks();
+
+      expect(captured.filter((e) => e.kind === 'bridge.rtt.outlier')).toHaveLength(1);
     } finally {
       await app.close();
     }
@@ -164,7 +191,7 @@ describe('bridge plugin → diag listeners', () => {
         bridge.emit('connected', { rttMs: 5, version: 'v1', hostname: 'h' });
         bridge.emit('rpc-error', { method: 'ping', code: 'internal', message: 'boom' });
         bridge.emit('disconnected', 'socket-error');
-        bridge.emit('rtt', 999);
+        bridge.emit('rtt', 999, 'ping');
       }).not.toThrow();
       await flushMicrotasks();
     } finally {
