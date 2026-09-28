@@ -1,4 +1,5 @@
 import { externalBanSources, externalBans } from '@squad/db/schema';
+import { findNonPublicAddress, OutboundUrlError, parseOutboundHttpUrl } from '@squad/shared-config';
 import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -136,6 +137,31 @@ function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
   return false;
 }
 
+/**
+ * Refuses a source URL the ban-sync worker must not fetch (#855): anything
+ * but `http:`/`https:`, `localhost`, and a host that is — or resolves to — a
+ * loopback, private, link-local or other non-public address, which would let
+ * a source manager read services inside the host or the compose network. A
+ * hostname that does not resolve right now is accepted; the worker checks the
+ * addresses it actually connects to on every fetch.
+ *
+ * @returns `true` when the reply was sent (422 `ban_source_url_forbidden`).
+ */
+async function denyUnsafeUrl(url: string, reply: FastifyReply): Promise<boolean> {
+  let reason: string;
+  try {
+    const parsed = parseOutboundHttpUrl(url);
+    const blocked = await findNonPublicAddress(parsed.hostname);
+    if (!blocked) return false;
+    reason = 'non_public_address';
+  } catch (err) {
+    if (!(err instanceof OutboundUrlError)) throw err;
+    reason = err.reason;
+  }
+  reply.code(422).send({ error: 'ban_source_url_forbidden', reason });
+  return true;
+}
+
 function denyManage(req: FastifyRequest, reply: FastifyReply): boolean {
   if (!req.user) {
     reply.code(401).send({ error: 'unauthenticated' });
@@ -207,6 +233,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(422);
         return { error: 'kick_requires_trusted_source' };
       }
+      if (await denyUnsafeUrl(req.body.url, reply)) return;
       const id = uuidv7();
       const authHeaderEncrypted =
         req.body.auth_header != null
@@ -262,6 +289,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'ban_source_not_found' };
       }
+      if (req.body.url !== undefined && (await denyUnsafeUrl(req.body.url, reply))) return;
       const updates: Record<string, unknown> = {};
       if (req.body.name !== undefined) updates.name = req.body.name;
       if (req.body.url !== undefined) updates.url = req.body.url;
