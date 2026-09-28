@@ -35,9 +35,38 @@ export function publicationsUrl(mediaId: string): string {
   return `/api/v1/media/${mediaId}/publications`;
 }
 
+export function publicationUrl(mediaId: string, destination: MediaPublicationDestination): string {
+  return `${publicationsUrl(mediaId)}/${destination}`;
+}
+
+export type MediaKind = 'video' | 'image' | 'external_link';
+
 /** Only a media row backed by a local file can be uploaded to a third party. */
-export function isPublishable(kind: 'video' | 'image' | 'external_link'): boolean {
+export function isPublishable(kind: MediaKind): boolean {
   return kind !== 'external_link';
+}
+
+/**
+ * Which destinations actually accept this media kind.
+ *
+ * The media-publisher worker rejects an image queued to YouTube with an
+ * unrecoverable `youtube_unsupported_kind` (publishers/youtube.ts) — the UI
+ * must not offer a destination that is guaranteed to fail (#439).
+ */
+export function destinationsForKind(kind: MediaKind): readonly MediaPublicationDestination[] {
+  if (kind === 'image') return PUBLICATION_DESTINATIONS.filter((d) => d !== 'youtube');
+  return PUBLICATION_DESTINATIONS;
+}
+
+/**
+ * A destination is "occupied" only by a publication that isn't `failed` — a
+ * failed job must not permanently block its destination slot from being
+ * retried (#439).
+ */
+export function occupiedDestinations(
+  publications: readonly MediaPublication[],
+): Set<MediaPublicationDestination> {
+  return new Set(publications.filter((p) => p.status !== 'failed').map((p) => p.destination));
 }
 
 /**

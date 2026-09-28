@@ -4,12 +4,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Checkbox, InlineBanner } from '@/components/ui';
 import {
   destinationLabel,
+  destinationsForKind,
   isPublishable,
   type MediaPublication,
   type MediaPublicationDestination,
-  PUBLICATION_DESTINATIONS,
+  occupiedDestinations,
   publicationErrorLabel,
   publicationsUrl,
+  publicationUrl,
   statusLabel,
 } from './media-publications';
 
@@ -34,15 +36,16 @@ export function MediaPublishControl({
   mediaKind: 'video' | 'image' | 'external_link';
 }) {
   const publishable = isPublishable(mediaKind);
+  const kindDestinations = destinationsForKind(mediaKind);
   const [items, setItems] = useState<MediaPublication[] | null>(null);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
-  const [selected, setSelected] = useState<MediaPublicationDestination[]>([
-    ...PUBLICATION_DESTINATIONS,
-  ]);
+  const [selected, setSelected] = useState<MediaPublicationDestination[]>([...kindDestinations]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [removingDestination, setRemovingDestination] =
+    useState<MediaPublicationDestination | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -68,9 +71,31 @@ export function MediaPublishControl({
     void load();
   }, [load, publishable]);
 
-  const queued = new Set((items ?? []).map((item) => item.destination));
-  const available = PUBLICATION_DESTINATIONS.filter((destination) => !queued.has(destination));
+  const occupied = occupiedDestinations(items ?? []);
+  const available = kindDestinations.filter((destination) => !occupied.has(destination));
   const chosen = selected.filter((destination) => available.includes(destination));
+
+  const removePublication = useCallback(
+    async (destination: MediaPublicationDestination) => {
+      setRemovingDestination(destination);
+      try {
+        const res = await fetch(publicationUrl(mediaId, destination), {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          setSubmitError('Не удалось убрать публикацию. Попробуйте ещё раз.');
+          return;
+        }
+        await load();
+      } catch {
+        setSubmitError('Не удалось убрать публикацию. Попробуйте ещё раз.');
+      } finally {
+        setRemovingDestination(null);
+      }
+    },
+    [load, mediaId],
+  );
 
   const submit = useCallback(async () => {
     setSubmitting(true);
@@ -120,6 +145,15 @@ export function MediaPublishControl({
                   </a>
                 )}
                 {reason && <span className="text-ink-3">{reason}</span>}
+                {publication.status === 'failed' && (
+                  <Button
+                    size="sm"
+                    onClick={() => void removePublication(publication.destination)}
+                    loading={removingDestination === publication.destination}
+                  >
+                    Убрать
+                  </Button>
+                )}
               </li>
             );
           })}
