@@ -33,6 +33,13 @@ const diffQuery = z.object({ from: z.string().uuid(), to: z.string().uuid() });
 const bodySchema = z.object({
   content: z.string().max(1024 * 1024),
   message: z.string().max(500).optional(),
+  // Optional lost-update guard (#608): the sha256 the editor's content was
+  // last loaded from. When present, the write is rejected with 409 if the
+  // file on disk no longer matches it.
+  base_sha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 const restoreBody = z
   .object({ message: z.string().max(500).optional() })
@@ -173,6 +180,21 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       if (req.params.name === 'License.cfg') {
         reply.code(400);
         return { error: 'panel_managed_file' };
+      }
+      if (req.body.base_sha256) {
+        let diskSha256: string | null = null;
+        try {
+          const onDisk = await app.bridge.fileRead({
+            path: configPath(req.params.id, req.params.name),
+          });
+          diskSha256 = hex(sha256(onDisk.content));
+        } catch {
+          diskSha256 = null;
+        }
+        if (diskSha256 !== req.body.base_sha256) {
+          reply.code(409);
+          return { error: 'stale_base', current_sha256: diskSha256 };
+        }
       }
       return writeVersion(
         app,

@@ -517,6 +517,69 @@ describe('PUT /api/v1/servers/:id/configs/:name', () => {
     expect(versions).toHaveLength(1);
   });
 
+  it('rejects a stale base_sha256 with 409 instead of clobbering a concurrent write (#608)', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    seedFakeConfig(id, 'Admins.cfg', 'original content');
+
+    const get1 = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+    });
+    expect(get1.statusCode).toBe(200);
+    const baseSha = get1.json<{ sha256: string }>().sha256;
+
+    // Simulates a write that bypassed this editor session entirely — another
+    // operator's PUT, a worker rewrite, or a manual SSH edit — after this
+    // editor loaded `baseSha`.
+    seedFakeConfig(id, 'Admins.cfg', 'someone else changed this first');
+
+    const stale = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'my stale edit', base_sha256: baseSha },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json<{ error: string }>().error).toBe('stale_base');
+
+    // The concurrent writer's content must survive untouched, and no new
+    // version was created for the rejected write.
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)?.toString(),
+    ).toBe('someone else changed this first');
+    const versions = await h.db
+      .select()
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Admins.cfg')));
+    expect(versions).toHaveLength(0);
+  });
+
+  it('accepts a PUT whose base_sha256 still matches the file on disk', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    seedFakeConfig(id, 'Admins.cfg', 'original content');
+
+    const get1 = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+    });
+    const baseSha = get1.json<{ sha256: string }>().sha256;
+
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'fresh edit', base_sha256: baseSha },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)?.toString(),
+    ).toBe('fresh edit');
+  });
+
   it('round-trips a CRLF payload byte-identically through PUT → GET and into config_versions', async () => {
     const cookie = await login();
     const id = await createServer(cookie);

@@ -107,7 +107,11 @@ vi.mock('next/dynamic', () => ({
         props.onMount(makeFakeEditor(props.value ?? ''), fakeMonaco);
       });
       return (
-        <div data-testid="monaco-stub" data-readonly={String(Boolean(props.options?.readOnly))} />
+        <div
+          data-testid="monaco-stub"
+          data-readonly={String(Boolean(props.options?.readOnly))}
+          data-value={props.value ?? ''}
+        />
       );
     },
 }));
@@ -1046,5 +1050,94 @@ describe('ConfigsPage — полоса ошибки', () => {
     ).toBe(getsBefore);
     expect(screen.getByText('изменено')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfigsPage — гонка ответов при переключении файлов (#607)', () => {
+  it('не подставляет содержимое первого файла под редактор второго, если его ответ пришёл позже', async () => {
+    let resolveServerCfg!: (r: Response) => void;
+    const serverCfgResponse = new Promise<Response>((resolve) => {
+      resolveServerCfg = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.endsWith('/configs/drift')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: [] }), { status: 200 }),
+          );
+        }
+        if (url.endsWith('/configs')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                items: Object.entries(BODIES).map(([name, body]) => ({
+                  name,
+                  size: body.length,
+                  sha256: `sha-${name}`,
+                  behavior: 'hot_reload',
+                  exists: true,
+                })),
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        // Server.cfg's response is deliberately delayed so it can resolve
+        // *after* MOTD.cfg's, even though the operator opened it first.
+        if (url.endsWith('/configs/Server.cfg')) return serverCfgResponse;
+        if (url.endsWith('/configs/MOTD.cfg')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                name: 'MOTD.cfg',
+                content: BODIES['MOTD.cfg'],
+                sha256: 'sha-MOTD.cfg',
+                behavior: 'hot_reload',
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }),
+    );
+
+    await renderPage();
+
+    await act(async () => {
+      screen.getByText('Server.cfg').click();
+    });
+    await act(async () => {
+      screen.getByText('MOTD.cfg').click();
+    });
+    await screen.findByTestId('monaco-stub');
+    await act(async () => {});
+
+    // The stale Server.cfg response finally arrives after MOTD.cfg is
+    // already open and must be discarded, not painted over MOTD.cfg.
+    await act(async () => {
+      resolveServerCfg(
+        new Response(
+          JSON.stringify({
+            name: 'Server.cfg',
+            content: BODIES['Server.cfg'],
+            sha256: 'sha-Server.cfg',
+            behavior: 'hot_reload',
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    await act(async () => {});
+
+    // The editor content must be MOTD's — never Server.cfg's stale payload
+    // landing under MOTD's header (which would then get PUT back to
+    // /configs/MOTD.cfg on save, clobbering the live MOTD with Server.cfg's
+    // text).
+    expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-value', BODIES['MOTD.cfg']);
   });
 });

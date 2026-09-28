@@ -25,6 +25,7 @@ function message(seq: number): ChatMessage {
     player_name: `Игрок${seq}`,
     player_id: null,
     steam_id64: null,
+    eos_id: null,
     message: `Сообщение ${seq}`,
     ts: new Date(2026, 0, 1, 0, 0, seq).toISOString(),
   };
@@ -60,7 +61,7 @@ describe('ChatPanel autoscroll beyond the message cap', () => {
       // burst into a single render and mask the bug this test guards against.
       for (let seq = 1; seq <= CHAT_LOG_CAP + 1; seq += 1) {
         act(() => {
-          chatHandler?.({ type: 'chat.message', data: message(seq) });
+          chatHandler?.({ type: 'chat.message', ts: new Date().toISOString(), data: message(seq) });
         });
       }
 
