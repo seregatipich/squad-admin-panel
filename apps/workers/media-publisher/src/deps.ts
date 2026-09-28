@@ -21,6 +21,12 @@ export interface MediaPublisherEnv {
   TELEGRAM_CHAT_ID?: string;
 }
 
+/**
+ * First key of the per-`storage_path` advisory lock; must equal
+ * `MEDIA_STORAGE_LOCK` in apps/api/src/lib/media-files.ts.
+ */
+export const MEDIA_STORAGE_LOCK = 'media_storage_path';
+
 export interface MediaPublisherDepsOptions {
   mediaBaseDir: string;
   env?: MediaPublisherEnv;
@@ -228,29 +234,40 @@ export function createMediaPublisherDeps(
         .limit(1);
       if (pending.length > 0) return false;
 
-      const sharing = await db
-        .select({ id: mediaFiles.id })
-        .from(mediaFiles)
-        .where(
-          and(
-            eq(mediaFiles.storagePath, job.storagePath),
-            ne(mediaFiles.id, job.mediaId),
-            isNull(mediaFiles.deletedAt),
-          ),
-        )
-        .limit(1);
-      if (sharing.length > 0) return false;
+      const storagePath = job.storagePath;
+      // Check-and-release under the same per-storage-path advisory lock the
+      // API's upload dedup and media delete take (`MEDIA_STORAGE_LOCK` in
+      // apps/api/src/lib/media-files.ts), so an upload cannot start sharing
+      // these bytes between the check and the release.
+      const released = await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext(${MEDIA_STORAGE_LOCK}), hashtext(${storagePath}))`,
+        );
+        const sharing = await tx
+          .select({ id: mediaFiles.id })
+          .from(mediaFiles)
+          .where(
+            and(
+              eq(mediaFiles.storagePath, storagePath),
+              ne(mediaFiles.id, job.mediaId),
+              isNull(mediaFiles.deletedAt),
+            ),
+          )
+          .limit(1);
+        if (sharing.length > 0) return false;
 
-      const updated = await db
-        .update(mediaFiles)
-        .set({ storagePath: null, externalUrl })
-        .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, job.storagePath)))
-        .returning({ id: mediaFiles.id });
-      if (updated.length === 0) return false;
+        const updated = await tx
+          .update(mediaFiles)
+          .set({ storagePath: null, externalUrl })
+          .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, storagePath)))
+          .returning({ id: mediaFiles.id });
+        return updated.length > 0;
+      });
+      if (!released) return false;
 
       // The database no longer references the bytes; reclaiming them is best
       // effort, and a missing file must not fail the publication.
-      await removeFile(path.join(options.mediaBaseDir, job.storagePath)).catch(() => undefined);
+      await removeFile(path.join(options.mediaBaseDir, storagePath)).catch(() => undefined);
       return true;
     },
   };

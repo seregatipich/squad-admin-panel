@@ -8,9 +8,13 @@ import {
   mediaPublications,
   mediaPublishSettings,
 } from '@squad/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createMediaPublisherDeps, type MediaPublisherDepsOptions } from '../src/deps.js';
+import {
+  createMediaPublisherDeps,
+  MEDIA_STORAGE_LOCK,
+  type MediaPublisherDepsOptions,
+} from '../src/deps.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -323,6 +327,52 @@ describeIfDb('createMediaPublisherDeps — releaseIfEnabled', () => {
     const released = await makeDeps().releaseIfEnabled(job, 'https://y/4');
 
     expect(released).toBe(false);
+    expect((await readMedia(mediaId)).storagePath).toBe(storagePath);
+    expect(existsSync(path.join(mediaBaseDir, storagePath))).toBe(true);
+  });
+
+  it('waits for an upload that is deduplicating onto the same file under the storage-path lock (#70)', async () => {
+    await setReleaseLocalFile(true);
+    const storagePath = '2026/07/race.mp4';
+    const sha256 = randomUUID().replace(/-/g, '');
+    const mediaId = await insertStoredMedia({ storagePath, sha256 });
+    const pubId = await insertPublication({ mediaId });
+    const job = await claimedJob(mediaId, pubId);
+    await makeDeps().markPublished(pubId, { externalId: 'x', externalUrl: 'https://y/race' }, NOW);
+
+    // Plays the API upload: it holds the storage-path lock while inserting a
+    // second row that reuses the bytes, and commits only after the release
+    // has started.
+    const uploader = createDatabaseClient(DATABASE_URL as string);
+    const dedupId = randomUUID();
+    createdMediaIds.push(dedupId);
+    let releaseStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    const upload = uploader.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${MEDIA_STORAGE_LOCK}), hashtext(${storagePath}))`,
+      );
+      await tx.insert(mediaFiles).values({
+        id: dedupId,
+        kind: 'video',
+        originalFilename: 'clip.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 16,
+        sha256,
+        storagePath,
+        externalUrl: null,
+      });
+      await started;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const release = makeDeps().releaseIfEnabled(job, 'https://y/race');
+    releaseStarted();
+    await upload;
+
+    expect(await release).toBe(false);
     expect((await readMedia(mediaId)).storagePath).toBe(storagePath);
     expect(existsSync(path.join(mediaBaseDir, storagePath))).toBe(true);
   });

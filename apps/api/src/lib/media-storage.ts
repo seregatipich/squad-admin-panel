@@ -106,7 +106,9 @@ export interface StoredMediaFile {
  * On a size-limit breach or magic-byte mismatch, the partially-written file is
  * removed and the corresponding error is thrown after the source stream has
  * been fully drained (so the caller's multipart parser doesn't hang waiting
- * for more of a part we've already decided to reject).
+ * for more of a part we've already decided to reject). If the source itself
+ * fails (client disconnect) or the disk write fails, the file is closed and
+ * removed and that error is rethrown.
  */
 export async function storeMediaUpload(params: {
   baseDir: string;
@@ -133,43 +135,68 @@ export async function storeMediaUpload(params: {
   let headerChecked = false;
   let rejection: Error | null = null;
 
-  for await (const chunk of params.source) {
-    sizeBytes += chunk.length;
-    if (rejection) continue; // drain the rest of the part without further processing
+  // Any failure — a rejected upload, a client that disconnects mid-stream
+  // (the multipart source throws), or a disk error — closes the file and
+  // removes the partial bytes, so an aborted upload never leaves a file that
+  // no `media_files` row references.
+  try {
+    for await (const chunk of params.source) {
+      sizeBytes += chunk.length;
+      if (rejection) continue; // drain the rest of the part without further processing
 
-    if (sizeBytes > maxBytes) {
-      rejection = new MediaSizeLimitExceededError(maxBytes);
-      continue;
-    }
+      if (sizeBytes > maxBytes) {
+        rejection = new MediaSizeLimitExceededError(maxBytes);
+        continue;
+      }
 
-    if (!headerChecked) {
-      headerBuf = Buffer.concat([headerBuf, chunk]);
-      if (headerBuf.length >= MAGIC_BYTE_CHECK_LENGTH) {
-        headerChecked = true;
-        if (!matchesMagicBytes(params.mimeType, headerBuf)) {
-          rejection = new MediaMagicByteMismatchError(params.mimeType);
-          continue;
+      if (!headerChecked) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        if (headerBuf.length >= MAGIC_BYTE_CHECK_LENGTH) {
+          headerChecked = true;
+          if (!matchesMagicBytes(params.mimeType, headerBuf)) {
+            rejection = new MediaMagicByteMismatchError(params.mimeType);
+            continue;
+          }
         }
+      }
+
+      hash.update(chunk);
+      if (!writeStream.write(chunk)) {
+        await new Promise<void>((resolve, reject) => {
+          const onDrain = () => {
+            writeStream.off('error', onError);
+            resolve();
+          };
+          const onError = (err: Error) => {
+            writeStream.off('drain', onDrain);
+            reject(err);
+          };
+          writeStream.once('drain', onDrain);
+          writeStream.once('error', onError);
+        });
       }
     }
 
-    hash.update(chunk);
-    if (!writeStream.write(chunk)) {
-      await new Promise<void>((resolve) => writeStream.once('drain', resolve));
+    if (!rejection && !headerChecked && !matchesMagicBytes(params.mimeType, headerBuf)) {
+      rejection = new MediaMagicByteMismatchError(params.mimeType);
     }
-  }
 
-  if (!rejection && !headerChecked && !matchesMagicBytes(params.mimeType, headerBuf)) {
-    rejection = new MediaMagicByteMismatchError(params.mimeType);
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
-  });
-
-  if (rejection) {
+    await new Promise<void>((resolve, reject) => {
+      writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+    });
+    if (rejection) throw rejection;
+  } catch (err) {
+    // Wait for the descriptor to close first: the stream opens its file
+    // asynchronously, so removing it earlier could race the open and leave
+    // an empty file behind.
+    if (!writeStream.closed) {
+      await new Promise<void>((resolve) => {
+        writeStream.once('close', () => resolve());
+        writeStream.destroy();
+      });
+    }
     await rm(absolutePath, { force: true });
-    throw rejection;
+    throw err;
   }
 
   return { relativePath, absolutePath, sizeBytes, sha256: hash.digest('hex') };
