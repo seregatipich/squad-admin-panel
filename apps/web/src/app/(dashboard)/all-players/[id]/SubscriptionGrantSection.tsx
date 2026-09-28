@@ -61,10 +61,13 @@ function formatDate(value: string): string {
 
 /**
  * VIPSUB-5 (#171): grant or review a player's VIP subscription from the player
- * card. Self-hides on 401/403 rather than reading a capability flag — the
- * batch freezes `GET /api/v1/me`, and the route requires `can_manage_economy`
+ * card. The list itself self-hides on 401/403 (both GET endpoints only require
+ * `panel_access`, so any panel user can view them). The grant footer is a
+ * separate concern: `POST .../subscriptions` requires `can_manage_economy`
  * together with `can_assign_roles` (it both spends the ledger and grants a
- * role, mirroring the ECON-6 privilege-shop guard).
+ * role, mirroring the ECON-6 privilege-shop guard), so `canGrant` is derived
+ * from those two flags on `/api/v1/me` — not from whether any tier happens to
+ * be purchasable (#459).
  */
 export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
   const tierSelectId = useId();
@@ -100,7 +103,6 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
         const body = (await tiersRes.json()) as { tiers: ShopTier[] };
         const purchasable = body.tiers.filter((t) => t.price_bonuses != null);
         setTiers(purchasable);
-        setCanGrant(purchasable.length > 0);
         setSelected((prev) => prev || (purchasable[0]?.id ?? ''));
       }
     } catch (err) {
@@ -112,6 +114,15 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
 
   useEffect(() => {
     void load();
+    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { can_manage_economy?: boolean; permissions?: string[] } | null) => {
+        setCanGrant(
+          (body?.can_manage_economy ?? false) &&
+            (body?.permissions?.includes('user:manage_roles') ?? false),
+        );
+      })
+      .catch(() => {});
   }, [load]);
 
   async function grant(): Promise<void> {
@@ -195,7 +206,7 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
         )}
       </CardBody>
 
-      {canGrant ? (
+      {canGrant && tiers.length > 0 ? (
         <CardFooter className="justify-between">
           <label className="text-xs text-ink-2" htmlFor={tierSelectId}>
             Тариф
