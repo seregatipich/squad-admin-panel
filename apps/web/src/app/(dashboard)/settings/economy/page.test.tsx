@@ -406,6 +406,23 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     ).toBeInTheDocument();
   });
 
+  it('maps vip_tier_has_subscriptions on delete (#365)', async () => {
+    stubFetch({
+      tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
+      tierMutationError: { status: 409, body: { error: 'vip_tier_has_subscriptions' } },
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
+
+    expect(
+      await within(section).findByText(
+        'Ошибка удаления тира: Нельзя удалить тир: на него оформлялись подписки. Отключите тир вместо удаления.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows the HTTP status when a delete error has no code', async () => {
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],

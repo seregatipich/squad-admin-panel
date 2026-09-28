@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { VIP_RENEWAL_LEAD_MS } from '@squad/db';
 import {
   adminsCfgSyncOutbox,
   bonusTransactions,
@@ -499,11 +500,13 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
       price_bonuses: TIER_PRICE,
       renews_every_days: TIER_DAYS,
     });
-    expectCloseTo(new Date(body.subscription.next_renewal_at), Date.now() + TIER_DAYS * DAY_MS);
-
     const stored = await storedPlayer(playerId);
     expect(stored.roleId).toBe(vipRoleId);
     expectCloseTo(stored.roleExpiresAt, Date.now() + TIER_DAYS * DAY_MS);
+    // #364: billed ahead of the role expiry, derived from it — never trailing it.
+    expect(new Date(body.subscription.next_renewal_at).getTime()).toBe(
+      (stored.roleExpiresAt as Date).getTime() - VIP_RENEWAL_LEAD_MS,
+    );
 
     const audit = await assertAuditRow(h, { action: 'me.subscription.create' });
     expect(audit.actorPlayerId).toBe(playerId);
@@ -818,5 +821,59 @@ describeIfDb('VIPSUB-5 admin subscription grant', () => {
         .length,
     ).toBeGreaterThan(0);
     expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(before);
+  });
+});
+
+describeIfDb('deactivated tiers cannot be bought or subscribed to (#363)', () => {
+  it('refuses a self-service purchase of an inactive tier without charging', async () => {
+    const playerId = await seedPlayer('SubsInactiveBuyer');
+    await credit(playerId, 200);
+    const cookie = await loginSelfService(playerId);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/purchases',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ tier_id: inactiveTierId }),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'tier_not_purchasable' });
+    const stored = await storedPlayer(playerId);
+    expect(stored.balance).toBe(200);
+    expect(stored.roleId).toBeNull();
+  });
+
+  it('refuses a self-service subscription to an inactive tier', async () => {
+    const playerId = await seedPlayer('SubsInactiveSubscriber');
+    await credit(playerId, 200);
+    const cookie = await loginSelfService(playerId);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/subscriptions',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ tier_id: inactiveTierId }),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'tier_not_purchasable' });
+    expect(await storedSubscriptions(playerId)).toHaveLength(0);
+  });
+
+  it('refuses an admin subscription grant on an inactive tier', async () => {
+    const playerId = await seedPlayer('SubsInactiveGrant');
+    await credit(playerId, 200);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/subscriptions`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ tier_id: inactiveTierId }),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'tier_not_purchasable' });
+    expect(await storedSubscriptions(playerId)).toHaveLength(0);
   });
 });

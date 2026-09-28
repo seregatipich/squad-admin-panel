@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, roles, vipTiers } from '@squad/db/schema';
+import { players, roles, vipSubscriptions, vipTiers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -430,5 +430,45 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(200);
+  });
+  it('refuses to delete a tier with subscription history (409, not a 500 FK error) (#365)', async () => {
+    const subRoleId = await seedRole(h.db);
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP Subscribed ${uuidv7()}`, role_id: subRoleId },
+    });
+    expect(created.statusCode).toBe(201);
+    const tier = created.json() as { id: string };
+    createdTierIds.push(tier.id);
+
+    // A long-cancelled subscription: no one holds the role any more, but the
+    // row still references the tier through vip_subscriptions.tier_id RESTRICT.
+    const subscriberId = await seedPlayer(h.db, null);
+    const subscriptionId = uuidv7();
+    await h.db.insert(vipSubscriptions).values({
+      id: subscriptionId,
+      playerId: subscriberId,
+      tierId: tier.id,
+      status: 'cancelled',
+      renewsEveryDays: 30,
+      priceBonuses: 100,
+      nextRenewalAt: new Date(Date.now() - 86_400_000),
+      cancelledAt: new Date(Date.now() - 86_400_000),
+    });
+    try {
+      const res = await h.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/vip-tiers/${tier.id}`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'vip_tier_has_subscriptions' });
+      const kept = await h.db.select().from(vipTiers).where(eq(vipTiers.id, tier.id)).limit(1);
+      expect(kept).toHaveLength(1);
+    } finally {
+      await h.db.delete(vipSubscriptions).where(eq(vipSubscriptions.id, subscriptionId));
+    }
   });
 });

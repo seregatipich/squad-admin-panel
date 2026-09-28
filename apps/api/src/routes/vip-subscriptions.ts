@@ -1,4 +1,4 @@
-import { type ApplyVipGrantResult, applyVipGrant } from '@squad/db';
+import { type ApplyVipGrantResult, applyVipGrant, VIP_RENEWAL_LEAD_MS } from '@squad/db';
 import {
   bonusTransactions,
   economySettings,
@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 
-const DAY_MS = 86_400_000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const MAX_PERIOD_DAYS = 3650;
@@ -133,13 +132,15 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
         priceBonuses: vipTiers.priceBonuses,
         rolePanelAccess: roles.panelAccess,
         roleIsSystem: roles.isSystemRole,
+        isActive: vipTiers.isActive,
       })
       .from(vipTiers)
       .innerJoin(roles, eq(roles.id, vipTiers.roleId))
       .where(eq(vipTiers.id, tierId))
       .limit(1);
     if (!tier) return { ok: false, reason: 'tier_not_found' };
-    if (tier.priceBonuses == null || tier.defaultDays == null) {
+    // A deactivated tier is off sale everywhere, not just hidden from /me/tiers (#363).
+    if (!tier.isActive || tier.priceBonuses == null || tier.defaultDays == null) {
       return { ok: false, reason: 'tier_not_purchasable' };
     }
     if (tier.rolePanelAccess || tier.roleIsSystem) {
@@ -557,7 +558,7 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
             status: 'active',
             renewsEveryDays: input.tier.days,
             priceBonuses: input.tier.price,
-            nextRenewalAt: new Date(Date.now() + input.tier.days * DAY_MS),
+            nextRenewalAt: new Date(applied.roleExpiresAt.getTime() - VIP_RENEWAL_LEAD_MS),
           })
           .returning();
         const subscription = inserted[0];
