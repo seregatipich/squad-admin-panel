@@ -13,7 +13,7 @@
 Repeats until told to stop:
 
 1. Discover event streams: `events:global` plus every `events:server:<id>` key currently in Redis (`SCAN events:server:*`).
-2. For any newly-discovered stream, create its consumer group (`XGROUP CREATE ... MKSTREAM`, idempotent — `BUSYGROUP` is swallowed).
+2. For any newly-discovered stream, create its consumer group (`XGROUP CREATE ... MKSTREAM`, idempotent — `BUSYGROUP` is swallowed). Streams found on the first iteration start at `$` (a first start does not replay history); a stream first seen later was created after the loop started, so its group starts at `0` and the XADD that created it is delivered (#60). Redelivery is harmless — dedup is by `event_id`.
 3. `XREADGROUP` across every known stream (`BLOCK` 1s, `COUNT` 50).
 4. For each entry read:
    a. Parse the `envelope` field and validate it against `eventEnvelope` (malformed → log + ack, skip).
@@ -24,6 +24,7 @@ Repeats until told to stop:
    d. Run the AUTO-1 `onEnvelope` hook (`processAutomationEnvelope`): map the envelope to a trigger input (`player_count` from `rcon.players_polled`; `player_flag` + player ref from `player.connected`; `time_of_day` off any event), load the enabled rules (cached ~15s), `evaluate` them, and for each match `runMatch` (real firing) — enqueuing an RCON command / notifying, and writing an `automation_runs` + `audit_log` row. A `time_of_day` match is gated by the `automation:tod:<ruleId>` cooldown. Errors here are logged and swallowed — they never block plugin delivery or the ack.
    e. Ack the stream entry.
 5. A failure processing one entry (bad JSON, a Redis blip) is logged; the loop continues to the next entry/iteration rather than crashing the worker.
+6. `NOGROUP` from `XREADGROUP` (a known stream was deleted and possibly re-created by a later XADD) clears the known-stream cache, so the next iteration re-creates every group instead of the read stalling until a restart (#60).
 
 ## Shutdown
 

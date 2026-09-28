@@ -1,5 +1,12 @@
 # Changelog — worker-automation
 
+## 2026-09-28 — consumer groups on new and re-created streams (#60)
+
+### Fixed
+
+- A stream discovered after the loop started gets its consumer group at `0`, not `$`, so the first events of a new server's `events:server:<id>` stream (including the XADD that created it) are delivered. Streams present on the first discovery still start at `$`.
+- `NOGROUP` from the multiplexed `XREADGROUP` clears the known-stream cache and re-creates the groups; a deleted and re-created stream no longer stops reading every stream until a restart.
+
 ## 2026-07-24
 
 ### Added

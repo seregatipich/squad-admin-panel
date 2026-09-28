@@ -162,13 +162,19 @@ export async function dispatchEnvelope(
   return result;
 }
 
-/** Creates the consumer group for `stream` if it doesn't already exist (idempotent). */
+/**
+ * Creates the consumer group for `stream` if it doesn't already exist (idempotent).
+ *
+ * @param startId Where a newly created group starts reading: `'$'` (default)
+ *   skips the entries already in the stream, `'0'` delivers all of them.
+ */
 export async function ensureConsumerGroup(
   redis: Redis,
   stream: string,
   group: string,
+  startId: '$' | '0' = '$',
 ): Promise<void> {
-  await redis.xgroup('CREATE', stream, group, '$', 'MKSTREAM').catch((err: Error) => {
+  await redis.xgroup('CREATE', stream, group, startId, 'MKSTREAM').catch((err: Error) => {
     if (!String(err.message).includes('BUSYGROUP')) throw err;
   });
 }
@@ -282,7 +288,15 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
     onEnvelope: opts.onEnvelope,
   };
 
+  // Streams whose group this loop has ensured. A stream first seen on a later
+  // iteration was created after the loop started — typically by the XADD of a
+  // new server's first event — so its group starts at '0' and that event is
+  // delivered; '$' would skip everything XADDed before discovery (#60,
+  // finding 1291). Only the first discovery starts at '$', so a first start
+  // against an existing install does not replay stream history. Redelivery of
+  // an already-handled entry is harmless: consumers dedup by `event_id`.
   const knownStreams = new Set<string>();
+  let initialDiscovery = true;
 
   while (!shouldStop()) {
     let streams: string[];
@@ -300,9 +314,10 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
 
     for (const stream of streams) {
       if (knownStreams.has(stream)) continue;
-      await ensureConsumerGroup(redis, stream, group);
+      await ensureConsumerGroup(redis, stream, group, initialDiscovery ? '$' : '0');
       knownStreams.add(stream);
     }
+    initialDiscovery = false;
 
     try {
       const res = (await redis.xreadgroup(
@@ -325,7 +340,17 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
         }
       }
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'dispatch poll iteration failed');
+      const message = (err as Error).message;
+      // A known stream was deleted (its group went with it) and possibly
+      // re-created by a later XADD: the multiplexed XREADGROUP then rejects
+      // NOGROUP for every stream. Forget the cache so the next iteration
+      // re-ensures each group; existing ones answer BUSYGROUP.
+      if (message.includes('NOGROUP')) {
+        log.info({ err: message }, 'xreadgroup NOGROUP — re-creating consumer groups');
+        knownStreams.clear();
+        continue;
+      }
+      log.error({ err: message }, 'dispatch poll iteration failed');
       await sleep(1000);
     }
   }
