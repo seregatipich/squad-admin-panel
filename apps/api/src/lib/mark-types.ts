@@ -31,6 +31,19 @@ export function isMarkTypeIcon(value: string): value is MarkTypeIcon {
   return MARK_TYPE_ICON_SET.has(value);
 }
 
+/**
+ * Ids `1..MARK_TYPE_SEED_ID_CEILING` are reserved for {@link MARK_TYPE_SEEDS};
+ * operator-created types are numbered above it, so a seed added by a later
+ * release never collides with a custom type's id.
+ */
+export const MARK_TYPE_SEED_ID_CEILING = 100;
+
+/** Unique index on `mark_types.slug`; tells a slug clash from any other 23505. */
+export const MARK_TYPE_SLUG_CONSTRAINT = 'mark_types_slug_key';
+
+/** `pg_advisory_xact_lock` key that serialises `POST /api/v1/mark-types`. */
+export const MARK_TYPE_CREATE_LOCK = 'mark_types_create';
+
 export interface MarkTypeSeed {
   id: number;
   slug: string;
@@ -116,6 +129,11 @@ export const MARK_TYPE_SEEDS: readonly MarkTypeSeed[] = [
   },
 ];
 
+/**
+ * Inserts any missing {@link MARK_TYPE_SEEDS}. Rows that already exist — by id
+ * or by slug — are left untouched, so operator edits survive restarts and a
+ * slug an operator already used never aborts API startup.
+ */
 export async function ensureMarkTypes(db: DatabaseClient): Promise<void> {
   await db
     .insert(markTypes)
@@ -130,5 +148,5 @@ export async function ensureMarkTypes(db: DatabaseClient): Promise<void> {
         sortOrder: seed.sortOrder,
       })),
     )
-    .onConflictDoNothing({ target: markTypes.id });
+    .onConflictDoNothing();
 }

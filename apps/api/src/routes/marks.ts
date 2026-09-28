@@ -324,15 +324,24 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const before = serializeMark(mark);
+      // `cleared_at IS NULL` makes the clear a compare-and-set: of two
+      // concurrent requests that both passed the check above, only one
+      // updates the row, audits and publishes; the other gets the 409.
       const updated = await app.db
         .update(playerMarks)
         .set({ clearedBy: actorId, clearedAt: new Date(), clearReason })
-        .where(eq(playerMarks.id, markId))
+        .where(
+          and(
+            eq(playerMarks.id, markId),
+            eq(playerMarks.playerId, playerId),
+            isNull(playerMarks.clearedAt),
+          ),
+        )
         .returning();
       const row = updated[0];
       if (!row) {
-        reply.code(500);
-        return { error: 'update_failed' };
+        reply.code(409);
+        return { error: 'mark_already_cleared' };
       }
 
       await writeAuditEntry(app.db, {
