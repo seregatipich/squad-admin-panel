@@ -11,7 +11,7 @@ Every Fastify API log line, worker log line, and bridge log line is written to t
 ### Viewing logs
 
 - **UI**: `/logs` page — filterable by source, level, server, and free text. Paginated, live-polling.
-- **API**: `GET /api/v1/logs` — query params: `src`, `lvl`, `srv`, `q`, `before`, `after`, `limit` (max 2000). Requires `host:view` permission.
+- **API**: `GET /api/v1/logs` — query params: `src`, `lvl`, `srv`, `q`, `before`, `after`, `limit` (max 2000). Returns `{ entries, cursor }`; tail with `after=<cursor>`. Requires `host:view` permission.
 - **Export**: `GET /api/v1/logs/export` — streams a gzip-compressed bundle (recent entries + latest audit slice). Requires `host:metrics` permission. Attach to support requests.
 
 Source codes: `B` = bridge, `R` = rcon, `L` = log-ingest, `W` = worker, `D` = depot, `I` = install, `A` = api.

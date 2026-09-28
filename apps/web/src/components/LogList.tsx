@@ -1,5 +1,9 @@
 'use client';
 
+// Sources and their wire codes come from the shared table, never a local copy:
+// a hand-copied list once lacked config-sync, whose entries then vanished as
+// soon as any source box was unchecked (#781).
+import { LOG_SOURCES, type LogSource, sourceCode } from '@squad/shared-config/log-stream';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
@@ -22,17 +26,6 @@ import {
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type Level = (typeof LEVELS)[number];
-
-const SOURCE_LIST = ['bridge', 'rcon', 'log-ingest', 'worker', 'depot', 'install', 'api'] as const;
-const SOURCE_CODES: Record<(typeof SOURCE_LIST)[number], string> = {
-  bridge: 'B',
-  rcon: 'R',
-  'log-ingest': 'L',
-  worker: 'W',
-  depot: 'D',
-  install: 'I',
-  api: 'A',
-};
 
 const DEFAULT_LEVEL: Level = 'info';
 
@@ -62,6 +55,12 @@ interface Entry {
   ctx?: Record<string, unknown>;
 }
 
+interface LogsResponse {
+  entries: Entry[];
+  /** Newest stream id the API scanned, before filtering; the next `after=`. */
+  cursor?: string;
+}
+
 interface ServersResponse {
   items: Array<{ id: string; display_name: string }>;
 }
@@ -69,7 +68,7 @@ interface ServersResponse {
 export function LogList(props: { servers: Array<{ id: string; display_name: string }> }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [src, setSrc] = useState<Set<string>>(new Set(SOURCE_LIST));
+  const [src, setSrc] = useState<Set<string>>(new Set(LOG_SOURCES));
   const [lvl, setLvl] = useState<Level>(DEFAULT_LEVEL);
   const [srv, setSrv] = useState<string>('');
   const [q, setQ] = useState<string>('');
@@ -80,10 +79,8 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
   const buildUrl = useCallback(
     (extra: Record<string, string> = {}) => {
       const p = new URLSearchParams();
-      if (src.size > 0 && src.size < SOURCE_LIST.length) {
-        const codes = Array.from(src)
-          .map((s) => SOURCE_CODES[s as (typeof SOURCE_LIST)[number]])
-          .filter(Boolean);
+      if (src.size > 0 && src.size < LOG_SOURCES.length) {
+        const codes = Array.from(src).map((s) => sourceCode(s as LogSource));
         if (codes.length) p.set('src', codes.join(','));
       }
       p.set('lvl', lvl);
@@ -104,10 +101,12 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       try {
         const r = await fetch(buildUrl(), { credentials: 'include', signal: controller.signal });
         if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        const body = (await r.json()) as LogsResponse;
         setEntries(body.entries);
         setLoaded(true);
-        if (body.entries.length > 0) lastIdRef.current = body.entries[0]?.id ?? null;
+        // The API cursor exists even when nothing matched the filter, so the
+        // tail starts on an empty first page too.
+        lastIdRef.current = body.cursor ?? body.entries[0]?.id ?? null;
       } catch {
         // swallowed (likely AbortError)
       }
@@ -124,9 +123,11 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       try {
         const r = await fetch(buildUrl({ after }), { credentials: 'include' });
         if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        const body = (await r.json()) as LogsResponse;
+        // Advance over everything scanned, matched or not: advancing only on
+        // matches re-read the same filtered-out window every second.
+        lastIdRef.current = body.cursor ?? body.entries[0]?.id ?? after;
         if (body.entries.length === 0) return;
-        lastIdRef.current = body.entries[0]?.id ?? after;
         setEntries((prev) => [...body.entries, ...prev].slice(0, 1000));
       } catch {
         // ignore transient errors
@@ -150,10 +151,10 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
   };
 
   const filtered =
-    q !== '' || srv !== '' || lvl !== DEFAULT_LEVEL || src.size !== SOURCE_LIST.length;
+    q !== '' || srv !== '' || lvl !== DEFAULT_LEVEL || src.size !== LOG_SOURCES.length;
 
   const resetFilters = () => {
-    setSrc(new Set(SOURCE_LIST));
+    setSrc(new Set(LOG_SOURCES));
     setLvl(DEFAULT_LEVEL);
     setSrv('');
     setQ('');
@@ -218,7 +219,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       <fieldset>
         <legend className="text-2xs uppercase tracking-[0.06em] text-ink-3">Источники</legend>
         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-          {SOURCE_LIST.map((s) => (
+          {LOG_SOURCES.map((s) => (
             <Checkbox
               key={s}
               label={s}

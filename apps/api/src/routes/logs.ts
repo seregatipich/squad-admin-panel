@@ -2,6 +2,7 @@ import { servers as serversTbl } from '@squad/db';
 import {
   decodeLogEntry,
   LOG_LEVELS,
+  LOG_SOURCES,
   type LogLevel,
   PANEL_LOGS_STREAM,
   sourceCode,
@@ -10,7 +11,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { streamBundle } from '../lib/log-export.js';
 
-const SOURCE_CODES = ['B', 'R', 'L', 'W', 'D', 'I', 'A'] as const;
+// Derived from the shared source table so a new source (config-sync → C, #781)
+// can never be silently dropped from `src=` filtering again.
+const SOURCE_CODES: ReadonlySet<string> = new Set(LOG_SOURCES.map(sourceCode));
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 const logsRoutes: FastifyPluginAsync = async (app) => {
@@ -46,13 +49,7 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         after?: string;
         limit: number;
       };
-      const codes = q.src
-        ? new Set(
-            q.src
-              .split(',')
-              .filter((c) => SOURCE_CODES.includes(c as (typeof SOURCE_CODES)[number])),
-          )
-        : null;
+      const codes = q.src ? new Set(q.src.split(',').filter((c) => SOURCE_CODES.has(c))) : null;
       const minRank = q.lvl ? LEVEL_RANK[q.lvl] : 0;
 
       let items: Array<[string, string[]]>;
@@ -79,6 +76,13 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         >;
       }
 
+      // Newest stream id this request scanned, before any filtering. Tailing
+      // clients pass it back as `after=`: advancing on the filtered result
+      // instead would stall on a window the filter drops entirely (#779), and
+      // an empty first result would leave no cursor at all (#778). `0-0` on
+      // an empty stream means "everything that arrives from now on".
+      const cursor = items[0]?.[0] ?? q.after ?? q.before ?? '0-0';
+
       const entries = items
         .map(([id, fields]) => {
           const obj: Record<string, string> = {};
@@ -100,7 +104,7 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
           return true;
         });
 
-      return { entries };
+      return { entries, cursor };
     },
   );
   app.get(
