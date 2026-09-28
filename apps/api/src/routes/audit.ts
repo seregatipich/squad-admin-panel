@@ -43,6 +43,9 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(desc(auditLog.id))
         .limit(page_size)
         .offset(offset);
+      // `total` counts the whole log (#94), matching the appeals/players list
+      // contract, so a client can page past the first `page_size` rows.
+      const [countRow] = await app.db.select({ total: sql<number>`count(*)::int` }).from(auditLog);
       const items = rows.map((r) => ({
         ...r,
         id: String(r.id),
@@ -50,7 +53,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
       }));
       return {
         items,
-        total: items.length,
+        total: countRow?.total ?? 0,
         page,
         page_size,
       };
@@ -61,7 +64,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/audit/verify-chain',
     { config: { permissions: ['audit:view'], audit: false } },
     async () => {
-      const rows = (await app.db.execute(sql`
+      const rows = await app.db.execute<AuditChainRow>(sql`
         SELECT
           id::text AS id,
           action_type,
@@ -73,7 +76,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
           encode(row_hash, 'hex') AS row_hash_hex
         FROM audit_log
         ORDER BY audit_log.id ASC
-      `)) as unknown as AuditChainRow[];
+      `);
 
       const result = verifyAuditChain(rows);
       return {

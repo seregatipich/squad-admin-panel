@@ -386,13 +386,13 @@ not ban may not lift a ban through an appeal either.
 | GET | `/api/v1/public/appeals/:token` | Applicant status page data. Returns exactly `{ number, status, created_at, decided_at, decision_note }` — never `internal_note`, `contact`, `player_id`, `steam_id64`, `moderation_action_id` or `submitter_ip`. `404 appeal_not_found`. Rate limit 60/min. | none (public) |
 | GET | `/api/v1/appeals?status=&player_id=&page=&page_size=` | Paginated review queue (newest first), joined to the appellant, the appealed ban and the handler. | `mod:unban` |
 | GET | `/api/v1/appeals/:id` | One appeal card. `404 appeal_not_found`. | `mod:unban` |
-| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `400 invalid_transition`, `409 bans_cfg_conflict`. Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
+| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `400 invalid_transition`, `409 { error: 'bans_cfg_conflict', partial_revert }`. Servers are unbanned one by one; on a conflict the servers before it stay unbanned, `partial_revert` lists them (`null` when none) and `appeal.unban_partial` is audited with their ids and `conflict_server_id`, while the appeal stays open for a retry. Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
 
 ## Audit
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/audit?page=&page_size=` | Page-paginated list (default 50, max 200). `id` is stringified bigserial. | `audit:view` |
+| GET | `/api/v1/audit?page=&page_size=` | Page-paginated list (default 50, max 200). Returns `{ items, total, page, page_size }`; `total` is the full `audit_log` row count. `id` is stringified bigserial. | `audit:view` |
 
 ## Host
 
