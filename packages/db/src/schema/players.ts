@@ -69,6 +69,11 @@ export const players = pgTable(
     canonicalNameNormalizedIdx: index('players_canonical_name_normalized_idx').on(
       table.canonicalNameNormalized,
     ),
+    /** Serves the `LIKE '%…%'` nickname searches a B-tree cannot (migration 0119). */
+    canonicalNameNormalizedTrgmIdx: index('players_canonical_name_normalized_trgm_idx').using(
+      'gin',
+      sql`${table.canonicalNameNormalized} gin_trgm_ops`,
+    ),
     lastSeenAtIdx: index('players_last_seen_at_idx').on(table.lastSeenAt),
     roleIdIdx: index('players_role_id_idx').on(table.roleId).where(sql`role_id IS NOT NULL`),
     roleExpiresAtIdx: index('players_role_expires_at_idx')

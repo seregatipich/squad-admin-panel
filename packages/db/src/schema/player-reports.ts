@@ -32,6 +32,11 @@ export const playerReports = pgTable(
     statusCreatedIdx: index('player_reports_status_created_idx').on(table.status, table.createdAt),
     targetPlayerIdx: index('player_reports_target_player_idx').on(table.targetPlayerId),
     serverIdx: index('player_reports_server_idx').on(table.serverId),
+    reporterCreatedIdx: index('player_reports_reporter_created_idx').on(
+      table.reporterPlayerId,
+      table.createdAt,
+    ),
+    handlerPlayerIdx: index('player_reports_handler_player_idx').on(table.handlerPlayerId),
     sourceCheck: check('player_reports_source_enum', sql`source IN ('ingame','ui')`),
     statusCheck: check(
       'player_reports_status_enum',
