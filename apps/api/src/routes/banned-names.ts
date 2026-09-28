@@ -14,6 +14,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const matchTypeSchema = z.enum(BANNED_NAME_MATCH_TYPES);
 const actionSchema = z.enum(BANNED_NAME_ACTIONS);
@@ -88,25 +89,6 @@ function snapshot(row: typeof bannedNameRules.$inferSelect) {
     created_by: row.createdBy,
     hit_count: row.hitCount,
   };
-}
-
-/**
- * `panel_access` gate for every banned-name route (#7). Rules are a panel
- * surface, and `squadPermissions` is not gated on `panel_access` in
- * `rbac.ts`, so an in-game-only role (Squad `ban`, no panel) must not reach
- * them through a session minted before its panel access was withdrawn.
- * API tokens arrive here already narrowed by `narrowToTokenScopes`.
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function hasBanPermission(req: FastifyRequest): boolean {

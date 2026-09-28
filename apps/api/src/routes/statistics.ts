@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { escapeCsvField, MAX_WINDOW_DAYS, resolveWindow } from './analytics.js';
 
 const DAY_MS = 86_400_000;
@@ -231,18 +232,6 @@ export function toStatisticsCsv(payload: StatisticsPayload): string {
   }
 
   return `${lines.join('\r\n')}\r\n`;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 // A type alias, not an interface: `db.execute<T>` constrains T to

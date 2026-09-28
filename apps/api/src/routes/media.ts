@@ -11,7 +11,7 @@ import {
   mediaUploadMetadata,
 } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
@@ -22,6 +22,7 @@ import {
   resolveMediaPath,
   storeMediaUpload,
 } from '../lib/media-storage.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 
@@ -36,18 +37,6 @@ function multipartFieldValue(field: unknown): string | undefined {
     return String((value as { value: unknown }).value);
   }
   return undefined;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 export function serializeMediaFile(row: MediaFileRow): MediaFileResponse {

@@ -7,11 +7,12 @@ import {
 } from '@squad/db';
 import { type EventEnvelope, STREAM_NAME, seedCallSentPayload } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 export const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
 const SEED_CHANNELS = ['email', 'webpush'] as const;
@@ -21,18 +22,6 @@ const subscriptionBody = z.object({
   channel: z.enum(SEED_CHANNELS),
   enabled: z.boolean(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401);
-    return true;
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return true;
-  }
-  return false;
-}
 
 function canCallSeeders(req: FastifyRequest): boolean {
   return (
@@ -122,7 +111,8 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   fast.get('/api/v1/seed-subscriptions', { config: { audit: false } }, async (req, reply) => {
-    if (panelGuard(req, reply)) return;
+    const denied = panelGuard(req, reply);
+    if (denied) return denied;
     const rows = await app.db
       .select({
         server_id: seedSubscriptions.serverId,
@@ -141,7 +131,8 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/seed-subscription',
     { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: false } },
     async (req, reply) => {
-      if (panelGuard(req, reply)) return;
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });
@@ -186,7 +177,8 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/seed-call',
     { schema: { params: serverIdParams }, config: { audit: false } },
     async (req, reply) => {
-      if (panelGuard(req, reply)) return;
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       const context = await loadServerContext(app, req.params.id);
       if (!context) {
         reply.code(404);

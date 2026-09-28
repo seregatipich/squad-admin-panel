@@ -14,6 +14,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 
 const COMMENT_MAX = 512;
@@ -44,18 +45,6 @@ const countQuery = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function manageGuard(
   req: FastifyRequest,

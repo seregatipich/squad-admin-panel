@@ -19,6 +19,8 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { ensureSystemIssueLabels } from '../lib/issue-labels.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import type { IssueCommentLiveView, IssueLiveView, IssuePlayerRef } from '../plugins/live-bus.js';
 
 const TITLE_MAX = 200;
@@ -112,14 +114,6 @@ function targetKey(target: LinkTarget): string {
  * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
  * error itself — the chain has to be walked.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 /**
  * Resolves the caller for the tracker routes, answering 401 without a user
@@ -141,22 +135,6 @@ function currentUser(req: FastifyRequest, reply: FastifyReply) {
     return null;
   }
   return req.user;
-}
-
-/**
- * `panel_access` gate for the player-card endpoint, which returns its body
- * instead of sending it (mirrors `media-links.ts`).
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function auditActor(req: FastifyRequest): AuditActor {

@@ -1,8 +1,9 @@
 import { bonusTransactions, economySettings, playerDailyPresence, servers } from '@squad/db/schema';
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
@@ -20,18 +21,6 @@ const seedContributionQuery = z.object({
     .max(MAX_WINDOW_DAYS)
     .default(DEFAULT_WINDOW_DAYS),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function resolveWindow(days: number): { fromDay: string; toDay: string } {
   const toDay = new Date().toISOString().slice(0, 10);

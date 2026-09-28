@@ -12,6 +12,7 @@ import {
   type PlayerIdentity,
   publishModerationEvent,
 } from '../lib/moderation-enforce.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { type ReloadOutcome, writeVersion } from './server-configs.js';
 
 const LIMIT_MAX = 200;
@@ -84,18 +85,6 @@ interface EvidenceItem {
 
 function bansCfgPath(serverId: string): string {
   return `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig/Bans.cfg`;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**

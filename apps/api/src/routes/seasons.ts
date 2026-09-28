@@ -4,6 +4,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const NAME_MAX = 120;
 
@@ -70,18 +71,6 @@ function editRolesGuard(
   if (!req.user.permissions.canEditRoles) {
     reply.code(403);
     return { error: 'forbidden', required: 'can_edit_roles' };
-  }
-  return null;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
   }
   return null;
 }

@@ -14,6 +14,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile } from './media.js';
 
 const mediaIdParams = z.object({ id: z.string().uuid() });
@@ -21,18 +23,6 @@ const publicationParams = z.object({
   id: z.string().uuid(),
   destination: mediaPublicationDestination,
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * Mutation gate for everything in this module. `can_manage_media` is a boolean
@@ -314,13 +304,5 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
  * a flat `err.code === '23505'` check silently misses it and turns a benign
  * duplicate into a 500.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current && depth < 5; depth++) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 export default mediaPublicationsRoutes;

@@ -5,26 +5,15 @@ import {
 } from '@squad/db';
 import { coplaySettings } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
 const TOP_PARTNERS_LIMIT = 20;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 interface TotalsRow {
   partner_id: string;

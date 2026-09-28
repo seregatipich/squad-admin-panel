@@ -1,9 +1,10 @@
 import { playerSessions, players, servers } from '@squad/db/schema';
 import { and, asc, eq, gt, isNull, lt, or } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { computeCoPresence, type RawSession } from '../lib/compare-online.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 7;
@@ -22,18 +23,6 @@ const compareQuery = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 interface ResolvedWindow {
   fromDay: string;

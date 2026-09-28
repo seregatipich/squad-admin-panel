@@ -1,21 +1,10 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /** ALT-7 privacy-aware pre-ban warning, gated by panel_access. */
 const playerBanAltWarningRoutes: FastifyPluginAsync = async (app) => {

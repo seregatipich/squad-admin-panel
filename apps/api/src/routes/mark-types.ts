@@ -10,6 +10,7 @@ import {
   MARK_TYPE_SEVERITY_MAX,
   MARK_TYPE_SEVERITY_MIN,
 } from '../lib/mark-types.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const LABEL_MAX = 64;
 const SLUG_MAX = 40;
@@ -66,14 +67,6 @@ function serialize(row: MarkTypeRow) {
  * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
  * error itself — the chain has to be walked.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 const markTypesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();

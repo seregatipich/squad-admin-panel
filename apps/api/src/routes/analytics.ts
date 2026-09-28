@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -76,18 +77,6 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
     return { from: new Date(to.getTime() - MAX_WINDOW_DAYS * DAY_MS), to };
   }
   return { from, to };
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */

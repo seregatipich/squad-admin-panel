@@ -1,26 +1,15 @@
 import { playerVehicleKills, playerVehicleStats, playerWeaponStats } from '@squad/db/schema';
 import { desc, eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 
 /** numeric columns come back as strings from postgres; expose null (UI renders "—") or a number. */
 function toNumber(value: string | null): number | null {
   return value === null ? null : Number(value);
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**

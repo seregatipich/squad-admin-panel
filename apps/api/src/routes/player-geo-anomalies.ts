@@ -1,9 +1,10 @@
 import { detectGeoAnomalies, type GeoObservation } from '@squad/db';
 import { geoipSettings, playerIpHistory } from '@squad/db/schema';
 import { desc, eq, isNotNull, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const feedQuery = z.object({
@@ -16,18 +17,6 @@ const FEED_CANDIDATE_CAP = 500;
 interface GeoConfig {
   switchWindowHours: number;
   multiCountryThreshold: number;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 interface IpRow {

@@ -13,6 +13,7 @@ import {
   exchangeCode,
   fetchDiscordUser,
 } from '../lib/discord-oauth.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const STATE_COOKIE = '__Host-discord-state';
 const STATE_TTL_SECONDS = 300;
@@ -22,15 +23,7 @@ const AUDIT_RESOURCE = 'player_discord_link';
 const AUDIT_LINK = 'integration.discord.link';
 const AUDIT_UNLINK = 'integration.discord.unlink';
 
-const PG_UNIQUE_VIOLATION = '23505';
-
 /** Drizzle wraps the driver error, so the SQLSTATE can sit one level down. */
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    (err as { code?: string }).code === PG_UNIQUE_VIOLATION ||
-    (err as { cause?: { code?: string } }).cause?.code === PG_UNIQUE_VIOLATION
-  );
-}
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const callbackQuery = z.object({

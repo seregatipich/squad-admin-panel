@@ -11,6 +11,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { reindexChatFlags } from '../lib/chat-flags.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const patternTypeSchema = z.enum(CHAT_FLAG_PATTERN_TYPES);
 const localeSchema = z.enum(CHAT_FLAG_LOCALES);
@@ -86,18 +87,6 @@ function snapshot(row: typeof chatFlagRules.$inferSelect) {
     enabled: row.enabled,
     created_by: row.createdBy,
   };
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function editGuard(

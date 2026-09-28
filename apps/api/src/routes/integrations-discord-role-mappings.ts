@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishDiscordRoleSync, readDiscordRoleSyncStatus } from '../lib/discord-role-sync.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const INTEGRATION_PERMISSION = 'integration:manage' as const;
 
@@ -40,16 +41,6 @@ const idParam = z.object({ id: z.string().uuid() });
  * `err.cause` rather than on the thrown object — the flat `err.code === '23505'`
  * check copied around this codebase silently misses it. Walk the chain.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current != null && depth < 5; depth++) {
-    if (typeof current === 'object' && (current as { code?: unknown }).code === '23505') {
-      return true;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 function serialize(row: DiscordRoleMappingRow, roleName: string | null) {
   return {

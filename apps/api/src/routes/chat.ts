@@ -6,9 +6,10 @@ import {
   players,
 } from '@squad/db/schema';
 import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;
@@ -71,18 +72,6 @@ function decodeCursor(raw: string): { sentAt: Date; id: bigint } | null {
   } catch {
     return null;
   }
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 const chatRoutes: FastifyPluginAsync = async (app) => {

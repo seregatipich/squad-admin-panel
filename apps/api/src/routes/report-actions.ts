@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { raiseAltBanAlert } from '../lib/alt-ban-alert.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
@@ -167,18 +168,6 @@ async function publishModerationEvent(
     JSON.stringify(envelope),
   );
   return envelope;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function handlerGuard(

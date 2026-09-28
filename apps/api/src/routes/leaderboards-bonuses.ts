@@ -1,8 +1,9 @@
 import { economySettings, playerBonusAccruals, players } from '@squad/db';
 import { asc, desc, eq, gt, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const CACHE_PREFIX = 'leaderboard-bonuses:';
 const CACHE_TTL_SECONDS = 60;
@@ -12,18 +13,6 @@ const bonusesQuery = z.object({
   period: z.enum(['all', '30d']).default('all'),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(100),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 interface BonusRow {
   playerId: string;

@@ -1,7 +1,7 @@
 import { players, servers } from '@squad/db/schema';
 import type { PermissionKey } from '@squad/shared-config';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
@@ -12,6 +12,7 @@ import {
   enforceModerationAction,
   type PlayerIdentity,
 } from '../lib/moderation-enforce.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { parseStoredRoster } from '../lib/roster.js';
 
 /** Hard ceiling on targets per request — see the deadline note below. */
@@ -58,18 +59,6 @@ interface BulkTargetResult {
   moderation_action_id?: string;
   error?: BulkTargetError;
   detail?: string;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**

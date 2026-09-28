@@ -9,9 +9,10 @@ import {
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const METRIC_COLUMNS = {
   online: playerStatPeriods.onlineSeconds,
@@ -64,18 +65,6 @@ const leaderboardsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * Resolves `period_start` for every period whose window is derivable from the

@@ -1,8 +1,9 @@
 import { matches, matchPlayers, servers } from '@squad/db/schema';
 import { desc, eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const RECENT_LIMIT = 10;
 const WINRATE_WINDOW = 30;
@@ -10,18 +11,6 @@ const WINRATE_WINDOW = 30;
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 
 type MatchOutcome = 'win' | 'loss' | 'draw' | null;
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function computeOutcome(team: number | null, winner: string | null): MatchOutcome {
   if (winner === null) return null;

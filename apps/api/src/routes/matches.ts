@@ -1,9 +1,10 @@
 import { combatEvents, matches, matchPlayers, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
@@ -53,18 +54,6 @@ type FilterInput = z.infer<typeof countQuery>;
 
 const STAT_KEYS = ['kills', 'deaths', 'teamkills', 'wounds', 'revives'] as const;
 type StatKey = (typeof STAT_KEYS)[number];
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
