@@ -126,28 +126,25 @@ function serializeVote(row: VoteListRow) {
 const votesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolveInitiatorIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    const pattern = `%${escapeLike(normalized)}%`;
-
-    const canonicalRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    for (const row of canonicalRows) ids.add(row.id);
-
-    const historyRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of historyRows) ids.add(row.id);
-
-    return Array.from(ids);
+  /**
+   * `initiator_player_id IN (players whose current or past nickname contains
+   * the query)` as one subquery. Kept in SQL rather than materialised as an id
+   * list: a short query matches thousands of players, and one bind parameter
+   * per id overflowed Postgres' 65 535-parameter limit (#376). The substring
+   * LIKEs are served by the trigram indexes from migration 0119.
+   */
+  function initiatorNicknameMatches(query: string): SQL {
+    const pattern = `%${escapeLike(query.trim().toLowerCase())}%`;
+    return sql`${gameVotes.initiatorPlayerId} IN (
+      SELECT ${players.id} FROM ${players}
+      WHERE ${players.canonicalNameNormalized} LIKE ${pattern}
+      UNION
+      SELECT ${playerNameHistory.playerId} FROM ${playerNameHistory}
+      WHERE ${playerNameHistory.nameNormalized} LIKE ${pattern}
+    )`;
   }
 
-  async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
+  function buildFilters(query: FilterInput): SQL[] {
     const clauses: SQL[] = [];
 
     const serverIds = asArray(query.serverId);
@@ -164,13 +161,11 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
     if (query.initiatorPlayerId) {
       clauses.push(eq(gameVotes.initiatorPlayerId, query.initiatorPlayerId));
-    } else if (query.initiatorQuery) {
-      const initiatorIds = await resolveInitiatorIds(query.initiatorQuery);
-      if (initiatorIds.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(gameVotes.initiatorPlayerId, initiatorIds));
+    } else if (query.initiatorQuery?.trim()) {
+      clauses.push(initiatorNicknameMatches(query.initiatorQuery));
     }
 
-    return { clauses, empty: false };
+    return clauses;
   }
 
   function listSelection() {
@@ -215,8 +210,7 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
 
       const { order, limit } = req.query;
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { items: [], next_cursor: null, limit };
+      const clauses = buildFilters(req.query);
 
       if (req.query.cursor) {
         const cursor = decodeCursor(req.query.cursor);
@@ -257,8 +251,7 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { total: 0 };
+      const clauses = buildFilters(req.query);
 
       const rows = await app.db
         .select({ total: sql<number>`count(*)::int` })
