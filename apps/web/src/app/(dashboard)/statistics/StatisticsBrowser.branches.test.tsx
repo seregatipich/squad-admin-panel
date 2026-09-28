@@ -352,4 +352,76 @@ describe('StatisticsBrowser — branch coverage', () => {
       vi.useRealTimers();
     }
   });
+
+  it('discards a stale /api/v1/statistics response that resolves after a newer request (#729)', async () => {
+    // Each fetch to /api/v1/statistics is held open until the test resolves
+    // it explicitly, in whatever order it chooses — mirroring the request
+    // resolving after a newer, still-in-flight one.
+    const pendingStats: Array<(res: Response) => void> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/statistics')) {
+          return new Promise<Response>((resolve) => pendingStats.push(resolve));
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(
+            new Response(JSON.stringify(serversResponse.body), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response('nf', { status: 404 }));
+      }),
+    );
+
+    await mount(<StatisticsBrowser />);
+    // Mount fired the first request (index 0); resolve it so the page settles
+    // on an initial, known state before exercising the race.
+    await act(async () => {
+      pendingStats[0]?.(new Response(JSON.stringify(FULL), { status: 200 }));
+    });
+    await screen.findByText('Население');
+
+    // Two rapid preset changes fire two more overlapping requests (index 1,
+    // the older "week" request, then index 2, the newer "today" request).
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'week' } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'today' } });
+    });
+    expect(pendingStats).toHaveLength(3);
+
+    // Only `avg_online` differs between the two payloads — everything else
+    // stays at FULL's values, some of which coincidentally share a KPI
+    // number with one another, so the assertions below read the specific
+    // "Средний онлайн за день" card rather than searching the whole page.
+    const newer: StatisticsResponse = {
+      ...FULL,
+      population: { ...FULL.population, avg_online: series(1, 1) },
+    };
+    const stale: StatisticsResponse = {
+      ...FULL,
+      population: { ...FULL.population, avg_online: series(100, 50) },
+    };
+    function avgOnlineKpiText() {
+      const card = screen.getByText('Средний онлайн за день').closest('section');
+      expect(card).not.toBeNull();
+      return (card as HTMLElement).querySelector('figcaption span:last-child')?.textContent ?? '';
+    }
+
+    // The newer ("today") request resolves first…
+    await act(async () => {
+      pendingStats[2]?.(new Response(JSON.stringify(newer), { status: 200 }));
+    });
+    expect(avgOnlineKpiText()).toMatch(/Среднее 2 · Максимум 2 · Всего 4/);
+
+    // …then the older, now-stale ("week") request resolves after it. It must
+    // not overwrite the newer data that is already on screen.
+    await act(async () => {
+      pendingStats[1]?.(new Response(JSON.stringify(stale), { status: 200 }));
+    });
+    expect(avgOnlineKpiText()).toMatch(/Среднее 2 · Максимум 2 · Всего 4/);
+    expect(avgOnlineKpiText()).not.toMatch(/150/);
+  });
 });
