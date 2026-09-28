@@ -52,6 +52,10 @@ import {
 
 /** Минимальный промежуток между живыми перечитываниями первой страницы. */
 const LIVE_REFRESH_MS = 1000;
+/** Верхняя граница страниц догонки в одном живом перечитывании (EVENTS-1336). */
+const MAX_CATCHUP_PAGES = 10;
+/** Верхняя граница длины списка: не даёт долгоживущей вкладке расти вечно. */
+const ITEMS_CAP = 1000;
 
 interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
@@ -115,6 +119,28 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const [selected, setSelected] = useState<EventListItem | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
+  /**
+   * Bumped every time `filters`/`lockedServerId` change (a new first page is
+   * requested). `loadMore` and `refreshHead` capture the generation active
+   * when they start and discard their response if it no longer matches by
+   * the time it arrives — otherwise a `loadMore`/`refreshHead` begun under
+   * the old filters could splice stale-filter rows or an old cursor into the
+   * list the new first page already replaced (EVENTS-553).
+   */
+  const requestGenerationRef = useRef(0);
+  const itemsRef = useRef<EventListItem[]>(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+  // Mirrors `loadingMore` without being a `loadMore` dependency: putting the
+  // state value itself in the deps recreated `loadMore` on every toggle,
+  // which re-ran the IntersectionObserver effect below and could re-trigger
+  // it immediately with no backoff (EVENTS-552).
+  const loadingMoreRef = useRef(false);
+  // Set on a failed `loadMore`; the IntersectionObserver skips auto-retrying
+  // while it's set; only the visible "Показать ещё" button clears it.
+  const loadMoreFailedRef = useRef(false);
+
   const navigate = useCallback(
     (partial: Partial<EventFilters>) => {
       const nextFilters: EventFilters = { ...filters, ...partial };
@@ -126,6 +152,8 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    requestGenerationRef.current += 1;
+    loadMoreFailedRef.current = false;
     setLoading(true);
     setError(null);
     fetch(`/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`, {
@@ -191,7 +219,9 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   }, [lockedServerId]);
 
   const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
+    if (!nextCursor || loadingMoreRef.current) return;
+    const generation = requestGenerationRef.current;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -200,14 +230,25 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as EventListResponse;
+      // The filters/server may have changed while this request was in
+      // flight — the first-page effect already replaced `items` under the
+      // new filters, so an old-generation response must not be appended to
+      // it (EVENTS-553).
+      if (requestGenerationRef.current !== generation) return;
       setItems((prev) => appendEventPage(prev, data.items));
       setNextCursor(data.next_cursor);
+      loadMoreFailedRef.current = false;
     } catch (err) {
+      if (requestGenerationRef.current !== generation) return;
       setError((err as Error).message);
+      // Stop the IntersectionObserver from firing again on its own; only the
+      // visible "Показать ещё" click clears this (EVENTS-552).
+      loadMoreFailedRef.current = true;
     } finally {
-      setLoadingMore(false);
+      loadingMoreRef.current = false;
+      if (requestGenerationRef.current === generation) setLoadingMore(false);
     }
-  }, [filters, nextCursor, loadingMore, lockedServerId]);
+  }, [filters, nextCursor, lockedServerId]);
 
   // Живая лента: API шлёт `server.events.appended`, как только в `events`
   // появилась строка, и список подтягивает свежую первую страницу сверху, не
@@ -224,18 +265,36 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     }
     live.inFlight = true;
     live.lastAt = Date.now();
+    const generation = requestGenerationRef.current;
     try {
-      const res = await fetch(
-        `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`,
-        { credentials: 'include', cache: 'no-store' },
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as EventListResponse;
+      // A single first-page refresh only ever sees PAGE_LIMIT=50 new rows: in
+      // a busy match, more than 50 events between two live refreshes used to
+      // vanish for good, since the cursor picks up only from the *old* head.
+      // Walk forward page by page (bounded) until a row already in the list
+      // is found, so a burst larger than one page is still caught up on
+      // instead of leaving a permanent gap (EVENTS-1336).
+      const known = new Set(itemsRef.current.map((event) => event.event_id));
+      let collected: EventListItem[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_CATCHUP_PAGES; page++) {
+        const res = await fetch(
+          `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, cursor, lockedServerId })}`,
+          { credentials: 'include', cache: 'no-store' },
+        );
+        if (!res.ok) break;
+        const data = (await res.json()) as EventListResponse;
+        collected = collected.concat(data.items);
+        const reachedKnownRow = data.items.some((event) => known.has(event.event_id));
+        if (reachedKnownRow || !data.next_cursor || data.items.length < PAGE_LIMIT) break;
+        cursor = data.next_cursor;
+      }
+      if (requestGenerationRef.current !== generation) return;
+      const added = collected.filter((event) => !known.has(event.event_id)).length;
+      if (added > 0) setTotal((current) => (current === null ? current : current + added));
       setItems((prev) => {
-        const known = new Set(prev.map((event) => event.event_id));
-        const added = data.items.filter((event) => !known.has(event.event_id)).length;
-        if (added > 0) setTotal((current) => (current === null ? current : current + added));
-        return mergeEventPage(data.items, prev);
+        const merged = mergeEventPage(collected, prev);
+        // A long-lived tab must not grow this list forever (EVENTS-1336).
+        return merged.length > ITEMS_CAP ? merged.slice(0, ITEMS_CAP) : merged;
       });
     } catch {
       // Живое обновление — надбавка; при ошибке список просто ждёт следующего кадра.
@@ -243,7 +302,14 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       live.inFlight = false;
       if (live.again) {
         live.again = false;
-        liveTimerRef.current = setTimeout(() => void refreshHead(), LIVE_REFRESH_MS);
+        liveTimerRef.current = setTimeout(() => {
+          // Without this reset, `onEventsAppended`'s
+          // `if (liveTimerRef.current) return;` guard permanently blocks any
+          // further live refresh once this retry timer has fired once
+          // (EVENTS-551).
+          liveTimerRef.current = null;
+          void refreshHead();
+        }, LIVE_REFRESH_MS);
       }
     }
   }, [filters, lockedServerId]);
@@ -274,6 +340,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     const node = sentinelRef.current;
     if (!node || !nextCursor) return;
     const observer = new IntersectionObserver((entries) => {
+      if (loadMoreFailedRef.current) return;
       if (entries.some((entry) => entry.isIntersecting)) void loadMore();
     });
     observer.observe(node);
@@ -400,7 +467,13 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
 
             {nextCursor ? (
               <div className="flex justify-center border-t border-line p-3">
-                <Button onClick={() => void loadMore()} loading={loadingMore}>
+                <Button
+                  onClick={() => {
+                    loadMoreFailedRef.current = false;
+                    void loadMore();
+                  }}
+                  loading={loadingMore}
+                >
                   Показать ещё
                 </Button>
               </div>
