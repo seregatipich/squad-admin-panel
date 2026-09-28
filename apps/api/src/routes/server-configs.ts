@@ -735,9 +735,15 @@ function driftGuardError(
   return null;
 }
 
-/** Matches both the fake harness bridge (`code: 'ENOENT'`) and the Go bridge's
- *  not-found variants (same patterns the config-sync worker tolerates). */
-function isFileNotFoundError(err: unknown): boolean {
+/**
+ * Tells a missing file apart from every other bridge `file_read` failure.
+ * Matches both the fake harness bridge (`code: 'ENOENT'`) and the Go bridge's
+ * not-found variants (same patterns the config-sync worker tolerates).
+ *
+ * @param err - The value thrown by `app.bridge.fileRead`.
+ * @returns True only when the file does not exist.
+ */
+export function isFileNotFoundError(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
   return (
     e.code === 'ENOENT' ||

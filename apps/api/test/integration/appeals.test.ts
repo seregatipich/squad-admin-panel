@@ -734,6 +734,45 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     expect(cfg).toContain(`Banned:${otherSteam}:`);
   });
 
+  // Regression (#40, #206): an unreadable Bans.cfg used to count as empty,
+  // so approval unbanned in the ledger while the player stayed banned in game.
+  it('approving answers 502 and keeps the appeal open when Bans.cfg cannot be read', async () => {
+    const steamId64 = testSteamId(987195);
+    const appealId = await openAppeal(steamId64, 'AppealTarget195');
+
+    const readSpy = vi
+      .spyOn(h.bridge, 'fileRead')
+      .mockRejectedValue(Object.assign(new Error('bridge timeout'), { code: 'transport' }));
+    let res: Awaited<ReturnType<typeof patch>>;
+    try {
+      res = await patch(appealId, { status: 'approved' });
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'bans_cfg_unavailable' });
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    expect(appeal?.status).toBe('pending');
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    const ledger = await h.db
+      .select({
+        actionType: moderationActions.actionType,
+        revertedAt: moderationActions.revertedAt,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, player?.id ?? ''));
+    expect(ledger).toEqual([{ actionType: 'ban', revertedAt: null }]);
+  });
+
   it('approving inserts an unban ledger row referencing the appeal', async () => {
     const steamId64 = testSteamId(987188);
     const appealId = await openAppeal(steamId64, 'AppealTarget188');

@@ -12,7 +12,7 @@ import {
   type PlayerIdentity,
   publishModerationEvent,
 } from '../lib/moderation-enforce.js';
-import { type ReloadOutcome, writeVersion } from './server-configs.js';
+import { isFileNotFoundError, type ReloadOutcome, writeVersion } from './server-configs.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 50;
@@ -254,7 +254,7 @@ export interface UnbanPlayerParams {
 
 /** Outcome of {@link unbanPlayerOnServer}. */
 export type UnbanPlayerResult =
-  | { ok: false; error: 'bans_cfg_conflict' }
+  | { ok: false; error: 'bans_cfg_conflict' | 'bans_cfg_unavailable' }
   | {
       ok: true;
       unbanActionId: string;
@@ -264,16 +264,39 @@ export type UnbanPlayerResult =
     };
 
 /**
+ * Reads a server's `Bans.cfg` through the bridge.
+ *
+ * @returns The file content, `''` when the file does not exist, or null when
+ *   the read failed for any other reason and the content is unknown.
+ */
+async function readBansCfg(app: FastifyInstance, path: string): Promise<string | null> {
+  try {
+    return (await app.bridge.fileRead({ path })).content;
+  } catch (err) {
+    if (isFileNotFoundError(err)) return '';
+    app.log.warn({ err, path }, 'Bans.cfg read failed; unban aborted');
+    return null;
+  }
+}
+
+/**
  * Unbans a player on one server: removes their `Banned:` line(s) from that
  * server's `Bans.cfg` (read-verify-write, retried up to
  * {@link MAX_BANS_CFG_ATTEMPTS} times against a racing concurrent edit before
  * giving up), marks every active ban row for that player+server reverted,
  * inserts an `unban` ledger row and publishes its EVT-1 envelope.
  *
- * A file with no matching line is left untouched — no write is attempted —
- * but the ledger is still updated, since the database, not the file, is the
- * source of truth for whether a player is banned. A player with no SteamID64
- * has no representable `Bans.cfg` line at all, so only the ledger is updated.
+ * A file with no matching line, or no `Bans.cfg` at all, is left untouched —
+ * no write is attempted — but the ledger is still updated, since the
+ * database, not the file, is the source of truth for whether a player is
+ * banned. A player with no SteamID64 has no representable `Bans.cfg` line at
+ * all, so only the ledger is updated.
+ *
+ * Any other `Bans.cfg` read failure (bridge down, timeout, socket error),
+ * including the read that verifies a write, aborts with
+ * `bans_cfg_unavailable` before the ledger is touched: an unreadable file is
+ * not an empty one, and reverting the ledger then would leave the player
+ * banned in game while the panel reports them unbanned (#40, #206).
  *
  * Shared by the player-card revert route below and the appeal-approval path
  * (MOD-5, `appeals.ts`) — an approved appeal *is* an unban, and there must be
@@ -282,8 +305,13 @@ export type UnbanPlayerResult =
  * @param app - The Fastify instance (`app.db`, `app.redis`, `app.bridge`).
  * @param params - The player, server, actor and reason for the unban.
  * @returns `{ ok: false, error: 'bans_cfg_conflict' }` when a concurrent
- *   editor kept winning the read-verify-write race (nothing is persisted);
- *   otherwise the ids of the new `unban` row and every reverted ban row.
+ *   editor kept winning the read-verify-write race, or
+ *   `{ ok: false, error: 'bans_cfg_unavailable' }` when `Bans.cfg` could not
+ *   be read. Either way the ledger is unchanged and no event is published,
+ *   but a write made by an earlier attempt stays in the file and in
+ *   `config_versions`; a retry then finds no line and just updates the
+ *   ledger. Otherwise the ids of the new `unban` row and every reverted ban
+ *   row.
  */
 export async function unbanPlayerOnServer(
   app: FastifyInstance,
@@ -299,12 +327,8 @@ export async function unbanPlayerOnServer(
     const path = bansCfgPath(serverId);
     let conflict = true;
     for (let attempt = 1; attempt <= MAX_BANS_CFG_ATTEMPTS; attempt++) {
-      let current: string;
-      try {
-        current = (await app.bridge.fileRead({ path })).content;
-      } catch {
-        current = '';
-      }
+      const current = await readBansCfg(app, path);
+      if (current === null) return { ok: false, error: 'bans_cfg_unavailable' };
       const result = removeBanLines(current, steamId64);
       if (result.removed.length === 0) {
         removed = [];
@@ -322,12 +346,8 @@ export async function unbanPlayerOnServer(
         params.actorIp,
       );
 
-      let verify: string;
-      try {
-        verify = (await app.bridge.fileRead({ path })).content;
-      } catch {
-        verify = '';
-      }
+      const verify = await readBansCfg(app, path);
+      if (verify === null) return { ok: false, error: 'bans_cfg_unavailable' };
       if (verify === result.content) {
         removed = result.removed;
         if ('reload' in writeResult && writeResult.reload) reload = writeResult.reload;
@@ -614,7 +634,7 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         targetActionId: target.id,
       });
       if (!result.ok) {
-        reply.code(409);
+        reply.code(result.error === 'bans_cfg_unavailable' ? 502 : 409);
         return { error: result.error };
       }
 
