@@ -555,3 +555,72 @@ describeIfDb('player daily presence API (PRES-3)', () => {
     expect(body.live).toEqual({ online: false, since: null });
   });
 });
+
+describeIfDb('player presence API — audit #71 input validation and permission gate', () => {
+  let h: IntegrationHarness;
+  let cookie: string;
+
+  beforeAll(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM_ID + 1n },
+      bridge: makeFakeBridge(),
+      reusePublicSchema: true,
+    });
+    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
+    cookie = await loginAs(h, h.seed.ownerPlayerId!);
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  it.each([
+    ['/presence?end=2024-13-45'],
+    ['/presence?end=2024-02-31'],
+    ['/presence/daily?range=30&end=2024-13-45'],
+    ['/presence/daily?range=30&end=2023-02-29'],
+  ])('answers 400, not 500, for the impossible date in %s (#227)', async (suffix) => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${uuidv7()}${suffix}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('still accepts a real leap day', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${uuidv7()}/presence/daily?range=30&end=2024-02-29`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { to: string }).to).toBe('2024-02-29');
+  });
+
+  it('gates presence routes on the player:view permission of an API token (#232)', async () => {
+    const mint = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie },
+      payload: { name: 'presence-scope-test', scopes: ['host:view'] },
+    });
+    expect(mint.statusCode).toBe(201);
+    const token = (mint.json() as { plaintext: string }).plaintext;
+    for (const path of ['/presence', '/presence/daily', '/primetime']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${uuidv7()}${path}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'forbidden', required: ['player:view'] });
+    }
+    const online = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/players/online-status',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(online.statusCode).toBe(403);
+  });
+});

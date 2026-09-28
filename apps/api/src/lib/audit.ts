@@ -23,7 +23,17 @@ export interface AuditEntryInput {
   durationMs?: number;
 }
 
-export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput): Promise<void> {
+/**
+ * Appends one row to the hash-chained `audit_log`.
+ *
+ * @param db - The pool client, or a transaction handle when the audit row must
+ *   commit or roll back together with the mutation it describes.
+ * @param entry - Actor, target and before/after snapshots of the action.
+ */
+export async function writeAuditEntry(
+  db: Pick<DatabaseClient, 'insert'>,
+  entry: AuditEntryInput,
+): Promise<void> {
   const actor = entry.actor;
   await db.insert(auditLog).values({
     actorKind: actor.kind,
