@@ -4,6 +4,14 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-28
+
+### Trigram indexes for player search, created_at index for report analytics (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_player_search_trgm_and_report_created_idx.sql`, `packages/db/src/schema/{players,player-name-history,player-reports}.ts`, `packages/db/test/migrations.regression.test.ts`
+
+Issue #71. The player search (`/api/v1/players?q=`, `/players/search`) and the role-member search match `LIKE '%…%'`, which the btree indexes on the normalized names cannot serve. The migration adds GIN `gin_trgm_ops` indexes `players_canonical_name_normalized_trgm_idx` and `player_name_history_name_normalized_trgm_idx` (pg_trgm has been installed since 0025), and `player_reports_created_at_idx` for the report-analytics date window. Rollback-safe: indexes only.
+
 ## 2026-09-27
 
 ### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)

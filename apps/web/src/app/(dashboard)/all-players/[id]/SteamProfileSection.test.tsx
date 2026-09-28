@@ -112,6 +112,15 @@ describe('SteamProfileSection', () => {
     expect(await screen.findByText('Steam API не настроен')).toBeInTheDocument();
   });
 
+  it('reports the per-user refresh limit from a 429', async () => {
+    stubFetch(429, { error: 'too_many_requests' });
+    renderSection(FULL);
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить из Steam' }));
+    expect(
+      await screen.findByText('Слишком много обновлений, попробуйте через минуту'),
+    ).toBeInTheDocument();
+  });
+
   it('reports a Steam outage from a 502', async () => {
     stubFetch(502, { error: 'steam_api_error' });
     renderSection(FULL);

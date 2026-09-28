@@ -1,5 +1,30 @@
 # `api` — changelog
 
+## 2026-09-28 — Аудит маршрутов игроков, репортов, ролей и архива (#71)
+
+### Security
+
+- Строка «incoming request» и логи ошибок больше не содержат одноразовый токен загрузки (`?token=` в `POST /api/v1/public/media`) и токен отслеживания апелляции (`/api/v1/public/appeals/:token`): сериализатор `req` логгера API заменяет их на `[redacted]` (`redactSensitiveUrl` в `lib/logger.ts`), поэтому токены не попадают в поток логов панели и в `/api/v1/logs/export`.
+- `GET /api/v1/analytics/reports` требует `panel_access` вместе с `can_handle_reports`, как остальные маршруты репортов.
+- Маршруты заметок (`/api/v1/players/:playerId/notes`, `/api/v1/notes/:noteId`) и присутствия (`/presence`, `/presence/daily`, `/primetime`, `/api/v1/players/online-status`) проверяют право `player:view` через `config.permissions`, а не собственный `panelGuard`; API-токен без scope `player:view` получает `403 { error: 'forbidden', required: ['player:view'] }`.
+- `POST /api/v1/players/:playerId/steam-refresh` ограничен 20 запросами в минуту на пользователя (`429`), чтобы перебор игроков не выжигал дневную квоту Steam Web API.
+
+### Fixed
+
+- Заметки: курсор пагинации теперь `<created_at с микросекундами, UTC>_<id>` (например `2026-01-01T00:00:00.000900Z_<uuid>`), и заметки из той же миллисекунды, что и последняя на странице, больше не пропадают; старый курсор в миллисекундах отвечает `400 invalid_cursor`. `PATCH`/`DELETE` блокируют строку заметки и пишут аудит в той же транзакции: правка или повторное удаление уже удалённой заметки отвечает `404`, а сбой записи аудита откатывает изменение.
+- `POST`/`PATCH /api/v1/players/:playerId/links` и `/api/v1/player-links/:linkId` пишут связь и аудит в одной транзакции. `GET /api/v1/players/:playerId/links` возвращает не больше 500 связей (новые первыми) и поле `truncated`.
+- `?end=` в `/presence` и `/presence/daily` проверяется как реальная дата: `2024-13-45` или `2023-02-29` дают `400`, а не `500` или сдвинутое окно.
+- Поиск игроков (`GET /api/v1/players?q=`, `/api/v1/players/search`) и участников роли (`GET /api/v1/roles/:id/members?q=`) экранирует `%`, `_` и `\`; SteamID64 в поиске участников сравнивается как число.
+- `POST /api/v1/public/media`: погашение токена, запись `media_files`/`media_links` и аудит выполняются одной транзакцией; при сбое токен остаётся действительным, а загруженный файл удаляется.
+- `GET /api/v1/public/banlist` отбрасывает истёкшие временные баны уже в SQL.
+- `GET /api/v1/analytics/reports`: `top_reporters` считается по репортам выбранного `server_id` и окна `from`/`to`; `confirmed`, `accuracy`, `trusted`, `spam_flagged` остаются общей репутацией из `reporter_stats`.
+- `POST /api/v1/reports` создаёт репорт и его вложения одной транзакцией. `PATCH /api/v1/reports/:id` при возврате в `pending` сбрасывает `resolved_at` и `claimed_at`, при возврате в `in_review` — `resolved_at`. Сбой пересчёта статистики репортёра или уведомления пишется в лог, а в контексте аудита появляется `notify_failed`.
+- `GET /api/v1/role-assignments` принимает `limit` (по умолчанию и максимум 1000) и `offset`, общее число строк отдаёт в заголовке `x-total-count`; `expiring_soon=true` больше не включает уже истёкшие выдачи.
+- `POST /api/v1/roles/:id/members/import` принимает тело до 6 MiB, поэтому CSV на 5000 строк больше 1 MiB доходит до проверки, а лишние строки получают `413 too_many_rows`.
+- `POST`/`PUT /api/v1/roles`: повторяющиеся ключи `squad_permissions` схлопываются, а `409 role_name_taken` возвращается только при конфликте имени. `PUT` ставит синхронизацию Admins.cfg в очередь, только если изменились имя или `squad_permissions`.
+- `PATCH /api/v1/seasons/:id` отвечает `422 season_finalized`, если сезон финализировали параллельно, и не переоткрывает его.
+- `POST /api/v1/servers/archive/:id/restore` отвечает `409 slug_in_use`, а не `500`, если slug заняли параллельно. `POST /api/v1/servers/:id/restore-configs` отклоняет внешний сервер (`409 external_server`).
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security
