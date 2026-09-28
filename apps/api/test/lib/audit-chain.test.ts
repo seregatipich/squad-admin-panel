@@ -46,12 +46,39 @@ function buildChain(n: number): AuditChainRow[] {
 
 describe('verifyAuditChain', () => {
   it('reports an empty chain as intact', () => {
-    expect(verifyAuditChain([])).toEqual({ ok: true, checked: 0, brokenAt: null, reason: null });
+    expect(verifyAuditChain([])).toEqual({
+      ok: true,
+      checked: 0,
+      brokenAt: null,
+      reason: null,
+      lastHashHex: null,
+    });
   });
 
   it('accepts a well-formed chain and counts every row', () => {
-    const result = verifyAuditChain(buildChain(6));
-    expect(result).toEqual({ ok: true, checked: 6, brokenAt: null, reason: null });
+    const rows = buildChain(6);
+    const result = verifyAuditChain(rows);
+    expect(result).toEqual({
+      ok: true,
+      checked: 6,
+      brokenAt: null,
+      reason: null,
+      lastHashHex: rows[rows.length - 1].row_hash_hex,
+    });
+  });
+
+  it('resumes a chain across batches given the previous batch last hash', () => {
+    const rows = buildChain(6);
+    const first = verifyAuditChain(rows.slice(0, 3));
+    expect(first.ok).toBe(true);
+    const second = verifyAuditChain(rows.slice(3), first.lastHashHex);
+    expect(second).toEqual({
+      ok: true,
+      checked: 3,
+      brokenAt: null,
+      reason: null,
+      lastHashHex: rows[rows.length - 1].row_hash_hex,
+    });
   });
 
   it('detects a tampered row payload as a row_hash break at that row', () => {

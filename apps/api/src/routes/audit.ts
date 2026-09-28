@@ -61,27 +61,46 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/audit/verify-chain',
     { config: { permissions: ['audit:view'], audit: false } },
     async () => {
-      const rows = (await app.db.execute(sql`
-        SELECT
-          id::text AS id,
-          action_type,
-          target_type,
-          target_id,
-          context::text AS context_text,
-          created_at::text AS created_at,
-          encode(prev_hash, 'hex') AS prev_hash_hex,
-          encode(row_hash, 'hex') AS row_hash_hex
-        FROM audit_log
-        ORDER BY audit_log.id ASC
-      `)) as unknown as AuditChainRow[];
+      // audit_log is append-only and grows without bound (only the archiver
+      // ever removes rows) — a single SELECT * FROM audit_log would
+      // materialize the whole table, context::text included, in this API
+      // process's memory. Walk it in fixed-size pages by id instead.
+      const BATCH_SIZE = 5_000;
+      let prevHashHex: string | null = null;
+      let checked = 0;
+      let lastId = '0';
 
-      const result = verifyAuditChain(rows);
-      return {
-        ok: result.ok,
-        checked: result.checked,
-        broken_at: result.brokenAt,
-        reason: result.reason,
-      };
+      for (;;) {
+        const rows = (await app.db.execute(sql`
+          SELECT
+            id::text AS id,
+            action_type,
+            target_type,
+            target_id,
+            context::text AS context_text,
+            created_at::text AS created_at,
+            encode(prev_hash, 'hex') AS prev_hash_hex,
+            encode(row_hash, 'hex') AS row_hash_hex
+          FROM audit_log
+          WHERE id > ${lastId}
+          ORDER BY audit_log.id ASC
+          LIMIT ${BATCH_SIZE}
+        `)) as unknown as AuditChainRow[];
+        if (rows.length === 0) break;
+
+        const result = verifyAuditChain(rows, prevHashHex);
+        checked += result.checked;
+        if (!result.ok) {
+          return { ok: false, checked, broken_at: result.brokenAt, reason: result.reason };
+        }
+        prevHashHex = result.lastHashHex;
+        // rows.length > 0, checked by the `break` right after fetching above.
+        const lastRow = rows[rows.length - 1] as AuditChainRow;
+        lastId = lastRow.id;
+        if (rows.length < BATCH_SIZE) break;
+      }
+
+      return { ok: true, checked, broken_at: null, reason: null };
     },
   );
 };

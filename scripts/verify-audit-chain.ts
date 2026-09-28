@@ -16,6 +16,15 @@
 import postgres from 'postgres';
 import { type AuditChainRow, verifyAuditChain } from '../apps/api/src/lib/audit-chain.js';
 
+// audit_log is append-only and grows without bound (only the archiver ever
+// removes rows, and only long after they're written) — loading it in one
+// SELECT materializes the whole table, context::text included, in this
+// process's memory at once. Walk it in fixed-size pages by id instead.
+// Overridable so the multi-batch path (crossing the page boundary, and a
+// chain break in a batch after the first) can be exercised in tests without
+// inserting thousands of rows.
+const BATCH_SIZE = Number(process.env.AUDIT_CHAIN_BATCH_SIZE) || 5_000;
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -25,27 +34,41 @@ async function main() {
   const sql = postgres(url, { max: 1, prepare: false });
 
   try {
-    const rows = await sql<AuditChainRow[]>`
-      SELECT
-        id::text AS id,
-        action_type,
-        target_type,
-        target_id,
-        context::text AS context_text,
-        created_at::text AS created_at,
-        encode(prev_hash, 'hex') AS prev_hash_hex,
-        encode(row_hash, 'hex') AS row_hash_hex
-      FROM audit_log
-      ORDER BY audit_log.id ASC
-    `;
+    let prevHashHex: string | null = null;
+    let checked = 0;
+    let lastId = '0';
 
-    const result = verifyAuditChain(rows);
-    if (!result.ok) {
-      console.error(`Chain break at id=${result.brokenAt}: ${result.reason} mismatch`);
-      console.error(`  verified ${result.checked} row(s) before the break`);
-      process.exit(1);
+    for (;;) {
+      const rows = await sql<AuditChainRow[]>`
+        SELECT
+          id::text AS id,
+          action_type,
+          target_type,
+          target_id,
+          context::text AS context_text,
+          created_at::text AS created_at,
+          encode(prev_hash, 'hex') AS prev_hash_hex,
+          encode(row_hash, 'hex') AS row_hash_hex
+        FROM audit_log
+        WHERE id > ${lastId}
+        ORDER BY audit_log.id ASC
+        LIMIT ${BATCH_SIZE}
+      `;
+      if (rows.length === 0) break;
+
+      const result = verifyAuditChain(rows, prevHashHex);
+      checked += result.checked;
+      if (!result.ok) {
+        console.error(`Chain break at id=${result.brokenAt}: ${result.reason} mismatch`);
+        console.error(`  verified ${checked} row(s) before the break`);
+        process.exit(1);
+      }
+      prevHashHex = result.lastHashHex;
+      lastId = rows[rows.length - 1].id;
+      if (rows.length < BATCH_SIZE) break;
     }
-    console.log(`ok: audit chain intact (${result.checked} rows)`);
+
+    console.log(`ok: audit chain intact (${checked} rows)`);
   } finally {
     await sql.end({ timeout: 5 });
   }
