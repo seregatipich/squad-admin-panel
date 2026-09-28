@@ -36,6 +36,10 @@ interface LogConsoleProps {
 /**
  * Sticky-to-bottom log console.
  *
+ * Rows are keyed by `LogEntry.id` when present, otherwise by the entry
+ * object's identity, so callers must append new objects rather than
+ * rebuilding existing ones if they want rows to stay mounted.
+ *
  * Scroll behavior:
  *   - If the user is at (or within 24 px of) the bottom when a new line arrives,
  *     the console auto-scrolls to keep them pinned there.
@@ -58,6 +62,21 @@ export function LogConsole({
   const stickToBottomRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
+  // Row keys by entry identity. Callers append parsed frames and cap their
+  // buffer with `slice(-N)`, which keeps the surviving objects but shifts
+  // every index — an index-based key would remount every row per new line.
+  const rowKeysRef = useRef(new WeakMap<LogEntry, string>());
+  const nextRowKeyRef = useRef(0);
+  const rowKey = (line: LogEntry): string => {
+    if (line.id) return line.id;
+    let key = rowKeysRef.current.get(line);
+    if (key === undefined) {
+      nextRowKeyRef.current += 1;
+      key = `row-${nextRowKeyRef.current}`;
+      rowKeysRef.current.set(line, key);
+    }
+    return key;
+  };
 
   const BOTTOM_THRESHOLD = 24;
 
@@ -142,8 +161,8 @@ export function LogConsole({
         {lines.length === 0 ? (
           <div className="text-ink-3">{emptyText}</div>
         ) : (
-          lines.map((l, i) => {
-            const key = l.id ?? `${l.ts ?? ''}:${i}:${l.message.slice(0, 40)}`;
+          lines.map((l) => {
+            const key = rowKey(l);
             const isError = l.stream === 'stderr';
             return (
               <div key={key} className={isError ? 'text-crit' : 'text-ink-2'}>
