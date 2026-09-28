@@ -45,6 +45,15 @@ export function UploadClient({ token }: { token: string }) {
   const [dragging, setDragging] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
+  // Mirrors `phase` synchronously: two files dropped in the same tick would
+  // both see the stale render-time `phase`, and the one-time token lets only
+  // one request win, so the guard must not wait for a re-render.
+  const phaseRef = useRef<Phase>('idle');
+
+  const changePhase = useCallback((next: Phase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -55,14 +64,17 @@ export function UploadClient({ token }: { token: string }) {
 
   const startUpload = useCallback(
     (file: File) => {
+      // The link is single-use: while one upload is in flight, or after one
+      // succeeded, a new file could only burn a request and end in a 410.
+      if (phaseRef.current === 'uploading' || phaseRef.current === 'done') return;
       if (!isAcceptedUploadType(file.type)) {
-        setPhase('error');
+        changePhase('error');
         setError(uploadErrorMessage(415));
         return;
       }
 
       setFilename(file.name);
-      setPhase('uploading');
+      changePhase('uploading');
       setError(null);
       setProgress(IDLE_PROGRESS);
 
@@ -75,24 +87,28 @@ export function UploadClient({ token }: { token: string }) {
       xhr.upload.onprogress = (tick: { loaded: number; total: number }) => {
         setProgress(computeProgress(tick.loaded, tick.total, Date.now() - startedAt));
       };
+      // A request that is no longer current (superseded or aborted) must not
+      // overwrite the outcome of the one that is.
       xhr.onload = () => {
+        if (xhrRef.current !== xhr) return;
         xhrRef.current = null;
         if (xhr.status === 201) {
-          setPhase('done');
+          changePhase('done');
           return;
         }
-        setPhase('error');
+        changePhase('error');
         setError(uploadErrorMessage(xhr.status));
       };
       xhr.onerror = () => {
+        if (xhrRef.current !== xhr) return;
         xhrRef.current = null;
-        setPhase('error');
+        changePhase('error');
         setError('Сеть недоступна — загрузка не завершилась. Попробуйте ещё раз.');
       };
       xhr.open('POST', `/api/v1/public/media?token=${encodeURIComponent(token)}`);
       xhr.send(body);
     },
-    [token],
+    [token, changePhase],
   );
 
   const onDrop = useCallback(
@@ -138,7 +154,7 @@ export function UploadClient({ token }: { token: string }) {
             type="file"
             className="hidden"
             accept={ACCEPTED_UPLOAD_TYPES.join(',')}
-            disabled={phase === 'uploading'}
+            disabled={phase === 'uploading' || phase === 'done'}
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) startUpload(file);
