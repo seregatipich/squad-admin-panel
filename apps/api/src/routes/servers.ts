@@ -4,6 +4,7 @@ import {
   DEPOT_VOLUME_NAME,
   PANEL_CONFIGS_ROOT,
   PANEL_SAVED_ROOT,
+  resolveRconHost,
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import {
@@ -20,7 +21,6 @@ import { z } from 'zod';
 import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
-import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar } from '../lib/rnsquadjs.js';

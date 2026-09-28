@@ -197,7 +197,12 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     });
 
   listPanelDirs = () =>
-    this.call<{ configs: string[]; saved: string[] }>('list_panel_dirs', undefined, {
+    this.call<{
+      configs: string[];
+      saved: string[];
+      /** RNSquadJS sidecar config dirs; absent on bridges that predate #66. */
+      sidecars?: string[];
+    }>('list_panel_dirs', undefined, {
       retryOnTransport: true,
     });
 
@@ -205,7 +210,11 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     this.call<SquadLogListResult>('squad_log_list', p, { retryOnTransport: true });
 
   listSquadContainers = () =>
-    this.call<{ containers: string[] }>('list_squad_containers', undefined, {
+    this.call<{
+      containers: string[];
+      /** `rnsquadjs-{uuid}` sidecar containers; absent on bridges that predate #66. */
+      sidecars?: string[];
+    }>('list_squad_containers', undefined, {
       retryOnTransport: true,
     });
 

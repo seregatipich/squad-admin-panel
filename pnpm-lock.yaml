@@ -144,9 +144,6 @@ importers:
       ssh2:
         specifier: 1.17.0
         version: 1.17.0
-      undici:
-        specifier: ^8.5.0
-        version: 8.9.0
       uuid:
         specifier: ^14.0.0
         version: 14.0.0
@@ -172,6 +169,9 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      undici:
+        specifier: ^8.5.0
+        version: 8.9.0
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.19.17)(happy-dom@20.14.5)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)

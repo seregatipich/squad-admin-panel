@@ -6,6 +6,7 @@ import {
   type AllowedConfigFile,
   configFileClass,
   PANEL_CONFIGS_ROOT,
+  resolveRconHost,
 } from '@squad/shared-config';
 import { createPatch } from 'diff';
 import { and, desc, eq, isNull } from 'drizzle-orm';
@@ -16,7 +17,6 @@ import { type BlameVersion, computeBlame } from '../lib/blame.js';
 import { maskConfigSecrets, unmaskRconPassword } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
-import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';

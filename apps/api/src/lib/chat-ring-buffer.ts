@@ -6,7 +6,8 @@ type ChatMessageEvent = Extract<LiveEvent, { type: 'chat.message' }>;
  * Bounded per-server ring of the most recent chat messages so a WebSocket
  * reconnect can replay the tail it missed (CHAT-1). Live chat fans out through
  * the live bus; this buffer only retains `chat.message` events and caps each
- * server at `capacity` entries.
+ * server at `capacity` entries. A `server.deleted` event drops that server's
+ * bucket so a deleted server's chat is not replayed to every new client.
  */
 export class ChatRingBuffer {
   private readonly byServer = new Map<string, ChatMessageEvent[]>();
@@ -14,16 +15,16 @@ export class ChatRingBuffer {
   constructor(private readonly capacity: number) {}
 
   push(event: LiveEvent): void {
+    if (event.type === 'server.deleted') {
+      this.byServer.delete(event.data.server_id);
+      return;
+    }
     if (event.type !== 'chat.message') return;
     const key = event.data.server_id;
     const bucket = this.byServer.get(key) ?? [];
     bucket.push(event);
     if (bucket.length > this.capacity) bucket.splice(0, bucket.length - this.capacity);
     this.byServer.set(key, bucket);
-  }
-
-  tailFor(serverId: string): ChatMessageEvent[] {
-    return [...(this.byServer.get(serverId) ?? [])];
   }
 
   tail(): ChatMessageEvent[] {

@@ -136,10 +136,6 @@ vi.mock('../src/lib/rcon-send.js', () => ({
   rconSendOnce: vi.fn(),
 }));
 
-vi.mock('../src/lib/rcon-host.js', () => ({
-  resolveRconHost: vi.fn(),
-}));
-
 vi.mock('../src/lib/auto-prune.js', () => ({
   fireAutoPrune: vi.fn(),
 }));

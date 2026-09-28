@@ -479,31 +479,57 @@ func validateDeletableDir(p string) (string, error) {
 }
 
 // listSquadContainers returns the names of every container matching
-// `squad-{uuid}`. The API uses this to detect orphan running containers
-// whose UUID has no row in the `servers` DB and stop+rm them.
+// `squad-{uuid}` ("containers") and every RNSquadJS sidecar matching
+// `rnsquadjs-{uuid}` ("sidecars"). The API uses this to detect orphan
+// containers whose UUID has no row in the `servers` DB and stop+rm them.
 func (d *Dispatcher) listSquadContainers(ctx context.Context, req *rpc.Request) rpc.Response {
 	names, err := d.Docker.ListSquadContainers(ctx)
 	if err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
 	}
-	body, _ := json.Marshal(map[string][]string{"containers": names})
+	sidecars, err := d.Docker.ListSidecarContainers(ctx)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "sidecars: "+err.Error())
+	}
+	body, _ := json.Marshal(map[string][]string{"containers": names, "sidecars": sidecars})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
+// panelDirListing names the roots list_panel_dirs enumerates.
+type panelDirListing struct {
+	Configs  string
+	Saved    string
+	Sidecars string
+}
+
+// panelDirRoots is the fixed set of roots list_panel_dirs reads. It is a
+// variable only so tests can point it at a temporary directory; callers of
+// the RPC can never influence it.
+var panelDirRoots = panelDirListing{
+	Configs:  validate.PanelConfigsRoot,
+	Saved:    validate.PanelSavedRoot,
+	Sidecars: validate.PanelSocketRoot,
+}
+
 // listPanelDirs returns the immediate child directory names of the two
-// allowlisted panel roots. Read-only, no path traversal — callers cannot
-// pass a path; the roots are hard-coded constants. Used by the API to
-// detect orphan directories whose UUID is no longer present in the DB.
+// allowlisted panel roots ("configs", "saved") and of the RNSquadJS sidecar
+// config root ("sidecars", each holding a plaintext RCON password).
+// Read-only, no path traversal — callers cannot pass a path. Used by the API
+// to detect orphan directories whose UUID is no longer present in the DB.
 func (d *Dispatcher) listPanelDirs(req *rpc.Request) rpc.Response {
-	configs, err := readImmediateDirs(validate.PanelConfigsRoot)
+	configs, err := readImmediateDirs(panelDirRoots.Configs)
 	if err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "configs: "+err.Error())
 	}
-	saved, err := readImmediateDirs(validate.PanelSavedRoot)
+	saved, err := readImmediateDirs(panelDirRoots.Saved)
 	if err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "saved: "+err.Error())
 	}
-	body, _ := json.Marshal(map[string][]string{"configs": configs, "saved": saved})
+	sidecars, err := readImmediateDirs(panelDirRoots.Sidecars)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "sidecars: "+err.Error())
+	}
+	body, _ := json.Marshal(map[string][]string{"configs": configs, "saved": saved, "sidecars": sidecars})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 

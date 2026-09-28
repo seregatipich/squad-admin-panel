@@ -1,11 +1,9 @@
 import type { DatabaseClient } from '@squad/db';
-import type Redis from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
   type AdminsCfgSyncEvent,
-  ensureAdminsCfgSyncGroup,
   publishAdminsCfgSyncForServer,
 } from '../src/lib/admins-cfg-sync.js';
 
@@ -36,52 +34,6 @@ describe('publishAdminsCfgSyncForServer', () => {
       payload: testEvent,
       correlationId: undefined,
     });
-  });
-});
-
-describe('ensureAdminsCfgSyncGroup', () => {
-  it('calls xgroup CREATE with correct args', async () => {
-    const serverId = 'dddddddd-0000-0000-0000-000000000001';
-    const xgroupArgs: unknown[][] = [];
-    const redis = {
-      xgroup: vi.fn((...args: unknown[]) => {
-        xgroupArgs.push(args);
-        return Promise.resolve('OK');
-      }),
-    } as unknown as Redis;
-
-    await ensureAdminsCfgSyncGroup(redis, serverId);
-
-    expect(xgroupArgs).toHaveLength(1);
-    expect(xgroupArgs[0]?.[0]).toBe('CREATE');
-    expect(xgroupArgs[0]?.[1]).toBe(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`);
-    expect(xgroupArgs[0]?.[2]).toBe(ADMINS_CFG_SYNC_GROUP);
-    expect(xgroupArgs[0]?.[3]).toBe('0');
-    expect(xgroupArgs[0]?.[4]).toBe('MKSTREAM');
-  });
-
-  it('swallows BUSYGROUP error silently', async () => {
-    const redis = {
-      xgroup: vi.fn().mockRejectedValue(new Error('BUSYGROUP Consumer Group name already exists')),
-    } as unknown as Redis;
-
-    await expect(
-      ensureAdminsCfgSyncGroup(redis, 'eeeeeeee-0000-0000-0000-000000000001'),
-    ).resolves.toBeUndefined();
-  });
-
-  it('rethrows non-BUSYGROUP errors', async () => {
-    const redis = {
-      xgroup: vi
-        .fn()
-        .mockRejectedValue(
-          new Error('WRONGTYPE Operation against a key holding the wrong kind of value'),
-        ),
-    } as unknown as Redis;
-
-    await expect(
-      ensureAdminsCfgSyncGroup(redis, 'ffffffff-0000-0000-0000-000000000001'),
-    ).rejects.toThrow('WRONGTYPE');
   });
 });
 

@@ -247,7 +247,7 @@ graph TB
   DEP --> DATA
 ```
 
-Two details in that graph are easy to miss and load-bearing. First, **`caddy` depends on `api: service_healthy` but not on `web`** (`docker/compose.yml:31-33`) — in the main compose file the edge router can come up while the frontend is still starting. Second, the API reaches game servers over **two unrelated RCON paths**: `apps/api/src/lib/rcon.ts:20-25` opens an HTTP-over-unix-socket connection to the rnsquadjs sidecar at `/run/squad-panel/rnsquadjs/<serverId>/sock/rcon.sock`, while `worker-rcon` speaks raw Valve RCON TCP from the host netns (`apps/workers/rcon/src/client.ts`). Both export a type literally named `RconClient`; they share no code.
+Two details in that graph are easy to miss and load-bearing. First, **`caddy` depends on `api: service_healthy` but not on `web`** (`docker/compose.yml:31-33`) — in the main compose file the edge router can come up while the frontend is still starting. Second, the API reaches game servers only through `worker-rcon`, which speaks raw Valve RCON TCP from the host netns (`apps/workers/rcon/src/client.ts`), with `rconSendOnce` (`apps/api/src/lib/rcon-send.ts`) as a direct fallback; the unused HTTP-over-unix-socket `app.rcon` client was removed (#66).
 
 ### 2.2 Three privilege zones
 
@@ -445,7 +445,6 @@ Ambient types are declared across five files rather than one; `plugins/types.ts`
 | `app.bridge` / `app.makeBridgeClient` | `BridgeClient` / factory | `types.ts:18,22` | `bridge.ts:62-63` |
 | `app.encryptionKey` | `Buffer` | `types.ts:19` | `server.ts:154` |
 | `app.config` | `AppConfig` | `types.ts:20` | `server.ts:155` |
-| `app.rcon` | `RconClient` | `types.ts:21` | `server.ts:156` |
 | `app.diag` / `req.diag` | `Diag` | `lib/diag.ts:4-11` | `lib/diag.ts:15-16` |
 | `app.metrics` | `MetricsContext` | `plugins/metrics.ts:64-68` | `metrics.ts:44` |
 | `app.liveBus` | `LiveBus` | `plugins/live-bus.ts:281-285` | `live-bus.ts:371` |
@@ -1460,9 +1459,9 @@ Two hand-maintained definitions: `BRIDGE_METHODS` (`packages/shared-config/src/b
 |---|---|---|
 | **Host info** (4) | `ping`, `host_info`, `host_metrics`, `process_info` | `/etc/os-release`, `/proc/{cpuinfo,stat,meminfo,net/dev}`, `statfs`, `docker --version`. No validation; `process_info` checks only `pid > 0`, so **any host PID is readable** |
 | **Files** (5) | `file_read`, `file_read_tail`, `file_read_stream`★, `file_write`, `file_atomic_write` | `validateReadablePath` / `validateWritablePath` (`handlers.go:818-842`); `fsx` re-validates; 10 MiB cap; tail clamped to 1 MiB, stream chunk to 8 MiB |
-| **Directories** (2) | `directory_delete`, `list_panel_dirs` | `validateDeletableDir` (`handlers.go:471`) accepts *exactly* `<configs\|saved>/{uuid}`; `list_panel_dirs` takes no path |
+| **Directories** (2) | `directory_delete`, `list_panel_dirs` | `validateDeletableDir` (`handlers.go:471`) accepts *exactly* `<configs\|saved\|rnsquadjs>/{uuid}`; `list_panel_dirs` takes no path and also returns the sidecar config dirs (`sidecars`) |
 | **Logs** (2) | `squad_log_list`, `squad_log_retention_sweep` | list filters `SquadGame*.log`; sweep takes **no path param by design** — only `archive_server_ids[]`, each `validate.ServerUUID`, with `DisallowUnknownFields` |
-| **Containers** (9) | `list_squad_containers`, `container_run`, `container_run_rnsquadjs`, `container_start`, `container_stop`, `container_rm`, `container_inspect`, `container_stats`, `container_logs_follow`★ | `validate.ContainerName` (three regexes); `container_run` gates image, mounts, depot volume; `ps` output re-validated against `serverContainerRegex` |
+| **Containers** (9) | `list_squad_containers`, `container_run`, `container_run_rnsquadjs`, `container_start`, `container_stop`, `container_rm`, `container_inspect`, `container_stats`, `container_logs_follow`★ | `validate.ContainerName` (three regexes); `container_run` gates image, mounts, depot volume; `ps` output re-validated against the strict name regexes; `list_squad_containers` also returns `rnsquadjs-{uuid}` sidecars (`sidecars`) for the orphan sweep |
 | **Depot / Docker** (2) | `depot_update`★, `docker_prune`★ | ensures `squad-depot` volume + generated job name; prune is `docker system prune -a -f --filter label!=panel.preserve=true`, volumes deliberately spared |
 | **UFW** (1) | `ufw_rule` | `UFWAction`∈{add,remove}, `UFWProto`∈{tcp,udp}, port 1024–65535; **`comment` unvalidated** |
 | **Backup** (3) | `backup_snapshots`, `backup_run`★, `backup_restore`★ | `composeDir()` must be set and absolute; restore is destructive and gated by `validate.ResticSnapshotID` |
@@ -1849,7 +1848,7 @@ Nothing in this system talks to anything else over a single mechanism. There are
 | 5 | Redis Stream, single group | `diag:queue` (`packages/shared-config/src/diag.ts:13`) | `createDiag().emit()` from api, workers, bridge (`packages/diag/src/index.ts:24`) | worker-diag-flush, group `diag-flush` → `diagnostic_events` | `MAXLEN ~ 100000` | FIFO | none | ack-after-insert only; **no XAUTOCLAIM** | diagnostics dropped | entries stay pending, then trimmed away |
 | 6 | Redis Streams, no groups (ring buffers) | `panel:logs` (`shared-config/src/log-stream.ts:83`), `host:metrics` (`metrics-pack.ts:12`), `container:metrics:<id>` | `log-stream-sink.ts:95`; metrics-sampler | **pull-only** `XRANGE`/`XREVRANGE` from `routes/logs.ts:77`, `routes/host.ts:78`, `routes/server-metrics.ts:39` | ring buffer, 100 000 / 5 760 entries | FIFO | n/a | n/a — nothing acks, nothing owns a cursor | data gap; endpoints return empty | unaffected |
 | 7 | Bridge unix-socket RPC | `/run/panel-host-bridge/bridge.sock` (`packages/shared-config/src/bridge-methods.ts:45`) | API + workers via `packages/bridge-client` | Go daemon `apps/bridge` | none — synchronous, in-memory pending map (`client.ts:349-372`) | per-connection request/response, multiplexed by id | none (id is correlation) | per-call `timeoutMs`, socket dropped on error and reconnected on next call (`client.ts:352,394`) | unaffected — not a Redis path | unaffected |
-| 8 | Direct RCON TCP | Valve Source RCON over `node:net` (`apps/workers/rcon/src/protocol.ts`; API fallback `apps/api/src/lib/rcon-send.ts`) | worker-rcon supervisor; API `rconSendOnce`; unix-socket HTTP client `apps/api/src/lib/rcon.ts` | the Squad game server | none | strictly serialized via `execQueue` (`client.ts:80-85`) | none | 10 s per-command timeout; keepalive `ShowServerInfo` every 90 s | unaffected | unaffected |
+| 8 | Direct RCON TCP | Valve Source RCON over `node:net` (`apps/workers/rcon/src/protocol.ts`; API fallback `apps/api/src/lib/rcon-send.ts`) | worker-rcon supervisor; API `rconSendOnce` | the Squad game server | none | strictly serialized via `execQueue` (`client.ts:80-85`) | none | 10 s per-command timeout; keepalive `ShowServerInfo` every 90 s | unaffected | unaffected |
 
 Two structural facts fall out of this table. First, **substrate 2 is the only one that is crash-safe end to end** — everything else loses in-flight work when Redis restarts, because the stream backlog *is* the queue. Second, the same stream can carry opposite delivery guarantees: automation claims its dedup key *before* dispatching (`dispatch.ts:213`) making it **at-most-once**, while discord `GET`s, delivers, then `SET`s (`consume.ts:119-129`) making it **at-least-once**. Same events, two consumers, incompatible semantics, and no comment anywhere saying so.
 
@@ -2919,10 +2918,10 @@ The layering is therefore upheld entirely by what each `package.json` declares. 
 
 ### 13.6 Suspicious edges
 
-1. **Runtime deps must be `dependencies` in `apps/api`.** `drizzle-orm` (imported in 116 files under `apps/api/src`) and `undici` (`apps/api/src/lib/rcon.ts:2`) are runtime imports; the api image installs production dependencies only, so a runtime import left in `devDependencies` fails at start-up. Both are `dependencies`, and `apps/api/test/runtime-dependencies.test.ts` pins that.
+1. **Runtime deps must be `dependencies` in `apps/api`.** `drizzle-orm` (imported in 116 files under `apps/api/src`) is a runtime import; the api image installs production dependencies only, so a runtime import left in `devDependencies` fails at start-up. It is a `dependency`, and `apps/api/test/runtime-dependencies.test.ts` pins that.
 2. **`apps/workers/_test-shared` is a `package.json`-less workspace member** matched by the `apps/workers/*` glob and imported by relative path across package boundaries (`apps/workers/log-ingest/test/contract.test.ts:3` → `'../../_test-shared/contract.js'`, same in `role-expirer`, `seed-reward`, `clan-priority-expirer`). A real cross-package edge invisible to pnpm and to Turbo's affected-package graph.
 3. **`docker/rnsquadjs/plugins/panelBridge` is a workspace member with zero `@squad/*` imports** that hand-copies the envelope with `type: string` (unconstrained) and `server_id: string` (non-nullable) at `src/eventMap.ts:3` — a third, weaker copy of the contract.
-4. **Two unrelated exported types both named `RconClient`/`RconClientOptions`**: `apps/api/src/lib/rcon.ts:4` (HTTP-over-unix-socket via `undici`) and `apps/workers/rcon/src/client.ts:12` (raw Valve RCON TCP over `node:net`). Different transports, same names, neither shared.
+4. **`RconClient` lives only in `apps/workers/rcon/src/client.ts:12`** (raw Valve RCON TCP over `node:net`); the API's same-named HTTP-over-unix-socket client was dead and has been removed (#66).
 
 ### 13.7 The Go↔TS drift surface
 

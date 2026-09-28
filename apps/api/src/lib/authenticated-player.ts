@@ -2,6 +2,9 @@ import { players } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SESSION_COOKIE } from '../plugins/auth.js';
+import { claimFirstOwner } from './first-owner.js';
+import { loadUserPermissions } from './rbac.js';
+import { createSession } from './sessions.js';
 
 export type AuthenticatedPlayerSessionResult =
   | { ok: true; scope: 'panel' | 'self_service' }
@@ -13,10 +16,6 @@ export interface PlayerIdentity {
   canonicalName: string;
   avatarUrl: string | null;
 }
-
-import { claimFirstOwner } from './first-owner.js';
-import { loadUserPermissions } from './rbac.js';
-import { createSession } from './sessions.js';
 
 export async function establishAuthenticatedPlayerSession(
   app: FastifyInstance,
@@ -55,8 +54,7 @@ export async function establishAuthenticatedPlayerSession(
     return { ok: false, error: 'identity_persist_failed' };
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: SentinelBridge structural subtype
-  const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, identity.steamId64);
+  const claim = await claimFirstOwner(app.db, app.bridge, playerId, identity.steamId64);
   if (claim === 'no_owner_role') {
     req.log.error('Owner role missing — system roles not seeded?');
     if (sendErrorResponse) reply.code(500).send({ error: 'owner_role_missing' });

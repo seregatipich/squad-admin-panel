@@ -1,11 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { auditLog } from '@squad/db/schema';
 
-export interface AuditConfig {
-  action: string;
-  resource: string;
-}
-
 export type AuditActor =
   | { kind: 'steam'; playerId: string; tokenId?: string | null }
   | { kind: 'system'; label: string };

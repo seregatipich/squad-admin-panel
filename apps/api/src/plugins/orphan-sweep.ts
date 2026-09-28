@@ -29,12 +29,20 @@ export default fp(async (app) => {
         actorPlayerId: null,
         actorIp: null,
       });
-      const removed = result.removed_configs.length + result.removed_saved.length;
+      const removed =
+        result.removed_configs.length +
+        result.removed_saved.length +
+        result.removed_containers.length +
+        result.removed_sidecar_containers.length +
+        result.removed_sidecar_dirs.length;
       if (removed > 0 || result.errors.length > 0) {
         app.log.info(
           {
             removed_configs: result.removed_configs.length,
             removed_saved: result.removed_saved.length,
+            removed_containers: result.removed_containers.length,
+            removed_sidecar_containers: result.removed_sidecar_containers.length,
+            removed_sidecar_dirs: result.removed_sidecar_dirs.length,
             errors: result.errors.length,
           },
           'orphan sweep',

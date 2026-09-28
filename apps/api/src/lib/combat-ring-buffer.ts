@@ -6,7 +6,8 @@ type CombatEvent = Extract<LiveEvent, { type: 'combat.event' }>;
  * Bounded per-server ring of the most recent combat events so a WebSocket
  * reconnect can replay the tail it missed (COMBAT-6). Live combat events fan
  * out through the live bus; this buffer only retains `combat.event` events
- * and caps each server at `capacity` entries.
+ * and caps each server at `capacity` entries. A `server.deleted` event drops
+ * that server's bucket so a deleted server's feed is not replayed.
  */
 export class CombatRingBuffer {
   private readonly byServer = new Map<string, CombatEvent[]>();
@@ -14,6 +15,10 @@ export class CombatRingBuffer {
   constructor(private readonly capacity: number) {}
 
   push(event: LiveEvent): void {
+    if (event.type === 'server.deleted') {
+      this.byServer.delete(event.data.server_id);
+      return;
+    }
     if (event.type !== 'combat.event') return;
     const key = event.data.server_id;
     const bucket = this.byServer.get(key) ?? [];
