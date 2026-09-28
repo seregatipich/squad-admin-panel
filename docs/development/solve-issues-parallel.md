@@ -46,11 +46,11 @@ The runner never merges anything. Integrate the pushed branches the same way as 
 4. Watch the `deploy` run for the `dev` tip, promote it (`git push origin origin/dev:master`), watch the `ci` run on `master` to green, and run `bash scripts/verify-done.sh`.
 5. For each integrated issue, post and verify the final `Completion evidence — 100% verified` issue comment required by `CLAUDE.md`. It must identify the current `dev` SHA, its deploy run and the `master` CI run; only then may the issue be reported complete or closed.
 
-A `timed-out` or `failed` result means no trustworthy branch was pushed for that issue — check the session in the Console before assuming anything landed.
+A `timed-out` or `failed` result means no trustworthy branch was pushed for that issue — check the session in the Console before assuming anything landed. When the runner gives up on a session that may still be running (timeout, `session.error`, or a stream that ends without going idle) it sends `user.interrupt` and archives the session, so it stops spending compute and cannot push or comment later; the report's `stopped:` line says whether each step succeeded. If either step failed, stop the session in the Console yourself.
 
 ## Tests
 
-The runner's orchestration logic (CLI parsing, branch naming, prompt building, concurrency pool) is covered by `scripts/solve-issues-parallel.test.ts`, run in CI's `lint` job and locally with:
+The runner's orchestration logic (CLI parsing, branch naming, prompt building, concurrency pool, and the remote stop of abandoned sessions against a fake client) is covered by `scripts/solve-issues-parallel.test.ts`, run in CI's `lint` job and locally with:
 
 ```bash
 pnpm solve:issues:test
