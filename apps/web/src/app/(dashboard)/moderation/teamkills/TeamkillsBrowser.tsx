@@ -31,6 +31,7 @@ import {
   formatTeamkillCount,
   formatTeamkillDate,
   parseTeamkillFilters,
+  TEAMKILL_SUMMARY_LIMIT,
   type TeamkillFilters,
   type TeamkillSort,
   type TeamkillSummaryResponse,
@@ -144,7 +145,13 @@ export function TeamkillsBrowser() {
             ))}
           </Select>
         }
-        summary={rows.length > 0 ? `Найдено: ${formatTeamkillCount(rows.length)}` : undefined}
+        summary={
+          rows.length > 0
+            ? rows.length >= TEAMKILL_SUMMARY_LIMIT
+              ? `Показаны первые ${formatTeamkillCount(rows.length)} — возможно, есть ещё`
+              : `Показано: ${formatTeamkillCount(rows.length)}`
+            : undefined
+        }
       />
 
       {error ? (

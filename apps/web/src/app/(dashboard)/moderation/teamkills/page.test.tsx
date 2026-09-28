@@ -14,7 +14,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: mockUseSearchParams,
 }));
 
-import { formatTeamkillDate } from './helpers';
+import { formatTeamkillDate, TEAMKILL_SUMMARY_LIMIT } from './helpers';
 import TeamkillsPage from './page';
 import { TeamkillsBrowser } from './TeamkillsBrowser';
 
@@ -103,6 +103,46 @@ describe('TeamkillsBrowser moderation column', () => {
       await screen.findAllByText('Charlie TK');
       const dashes = screen.getAllByText('—');
       expect(dashes.length).toBeGreaterThan(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'labels the row count as "Показано" rather than the misleading "Найдено"',
+    async () => {
+      render(<TeamkillsBrowser />);
+      await screen.findAllByText('Alpha TK');
+      expect(screen.getByText('Показано: 2')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'warns that the list may be truncated once it hits the API page-size limit',
+    async () => {
+      const fullPage = {
+        generated_at: SUMMARY.generated_at,
+        rows: Array.from({ length: TEAMKILL_SUMMARY_LIMIT }, (_, i) => ({
+          ...SUMMARY.rows[0],
+          player_id: `player-${i}`,
+          current_name: `Player ${i}`,
+        })),
+      };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.includes('/api/v1/servers')) {
+            return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+          }
+          return Promise.resolve(new Response(JSON.stringify(fullPage), { status: 200 }));
+        }),
+      );
+
+      render(<TeamkillsBrowser />);
+      await screen.findAllByText('Player 0');
+      expect(
+        screen.getByText(`Показаны первые ${TEAMKILL_SUMMARY_LIMIT} — возможно, есть ещё`),
+      ).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

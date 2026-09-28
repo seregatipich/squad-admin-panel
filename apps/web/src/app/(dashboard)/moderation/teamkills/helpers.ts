@@ -86,7 +86,13 @@ export function buildTeamkillQueryString(filters: TeamkillFilters): string {
   return params.toString();
 }
 
-export function buildTeamkillSummaryApiQuery(filters: TeamkillFilters, limit = 50): string {
+/** `GET /api/v1/moderation/teamkills` has no pagination yet — this is the whole page. */
+export const TEAMKILL_SUMMARY_LIMIT = 50;
+
+export function buildTeamkillSummaryApiQuery(
+  filters: TeamkillFilters,
+  limit = TEAMKILL_SUMMARY_LIMIT,
+): string {
   const params = new URLSearchParams();
   params.set('sort', filters.sort);
   params.set('order', filters.order);
