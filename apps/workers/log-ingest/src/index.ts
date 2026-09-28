@@ -17,6 +17,7 @@ import { handleAltBanConnect } from './alt-ban/store.js';
 import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
+import { BoundedChain } from './bounded-chain.js';
 import { handleChatCommand } from './chat/commands.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
@@ -111,7 +112,12 @@ async function main() {
     log.info({ serverId, beaconPort, source: wanted.source.kind }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
     let voteChain: Promise<void> = Promise.resolve();
-    let combatChain: Promise<void> = Promise.resolve();
+    // Combat/vehicle lines are by far the highest-volume kind on a busy
+    // server; cap the backlog instead of letting it grow without bound
+    // (#63 finding 916).
+    const combatChain = new BoundedChain(500, (queued) =>
+      log.warn({ serverId, queued }, 'combat chain backlog full, dropping event'),
+    );
     const ingestor = new LogIngestor({
       serverId,
       beaconPort,
@@ -195,26 +201,24 @@ async function main() {
           .catch((err) => log.error({ err: (err as Error).message }, 'vote handling failed'));
       },
       onCombat: (command) => {
-        combatChain = combatChain
-          .then(() => handleCombat(db, redis, command))
-          .then(() => undefined)
-          .catch((err) =>
+        combatChain.enqueue(
+          () => handleCombat(db, redis, command),
+          (err) =>
             log.error(
               { err: (err as Error).message, kind: command.kind },
               'combat handling failed',
             ),
-          );
+        );
       },
       onVehicle: (command) => {
-        combatChain = combatChain
-          .then(() => handleVehicle(db, redis, command))
-          .then(() => undefined)
-          .catch((err) =>
+        combatChain.enqueue(
+          () => handleVehicle(db, redis, command),
+          (err) =>
             log.error(
               { err: (err as Error).message, kind: command.kind },
               'vehicle handling failed',
             ),
-          );
+        );
       },
     });
     const onLine = (line: string) => {
