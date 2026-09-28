@@ -67,7 +67,11 @@ const hostActionsRoutes: FastifyPluginAsync = async (app) => {
 
   // Frees disk by running `docker system prune -af` on the host. Removes
   // stopped containers, unused images, and the entire build cache.
-  // Volumes are NOT pruned (squad-depot + per-server data must survive).
+  // Volumes are NOT pruned (squad-depot + per-server data must survive), and
+  // images labelled `panel.preserve=true` are spared: the game-server and
+  // depot-init images and every panel release image (api, web, workers,
+  // caddy), so the previous release stays loaded for a rollback. A non-zero
+  // docker exit code is reported as a 502.
   app.post(
     '/api/v1/host/docker-prune',
     {
@@ -81,6 +85,15 @@ const hostActionsRoutes: FastifyPluginAsync = async (app) => {
         const client = app.makeBridgeClient();
         try {
           const result = await client.dockerPrune();
+          if (result.exit_code !== 0) {
+            req.log.error({ exitCode: result.exit_code }, 'docker_prune exited non-zero');
+            reply.code(502);
+            return {
+              error: 'docker_prune_failed',
+              exit_code: result.exit_code,
+              detail: `docker system prune завершился с кодом ${result.exit_code}`,
+            };
+          }
           return {
             ok: true,
             exit_code: result.exit_code,
