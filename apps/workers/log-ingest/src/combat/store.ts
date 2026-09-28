@@ -250,13 +250,27 @@ export async function handleCombat(
   const occurredAt = new Date(command.ts);
   const attackerPlayerId = await resolveOrCreatePlayer(db, command.attacker);
   const victimPlayerId = await resolveOrCreatePlayer(db, command.victim);
+  // The parser's isSuicide only has the two combatants' names/ids to compare
+  // (Squad's Wound/Die lines never carry a victim id segment — see
+  // parser/combat.ts), so it can miss a self-damage line whose attacker
+  // segment is a controller name that differs from the victim's display
+  // name. Once both sides resolve to the same DB player row, treat it as a
+  // suicide regardless, so it is never counted as a teamkill (#63 finding 922).
+  const isSuicide =
+    command.isSuicide || (attackerPlayerId !== null && attackerPlayerId === victimPlayerId);
 
   const teamIndex = await loadTeamIndex(redis, command.serverId);
-  const isTeamkill = detectTeamkill(command, teamIndex);
+  const isTeamkill = !isSuicide && detectTeamkill(command, teamIndex);
   const matchId = await resolveMatchId(db, command.serverId, occurredAt);
 
   const eventId = deterministicEventId(command);
-  const payload = buildPayload(command, attackerPlayerId, victimPlayerId, isTeamkill, matchId);
+  const payload = buildPayload(
+    { ...command, isSuicide },
+    attackerPlayerId,
+    victimPlayerId,
+    isTeamkill,
+    matchId,
+  );
   const eventType = COMBAT_KIND_TO_EVENT_TYPE[command.kind];
 
   // DOSSIER-2 (#189): the events envelope, the typed combat_events row and the
