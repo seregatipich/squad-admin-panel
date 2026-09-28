@@ -207,7 +207,12 @@ export default function GeoipIntegrationPage() {
               Удалить ключ
             </Button>
           ) : null}
-          <Button variant="primary" loading={saving} onClick={() => void save()}>
+          <Button
+            variant="primary"
+            loading={saving}
+            disabled={saving || !settings}
+            onClick={() => void save()}
+          >
             Сохранить
           </Button>
         </CardFooter>

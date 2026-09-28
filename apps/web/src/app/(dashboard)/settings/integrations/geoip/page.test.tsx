@@ -62,6 +62,27 @@ describe('GeoipIntegrationPage', () => {
   );
 
   it(
+    'disables Save (and never sends a PUT) while settings failed to load (#713)',
+    async () => {
+      const fn = vi.fn(() => Promise.resolve(new Response('{}', { status: 500 })));
+      vi.stubGlobal('fetch', fn);
+      render(<GeoipIntegrationPage />);
+
+      await screen.findByText('Не удалось загрузить настройки GeoIP');
+      const saveButton = screen.getByRole('button', { name: 'Сохранить' });
+      expect(saveButton).toBeDisabled();
+
+      fireEvent.click(saveButton);
+      // Only the initial GET (and the reload it never triggered) should have
+      // been made — no PUT slipped through a disabled button.
+      expect(
+        fn.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PUT'),
+      ).toHaveLength(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'keeps the key when the delete confirmation is cancelled',
     async () => {
       const calls = stubFetch();
