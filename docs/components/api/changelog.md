@@ -1,5 +1,38 @@
 # `api` — changelog
 
+## 2026-09-28 — Аудит маршрутов API: права, аудит, валидация ввода (#69)
+
+### Security
+
+- Discord-команды (`POST /api/v1/integrations/discord/interactions`) проверяют доступ через `loadUserPermissions`: роль с истёкшим `role_expires_at` больше не даёт ответов `/status`, `/player`, `/online-admins`, а `/online-admins` не показывает админами игроков с истёкшей ролью.
+- `POST /api/v1/players/:playerId/bonus-purchases` отвечает `409 tier_not_purchasable` для отключённого (`is_active = false`) тарифа.
+- `POST /api/v1/integrations/balancer/proposals` отклоняет подпись с `x-balancer-timestamp` вне окна ±5 минут (`401 stale_timestamp`; ISO-8601 или unix-секунды), отвечает `404 server_not_found` для мягко удалённого сервера, при повторной доставке меняет только `received_at` открытого снимка и отвечает `409 snapshot_identity_mismatch`, если изменились `server_id`/`mode`; доставки для пары `(server_id, mode)` сериализуются advisory-блокировкой.
+- `POST /api/v1/issues/:id/links` разрешён только автору тикета или держателю `can_manage_issues` (`403 { error: 'forbidden', required: 'can_manage_issues' }`), как `PATCH /api/v1/issues/:id`.
+- `POST /api/v1/host/backups/:id/restore` проверяет id снимка (`latest` или 8/64 hex) и тело на границе API (400).
+- `GET /api/v1/ws/live`: периодическая перепроверка сокета с API-токеном сужает права по scopes токена — токен больше не получает `combat.event` и уведомления о ролях по флагам роли владельца. Чат, бой, ростер и события воркеров без потребителя приходят только после подписки (`subscribe`), см. `docs/components/live-bus/changelog.md`.
+
+### Changed
+
+- Мутации `integrations-discord.ts`, `integrations-geoip.ts` и `issues.ts` перешли на декларативный `config.audit` с `req.auditSnapshots`: аудируются и отказы (401/403), и ошибки (400/404); маршруты добавлены в `test/audit-coverage.test.ts`. `POST /api/v1/integrations/discord/templates/:eventType/preview` теперь тоже пишет строку аудита (`integration.discord.template.preview`).
+- Маппинги ролей Discord пишут снимки before/after (роль панели ↔ `discord_role_id`) при создании, изменении и удалении.
+- `POST /api/v1/players/:playerId/bonus-adjustments` пишет аудит в той же транзакции, что и изменение баланса.
+- `PUT /api/v1/integrations/discord` и `PUT /api/v1/integrations/geoip` делают upsert + `SELECT … FOR UPDATE` в транзакции: одновременные первые сохранения не дают 500 и не теряют поля.
+- Шаблон Discord из БД проверяется схемой; невалидный заменяется шаблоном по умолчанию.
+- `GET /api/v1/players/:playerId/issues`: `open_count` считает все открытые тикеты, а не только 50 выведенных.
+- `GET /api/v1/events/export` отдаёт CSV потоком страницами по 1000 строк вместо сборки до 50 000 строк в памяти.
+
+### Fixed
+
+- `GET /api/v1/events?cursor=` с не-UUID идентификатором отвечает `400 invalid_cursor`, а не 500.
+- Поиск `GET /api/v1/external-bans?q=`, `GET /api/v1/leaderboards?search=` и Discord-команда `/player` экранируют `%`, `_` и `\` (общий `lib/sql-like.ts`); `total` реестра внешних банов верен и при `offset` за концом выборки.
+- `GET /api/v1/host/disk-usage?refresh=false` (и `=0`) больше не запускает полный пересчёт; допустимы только `true/false/1/0`. `GET /api/v1/host/metrics/history` пропускает сэмплы, не являющиеся массивом чисел.
+- `GET /api/v1/leaderboards`: несуществующая дата в `period_start` и слишком большие `page`/`offset` дают 400, а не 500; счётчик ограничения поиска всегда получает TTL (`INCR` + `EXPIRE NX` в одном `MULTI`); ошибки запросов лидербордов (и `/leaderboards/bonuses`) логируются.
+- Тестовая отправка вебхука Discord освобождает тело ответа.
+
+### Migration notes
+
+- Миграция `0119_player_name_trgm_indexes` добавляет GIN-индексы pg_trgm для поиска по именам игроков; совместима с предыдущим релизом.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security
