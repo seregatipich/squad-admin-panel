@@ -141,11 +141,31 @@ function integrationView(row: IntegrationRowLike | null) {
   };
 }
 
+/**
+ * Decrypts a stored webhook URL.
+ *
+ * @returns The URL, or null when the ciphertext cannot be decrypted with
+ *   `key` (the row was written under a rotated `APP_ENCRYPTION_KEY`, or is
+ *   corrupt) — AES-GCM rejects it on the auth-tag check.
+ */
+function decryptWebhookUrl(row: DiscordWebhookRow, key: Buffer): string | null {
+  try {
+    return decryptString(
+      key,
+      deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * API view of a webhook row. An undecryptable URL is reported as not
+ * configured instead of failing, so one such row cannot break the list or
+ * block its own deletion.
+ */
 function webhookView(row: DiscordWebhookRow, key: Buffer) {
-  const url = decryptString(
-    key,
-    deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
-  );
+  const url = decryptWebhookUrl(row, key);
   return {
     id: row.id,
     event_type: row.eventType,
@@ -153,8 +173,8 @@ function webhookView(row: DiscordWebhookRow, key: Buffer) {
     enabled: row.enabled,
     mention_everyone: row.mentionEveryone,
     server_id: row.serverId,
-    url_configured: true,
-    url_mask: maskWebhookUrl(url),
+    url_configured: url !== null,
+    url_mask: url === null ? null : maskWebhookUrl(url),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
@@ -452,10 +472,11 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         payload.allowed_mentions = { parse: ['everyone'] };
       }
 
-      const url = decryptString(
-        app.encryptionKey,
-        deserialize(Buffer.from(webhook.webhookUrlEncrypted as unknown as Buffer)),
-      );
+      const url = decryptWebhookUrl(webhook, app.encryptionKey);
+      if (url === null) {
+        reply.code(409);
+        return { error: 'webhook_url_unreadable' };
+      }
 
       let outcome: 'ok' | 'discord_error' | 'unreachable';
       let discordStatus: number | null = null;

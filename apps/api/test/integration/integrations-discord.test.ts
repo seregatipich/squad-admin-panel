@@ -480,3 +480,53 @@ describeIfDb('Discord integration — POST /webhooks/:id/test', () => {
     }
   });
 });
+
+describeIfDb('Discord webhooks — undecryptable rows (#162)', () => {
+  it('lists and deletes a webhook encrypted under a different key', async () => {
+    const cookie = await loginAsOwner(h);
+    const foreignKey = Buffer.alloc(32, 0x07);
+    const brokenId = randomUUID();
+    await h.db.insert(discordWebhooks).values({
+      id: brokenId,
+      eventType: 'ban_issued',
+      webhookUrlEncrypted: serialize(
+        encrypt(foreignKey, 'https://discord.com/api/webhooks/1/foreign-token'),
+      ),
+      channelLabel: 'rotated-key',
+    });
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/integrations/discord/webhooks',
+      headers: { cookie },
+    });
+    expect(list.statusCode).toBe(200);
+    const broken = (list.json() as Array<{ id: string }>).find((row) => row.id === brokenId);
+    expect(broken).toMatchObject({
+      id: brokenId,
+      channel_label: 'rotated-key',
+      url_configured: false,
+      url_mask: null,
+    });
+
+    const testSend = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/integrations/discord/webhooks/${brokenId}/test`,
+      headers: { cookie },
+    });
+    expect(testSend.statusCode).toBe(409);
+    expect(testSend.json()).toEqual({ error: 'webhook_url_unreadable' });
+
+    const del = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/integrations/discord/webhooks/${brokenId}`,
+      headers: { cookie },
+    });
+    expect(del.statusCode).toBe(200);
+    const remaining = await h.db
+      .select({ id: discordWebhooks.id })
+      .from(discordWebhooks)
+      .where(eq(discordWebhooks.id, brokenId));
+    expect(remaining).toEqual([]);
+  });
+});
