@@ -12,6 +12,7 @@ import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { containsPattern } from '../lib/sql-like.js';
 
 const METRIC_COLUMNS = {
   online: playerStatPeriods.onlineSeconds,
@@ -37,6 +38,20 @@ const CACHE_TTL_SECONDS = 60;
 const MAX_LIMIT = 200;
 const SEARCH_RATE_LIMIT_PER_MINUTE = 60;
 const SEARCH_RATE_LIMIT_PREFIX = 'leaderboard:search-rl:';
+const SEARCH_RATE_LIMIT_WINDOW_SECONDS = 60;
+/**
+ * Upper bound for `offset` and the offset a `page` implies. Far beyond any real
+ * leaderboard, and small enough that `(page - 1) * per_page` stays an exact
+ * integer and a valid Postgres OFFSET — larger values answer 400, not 500.
+ */
+const MAX_OFFSET = 1_000_000;
+const MAX_PAGE = Math.floor(MAX_OFFSET / MAX_LIMIT) + 1;
+
+/** `YYYY-MM-DD` that names a real calendar day (rejects `2024-13-45`, `2024-02-30`). */
+function isCalendarDate(value: string): boolean {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 
 const leaderboardsQuery = z.object({
   metric: z.enum([
@@ -55,14 +70,15 @@ const leaderboardsQuery = z.object({
   period_start: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine(isCalendarDate, 'period_start must be a real calendar date')
     .optional(),
   server_id: z.union([z.literal('all'), z.string().uuid()]).default('all'),
   order: z.enum(['asc', 'desc']).default('desc'),
   search: z.string().trim().min(1).max(64).optional(),
-  page: z.coerce.number().int().min(1).optional(),
+  page: z.coerce.number().int().min(1).max(MAX_PAGE).optional(),
   per_page: z.coerce.number().int().min(1).max(MAX_LIMIT).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(100),
-  offset: z.coerce.number().int().min(0).default(0),
+  offset: z.coerce.number().int().min(0).max(MAX_OFFSET).default(0),
 });
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
@@ -119,15 +135,20 @@ function serializeSeason(row: SeasonRow): SeasonMeta {
   };
 }
 
+/**
+ * Substring match on current and historical normalised names (LIKE with the
+ * user's `%`/`_` escaped, served by the pg_trgm GIN indexes from migration
+ * 0119), plus exact steam_id64 / eos_id matches.
+ */
 function buildSearchFilter(search: string): SQL {
   const exactMatch = search.toLowerCase();
-  const nameMatch = normalizePlayerName(search);
+  const namePattern = containsPattern(normalizePlayerName(search));
   const nameHistoryMatch = sql`EXISTS (
     SELECT 1 FROM player_name_history h
-    WHERE h.player_id = ${players.id} AND h.name_normalized LIKE ${`%${nameMatch}%`}
+    WHERE h.player_id = ${players.id} AND h.name_normalized LIKE ${namePattern}
   )`;
   const filter = or(
-    sql`${players.canonicalNameNormalized} LIKE ${`%${nameMatch}%`}`,
+    sql`${players.canonicalNameNormalized} LIKE ${namePattern}`,
     sql`${players.steamId64}::text = ${exactMatch}`,
     sql`${players.eosId} = ${search}`,
     nameHistoryMatch,
@@ -211,8 +232,16 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
 
       if (search) {
         const rateKey = `${SEARCH_RATE_LIMIT_PREFIX}${req.ip}:${req.user?.playerId ?? ''}`;
-        const hits = await app.redis.incr(rateKey).catch(() => 0);
-        if (hits === 1) await app.redis.expire(rateKey, 60).catch(() => {});
+        // INCR and EXPIRE NX in one MULTI: the key can never be left without a
+        // TTL (which would lock search for this caller forever), and NX keeps a
+        // live window from being extended by every further search.
+        const results = await app.redis
+          .multi()
+          .incr(rateKey)
+          .expire(rateKey, SEARCH_RATE_LIMIT_WINDOW_SECONDS, 'NX')
+          .exec()
+          .catch(() => null);
+        const hits = Number(results?.[0]?.[1] ?? 0);
         if (hits > SEARCH_RATE_LIMIT_PER_MINUTE) {
           reply.code(429);
           return {
@@ -295,7 +324,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
           .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
           .where(whereClause);
         total = countRow?.total ?? 0;
-      } catch {
+      } catch (err) {
+        req.log.error({ err, metric, period, periodStart }, 'leaderboard query failed');
         reply.code(500);
         return {
           error: { code: 'internal_error', message: 'Не удалось загрузить таблицу лидеров.' },

@@ -4,6 +4,16 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-28
+
+### Trigram indexes for player-name substring search (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_player_name_trgm_indexes.sql`, `packages/db/src/schema/{players,player-name-history}.ts`, `packages/db/test/player-name-trgm-indexes.migration.test.ts`
+
+Issue #69 (finding #180). Name search (`GET /api/v1/leaderboards?search=`, the events player filter) matches `canonical_name_normalized` and `player_name_history.name_normalized` with `LIKE '%q%'`, which the existing btree indexes cannot serve. The migration adds `players_canonical_name_normalized_trgm_idx` and `player_name_history_name_normalized_trgm_idx` (`USING gin (… gin_trgm_ops)`); `pg_trgm` is already enabled since 0025. Rollback-safe: additive indexes only.
+
+---
+
 ## 2026-09-27
 
 ### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)

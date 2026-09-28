@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { economySettings, playerBonusAccruals, players, roles } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -233,6 +233,28 @@ describeIfDb('GET /api/v1/leaderboards/bonuses', () => {
       expect(body.total_rows).toBe(0);
     } finally {
       await setEconomyEnabled(true);
+    }
+  });
+
+  it('logs the database error and returns an opaque envelope when the query fails', async () => {
+    const logged = vi.spyOn(h.app.log, 'error');
+    await h.redis.del('leaderboard-bonuses:30d:11');
+    await h.db.execute(
+      sql`ALTER TABLE player_bonus_accruals RENAME TO player_bonus_accruals_hidden`,
+    );
+    try {
+      const res = await fetchBonuses('?period=30d&limit=11');
+      expect(res.statusCode).toBe(500);
+      expect((res.json() as { error: { code: string } }).error.code).toBe('internal_error');
+      expect(logged).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.anything() }),
+        expect.any(String),
+      );
+    } finally {
+      await h.db.execute(
+        sql`ALTER TABLE player_bonus_accruals_hidden RENAME TO player_bonus_accruals`,
+      );
+      logged.mockRestore();
     }
   });
 
