@@ -3,7 +3,7 @@
 # real git and gitleaks (scripts/operations-scripts.test.ts covers the rest of
 # scripts/pre-push-checklist.sh with shims).
 #
-#   A/B. The checklist's real, extracted `gitleaks detect ...` invocation
+#   A/B. The checklist's real, extracted `gitleaks git ...` invocation
 #        ignores a secret already merged into dev (outside the range a later
 #        branch pushes) but still catches a new one within the pushed range.
 #   C.   The real checklist measures changes from the merge base with
@@ -35,9 +35,9 @@ CHECKLIST="$REPO_ROOT/scripts/pre-push-checklist.sh"
 # Extract the real, current production command rather than hand-copying it,
 # so this test always exercises what actually ships, not a duplicate that can
 # drift out of sync.
-gitleaks_cmd=$(grep -o 'gitleaks detect .*' "$CHECKLIST")
+gitleaks_cmd=$(grep -o 'gitleaks git .*' "$CHECKLIST")
 if [ -z "$gitleaks_cmd" ]; then
-  echo "test-pre-push-checklist: could not extract a 'gitleaks detect ...' invocation from $CHECKLIST" >&2
+  echo "test-pre-push-checklist: could not extract a 'gitleaks git ...' invocation from $CHECKLIST" >&2
   exit 1
 fi
 

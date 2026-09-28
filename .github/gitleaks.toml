@@ -1,12 +1,10 @@
 [extend]
 useDefault = true
 
-[allowlist]
-description = "Synthetic fixtures live in test files and e2e helpers (fake tokens/keys/ids used to exercise parsing and redaction); they are not real secrets."
+[[allowlists]]
+description = "Synthetic fixtures live in test/spec files (fake tokens/keys/ids used to exercise parsing and redaction); they are not real secrets. Non-*.test.ts/*.spec.ts helpers and harnesses under test/ and e2e/ (e.g. apps/api/test/e2e/lib/client.ts, apps/api/test/integration/harness.ts) are deliberately NOT excluded here so a real credential pasted into one of them is still caught."
 paths = [
-  '''.*\.test\.tsx?$''',
-  '''.*\.spec\.tsx?$''',
-  '''(^|/)test/''',
-  '''(^|/)e2e/''',
+  '''\.test\.tsx?$''',
+  '''\.spec\.tsx?$''',
   '''\.env\.example$''',
 ]
