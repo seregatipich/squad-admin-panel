@@ -420,6 +420,113 @@ describe('PATCH /api/v1/servers/:id/scheduled-tasks/:taskId', () => {
   });
 });
 
+// Regression (#43 finding 311): PATCH left the worker's `last_executed_at`
+// cursor alone, so a re-enabled or re-timed recurring task replayed the latest
+// missed occurrence at once, and a rescheduled executed one-off never ran.
+describe('PATCH /api/v1/servers/:id/scheduled-tasks/:taskId — scheduler cursor', () => {
+  const STALE_RUN = new Date('2026-01-01T04:00:00Z');
+
+  async function insertTask(
+    serverId: string,
+    fields: { recurrence: string | null; scheduledAt: Date | null; enabled: boolean },
+  ): Promise<string> {
+    const id = uuidv7();
+    await h.db.insert(scheduledTasks).values({
+      id,
+      serverId,
+      name: 'Nightly restart',
+      taskType: 'restart',
+      params: {},
+      ...fields,
+      lastExecutedAt: STALE_RUN,
+    });
+    return id;
+  }
+
+  async function cursorOf(taskId: string): Promise<Date | null> {
+    const [row] = await h.db
+      .select({ lastExecutedAt: scheduledTasks.lastExecutedAt })
+      .from(scheduledTasks)
+      .where(eq(scheduledTasks.id, taskId));
+    return row?.lastExecutedAt ?? null;
+  }
+
+  async function patch(cookie: string, serverId: string, taskId: string, payload: object) {
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks/${taskId}`,
+      headers: { cookie },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it('moves a recurring task cursor to now when it is re-enabled', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const taskId = await insertTask(serverId, {
+      recurrence: '0 4 * * *',
+      scheduledAt: null,
+      enabled: false,
+    });
+    const before = Date.now();
+
+    await patch(cookie, serverId, taskId, { enabled: true });
+
+    const cursor = await cursorOf(taskId);
+    expect(cursor?.getTime()).toBeGreaterThan(before - 60_000);
+    expect(cursor?.getTime()).toBeLessThanOrEqual(Date.now());
+    // Minute-aligned like a worker-written occurrence, so the next minute's
+    // occurrence is still in the worker's scan window.
+    expect(cursor?.getUTCSeconds()).toBe(0);
+    expect(cursor?.getUTCMilliseconds()).toBe(0);
+  });
+
+  it('moves a recurring task cursor to now when its recurrence changes', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const taskId = await insertTask(serverId, {
+      recurrence: '0 4 * * *',
+      scheduledAt: null,
+      enabled: true,
+    });
+
+    await patch(cookie, serverId, taskId, { recurrence: '0 5 * * *' });
+
+    expect((await cursorOf(taskId))?.getTime()).toBeGreaterThan(Date.now() - 120_000);
+  });
+
+  it('clears the cursor of an executed one-off task that is rescheduled', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const taskId = await insertTask(serverId, {
+      recurrence: null,
+      scheduledAt: new Date('2026-01-01T04:00:00Z'),
+      enabled: true,
+    });
+
+    await patch(cookie, serverId, taskId, {
+      scheduled_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    expect(await cursorOf(taskId)).toBeNull();
+  });
+
+  it('leaves the cursor alone for a rename', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const taskId = await insertTask(serverId, {
+      recurrence: '0 4 * * *',
+      scheduledAt: null,
+      enabled: true,
+    });
+
+    await patch(cookie, serverId, taskId, { name: 'Renamed restart' });
+
+    expect(await cursorOf(taskId)).toEqual(STALE_RUN);
+  });
+});
+
 describe('DELETE /api/v1/servers/:id/scheduled-tasks/:taskId', () => {
   it('deletes the task and writes an audit row', async () => {
     const cookie = await login();

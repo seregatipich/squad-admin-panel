@@ -240,6 +240,29 @@ describe('ROT-4 rotation calendar API', () => {
     }
   });
 
+  // Same root cause as #43 findings 311/327: the worker never runs an entry
+  // whose `last_executed_at` is set, so moving an executed entry must clear it.
+  it('clears the cursor of an executed entry moved to a new time', async () => {
+    const entryId = uuidv7();
+    await h.db.insert(rotationSchedule).values({
+      id: entryId,
+      serverId: SERVER_ID,
+      scheduledAt: new Date('2026-07-01T10:00:00Z'),
+      layer: KNOWN_LAYER,
+      lastExecutedAt: new Date('2026-07-01T10:00:00Z'),
+    });
+    const cookie = await loginAsOwner(h);
+    const response = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/servers/${SERVER_ID}/rotation-schedule/${entryId}`,
+      headers: { cookie },
+      payload: { scheduled_at: '2026-12-01T10:00:00.000Z' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ last_executed_at: string | null }>().last_executed_at).toBeNull();
+  });
+
   it('gates writes by changemap while retaining read-only calendar access', async () => {
     const cookie = await asRoleWithoutChangeMap();
     const read = await h.app.inject({

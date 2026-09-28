@@ -13,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { validateLayerName } from '../lib/rotation-segment.js';
+import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 const entryParams = z.object({ id: z.string().uuid(), entryId: z.string().uuid() });
@@ -391,6 +392,15 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.layer !== undefined) updates.layer = req.body.layer;
       if (req.body.mode !== undefined) updates.mode = req.body.mode;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
+      const cursor = rescheduledCursor({
+        scheduleChanged:
+          updates.scheduledAt !== undefined &&
+          updates.scheduledAt.getTime() !== existing.scheduledAt.getTime(),
+        reenabled: req.body.enabled === true && !existing.enabled,
+        recurring: false,
+        now: new Date(),
+      });
+      if (cursor !== undefined) updates.lastExecutedAt = cursor;
       const [row] = await app.db
         .update(rotationSchedule)
         .set(updates)
