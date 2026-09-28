@@ -21,8 +21,9 @@ describe('metrics plugin', () => {
     expect(app.metrics.registry).toBeDefined();
     expect(app.metrics.httpRequests).toBeDefined();
     expect(app.metrics.httpDuration).toBeDefined();
-    expect(app.metrics.consumerEvents).toBeDefined();
-    expect(app.metrics.bridgeCalls).toBeDefined();
+    // Counters nothing increments are not registered: they would always
+    // scrape as 0 and suggest the bridge and event consumers are monitored.
+    expect(Object.keys(app.metrics).sort()).toEqual(['httpDuration', 'httpRequests', 'registry']);
   });
 
   it('GET /metrics returns prometheus text format', async () => {
