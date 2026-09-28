@@ -240,6 +240,16 @@ describe('POST /api/v1/banned-names — three match types + audit', () => {
     expect((body.detail as string).length).toBeGreaterThan(0);
   });
 
+  it('rejects a catastrophic-backtracking regex with 422 (#52)', async () => {
+    const cookie = await loginAsOwner(h);
+    const { statusCode, body } = await createRule(cookie, {
+      pattern: '(a+)+$',
+      match_type: 'regex',
+    });
+    expect(statusCode).toBe(422);
+    expect(body).toMatchObject({ error: 'invalid_pattern', detail: 'nested_quantifier' });
+  });
+
   it('rejects a pattern longer than 256 chars with 422', async () => {
     const cookie = await loginAsOwner(h);
     const { statusCode } = await createRule(cookie, {

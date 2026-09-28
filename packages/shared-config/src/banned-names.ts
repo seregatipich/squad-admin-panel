@@ -1,3 +1,5 @@
+import { detectDangerousRegex } from './regex-safety.js';
+
 export const BANNED_NAME_MATCH_TYPES = ['exact', 'substring', 'regex'] as const;
 export type BannedNameMatchType = (typeof BANNED_NAME_MATCH_TYPES)[number];
 
@@ -35,6 +37,8 @@ export function validateBannedNamePattern(
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }
+    const danger = detectDangerousRegex(pattern);
+    if (danger) return { ok: false, error: danger };
   }
   return { ok: true };
 }
@@ -51,6 +55,8 @@ export function matchBannedName(
   if (matchType === 'substring') {
     return nickname.toLowerCase().includes(pattern.toLowerCase());
   }
+  // A rule stored before the ReDoS screen existed must never run on a nick.
+  if (detectDangerousRegex(pattern)) return false;
   try {
     // Case-insensitive to match the log-ingest worker's compiled regex
     // matcher (apps/workers/log-ingest/src/banname/matcher.ts), so this

@@ -82,6 +82,48 @@ describe('validateChatFlagPattern', () => {
     }
   });
 
+  it('rejects overlapping alternation under a repeating quantifier (#52 finding 1156)', () => {
+    for (const evil of [
+      '(a|aa)+$',
+      '(\\w|\\d)+$',
+      '(?:x|x)+y',
+      '(?:ab|a){2,50}',
+      '((a|aa))*',
+      '(a.|ab)+',
+    ]) {
+      const result = validateChatFlagPattern(evil, 'regex');
+      expect(result, `expected ${evil} to be rejected`).toEqual({
+        ok: false,
+        error: 'alternation_under_quantifier',
+      });
+    }
+  });
+
+  it('rejects variable-length repetition nested under a bounded quantifier (#52 finding 1156)', () => {
+    for (const evil of ['(a{1,100}){1,100}$', '(.*a){20}', '(a?){10}b']) {
+      const result = validateChatFlagPattern(evil, 'regex');
+      expect(result, `expected ${evil} to be rejected`).toEqual({
+        ok: false,
+        error: 'nested_quantifier',
+      });
+    }
+  });
+
+  it('keeps accepting fixed-width repetition and unrepeated alternation', () => {
+    for (const safe of [
+      '(ab)+',
+      '(a{3})+',
+      '(?:foo|bar)',
+      '(foo|bar)?',
+      '(a+)?',
+      'x(a|b)y+',
+      '((a|b))*',
+      '(?:Bad|worse){2}',
+    ]) {
+      expect(validateChatFlagPattern(safe, 'regex'), safe).toEqual({ ok: true });
+    }
+  });
+
   it('rejects oversized bounded repetition', () => {
     const result = validateChatFlagPattern('a{500}', 'regex');
     expect(result).toEqual({ ok: false, error: 'repeat_too_large' });
@@ -119,6 +161,10 @@ describe('compileChatFlagRule + detectChatFlag', () => {
   it('drops rules whose pattern is blank or uncompilable', () => {
     expect(compileChatFlagRule({ id: 'blank', pattern: '   ', patternType: 'word' })).toBeNull();
     expect(compileChatFlagRule({ id: 'broken', pattern: '(', patternType: 'regex' })).toBeNull();
+    // A catastrophic pattern stored before validation tightened never runs on chat.
+    expect(
+      compileChatFlagRule({ id: 'redos', pattern: '(a|aa)+$', patternType: 'regex' }),
+    ).toBeNull();
     const compiled = compileChatFlagRules([
       { id: 'blank', pattern: '', patternType: 'word' },
       { id: 'ok', pattern: 'shit', patternType: 'word' },

@@ -87,6 +87,14 @@ describe('compileBannedNameRules + matchBannedNickname', () => {
     expect(matchBannedNickname('(unterminated', compiled)).toBeNull();
   });
 
+  it('drops a catastrophic-backtracking regex rule instead of running it (#52)', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'redos', pattern: '(a|aa)+$', matchType: 'regex' }),
+    ]);
+    expect(compiled.regex).toHaveLength(0);
+    expect(matchBannedNickname('aaaa', compiled)).toBeNull();
+  });
+
   it('drops an empty or over-length pattern', () => {
     const compiled = compileBannedNameRules([
       rule({ id: 'empty', pattern: '', matchType: 'substring' }),

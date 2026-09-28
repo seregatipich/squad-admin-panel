@@ -2,6 +2,7 @@ import {
   BANNED_NAME_PATTERN_MAX,
   type BannedNameAction,
   type BannedNameMatchType,
+  validateBannedNamePattern,
 } from '@squad/shared-config/banned-names';
 
 /** One row read from `banned_name_rules`, as needed to compile a matcher. */
@@ -66,20 +67,18 @@ function compileBannedNameRule(row: BannedNameRuleRow): CompiledBannedNameRule |
     };
   }
 
-  try {
-    const regex = new RegExp(pattern, 'i');
-    return {
-      id: row.id,
-      matchType: row.matchType,
-      reason: row.reason,
-      action: row.action,
-      test: (nickname) => regex.test(nickname),
-    };
-  } catch {
-    // Invalid regex rules are dropped silently: one bad rule must never
-    // break ingestion for every other rule/player.
-    return null;
-  }
+  // Invalid and ReDoS-prone regex rules (the latter possibly stored before the
+  // API screened them) are dropped silently: every player's nick runs through
+  // this matcher, and one bad rule must never break ingestion for the rest.
+  if (!validateBannedNamePattern(pattern, 'regex').ok) return null;
+  const regex = new RegExp(pattern, 'i');
+  return {
+    id: row.id,
+    matchType: row.matchType,
+    reason: row.reason,
+    action: row.action,
+    test: (nickname) => regex.test(nickname),
+  };
 }
 
 /** Compiles active rule rows into the tiered set `matchBannedNickname` evaluates. */
