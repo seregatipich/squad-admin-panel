@@ -124,14 +124,16 @@ check_push() {
         deny "pushing $local_sha to master — the commit is not reachable from dev; master only receives promotions from dev"
       ;;
     esac
-    # Reject non-fast-forward updates of the protected branches.
+    # Reject non-fast-forward updates of the protected branches. A fast-forward
+    # always builds on the old remote tip, so a tip missing from the local
+    # clone can only be replaced by rewriting history: fail closed.
     case "$branch" in
     master | dev)
-      if [ "$remote_sha" != "$zero" ] &&
-        git rev-parse -q --verify "$remote_sha^{commit}" >/dev/null 2>&1 &&
-        ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      [ "$remote_sha" = "$zero" ] && continue
+      git rev-parse -q --verify "$remote_sha^{commit}" >/dev/null 2>&1 ||
+        deny "pushing to '$branch' whose remote tip $remote_sha is unknown locally — git fetch first; history of protected branches must never be rewritten"
+      git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null ||
         deny "non-fast-forward push to '$branch' — history of protected branches must never be rewritten"
-      fi
       ;;
     esac
   done
@@ -348,6 +350,11 @@ analyze_push() {
       src=$spec
       dst=$spec
       ;;
+    esac
+    # `HEAD` and `@` push to the branch currently checked out, so resolve
+    # them before matching the protected names.
+    case "$dst" in
+    HEAD | @) dst=$(current_branch) ;;
     esac
     dst=$(strip_ref_prefix "$dst")
     case "$dst" in
