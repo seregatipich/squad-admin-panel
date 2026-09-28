@@ -157,6 +157,18 @@ describe('serverCreateInput', () => {
     expect(parsed.extra_args).toBe('');
   });
 
+  it('accepts an IPv4 or IPv6 multihome literal (#52 finding 1170)', () => {
+    for (const multihome of ['10.0.0.5', '0.0.0.0', '2001:db8::1']) {
+      expect(serverCreateInput.safeParse({ ...minimal, multihome }).success, multihome).toBe(true);
+    }
+  });
+
+  it('rejects a multihome that is not an IP literal, so no launch flag can ride along (#52 finding 1170)', () => {
+    for (const multihome of ['0.0.0.0 -SomeFlag', 'host.example', '', '10.0.0.5/24']) {
+      expect(serverCreateInput.safeParse({ ...minimal, multihome }).success, multihome).toBe(false);
+    }
+  });
+
   it('accepts every optional cgroup tuning knob', () => {
     const v = {
       ...minimal,

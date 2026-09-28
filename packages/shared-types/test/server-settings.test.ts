@@ -25,6 +25,20 @@ describe('serverSettingsUpdate port uniqueness', () => {
   });
 });
 
+describe('serverSettingsUpdate multihome (#52 finding 1170)', () => {
+  it('accepts an IP literal and an explicit null', () => {
+    expect(serverSettingsUpdate.safeParse({ multihome: '192.168.1.20' }).success).toBe(true);
+    expect(serverSettingsUpdate.safeParse({ multihome: '::' }).success).toBe(true);
+    expect(serverSettingsUpdate.safeParse({ multihome: null }).success).toBe(true);
+  });
+
+  it('rejects anything that is not an IP literal', () => {
+    for (const multihome of ['0.0.0.0 -SomeFlag', 'not-an-ip', '']) {
+      expect(serverSettingsUpdate.safeParse({ multihome }).success, multihome).toBe(false);
+    }
+  });
+});
+
 describe('serverPatch license pairing (SRV-6 #45)', () => {
   const incompleteMessages = (input: unknown): string[] => {
     const result = serverPatch.safeParse(input);

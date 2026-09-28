@@ -61,7 +61,9 @@ export const serverCreateInput = z
     query_port: z.number().int().min(1024).max(65_535),
     beacon_port: z.number().int().min(1024).max(65_535),
     rcon_port: z.number().int().min(1024).max(65_535),
-    multihome: z.string().default('0.0.0.0'),
+    // Interpolated into the Squad command line (RCONIP=/MULTIHOME=) by the
+    // bridge, so only a bare IP literal is accepted (#52).
+    multihome: z.string().ip().default('0.0.0.0'),
     max_players: z.number().int().min(1).max(100).default(100),
     tickrate: z.number().int().min(10).max(120).default(50),
     extra_args: z.string().default(''),

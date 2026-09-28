@@ -198,3 +198,30 @@ func TestPanelSavedServerRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestMultihome(t *testing.T) {
+	for _, ok := range []string{"0.0.0.0", "10.0.0.5", "192.168.1.20", "::", "2001:db8::1"} {
+		if err := Multihome(ok); err != nil {
+			t.Errorf("Multihome(%q) unexpected err: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"0.0.0.0 -SomeFlag",
+		"0.0.0.0\tQueryPort=1",
+		"-log",
+		"host.example",
+		"256.0.0.1",
+		"10.0.0.5/24",
+		" 10.0.0.5",
+	} {
+		err := Multihome(bad)
+		if err == nil {
+			t.Errorf("Multihome(%q) expected error", bad)
+			continue
+		}
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("Multihome(%q) err %v is not ErrInvalidArgs", bad, err)
+		}
+	}
+}
