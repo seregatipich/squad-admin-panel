@@ -235,6 +235,21 @@ describeIfDb('server map-vote routes', () => {
     ]);
   });
 
+  // #305: unlike PUT /settings and POST /restore, this route used to skip
+  // checking the server exists, so an unknown UUID hit the
+  // map_vote_candidates.server_id FK and 500ed instead of 404ing cleanly.
+  it('PUT candidates for a nonexistent server → 404 settings_not_found, not a 500', async () => {
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${uuidv7()}/map-vote/candidates`,
+      headers: { cookie },
+      payload: { candidates: [{ layer: LAYER_A, weight: 1, enabled: true }] },
+    });
+    expect(resp.statusCode).toBe(404);
+    expect(resp.json()).toEqual({ error: 'settings_not_found' });
+  });
+
   it('PUT candidates with unknown layer → 404 unknown_layer', async () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
     const resp = await putCandidates(cookie, [{ layer: LAYER_UNKNOWN, weight: 1, enabled: true }]);

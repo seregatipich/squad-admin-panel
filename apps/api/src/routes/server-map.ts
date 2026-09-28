@@ -4,7 +4,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { auditMapLikeAction, requireSquadPermission } from '../lib/map-guards.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 
 const serverIdParams = z.object({ serverId: z.string().uuid() });
@@ -13,13 +13,20 @@ const mapActionBody = z.object({
   confirm_deprecated: z.boolean().optional(),
 });
 
-interface RconStatus {
-  state?: string;
-  current_map?: string;
-  next_level?: string;
-  next_layer?: string;
-  game_mode?: string;
-}
+// #307: the worker-rcon status blob is untrusted input read back out of
+// Redis — validate its shape instead of an unchecked `as RconStatus`, so a
+// malformed value can't reach `eq(layers.name, …)` or patchNextLayer as a
+// non-string.
+const rconStatusSchema = z
+  .object({
+    state: z.string().optional(),
+    current_map: z.string().optional(),
+    next_level: z.string().optional(),
+    next_layer: z.string().optional(),
+    game_mode: z.string().optional(),
+  })
+  .partial();
+type RconStatus = z.infer<typeof rconStatusSchema>;
 
 interface MapSide {
   layer: string;
@@ -32,22 +39,15 @@ function requireChangemap(
   req: FastifyRequest,
   reply: FastifyReply,
 ): { error: string; required_squad_permission?: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.squadPermissions.has('changemap')) {
-    reply.code(403);
-    return { error: 'forbidden', required_squad_permission: 'changemap' };
-  }
-  return null;
+  return requireSquadPermission(req, reply, 'changemap');
 }
 
 async function readRconStatus(redis: Redis, serverId: string): Promise<RconStatus> {
   const raw = await redis.get(`rcon:status:${serverId}`);
   if (!raw) return {};
   try {
-    return JSON.parse(raw) as RconStatus;
+    const parsed = rconStatusSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : {};
   } catch {
     return {};
   }
@@ -85,23 +85,11 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
     };
   }
 
-  async function auditMapAction(
+  const auditMapAction = (
     req: FastifyRequest,
     reply: FastifyReply,
     input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> {
-    if (!req.user) return;
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: input.actionType,
-      targetType: 'server',
-      targetId: input.serverId,
-      after: input.after,
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-  }
+  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
 
   fast.get(
     '/api/v1/servers/:serverId/map',
@@ -291,16 +279,26 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
   );
 };
 
+// #304: a plain GET, patch-in-JS, SET raced worker-rcon's own status writes
+// (a status written between our GET and SET was clobbered by our stale
+// snapshot) and always reset the TTL to 300s — extending a dead worker's
+// stale 'connected' status instead of letting it expire. The Lua script
+// executes as one atomic step on the Redis server, closing the race, and
+// `KEEPTTL` leaves the poll-driven expiry alone.
+const PATCH_NEXT_LAYER_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ok, status = pcall(cjson.decode, raw)
+if not ok or type(status) ~= 'table' then return 0 end
+status.next_layer = ARGV[1]
+redis.call('SET', KEYS[1], cjson.encode(status), 'KEEPTTL')
+return 1
+`;
+
 async function patchNextLayer(redis: Redis, serverId: string, layer: string): Promise<void> {
   const key = `rcon:status:${serverId}`;
-  const raw = await redis.get(key);
-  if (!raw) return;
   try {
-    const status = JSON.parse(raw) as Record<string, unknown>;
-    status.next_layer = layer;
-    // 5-minute TTL, matching worker-rcon's own writeStatus — the next real
-    // poll (≤30s) overwrites this with the actual game state regardless.
-    await redis.set(key, JSON.stringify(status), 'EX', 300);
+    await redis.eval(PATCH_NEXT_LAYER_SCRIPT, 1, key, layer);
   } catch {
     // best-effort optimistic patch only; the poll loop is the source of truth
   }
