@@ -114,12 +114,42 @@ describe('GET /api/v1/servers/archive', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      items: Array<{ id: string; slug: string; deleted_at: string | null }>;
+      items: Array<{
+        id: string;
+        slug: string;
+        deleted_at: string | null;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      }>;
       total: number;
     };
     expect(body.total).toBe(2);
     expect(body.items.map((i) => i.slug)).toEqual(['archived-b', 'archived-a']);
     expect(body.items[0]?.id).toBe(b.id);
+  });
+
+  // #661: the list previously only ever returned `deleted_by_player_id`
+  // (an internal UUID) while the web archive pages read
+  // `deleted_by_steam_id64`, which was always undefined.
+  it("includes the deleting admin's steam_id64, joined from deleted_by_player_id", async () => {
+    const a = await seedAndSoftDelete(h, 'archived-steamid');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/servers/archive',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{
+        id: string;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      }>;
+    };
+    const row = body.items.find((i) => i.id === a.id);
+    expect(row?.deleted_by_player_id).toBe(h.seed.ownerPlayerId);
+    expect(row?.deleted_by_steam_id64).toBe(OWNER_STEAM_ID.toString());
   });
 });
 
@@ -145,10 +175,19 @@ describe('GET /api/v1/servers/archive/:id', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      server: { id: string; slug: string; deleted_at: string | null };
+      server: {
+        id: string;
+        slug: string;
+        deleted_at: string | null;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      };
       backups: Array<{ filename: string; sha256_hex: string }>;
     };
     expect(body.server.id).toBe(archived.id);
+    // #661: same fix as the list endpoint above.
+    expect(body.server.deleted_by_player_id).toBe(h.seed.ownerPlayerId);
+    expect(body.server.deleted_by_steam_id64).toBe(OWNER_STEAM_ID.toString());
     const filenames = body.backups.map((b) => b.filename);
     expect(filenames).toContain('Admins.cfg');
     expect(filenames).toContain('Server.cfg');

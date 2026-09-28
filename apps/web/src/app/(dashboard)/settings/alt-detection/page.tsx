@@ -173,9 +173,11 @@ export default function AltDetectionPage() {
           weight_shared_name: settings.weight_shared_name,
           weight_young_account: settings.weight_young_account,
           weight_steamid_proximity: settings.weight_steamid_proximity,
+          weight_coplay_overlap: settings.weight_coplay_overlap,
           steamid_delta_threshold: settings.steamid_delta_threshold,
           medium_threshold: settings.medium_threshold,
           high_threshold: settings.high_threshold,
+          coplay_overlap_threshold_seconds: settings.coplay_overlap_threshold_seconds,
         }),
       });
       const updated = await readJson<AltDetectionSettingsView>(res);
@@ -351,9 +353,19 @@ export default function AltDetectionPage() {
                   onChange={(v) => updateField('weight_steamid_proximity', v)}
                 />
                 <NumberField
+                  label="Вес: совместная игра"
+                  value={settings.weight_coplay_overlap}
+                  onChange={(v) => updateField('weight_coplay_overlap', v)}
+                />
+                <NumberField
                   label="Порог дельты SteamID64"
                   value={settings.steamid_delta_threshold}
                   onChange={(v) => updateField('steamid_delta_threshold', v)}
+                />
+                <NumberField
+                  label="Порог совместной игры (сек)"
+                  value={settings.coplay_overlap_threshold_seconds}
+                  onChange={(v) => updateField('coplay_overlap_threshold_seconds', v)}
                 />
                 <NumberField
                   label="Порог доверия: средний"

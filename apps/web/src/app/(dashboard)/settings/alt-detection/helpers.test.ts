@@ -48,10 +48,24 @@ describe('validateAltDetectionSettingsForm', () => {
     weight_shared_name: 25,
     weight_young_account: 15,
     weight_steamid_proximity: 10,
+    weight_coplay_overlap: 30,
     steamid_delta_threshold: 10_000,
     medium_threshold: 50,
     high_threshold: 75,
+    coplay_overlap_threshold_seconds: 36_000,
   };
+
+  it('rejects a negative weight_coplay_overlap (#669)', () => {
+    expect(
+      validateAltDetectionSettingsForm({ ...baseForm, weight_coplay_overlap: -1 }),
+    ).not.toBeNull();
+  });
+
+  it('rejects a non-integer coplay_overlap_threshold_seconds (#669)', () => {
+    expect(
+      validateAltDetectionSettingsForm({ ...baseForm, coplay_overlap_threshold_seconds: 1.5 }),
+    ).not.toBeNull();
+  });
 
   it('accepts a valid form', () => {
     expect(validateAltDetectionSettingsForm(baseForm)).toBeNull();

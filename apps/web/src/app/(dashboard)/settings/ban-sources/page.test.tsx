@@ -130,4 +130,44 @@ describe('BanSourcesPage', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  // #680: a failed /api/v1/ban-sources GET (HTTP error or network rejection)
+  // previously left `sources` null forever with no error banner at all.
+  it(
+    'shows an error banner with retry on an HTTP error from /ban-sources',
+    async () => {
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith('/api/v1/ban-sources')) {
+          return Promise.resolve(new Response('{}', { status: 500 }));
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: [], can_manage_ban_sources: true }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+
+      expect(await screen.findByText(/Не удалось загрузить источники/)).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Повторить' }).length).toBeGreaterThan(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows an error banner on a network-level rejection, not just an HTTP error',
+    async () => {
+      const fn = vi.fn(() => Promise.reject(new Error('network down')));
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+
+      expect(await screen.findByText(/Не удалось загрузить источники/)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

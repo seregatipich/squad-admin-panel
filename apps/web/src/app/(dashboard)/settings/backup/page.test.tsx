@@ -178,7 +178,11 @@ describe('BackupPage', () => {
     try {
       const fetchSpy = mockFetchOnce(() => Promise.resolve(snapshotList([])));
       render(<BackupPage />);
-      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      // Wait for the *first* load to fully settle (not just be invoked) before
+      // advancing the clock — the in-flight overlap guard (#675) would
+      // otherwise see the first load still "in progress" and skip the tick.
+      await vi.waitFor(() => expect(screen.getByText('Снимков пока нет')).toBeInTheDocument());
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
       act(() => {
         vi.advanceTimersByTime(30_000);
       });

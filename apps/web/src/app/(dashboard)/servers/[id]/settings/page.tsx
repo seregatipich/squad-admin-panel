@@ -180,33 +180,42 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [logSourceErr, setLogSourceErr] = useState<string | null>(null);
   const [logSourceSaved, setLogSourceSaved] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setServerInfo({
-        status: data.server.status,
-        display_name: data.server.display_name,
-        tags: data.server.tags ?? [],
-        runtime: data.server.runtime ?? 'container',
-        connection: data.connection ?? null,
-      });
-      setTags(data.server.tags ?? []);
-      const lic = (data.server.license ?? null) as LicenseState | null;
-      setLicense(lic);
-      setLicenseId(lic?.license_id ?? '');
-      setContainer(
-        data.container
-          ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
-          : null,
-      );
-      setSettings(data.settings);
-      setDraft({});
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, [id]);
+  // `resetDraft` is false for a reload triggered by an unrelated save (license
+  // attach/detach) — those must not discard other fields' unsaved edits, only
+  // refresh what the server now reports (#652).
+  const load = useCallback(
+    async (resetDraft = true) => {
+      try {
+        const r = await fetch(`/api/v1/servers/${id}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        setServerInfo({
+          status: data.server.status,
+          display_name: data.server.display_name,
+          tags: data.server.tags ?? [],
+          runtime: data.server.runtime ?? 'container',
+          connection: data.connection ?? null,
+        });
+        setTags(data.server.tags ?? []);
+        const lic = (data.server.license ?? null) as LicenseState | null;
+        setLicense(lic);
+        setLicenseId(lic?.license_id ?? '');
+        setContainer(
+          data.container
+            ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
+            : null,
+        );
+        setSettings(data.settings);
+        if (resetDraft) setDraft({});
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    },
+    [id],
+  );
 
   useEffect(() => {
     void load();
@@ -341,7 +350,10 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     };
   }, [id]);
 
-  const isRunning = serverInfo && !['stopped', 'ready', 'pending'].includes(serverInfo.status);
+  // Mirrors the API's PORT_CHANGEABLE_STATUSES (apps/api/src/routes/server-settings.ts) —
+  // 'failed' also allows port edits there, so the UI must not disable them for it.
+  const isRunning =
+    serverInfo && !['stopped', 'ready', 'pending', 'failed'].includes(serverInfo.status);
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -464,7 +476,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
       }
       setLicenseKey('');
-      await load();
+      await load(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -490,7 +502,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       }
       setLicenseId('');
       setLicenseKey('');
-      await load();
+      await load(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -503,7 +515,20 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   if (!settings) {
     return (
       <PageContainer width="reading">
-        <Skeleton variant="card" count={4} label="Настройки сервера загружаются" />
+        {err ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить настройки сервера"
+            description={err}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : (
+          <Skeleton variant="card" count={4} label="Настройки сервера загружаются" />
+        )}
       </PageContainer>
     );
   }
@@ -527,16 +552,22 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           <TagInput
             tags={tags}
             onChange={async (newTags) => {
+              const previousTags = tags;
               setTags(newTags);
               try {
-                await fetch(`/api/v1/servers/${id}`, {
+                const res = await fetch(`/api/v1/servers/${id}`, {
                   method: 'PATCH',
                   credentials: 'include',
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ tags: newTags }),
                 });
-              } catch {
-                /* best effort */
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({}));
+                  throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+                }
+              } catch (e) {
+                setTags(previousTags);
+                setErr(`Не удалось сохранить теги: ${(e as Error).message}`);
               }
             }}
           />

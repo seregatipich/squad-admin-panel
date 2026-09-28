@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackupTriggerButton } from '@/components/BackupTriggerButton';
 import { RestoreSnapshotButton } from '@/components/RestoreSnapshotButton';
 import {
@@ -43,8 +43,13 @@ function formatDate(iso: string): string {
 
 export default function BackupPage() {
   const [state, setState] = useState<Load>({ kind: 'loading' });
+  // Guards against overlapping polls: a slow request must not race the next
+  // tick's request over the same `state` (#675).
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const res = await fetch('/api/v1/host/backups', {
         credentials: 'include',
@@ -60,16 +65,35 @@ export default function BackupPage() {
         return;
       }
       const body = (await res.json()) as { snapshots: Snapshot[] };
-      setState({ kind: 'ready', snapshots: body.snapshots });
+      // The bridge/restic contract for a taggless snapshot plausibly omits
+      // `tags` or sends null; normalize so `.length`/`.map` never throws.
+      setState({
+        kind: 'ready',
+        snapshots: body.snapshots.map((s) => ({ ...s, tags: s.tags ?? [] })),
+      });
     } catch (e) {
       setState({ kind: 'error', text: (e as Error).message });
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
+    // Paused while the tab is hidden — no point hammering the bridge for a
+    // page nobody is looking at (#675).
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, POLL_MS);
+    const onVisibilityChange = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [load]);
 
   return (
