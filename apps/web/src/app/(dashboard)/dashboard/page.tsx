@@ -459,7 +459,11 @@ export default function DashboardPage() {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ server_ids: serverIds }),
           });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          // The dialog shows this message, so carry the API's error code.
+          if (!r.ok) {
+            const body = (await r.json().catch(() => null)) as { error?: string } | null;
+            throw new Error(body?.error ?? `HTTP ${r.status}`);
+          }
           setDepotProgressOpen(true);
           void load();
         }}
