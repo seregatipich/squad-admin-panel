@@ -15,8 +15,8 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
-| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; issues a `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session for one without (VIPSUB-5 #171). The callback's query string is kept out of the automatic request log. | none |
+| GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. Optional `?return_to=` is kept with the nonce only when it is on the exact allow-list (`/appeal`); anything else is ignored, so the login is never an open redirect. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; issues a `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session for one without (VIPSUB-5 #171); an allow-listed `return_to` from the login replaces that landing page. The callback's query string is kept out of the automatic request log. | none |
 | GET | `/api/v1/auth/discord/login` | DISCORD-4 step 1. Generates a random `state` (base64url, 16 bytes), stores it in Redis (`discord-oauth-state:{state}`, TTL 300 s, bound to the caller's `player_id`) and a `__Host-discord-state` cookie, then redirects to `discord.com/oauth2/authorize` with `scope=identify`. 503 `oauth_not_configured` when `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` are unset. | session |
 | GET | `/api/v1/auth/discord/callback` | DISCORD-4 step 2. Requires `state` cookie ↔ query match **and** a Redis record owned by the caller (403 `state_mismatch`); a missing/expired record is 400 `state_expired`; the record is consumed single-use. Exchanges the code (form POST to `discord.com/api/oauth2/token`, HTTP Basic credentials), reads `users/@me`, and inserts `player_discord_links`. 409 `already_linked_self` when the player already has a link, 409 `already_linked_other` when the Discord account belongs to another player, 502 `discord_exchange_failed` when Discord rejects the exchange. On success writes an `integration.discord.link` audit row and redirects to `/players/{playerId}`. | session |
 | POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
@@ -359,16 +359,22 @@ outbox. WL-3 adds no new expiry mechanic.
 
 ## Ban appeals (MOD-5, #62)
 
-Public appeal portal plus the panel review queue. A banned player has no panel
-session by definition, so the two `/api/v1/public/appeals*` routes are
-**anonymous** (`config.audit: false` + a declarative rate limit, self-auditing
-through an explicit `writeAuditEntry` with a `system`/`http-anonymous` actor —
-the same shape as the public whitelist portal above).
+Player-facing appeal portal plus the panel review queue. Submitting requires
+proof that the caller owns the appealed account (#40, finding #234): the player
+signs in through Steam OpenID (`/api/v1/auth/steam/login?return_to=%2Fappeal`
+brings them back to the portal; a banned player without a panel role gets a
+`self_service` session) and the appeal is filed for that login's SteamID64.
+The submit route is `config.selfService: true` with a declarative rate limit
+and self-audits through an explicit `writeAuditEntry` with the verified player
+as a `steam` actor. Before this, the portal accepted any SteamID64 anonymously,
+so anyone could open an appeal in a victim's name, keep its tracking token,
+block the victim's own appeal with `409` and burn their daily quota.
 
-Both public routes are deliberately blind oracles: submitting answers `201` for
-a banned player, an unbanned player and an unknown SteamID64 alike, so the
-portal cannot be walked to discover who is banned, and the status route answers
-one `404 appeal_not_found` for both an unknown and somebody else's token.
+Submitting answers `201` whether or not the player holds an active ban, so the
+portal does not reveal ban state, and `409 appeal_already_open` only ever
+reaches the account's owner. The status route stays **anonymous** (the tracking
+token is the credential) and answers one `404 appeal_not_found` for both an
+unknown and somebody else's token.
 
 Approving an appeal **is an unban**: it reuses the MOD-2 (#59) revert path
 (`unbanPlayerOnServer` in `routes/moderation-actions.ts`) once per server the
@@ -382,7 +388,7 @@ not ban may not lift a ban through an appeal either.
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/public/appeals` | Submit an appeal. Body: `{ steam_id64 (17 digits), body (20..4000), contact? (≤200), moderation_action_id? }`. `201 {id, number, status:'pending', tracking_token}` — the token is returned **once** and is the applicant's only handle. `409 appeal_already_open` (partial-unique index on `steam_id64` while `pending`/`in_review`), `429 rate_limited`. Anti-abuse: `@fastify/rate-limit` 5/hour plus daily Redis counters `appeal-rl:ip:<ip>` (10/day) and `appeal-rl:steam:<id>` (3/day). Audit `appeal.create` (anonymous `actor_kind='system'`, label `http-anonymous`). | none (public) |
+| POST | `/api/v1/public/appeals` | Submit an appeal for the signed-in Steam account. Body: `{ steam_id64? (17 digits, must equal the login), body (20..4000), contact? (≤200), moderation_action_id? }`. `201 {id, number, status:'pending', tracking_token}` — the token is returned **once** and is the applicant's only handle. `401` without a session, `403 steam_id_mismatch` when `steam_id64` names another account, `403 steam_login_required` for a session without a SteamID64, `409 appeal_already_open` (partial-unique index on `steam_id64` while `pending`/`in_review`), `429 rate_limited`. Anti-abuse: `@fastify/rate-limit` 5/hour plus daily Redis counters `appeal-rl:ip:<ip>` (10/day) and `appeal-rl:steam:<id>` (3/day, counted for the verified account only). Audit `appeal.create` (`actor_kind='steam'`, the verified player). | Steam login (panel or `self_service` session) |
 | GET | `/api/v1/public/appeals/:token` | Applicant status page data. Returns exactly `{ number, status, created_at, decided_at, decision_note }` — never `internal_note`, `contact`, `player_id`, `steam_id64`, `moderation_action_id` or `submitter_ip`. `404 appeal_not_found`. Rate limit 60/min. | none (public) |
 | GET | `/api/v1/appeals?status=&player_id=&page=&page_size=` | Paginated review queue (newest first), joined to the appellant, the appealed ban and the handler. | `mod:unban` |
 | GET | `/api/v1/appeals/:id` | One appeal card. `404 appeal_not_found`. | `mod:unban` |

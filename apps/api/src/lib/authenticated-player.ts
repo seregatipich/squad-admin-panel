@@ -18,12 +18,22 @@ import { claimFirstOwner } from './first-owner.js';
 import { loadUserPermissions } from './rbac.js';
 import { createSession } from './sessions.js';
 
+/**
+ * Upserts the player behind a proven external identity, opens a session for
+ * them and redirects the browser.
+ *
+ * @param options.sendErrorResponse - Whether failures also send the error
+ *   response (default true).
+ * @param options.redirectTo - A same-origin path to land on after login; the
+ *   caller must have allow-listed it. Defaults to `/` for a panel session and
+ *   `/me` for a self-service one.
+ */
 export async function establishAuthenticatedPlayerSession(
   app: FastifyInstance,
   req: FastifyRequest,
   reply: FastifyReply,
   identity: PlayerIdentity,
-  options: { sendErrorResponse?: boolean } = {},
+  options: { sendErrorResponse?: boolean; redirectTo?: string } = {},
 ): Promise<AuthenticatedPlayerSessionResult> {
   const sendErrorResponse = options.sendErrorResponse ?? true;
   const canonicalName = identity.canonicalName.trim();
@@ -79,6 +89,6 @@ export async function establishAuthenticatedPlayerSession(
     sameSite: 'lax',
     maxAge: app.config.SESSION_TTL_SECONDS,
   });
-  reply.redirect(scope === 'panel' ? '/' : '/me', 302);
+  reply.redirect(options.redirectTo ?? (scope === 'panel' ? '/' : '/me'), 302);
   return { ok: true, scope };
 }

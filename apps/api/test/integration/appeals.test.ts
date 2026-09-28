@@ -155,11 +155,42 @@ async function seedBannedPlayer(
   return { playerId, actionId: action.id };
 }
 
-async function submitAppeal(payload: Record<string, unknown>) {
+/**
+ * A Steam-login session for the seeded player owning `steamId64`, scoped
+ * `self_service` like the one a banned player (no panel role) gets after the
+ * Steam OpenID round trip.
+ */
+async function steamSessionCookie(steamId64: bigint): Promise<string> {
+  const [row] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!row) throw new Error(`no player seeded for ${steamId64}`);
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: row.id,
+    ip: null,
+    userAgent: 'appeals-test-steam',
+    ttlMs: 21_600_000,
+    scope: 'self_service',
+  });
+  return `__Host-sid=${token}`;
+}
+
+/**
+ * Submits an appeal as the Steam-verified owner of `payload.steam_id64`, or
+ * with the given session cookie (`null` submits with no session at all).
+ */
+async function submitAppeal(payload: Record<string, unknown>, cookie?: string | null) {
+  const sessionCookie =
+    cookie === undefined ? await steamSessionCookie(BigInt(String(payload.steam_id64))) : cookie;
   return h.app.inject({
     method: 'POST',
     url: '/api/v1/public/appeals',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
+    },
     payload: JSON.stringify(payload),
   });
 }
@@ -217,8 +248,8 @@ beforeEach(async () => {
   if (keys.length > 0) await h.redis.del(...keys);
 });
 
-describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
-  it('creates a pending appeal without any session and returns a tracking token', async () => {
+describeIfDb('POST /api/v1/public/appeals (Steam-verified submission)', () => {
+  it('creates a pending appeal for the Steam-verified player and returns a tracking token', async () => {
     const steamId64 = testSteamId(987100);
     await seedBannedPlayer(steamId64, 'AppealTarget100');
 
@@ -268,26 +299,65 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
     expect(row?.moderationActionId).toBe(actionId);
   });
 
-  it('answers identically for an unknown SteamID so it cannot enumerate bans', async () => {
-    const bannedSteam = testSteamId(987102);
-    const unknownSteam = testSteamId(987103);
-    await seedBannedPlayer(bannedSteam, 'AppealTarget102');
+  // Regression (#40, #234): the portal accepted any steam_id64 anonymously,
+  // so anyone could open (and hold the tracking token of) a victim's appeal,
+  // block the victim's own submission with 409 and burn their daily quota.
+  it('rejects a submission without a Steam login with 401 and stores nothing', async () => {
+    const steamId64 = testSteamId(987102);
+    await seedBannedPlayer(steamId64, 'AppealTarget102');
 
-    const banned = await submitAppeal({
-      steam_id64: String(bannedSteam),
-      body: 'Прошу пересмотреть мой бан, это была ошибка.',
-    });
-    const unknown = await submitAppeal({
-      steam_id64: String(unknownSteam),
-      body: 'Прошу пересмотреть мой бан, это была ошибка.',
-    });
-
-    expect(banned.statusCode).toBe(201);
-    expect(unknown.statusCode).toBe(201);
-    expect(Object.keys(unknown.json() as object).sort()).toEqual(
-      Object.keys(banned.json() as object).sort(),
+    const res = await submitAppeal(
+      { steam_id64: String(steamId64), body: 'Прошу пересмотреть мой бан, это была ошибка.' },
+      null,
     );
-    expect(unknown.json()).toMatchObject({ status: 'pending' });
+
+    expect(res.statusCode).toBe(401);
+    const rows = await h.db.select().from(banAppeals).where(eq(banAppeals.steamId64, steamId64));
+    expect(rows).toHaveLength(0);
+    expect(await h.redis.get(`appeal-rl:steam:${steamId64}`)).toBeNull();
+  });
+
+  it("refuses to file an appeal for somebody else's SteamID and leaves the victim's slot free", async () => {
+    const victimSteam = testSteamId(987103);
+    const attackerSteam = testSteamId(987110);
+    await seedBannedPlayer(victimSteam, 'AppealVictim103');
+    await seedPlayer(attackerSteam, 'AppealAttacker110');
+
+    const forged = await submitAppeal(
+      {
+        steam_id64: String(victimSteam),
+        body: 'Поддельная апелляция от чужого имени, прошу снять.',
+      },
+      await steamSessionCookie(attackerSteam),
+    );
+    expect(forged.statusCode).toBe(403);
+    expect(forged.json()).toEqual({ error: 'steam_id_mismatch' });
+
+    const genuine = await submitAppeal({
+      steam_id64: String(victimSteam),
+      body: 'Настоящая апелляция владельца аккаунта, прошу рассмотреть.',
+    });
+    expect(genuine.statusCode).toBe(201);
+    const rows = await h.db.select().from(banAppeals).where(eq(banAppeals.steamId64, victimSteam));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('files the appeal under the Steam login when steam_id64 is omitted', async () => {
+    const steamId64 = testSteamId(987111);
+    const { playerId } = await seedBannedPlayer(steamId64, 'AppealTarget111');
+
+    const res = await submitAppeal(
+      { body: 'Апелляция без явного SteamID, берётся из входа через Steam.' },
+      await steamSessionCookie(steamId64),
+    );
+
+    expect(res.statusCode).toBe(201);
+    const [row] = await h.db
+      .select()
+      .from(banAppeals)
+      .where(eq(banAppeals.steamId64, steamId64))
+      .limit(1);
+    expect(row?.playerId).toBe(playerId);
   });
 
   it('answers identically for a player whose ban is already reverted', async () => {
@@ -353,14 +423,16 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
   });
 
   it('rejects a malformed steam_id64', async () => {
-    const res = await submitAppeal({
-      steam_id64: '123',
-      body: 'Нормальное тело апелляции достаточной длины.',
-    });
+    const steamId64 = testSteamId(987112);
+    await seedPlayer(steamId64, 'AppealTarget112');
+    const res = await submitAppeal(
+      { steam_id64: '123', body: 'Нормальное тело апелляции достаточной длины.' },
+      await steamSessionCookie(steamId64),
+    );
     expect(res.statusCode).toBe(400);
   });
 
-  it('writes an appeal.create audit row with a system actor and the submitter IP', async () => {
+  it('writes an appeal.create audit row with the Steam-verified actor and the submitter IP', async () => {
     const steamId64 = testSteamId(987107);
     await seedBannedPlayer(steamId64, 'AppealTarget107');
 
@@ -376,9 +448,13 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
       resource: 'ban_appeal',
       targetId: appealId,
     });
-    expect(row.actorKind).toBe('system');
-    expect(row.actorSystemLabel).toBe('http-anonymous');
-    expect(row.actorPlayerId).toBeNull();
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    expect(row.actorKind).toBe('steam');
+    expect(row.actorPlayerId).toBe(player?.id);
     expect(row.actorIp).toBe('127.0.0.1');
   });
 

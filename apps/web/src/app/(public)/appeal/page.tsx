@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Button,
   Card,
@@ -13,40 +13,85 @@ import {
   TextInput,
 } from '@/components/ui';
 
-const STEAM_ID64_RE = /^\d{17}$/;
 const BODY_MIN = 20;
 const BODY_MAX = 4000;
 const CONTACT_MAX = 200;
+
+/** Steam login that returns the player straight back to this page. */
+const STEAM_LOGIN_HREF = '/api/v1/auth/steam/login?return_to=%2Fappeal';
+
+/**
+ * Ссылка входа — обычный `<a>`: OpenID-обмен требует полной навигации
+ * документа, которую перехватил бы `next/link` (см. `app/login/page.tsx`).
+ */
+const STEAM_LINK_CLASS =
+  'inline-flex h-8 items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
 
 interface SubmittedAppeal {
   number: number;
   tracking_token: string;
 }
 
+/** The Steam account the visitor proved they own, from `GET /api/v1/me`. */
+interface SteamIdentity {
+  steamId64: string;
+  name: string;
+}
+
+type IdentityState =
+  | { kind: 'loading' }
+  | { kind: 'anonymous' }
+  | ({ kind: 'steam' } & SteamIdentity);
+
 /**
- * Public, no-session ban-appeal portal (MOD-5, #62). A banned player cannot
- * hold a panel session, so this page submits straight to the anonymous
- * `POST /api/v1/public/appeals` with no auth of any kind.
+ * Ban-appeal portal (MOD-5, #62).
+ *
+ * Only the owner of the banned account may appeal (#40, finding #234): the
+ * visitor first signs in through Steam — a banned player without a panel
+ * role gets a self-service session — and the appeal is filed for that
+ * login's SteamID64, which the page shows read-only. Before this the form
+ * took any SteamID64 anonymously, so anyone could open an appeal in a
+ * victim's name and block the victim's own.
  *
  * The tracking link shown after a successful submission is the applicant's
  * only handle on their appeal — the API returns the token exactly once — so
  * it is rendered prominently and paired with an explicit "save this link".
  */
 export default function PublicAppealPage() {
-  const [steamId64, setSteamId64] = useState('');
+  const [identity, setIdentity] = useState<IdentityState>({ kind: 'loading' });
   const [body, setBody] = useState('');
   const [contact, setContact] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<SubmittedAppeal | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        const me = res.ok
+          ? ((await res.json()) as { steam_id64?: string | null; canonical_name?: string })
+          : null;
+        if (cancelled) return;
+        setIdentity(
+          me?.steam_id64
+            ? { kind: 'steam', steamId64: me.steam_id64, name: me.canonical_name ?? '' }
+            : { kind: 'anonymous' },
+        );
+      } catch {
+        if (!cancelled) setIdentity({ kind: 'anonymous' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (identity.kind !== 'steam') return;
     setError(null);
-    if (!STEAM_ID64_RE.test(steamId64.trim())) {
-      setError('Укажите корректный SteamID64 (17 цифр).');
-      return;
-    }
     if (body.trim().length < BODY_MIN) {
       setError(`Опишите ситуацию — не менее ${BODY_MIN} символов.`);
       return;
@@ -55,9 +100,10 @@ export default function PublicAppealPage() {
     try {
       const res = await fetch('/api/v1/public/appeals', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          steam_id64: steamId64.trim(),
+          steam_id64: identity.steamId64,
           body: body.trim(),
           contact: contact.trim() || undefined,
         }),
@@ -66,12 +112,21 @@ export default function PublicAppealPage() {
         setSubmitted((await res.json()) as SubmittedAppeal);
         return;
       }
+      if (res.status === 401) {
+        setIdentity({ kind: 'anonymous' });
+        setError('Вход через Steam истёк. Войдите ещё раз.');
+        return;
+      }
+      if (res.status === 403) {
+        setError('Апелляцию можно подать только за тот аккаунт Steam, с которым вы вошли.');
+        return;
+      }
       if (res.status === 409) {
-        setError('Апелляция с этим SteamID64 уже на рассмотрении.');
+        setError('Ваша апелляция уже на рассмотрении.');
         return;
       }
       if (res.status === 429) {
-        setError('Слишком много заявок с этого адреса. Попробуйте завтра.');
+        setError('Слишком много заявок. Попробуйте завтра.');
         return;
       }
       if (res.status === 400) {
@@ -107,20 +162,29 @@ export default function PublicAppealPage() {
             </>
           }
         />
+      ) : identity.kind === 'loading' ? null : identity.kind === 'anonymous' ? (
+        <Card padding="none">
+          <CardBody>
+            <div className="space-y-4">
+              {error ? <InlineBanner tone="crit" title={error} /> : null}
+              <p className="text-sm text-ink">
+                Подать апелляцию может только владелец забаненного аккаунта. Войдите через Steam —
+                так мы убедимся, что апелляцию подаёте именно вы. Доступа к панели вход не даёт.
+              </p>
+              <a href={STEAM_LOGIN_HREF} className={STEAM_LINK_CLASS}>
+                Войти через Steam
+              </a>
+            </div>
+          </CardBody>
+        </Card>
       ) : (
         <Card padding="none">
           <CardBody>
             <form onSubmit={submit} className="space-y-4">
               {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-              <FieldRow label="SteamID64" required>
-                <TextInput
-                  inputMode="numeric"
-                  value={steamId64}
-                  onChange={(e) => setSteamId64(e.target.value)}
-                  placeholder="76561198000000000"
-                  className="font-mono"
-                />
+              <FieldRow label="Аккаунт Steam" hint={identity.name || undefined}>
+                <TextInput value={identity.steamId64} readOnly className="font-mono" />
               </FieldRow>
 
               <FieldRow label="Апелляция" required hint={`Минимум ${BODY_MIN} символов.`}>

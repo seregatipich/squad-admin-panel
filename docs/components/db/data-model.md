@@ -9,7 +9,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | Table | Source file | Purpose |
 |---|---|---|
 | [`audit_log`](#audit_log) | `audit-log.ts` | Append-only, hash-chained action log |
-| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 anonymous ban-appeal portal queue |
+| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 ban-appeal portal queue (Steam-verified submissions) |
 | [`balancer_settings`](#balancer-tables-game-2) | `balancer-settings.ts` | GAME-2 singleton team-balancer rules/thresholds |
 | [`balancer_proposals`](#balancer-tables-game-2) | `balancer-proposals.ts` | GAME-2 cache of dry-run balance snapshots from the SquadJS exporter |
 | [`balancer_decisions`](#balancer-tables-game-2) | `balancer-decisions.ts` | GAME-2 append-only operator decisions on a snapshot |
@@ -801,7 +801,7 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 ---
 ## `ban_appeals`
 
-MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so rows are created by the **anonymous** `POST /api/v1/public/appeals` and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
+MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/appeals` for the Steam account the submitter signed in with (a banned player gets a `self_service` session; #40) and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
 
 `player_id` is **nullable on purpose**: the portal accepts a submission for any SteamID64, including one the panel has never seen, so its response cannot be walked to discover who is banned. The anti-spam partial unique index therefore keys on `steam_id64`, which is always present — a `player_id` index would not collide on NULLs.
 

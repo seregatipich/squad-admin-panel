@@ -4,6 +4,7 @@
 
 ### Security
 
+- Апелляция на бан (`POST /api/v1/public/appeals`) принимается только от владельца аккаунта: игрок входит через Steam (`/api/v1/auth/steam/login?return_to=%2Fappeal` возвращает его на страницу апелляции, забаненный игрок без роли получает self-service-сессию), и апелляция подаётся за SteamID64 этого входа. Без сессии — `401`, чужой `steam_id64` в теле — `403 steam_id_mismatch`. Раньше апелляцию за чужой SteamID мог подать кто угодно: он получал её трекинг-токен, блокировал настоящую апелляцию игрока ответом `409` и выжигал его суточный лимит. Аудит `appeal.create` теперь пишется от проверенного игрока (`actor_kind='steam'`). Страница `/appeal` сначала предлагает войти через Steam и показывает SteamID64 входа только для чтения.
 - Метки игроков: `POST /api/v1/players/:playerId/marks` и `DELETE …/marks/:markId` требуют `player:set_flags` (право больше не `unimplemented`), чтение меток, `GET /api/v1/mark-types` и `GET /api/v1/marks/active-summary` — `player:view`. Раньше хватало `panel_access`, и API-токен с любым посторонним scope мог ставить и снимать метки.
 - `GET /api/v1/players/:playerId/compare-online`, `/coplay`, `/ban-alt-warning` и `/dossier` объявляют `player:view`, поэтому scopes API-токена сужают и их.
 - `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats` и `/vehicle-stats` требуют `player:view` и, как `/dossier`, `combat_view` для чужого игрока (свой игрок открыт без него).

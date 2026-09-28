@@ -13,15 +13,31 @@ const NONCE_REDIS_PREFIX = 'steam-nonce:';
 const RESPONSE_NONCE_REDIS_PREFIX = 'steam-response-nonce:';
 const RESPONSE_NONCE_TTL_SECONDS = 3600;
 
+/**
+ * Pages a Steam login may send the player back to (`?return_to=` on the login
+ * route). An exact allow-list, never a prefix or URL check, so the login can
+ * never become an open redirect. `/appeal` is the ban-appeal portal, which
+ * needs a verified Steam identity to accept a submission (#40, finding #234).
+ * Without an allow-listed value the callback keeps its default: `/` for a
+ * panel session, `/me` for a self-service one.
+ */
+const STEAM_LOGIN_RETURN_PATHS: ReadonlySet<string> = new Set(['/appeal']);
+
+/** Returns `value` when it is an allow-listed return path, otherwise undefined. */
+function allowedReturnPath(value: unknown): string | undefined {
+  return typeof value === 'string' && STEAM_LOGIN_RETURN_PATHS.has(value) ? value : undefined;
+}
+
 const steamRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/auth/steam/login',
     { config: { audit: false, public: true, rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const nonce = randomBytes(16).toString('base64url');
+      const returnTo = allowedReturnPath((req.query as { return_to?: unknown }).return_to);
       await app.redis.set(
         `${NONCE_REDIS_PREFIX}${nonce}`,
-        JSON.stringify({ ts: Date.now(), ip: req.ip ?? null }),
+        JSON.stringify({ ts: Date.now(), ip: req.ip ?? null, ...(returnTo ? { returnTo } : {}) }),
         'EX',
         NONCE_TTL_SECONDS,
       );
@@ -57,6 +73,12 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       await app.redis.del(`${NONCE_REDIS_PREFIX}${queryNonce}`);
       if (!stored) {
         return reply.code(400).send({ error: 'nonce_expired' });
+      }
+      let landingPath: string | undefined;
+      try {
+        landingPath = allowedReturnPath((JSON.parse(stored) as { returnTo?: unknown }).returnTo);
+      } catch {
+        landingPath = undefined;
       }
 
       const expectedReturnPrefix = `${app.config.PANEL_PUBLIC_URL.replace(/\/+$/, '')}/api/v1/auth/steam/callback`;
@@ -105,7 +127,9 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const identity: PlayerIdentity = { steamId64, canonicalName, avatarUrl };
-      await establishAuthenticatedPlayerSession(app, req, reply, identity);
+      await establishAuthenticatedPlayerSession(app, req, reply, identity, {
+        redirectTo: landingPath,
+      });
       return reply;
     },
   );
