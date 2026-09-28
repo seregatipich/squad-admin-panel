@@ -114,9 +114,13 @@ export function BulkModerationModal({
   const banLengths = BAN_LENGTHS.filter((entry) => (entry.value === '0' ? canBanPerm : canBanTemp));
 
   const [step, setStep] = useState<Step>('form');
-  const [actionType, setActionType] = useState<BulkActionType>(actionTypes[0] ?? 'kick');
+  const defaultActionType: BulkActionType = actionTypes[0] ?? 'kick';
+  const [actionType, setActionType] = useState<BulkActionType>(defaultActionType);
   const [reason, setReason] = useState('');
-  const [banLength, setBanLength] = useState(banLengths[0]?.value ?? '0');
+  // Never fall back to '0' (permanent): the fallback only applies when no
+  // ban is offered, and it must not become the harshest option by accident.
+  const defaultBanLength = banLengths[0]?.value ?? BAN_LENGTHS[0].value;
+  const [banLength, setBanLength] = useState(defaultBanLength);
   const [challenge, setChallenge] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +149,16 @@ export function BulkModerationModal({
     setResult(null);
     setBatch([]);
   }, [open]);
+
+  // The caller's keys can arrive after mount (`/api/v1/me` races the roster
+  // on the server page), so the defaults are re-derived whenever they change —
+  // otherwise the state stays pinned to the empty-permission fallback and the
+  // form submits an action or ban length the <select> does not even show.
+  useEffect(() => {
+    if (!open) return;
+    setActionType(defaultActionType);
+    setBanLength(defaultBanLength);
+  }, [open, defaultActionType, defaultBanLength]);
 
   if (!targets) return null;
 
