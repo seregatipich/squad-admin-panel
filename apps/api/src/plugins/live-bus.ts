@@ -159,6 +159,7 @@ export type LiveEvent =
         steam_id64: string | null;
         eos_id: string | null;
         message: string;
+        source: 'log' | 'rcon' | 'panel';
       };
     }
   | {

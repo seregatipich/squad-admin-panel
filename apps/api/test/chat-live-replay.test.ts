@@ -26,6 +26,7 @@ function chat(id: string, message: string): LiveEvent {
       steam_id64: '76561198012345678',
       eos_id: null,
       message,
+      source: 'log',
     },
   };
 }

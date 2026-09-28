@@ -49,7 +49,13 @@ export const EMPTY_CHAT_FILTERS: ChatFilters = {
 };
 
 export interface ChatMsg {
-  id: number;
+  /**
+   * Archive rows use the numeric `chat_messages.id`; a live row not yet
+   * reflected in the archive uses a synthetic `live:<uuid>` string key
+   * instead (see `liveToChatMsg`) — the live-bus frame's own id is a uuidv7,
+   * never the archive row's bigserial id.
+   */
+  id: number | string;
   serverId: string;
   scope: string;
   message: string;
@@ -104,7 +110,7 @@ export function thirtyDayCountQuery(playerId: string, now: number = Date.now()):
 }
 
 export function mergeChatPage(prev: ChatMsg[], incoming: ChatMsg[], append: boolean): ChatMsg[] {
-  const seen = new Set<number>();
+  const seen = new Set<number | string>();
   const base = append ? prev : [];
   for (const message of base) seen.add(message.id);
   const merged = append ? [...prev] : [];
@@ -123,14 +129,18 @@ export function prependLiveMessage(prev: ChatMsg[], incoming: ChatMsg): ChatMsg[
 
 export function liveToChatMsg(event: LiveChatMessage): ChatMsg | null {
   if (!event.player_id) return null;
-  const numericId = Number(event.id);
-  if (!Number.isFinite(numericId)) return null;
+  // The live-bus frame's id is a uuidv7 (packages/chat-ingest/src/store.ts),
+  // never the archive row's numeric id — deriving a number from it always
+  // produced NaN, silently dropping every live message (#432, #470). A
+  // `live:`-prefixed string key is unique and never collides with an
+  // archive id, and the next full reload (which replaces the whole list)
+  // naturally drops it in favor of the real archived row.
   return {
-    id: numericId,
+    id: `live:${event.id}`,
     serverId: event.server_id,
     scope: CHANNEL_TO_SCOPE[event.channel],
     message: event.message,
-    source: 'log',
+    source: event.source,
     isFlagged: false,
     teamId: null,
     squadId: null,

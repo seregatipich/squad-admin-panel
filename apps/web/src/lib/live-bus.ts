@@ -248,6 +248,8 @@ export interface ChatMessage {
   steam_id64: string | null;
   eos_id: string | null;
   message: string;
+  /** Which pipeline carried the line — same values the archive row's `source` uses. */
+  source: 'log' | 'rcon' | 'panel';
 }
 
 export interface PlayerNote {
