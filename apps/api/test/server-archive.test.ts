@@ -209,6 +209,46 @@ describe('POST /api/v1/servers/archive/:id/restore', () => {
     expect(body.error).toBe('slug_in_use');
   });
 
+  it('rejects with 409 port_conflict when an active server now holds the archived ports (#269)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-ports');
+    // seedServer reuses the archived server's game/query/beacon/rcon ports.
+    await seedServer(h, { slug: 'port-squatter' });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/archive/${archived.id}/restore`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { slug: 'restored-ports' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('port_conflict');
+    const created = await h.db.query.servers.findFirst({
+      where: and(eq(servers.slug, 'restored-ports'), isNull(servers.deletedAt)),
+    });
+    expect(created).toBeUndefined();
+  });
+
+  it('restores next to an active server when the request picks free ports (#269)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-free-ports');
+    await seedServer(h, { slug: 'port-holder' });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/archive/${archived.id}/restore`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: {
+        slug: 'restored-free-ports',
+        game_port: 7797,
+        query_port: 27175,
+        beacon_port: 15010,
+        rcon_port: 21124,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
   it('creates a new pending server and returns next_steps', async () => {
     const archived = await seedAndSoftDelete(h, 'archived-restore');
     const cookie = await loginAsOwner(h);

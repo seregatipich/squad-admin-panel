@@ -11,7 +11,7 @@ import {
   externalServerCreateInput,
   serverCreateInput,
 } from '@squad/shared-types';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
@@ -25,6 +25,7 @@ import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
 import { stopSidecar } from '../lib/sidecar-lifecycle.js';
 
@@ -176,31 +177,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
 
       // --- cross-server port collision check (mirrors PUT /:id/settings) ---
       const requestedPorts = [body.game_port, body.query_port, body.beacon_port, body.rcon_port];
-      const conflictRows = await app.db
-        .select({ serverId: serverSettings.serverId })
-        .from(serverSettings)
-        .innerJoin(servers, eq(serverSettings.serverId, servers.id))
-        .where(
-          and(
-            isNull(servers.deletedAt),
-            // External servers live on other hosts: their ports never collide
-            // with a container bound on this one.
-            eq(servers.runtime, 'container'),
-            or(
-              ...requestedPorts.map((p) =>
-                or(
-                  eq(serverSettings.gamePort, p),
-                  eq(serverSettings.queryPort, p),
-                  eq(serverSettings.beaconPort, p),
-                  eq(serverSettings.rconPort, p),
-                ),
-              ),
-            ),
-          ),
-        )
-        .limit(1);
-
-      if (conflictRows.length > 0) {
+      if (await hasContainerPortConflict(app.db, requestedPorts)) {
         reply.code(409);
         return {
           error: 'port_conflict',

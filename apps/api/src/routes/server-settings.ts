@@ -1,11 +1,12 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { serverPatch, serverSettingsUpdate } from '@squad/shared-types';
-import { and, eq, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { syncLicenseCfg } from '../lib/license-cfg.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -123,30 +124,7 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
 
         // cross-server conflict: any port that changed must not exist on another server
         const changedPortValues = Object.values(portChange);
-        const conflictRows = await app.db
-          .select({ serverId: serverSettings.serverId })
-          .from(serverSettings)
-          .innerJoin(servers, eq(serverSettings.serverId, servers.id))
-          .where(
-            and(
-              ne(serverSettings.serverId, id),
-              isNull(servers.deletedAt),
-              eq(servers.runtime, 'container'),
-              or(
-                ...changedPortValues.map((p) =>
-                  or(
-                    eq(serverSettings.gamePort, p),
-                    eq(serverSettings.queryPort, p),
-                    eq(serverSettings.beaconPort, p),
-                    eq(serverSettings.rconPort, p),
-                  ),
-                ),
-              ),
-            ),
-          )
-          .limit(1);
-
-        if (conflictRows.length > 0) {
+        if (await hasContainerPortConflict(app.db, changedPortValues, id)) {
           reply.code(409);
           return {
             error: 'port_conflict',
