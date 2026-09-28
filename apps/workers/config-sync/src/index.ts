@@ -198,12 +198,15 @@ async function main() {
       )) as Array<[string, Array<[string, string[]]>]> | null;
     } catch (err) {
       const msg = (err as Error).message;
-      // A destroyed per-server stream/group (its server was soft-deleted,
-      // SYNC-5) makes the multiplexed XREADGROUP reject NOGROUP for the WHOLE
-      // batch, stalling sync for every server until the next 30 s refresh.
-      // Recover immediately: re-query the server list so the vanished id is
-      // dropped (and its group is not re-created), prune its per-server
-      // backoff, and let the next loop iteration read the surviving streams.
+      // A missing per-server stream/group makes the multiplexed XREADGROUP
+      // reject NOGROUP for the WHOLE batch, stalling sync for every server.
+      // Two causes: the server was soft-deleted (SYNC-5), or Redis lost the
+      // group of a server that is still active (data loss, a manual XGROUP
+      // DESTROY). Re-query the server list so a vanished id is dropped (and
+      // its group is not re-created), prune its backoff, then re-create the
+      // group of every server still active — `refreshServerList` alone only
+      // creates groups for new ids (#873). The pause keeps a group that
+      // cannot be re-created from turning this into a hot loop.
       if (/NOGROUP|no such key/i.test(msg)) {
         log.info({ err: msg }, 'xreadgroup NOGROUP — refreshing server list');
         await refreshServerList().catch((refreshErr) =>
@@ -215,6 +218,15 @@ async function main() {
         for (const id of backoffByServer.keys()) {
           if (!activeServerIds.has(id)) backoffByServer.delete(id);
         }
+        for (const id of activeServerIds) {
+          await ensureGroup(redis, id).catch((groupErr) =>
+            log.warn(
+              { serverId: id, err: (groupErr as Error).message },
+              'consumer group re-create after NOGROUP failed',
+            ),
+          );
+        }
+        await new Promise((r) => setTimeout(r, 1000));
         return;
       }
       log.warn({ err: msg }, 'xreadgroup failed');

@@ -157,6 +157,42 @@ describe('syncServerAdminsCfg', () => {
     expect(lastStatus.state).toBe('unreachable');
   });
 
+  it('keeps the outage start across consecutive failed attempts (#871)', async () => {
+    const ctx = makeCtx(new Error('bridge down'));
+    const readStatus = async () => {
+      const raw = await (ctx.redis as unknown as { get: (k: string) => Promise<string> }).get(
+        `${ADMINS_CFG_STATUS_KEY_PREFIX}${SERVER_ID}`,
+      );
+      return JSON.parse(raw) as { state: string; unreachable_since: string | null };
+    };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-07-25T10:00:00.000Z'));
+      await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorPlayerId: null });
+      vi.setSystemTime(new Date('2026-07-25T11:30:00.000Z'));
+      await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'drift_check', actorPlayerId: null });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(await readStatus()).toMatchObject({
+      state: 'unreachable',
+      unreachable_since: '2026-07-25T10:00:00.000Z',
+    });
+  });
+
+  it('clears the outage start once a sync succeeds', async () => {
+    const ctx = makeCtx(new Error('bridge down'));
+    await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorPlayerId: null });
+    const recovered = { ...ctx, bridge: makeBridge({ content: inSyncFileContent() }) };
+    await syncServerAdminsCfg(recovered, SERVER_ID, { reason: 'drift_check', actorPlayerId: null });
+
+    const raw = await (ctx.redis as unknown as { get: (k: string) => Promise<string> }).get(
+      `${ADMINS_CFG_STATUS_KEY_PREFIX}${SERVER_ID}`,
+    );
+    expect(JSON.parse(raw)).toMatchObject({ state: 'in_sync', unreachable_since: null });
+  });
+
   it('returns in_sync when file content already matches DB-generated segment', async () => {
     const ctx = makeCtx(new Error('no such file'));
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {

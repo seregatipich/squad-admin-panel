@@ -78,6 +78,8 @@ Imports `src/index.ts` with `ioredis`, `@squad/db`, `@squad/bridge-client`, `@sq
 | importable + calls syncer | the module boots and wires the syncer |
 | passive drift logs "awaiting force-sync" | the `drift` branch surfaces the warn, does not overwrite |
 | **NOGROUP xreadgroup → immediate refresh (SYNC-5)** | a one-shot `mockImplementationOnce` rejects `XREADGROUP` with `NOGROUP …`; the worker calls `refreshServerList()` at once (observed as an extra `db.select` call) and keeps polling afterwards — proving the destroyed-stream case self-heals within one loop iteration rather than stalling |
+| **NOGROUP for a still-active server (#873)** | `XREADGROUP` keeps rejecting `NOGROUP` for a server the refreshed list still contains; the worker re-creates that server's group (`XGROUP CREATE … 0 MKSTREAM`) and reads at most twice in 1.5 s — no hot loop |
+| **`unreachable_since` across retries (#871)** (`syncer.test.ts`) | two failed syncs 90 minutes apart keep the first attempt's `unreachable_since`; a later successful sync clears it |
 
 ### `contract.test.ts` — subprocess
 
