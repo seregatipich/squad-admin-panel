@@ -8,9 +8,13 @@ export const serverSettingsUpdate = z
     rcon_port: z.number().int().min(1024).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),
     tickrate: z.number().int().min(10).max(60).optional(),
-    multihome: z.string().nullable().optional(),
-    extra_args: z.string().optional(),
-    cpu_affinity: z.string().nullable().optional(),
+    // #330: server_settings.multihome is a Postgres `inet` column; a
+    // non-IP string used to reach the UPDATE and 500 there (22P02) instead
+    // of 400ing at the boundary — after any UFW rule changes in the same
+    // request had already been applied.
+    multihome: z.string().ip().nullable().optional(),
+    extra_args: z.string().max(1000).optional(),
+    cpu_affinity: z.string().max(200).nullable().optional(),
     cpu_weight: z.number().int().min(1).max(10_000).nullable().optional(),
     niceness: z.number().int().min(-20).max(19).nullable().optional(),
     memory_high_mb: z.number().int().min(2048).nullable().optional(),
