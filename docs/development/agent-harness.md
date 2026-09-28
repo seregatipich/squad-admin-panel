@@ -89,9 +89,11 @@ the `stand` environment, or when the job graph described below drifts.
 **Outside code must never reach a deploy secret.** Both workflows accept only trusted
 `push` events and explicit dispatches — never `pull_request`.
 [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) enforces
-that no workflow combines a `pull_request`/`pull_request_target` trigger with a
-self-hosted job, recognising the bare label, inline and block label lists, and runner
-groups, and it checks its own detector against fixtures first (#217, #286). That guard
+that no workflow (`.yml` or `.yaml`) combines a `pull_request`, `pull_request_target`
+or `workflow_run` trigger — written as a scalar, an inline or block list, or a map key —
+with a self-hosted job, recognising the bare label, inline and block label lists, and
+runner groups, and it checks its own detector against fixtures first, failing on any
+fixture it misreads (#217, #286). That guard
 only sees workflow files already in the repository: a fork's pull request can bring its
 own workflow file. Two repository settings close that gap and must stay on — Settings →
 Actions → General → *Require approval for all outside collaborators*, and *Workflow
