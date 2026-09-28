@@ -325,6 +325,23 @@ describe('handleMatchClose', () => {
     expect(total).toBe(1800 + 3300 + 3400);
   });
 
+  // Regression for #63 finding 923: loadSessions must keep a lower bound on
+  // connectedAt so partition pruning still applies, without excluding a
+  // session that started shortly before the match and is still open.
+  it('bounds how far before the match a session may have connected (#63 finding 923)', async () => {
+    await seedClosedMatchScenario();
+    const ancientSessionPlayer = PLAYER_D;
+    await db.insert(playerSessions).values({
+      playerId: ancientSessionPlayer,
+      serverId: SERVER_ID,
+      connectedAt: new Date(START.getTime() - 48 * 60 * 60 * 1000),
+      disconnectedAt: null,
+    });
+    await handleMatchClose(db, redis, closeCommand);
+    const rows = await rosterRows(MATCH_ID);
+    expect(rows.some((row) => row.playerId === ancientSessionPlayer)).toBe(false);
+  });
+
   it('is idempotent when the close replays', async () => {
     await seedClosedMatchScenario();
     await handleMatchClose(db, redis, closeCommand);
