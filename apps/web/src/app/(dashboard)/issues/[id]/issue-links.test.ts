@@ -77,7 +77,9 @@ describe('linkErrorMessage', () => {
   });
 
   it('explains a permission failure', () => {
-    expect(linkErrorMessage(403, 'forbidden')).toBe('Недостаточно прав: нужно can_manage_issues.');
+    expect(linkErrorMessage(403, 'forbidden')).toBe(
+      'Недостаточно прав: связи меняет автор тикета или can_manage_issues.',
+    );
   });
 
   it('explains a missing issue or link', () => {

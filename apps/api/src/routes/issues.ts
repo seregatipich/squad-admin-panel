@@ -17,8 +17,8 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { ensureSystemIssueLabels } from '../lib/issue-labels.js';
+import { hasPgErrorCode, PG_UNIQUE_VIOLATION } from '../lib/pg-errors.js';
 import type { IssueCommentLiveView, IssueLiveView, IssuePlayerRef } from '../plugins/live-bus.js';
 
 const TITLE_MAX = 200;
@@ -108,20 +108,6 @@ function targetKey(target: LinkTarget): string {
 }
 
 /**
- * Detects Postgres `23505` (unique violation). Drizzle wraps driver errors in a
- * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
- * error itself — the chain has to be walked.
- */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-/**
  * Resolves the caller for the tracker routes, answering 401 without a user
  * and 403 without `panel_access` (#7). The tracker is a panel surface:
  * authentication alone let a session minted before the player's panel access
@@ -157,15 +143,6 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
     return { error: 'forbidden' };
   }
   return null;
-}
-
-function auditActor(req: FastifyRequest): AuditActor {
-  return {
-    kind: 'steam',
-    // biome-ignore lint/style/noNonNullAssertion: callers guard req.user first
-    playerId: req.user!.playerId,
-    tokenId: req.apiTokenId ?? null,
-  };
 }
 
 function playerRef(id: string | null, names: Map<string, string>): IssuePlayerRef | null {
@@ -400,88 +377,85 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     return { items: rows };
   });
 
-  fast.post('/api/v1/issues', { schema: { body: createBody } }, async (req, reply) => {
-    const user = currentUser(req, reply);
-    if (!user) return;
+  fast.post(
+    '/api/v1/issues',
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'issue.create', resource: 'issue' } },
+    },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
 
-    const resolved = await resolveLabelIds(req.body.labels ?? []);
-    if (!resolved.ok) {
-      reply.code(422);
-      return { error: 'unknown_labels', unknown: resolved.unknown };
-    }
+      const resolved = await resolveLabelIds(req.body.labels ?? []);
+      if (!resolved.ok) {
+        reply.code(422);
+        return { error: 'unknown_labels', unknown: resolved.unknown };
+      }
 
-    // Deduplicated so an auto-ticket that names the same entity twice does not
-    // trip the unique index and roll the whole create back.
-    const linkTargets: LinkTarget[] = [];
-    const seenTargets = new Set<string>();
-    for (const raw of req.body.links ?? []) {
-      const key = targetKey(raw);
-      if (seenTargets.has(key)) continue;
-      seenTargets.add(key);
-      linkTargets.push({ entity_type: raw.entity_type, entity_id: raw.entity_id });
-    }
-    const unknownTargets = await findUnknownTargets(linkTargets);
-    if (unknownTargets.length > 0) {
-      reply.code(422);
-      return { error: 'unknown_entity', unknown: unknownTargets };
-    }
+      // Deduplicated so an auto-ticket that names the same entity twice does not
+      // trip the unique index and roll the whole create back.
+      const linkTargets: LinkTarget[] = [];
+      const seenTargets = new Set<string>();
+      for (const raw of req.body.links ?? []) {
+        const key = targetKey(raw);
+        if (seenTargets.has(key)) continue;
+        seenTargets.add(key);
+        linkTargets.push({ entity_type: raw.entity_type, entity_id: raw.entity_id });
+      }
+      const unknownTargets = await findUnknownTargets(linkTargets);
+      if (unknownTargets.length > 0) {
+        reply.code(422);
+        return { error: 'unknown_entity', unknown: unknownTargets };
+      }
 
-    const id = uuidv7();
-    await app.db.transaction(async (tx) => {
-      await tx.insert(issues).values({
-        id,
-        authorPlayerId: user.playerId,
-        title: req.body.title,
-        body: req.body.body,
-        state: 'open',
+      const id = uuidv7();
+      await app.db.transaction(async (tx) => {
+        await tx.insert(issues).values({
+          id,
+          authorPlayerId: user.playerId,
+          title: req.body.title,
+          body: req.body.body,
+          state: 'open',
+        });
+        if (resolved.ids.length > 0) {
+          await tx
+            .insert(issueLabelLinks)
+            .values(resolved.ids.map((labelId) => ({ issueId: id, labelId })));
+        }
+        if (linkTargets.length > 0) {
+          await tx.insert(issueLinks).values(
+            linkTargets.map((target) => ({
+              id: uuidv7(),
+              issueId: id,
+              entityType: target.entity_type,
+              entityId: target.entity_id,
+              createdBy: user.playerId,
+            })),
+          );
+        }
       });
-      if (resolved.ids.length > 0) {
-        await tx
-          .insert(issueLabelLinks)
-          .values(resolved.ids.map((labelId) => ({ issueId: id, labelId })));
-      }
-      if (linkTargets.length > 0) {
-        await tx.insert(issueLinks).values(
-          linkTargets.map((target) => ({
-            id: uuidv7(),
-            issueId: id,
-            entityType: target.entity_type,
-            entityId: target.entity_id,
-            createdBy: user.playerId,
-          })),
-        );
-      }
-    });
 
-    const created = await getIssueRow(id);
-    if (!created) {
-      reply.code(500);
-      return { error: 'insert_failed' };
-    }
-    const labels = (await labelsForIssues([id])).get(id) ?? [];
-    const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
-    const view = serializeIssue(created, labels, names);
-    const links = await linksForIssue(id);
+      const created = await getIssueRow(id);
+      if (!created) {
+        reply.code(500);
+        return { error: 'insert_failed' };
+      }
+      const labels = (await labelsForIssues([id])).get(id) ?? [];
+      const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
+      const view = serializeIssue(created, labels, names);
+      const links = await linksForIssue(id);
 
-    reply.code(201);
-    await writeAuditEntry(app.db, {
-      actor: auditActor(req),
-      actorIp: req.ip ?? null,
-      actionType: 'issue.create',
-      targetType: 'issue',
-      targetId: id,
-      before: null,
-      after: { ...view, links },
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-    app.liveBus.publish({
-      type: 'issue.created',
-      ts: new Date().toISOString(),
-      data: { issue: view },
-    });
-    return { ...view, links };
-  });
+      reply.code(201);
+      req.auditSnapshots = { before: null, after: { ...view, links }, targetId: id };
+      app.liveBus.publish({
+        type: 'issue.created',
+        ts: new Date().toISOString(),
+        data: { issue: view },
+      });
+      return { ...view, links };
+    },
+  );
 
   fast.get('/api/v1/issues', { schema: { querystring: listQuery } }, async (req, reply) => {
     const user = currentUser(req, reply);
@@ -562,7 +536,10 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/issues/:id',
-    { schema: { params: idParam, body: patchBody } },
+    {
+      schema: { params: idParam, body: patchBody },
+      config: { audit: { action: 'issue.update', resource: 'issue' } },
+    },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -645,17 +622,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       ]);
       const afterView = serializeIssue(updated, afterLabels, afterNames);
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'issue.update',
-        targetType: 'issue',
-        targetId: issue.id,
-        before: beforeView,
-        after: afterView,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { before: beforeView, after: afterView };
       app.liveBus.publish({
         type: 'issue.updated',
         ts: new Date().toISOString(),
@@ -667,7 +634,10 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/issues/:id/comments',
-    { schema: { params: idParam, body: commentBody } },
+    {
+      schema: { params: idParam, body: commentBody },
+      config: { audit: { action: 'issue.comment.create', resource: 'issue' } },
+    },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -706,17 +676,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       );
 
       reply.code(201);
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'issue.comment.create',
-        targetType: 'issue',
-        targetId: issue.id,
-        before: null,
-        after: view,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { before: null, after: view };
       app.liveBus.publish({
         type: 'issue.comment.created',
         ts: new Date().toISOString(),
@@ -728,7 +688,10 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/issues/:id/links',
-    { schema: { params: idParam, body: linkInput } },
+    {
+      schema: { params: idParam, body: linkInput },
+      config: { audit: { action: 'issue.link.create', resource: 'issue' } },
+    },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -737,6 +700,12 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       if (!issue) {
         reply.code(404);
         return { error: 'issue_not_found' };
+      }
+      // Same rule as PATCH /issues/:id: changing a ticket, its links included,
+      // belongs to its author or a can_manage_issues holder.
+      if (issue.authorPlayerId !== user.playerId && !user.permissions.canManageIssues) {
+        reply.code(403);
+        return { error: 'forbidden', required: 'can_manage_issues' };
       }
 
       const target: LinkTarget = {
@@ -762,7 +731,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
           })
           .returning();
       } catch (err) {
-        if (isUniqueViolation(err)) {
+        if (hasPgErrorCode(err, PG_UNIQUE_VIOLATION)) {
           reply.code(409);
           return { error: 'link_exists' };
         }
@@ -776,24 +745,17 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       const [view] = await serializeLinks([row]);
 
       reply.code(201);
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'issue.link.create',
-        targetType: 'issue',
-        targetId: issue.id,
-        before: null,
-        after: view,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { before: null, after: view };
       return view;
     },
   );
 
   fast.delete(
     '/api/v1/issues/:id/links/:linkId',
-    { schema: { params: linkIdParam } },
+    {
+      schema: { params: linkIdParam },
+      config: { audit: { action: 'issue.link.delete', resource: 'issue' } },
+    },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -818,25 +780,15 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       const [view] = await serializeLinks([row]);
       await app.db.delete(issueLinks).where(eq(issueLinks.id, row.id));
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'issue.link.delete',
-        targetType: 'issue',
-        targetId: row.issueId,
-        before: view,
-        after: null,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { before: view, after: null };
       return { ok: true };
     },
   );
 
   /**
    * Reverse lookup for the player card: the tickets still awaiting work that
-   * name this player. `open_count` counts everything not yet `closed`, which is
-   * exactly what `items` carries.
+   * name this player. `open_count` counts every ticket not yet `closed`;
+   * `items` carries the newest {@link PLAYER_CARD_ISSUES_LIMIT} of them.
    */
   fast.get(
     '/api/v1/players/:playerId/issues',
@@ -845,6 +797,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
+      const openForPlayer = and(
+        eq(issueLinks.entityType, 'player'),
+        eq(issueLinks.entityId, req.params.playerId),
+        ne(issues.state, 'closed'),
+      );
       const rows = await app.db
         .select({
           id: issues.id,
@@ -855,18 +812,22 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         })
         .from(issueLinks)
         .innerJoin(issues, eq(issues.id, issueLinks.issueId))
-        .where(
-          and(
-            eq(issueLinks.entityType, 'player'),
-            eq(issueLinks.entityId, req.params.playerId),
-            ne(issues.state, 'closed'),
-          ),
-        )
+        .where(openForPlayer)
         .orderBy(desc(issues.number))
         .limit(PLAYER_CARD_ISSUES_LIMIT);
+      const openCount =
+        rows.length < PLAYER_CARD_ISSUES_LIMIT
+          ? rows.length
+          : ((
+              await app.db
+                .select({ count: sql<number>`count(*)::int` })
+                .from(issueLinks)
+                .innerJoin(issues, eq(issues.id, issueLinks.issueId))
+                .where(openForPlayer)
+            )[0]?.count ?? rows.length);
 
       return {
-        open_count: rows.length,
+        open_count: openCount,
         items: rows.map((row) => ({
           id: row.id,
           number: Number(row.number),

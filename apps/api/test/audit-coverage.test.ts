@@ -38,6 +38,7 @@ import integrationsBalancerRoutes from '../src/routes/integrations-balancer.js';
 import integrationsDiscordRoutes from '../src/routes/integrations-discord.js';
 import integrationsDiscordRoleMappingsRoutes from '../src/routes/integrations-discord-role-mappings.js';
 import integrationsGeoipRoutes from '../src/routes/integrations-geoip.js';
+import issuesRoutes from '../src/routes/issues.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
 import playerSteamRefreshRoutes from '../src/routes/player-steam-refresh.js';
@@ -60,6 +61,19 @@ interface RouteRecord {
   config: Record<string, unknown>;
 }
 
+/**
+ * A chainable, awaitable no-op standing in for `app.db`: route modules that
+ * seed rows while registering (issues.ts → `ensureSystemIssueLabels`) resolve
+ * every query chain to an empty result instead of needing a live database.
+ */
+function inertDb(): unknown {
+  return new Proxy(() => undefined, {
+    get: (_target, prop) =>
+      prop === 'then' ? (resolve: (value: unknown[]) => void) => resolve([]) : inertDb(),
+    apply: () => inertDb(),
+  });
+}
+
 async function collectRoutes(): Promise<RouteRecord[]> {
   const app: FastifyInstance = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
@@ -67,7 +81,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   // Minimal stubs for the plugin decorations that routes read from. We
   // don't need real DB/Redis/Bridge to enumerate routes.
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('db', {});
+  (app as any).decorate('db', inertDb());
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('redis', {});
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
@@ -115,6 +129,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsDiscordRoutes);
   await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(integrationsGeoipRoutes);
+  await app.register(issuesRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
   await app.register(discordAuthRoutes);

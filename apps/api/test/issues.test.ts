@@ -284,14 +284,52 @@ describeIfDb('issues API — create, RBAC, comments, audit', () => {
     expect((commentRow?.afterSnapshot as { body: string }).body).toBe('auditable comment');
   });
 
-  async function latestAudit(db: DatabaseClient, action: string, targetId: string) {
-    const rows = await db
-      .select()
-      .from(auditLog)
-      .where(and(eq(auditLog.actionType, action), eq(auditLog.targetId, targetId)))
-      .orderBy(desc(auditLog.id))
-      .limit(1);
-    return rows[0] ?? null;
+  it('audits a refused PATCH by a non-author without can_manage_issues', async () => {
+    const author = await seedPlayer(h.db, { name: 'PatchAuditAuthor' });
+    const stranger = await seedPlayer(h.db, { name: 'PatchAuditStranger' });
+    const issue = await createIssue(h, await loginAs(h, author), {
+      title: 'refused patch',
+      body: 'b',
+    });
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/issues/${issue.id}`,
+      headers: { cookie: await loginAs(h, stranger) },
+      payload: { state: 'closed' },
+    });
+    expect(res.statusCode).toBe(403);
+    const row = await latestAudit(h.db, 'issue.update', issue.id, 403);
+    expect(row?.actorPlayerId).toBe(stranger);
+    expect(row?.afterSnapshot).toBeNull();
+  });
+
+  /**
+   * Newest audit row for `action` on `targetId` (optionally with `statusCode`),
+   * polled briefly because the declarative audit hook writes in `onResponse`.
+   */
+  async function latestAudit(
+    db: DatabaseClient,
+    action: string,
+    targetId: string,
+    statusCode?: number,
+  ) {
+    const deadline = Date.now() + 2_000;
+    for (;;) {
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.actionType, action),
+            eq(auditLog.targetId, targetId),
+            ...(statusCode === undefined ? [] : [eq(auditLog.statusCode, statusCode)]),
+          ),
+        )
+        .orderBy(desc(auditLog.id))
+        .limit(1);
+      if (rows[0] || Date.now() > deadline) return rows[0] ?? null;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 });
 

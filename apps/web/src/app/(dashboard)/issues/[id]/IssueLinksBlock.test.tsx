@@ -203,7 +203,9 @@ describe('IssueLinksBlock', () => {
       );
 
       fireEvent.click(await screen.findByRole('button', { name: 'Удалить связь: Mine' }));
-      await screen.findByText('Недостаточно прав: нужно can_manage_issues.');
+      await screen.findByText(
+        'Недостаточно прав: связи меняет автор тикета или can_manage_issues.',
+      );
     },
     TEST_TIMEOUT_MS,
   );
