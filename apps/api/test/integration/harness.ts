@@ -24,7 +24,7 @@ import healthPlugin from '../../src/plugins/health.js';
 import heartbeatWatchPlugin from '../../src/plugins/heartbeat-watch.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
-import requestContextPlugin from '../../src/plugins/request-context.js';
+import requestContextPlugin, { genRequestId } from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import { registerRoutes } from '../../src/routes/index.js';
 import { createIsolatedSchema, ensureWorkerDatabase, hostRedisUrl } from './isolated-db.js';
@@ -329,7 +329,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   const bridge = opts.bridge ?? makeFakeBridge();
   const mediaDir = mkdtempSync(path.join(tmpdir(), 'squad-media-test-'));
 
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, genReqId: genRequestId });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
