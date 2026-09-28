@@ -71,15 +71,20 @@ async function createSeason(
 }
 
 // uuidv7's leading characters encode the timestamp, so slicing it does not
-// yield a unique name within a single test run — use a counter instead.
+// yield a unique name within a single test run — use a counter instead. The
+// same counter also spaces out the default `starts_at` by a day per call:
+// seasons_start_day_key (#576) rejects two seasons starting the same UTC day,
+// and several tests here create more than one default-payload season.
 let seasonNameCounter = 0;
 
 function seasonPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   seasonNameCounter += 1;
+  const startsAt = new Date(Date.UTC(2026, 5, seasonNameCounter));
+  const endsAt = new Date(Date.UTC(2026, 8, seasonNameCounter));
   return {
     name: `Season ${seasonNameCounter}`,
-    starts_at: '2026-06-01T00:00:00.000Z',
-    ends_at: '2026-08-31T00:00:00.000Z',
+    starts_at: startsAt.toISOString(),
+    ends_at: endsAt.toISOString(),
     ...overrides,
   };
 }
@@ -168,7 +173,8 @@ describeIfDb('GET /api/v1/seasons', () => {
   });
 
   it('lists seasons for a panel user without can_edit_roles', async () => {
-    await createSeason(ownerCookie, seasonPayload({ name: 'Readable' }));
+    const payload = seasonPayload({ name: 'Readable' });
+    await createSeason(ownerCookie, payload);
 
     const res = await h.app.inject({
       method: 'GET',
@@ -183,7 +189,7 @@ describeIfDb('GET /api/v1/seasons', () => {
       status: 'upcoming',
       finalized: false,
     });
-    expect(body.items[0]?.starts_at).toBe('2026-06-01T00:00:00.000Z');
+    expect(body.items[0]?.starts_at).toBe(payload.starts_at);
   });
 
   it('filters by status', async () => {
@@ -219,13 +225,14 @@ describeIfDb('POST /api/v1/seasons', () => {
   });
 
   it('creates a season for a role holding can_edit_roles', async () => {
-    const res = await createSeason(editorCookie, seasonPayload({ name: 'Summer 2026' }));
+    const payload = seasonPayload({ name: 'Summer 2026' });
+    const res = await createSeason(editorCookie, payload);
     expect(res.statusCode).toBe(201);
     const body = res.json() as SeasonBody;
     expect(body).toMatchObject({
       name: 'Summer 2026',
-      starts_at: '2026-06-01T00:00:00.000Z',
-      ends_at: '2026-08-31T00:00:00.000Z',
+      starts_at: payload.starts_at,
+      ends_at: payload.ends_at,
       status: 'upcoming',
       finalized: false,
     });
@@ -260,6 +267,23 @@ describeIfDb('POST /api/v1/seasons', () => {
     const res = await createSeason(editorCookie, seasonPayload({ name: 'Duplicate' }));
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'season_name_taken' });
+  });
+
+  it('rejects a second season starting the same UTC day with 409 season_start_day_taken (#576)', async () => {
+    const first = await createSeason(
+      editorCookie,
+      seasonPayload({ name: 'Day First', starts_at: '2026-09-01T00:00:00.000Z' }),
+    );
+    expect(first.statusCode).toBe(201);
+
+    const second = await createSeason(
+      editorCookie,
+      // A later time on the same UTC day still collides — the season is
+      // resolved purely by that day, both here and in the web UI's picker.
+      seasonPayload({ name: 'Day Second', starts_at: '2026-09-01T18:00:00.000Z' }),
+    );
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({ error: 'season_start_day_taken' });
   });
 
   it('refuses to create a season directly in the closed state', async () => {
