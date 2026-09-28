@@ -6,6 +6,7 @@ import { ChatRingBuffer } from '../lib/chat-ring-buffer.js';
 import { CombatRingBuffer } from '../lib/combat-ring-buffer.js';
 import { loadUserPermissions, type PermissionContext } from '../lib/rbac.js';
 import { resolveSession } from '../lib/sessions.js';
+import { sendUnlessStalled, serialiseOnce, WS_MAX_BUFFERED_BYTES } from '../lib/ws-send.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
 
 const PING_INTERVAL_MS = 10_000;
@@ -26,6 +27,12 @@ export interface LiveRoutesOptions {
    * player's permissions. Defaults to 30 s; tests pass a short interval.
    */
   revalidateIntervalMs?: number;
+  /**
+   * Bytes a socket may have queued before it counts as stalled and is
+   * dropped. Defaults to {@link WS_MAX_BUFFERED_BYTES}; tests pass a small
+   * limit.
+   */
+  maxBufferedBytes?: number;
 }
 
 type Revalidation =
@@ -48,6 +55,7 @@ type Revalidation =
  */
 const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
   const revalidateIntervalMs = opts.revalidateIntervalMs ?? DEFAULT_REVALIDATE_INTERVAL_MS;
+  const maxBufferedBytes = opts.maxBufferedBytes ?? WS_MAX_BUFFERED_BYTES;
 
   const chatBuffer = new ChatRingBuffer(CHAT_BUFFER_PER_SERVER);
   const stopChatBuffer = app.liveBus.subscribe((event) => chatBuffer.push(event));
@@ -83,10 +91,16 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         })
         .catch(() => undefined);
 
-      const safeSend = (payload: unknown): void => {
+      // Every bus event reaches every socket, so it is encoded once for all
+      // of them; a socket that stops reading is dropped instead of buffering
+      // the stream in memory (#1297).
+      const safeSend = (payload: object): void => {
         if (closed) return;
         try {
-          socket.send(JSON.stringify(payload));
+          if (!sendUnlessStalled(socket, serialiseOnce(payload), maxBufferedBytes)) {
+            closed = true;
+            req.log.warn('live-bus: dropped a client that stopped reading');
+          }
         } catch (err) {
           req.log.warn({ err: (err as Error).message }, 'live-bus: send failed');
         }

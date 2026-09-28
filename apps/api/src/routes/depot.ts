@@ -14,6 +14,7 @@ import {
   publishDepotProgressDone,
   publishDepotProgressLine,
 } from '../lib/depot-progress.js';
+import { sendUnlessStalled } from '../lib/ws-send.js';
 
 /**
  * Manages the shared `squad-depot` Docker volume that holds Squad game
@@ -313,10 +314,15 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         const stream = kv[kv.indexOf('stream') + 1] ?? 'stdout';
         const text = kv[idx + 1] ?? '';
         if (stream === 'event') {
-          socket.send(text);
+          sendUnlessStalled(socket, text);
           return true;
         }
-        socket.send(JSON.stringify({ ts: new Date().toISOString(), stream, message: text }));
+        // A watcher that stops reading is dropped rather than buffering the
+        // SteamCMD output in the API process (#1297).
+        sendUnlessStalled(
+          socket,
+          JSON.stringify({ ts: new Date().toISOString(), stream, message: text }),
+        );
         return false;
       }
 
