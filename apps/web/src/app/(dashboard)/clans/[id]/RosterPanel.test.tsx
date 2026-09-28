@@ -90,14 +90,8 @@ describe('priorityErrorMessage', () => {
 });
 
 describe('deriveCapabilities', () => {
-  const roster = [
-    member({ player_id: 'p-leader', member_role: 'leader' }),
-    member({ player_id: 'p-deputy', member_role: 'deputy' }),
-    member({ player_id: 'p-member', member_role: 'member' }),
-  ];
-
   it('grants full control to a global clan manager', () => {
-    const caps = deriveCapabilities({ player_id: 'p-outsider', can_manage_clans: true }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-outsider', can_manage_clans: true }, null);
     expect(caps).toEqual({
       canManageFull: true,
       canAdd: true,
@@ -106,14 +100,14 @@ describe('deriveCapabilities', () => {
     });
   });
 
-  it('grants full control to the clan leader', () => {
-    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, roster);
+  it('grants full control to the clan leader per the server-computed viewer_manage_level', () => {
+    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, 'full');
     expect(caps.canManageFull).toBe(true);
     expect(caps.canTogglePriority).toBe(true);
   });
 
   it('grants a deputy add/remove/priority-toggle but not full control', () => {
-    const caps = deriveCapabilities({ player_id: 'p-deputy', can_manage_clans: false }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-deputy', can_manage_clans: false }, 'deputy');
     expect(caps.canManageFull).toBe(false);
     expect(caps.canAdd).toBe(true);
     expect(caps.canRemoveMembers).toBe(true);
@@ -121,13 +115,20 @@ describe('deriveCapabilities', () => {
   });
 
   it('grants a rank-and-file member nothing', () => {
-    const caps = deriveCapabilities({ player_id: 'p-member', can_manage_clans: false }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-member', can_manage_clans: false }, null);
     expect(caps).toEqual({
       canManageFull: false,
       canAdd: false,
       canRemoveMembers: false,
       canTogglePriority: false,
     });
+  });
+
+  it('grants a leader full control even when their own row is off the loaded/paginated members page (#509)', () => {
+    // The server computes viewer_manage_level independently of `items` — a
+    // leader whose row fell off the current search/sort/page still gets it.
+    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, 'full');
+    expect(caps.canManageFull).toBe(true);
   });
 });
 
@@ -364,6 +365,44 @@ describe('RosterPanel (rendered)', () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('grants the leader management controls even when their own row is off the loaded page (#509)', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ player_id: 'p-leader', can_manage_clans: false }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.startsWith('/api/v1/clans/clan-1/members')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              clan_id: 'clan-1',
+              // The leader's own row (p-leader) is not on this page — a
+              // search, sort or later page pushed it off — yet the server
+              // still reports the leader's real manage level.
+              items: [member({ player_id: 'p-other', member_role: 'member' })],
+              total: 2,
+              page: 1,
+              limit: 25,
+              priority_count: 0,
+              max_priority_slots: 5,
+              viewer_manage_level: 'full',
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<RosterPanel clanId="clan-1" />);
+
+    expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
   });
 
   it('renders a CSV export link pointing at the roster export endpoint', async () => {
