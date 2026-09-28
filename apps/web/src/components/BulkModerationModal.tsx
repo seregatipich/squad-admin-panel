@@ -42,16 +42,20 @@ const ACTION_LABEL: Record<BulkActionType, string> = {
   ban: 'Бан',
 };
 
-const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: '1d', label: '1 день' },
-  { value: '3d', label: '3 дня' },
-  { value: '7d', label: '7 дней' },
-  { value: '30d', label: '30 дней' },
-  { value: '0', label: 'Навсегда' },
+/** Ban-length choices for both this modal and the live-roster quick-moderation dialog. */
+export const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string; permanent: boolean }> = [
+  { value: '1d', label: '1 день', permanent: false },
+  { value: '3d', label: '3 дня', permanent: false },
+  { value: '7d', label: '7 дней', permanent: false },
+  { value: '30d', label: '30 дней', permanent: false },
+  { value: '0', label: 'Навсегда', permanent: true },
 ];
 
-/** Human-readable per-target failure reasons returned in `results[].error`. */
-const ERROR_LABEL: Record<string, string> = {
+/**
+ * Human-readable per-target failure reasons returned in `results[].error`,
+ * shared with the live-roster quick-moderation dialog.
+ */
+export const TARGET_ERROR_LABEL: Record<string, string> = {
   player_not_found: 'Игрок не найден',
   target_identity_missing: 'Нет SteamID64 и EOS ID',
   target_offline: 'Игрок не в сети',
@@ -111,7 +115,7 @@ export function BulkModerationModal({
     ...(canKick ? (['kick'] as const) : []),
     ...(canBanTemp || canBanPerm ? (['ban'] as const) : []),
   ];
-  const banLengths = BAN_LENGTHS.filter((entry) => (entry.value === '0' ? canBanPerm : canBanTemp));
+  const banLengths = BAN_LENGTHS.filter((entry) => (entry.permanent ? canBanPerm : canBanTemp));
 
   const [step, setStep] = useState<Step>('form');
   const [actionType, setActionType] = useState<BulkActionType>(actionTypes[0] ?? 'kick');
@@ -347,7 +351,7 @@ export function BulkModerationModal({
                     .map((row) => (
                       <li key={row.player_id}>
                         {nameById.get(row.player_id) ?? row.player_id} —{' '}
-                        {ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
+                        {TARGET_ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
                         {row.detail ? ` (${row.detail})` : ''}
                       </li>
                     ))}

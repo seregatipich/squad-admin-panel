@@ -280,6 +280,50 @@ describe('LivePlayers', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'does not silently re-select a player who left and rejoined the server',
+    async () => {
+      // First reload after the selection: Leader has left the server.
+      // Second reload: Leader has reconnected under the same player_id.
+      const rosterWithoutLeader = {
+        ...ROSTER,
+        players: ROSTER.players.filter((player) => player.name !== 'Leader'),
+      };
+      let rosterToServe: unknown = ROSTER;
+      const fetchMock = vi.fn((_url: string) =>
+        Promise.resolve(new Response(JSON.stringify(rosterToServe), { status: 200 })),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick']} />);
+      await screen.findByText('Leader');
+      fireEvent.click(screen.getByLabelText('Выбрать игрока: Leader'));
+      expect(screen.getByText('Выбрано: 1')).toBeInTheDocument();
+
+      // Leader disconnects: the bulk bar must disappear (bulkTargets already
+      // excludes anyone outside the current roster).
+      rosterToServe = rosterWithoutLeader;
+      await act(async () => {
+        rosterEventHandler?.({ data: { server_id: 'srv-1' } });
+      });
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Массовое действие' })).not.toBeInTheDocument(),
+      );
+
+      // Leader reconnects with the same player_id. A stale `selected` entry
+      // would silently re-include them in the bulk target set without the
+      // moderator re-checking the box.
+      rosterToServe = ROSTER;
+      await act(async () => {
+        rosterEventHandler?.({ data: { server_id: 'srv-1' } });
+      });
+      await screen.findByText('Leader');
+      expect(screen.queryByRole('button', { name: 'Массовое действие' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Выбрать игрока: Leader')).not.toBeChecked();
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
 
 describe('LivePlayers — колонки команд и порядок в отряде', () => {

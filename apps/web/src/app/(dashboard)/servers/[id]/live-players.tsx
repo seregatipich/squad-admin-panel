@@ -1,7 +1,12 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  BAN_LENGTHS,
+  BulkModerationModal,
+  type BulkModerationTarget,
+  TARGET_ERROR_LABEL,
+} from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import {
@@ -70,23 +75,6 @@ const QUICK_EXPLANATION: Record<QuickAction, string> = {
   warn: 'Игрок получит предупреждение в игре. Причина попадёт в его карточку.',
   kick: 'Игрок будет отключён от сервера и сможет вернуться сразу же.',
   ban: 'Игрок будет отключён и не сможет зайти до конца срока бана.',
-};
-
-const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string; permanent: boolean }> = [
-  { value: '1d', label: '1 день', permanent: false },
-  { value: '3d', label: '3 дня', permanent: false },
-  { value: '7d', label: '7 дней', permanent: false },
-  { value: '30d', label: '30 дней', permanent: false },
-  { value: '0', label: 'Навсегда', permanent: true },
-];
-
-/** Причины отказа из `results[].error` — те же, что показывает массовое окно. */
-const TARGET_ERROR_LABEL: Record<string, string> = {
-  player_not_found: 'Игрок не найден',
-  target_identity_missing: 'Нет SteamID64 и EOS ID',
-  target_offline: 'Игрок не в сети',
-  rcon_failed: 'RCON не подтвердил команду',
-  bulk_deadline_exceeded: 'Превышен лимит времени операции',
 };
 
 interface BulkResponse {
@@ -205,6 +193,20 @@ export function LivePlayers({
     player.player_id ? [{ playerId: player.player_id, name: player.name }] : [],
   );
   const bulkTargets = selectable.filter((target) => selected.has(target.playerId));
+
+  // A player who left the server (or logged back in) must not stay in — or
+  // silently re-enter — the bulk-action selection once they drop out of the
+  // current roster.
+  useEffect(() => {
+    if (!roster) return;
+    const rosterPlayerIds = new Set(
+      roster.players.flatMap((player) => (player.player_id ? [player.player_id] : [])),
+    );
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => rosterPlayerIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [roster]);
   const abilities = quickAbilities(modPermissions);
 
   const rowProps = {
@@ -366,7 +368,10 @@ function QuickModerationDialog({
 
   const canBanTemp = permissions.includes('mod:ban_temp');
   const canBanPerm = permissions.includes('mod:ban_perm');
-  const banLengths = BAN_LENGTHS.filter((entry) => (entry.permanent ? canBanPerm : canBanTemp));
+  const banLengths = useMemo(
+    () => BAN_LENGTHS.filter((entry) => (entry.permanent ? canBanPerm : canBanTemp)),
+    [canBanPerm, canBanTemp],
+  );
 
   const open = request !== null;
   // Причина и срок сбрасываются на каждое открытие: текст, набранный для
@@ -374,11 +379,9 @@ function QuickModerationDialog({
   useEffect(() => {
     if (!open) return;
     setReason('');
-    setBanLength(
-      BAN_LENGTHS.filter((e) => (e.permanent ? canBanPerm : canBanTemp))[0]?.value ?? '0',
-    );
+    setBanLength(banLengths[0]?.value ?? '0');
     setError(null);
-  }, [open, canBanPerm, canBanTemp]);
+  }, [open, banLengths]);
 
   if (!request) return null;
 
