@@ -174,12 +174,12 @@ describeIfDb('AUTO-4 chat-command settings + history', () => {
       }[];
     };
     expect(allBody.invocations).toHaveLength(2);
-    expect(allBody.invocations[0].command).toBe('report');
-    expect(allBody.invocations[0].args).toBe('BadGuy hacking');
-    expect(allBody.invocations[0].responded).toBe(true);
-    expect(allBody.invocations[0].response_source).toBe('rcon_warn');
-    expect(allBody.invocations[0].player_id).toBeNull();
-    expect(allBody.invocations[1].command).toBe('stats');
+    expect(allBody.invocations[0]?.command).toBe('report');
+    expect(allBody.invocations[0]?.args).toBe('BadGuy hacking');
+    expect(allBody.invocations[0]?.responded).toBe(true);
+    expect(allBody.invocations[0]?.response_source).toBe('rcon_warn');
+    expect(allBody.invocations[0]?.player_id).toBeNull();
+    expect(allBody.invocations[1]?.command).toBe('stats');
 
     const filtered = await h.app.inject({
       method: 'GET',
@@ -189,7 +189,7 @@ describeIfDb('AUTO-4 chat-command settings + history', () => {
     expect(filtered.statusCode).toBe(200);
     const filteredBody = filtered.json() as { invocations: { command: string }[] };
     expect(filteredBody.invocations).toHaveLength(1);
-    expect(filteredBody.invocations[0].command).toBe('report');
+    expect(filteredBody.invocations[0]?.command).toBe('report');
   });
 
   it('GET chat-commands returns 404 for an unknown server', async () => {

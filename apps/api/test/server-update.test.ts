@@ -240,7 +240,11 @@ describe('POST /api/v1/servers/:id/update', () => {
     it('streams SteamCMD output and a done sentinel into depot:progress on success', async () => {
       const id = await seedServer(h, 'stopped');
       h.bridge.depotUpdate = async (onStream) => {
-        onStream({ stream: 'stdout', data: 'Update state (0x5) verifying install…' });
+        onStream({
+          id: 'depot-progress',
+          stream: 'stdout',
+          data: 'Update state (0x5) verifying install…',
+        });
         return { exit_code: 0 };
       };
 
@@ -294,7 +298,11 @@ describe('POST /api/v1/servers/:id/update', () => {
     it('reports depot:last_update=failed when a progress line silently fails to persist', async () => {
       const id = await seedServer(h, 'stopped');
       h.bridge.depotUpdate = async (onStream) => {
-        onStream({ stream: 'stdout', data: 'Update state (0x5) verifying install…' });
+        onStream({
+          id: 'depot-progress',
+          stream: 'stdout',
+          data: 'Update state (0x5) verifying install…',
+        });
         return { exit_code: 0 };
       };
       const xaddSpy = vi

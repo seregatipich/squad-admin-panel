@@ -54,6 +54,7 @@ async function seedPlayerWithRole(opts: {
       roleId,
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -66,6 +67,7 @@ async function seedPlainPlayer(name: string): Promise<string> {
       canonicalNameNormalized: name.toLowerCase(),
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -220,8 +222,8 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
       .from(playerDiscordLinks)
       .where(eq(playerDiscordLinks.playerId, playerId));
     expect(rows).toHaveLength(1);
-    expect(rows[0].discordUserId).toBe('111222333444555666');
-    expect(rows[0].discordUsername).toBe('Сквадди');
+    expect(rows[0]?.discordUserId).toBe('111222333444555666');
+    expect(rows[0]?.discordUsername).toBe('Сквадди');
 
     await assertAuditRow(h, {
       action: 'integration.discord.link',
@@ -387,7 +389,7 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
       .from(playerDiscordLinks)
       .where(eq(playerDiscordLinks.playerId, playerId));
     expect(rows).toHaveLength(1);
-    expect(rows[0].discordUserId).toBe('111222333444555666');
+    expect(rows[0]?.discordUserId).toBe('111222333444555666');
   });
 
   it('answers 502 discord_exchange_failed when Discord rejects the token exchange', async () => {

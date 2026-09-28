@@ -207,10 +207,10 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     const body = await list(`?serverId=${serverB}&type=revive`);
     expect(body.rows).toHaveLength(1);
     const revive = body.rows[0];
-    expect(revive.eventType).toBe('revive');
-    expect(revive.attacker).toEqual({ player_id: medic, current_name: 'FieldMedic' });
-    expect(revive.victim).toEqual({ player_id: target, current_name: 'TargetDummy' });
-    expect(revive.weapon).toBeNull();
+    expect(revive?.eventType).toBe('revive');
+    expect(revive?.attacker).toEqual({ player_id: medic, current_name: 'FieldMedic' });
+    expect(revive?.victim).toEqual({ player_id: target, current_name: 'TargetDummy' });
+    expect(revive?.weapon).toBeNull();
   });
 
   it('applies combined filters (player + weapon + server + period)', async () => {
@@ -228,20 +228,20 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
   it('filters teamkills only', async () => {
     const body = await list(`?serverId=${serverB}&teamkillsOnly=true`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].isTeamkill).toBe(true);
+    expect(body.rows[0]?.isTeamkill).toBe(true);
     expect(body.approxTotal).toBe(1);
   });
 
   it('matches a player on either side via playerId', async () => {
     const body = await list(`?serverId=${serverB}&playerId=${medic}`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].attacker?.player_id).toBe(medic);
+    expect(body.rows[0]?.attacker?.player_id).toBe(medic);
   });
 
   it('resolves attackerName substring against the current name', async () => {
     const body = await list(`?serverId=${serverB}&attackerName=medic`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].attacker?.current_name).toBe('FieldMedic');
+    expect(body.rows[0]?.attacker?.current_name).toBe('FieldMedic');
   });
 
   it('paginates deep via keyset with correct ordering and no gaps, each page < 500ms', async () => {
@@ -312,11 +312,11 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     const body = await list(`?serverId=${serverB}&type=vehicle_destroyed`);
     expect(body.rows).toHaveLength(1);
     const row = body.rows[0];
-    expect(row.eventType).toBe('vehicle_destroyed');
-    expect(row.victim).toBeNull();
-    expect(row.victimVehicle).toBe('T72B3');
-    expect(row.attackerVehicle).toBe('BTR82A');
-    expect(row.attacker?.player_id).toBe(sniper);
+    expect(row?.eventType).toBe('vehicle_destroyed');
+    expect(row?.victim).toBeNull();
+    expect(row?.victimVehicle).toBe('T72B3');
+    expect(row?.attackerVehicle).toBe('BTR82A');
+    expect(row?.attacker?.player_id).toBe(sniper);
   });
 
   it('rejects an unauthenticated request', async () => {

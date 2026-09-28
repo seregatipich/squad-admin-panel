@@ -81,6 +81,7 @@ async function loginAsRoleWithoutViewIps(): Promise<string> {
       canonicalNameNormalized: 'limitedviewer',
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
 
   const ownerCookie = await loginAsOwner(h);
   const created = await h.app.inject({
@@ -323,6 +324,7 @@ describe('POST/DELETE /api/v1/settings/alt-detection/ignored-ips', () => {
   it('deletes an entry, and 404s on repeat delete', async () => {
     const cookie = await loginAsOwner(h);
     const [row] = await h.db.insert(altIgnoredIps).values({ cidr: '198.51.100.0/24' }).returning();
+    if (!row) throw new Error('row: insert returned no row');
 
     const del = await h.app.inject({
       method: 'DELETE',

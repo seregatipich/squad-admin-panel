@@ -13,7 +13,10 @@ import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
-import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
+import {
+  sendRconCommandViaWorker,
+  type WorkerRconCommandOutcome,
+} from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -42,7 +45,7 @@ let altSteam: bigint;
 let serverId: string;
 let pairSeq = 0;
 
-function okOutcome() {
+function okOutcome(): WorkerRconCommandOutcome {
   return {
     attempted: true,
     ok: true,
@@ -84,7 +87,7 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
 }
 
 async function insertConfirmedAlt(): Promise<void> {
-  const [playerAId, playerBId] = [targetId, altId].sort();
+  const [playerAId, playerBId] = targetId < altId ? [targetId, altId] : [altId, targetId];
   await h.db.insert(playerLinks).values({
     playerAId,
     playerBId,
@@ -99,6 +102,7 @@ beforeAll(async () => {
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
+  if (!h.seed.ownerPlayerId) throw new Error('owner was not seeded');
   ownerId = h.seed.ownerPlayerId;
 });
 
@@ -177,6 +181,7 @@ describeIfDb('ALT-7 report ban flow', () => {
         createdBy: ownerId,
       })
       .returning({ id: alertRules.id });
+    if (!rule) throw new Error('rule: insert returned no row');
     const [report] = await h.db
       .insert(playerReports)
       .values({
@@ -188,6 +193,7 @@ describeIfDb('ALT-7 report ban flow', () => {
         status: 'pending',
       })
       .returning({ id: playerReports.id });
+    if (!report) throw new Error('report: insert returned no row');
     const cookie = await loginAsOwner(h);
 
     const response = await h.app.inject({

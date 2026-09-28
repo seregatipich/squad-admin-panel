@@ -4,6 +4,7 @@ import path from 'node:path';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import websocket from '@fastify/websocket';
+import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { auditLog, players, roles } from '@squad/db/schema';
@@ -348,6 +349,8 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
+    HOST_ORPHAN_SWEEP_INTERVAL_MS: 5 * 60_000,
+    HOST_DOCKER_PRUNE_INTERVAL_MS: 24 * 60 * 60_000,
     // OAuth round-trip config (DISCORD-4) and the origin the delegated-upload
     // link is built against (VIDEO-3): both need a public origin, and the
     // Discord routes also need client credentials to build their redirects.
@@ -360,8 +363,9 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', bridge);
-  app.decorate('makeBridgeClient', () => bridge);
+  // FakeBridge implements the RPC surface routes call, not the socket internals.
+  app.decorate('bridge', bridge as unknown as BridgeClient);
+  app.decorate('makeBridgeClient', () => bridge as unknown as BridgeClient);
 
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
   await app.register(websocket);

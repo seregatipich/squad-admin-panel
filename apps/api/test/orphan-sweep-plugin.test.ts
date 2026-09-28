@@ -101,8 +101,8 @@ describe('orphan-sweep plugin', () => {
 
   it('uses the configured intervals passed as plugin options (#85)', async () => {
     const custom = Fastify();
-    custom.decorate('db', {});
-    custom.decorate('bridge', { ping });
+    custom.decorate('db', {} as never);
+    custom.decorate('bridge', { ping } as never);
     await custom.register(orphanSweepPlugin, {
       sweepIntervalMs: 2 * 60_000,
       dockerPruneIntervalMs: 60 * 60_000,

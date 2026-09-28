@@ -47,6 +47,7 @@ async function seedMatch(
     .insert(matches)
     .values({ serverId: SERVER_ID, startedAt: new Date(startedAt), winner })
     .returning({ id: matches.id });
+  if (!match) throw new Error('match: insert returned no row');
   await h.db.insert(matchPlayers).values({
     matchId: match.id,
     playerId,
@@ -84,6 +85,7 @@ beforeAll(async () => {
       eosId: 'eos-combat-trend',
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   playerId = row.id;
 
   // July 2026: exactly 10 decided-or-drawn matches — 5 wins, 3 losses, 2 draws,

@@ -27,6 +27,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'рядовой',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
   memberPlayerId = member.id;
 
   clanId = uuidv7();
@@ -65,6 +66,7 @@ beforeAll(async () => {
       roleId: nobodyRoleId,
     })
     .returning({ id: players.id });
+  if (!nobody) throw new Error('nobody: insert returned no row');
   invalidateAllPermissionCaches();
   const { token } = await createSession(h.db, h.redis, {
     playerId: nobody.id,

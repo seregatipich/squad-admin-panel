@@ -11,7 +11,7 @@
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc -p tsconfig.json",
     "mint:owner-session": "tsx --conditions=development src/tools/mint-owner-session.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:integration": "vitest run --dir test/integration",

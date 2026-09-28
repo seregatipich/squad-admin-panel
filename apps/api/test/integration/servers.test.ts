@@ -14,10 +14,30 @@ import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
+  type FakeBridge,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+type ContainerInspectResult = Awaited<ReturnType<FakeBridge['containerInspect']>>;
+
+/** A containerInspect stub answering the given fields; the rest are Docker's idle defaults. */
+function inspectReturning(fields: Partial<ContainerInspectResult>): FakeBridge['containerInspect'] {
+  return async ({ name }) => ({
+    name,
+    state: 'not_found',
+    running: false,
+    pid: 0,
+    started_at: '',
+    finished_at: '',
+    exit_code: 0,
+    image: '',
+    restart_count: 0,
+    labels: {},
+    ...fields,
+  });
+}
 
 // The start/restart routes relaunch the per-server rnsquadjs sidecar via
 // relaunchSidecar, which performs real fs writes under /run and consults
@@ -310,9 +330,9 @@ describe('POST /api/v1/servers/:id/start', () => {
     let ran = false;
     h.bridge.containerRun = async () => {
       ran = true;
-      return { container_id: 'abc' };
+      return { container_id: 'abc', status: 'started' };
     };
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -338,7 +358,7 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 
   it('short-circuits when the container is already running', async () => {
-    h.bridge.containerInspect = async () => ({ running: true, state: 'running' });
+    h.bridge.containerInspect = inspectReturning({ running: true, state: 'running' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -358,7 +378,7 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 
   it('relaunches the rnsquadjs sidecar after the squad container starts', async () => {
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -379,7 +399,7 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 
   it('still returns 200 when the sidecar relaunch rejects', async () => {
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));
     const cookie = await login();
     const { id } = (
@@ -406,6 +426,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
     let stopped = false;
     h.bridge.containerStop = async () => {
       stopped = true;
+      return { status: 'ok' };
     };
     const cookie = await login();
     const { id } = (
@@ -434,7 +455,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
 
   it('writes status=starting BEFORE calling container_run/start so a crash leaves a recoverable state', async () => {
     const cookie = await login();
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     let statusAtRunCall: string | null = null;
     h.bridge.containerRun = async () => {
       const [row] = await h.db.select().from(servers);
@@ -479,6 +500,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
     h.bridge.containerStop = async () => {
       const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
       statusAtStopCall = row?.status ?? null;
+      return { status: 'ok' };
     };
 
     const resp = await h.app.inject({
@@ -546,6 +568,7 @@ describe('POST /api/v1/servers/:id/restart', () => {
     let startCalls = 0;
     h.bridge.containerStart = async () => {
       startCalls++;
+      return { status: 'ok' };
     };
     const cookie = await login();
     const { id } = (

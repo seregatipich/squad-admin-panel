@@ -152,8 +152,8 @@ describe('softDeleteServer (orchestrator)', () => {
     });
     expect(result.sidecar_dirs_removed).toBe(true);
     expect(ufwRule).toHaveBeenCalledTimes(4);
-    for (const call of ufwRule.mock.calls) {
-      expect(call[0].action).toBe('remove');
+    for (const call of ufwRule.mock.calls as unknown as Array<[{ action: string }]>) {
+      expect(call[0]?.action).toBe('remove');
     }
 
     const backupRows = await h.db

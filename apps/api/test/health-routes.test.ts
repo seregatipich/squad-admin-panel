@@ -133,10 +133,11 @@ describe('GET /ready for anonymous callers (#70)', () => {
 
   it('fails a check that does not answer within the probe timeout', async () => {
     const slowApp = Fastify();
-    slowApp.decorate('db', fakes.db);
-    slowApp.decorate('redis', fakes.redis);
-    slowApp.decorate('bridge', { ping: () => new Promise(() => undefined) });
-    slowApp.decorate('statusReconciler', fakes.statusReconciler);
+    // Partial fakes: the plugin only calls the methods stubbed here.
+    slowApp.decorate('db', fakes.db as never);
+    slowApp.decorate('redis', fakes.redis as never);
+    slowApp.decorate('bridge', { ping: () => new Promise(() => undefined) } as never);
+    slowApp.decorate('statusReconciler', fakes.statusReconciler as never);
     await slowApp.register(healthPlugin, { readyCheckTimeoutMs: 50 });
     await slowApp.ready();
     try {

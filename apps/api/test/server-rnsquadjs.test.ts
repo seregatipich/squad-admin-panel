@@ -48,7 +48,7 @@ function makeSpyLogger(): { logger: FastifyBaseLogger; error: Mock } {
     trace: vi.fn(),
     silent: vi.fn(),
   } as unknown as FastifyBaseLogger;
-  (logger as { child: () => FastifyBaseLogger }).child = () => logger;
+  (logger as unknown as { child: () => FastifyBaseLogger }).child = () => logger;
   return { logger, error };
 }
 

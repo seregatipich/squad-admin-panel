@@ -3,6 +3,7 @@ import { players, rolePermissions, roles } from '@squad/db/schema';
 import { PERMISSIONS, type PermissionKey } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import type { InjectOptions } from 'fastify';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -185,7 +186,7 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
   const roleId = uuidv7();
   createdRoleIds.push(roleId);
 
-  let playerId: string;
+  let playerId: string | undefined;
   await db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -213,6 +214,7 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
     playerId = upserted.id;
   });
 
+  if (!playerId) throw new Error('matrix-test player was not created');
   playerIds.set(key, playerId);
   invalidatePermissionCache(playerId);
   const { token } = await createSession(h.db, h.redis, {
@@ -231,7 +233,8 @@ async function inject(
 ): Promise<{ statusCode: number }> {
   const cookie = cookies.get(cookieKey);
   if (!cookie) throw new Error(`no cookie for key "${cookieKey}"`);
-  return h.app.inject({ method, url, headers: { cookie } });
+  // Methods come from the registered route table, so they are valid HTTP methods.
+  return h.app.inject({ method: method as InjectOptions['method'], url, headers: { cookie } });
 }
 
 describe('permission matrix', () => {

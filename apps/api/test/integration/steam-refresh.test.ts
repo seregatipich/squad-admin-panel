@@ -180,8 +180,8 @@ describeIfDb('POST /api/v1/players/:playerId/steam-refresh', () => {
       .select({ checkedAt: players.steamCheckedAt, personaName: players.personaName })
       .from(players)
       .where(eq(players.steamId64, PLAYER_STEAM));
-    expect(row.checkedAt).toBeNull();
-    expect(row.personaName).toBeNull();
+    expect(row?.checkedAt).toBeNull();
+    expect(row?.personaName).toBeNull();
   });
 
   it('persists the full Steam snapshot, returns it, and writes an audit row', async () => {
@@ -213,17 +213,17 @@ describeIfDb('POST /api/v1/players/:playerId/steam-refresh', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
     const [row] = await h.db.select().from(players).where(eq(players.steamId64, PLAYER_STEAM));
-    expect(row.avatarUrl).toBe('https://avatars.steamstatic.com/full.jpg');
-    expect(row.personaName).toBe('Стим Ник');
-    expect(row.profileVisibility).toBe(3);
-    expect(row.vacBanned).toBe(true);
-    expect(row.vacBanCount).toBe(2);
-    expect(row.gameBanCount).toBe(1);
-    expect(row.daysSinceLastBan).toBe(512);
-    expect(row.ownsSquad).toBe(true);
-    expect(row.steamPlaytimeMinutes).toBe(9876);
-    expect(row.steamCheckedAt).toBeInstanceOf(Date);
-    expect(row.steamAccountCreatedAt?.getTime()).toBe(1_300_000_000 * 1000);
+    expect(row?.avatarUrl).toBe('https://avatars.steamstatic.com/full.jpg');
+    expect(row?.personaName).toBe('Стим Ник');
+    expect(row?.profileVisibility).toBe(3);
+    expect(row?.vacBanned).toBe(true);
+    expect(row?.vacBanCount).toBe(2);
+    expect(row?.gameBanCount).toBe(1);
+    expect(row?.daysSinceLastBan).toBe(512);
+    expect(row?.ownsSquad).toBe(true);
+    expect(row?.steamPlaytimeMinutes).toBe(9876);
+    expect(row?.steamCheckedAt).toBeInstanceOf(Date);
+    expect(row?.steamAccountCreatedAt?.getTime()).toBe(1_300_000_000 * 1000);
 
     const [audit] = await h.db
       .select({ actionType: auditLog.actionType, targetId: auditLog.targetId })

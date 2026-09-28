@@ -34,6 +34,7 @@ beforeAll(async () => {
       eosId: 'eos-private-value',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
 
   await h.db.insert(servers).values({
     id: SERVER_ID,

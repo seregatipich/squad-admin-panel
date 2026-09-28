@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import { players, roles, sessions } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
@@ -36,7 +37,7 @@ async function buildApp(dbUrl: string) {
   };
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   app.decorate('config', {
     SESSION_TTL_SECONDS: 21_600,
     // biome-ignore lint/suspicious/noExplicitAny: partial config for isolated helper test

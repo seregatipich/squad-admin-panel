@@ -37,6 +37,7 @@ async function seedPlayer(
       roleId: opts.roleId ?? null,
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -266,8 +267,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     const body = res.json() as CompareOnlineResponse;
 
     expect(body.players.map((p) => p.id)).toEqual([idA, idB]);
-    expect(body.players[0].canonical_name).toBe('PlayerA');
-    expect(body.players[1].canonical_name).toBe('PlayerB');
+    expect(body.players[0]?.canonical_name).toBe('PlayerA');
+    expect(body.players[1]?.canonical_name).toBe('PlayerB');
 
     expect(body.sessions.a).toHaveLength(2);
     expect(body.sessions.b).toHaveLength(1);

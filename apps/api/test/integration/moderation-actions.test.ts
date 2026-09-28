@@ -207,7 +207,7 @@ describe('GET /api/v1/players/:playerId/moderation-actions', () => {
       reason: 'Banned nickname rule matched',
       author: { kind: 'system', label: 'banname-worker' },
     });
-    expect(body.actions[1].context).toMatchObject({ rule_id: 'rule-1' });
+    expect(body.actions[1]?.context).toMatchObject({ rule_id: 'rule-1' });
   });
 
   it('rejects an unauthenticated request', async () => {

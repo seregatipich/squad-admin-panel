@@ -139,8 +139,10 @@ beforeAll(async () => {
       },
     ])
     .returning({ id: players.id });
-  playerId = inserted[0].id;
-  emptyPlayerId = inserted[1].id;
+  const [dossierPlayer, emptyPlayer] = inserted;
+  if (!dossierPlayer || !emptyPlayer) throw new Error('player insert returned no rows');
+  playerId = dossierPlayer.id;
+  emptyPlayerId = emptyPlayer.id;
 
   // Server A: one win with 4/2, server B: one loss with 1/1 → lifetime 5 kills,
   // 3 deaths, 1W/1L, winrate 0.5; serverId=A → 4 kills, 1 match, 1 win.
@@ -148,10 +150,12 @@ beforeAll(async () => {
     .insert(matches)
     .values({ serverId: SERVER_A, startedAt: new Date('2026-07-01T12:00:00Z'), winner: 'team1' })
     .returning({ id: matches.id });
+  if (!winMatch) throw new Error('winMatch: insert returned no row');
   const [lossMatch] = await h.db
     .insert(matches)
     .values({ serverId: SERVER_B, startedAt: new Date('2026-07-02T12:00:00Z'), winner: 'team1' })
     .returning({ id: matches.id });
+  if (!lossMatch) throw new Error('lossMatch: insert returned no row');
   await h.db.insert(matchPlayers).values([
     {
       matchId: winMatch.id,
@@ -188,6 +192,7 @@ beforeAll(async () => {
       isSeed: true,
     })
     .returning({ id: matches.id });
+  if (!seedMatch) throw new Error('seedMatch: insert returned no row');
   await h.db.insert(matchPlayers).values({
     matchId: seedMatch.id,
     playerId,
@@ -426,6 +431,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
         roleId,
       })
       .returning({ id: players.id });
+    if (!gated) throw new Error('gated: insert returned no row');
     const gatedCookie = await loginAs(h.db, gated.id);
 
     const res = await fetchDossier(playerId, '', gatedCookie);
@@ -452,6 +458,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
         roleId,
       })
       .returning({ id: players.id });
+    if (!selfGated) throw new Error('selfGated: insert returned no row');
     const selfCookie = await loginAs(h.db, selfGated.id);
 
     const own = await fetchDossier(selfGated.id, '', selfCookie);

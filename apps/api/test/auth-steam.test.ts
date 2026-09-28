@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import { panelMeta, players, roles, sessions } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
@@ -21,7 +22,7 @@ async function buildApp(opts: { dbUrl: string }) {
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   app.decorate('config', {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',

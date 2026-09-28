@@ -89,6 +89,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'rolesynctarget',
     })
     .returning({ id: players.id });
+  if (!target) throw new Error('target: insert returned no row');
   targetPlayerId = target.id;
   invalidateAllPermissionCaches();
 }, 60_000);
@@ -132,6 +133,7 @@ describeIfDb('Discord role mappings — RBAC gating', () => {
       .from(players)
       .where(eq(players.steamId64, PLAIN_STEAM))
       .limit(1);
+    if (!row) throw new Error('row: insert returned no row');
     const cookie = await login(row.id);
     for (const ep of endpoints) {
       const res = await h.app.inject({

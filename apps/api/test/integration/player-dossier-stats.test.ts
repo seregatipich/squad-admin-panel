@@ -41,6 +41,7 @@ async function seedPlayer(): Promise<string> {
       eosId: 'eos-dossier',
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 

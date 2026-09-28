@@ -11,7 +11,7 @@ function buildApp(opts: {
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-  app.decorate('db', { execute: opts.execute ?? vi.fn().mockResolvedValue([]) });
+  app.decorate('db', { execute: opts.execute ?? vi.fn().mockResolvedValue([]) } as never);
   app.addHook('preHandler', async (req) => {
     req.user = {
       playerId: opts.playerId ?? 'viewer-player',

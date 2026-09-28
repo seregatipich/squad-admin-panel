@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import {
   playerApiTokens,
@@ -41,7 +42,7 @@ async function buildApp(opts: { dbUrl: string; revalidateIntervalMs?: number }) 
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',

@@ -28,6 +28,7 @@ async function seedPlayer(steamId64: bigint | null, name: string): Promise<strin
       canonicalNameNormalized: name.toLowerCase(),
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -113,7 +114,7 @@ describe('POST /api/v1/players/:playerId/links', () => {
         ),
       );
     expect(rows).toHaveLength(1);
-    expect(rows[0].playerAId < rows[0].playerBId).toBe(true);
+    expect(String(rows[0]?.playerAId) < String(rows[0]?.playerBId)).toBe(true);
   });
 
   it('creates a rejected link that then marks the pair in the full ALT-1 candidate output', async () => {
@@ -280,8 +281,8 @@ describe('POST /api/v1/players/:playerId/links', () => {
       .from(auditLog)
       .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
     expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].beforeSnapshot).toBeNull();
-    expect(auditRows[0].afterSnapshot).toMatchObject({
+    expect(auditRows[0]?.beforeSnapshot).toBeNull();
+    expect(auditRows[0]?.afterSnapshot).toMatchObject({
       evidenceSnapshot: { score: 75, confidence: 'high', shared_ip_count: 2 },
     });
   });
@@ -318,7 +319,9 @@ describe('PATCH /api/v1/player-links/:linkId', () => {
     expect(body.link_type).toBe('unrelated');
 
     const [after] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
-    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(after?.updatedAt.getTime()).toBeGreaterThan(
+      before?.updatedAt.getTime() ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it('returns 404 for an unknown link id', async () => {
@@ -373,8 +376,8 @@ describe('PATCH /api/v1/player-links/:linkId', () => {
         ),
       );
     expect(auditRows).toHaveLength(1);
-    const before = auditRows[0].beforeSnapshot as { status: string };
-    const after = auditRows[0].afterSnapshot as { status: string };
+    const before = auditRows[0]?.beforeSnapshot as { status: string };
+    const after = auditRows[0]?.afterSnapshot as { status: string };
     expect(before.status).toBe('confirmed');
     expect(after.status).toBe('rejected');
   });
@@ -407,8 +410,8 @@ describe('GET /api/v1/players/:playerId/links', () => {
     const bodyB = fromB.json() as { links: Array<{ other_player: { id: string } }> };
     expect(bodyA.links).toHaveLength(1);
     expect(bodyB.links).toHaveLength(1);
-    expect(bodyA.links[0].other_player.id).toBe(idB);
-    expect(bodyB.links[0].other_player.id).toBe(idA);
+    expect(bodyA.links[0]?.other_player.id).toBe(idB);
+    expect(bodyB.links[0]?.other_player.id).toBe(idA);
   });
 
   it('rejects an unauthenticated request', async () => {
@@ -436,7 +439,7 @@ describe('link annotation on GET /api/v1/players/:playerId/alt-candidates', () =
     expect(res.statusCode).toBe(200);
     const body = res.json() as { candidates: Array<{ player_id: string; link: unknown }> };
     expect(body.candidates).toHaveLength(1);
-    expect(body.candidates[0].player_id).toBe(idC);
-    expect(body.candidates[0].link).toBeNull();
+    expect(body.candidates[0]?.player_id).toBe(idC);
+    expect(body.candidates[0]?.link).toBeNull();
   });
 });

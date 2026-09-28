@@ -61,8 +61,9 @@ describe('audit_log trigger invariants', () => {
       rowHash: Buffer.from([]),
     });
     const [row] = await h.db.select().from(auditLog).orderBy(desc(auditLog.createdAt)).limit(1);
+    if (!row) throw new Error('audit_log has no row to tamper with');
     await expectRejectsMatching(
-      h.db.update(auditLog).set({ actionType: 'tampered' }).where(eq(auditLog.id, row?.id)),
+      h.db.update(auditLog).set({ actionType: 'tampered' }).where(eq(auditLog.id, row.id)),
       /append-only/i,
     );
   });
@@ -131,11 +132,9 @@ describe('config_versions trigger invariants', () => {
       authorLabel: 'system',
     });
     const [row] = await h.db.select().from(configVersions);
+    if (!row) throw new Error('config_versions has no row to tamper with');
     await expectRejectsMatching(
-      h.db
-        .update(configVersions)
-        .set({ content: 'tampered' })
-        .where(eq(configVersions.id, row?.id)),
+      h.db.update(configVersions).set({ content: 'tampered' }).where(eq(configVersions.id, row.id)),
       /append-only|immutable|cannot/i,
     );
     await expectRejectsMatching(h.db.delete(configVersions), /append-only|immutable|cannot/i);

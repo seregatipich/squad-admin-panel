@@ -140,7 +140,7 @@ function expectCloseTo(actual: Date | null | undefined, expectedMs: number, tole
  * caller finally `await`s, that `await` is the one intercepted: `onSettled`
  * runs after the real query resolves and before the value reaches the caller.
  */
-function wrapThenable(real: unknown, onSettled: () => Promise<void>): unknown {
+function wrapThenable(real: unknown, onSettled: () => Promise<unknown>): unknown {
   if (real === null || typeof real !== 'object') return real;
   return new Proxy(real as object, {
     get(target, prop) {

@@ -42,6 +42,7 @@ async function seedPlayer(
       createdAt: extra?.createdAt,
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -50,6 +51,7 @@ async function seedServer(name: string): Promise<string> {
     .insert(servers)
     .values({ id: uuidv7(), displayName: name, slug: `${name.toLowerCase()}-${uuidv7()}` })
     .returning({ id: servers.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -164,10 +166,10 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       total: number;
     };
     expect(bodyA.candidates).toHaveLength(1);
-    expect(bodyA.candidates[0].player_id).toBe(idB);
-    expect(bodyA.candidates[0].shared_ip_count).toBe(1);
-    expect(bodyA.candidates[0].min_time_delta_seconds).toBe(90);
-    expect(bodyA.candidates[0].matches[0]).toMatchObject({ ip: '203.0.113.10', ignored: false });
+    expect(bodyA.candidates[0]?.player_id).toBe(idB);
+    expect(bodyA.candidates[0]?.shared_ip_count).toBe(1);
+    expect(bodyA.candidates[0]?.min_time_delta_seconds).toBe(90);
+    expect(bodyA.candidates[0]?.matches[0]).toMatchObject({ ip: '203.0.113.10', ignored: false });
 
     const resB = await h.app.inject({
       method: 'GET',
@@ -177,7 +179,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(resB.statusCode).toBe(200);
     const bodyB = resB.json() as { candidates: Array<{ player_id: string }> };
     expect(bodyB.candidates).toHaveLength(1);
-    expect(bodyB.candidates[0].player_id).toBe(idA);
+    expect(bodyB.candidates[0]?.player_id).toBe(idA);
   });
 
   it('excludes a shared IP covered by an ignored CIDR from the score, but keeps the pair visible', async () => {
@@ -211,11 +213,11 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     };
     expect(body.candidates).toHaveLength(1);
     const candidate = body.candidates[0];
-    expect(candidate.shared_ip_count).toBe(0);
-    expect(candidate.ignored_shared_ip_count).toBe(1);
-    expect(candidate.matches[0].ignored).toBe(true);
-    expect(candidate.score).toBe(0);
-    expect(candidate.confidence).toBe('low');
+    expect(candidate?.shared_ip_count).toBe(0);
+    expect(candidate?.ignored_shared_ip_count).toBe(1);
+    expect(candidate?.matches[0]?.ignored).toBe(true);
+    expect(candidate?.score).toBe(0);
+    expect(candidate?.confidence).toBe('low');
   });
 
   it('raises the score and lists a shared historical nickname', async () => {
@@ -244,9 +246,9 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
         score: number;
       }>;
     };
-    expect(body.candidates[0].signals.shared_names.value).toEqual(['ghostsniper']);
+    expect(body.candidates[0]?.signals.shared_names.value).toEqual(['ghostsniper']);
     // 50 (shared IP) + 25 (shared name) with the seeded default weights.
-    expect(body.candidates[0].score).toBe(75);
+    expect(body.candidates[0]?.score).toBe(75);
   });
 
   it('flags a young account created after the target player last ban', async () => {
@@ -275,7 +277,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     const body = res.json() as {
       candidates: Array<{ signals: { young_account: { value: boolean } } }>;
     };
-    expect(body.candidates[0].signals.young_account.value).toBe(true);
+    expect(body.candidates[0]?.signals.young_account.value).toBe(true);
   });
 
   it('flags SteamID64 proximity below the threshold and not above it', async () => {
@@ -374,8 +376,10 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       total: number;
     };
     expect(fullBody.total).toBe(2);
-    expect(fullBody.candidates[0].player_id).toBe(idHigh);
-    expect(fullBody.candidates[0].score).toBeGreaterThan(fullBody.candidates[1].score);
+    expect(fullBody.candidates[0]?.player_id).toBe(idHigh);
+    expect(fullBody.candidates[0]?.score).toBeGreaterThan(
+      fullBody.candidates[1]?.score ?? Number.POSITIVE_INFINITY,
+    );
 
     const page1 = await h.app.inject({
       method: 'GET',
@@ -384,7 +388,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     });
     const page1Body = page1.json() as { candidates: Array<{ player_id: string }>; total: number };
     expect(page1Body.candidates).toHaveLength(1);
-    expect(page1Body.candidates[0].player_id).toBe(idHigh);
+    expect(page1Body.candidates[0]?.player_id).toBe(idHigh);
     expect(page1Body.total).toBe(2);
 
     const page2 = await h.app.inject({
@@ -394,7 +398,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     });
     const page2Body = page2.json() as { candidates: Array<{ player_id: string }> };
     expect(page2Body.candidates).toHaveLength(1);
-    expect(page2Body.candidates[0].player_id).toBe(idLow);
+    expect(page2Body.candidates[0]?.player_id).toBe(idLow);
   });
 
   it('rejects an unauthenticated request', async () => {
