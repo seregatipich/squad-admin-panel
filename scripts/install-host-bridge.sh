@@ -117,11 +117,15 @@ mkdir -p \
   "${DATA_DIR}/backup-repo" \
   "${DATA_DIR}/backup-dump" \
   "${DATA_DIR}/depot" \
+  "${DATA_DIR}/media" \
   "${DATA_DIR}/servers/configs" \
   "${DATA_DIR}/servers/saved"
 
 chmod 0755 "${DATA_DIR}"
 chmod 0700 "${DATA_DIR}/postgres"
+# Uploaded media (media_data bind mount); api and worker-media-publisher run
+# as root, so nobody else needs to read it.
+chmod 0750 "${DATA_DIR}/media"
 chmod 0755 "${DATA_DIR}/servers"
 chmod 0750 "${DATA_DIR}/servers/configs" "${DATA_DIR}/servers/saved"
 chown "${SUDO_USER:-root}:${SUDO_USER:-root}" "${DATA_DIR}" 2>/dev/null || true

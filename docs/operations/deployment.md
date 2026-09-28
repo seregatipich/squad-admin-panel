@@ -318,7 +318,9 @@ All named volumes are bind-mounted from `${DATA_DIR}` (set in `.env`). `install-
 | `caddy_data` | `${DATA_DIR}/caddy-data` | TLS certificates. |
 | `caddy_config` | `${DATA_DIR}/caddy-config` | Caddy auto-config. |
 | `backup_repo` | `${DATA_DIR}/backup-repo` | Restic repository (optional). |
-| `squad-depot` | `${DATA_DIR}/depot` | Steam-fetched Squad game files (~45 GB). Populated once by `depot_update`. |
+| `backup_dump` | `${DATA_DIR}/backup-dump` | Logical dumps the backup service snapshots; `restore.sh` stages restored dumps under `restore/`. |
+| `media_data` | `${DATA_DIR}/media` | Uploaded media shared by `api` and `worker-media-publisher`. |
+| `squad-depot` | `${DATA_DIR}/depot` | Steam-fetched Squad game files (~45 GB). Populated once by `depot_update`. Created by `install-host-bridge.sh` and re-created with the same bind by `rebuild.sh`, never implicitly by Docker. |
 
 Per-server configs and saved state live at `/var/lib/squad-panel/` (a symlink to `${DATA_DIR}/servers/`) on the host, bind-mounted into each Squad container.
 
@@ -485,7 +487,7 @@ scripts/restore.sh --apply                # destructive — overwrites live Post
 scripts/restore.sh --apply --snapshot ID  # destructive — restore a specific restic snapshot id
 ```
 
-`--apply` restores the selected snapshot (default `latest`; `--snapshot` takes a restic short/long id or `latest` and is regex-validated so it cannot smuggle arguments): it waits for `postgres` to be healthy, runs `pg_restore --clean --if-exists`, then reloads the Redis dataset. Run it with `sudo` if `${DATA_DIR}/redis` is not writable by your user — the Redis container owns those files (uid 999), and `--apply` rewrites them on the host. Redis is loaded via a one-off `redis-server` that reads the restored `dump.rdb` and rewrites it into an AOF, because the `redis` service runs with `--appendonly yes` and would otherwise ignore a bare `dump.rdb`.
+`--apply` restores the selected snapshot (default `latest`; `--snapshot` takes a restic short/long id or `latest` and is regex-validated so it cannot smuggle arguments): it waits for `postgres` to be healthy, stages the snapshot's `admin.dump` and `dump.rdb` under `${DATA_DIR}/backup-dump/restore` and stops if either is missing — before anything live changes — then stops the running `worker-*` services, runs `pg_restore --single-transaction --exit-on-error --clean --if-exists` (a failure rolls the whole restore back instead of leaving a half-dropped schema), and reloads the Redis dataset. The workers start again when the script exits, whether it succeeded or not. The api stays up: the bridge runs the restore for the api's request and cancels it if that connection drops. The live Redis files are moved aside to `${DATA_DIR}/redis.pre-restore` rather than deleted, put back if loading the new dataset fails, and removed once it succeeds; the one-off load and the AOF rewrite give up after `REDIS_READY_ATTEMPTS` (600) and `REDIS_REWRITE_ATTEMPTS` (2000) polls 0.3 s apart, or as soon as that `redis-server` exits. A `redis.pre-restore` left behind by an interrupted restore blocks the next one until an operator inspects and removes it. Run it with `sudo` if `${DATA_DIR}/redis` is not writable by your user — the Redis container owns those files (uid 999), and `--apply` rewrites them on the host. Redis is loaded via a one-off `redis-server` that reads the restored `dump.rdb` and rewrites it into an AOF, because the `redis` service runs with `--appendonly yes` and would otherwise ignore a bare `dump.rdb`.
 
 ### Backup/restore from the panel UI (INFRA-8-P1)
 
