@@ -198,3 +198,31 @@ func TestPanelSavedServerRoot(t *testing.T) {
 		}
 	}
 }
+
+// #53: multihome becomes the RCONIP=/MULTIHOME= Squad launch arguments, and
+// Unreal re-tokenises its argv, so anything but a bare IP literal could smuggle
+// extra startup arguments past the bridge.
+func TestMultihome(t *testing.T) {
+	for _, ok := range []string{"0.0.0.0", "10.0.0.5", "::", "2001:db8::1"} {
+		if err := Multihome(ok); err != nil {
+			t.Errorf("expected ok for %q, got %v", ok, err)
+		}
+	}
+	bad := []string{
+		"",
+		"0.0.0.0 -ExecCmds=quit",
+		"0.0.0.0\"",
+		"-ExecCmds=quit",
+		"localhost",
+		"999.1.1.1",
+		"10.0.0.5/24",
+		"0.0.0.0\x00",
+	}
+	for _, b := range bad {
+		if err := Multihome(b); err == nil {
+			t.Errorf("expected forbidden for %q, got ok", b)
+		} else if !errors.Is(err, ErrForbidden) {
+			t.Errorf("expected ErrForbidden for %q, got %v", b, err)
+		}
+	}
+}

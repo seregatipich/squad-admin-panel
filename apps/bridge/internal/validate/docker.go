@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -73,6 +74,17 @@ func ContainerName(name string) error {
 func ServerUUID(uuid string) error {
 	if !uuidRegexp.MatchString(uuid) {
 		return fmt.Errorf("%w: uuid %q is not a UUID", ErrForbidden, uuid)
+	}
+	return nil
+}
+
+// Multihome rejects anything but a bare IPv4/IPv6 literal. The value is
+// interpolated into the Squad launch arguments (`RCONIP=`/`MULTIHOME=`) and
+// Unreal re-tokenises its argv, so a value carrying spaces or quotes could add
+// arbitrary engine startup arguments (#53).
+func Multihome(addr string) error {
+	if net.ParseIP(addr) == nil {
+		return fmt.Errorf("%w: multihome %q is not an IP address", ErrForbidden, addr)
 	}
 	return nil
 }

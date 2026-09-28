@@ -174,7 +174,20 @@ describe('SettingsPage — внешний сервер', () => {
     });
     await screen.findByText('Сеть');
     expect(screen.queryByText('RCON-подключение')).not.toBeInTheDocument();
-    expect(screen.getByText('Ресурсы')).toBeInTheDocument();
+    expect(screen.getByText('Лицензия')).toBeInTheDocument();
+  });
+
+  // #53: лимиты памяти/CPU/IO никогда не применялись к контейнеру — поля
+  // создавали ложное впечатление, что сервер ограничен.
+  it('у контейнерного сервера нет полей лимитов ресурсов', async () => {
+    stubFetch('container');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Сеть');
+    expect(screen.queryByText('Ресурсы')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Память, жёсткий предел (МБ)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Привязка к ядрам (CPU affinity)')).not.toBeInTheDocument();
   });
 });
 

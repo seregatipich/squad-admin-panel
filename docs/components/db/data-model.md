@@ -584,15 +584,15 @@ One row per server; primary key mirrors `servers.id`. Stores Docker-level and Sq
 | `rcon_port` | `integer` | NO | — | Valve RCON port (TCP) |
 | `max_players` | `integer` | NO | `100` | |
 | `tickrate` | `integer` | NO | `50` | |
-| `multihome` | `inet` | YES | NULL | Bind to a specific NIC |
-| `extra_args` | `text` | NO | `''` | Appended to the Squad launch command |
-| `launch_args_override` | `text` | YES | NULL | Completely replaces the default arg set when non-NULL |
-| `cpu_affinity` | `text` | YES | NULL | `taskset` mask |
-| `cpu_weight` | `integer` | YES | NULL | cgroup `CPUWeight` (100–10000) |
-| `niceness` | `integer` | YES | NULL | Process nice value (-20 to 19) |
-| `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB |
-| `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB |
-| `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000) |
+| `multihome` | `inet` | YES | NULL | Bind to a specific NIC; passed as `RCONIP=`/`MULTIHOME=` (IP literal, validated by API and bridge) |
+| `extra_args` | `text` | NO | `''` | **Inert** (#53): never passed to the container; the API no longer writes it |
+| `launch_args_override` | `text` | YES | NULL | **Inert** (#53) |
+| `cpu_affinity` | `text` | YES | NULL | **Inert** (#53): no cgroup/cpuset is applied |
+| `cpu_weight` | `integer` | YES | NULL | **Inert** (#53) |
+| `niceness` | `integer` | YES | NULL | **Inert** (#53) |
+| `memory_high_mb` | `integer` | YES | NULL | **Inert** (#53) |
+| `memory_max_mb` | `integer` | YES | NULL | **Inert** (#53): the container runs without a memory limit |
+| `io_weight` | `integer` | YES | NULL | **Inert** (#53) |
 | `chat_commands_enabled` | `boolean` | NO | `true` | AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands (`!stats`/`!rules`/`!report`); disable where an RNSquadJS sidecar runs its own `chatCommands` |
 | `rules_text` | `text` | YES | NULL | AUTO-4 (#75): text returned in-game for `!rules` (capped to the RCON single-message limit) |
 

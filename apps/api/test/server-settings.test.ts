@@ -148,36 +148,71 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(body.error).toBe('port_conflict');
   });
 
-  it('allows resource-limit changes on a running server → 200', async () => {
+  // #53 (#1186): these knobs never reached `docker run`; a 200 told the
+  // operator a memory/CPU limit was in force on an unlimited container.
+  it('rejects never-applied resource limits → 400 and leaves the row untouched', async () => {
     const serverId = await seedServer({ slug: 'settings-resource-running', status: 'running' });
+    const cookie = await loginAsOwner(h);
+
+    for (const payload of [
+      { memory_max_mb: 8192 },
+      { memory_high_mb: 4096 },
+      { cpu_weight: 500 },
+      { cpu_affinity: '0-3' },
+      { niceness: -5 },
+      { io_weight: 100 },
+      { extra_args: '-ExecCmds=quit' },
+    ]) {
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${serverId}/settings`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+
+    const [row] = await h.db
+      .select()
+      .from(serverSettings)
+      .where(eq(serverSettings.serverId, serverId));
+    expect(row?.memoryMaxMb).toBeNull();
+    expect(row?.cpuWeight).toBeNull();
+    expect(row?.extraArgs).toBe('');
+  });
+
+  it('still accepts the unset value of each resource knob → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-resource-unset', status: 'running' });
     const cookie = await loginAsOwner(h);
 
     const res = await h.app.inject({
       method: 'PUT',
       url: `/api/v1/servers/${serverId}/settings`,
       headers: { cookie, 'content-type': 'application/json' },
-      payload: {
-        cpu_weight: 500,
-        niceness: -5,
-        memory_high_mb: 4096,
-        memory_max_mb: 8192,
-        io_weight: 100,
-      },
+      payload: { extra_args: '', cpu_weight: null, memory_max_mb: null, max_players: 90 },
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      cpu_weight: number;
-      niceness: number;
-      memory_high_mb: number;
-      memory_max_mb: number;
-      io_weight: number;
-    };
-    expect(body.cpu_weight).toBe(500);
-    expect(body.niceness).toBe(-5);
-    expect(body.memory_high_mb).toBe(4096);
-    expect(body.memory_max_mb).toBe(8192);
-    expect(body.io_weight).toBe(100);
+    expect((res.json() as { max_players: number }).max_players).toBe(90);
+  });
+
+  // #53 (#1187): multihome becomes the RCONIP=/MULTIHOME= launch arguments.
+  it('rejects a non-IP multihome → 400 and accepts an IP literal → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+    const put = (multihome: string) =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${serverId}/settings`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: { multihome },
+      });
+
+    expect((await put('0.0.0.0 -ExecCmds=quit')).statusCode).toBe(400);
+    expect((await put('localhost')).statusCode).toBe(400);
+    const ok = await put('10.0.0.7');
+    expect(ok.statusCode).toBe(200);
+    expect((ok.json() as { multihome: string }).multihome).toBe('10.0.0.7');
   });
 
   it('calls ufwRule remove+add when a port changes on a stopped server', async () => {

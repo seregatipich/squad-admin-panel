@@ -1004,20 +1004,19 @@ func (d *Dispatcher) ufwRule(ctx context.Context, req *rpc.Request) rpc.Response
 // --- container lifecycle ---
 
 type containerRunParams struct {
-	ServerID     string   `json:"server_id"`
-	Image        string   `json:"image"`
-	GamePort     int      `json:"game_port"`
-	QueryPort    int      `json:"query_port"`
-	BeaconPort   int      `json:"beacon_port"`
-	RCONPort     int      `json:"rcon_port"`
-	MaxPlayers   int      `json:"max_players,omitempty"`
-	Tickrate     int      `json:"tickrate,omitempty"`
-	Multihome    string   `json:"multihome,omitempty"`
-	ExtraArgs    []string `json:"extra_args,omitempty"`
-	ConfigsHost  string   `json:"configs_host"`
-	SavedHost    string   `json:"saved_host"`
-	DepotVolume  string   `json:"depot_volume"`
-	UlimitNofile int      `json:"ulimit_nofile,omitempty"`
+	ServerID     string `json:"server_id"`
+	Image        string `json:"image"`
+	GamePort     int    `json:"game_port"`
+	QueryPort    int    `json:"query_port"`
+	BeaconPort   int    `json:"beacon_port"`
+	RCONPort     int    `json:"rcon_port"`
+	MaxPlayers   int    `json:"max_players,omitempty"`
+	Tickrate     int    `json:"tickrate,omitempty"`
+	Multihome    string `json:"multihome,omitempty"`
+	ConfigsHost  string `json:"configs_host"`
+	SavedHost    string `json:"saved_host"`
+	DepotVolume  string `json:"depot_volume"`
+	UlimitNofile int    `json:"ulimit_nofile,omitempty"`
 }
 
 func (d *Dispatcher) containerRun(ctx context.Context, req *rpc.Request) rpc.Response {
@@ -1035,7 +1034,6 @@ func (d *Dispatcher) containerRun(ctx context.Context, req *rpc.Request) rpc.Res
 		MaxPlayers:   p.MaxPlayers,
 		Tickrate:     p.Tickrate,
 		Multihome:    p.Multihome,
-		ExtraArgs:    p.ExtraArgs,
 		ConfigsHost:  p.ConfigsHost,
 		SavedHost:    p.SavedHost,
 		DepotVolume:  p.DepotVolume,

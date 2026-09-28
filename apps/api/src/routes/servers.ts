@@ -227,14 +227,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           maxPlayers: body.max_players ?? 100,
           tickrate: body.tickrate ?? 50,
           multihome: body.multihome ?? '0.0.0.0',
-          extraArgs: body.extra_args ?? '',
-          launchArgsOverride: body.launch_args_override ?? null,
-          cpuAffinity: body.cpu_affinity ?? null,
-          cpuWeight: body.cpu_weight ?? null,
-          niceness: body.niceness ?? null,
-          memoryHighMb: body.memory_high_mb ?? null,
-          memoryMaxMb: body.memory_max_mb ?? null,
-          ioWeight: body.io_weight ?? null,
         });
         const rconPassword = randomBytes(24).toString('base64url');
         const blob = encrypt(app.encryptionKey, rconPassword);

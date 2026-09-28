@@ -154,23 +154,50 @@ describe('serverCreateInput', () => {
     expect(parsed.multihome).toBe('0.0.0.0');
     expect(parsed.max_players).toBe(100);
     expect(parsed.tickrate).toBe(50);
-    expect(parsed.extra_args).toBe('');
   });
 
-  it('accepts every optional cgroup tuning knob', () => {
+  // #53 (#1169/#1186): the panel never applied these to the container, so an
+  // operator setting e.g. a memory cap got a 200 and an unlimited server.
+  it.each([
+    ['extra_args', '-log'],
+    ['launch_args_override', '+sm_clean=1'],
+    ['cpu_affinity', '0-3'],
+    ['cpu_weight', 5_000],
+    ['niceness', -5],
+    ['memory_high_mb', 8_192],
+    ['memory_max_mb', 16_384],
+    ['io_weight', 100],
+  ])('rejects the never-applied launch/resource knob %s', (key, value) => {
+    expect(serverCreateInput.safeParse({ ...minimal, [key]: value }).success).toBe(false);
+  });
+
+  it('still accepts the unset value of each knob (existing clients send the defaults)', () => {
     const v = {
       ...minimal,
-      description: 'long-form text',
-      launch_args_override: '+sm_clean=1',
-      cpu_affinity: '0-3',
-      cpu_weight: 5_000,
-      niceness: -5,
-      memory_high_mb: 8_192,
-      memory_max_mb: 16_384,
-      io_weight: 100,
+      extra_args: '',
+      launch_args_override: null,
+      cpu_affinity: null,
+      cpu_weight: null,
+      niceness: null,
+      memory_high_mb: null,
+      memory_max_mb: null,
+      io_weight: null,
     };
     expect(serverCreateInput.safeParse(v).success).toBe(true);
   });
+
+  // #53 (#1187): multihome is interpolated into the Squad launch argv.
+  it('accepts an IPv4 or IPv6 multihome address', () => {
+    expect(serverCreateInput.safeParse({ ...minimal, multihome: '10.0.0.5' }).success).toBe(true);
+    expect(serverCreateInput.safeParse({ ...minimal, multihome: '::' }).success).toBe(true);
+  });
+
+  it.each(['0.0.0.0 -ExecCmds=quit', 'example.com', '', '999.1.1.1'])(
+    'rejects the non-IP multihome %j',
+    (multihome) => {
+      expect(serverCreateInput.safeParse({ ...minimal, multihome }).success).toBe(false);
+    },
+  );
 
   it('accepts description = null', () => {
     expect(serverCreateInput.safeParse({ ...minimal, description: null }).success).toBe(true);
@@ -212,26 +239,6 @@ describe('serverCreateInput', () => {
 
   it('rejects tickrate below 10', () => {
     expect(serverCreateInput.safeParse({ ...minimal, tickrate: 9 }).success).toBe(false);
-  });
-
-  it('rejects niceness above 19', () => {
-    expect(serverCreateInput.safeParse({ ...minimal, niceness: 20 }).success).toBe(false);
-  });
-
-  it('rejects niceness below -20', () => {
-    expect(serverCreateInput.safeParse({ ...minimal, niceness: -21 }).success).toBe(false);
-  });
-
-  it('rejects cpu_weight above 10000', () => {
-    expect(serverCreateInput.safeParse({ ...minimal, cpu_weight: 10_001 }).success).toBe(false);
-  });
-
-  it('rejects memory_max_mb = 0', () => {
-    expect(serverCreateInput.safeParse({ ...minimal, memory_max_mb: 0 }).success).toBe(false);
-  });
-
-  it('rejects io_weight below 1', () => {
-    expect(serverCreateInput.safeParse({ ...minimal, io_weight: 0 }).success).toBe(false);
   });
 
   it('rejects unknown extra keys (strict)', () => {

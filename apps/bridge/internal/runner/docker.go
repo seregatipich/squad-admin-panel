@@ -45,7 +45,6 @@ type ContainerRunSpec struct {
 	MaxPlayers   int
 	Tickrate     int
 	Multihome    string
-	ExtraArgs    []string
 	ConfigsHost  string
 	SavedHost    string
 	DepotVolume  string
@@ -77,6 +76,9 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	}
 	if spec.Multihome == "" {
 		spec.Multihome = "0.0.0.0"
+	}
+	if err := validate.Multihome(spec.Multihome); err != nil {
+		return "", err
 	}
 	if spec.MaxPlayers <= 0 {
 		spec.MaxPlayers = 100
@@ -115,7 +117,6 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 		fmt.Sprintf("MULTIHOME=%s", spec.Multihome),
 		"-log",
 	}
-	squadArgs = append(squadArgs, spec.ExtraArgs...)
 	args = append(args, squadArgs...)
 	var out string
 	// `docker run` failing at the OCI-runtime-create stage (the class this

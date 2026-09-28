@@ -61,17 +61,23 @@ export const serverCreateInput = z
     query_port: z.number().int().min(1024).max(65_535),
     beacon_port: z.number().int().min(1024).max(65_535),
     rcon_port: z.number().int().min(1024).max(65_535),
-    multihome: z.string().default('0.0.0.0'),
+    // Interpolated into the Squad launch argv (RCONIP=/MULTIHOME=), so only a
+    // bare IP literal is accepted; the bridge re-validates it (#53).
+    multihome: z.string().ip().default('0.0.0.0'),
     max_players: z.number().int().min(1).max(100).default(100),
     tickrate: z.number().int().min(10).max(120).default(50),
-    extra_args: z.string().default(''),
-    launch_args_override: z.string().nullable().optional(),
-    cpu_affinity: z.string().nullable().optional(),
-    cpu_weight: z.number().int().min(1).max(10_000).nullable().optional(),
-    niceness: z.number().int().min(-20).max(19).nullable().optional(),
-    memory_high_mb: z.number().int().positive().nullable().optional(),
-    memory_max_mb: z.number().int().positive().nullable().optional(),
-    io_weight: z.number().int().min(1).max(10_000).nullable().optional(),
+    // Launch-arg and cgroup knobs: the container is never started with them,
+    // so only their "unset" value is accepted (kept for existing clients that
+    // send the defaults) — a real limit is rejected rather than stored as if it
+    // were in force (#53).
+    extra_args: z.literal('').optional(),
+    launch_args_override: z.null().optional(),
+    cpu_affinity: z.null().optional(),
+    cpu_weight: z.null().optional(),
+    niceness: z.null().optional(),
+    memory_high_mb: z.null().optional(),
+    memory_max_mb: z.null().optional(),
+    io_weight: z.null().optional(),
   })
   .strict()
   .refine(

@@ -34,13 +34,6 @@ interface Settings {
   max_players: number;
   tickrate: number;
   multihome: string | null;
-  extra_args: string;
-  cpu_affinity: string | null;
-  cpu_weight: number | null;
-  niceness: number | null;
-  memory_high_mb: number | null;
-  memory_max_mb: number | null;
-  io_weight: number | null;
   seed_live_at: number;
   seed_hysteresis: number;
   chat_commands_enabled: boolean;
@@ -63,15 +56,6 @@ const PORT_FIELDS = [
   ['query_port', 'Порт запросов'],
   ['beacon_port', 'Порт маяка'],
   ['rcon_port', 'Порт RCON'],
-] as const;
-
-/** Лимиты ресурсов контейнера: ключ настройки, подпись строки и минимум. */
-const RESOURCE_FIELDS = [
-  ['memory_high_mb', 'Память, мягкий предел (МБ)', 2048],
-  ['memory_max_mb', 'Память, жёсткий предел (МБ)', 2048],
-  ['cpu_weight', 'Вес CPU', 1],
-  ['io_weight', 'Вес ввода-вывода', 10],
-  ['niceness', 'Приоритет (nice)', -20],
 ] as const;
 
 interface ServerInfo {
@@ -1010,46 +994,6 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           </div>
         </div>
       ) : null}
-
-      {external ? null : (
-        <GroupedList title="Ресурсы" footnote="Применяется при следующем запуске.">
-          {RESOURCE_FIELDS.map(([key, label, min]) => (
-            <GroupedRow
-              key={key}
-              label={label}
-              control={
-                <div className="w-32">
-                  <TextInput
-                    type="number"
-                    aria-label={label}
-                    value={(val(key) as number | null) ?? ''}
-                    onChange={(e) =>
-                      setField(key, e.target.value === '' ? null : Number(e.target.value))
-                    }
-                    min={min}
-                    placeholder="Нет лимита"
-                  />
-                </div>
-              }
-            />
-          ))}
-          <GroupedRow
-            label="Привязка к ядрам (CPU affinity)"
-            control={
-              <div className="w-32">
-                <TextInput
-                  aria-label="Привязка к ядрам (CPU affinity)"
-                  value={(val('cpu_affinity') as string | null) ?? ''}
-                  onChange={(e) =>
-                    setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
-                  }
-                  placeholder="Нет ограничения"
-                />
-              </div>
-            }
-          />
-        </GroupedList>
-      )}
 
       {external ? null : (
         <div className="space-y-3">
