@@ -5,6 +5,7 @@ import * as schema from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { createDiag } from '@squad/diag';
 import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import { BAN_SYNC_MANUAL_STREAM } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
@@ -19,7 +20,7 @@ const log = pino({
   base: { service: 'worker-ban-sync' },
 });
 
-const MANUAL_STREAM = 'bansync:manual';
+const MANUAL_STREAM = BAN_SYNC_MANUAL_STREAM;
 const MANUAL_GROUP = 'ban-sync';
 
 const TICK_INTERVAL_MS = Number(process.env.BAN_SYNC_INTERVAL_MS ?? 60_000);
