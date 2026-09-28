@@ -77,7 +77,8 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.postgres).toBe('connection refused');
+    expect(body.checks.postgres).toBe('fail');
+    expect(res.body).not.toContain('connection refused');
   });
 
   it('returns 503 when redis fails', async () => {
@@ -86,7 +87,8 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.redis).toBe('ECONNREFUSED');
+    expect(body.checks.redis).toBe('fail');
+    expect(res.body).not.toContain('ECONNREFUSED');
   });
 
   it('returns 503 when bridge fails', async () => {
@@ -95,21 +97,57 @@ describe('GET /ready', () => {
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe('degraded');
-    expect(body.checks.bridge).toBe('socket: ENOENT');
+    expect(body.checks.bridge).toBe('fail');
+    expect(res.body).not.toContain('ENOENT');
   });
 
   it('returns degraded when bridge pong is false', async () => {
     fakes.bridge.ping.mockResolvedValueOnce({ pong: false });
     const res = await app.inject({ method: 'GET', url: '/ready' });
     expect(res.statusCode).toBe(503);
-    expect(res.json().checks.bridge).toBe('no pong');
+    expect(res.json().checks.bridge).toBe('fail');
   });
 
   it('returns degraded when redis ping is not PONG', async () => {
     fakes.redis.ping.mockResolvedValueOnce('LOADING');
     const res = await app.inject({ method: 'GET', url: '/ready' });
     expect(res.statusCode).toBe(503);
-    expect(res.json().checks.redis).toBe('LOADING');
+    expect(res.json().checks.redis).toBe('fail');
+  });
+});
+
+describe('GET /ready for anonymous callers (#70)', () => {
+  it('never discloses internal error text such as addresses or socket paths', async () => {
+    fakes.db.execute.mockRejectedValueOnce(new Error('connect ECONNREFUSED 172.18.0.3:5432'));
+    fakes.bridge.ping.mockRejectedValueOnce(
+      new Error('connect ENOENT /run/panel-host-bridge/bridge.sock'),
+    );
+    const res = await app.inject({ method: 'GET', url: '/ready' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({
+      status: 'degraded',
+      checks: { postgres: 'fail', redis: 'ok', bridge: 'fail' },
+    });
+    expect(res.body).not.toMatch(/172\.18|bridge\.sock|ECONNREFUSED|ENOENT/);
+  });
+
+  it('fails a check that does not answer within the probe timeout', async () => {
+    const slowApp = Fastify();
+    slowApp.decorate('db', fakes.db);
+    slowApp.decorate('redis', fakes.redis);
+    slowApp.decorate('bridge', { ping: () => new Promise(() => undefined) });
+    slowApp.decorate('statusReconciler', fakes.statusReconciler);
+    await slowApp.register(healthPlugin, { readyCheckTimeoutMs: 50 });
+    await slowApp.ready();
+    try {
+      const startedAt = Date.now();
+      const res = await slowApp.inject({ method: 'GET', url: '/ready' });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(res.statusCode).toBe(503);
+      expect(res.json().checks.bridge).toBe('fail');
+    } finally {
+      await slowApp.close();
+    }
   });
 });
 

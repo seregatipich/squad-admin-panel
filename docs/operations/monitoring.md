@@ -89,6 +89,8 @@ The `/ready` endpoint also probes the bridge:
 curl -sk https://${APP_DOMAIN}/ready | jq .checks.bridge
 ```
 
+`/ready` is public, so each check reports only `ok` or `fail` and every probe gives up after 3 s. The reason for a `fail` (connection error, bridge socket path, timeout) is logged by the API as `readiness check failed` with the check name.
+
 ## Audit log
 
 `audit_log` is the security-grade append-only record of all state-mutating API calls. It is hash-chained: each row's `row_hash = sha256(prev_hash || canonical_json(row))`.
