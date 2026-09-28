@@ -213,16 +213,25 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
     setItems(body.items);
   }, [filters]);
 
+  // Settings back the rules-edit form below (`settings` is the same state the
+  // form binds to). Only proposals are polled: re-polling settings every
+  // POLL_INTERVAL_MS silently overwrote whatever the operator was mid-editing
+  // — an edit older than 8s vanished with no warning (#493). Settings are
+  // loaded once up front and refreshed explicitly after a save.
   const refresh = useCallback(async () => {
     try {
-      await Promise.all([loadSettings(), loadProposals()]);
+      await loadProposals();
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [loadSettings, loadProposals]);
+  }, [loadProposals]);
+
+  useEffect(() => {
+    loadSettings().catch((e) => setError((e as Error).message));
+  }, [loadSettings]);
 
   useEffect(() => {
     void refresh();

@@ -277,4 +277,39 @@ describe('BalancerBrowser rules form', () => {
     const putCall = spy.mock.calls.find(([, init]) => (init as RequestInit)?.method === 'PUT');
     expect(JSON.parse(String((putCall?.[1] as RequestInit).body)).win_streak_threshold).toBe(7);
   });
+
+  it('does not let the 8s settings poll clobber an unsaved edit (#493)', async () => {
+    mockApi({ items: [] });
+
+    // Captures the poll interval's own callback so it can be invoked directly
+    // — avoids mixing fake timers with testing-library's own setTimeout-based
+    // polling (`findBy*`/`waitFor`), which fight each other.
+    const captured: { pollTick: (() => void) | null } = { pollTick: null };
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        // The component's own 8s poll — not vitest/testing-library's unrelated
+        // internal intervals, which also go through window.setInterval here.
+        if (timeout === 8000 && captured.pollTick === null) {
+          captured.pollTick = handler as () => void;
+        }
+        return 0 as unknown as ReturnType<typeof setInterval>;
+      });
+
+    render(<BalancerBrowser canEdit />);
+    const field = (await screen.findByLabelText(/Серия побед/)) as HTMLInputElement;
+    expect(field.value).toBe('3');
+    expect(captured.pollTick).not.toBeNull();
+
+    fireEvent.change(field, { target: { value: '7' } });
+    expect(field.value).toBe('7');
+
+    // Fire the poll tick (as if 8s had elapsed) while the edit is unsaved,
+    // then let its fetch round-trips settle.
+    captured.pollTick?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((screen.getByLabelText(/Серия побед/) as HTMLInputElement).value).toBe('7');
+    setIntervalSpy.mockRestore();
+  });
 });
