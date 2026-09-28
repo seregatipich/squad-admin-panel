@@ -3,11 +3,15 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stableSearchParams = new URLSearchParams();
+const { mockUseSearchParams } = vi.hoisted(() => ({
+  mockUseSearchParams: vi.fn(),
+}));
+mockUseSearchParams.mockReturnValue(stableSearchParams);
 
 vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ replace: vi.fn(), refresh: vi.fn() })),
   usePathname: vi.fn(() => '/moderation/teamkills'),
-  useSearchParams: vi.fn(() => stableSearchParams),
+  useSearchParams: mockUseSearchParams,
 }));
 
 import { formatTeamkillDate } from './helpers';
@@ -99,6 +103,58 @@ describe('TeamkillsBrowser moderation column', () => {
       await screen.findAllByText('Charlie TK');
       const dashes = screen.getAllByText('—');
       expect(dashes.length).toBeGreaterThan(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps the response for the current filter even when an older request resolves last',
+    async () => {
+      // The first (server=all) request is deliberately the slow one; the
+      // second (server=srv-2) fires after a filter change and resolves
+      // first. Without request cancellation, the stale "all" response would
+      // land last and overwrite the fresh per-server one.
+      const allRequest: { resolve: (() => void) | null } = { resolve: null };
+      const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        if (url.includes('serverId=srv-2')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ generated_at: SUMMARY.generated_at, rows: [SUMMARY.rows[1]] }),
+              { status: 200 },
+            ),
+          );
+        }
+        // A fetch honoring AbortSignal rejects once the caller aborts it,
+        // exactly like the real browser fetch the fixed component relies on.
+        const signal = init?.signal;
+        return new Promise<Response>((resolve, reject) => {
+          allRequest.resolve = () =>
+            resolve(new Response(JSON.stringify(SUMMARY), { status: 200 }));
+          signal?.addEventListener('abort', () => reject(new DOMException('', 'AbortError')));
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { rerender } = render(<TeamkillsBrowser />);
+      // The "all" request is now in flight but not yet resolved.
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+      mockUseSearchParams.mockReturnValue(new URLSearchParams('server=srv-2'));
+      rerender(<TeamkillsBrowser />);
+      await screen.findAllByText('Charlie TK');
+
+      // Now let the stale "all" response resolve, after the newer one, and
+      // give its `res.json()` a moment to actually run.
+      allRequest.resolve?.();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(screen.queryByText('Alpha TK')).not.toBeInTheDocument();
+      expect(screen.getByText('Charlie TK')).toBeInTheDocument();
+
+      mockUseSearchParams.mockReturnValue(stableSearchParams);
     },
     TEST_TIMEOUT_MS,
   );
