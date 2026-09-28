@@ -159,30 +159,6 @@ After all streaming frames the final response frame is written (same framing, `o
 
 ---
 
-### `process_info`
-
-**Params:**
-```json
-{ "pid": 12345 }
-```
-
-**Result:**
-```json
-{
-  "pid":       12345,
-  "exists":    true,
-  "rss_bytes": 1073741824,
-  "vsz_bytes": 4294967296,
-  "cmdline":   "/squad/SquadGameServer.sh ...",
-  "state":     "S (sleeping)",
-  "threads":   64
-}
-```
-
-When `exists: false` only `pid` and `exists` are populated.
-
----
-
 ### `file_read`
 
 **Params:**
@@ -201,11 +177,11 @@ When `exists: false` only `pid` and `exists` are populated.
 - Depot host path (default `/var/lib/docker/volumes/squad-depot/_data`, overridable via `PANEL_DEPOT_HOST_PATH`).
 - `/var/lib/squad-panel/.first-owner-claimed` sentinel.
 
-**Confinement:** the allowlist check is lexical, so every reader (`file_read`, `file_read_tail`, `file_read_stream`, `squad_log_list`) also resolves the path inside a trust root through `os.Root`: `configs/{uuid}` and `saved/{uuid}` per server (their contents are bind-mounted read-write into the game container), the depot root, and `/var/lib/squad-panel` for the sentinel. A symlink or `..` that leaves the trust root fails the request, and a target that is not a regular file (FIFO, socket, device) is refused with `forbidden`. `squad_log_retention_sweep` resolves each server's `Logs` directory the same way inside `saved/{uuid}`.
+**Confinement:** the allowlist check is lexical, so every reader (`file_read`, `file_read_stream`, `squad_log_list`) also resolves the path inside a trust root through `os.Root`: `configs/{uuid}` and `saved/{uuid}` per server (their contents are bind-mounted read-write into the game container), the depot root, and `/var/lib/squad-panel` for the sentinel. A symlink or `..` that leaves the trust root fails the request, and a target that is not a regular file (FIFO, socket, device) is refused with `forbidden`. `squad_log_retention_sweep` resolves each server's `Logs` directory the same way inside `saved/{uuid}`.
 
 ---
 
-### `file_write`
+### `file_atomic_write`
 
 **Params:**
 ```json
@@ -229,11 +205,7 @@ When `exists: false` only `pid` and `exists` are populated.
 
 The depot path is **read-only** and not in the writable allowlist.
 
----
-
-### `file_atomic_write`
-
-Identical params and result to `file_write`. Uses a write-to-temp + rename pattern to ensure atomicity. Also calls `MkdirAll` up through the allowed root before writing.
+Writes a unique hidden temp file next to the target (`.<name>.*.tmp`), fsyncs it, applies `mode`, and `rename(2)`s it into place, so concurrent writers of one path never interleave. Missing parent directories are created at `0755`; existing ones keep their mode.
 
 ---
 

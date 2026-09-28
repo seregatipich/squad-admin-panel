@@ -131,16 +131,6 @@ type BridgeErrorCode =
 }
 ```
 
-### `ProcessInfoResult`
-
-```ts
-{
-  pid: number; exists: boolean;
-  rss_bytes?: number; vsz_bytes?: number;
-  cmdline?: string; state?: string; threads?: number;
-}
-```
-
 ### `HostAgentRestartResult`
 
 ```ts
@@ -184,12 +174,6 @@ type BridgeErrorCode =
 
 ```ts
 { action: 'add' | 'remove'; port: number; proto: 'tcp' | 'udp'; comment?: string }
-```
-
-### `ProcessInfoParams`
-
-```ts
-{ pid: number }
 ```
 
 ### `ContainerControlParams`

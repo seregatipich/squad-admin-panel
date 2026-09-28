@@ -134,12 +134,8 @@ func (d *Dispatcher) Handle(
 		return d.hostMetrics(req)
 	case "file_read":
 		return d.fileRead(req)
-	case "file_read_tail":
-		return d.fileReadTail(req)
 	case "file_read_stream":
 		return d.fileReadStream(ctx, req, onStream)
-	case "file_write":
-		return d.fileWrite(req)
 	case "file_atomic_write":
 		return d.fileAtomicWrite(req)
 	case "directory_delete":
@@ -152,8 +148,6 @@ func (d *Dispatcher) Handle(
 		return d.listSquadContainers(ctx, req)
 	case "ufw_rule":
 		return d.ufwRule(ctx, req)
-	case "process_info":
-		return d.processInfo(req)
 	case "container_run":
 		return d.containerRun(ctx, req)
 	case "container_run_rnsquadjs":
@@ -278,60 +272,6 @@ func (d *Dispatcher) fileRead(req *rpc.Request) rpc.Response {
 }
 
 const (
-	fileReadTailDefaultMaxBytes int64 = 64 * 1024
-	fileReadTailMaxAllowedBytes int64 = 1 << 20
-)
-
-type fileReadTailParams struct {
-	Path     string `json:"path"`
-	MaxBytes int64  `json:"max_bytes"`
-}
-
-func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
-	var p fileReadTailParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	maxBytes := p.MaxBytes
-	if maxBytes <= 0 {
-		maxBytes = fileReadTailDefaultMaxBytes
-	} else if maxBytes > fileReadTailMaxAllowedBytes {
-		maxBytes = fileReadTailMaxAllowedBytes
-	}
-	f, st, err := openReadableFile(p.Path)
-	if err != nil {
-		return readableOpenErrorResponse(req.ID, err)
-	}
-	defer f.Close()
-	size := st.Size()
-	var off int64
-	if size > maxBytes {
-		off = size - maxBytes
-	}
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	buf := make([]byte, size-off)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	start := 0
-	if off > 0 {
-		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
-			start = i + 1
-		}
-	}
-	body, _ := json.Marshal(map[string]any{
-		"content":   string(buf[start:n]),
-		"offset":    off + int64(start),
-		"size":      size,
-		"truncated": off > 0,
-	})
-	return rpc.NewSuccessResponse(req.ID, body)
-}
-
-const (
 	// fileReadStreamDefaultChunkBytes is the read size used when the caller does
 	// not pin chunk_size. 1 MiB keeps every emitted frame far below rpc.MaxFrame
 	// (16 MiB) even after base64 expansion (~1.33 MiB), so an arbitrarily large
@@ -399,25 +339,6 @@ type fileWriteParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	Mode    uint32 `json:"mode,omitempty"`
-}
-
-func (d *Dispatcher) fileWrite(req *rpc.Request) rpc.Response {
-	var p fileWriteParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	if err := validateWritablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
-	}
-	mode := os.FileMode(0o644)
-	if p.Mode != 0 {
-		mode = os.FileMode(p.Mode)
-	}
-	if err := fsx.Write(p.Path, []byte(p.Content), mode); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	body, _ := json.Marshal(map[string]string{"status": "written"})
-	return rpc.NewSuccessResponse(req.ID, body)
 }
 
 func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
@@ -1354,65 +1275,6 @@ func humanReclaimed(s string) string {
 
 // parseHumanSize is defined later in this file (the feat-branch variant
 // returning (int64, error)). The reclaimed-space parser above wraps it.
-
-// --- process inspection ---
-
-type processInfoParams struct {
-	PID int `json:"pid"`
-}
-
-type processInfoResult struct {
-	PID      int    `json:"pid"`
-	Exists   bool   `json:"exists"`
-	RSSBytes int64  `json:"rss_bytes,omitempty"`
-	VSZBytes int64  `json:"vsz_bytes,omitempty"`
-	Cmdline  string `json:"cmdline,omitempty"`
-	State    string `json:"state,omitempty"`
-	Threads  int    `json:"threads,omitempty"`
-}
-
-func (d *Dispatcher) processInfo(req *rpc.Request) rpc.Response {
-	var p processInfoParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	if p.PID <= 0 {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "pid must be > 0")
-	}
-	res := processInfoResult{PID: p.PID}
-	if _, err := os.Stat(fmt.Sprintf("/proc/%d", p.PID)); os.IsNotExist(err) {
-		body, _ := json.Marshal(res)
-		return rpc.NewSuccessResponse(req.ID, body)
-	}
-	res.Exists = true
-	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", p.PID)); err == nil {
-		res.Cmdline = strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " ")
-	}
-	if status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", p.PID)); err == nil {
-		for _, line := range strings.Split(string(status), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
-				continue
-			}
-			switch fields[0] {
-			case "State:":
-				res.State = strings.Join(fields[1:], " ")
-			case "Threads:":
-				fmt.Sscanf(fields[1], "%d", &res.Threads)
-			case "VmRSS:":
-				var kb int64
-				fmt.Sscanf(fields[1], "%d", &kb)
-				res.RSSBytes = kb * 1024
-			case "VmSize:":
-				var kb int64
-				fmt.Sscanf(fields[1], "%d", &kb)
-				res.VSZBytes = kb * 1024
-			}
-		}
-	}
-	body, _ := json.Marshal(res)
-	return rpc.NewSuccessResponse(req.ID, body)
-}
 
 func isForbidden(err error) bool {
 	if err == nil {

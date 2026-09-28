@@ -19,19 +19,19 @@ func TestAtomicWriteRejectsPathOutsideRoot(t *testing.T) {
 	}
 }
 
-func TestWriteRejectsRelative(t *testing.T) {
-	err := Write("relative.txt", []byte(""), 0o644)
+func TestAtomicWriteRejectsRelative(t *testing.T) {
+	err := AtomicWrite("relative.txt", []byte(""), 0o644)
 	if !errors.Is(err, validate.ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
 
 // Regression: panel-host-bridge.service runs with UMask=0077. Without an
-// explicit chmod after os.WriteFile / O_CREAT, the files land at 0600
-// which blocks Squad (uid 1001) from reading Rcon.cfg and prevents
-// worker-rcon from ever connecting (ECONNREFUSED on port 21114). Write
-// and AtomicWrite must force the requested mode.
-func TestWriteForcesModePastUmask(t *testing.T) {
+// explicit chmod after O_CREAT, the files land at 0600 which blocks
+// Squad (uid 1001) from reading Rcon.cfg and prevents worker-rcon from
+// ever connecting (ECONNREFUSED on port 21114). AtomicWrite must force
+// the requested mode.
+func TestAtomicWriteForcesModePastUmask(t *testing.T) {
 	scratchRoot := t.TempDir()
 	// Register scratchRoot as a writable root so validate.Path passes in
 	// this unit-test context (production uses /var/lib/squad-panel).
@@ -46,7 +46,6 @@ func TestWriteForcesModePastUmask(t *testing.T) {
 		name string
 		call func(p string) error
 	}{
-		{"Write", func(p string) error { return Write(p, []byte("hello"), 0o644) }},
 		{"AtomicWrite", func(p string) error { return AtomicWrite(p, []byte("hello"), 0o644) }},
 	} {
 		fn := fn
@@ -109,7 +108,7 @@ func scratchWritableRoot(t *testing.T) string {
 // plaintext) are 0644. Creating a new server's configs/{uuid}/ServerConfig
 // tree must chmod only the directories it created, never widen an existing
 // ancestor to 0755.
-func TestWritePreservesExistingAncestorMode(t *testing.T) {
+func TestAtomicWritePreservesExistingAncestorMode(t *testing.T) {
 	root := scratchWritableRoot(t)
 	old := syscall.Umask(0o077)
 	t.Cleanup(func() { syscall.Umask(old) })
@@ -118,7 +117,6 @@ func TestWritePreservesExistingAncestorMode(t *testing.T) {
 		name string
 		call func(p string) error
 	}{
-		{"Write", func(p string) error { return Write(p, []byte("x"), 0o644) }},
 		{"AtomicWrite", func(p string) error { return AtomicWrite(p, []byte("x"), 0o644) }},
 	} {
 		t.Run(fn.name, func(t *testing.T) {

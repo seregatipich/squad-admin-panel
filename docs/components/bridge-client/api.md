@@ -42,9 +42,9 @@ Idempotent unary methods perform exactly **one** transparent retry when the firs
 
 | Auto-retries | Pass-through |
 |---|---|
-| `ping`, `hostInfo`, `hostMetrics`, `processInfo` | `fileWrite` (non-atomic) |
-| `fileRead`, `fileAtomicWrite` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
-| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `ping`, `hostInfo`, `hostMetrics` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
+| `fileRead`, `fileAtomicWrite` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | |
 | `containerInspect`, `containerStats` | streaming methods (`containerLogsFollow`, `depotUpdate`, `dockerPrune`) |
 
 Streaming methods are never retried — partial output would already have been delivered to the caller. State-changing container/host RPC's are not retried because we cannot safely tell whether the bridge processed the request before the socket dropped (e.g. `container_run` would risk creating a duplicate). Callers that need retry semantics for those should layer it themselves with appropriate idempotency guards.
@@ -117,56 +117,15 @@ Throws `BridgeError('forbidden')` if the path is outside the allowlist.
 
 ---
 
-#### `fileReadTail(p: FileReadTailParams): Promise<FileReadTailResult>`
+#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
 
-Reads up to `max_bytes` from the **end** of an allowlisted file. When the file is larger than `max_bytes` the read snaps forward to the next `\n` so the result never starts mid-line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
-
-```ts
-interface FileReadTailParams {
-  path: string;
-  max_bytes?: number; // default 65536, max 1 MiB
-}
-
-interface FileReadTailResult {
-  content: string;
-  offset: number;     // byte offset where `content` starts in the source file
-  size: number;       // total file size in bytes at read time
-  truncated: boolean; // true iff size > max_bytes (some prefix was skipped)
-}
-```
-
-| Param | Type | Required | Default | Notes |
-|---|---|---:|---|---|
-| `path` | `string` | yes | — | Same allowlist as `fileRead`. |
-| `max_bytes` | `number` | no | `65536` | Values `<= 0` or `> 1048576` snap to the default. |
-
-```ts
-const tail = await client.fileReadTail({
-  path: '/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log',
-  max_bytes: 65536,
-});
-// { content, offset: 12516352, size: 12582912, truncated: true }
-```
-
-Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
-
----
-
-#### `fileWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes a file with standard `os.WriteFile`. Not atomic — use `fileAtomicWrite` for config edits.
+Writes via a unique temp file plus rename (atomic on Linux ext4/XFS; concurrent writers of one path never interleave). Creates missing intermediate directories at `0755` without changing existing ones. Use this for all config and sentinel writes.
 
 | Param | Type | Required |
 |---|---|---|
 | `path` | `string` | yes |
 | `content` | `string` | yes |
 | `mode` | `number` | no (defaults to `0644`) |
-
----
-
-#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes via a temp-file rename (atomic on Linux ext4/XFS). Creates intermediate directories up to the allowed root. Use this for all config-editor saves.
 
 ---
 
@@ -180,17 +139,6 @@ Adds or removes a UFW firewall rule.
 | `port` | `number` | 1–65535 |
 | `proto` | `'tcp' \| 'udp'` | |
 | `comment` | `string` | optional |
-
----
-
-#### `processInfo(p: ProcessInfoParams): Promise<ProcessInfoResult>`
-
-Reads `/proc/{pid}/` data.
-
-```ts
-const info = await client.processInfo({ pid: 12345 });
-// { pid, exists, rss_bytes?, vsz_bytes?, cmdline?, state?, threads? }
-```
 
 ---
 

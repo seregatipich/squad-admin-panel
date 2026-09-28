@@ -75,7 +75,6 @@ export interface FakeBridge {
   squadLogList: (p: { path: string }) => Promise<{
     files: Array<{ name: string; size: number; mtime: string; is_live: boolean }>;
   }>;
-  fileWrite: (p: { path: string; content: string; mode?: number }) => Promise<{ status: string }>;
   fileAtomicWrite: (p: {
     path: string;
     content: string;
@@ -129,7 +128,6 @@ export interface FakeBridge {
     comment?: string;
   }) => Promise<{ output: string; status: string }>;
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
-  processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
   backupSnapshots: () => Promise<{
     snapshots: Array<{
@@ -211,10 +209,6 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
       return { bytes_sent: buf.length };
     },
     squadLogList: async () => ({ files: [] }),
-    fileWrite: async ({ path, content }) => {
-      files.set(path, Buffer.from(content, 'utf-8'));
-      return { status: 'ok' };
-    },
     fileAtomicWrite: async ({ path, content }) => {
       files.set(path, Buffer.from(content, 'utf-8'));
       return { status: 'ok' };
@@ -250,7 +244,6 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     depotUpdate: async () => ({ exit_code: 0 }),
     ufwRule: async () => ({ output: '', status: 'ok' }),
     directoryDelete: async () => ({ removed: true }),
-    processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
     backupSnapshots: async () => ({ snapshots: [] }),
     backupRun: async () => ({ exit_code: 0 }),

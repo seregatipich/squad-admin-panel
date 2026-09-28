@@ -77,18 +77,6 @@ export interface FileReadParams {
   path: string;
 }
 
-export interface FileReadTailParams {
-  path: string;
-  max_bytes?: number;
-}
-
-export interface FileReadTailResult {
-  content: string;
-  offset: number;
-  size: number;
-  truncated: boolean;
-}
-
 export interface FileReadStreamParams {
   path: string;
   /** Read/emit chunk size in bytes. Bridge default 1 MiB, capped at 8 MiB. */
@@ -136,20 +124,6 @@ export interface UfwRuleParams {
   port: number;
   proto: 'tcp' | 'udp';
   comment?: string;
-}
-
-export interface ProcessInfoParams {
-  pid: number;
-}
-
-export interface ProcessInfoResult {
-  pid: number;
-  exists: boolean;
-  rss_bytes?: number;
-  vsz_bytes?: number;
-  cmdline?: string;
-  state?: string;
-  threads?: number;
 }
 
 export interface ContainerRunParams {

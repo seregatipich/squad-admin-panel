@@ -25,16 +25,12 @@ import {
   type FileReadParams,
   type FileReadStreamParams,
   type FileReadStreamResult,
-  type FileReadTailParams,
-  type FileReadTailResult,
   type FileWriteParams,
   type HostAgentRestartResult,
   type HostInfo,
   type HostMetrics,
   type PanelDiskUsage,
   type PingResult,
-  type ProcessInfoParams,
-  type ProcessInfoResult,
   type SquadLogListParams,
   type SquadLogListResult,
   type SquadLogRetentionSweepParams,
@@ -176,8 +172,6 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
 
   fileRead = (p: FileReadParams) =>
     this.call<{ content: string }>('file_read', p, { retryOnTransport: true });
-  fileReadTail = (p: FileReadTailParams) =>
-    this.call<FileReadTailResult>('file_read_tail', p, { retryOnTransport: true });
 
   // Streams a file back as ordered stdout frames, each a base64-encoded chunk.
   // Used for downloading large Squad logs without buffering the whole file.
@@ -186,7 +180,6 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
       onStream,
       timeoutMs: 600_000,
     });
-  fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) =>
     this.call<{ status: string }>('file_atomic_write', p, { retryOnTransport: true });
 
@@ -211,9 +204,6 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
 
   ufwRule = (p: UfwRuleParams) =>
     this.call<{ output: string; status: string }>('ufw_rule', p, { retryOnTransport: true });
-
-  processInfo = (p: ProcessInfoParams) =>
-    this.call<ProcessInfoResult>('process_info', p, { retryOnTransport: true });
 
   containerRun = (p: ContainerRunParams) =>
     this.call<ContainerRunResult>('container_run', p, { timeoutMs: 60_000 });

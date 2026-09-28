@@ -269,7 +269,7 @@ describe('handleFrame edge cases', () => {
       });
     });
     const client = new BridgeClient({ socketPath });
-    await expect(client.fileWrite({ path: '/x', content: 'y' })).rejects.toMatchObject({
+    await expect(client.fileAtomicWrite({ path: '/x', content: 'y' })).rejects.toMatchObject({
       code: 'internal',
     });
     await client.close();
@@ -307,7 +307,7 @@ describe('timeout firing', () => {
     const client = new BridgeClient({ socketPath, defaultTimeoutMs: 50 });
     let caught: unknown;
     try {
-      await client.fileWrite({ path: '/x', content: 'y' });
+      await client.fileAtomicWrite({ path: '/x', content: 'y' });
     } catch (err) {
       caught = err;
     }
@@ -335,7 +335,7 @@ describe('socket.write callback error path', () => {
     const client = new BridgeClient({ socketPath, defaultTimeoutMs: 30_000 });
     const onLog = vi.fn();
     (client as unknown as { onLog: (m: string, meta?: unknown) => void }).onLog = onLog;
-    const fileWritePromise = client.fileWrite({ path: '/x', content: 'y' }).catch((e) => e);
+    const atomicWritePromise = client.fileAtomicWrite({ path: '/x', content: 'y' }).catch((e) => e);
     await new Promise((r) => setTimeout(r, 30));
     // biome-ignore lint/complexity/useLiteralKeys: reaching into private pending map.
     const pending = (
@@ -345,7 +345,7 @@ describe('socket.write callback error path', () => {
       p.reject('plain-string-rejection');
     }
     pending.clear();
-    const err = await fileWritePromise;
+    const err = await atomicWritePromise;
     expect(err).toBe('plain-string-rejection');
     await client.close();
   });
@@ -436,21 +436,11 @@ describe('all wrapper methods dispatch the correct method id', () => {
     ['host_info', (c) => c.hostInfo()],
     ['host_metrics', (c) => c.hostMetrics()],
     ['file_read', (c) => c.fileRead({ path: '/x' })],
-    [
-      'file_read_tail',
-      (c) =>
-        c.fileReadTail({
-          path: '/var/lib/squad-panel/saved/x/y',
-          max_bytes: 16,
-        }),
-    ],
-    ['file_write', (c) => c.fileWrite({ path: '/x', content: 'y' })],
     ['file_atomic_write', (c) => c.fileAtomicWrite({ path: '/x', content: 'y' })],
     ['directory_delete', (c) => c.directoryDelete({ path: '/x' })],
     ['list_panel_dirs', (c) => c.listPanelDirs()],
     ['list_squad_containers', (c) => c.listSquadContainers()],
     ['ufw_rule', (c) => c.ufwRule({ action: 'add', port: 7787, proto: 'udp' })],
-    ['process_info', (c) => c.processInfo({ pid: 1 })],
     [
       'container_run',
       (c) =>
@@ -507,7 +497,7 @@ describe('close() while a call is pending', () => {
       // accept and stay silent so the call hangs
     });
     const client = new BridgeClient({ socketPath, defaultTimeoutMs: 60_000 });
-    const inFlight = client.fileWrite({ path: '/x', content: 'y' }).catch((err) => err);
+    const inFlight = client.fileAtomicWrite({ path: '/x', content: 'y' }).catch((err) => err);
     await new Promise((r) => setTimeout(r, 50));
     await client.close();
     const err = await inFlight;

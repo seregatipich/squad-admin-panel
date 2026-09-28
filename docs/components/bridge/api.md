@@ -44,7 +44,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 25 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 27 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -73,10 +73,6 @@ Static host snapshot.
 
 Live sample. Internally takes two short-interval samples so CPU% and net rates are non-zero on first call.
 
-#### `process_info({ pid })` → `ProcessInfoResult`
-
-Reads `/proc/<pid>/{status,cmdline}`. The bridge does not require the pid to belong to a panel-managed container; the API layer ties `process_info` calls to the server owning that pid.
-
 ### Files
 
 All file methods are restricted to:
@@ -92,47 +88,9 @@ Allowed cfg filenames are pinned by `ALLOWED_CONFIG_FILES` in `shared-config` (1
 
 Up to 16 MiB. Anything outside the allowlist returns `forbidden`.
 
-#### `file_read_tail({ path, max_bytes? })` → `{ content, offset, size, truncated }`
-
-Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read starts at the next `\n` after the truncation point so the caller never sees a partial first line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `string` | Required. Same allowlist as `file_read` (configs / saved / depot RO / sentinel). |
-| `max_bytes` | `number` | Optional. Clamp semantics: `<= 0` (or unset) defaults to `65536` (64 KiB); values in `(0, 1048576]` (1 MiB) are honored as-is; values `> 1048576` are clamped down to the 1 MiB ceiling. |
-
-| Result field | Type | Description |
-|---|---|---|
-| `content` | `string` | Tail bytes after the newline-snap. Empty when the file is empty or the tail window contained no newline. |
-| `offset` | `number` | Byte offset where `content` begins in the source file (0 when the whole file fits, otherwise the position of the byte immediately after the snap newline). |
-| `size` | `number` | Total size of the file in bytes at read time. |
-| `truncated` | `boolean` | `true` iff `size > max_bytes` (i.e. some prefix of the file was skipped). |
-
-Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `runtime_error` (open / stat / seek failed).
-
-```json
-// request
-{ "id": "req-1", "method": "file_read_tail", "params": {
-  "path": "/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log",
-  "max_bytes": 65536
-} }
-
-// response (file is 12 MiB)
-{ "id": "req-1", "ok": true, "result": {
-  "content": "[2026.04.28-10.00.00:000][000]LogNet: ...\n...",
-  "offset": 12516352,
-  "size": 12582912,
-  "truncated": true
-} }
-```
-
-#### `file_write({ path, content, mode? })` → `{ status: 'written' }`
-
-Non-atomic. Use only when atomicity is not required.
-
 #### `file_atomic_write({ path, content, mode? })` → `{ status: 'written' }`
 
-Writes a sibling `.new`, fsyncs, then `rename(2)` into place. Existing file is renamed to `.bak` first. `MkdirAll`s up through the allowed root.
+Writes a unique hidden sibling temp file (`os.CreateTemp`, `.<name>.*.tmp`), fsyncs, chmods it to `mode`, then `rename(2)`s it over the target, so concurrent writers of one path never interleave (the last rename wins). Missing parent directories are created at `0755`; directories that already exist keep their mode (the installer's `0750` on `configs/` and `saved/` is never widened).
 
 #### `directory_delete({ path })` → `{ removed: boolean }`
 

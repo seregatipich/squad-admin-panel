@@ -54,7 +54,7 @@ PY
 call 'verify-1' 'ping' 'null'
 call 'verify-2' 'host_info' 'null'
 call 'verify-3' 'host_metrics' 'null'
-call 'verify-4' 'process_info' "{\"pid\": $$}"
+call 'verify-4' 'list_panel_dirs' 'null'
 call 'verify-5' 'file_read' '{"path": "/etc/shadow"}'                                   # must be forbidden (path allowlist)
 call 'verify-6' 'file_atomic_write' '{"path": "/opt/squad-servers/verify-bridge.tmp", "content": "verify-bridge ok\n", "mode": 420}'   # must be forbidden
 call 'verify-7' 'container_inspect' '{"name": "squad-00000000-0000-0000-0000-000000000000"}'   # must resolve (missing container)

@@ -79,32 +79,13 @@ func mkdirAllWithMode(p string, perm os.FileMode) error {
 	return nil
 }
 
-// Write writes content atomically-ish (no rename); creates parent dirs
-// up through the allowed root as needed. A trailing os.Chmod bypasses
-// the process umask so Squad (uid 1001) can read what the bridge (root,
-// UMask=0077) writes.
-func Write(p string, content []byte, mode os.FileMode) error {
-	_, err := validate.Path(p, writableRoots...)
-	if err != nil {
-		return err
-	}
-	if err := mkdirAllWithMode(filepath.Dir(p), 0o755); err != nil {
-		return fmt.Errorf("mkdir parent: %w", err)
-	}
-	if len(content) > MaxReadBytes {
-		return fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
-	}
-	if err := os.WriteFile(p, content, mode); err != nil {
-		return err
-	}
-	return os.Chmod(p, mode)
-}
-
 // AtomicWrite replaces p with content via a unique temp file in the same
 // directory, fsync and rename, so readers see either the old or the new
 // file and concurrent writers of one path never corrupt each other (the
-// last rename wins). Parent directories are created as in Write; the
-// final file gets `mode` regardless of the process umask.
+// last rename wins). Missing parent directories are created at 0755 (see
+// mkdirAllWithMode), and the final file gets `mode` regardless of the
+// process umask so Squad (uid 1001) can read what the bridge (root,
+// UMask=0077) writes. Content above MaxReadBytes is rejected.
 func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 	_, err := validate.Path(p, writableRoots...)
 	if err != nil {
