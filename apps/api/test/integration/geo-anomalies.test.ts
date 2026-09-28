@@ -10,6 +10,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { FEED_CANDIDATE_CAP } from '../../src/routes/player-geo-anomalies.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
@@ -281,4 +282,48 @@ describeIfDb('GET /api/v1/geo-anomalies feed', () => {
     expect(entry).toBeDefined();
     expect(entry?.multi_country).toBe(true);
   });
+});
+
+describeIfDb('GET /api/v1/geo-anomalies candidate cap (#70)', () => {
+  it('keeps the most recently seen switcher when stale multi-country players exceed the cap', async () => {
+    const stale = Array.from({ length: FEED_CANDIDATE_CAP + 20 }, (_, i) => ({
+      // Ids that sort before every uuidv7, so an unordered LIMIT tends to keep them.
+      id: `00000000-0000-7000-8000-${String(i).padStart(12, '0')}`,
+      steamId64: null,
+      canonicalName: `stale-${i}`,
+      canonicalNameNormalized: `stale-${i}`,
+    }));
+    await h.db.insert(players).values(stale);
+    const longAgo = Date.now() - 5000 * HOUR_MS;
+    await h.db.insert(playerIpHistory).values(
+      stale.flatMap((player, i) => [
+        {
+          playerId: player.id,
+          ip: `10.1.${Math.floor(i / 250)}.${i % 250}`,
+          countryCode: 'PL',
+          countryName: 'Poland',
+          firstSeenAt: new Date(longAgo - 500 * HOUR_MS),
+          lastSeenAt: new Date(longAgo - 500 * HOUR_MS),
+        },
+        {
+          playerId: player.id,
+          ip: `10.2.${Math.floor(i / 250)}.${i % 250}`,
+          countryCode: 'CZ',
+          countryName: 'Czechia',
+          firstSeenAt: new Date(longAgo),
+          lastSeenAt: new Date(longAgo),
+        },
+      ]),
+    );
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/geo-anomalies',
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: Array<{ player_id: string }>; truncated: boolean };
+    expect(body.items.some((item) => item.player_id === anomalyPlayerId)).toBe(true);
+    expect(body.truncated).toBe(true);
+  }, 60_000);
 });

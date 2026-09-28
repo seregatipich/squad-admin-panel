@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { auditLog, playerIpHistory, playerLinks, players } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH } from '../../src/routes/player-links.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -257,7 +259,7 @@ describe('POST /api/v1/players/:playerId/links', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('writes an audit_log entry with the evidence_snapshot on create', async () => {
+  it('writes an audit_log entry with the evidence_snapshot hash, not its body, on create (#70)', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
     const cookie = await loginAsOwner(h);
@@ -281,9 +283,30 @@ describe('POST /api/v1/players/:playerId/links', () => {
       .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
     expect(auditRows).toHaveLength(1);
     expect(auditRows[0].beforeSnapshot).toBeNull();
-    expect(auditRows[0].afterSnapshot).toMatchObject({
-      evidenceSnapshot: { score: 75, confidence: 'high', shared_ip_count: 2 },
+    const [stored] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    expect(stored?.evidenceSnapshot).toEqual({ score: 75, confidence: 'high', shared_ip_count: 2 });
+    const expectedHash = createHash('sha256')
+      .update(JSON.stringify(stored?.evidenceSnapshot))
+      .digest('hex');
+    expect(auditRows[0].afterSnapshot).toMatchObject({ evidenceSnapshotSha256: expectedHash });
+    expect(auditRows[0].afterSnapshot).not.toHaveProperty('evidenceSnapshot');
+  });
+
+  it('rejects an evidence_snapshot above the size cap with 400 (#70)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        other_player_id: idB,
+        link_type: 'alt',
+        evidence_snapshot: { blob: 'x'.repeat(EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH) },
+      }),
     });
+    expect(res.statusCode).toBe(400);
   });
 });
 

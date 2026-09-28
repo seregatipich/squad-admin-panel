@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import {
   PLAYER_LINK_STATUSES,
@@ -15,12 +16,24 @@ import { writeAuditEntry } from '../lib/audit.js';
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const linkIdParams = z.object({ linkId: z.string().uuid() });
 
+/**
+ * Largest serialized `evidence_snapshot` accepted, in UTF-16 code units of its
+ * JSON. The web client sends an alt candidate's score and signals (a few KiB);
+ * the cap stops the free-form JSONB from being used to bloat the table.
+ */
+export const EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH = 16_384;
+
 const createBody = z.object({
   other_player_id: z.string().uuid(),
   link_type: z.enum(PLAYER_LINK_TYPES),
   status: z.enum(PLAYER_LINK_STATUSES).default('confirmed'),
   note: z.string().trim().max(2000).optional(),
-  evidence_snapshot: z.record(z.string(), z.unknown()).optional(),
+  evidence_snapshot: z
+    .record(z.string(), z.unknown())
+    .refine((value) => JSON.stringify(value).length <= EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH, {
+      message: 'evidence_snapshot_too_large',
+    })
+    .optional(),
 });
 
 const patchBody = z
@@ -54,8 +67,22 @@ function serializeLink(
   };
 }
 
+/**
+ * The audit before/after view of a link. `audit_log` is append-only, so the
+ * free-form evidence snapshot is recorded as its SHA-256 (enough to prove
+ * which snapshot the row held) instead of being copied in full.
+ */
 function snapshot(row: PlayerLinkRow) {
-  return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+  const { evidenceSnapshot, ...rest } = row;
+  return {
+    ...rest,
+    evidenceSnapshotSha256:
+      evidenceSnapshot == null
+        ? null
+        : createHash('sha256').update(JSON.stringify(evidenceSnapshot)).digest('hex'),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }
 
 async function auditMutation(

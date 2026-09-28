@@ -94,9 +94,11 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
         LIMIT ${TOP_PARTNERS_LIMIT}
       `)) as unknown as TotalsRow[];
 
-      const topPartnerIds = new Set(totals.map((row) => row.partner_id));
+      const topPartnerIds = totals.map((row) => row.partner_id);
 
-      const perServer = topPartnerIds.size
+      // Only the top partners' rows are aggregated per server; the database
+      // never groups the long tail that the response would drop anyway.
+      const perServer = topPartnerIds.length
         ? ((await app.db.execute(sql`
             WITH windowed AS (
               SELECT
@@ -108,6 +110,11 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
               FROM player_coplay pc
               WHERE (pc.player_a_id = ${playerId} OR pc.player_b_id = ${playerId})
                 AND pc.window_start >= ${fromDay}::date
+                AND CASE WHEN pc.player_a_id = ${playerId} THEN pc.player_b_id ELSE pc.player_a_id END
+                  IN (${sql.join(
+                    topPartnerIds.map((id) => sql`${id}::uuid`),
+                    sql`, `,
+                  )})
             )
             SELECT
               w.partner_id,
@@ -134,7 +141,6 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
         }>
       >();
       for (const row of perServer) {
-        if (!topPartnerIds.has(row.partner_id)) continue;
         const list = byPartner.get(row.partner_id) ?? [];
         list.push({
           server_id: row.server_id,
