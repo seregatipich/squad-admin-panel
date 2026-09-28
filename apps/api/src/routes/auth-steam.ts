@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { fetchSteamProfile } from '@squad/steam-api';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   establishAuthenticatedPlayerSession,
   type PlayerIdentity,
 } from '../lib/authenticated-player.js';
 import { buildLoginRedirectUrl, verifyWithSteam } from '../lib/steam-openid.js';
-import { fetchSteamProfile } from '../lib/steam-profile.js';
 
 const NONCE_COOKIE = '__Host-steam-nonce';
 const NONCE_TTL_SECONDS = 300;

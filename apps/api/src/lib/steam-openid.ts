@@ -1,5 +1,7 @@
 const STEAM_OPENID_ENDPOINT = 'https://steamcommunity.com/openid/login';
 const CLAIMED_ID_PREFIX = 'https://steamcommunity.com/openid/id/';
+/** Upper bound for Steam's check_authentication answer during the login callback. */
+export const STEAM_OPENID_TIMEOUT_MS = 10_000;
 
 export interface BuildLoginRedirectUrlInput {
   panelPublicUrl: string;
@@ -40,8 +42,17 @@ export interface SteamVerifyResult {
 
 export interface VerifyDeps {
   fetch?: typeof fetch;
+  /** Timeout for the Steam POST; defaults to {@link STEAM_OPENID_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }
 
+/**
+ * Asks Steam to confirm an OpenID assertion (`check_authentication`).
+ *
+ * @throws When Steam answers non-2xx, does not confirm `is_valid:true`, does
+ *   not answer within the timeout, or the assertion lacks a well-formed
+ *   `claimed_id` or `response_nonce`.
+ */
 export async function verifyWithSteam(
   params: CallbackParams,
   deps: VerifyDeps = {},
@@ -56,6 +67,7 @@ export async function verifyWithSteam(
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(deps.timeoutMs ?? STEAM_OPENID_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`steam check_authentication HTTP ${res.status}`);
   const text = await res.text();

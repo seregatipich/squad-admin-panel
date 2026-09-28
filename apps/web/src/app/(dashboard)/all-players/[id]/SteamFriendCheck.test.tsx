@@ -39,6 +39,13 @@ describe('SteamFriendCheck', () => {
     expect(await screen.findByText('Steam: Профиль скрыт')).toBeInTheDocument();
   });
 
+  it('asks to retry when Steam is temporarily unavailable', async () => {
+    renderCheck({ in_friend: null, reason: 'steam_unavailable', cached: false });
+    expect(
+      await screen.findByText('Steam: Steam не отвечает — повторите позже'),
+    ).toBeInTheDocument();
+  });
+
   it('shows a negative cached result', async () => {
     renderCheck({ in_friend: false, reason: null, cached: true });
     const result = await screen.findByText('Steam: Не найдено в друзьях');

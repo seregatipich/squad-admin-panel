@@ -1,8 +1,8 @@
 import { auditLog, players } from '@squad/db/schema';
+import { SQUAD_APP_ID } from '@squad/steam-api';
 import { and, desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
-import { SQUAD_APP_ID } from '../../src/lib/steam-owned-games.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 

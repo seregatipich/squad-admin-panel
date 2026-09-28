@@ -1,11 +1,9 @@
 import { players } from '@squad/db/schema';
+import { fetchSteamBans, fetchSteamOwnedGames, fetchSteamProfile } from '@squad/steam-api';
 import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { fetchSteamBans } from '../lib/steam-bans.js';
-import { fetchSteamOwnedGames } from '../lib/steam-owned-games.js';
-import { fetchSteamProfile } from '../lib/steam-profile.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 
