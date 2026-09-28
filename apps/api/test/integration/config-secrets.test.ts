@@ -10,7 +10,7 @@ import { and, eq, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mintApiToken } from '../../src/lib/api-tokens.js';
-import { decryptString, deserialize } from '../../src/lib/crypto.js';
+import { decryptString, deserialize, encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { softDeleteServer } from '../../src/lib/server-delete.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -98,6 +98,23 @@ async function createServer(): Promise<string> {
   return resp.json<{ id: string }>().id;
 }
 
+/**
+ * A server whose panel RCON credentials are `RCON_SECRET` on port 21114 — the
+ * values `rconCfg()` renders — so writes that keep `Password=`/`Port=` pass
+ * the credential guard (#280).
+ */
+async function createRconServer(): Promise<string> {
+  const id = await createServer();
+  await h.db
+    .update(serverCredentials)
+    .set({
+      rconPort: 21114,
+      rconPasswordEncrypted: serialize(encrypt(h.app.encryptionKey, RCON_SECRET)),
+    })
+    .where(eq(serverCredentials.serverId, id));
+  return id;
+}
+
 async function getConfig(id: string, name: string, headers: Record<string, string> = { cookie }) {
   return h.app.inject({ method: 'GET', url: `/api/v1/servers/${id}/configs/${name}`, headers });
 }
@@ -164,7 +181,7 @@ async function historyReads(id: string, name: string, fromId: string, toId: stri
 
 describeIfDb('Rcon.cfg password masking (#10)', () => {
   it('GET masks the password and reports the sha of the on-disk bytes', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
 
     const res = await getConfig(id, 'Rcon.cfg');
@@ -176,7 +193,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('a server:view-scoped API token cannot read the RCON password', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     const minted = mintApiToken();
     // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
@@ -196,7 +213,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('an editor round-trip keeps the real password on disk and never stores it', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     const first = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
     const second = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 7));
@@ -224,7 +241,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('restoring a masked version writes the current real password to disk', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     const first = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
     await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 7));
@@ -240,7 +257,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('refuses a masked write when no real password can be resolved', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
 
     const res = await h.app.inject({
@@ -255,7 +272,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('reset-default keeps the real password on disk but stores it masked', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     h.bridge.files.set(
       `${DEPOT_ROOT}/SquadGame/ServerConfig/Rcon.cfg`,
       Buffer.from('Port=0\nPassword=CHANGEME\n', 'utf-8'),
@@ -284,7 +301,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('masks a legacy plaintext history row on every read path', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     const legacyContent = rconCfg(RCON_SECRET);
     const [legacy] = await h.db
       .insert(configVersions)
@@ -307,7 +324,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('drift revert restores the panel password over an out-of-band change', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     const panelPassword = await panelRconPassword(id);
     setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
     await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
@@ -327,7 +344,7 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
   });
 
   it('restoring a version after an out-of-band change writes the panel password', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     const panelPassword = await panelRconPassword(id);
     setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
     const first = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
@@ -345,10 +362,30 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
     expect(res.json<{ sha256: string }>().sha256).toBe(sha256Hex(rconCfg(panelPassword, 6)));
   });
 
-  it('drift accept records the out-of-band file masked and leaves the disk alone', async () => {
-    const id = await createServer();
-    const panelPassword = await panelRconPassword(id);
-    setDisk(id, 'Rcon.cfg', rconCfg(panelPassword));
+  it('drift accept records an out-of-band change masked and leaves the disk alone', async () => {
+    const id = await createRconServer();
+    setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
+    await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
+    setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET, 8));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/drift/accept`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readDisk(id, 'Rcon.cfg')).toBe(rconCfg(RCON_SECRET, 8));
+    const stored = await storedContents(id, 'Rcon.cfg');
+    expect(stored).toHaveLength(2);
+    expect(stored).toContain(rconCfg(MASK, 8));
+    for (const content of stored) expect(content).not.toContain(RCON_SECRET);
+    expect(await rconDriftState(id)).toBe('in_sync');
+  });
+
+  it('drift accept refuses an out-of-band password the panel would not follow (#280)', async () => {
+    const id = await createRconServer();
+    setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
     setDisk(id, 'Rcon.cfg', rconCfg(OUT_OF_BAND_PASSWORD, 8));
 
@@ -358,17 +395,14 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
       headers: { cookie },
       payload: {},
     });
-    expect(res.statusCode, res.body).toBe(200);
-    expect(readDisk(id, 'Rcon.cfg')).toBe(rconCfg(OUT_OF_BAND_PASSWORD, 8));
-    const stored = await storedContents(id, 'Rcon.cfg');
-    expect(stored).toHaveLength(2);
-    expect(stored).toContain(rconCfg(MASK, 8));
-    for (const content of stored) expect(content).not.toContain(OUT_OF_BAND_PASSWORD);
-    expect(await rconDriftState(id)).toBe('in_sync');
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.body).toContain('rcon_credentials_managed');
+    expect(res.body).not.toContain(OUT_OF_BAND_PASSWORD);
+    expect(await storedContents(id, 'Rcon.cfg')).toHaveLength(1);
   });
 
   it('drift diff masks the password on both sides', async () => {
-    const id = await createServer();
+    const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 6));
     setDisk(id, 'Rcon.cfg', rconCfg('Out-Of-Band-Pw-42', 8));

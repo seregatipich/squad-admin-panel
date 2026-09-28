@@ -25,9 +25,21 @@ export interface BlameLine {
  * Deleted lines fall off naturally (they aren't present in the next
  * version's array). We use the `diff` library's Myers-based `diffArrays`
  * on per-line arrays so whitespace / newline handling is explicit.
+ *
+ * Myers runs synchronously in O((N+M)·D), so two large unrelated versions
+ * would block the event loop for minutes (#283). All pairwise diffs share one
+ * `timeoutMs` budget; when it runs out the walk is abandoned.
+ *
+ * @param versions - The versions to attribute, in any order.
+ * @param opts.timeoutMs - Wall-clock budget for every diff together.
+ * @returns One entry per tip line, or `undefined` when the budget ran out.
  */
-export function computeBlame(versions: BlameVersion[]): BlameLine[] {
+export function computeBlame(
+  versions: BlameVersion[],
+  opts: { timeoutMs: number },
+): BlameLine[] | undefined {
   if (versions.length === 0) return [];
+  const deadline = Date.now() + opts.timeoutMs;
 
   const sorted = [...versions].sort((a, b) =>
     a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
@@ -49,7 +61,10 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
     const v = sorted[i] as BlameVersion;
     const prev = current.map((l) => l.text);
     const next = splitLines(v.content);
-    const parts = diffArrays(prev, next);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return undefined;
+    const parts = diffArrays(prev, next, { timeout: remainingMs });
+    if (!parts) return undefined;
     const out: BlameLine[] = [];
     let prevCursor = 0;
     for (const part of parts) {

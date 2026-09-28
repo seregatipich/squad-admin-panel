@@ -15,6 +15,14 @@ import { purgeSidecarDir, removeSidecar } from './sidecar-lifecycle.js';
 // delete so a stale `unreachable` alert cannot outlive the server.
 const ADMINS_CFG_STATUS_KEY_PREFIX = 'admins-cfg:status:';
 
+/**
+ * Prefix of the `config_versions.message` that marks a deletion backup row.
+ * Archive restore (`server-restore.ts`, `server-archive.ts`) picks backups by
+ * `LIKE 'deletion-backup-marker%'`, so the config editor refuses user messages
+ * that start with it (#281).
+ */
+export const DELETION_BACKUP_MARKER = 'deletion-backup-marker';
+
 export interface DeleteResult {
   backup_marker_id: string | null;
   files_backed_up: number;
@@ -125,7 +133,7 @@ export async function softDeleteServer(
 
     if (backed.length > 0) {
       await ctx.db.transaction(async (tx) => {
-        const message = `deletion-backup-marker ${new Date().toISOString()}`;
+        const message = `${DELETION_BACKUP_MARKER} ${new Date().toISOString()}`;
         const inserts = await tx
           .insert(configVersions)
           .values(

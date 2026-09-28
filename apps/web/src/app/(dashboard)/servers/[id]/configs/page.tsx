@@ -274,12 +274,16 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }, [id]);
 
+  // #1335: the list reads every allowlisted file through the bridge, so it is
+  // refreshed on mount, after writes and when the tab comes back — not on the
+  // poll. Drift and the open file poll only while the tab is visible.
   useEffect(() => {
     void refreshFiles();
-    const t = setInterval(() => {
-      void refreshFiles();
-    }, POLL_MS);
-    return () => clearInterval(t);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshFiles();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [refreshFiles]);
 
   const refreshDrift = useCallback(async () => {
@@ -299,7 +303,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     void refreshDrift();
     const t = setInterval(() => {
-      void refreshDrift();
+      if (document.visibilityState === 'visible') void refreshDrift();
     }, POLL_MS);
     return () => clearInterval(t);
   }, [refreshDrift]);
@@ -309,7 +313,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     let cancelled = false;
     async function poll() {
       const target = selectedRef.current;
-      if (!target) return;
+      if (!target || document.visibilityState !== 'visible') return;
       try {
         const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
           credentials: 'include',

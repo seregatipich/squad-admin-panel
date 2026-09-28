@@ -358,7 +358,9 @@ describe('POST /api/v1/servers/:id/configs/:name/reset-default (CFG-2 #64)', () 
       `${DEPOT_CONFIG_DIR}/Server.cfg`,
       Buffer.from('ServerName="Depot Default"\r\nMaxPlayers=100\r\n', 'utf-8'),
     );
-    await putConfig(cookie, id, 'Rcon.cfg', 'Port=9\nPassword=broken\n');
+    // A broken Rcon.cfg can no longer be written through the editor (#280);
+    // it reaches the disk out-of-band.
+    h.bridge.files.set(diskPath(id, 'Rcon.cfg'), Buffer.from('Port=9\nPassword=broken\n'));
 
     const resetRcon = await h.app.inject({
       method: 'POST',
