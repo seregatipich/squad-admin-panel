@@ -343,6 +343,50 @@ describeIfDb('POST /api/v1/moderation-actions/bulk', () => {
     expect(ledgered.has(targetIds[4] as string)).toBe(true);
   });
 
+  it('records a thrown per-target error as internal_error and still processes the rest and the summary audit (#70)', async () => {
+    const cookie = await loginAsOwner(h);
+    let call = 0;
+    vi.mocked(sendRconCommandViaWorker).mockImplementation(async () => {
+      call += 1;
+      if (call === 2) throw new Error('redis unavailable');
+      return okOutcome();
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: URL,
+      headers: { cookie },
+      payload: {
+        server_id: serverId,
+        action_type: 'ban',
+        player_ids: targetIds,
+        reason: 'Thrown failure run',
+        ban_length: '1d',
+        confirm_bulk: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as BulkResponse;
+    expect(body.applied).toBe(4);
+    expect(body.results[1]).toMatchObject({
+      player_id: targetIds[1],
+      status: 'failed',
+      error: 'internal_error',
+    });
+    expect(vi.mocked(sendRconCommandViaWorker).mock.calls).toHaveLength(5);
+    const summary = await assertAuditRow(h, {
+      action: 'moderation.bulk_action',
+      resource: 'server',
+      targetId: serverId,
+    });
+    expect(summary.afterSnapshot).toMatchObject({
+      reason: 'Thrown failure run',
+      applied: 4,
+      failed: 1,
+    });
+  });
+
   it('marks an offline target as target_offline for kick without touching RCON or the ledger', async () => {
     const cookie = await loginAsOwner(h);
     const offline = await seedTarget(90);
