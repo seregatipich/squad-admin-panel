@@ -83,7 +83,9 @@ describe('TeamkillsBrowser moderation column', () => {
       await screen.findAllByText('Alpha TK');
       expect(screen.getByText('Модерация')).toBeInTheDocument();
       expect(
-        screen.getByText(`warn · ${formatTeamkillDate('2026-07-12T13:00:00.000Z')}, всего 3`),
+        screen.getByText(
+          `Предупреждение · ${formatTeamkillDate('2026-07-12T13:00:00.000Z')}, всего 3`,
+        ),
       ).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,

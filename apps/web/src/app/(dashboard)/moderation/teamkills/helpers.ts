@@ -1,3 +1,5 @@
+import { moderationActionLabel } from '../../all-players/[id]/moderation-history';
+
 export const TEAMKILL_SORTS = ['tk_7d', 'tk_30d', 'total'] as const;
 export type TeamkillSort = (typeof TEAMKILL_SORTS)[number];
 export type TeamkillOrder = 'asc' | 'desc';
@@ -127,6 +129,7 @@ export function formatTeamkillDate(value: string | null): string {
   return at.toLocaleString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -143,7 +146,7 @@ export function formatModerationSummary(row: {
   last_moderation_type: string | null;
 }): string {
   if (row.moderation_total === 0) return '—';
-  const type = row.last_moderation_type ?? '—';
+  const type = row.last_moderation_type ? moderationActionLabel(row.last_moderation_type) : '—';
   const date = formatTeamkillDate(row.last_moderation_at);
   return `${type} · ${date}, всего ${formatTeamkillCount(row.moderation_total)}`;
 }
