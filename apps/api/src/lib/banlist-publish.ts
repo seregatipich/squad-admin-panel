@@ -1,3 +1,5 @@
+import { BAN_LENGTH_PATTERN } from '@squad/shared-config';
+
 /**
  * Pure helpers for CBAN-5 outbound banlist federation: turning
  * `moderation_actions` ban rows into the public `squad_cfg`/`json` banlist
@@ -6,9 +8,6 @@
  */
 
 export type BanlistPublishScope = 'all_active' | 'permanent_only';
-
-/** Matches the RCON-worker `AdminBan` duration syntax (see commands.ts). */
-const BAN_LENGTH_PATTERN = /^(\d+)([smhdwMy])?$/;
 
 const UNIT_MILLISECONDS: Record<string, number> = {
   s: 1_000,

@@ -126,14 +126,16 @@ export const ACTION_LABELS: Record<ReportActionType, string> = {
 };
 
 /** Labels for the "linked actions" list on the report card / moderation history. */
-export const ACTION_TYPE_LABELS: Record<string, string> = {
+const ACTION_TYPE_LABELS: Record<ReportActionType, string> = {
   warn: 'Предупреждение',
   kick: 'Кик',
   ban: 'Бан',
 };
 
 export function actionTypeBadge(actionType: string): string {
-  return ACTION_TYPE_LABELS[actionType] ?? actionType;
+  return Object.hasOwn(ACTION_TYPE_LABELS, actionType)
+    ? ACTION_TYPE_LABELS[actionType as ReportActionType]
+    : actionType;
 }
 
 export type ReporterNotifyTemplate = 'in_review' | 'resolved';
@@ -142,13 +144,6 @@ export const NOTIFY_TEMPLATE_LABELS: Record<ReporterNotifyTemplate, string> = {
   in_review: 'Репорт принят в работу',
   resolved: 'Репорт рассмотрен',
 };
-
-const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
-
-/** Mirrors the API/RCON-worker ban-length syntax check (see AdminBan). */
-export function isValidBanLength(value: string): boolean {
-  return BAN_LENGTH_PATTERN.test(value.trim());
-}
 
 /** Minimum target report count (90d window) to render the recidivist badge (REPORT-5, #115). */
 export const RECIDIVIST_MIN_COUNT_90D = 3;

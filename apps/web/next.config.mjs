@@ -85,6 +85,8 @@ export default {
     return [
       { source: '/players', destination: '/all-players', permanent: true },
       { source: '/players/:path*', destination: '/all-players/:path*', permanent: true },
+      { source: '/roles', destination: '/settings/groups', permanent: true },
+      { source: '/roles/:path*', destination: '/settings/groups', permanent: true },
     ];
   },
 };

@@ -556,7 +556,6 @@ export function sortMatchRosterEntries(
 
 const ROSTER_ROW_BASE_CLASS = 'border-t border-neutral-900';
 const ROSTER_ROW_DIMMED_CLASS = `${ROSTER_ROW_BASE_CLASS} opacity-50`;
-export const ROSTER_LEFT_EARLY_TITLE = 'Покинул матч до конца';
 
 /** A roster row is dimmed when the player disconnected before the match ended. */
 export function isDimmedRosterEntry(entry: Pick<MatchRosterEntry, 'left_early'>): boolean {

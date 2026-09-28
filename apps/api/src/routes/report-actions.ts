@@ -1,4 +1,5 @@
 import { events, moderationActions, playerReports, players } from '@squad/db/schema';
+import { BAN_LENGTH_PATTERN } from '@squad/shared-config';
 import {
   type EventEnvelope,
   type EventType,
@@ -20,7 +21,6 @@ import { parseStoredRoster } from '../lib/roster.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const REASON_MAX = 300;
-const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
 const RESOLUTION_NOTE_MAX = 2000;
 
 const idParam = z.object({ id: z.string().uuid() });
