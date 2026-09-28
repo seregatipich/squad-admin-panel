@@ -111,9 +111,9 @@ describe('automation plugin dispatch (integration)', () => {
     // same Redis db, so a unique group name alone cannot stop a foreign
     // envelope XADDed by someone else from being delivered here first.
     stream = `events:test:${randomUUID()}`;
-    // Create the consumer group (positioned at '$') before anything is
-    // pushed, so the dispatch loop's own (idempotent) group creation can't
-    // race against the XADD below and miss the entry.
+    // Create the consumer group before anything is pushed, so the dispatch
+    // loop's own (idempotent) group creation can't race against the XADD
+    // below.
     await ensureConsumerGroup(redis, stream, group);
     const received: EventEnvelope[] = [];
     const registry = new PluginRegistry();
@@ -126,6 +126,27 @@ describe('automation plugin dispatch (integration)', () => {
 
     const envelope = makeEnvelope();
     await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
+
+    await pollUntil(() => received.length === 1);
+    expect(received[0]).toEqual(envelope);
+  });
+
+  it('delivers an event published before the stream was discovered (#844)', async () => {
+    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
+    const group = `test-group-${randomUUID()}`;
+    stream = `events:test:${randomUUID()}`;
+    const envelope = makeEnvelope();
+    // A new server's first event lands before the loop has ever seen its
+    // stream, so no consumer group exists yet when it is published.
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
+    const received: EventEnvelope[] = [];
+    const registry = new PluginRegistry();
+    registry.register(
+      subscribedHandler('receiver-plugin', ['player.connected'], (event) => {
+        received.push(event);
+      }),
+    );
+    startLoop(registry, group, stream);
 
     await pollUntil(() => received.length === 1);
     expect(received[0]).toEqual(envelope);

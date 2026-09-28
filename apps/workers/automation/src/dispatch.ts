@@ -84,9 +84,11 @@ export interface DispatchDeps {
   pluginTimeoutMs?: number;
   /**
    * Optional per-envelope hook run after plugin dispatch, inside the same
-   * dedup-guarded block (so it fires at most once per event per consumer
-   * group). AUTO-1 (#72) wires the automation rule engine here; a failure is
-   * logged and swallowed so it never affects plugin delivery or acking.
+   * dedup-guarded block (so a completed run is not repeated for the same
+   * event per consumer group). AUTO-1 (#72) wires the automation rule engine
+   * here. A rejection leaves the entry unacked and without a dedup key, so the
+   * reclaim sweep retries it — plugins then see the event again
+   * (at-least-once).
    */
   onEnvelope?: (envelope: EventEnvelope) => Promise<void>;
 }
@@ -162,13 +164,38 @@ export async function dispatchEnvelope(
   return result;
 }
 
-/** Creates the consumer group for `stream` if it doesn't already exist (idempotent). */
+/**
+ * An entry idle (delivered but unacked) longer than this is reclaimed via
+ * XAUTOCLAIM regardless of which consumer it was delivered to, so an entry
+ * orphaned by a crash or left pending after a failed `onEnvelope` is retried
+ * instead of sitting in the pending list forever (#841).
+ */
+export const DEFAULT_RECLAIM_MIN_IDLE_MS = 30_000;
+/** Max entries claimed per stream per XAUTOCLAIM call. */
+export const DEFAULT_RECLAIM_BATCH_SIZE = 50;
+/** How often the pending-entry reclaim sweep runs (it also runs once at boot). */
+export const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
+/**
+ * How often the stream set is re-discovered. Discovery is a keyspace-wide
+ * `SCAN`, whose cost grows with every key in Redis (dedup keys included), so
+ * it runs on a timer rather than on every poll (#843). A new game server's
+ * stream is picked up within this interval; its consumer group starts at `0`,
+ * so events published before discovery are still delivered.
+ */
+export const DEFAULT_STREAM_REFRESH_MS = 30_000;
+
+/**
+ * Creates the consumer group for `stream` if it doesn't already exist
+ * (idempotent). The group starts at the beginning of the stream (`0`), not at
+ * `$`: streams are discovered on a timer, so a new server's first events land
+ * before its group exists and would otherwise never be delivered (#844).
+ */
 export async function ensureConsumerGroup(
   redis: Redis,
   stream: string,
   group: string,
 ): Promise<void> {
-  await redis.xgroup('CREATE', stream, group, '$', 'MKSTREAM').catch((err: Error) => {
+  await redis.xgroup('CREATE', stream, group, '0', 'MKSTREAM').catch((err: Error) => {
     if (!String(err.message).includes('BUSYGROUP')) throw err;
   });
 }
@@ -185,9 +212,10 @@ const LIVE_SERVER_STREAM = /^events:server:[^:]+$/;
  * Discovers every event stream plugins might care about: the shared
  * `events:global` stream plus every per-server `events:server:<id>` stream
  * currently present in Redis (discovered via `SCAN`, not a DB query, so the
- * automation worker has no database dependency). Called once per poll
- * iteration so a newly started game server's stream is picked up without a
- * worker restart. Sidecar shadow streams are skipped (see `LIVE_SERVER_STREAM`).
+ * automation worker has no database dependency). The dispatch loop calls it
+ * every `streamRefreshMs`, so a newly started game server's stream is picked
+ * up without a worker restart. Sidecar shadow streams are skipped (see
+ * `LIVE_SERVER_STREAM`).
  */
 export async function discoverEventStreams(redis: Redis): Promise<string[]> {
   const streams = new Set<string>([STREAM_NAME.eventsGlobal()]);
@@ -202,6 +230,21 @@ export async function discoverEventStreams(redis: Redis): Promise<string[]> {
   return [...streams];
 }
 
+/**
+ * Processes one stream entry with at-least-once semantics (#841), in the same
+ * order as worker-discord's `consume.ts`:
+ *
+ * 1. a malformed entry is acked and dropped;
+ * 2. an entry whose dedup key already exists was fully handled by an earlier
+ *    delivery, so it is only acked;
+ * 3. otherwise the plugins and the `onEnvelope` hook run, and only then is
+ *    the dedup key set and the entry acked.
+ *
+ * Any rejection (an `onEnvelope` failure such as an unreachable database, or
+ * a Redis error) propagates before the dedup key is written, so the entry
+ * stays pending and the reclaim sweep retries it. A crash at any point before
+ * the XACK likewise leaves it pending rather than silently dropped.
+ */
 async function processEntry(
   deps: DispatchDeps,
   stream: string,
@@ -210,38 +253,77 @@ async function processEntry(
   fields: string[],
 ): Promise<void> {
   const { redis, log } = deps;
-  try {
-    const envelope = parseStreamEnvelope(fields);
-    if (!envelope) {
-      log.warn({ stream, id }, 'malformed event entry; acking without dispatch');
-      await redis.xack(stream, group, id);
-      return;
-    }
-
-    // Consumer-side idempotency: the producer's dedup key is a no-op on the
-    // first XADD (see publish.ts); this is where re-delivery is actually
-    // caught, per-consumer-group.
-    const claimed = await redis.set(
-      DEDUP_KEY(group, envelope.event_id),
-      '1',
-      'EX',
-      DEDUP_TTL_SECONDS,
-      'NX',
-    );
-    if (!claimed) {
-      await redis.xack(stream, group, id);
-      return;
-    }
-
-    await dispatchEnvelope(deps, envelope);
-    if (deps.onEnvelope) {
-      await deps.onEnvelope(envelope).catch((err: unknown) => {
-        log.error({ err: (err as Error).message, stream, id }, 'automation onEnvelope hook failed');
-      });
-    }
+  const envelope = parseStreamEnvelope(fields);
+  if (!envelope) {
+    log.warn({ stream, id }, 'malformed event entry; acking without dispatch');
     await redis.xack(stream, group, id);
+    return;
+  }
+
+  // Consumer-side idempotency: the producer's dedup key is a no-op on the
+  // first XADD (see publish.ts); this is where re-delivery is actually
+  // caught, per-consumer-group.
+  const dedupKey = DEDUP_KEY(group, envelope.event_id);
+  if (await redis.get(dedupKey)) {
+    await redis.xack(stream, group, id);
+    return;
+  }
+
+  await dispatchEnvelope(deps, envelope);
+  await deps.onEnvelope?.(envelope);
+  await redis.set(dedupKey, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
+  await redis.xack(stream, group, id);
+}
+
+async function processEntrySafely(
+  deps: DispatchDeps,
+  stream: string,
+  group: string,
+  id: string,
+  fields: string[],
+): Promise<void> {
+  try {
+    await processEntry(deps, stream, group, id, fields);
   } catch (err) {
-    log.error({ err: (err as Error).message, stream, id }, 'event entry processing failed');
+    deps.log.error(
+      { err: (err as Error).message, stream, id },
+      'event entry processing failed; left pending for the reclaim sweep',
+    );
+  }
+}
+
+/**
+ * Reclaims entries of `stream`/`group` idle longer than `minIdleMs` —
+ * whichever (possibly dead) consumer they were delivered to — and processes
+ * each like a freshly read entry.
+ */
+async function reclaimPendingEntries(
+  deps: DispatchDeps,
+  stream: string,
+  group: string,
+  consumer: string,
+  minIdleMs: number,
+  batchSize: number,
+): Promise<void> {
+  let claimed: [string, string[]][];
+  try {
+    const result = (await deps.redis.xautoclaim(
+      stream,
+      group,
+      consumer,
+      minIdleMs,
+      '0-0',
+      'COUNT',
+      batchSize,
+    )) as [string, [string, string[]][], string[]];
+    claimed = result?.[1] ?? [];
+  } catch (err) {
+    const message = (err as Error).message;
+    if (!message.includes('NOGROUP')) deps.log.warn({ stream, err: message }, 'xautoclaim failed');
+    return;
+  }
+  for (const [id, fields] of claimed) {
+    await processEntrySafely(deps, stream, group, id, fields);
   }
 }
 
@@ -250,18 +332,32 @@ export interface RunDispatchLoopOpts extends DispatchDeps {
   consumer?: string;
   blockMs?: number;
   batchSize?: number;
+  /** Entries idle longer than this are reclaimed from any consumer (see `reclaimPendingEntries`). */
+  reclaimMinIdleMs?: number;
+  reclaimBatchSize?: number;
+  /** How often the reclaim sweep runs; it always runs on the first iteration. */
+  reclaimIntervalMs?: number;
+  /** How often the stream set is re-discovered; see `DEFAULT_STREAM_REFRESH_MS`. */
+  streamRefreshMs?: number;
   /** Polled once per loop iteration; the loop returns once this is true. */
   shouldStop: () => boolean;
   /** Override stream discovery — used by tests to pin a fixed stream set. */
   discoverStreams?: (redis: Redis) => Promise<string[]>;
+  /** Clock for the discovery and reclaim timers; injectable for tests. */
+  now?: () => number;
 }
 
 /**
  * The automation worker's event-stream consumer: a consumer-group reader
- * (mirroring worker-diag-flush's XREADGROUP loop) that discovers event
- * streams, reads envelopes, and dispatches each to subscribed plugins via
- * `dispatchEnvelope`. A failure processing one entry (bad JSON, a redis
- * blip) is logged and the loop continues — it never crashes the worker.
+ * (mirroring worker-discord's notify loop) that periodically discovers event
+ * streams, reclaims stale pending entries, reads new envelopes, and dispatches
+ * each to subscribed plugins via `dispatchEnvelope`.
+ *
+ * Nothing inside an iteration rejects this function: a failing discovery keeps
+ * the previous stream set, a failing group creation skips that stream until
+ * the next iteration retries it, a `NOGROUP` read error forgets every created
+ * group so they are re-created (e.g. after Redis lost its data), and a failed
+ * entry stays pending for the reclaim sweep (#844).
  */
 export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> {
   const {
@@ -270,8 +366,13 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
     consumer = `automation-dispatch-${process.pid}`,
     blockMs = DEFAULT_BLOCK_MS,
     batchSize = DEFAULT_BATCH_SIZE,
+    reclaimMinIdleMs = DEFAULT_RECLAIM_MIN_IDLE_MS,
+    reclaimBatchSize = DEFAULT_RECLAIM_BATCH_SIZE,
+    reclaimIntervalMs = DEFAULT_RECLAIM_INTERVAL_MS,
+    streamRefreshMs = DEFAULT_STREAM_REFRESH_MS,
     shouldStop,
     discoverStreams = discoverEventStreams,
+    now = Date.now,
     log,
   } = opts;
   const deps: DispatchDeps = {
@@ -282,26 +383,58 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
     onEnvelope: opts.onEnvelope,
   };
 
-  const knownStreams = new Set<string>();
+  const groupsCreated = new Set<string>();
+  let streams: string[] = [];
+  let nextDiscoveryAt = Number.NEGATIVE_INFINITY;
+  let nextReclaimAt = Number.NEGATIVE_INFINITY;
 
   while (!shouldStop()) {
-    let streams: string[];
-    try {
-      streams = await discoverStreams(redis);
-    } catch (err) {
-      log.error({ err: (err as Error).message }, 'event stream discovery failed');
-      await sleep(1000);
-      continue;
+    if (now() >= nextDiscoveryAt) {
+      try {
+        streams = await discoverStreams(redis);
+        nextDiscoveryAt = now() + streamRefreshMs;
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'event stream discovery failed');
+        if (streams.length === 0) {
+          await sleep(1000);
+          continue;
+        }
+      }
     }
-    if (streams.length === 0) {
+
+    const readable: string[] = [];
+    for (const stream of streams) {
+      if (!groupsCreated.has(stream)) {
+        try {
+          await ensureConsumerGroup(redis, stream, group);
+          groupsCreated.add(stream);
+        } catch (err) {
+          log.error(
+            { err: (err as Error).message, stream },
+            'consumer group creation failed; stream skipped until the next iteration',
+          );
+          continue;
+        }
+      }
+      readable.push(stream);
+    }
+    if (readable.length === 0) {
       await sleep(blockMs);
       continue;
     }
 
-    for (const stream of streams) {
-      if (knownStreams.has(stream)) continue;
-      await ensureConsumerGroup(redis, stream, group);
-      knownStreams.add(stream);
+    if (now() >= nextReclaimAt) {
+      nextReclaimAt = now() + reclaimIntervalMs;
+      for (const stream of readable) {
+        await reclaimPendingEntries(
+          deps,
+          stream,
+          group,
+          consumer,
+          reclaimMinIdleMs,
+          reclaimBatchSize,
+        );
+      }
     }
 
     try {
@@ -314,18 +447,20 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
         'BLOCK',
         blockMs,
         'STREAMS',
-        ...streams,
-        ...streams.map(() => '>'),
+        ...readable,
+        ...readable.map(() => '>'),
       )) as [string, [string, string[]][]][] | null;
       if (!res) continue;
 
       for (const [streamKey, entries] of res) {
         for (const [id, fields] of entries) {
-          await processEntry(deps, streamKey, group, id, fields);
+          await processEntrySafely(deps, streamKey, group, id, fields);
         }
       }
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'dispatch poll iteration failed');
+      const message = (err as Error).message;
+      log.error({ err: message }, 'dispatch poll iteration failed');
+      if (message.includes('NOGROUP')) groupsCreated.clear();
       await sleep(1000);
     }
   }

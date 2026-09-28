@@ -2,7 +2,7 @@
 
 **Worker exits immediately at startup:** `REDIS_URL` (as of `INT-4`) and `DATABASE_URL` (as of AUTO-1) are both required — the process logs `<NAME> is required` and exits 1 if either is missing. Set them (see [configuration.md](./configuration.md)).
 
-**An automation rule never fires:** confirm it is `enabled` and its `condition_type`'s trigger reaches this worker — `player_count` needs `rcon.players_polled` events, `player_flag` needs `player.connected`, `time_of_day` fires off any event but at most once per `automation:tod:<ruleId>` cooldown window. `chat_keyword` rules are **not** evaluated here — they fire in `@squad/worker-log-ingest`. Use `POST /api/v1/automation-rules/:id/dry-run` to test a rule's condition without executing its action, and check `GET /api/v1/automation-runs` for `skipped`/`failed` rows (e.g. a `kick`/`warn` with no resolvable target, or a global rule firing on an event with no `server_id`).
+**An automation rule never fires:** confirm it is `enabled` and its `condition_type`'s trigger reaches this worker — `player_count` needs `rcon.players_polled` events, `player_flag` needs `player.connected`, `time_of_day` fires off any event but at most once per `automation:tod:<ruleId>:<serverId>` cooldown window on each server (a failed firing releases the window). `chat_keyword` rules are **not** evaluated here — they fire in `@squad/worker-log-ingest`. Use `POST /api/v1/automation-rules/:id/dry-run` to test a rule's condition without executing its action, and check `GET /api/v1/automation-runs` for `skipped`/`failed` rows (e.g. a `kick`/`warn` with no resolvable target, or a global rule firing on an event with no `server_id`).
 
 **A plugin doesn't seem to receive events it should be subscribed to:**
 

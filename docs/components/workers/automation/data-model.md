@@ -20,8 +20,8 @@ The plugin host (INT-4) itself has no tables — plugin registration is in-code 
 | `events:global` | read | Shared stream for events with no `server_id` |
 | `events:server:<id>` | read | Per-server event stream (discovered via `SCAN events:server:*`) |
 | `rcon:commands:<serverId>` | write | AUTO-1 actions (`rcon_command`/`kick`/`warn`) enqueue an operator command here for worker-rcon to run |
-| `automation:tod:<ruleId>` | read/write | Per-rule cooldown so a `time_of_day` rule fires at most once per window instead of on every event inside it |
-| `dedup:automation-dispatch:v1:<event_id>` | read/write | Consumer-side idempotency: an entry already claimed here is ack'd without re-dispatching |
+| `automation:tod:<ruleId>:<serverId>` | read/write | Per-rule, per-server cooldown so a `time_of_day` rule fires at most once per window on each server instead of on every event inside it; `<serverId>` is `global` for a serverless `notify_admin` firing. Released when the firing fails |
+| `dedup:automation-dispatch:v1:<event_id>` | read/write | Consumer-side idempotency: written only after the plugins and the rule hook finished; an entry whose key exists is ack'd without re-dispatching |
 | `worker:heartbeat:automation` | write | Liveness heartbeat (`@squad/shared-config`'s `startHeartbeat`) |
 
 The `EventEnvelope` shape consumed from those streams is defined once in `packages/shared-types/src/events.ts` (`EVT-1`); the plugin manifest/permission contract is defined in `packages/shared-types/src/plugins.ts`. The `chat_keyword` condition is evaluated in `@squad/worker-log-ingest` (chat is not on the event stream), not here.
