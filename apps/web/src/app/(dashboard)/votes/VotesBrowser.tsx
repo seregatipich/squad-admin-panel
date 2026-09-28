@@ -108,6 +108,13 @@ export function VotesBrowser() {
     const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
+    // Reset synchronously, not only once the response lands (#750): a
+    // filter change with the sentinel already visible would otherwise still
+    // fire loadMore with the previous filters' cursor, and the previous
+    // filters' rows would sit on screen with no loading indicator while the
+    // new page is in flight.
+    setNextCursor(null);
+    setItems([]);
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -175,6 +182,13 @@ export function VotesBrowser() {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    // Captured before the request goes out: if loadFirstPage bumps this
+    // (a filter change, or the effect's own cleanup on unmount) while this
+    // fetch is in flight, its response is for a cursor/filters pairing that
+    // no longer applies and must not be appended or override nextCursor
+    // (#750).
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -183,12 +197,13 @@ export function VotesBrowser() {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as VoteListResponse;
+      if (!current()) return;
       setItems((prev) => appendVotePage(prev, data.items));
       setNextCursor(data.next_cursor);
     } catch (err) {
-      setError((err as Error).message);
+      if (current()) setError((err as Error).message);
     } finally {
-      setLoadingMore(false);
+      if (current()) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore]);
 
@@ -205,13 +220,18 @@ export function VotesBrowser() {
 
   const refreshHead = useCallback(() => {
     if (filters.order !== 'desc') return;
+    // Same staleness guard as loadMore (#750): a `vote.ended` push can land
+    // while a filter change's own first-page load is in flight, and this
+    // request was built from the filters in effect when it fired.
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
     })
       .then(async (res) => (res.ok ? ((await res.json()) as VoteListResponse) : null))
       .then((data) => {
-        if (!data) return;
+        if (!data || !current()) return;
         setItems((prev) => mergeVotePage(data.items, prev));
       })
       .catch(() => {});
