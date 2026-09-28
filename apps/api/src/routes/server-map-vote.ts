@@ -387,8 +387,10 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
             enabled: c.enabled,
             deprecated: c.deprecated ?? false,
           })),
+        // Same filter as the scheduler's loadRecentMatchesForMapVote (#301):
+        // a match without a layer (null or '') never counts toward cooldowns.
         recentMatches: recentRows
-          .filter((row) => row.layer !== null)
+          .filter((row) => Boolean(row.layer))
           .map((row) => ({ layer: row.layer as string, map: row.map ?? '', isSeed: row.isSeed })),
         settings: {
           selection: settings.selection,

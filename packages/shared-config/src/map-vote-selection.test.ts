@@ -41,6 +41,26 @@ describe('selectNextLayer (weighted_random)', () => {
     expect(bravo).toBeGreaterThan(400);
   });
 
+  it('#301: picks the same layer whatever order the candidates arrive in', () => {
+    const alphabetical = [
+      candidate('Alpha RAAS v1', { weight: 5 }),
+      candidate('Bravo RAAS v1', { weight: 20 }),
+      candidate('Charlie AAS v2', { weight: 40 }),
+      candidate('Delta TC v1', { weight: 35 }),
+    ];
+    // The scheduler reads candidates in insertion order, the preview sorted
+    // by layer: the same seed must still give the same pick.
+    const insertion = [alphabetical[3], alphabetical[1], alphabetical[0], alphabetical[2]].filter(
+      (c): c is MapVoteSelectionInput['candidates'][number] => c !== undefined,
+    );
+    for (let i = 0; i < 200; i++) {
+      const seed = `match-${i}`;
+      const sorted = selectNextLayer(makeInput({ candidates: alphabetical, seed }));
+      const shuffled = selectNextLayer(makeInput({ candidates: insertion, seed }));
+      expect(shuffled, seed).toEqual(sorted);
+    }
+  });
+
   it('is deterministic for the same seed', () => {
     const input = makeInput({
       candidates: [
