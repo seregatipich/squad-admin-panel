@@ -74,7 +74,24 @@ export async function findConfirmedAltLinks(
   }));
 }
 
-/** Raises one AUTO-3 alert per enabled custom ALT-7 rule and publishes it live. */
+const ALT_BAN_EVENT_KIND = 'alt.ban_evasion_suspected';
+
+/**
+ * Raises one AUTO-3 alert per enabled custom ALT-7 rule and publishes it live.
+ *
+ * Every matching rule's `alert_events` row is written by one INSERT before
+ * anything is published, so a live-bus failure can never leave a matching rule
+ * without its stored alert. Each stored alert then gets its own
+ * `alert.triggered` frame carrying `event_kind`, `alert_event_id`, `rule_id`
+ * and `severity` — the shape the other alert producers use — so clients and
+ * the live fan-out can classify it. The frame deliberately omits the player
+ * ids: the link details stay in `alert_events` for authorized readers instead
+ * of going to every connected session.
+ *
+ * @returns The number of alerts stored.
+ * @throws When the insert fails, or when publishing a frame fails (the alerts
+ *   are stored by then).
+ */
 export async function raiseAltBanAlert(
   db: DatabaseClient,
   publisher: AltBanAlertPublisher,
@@ -85,21 +102,34 @@ export async function raiseAltBanAlert(
     .from(alertRules)
     .where(and(eq(alertRules.type, 'custom'), eq(alertRules.enabled, true)));
 
-  let raised = 0;
-  for (const rule of rules) {
-    const config = rule.config as AltBanAlertRuleConfig;
-    if (config.eventKind !== 'alt.ban_evasion_suspected') continue;
-    await db.insert(alertEvents).values({
+  const alerts = rules
+    .filter((rule) => (rule.config as AltBanAlertRuleConfig).eventKind === ALT_BAN_EVENT_KIND)
+    .map((rule) => ({
       id: uuidv7(),
       ruleId: rule.id,
-      severity: config.severity ?? 'warning',
+      severity: (rule.config as AltBanAlertRuleConfig).severity ?? 'warning',
       payload,
-    });
+    }));
+  if (alerts.length === 0) return 0;
+
+  await db.insert(alertEvents).values(alerts);
+  const ts = new Date().toISOString();
+  for (const alert of alerts) {
     await publisher.publish(
       'live-bus',
-      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
+      JSON.stringify({
+        type: 'alert.triggered',
+        ts,
+        data: {
+          event_kind: ALT_BAN_EVENT_KIND,
+          alert_event_id: alert.id,
+          rule_id: alert.ruleId,
+          severity: alert.severity,
+          trigger: payload.trigger,
+          ...(payload.trigger === 'player_connected' ? { server_id: payload.server_id } : {}),
+        },
+      }),
     );
-    raised++;
   }
-  return raised;
+  return alerts.length;
 }

@@ -73,16 +73,16 @@ export async function snapshotRolesAndAdmins(
     ORDER BY c.name, p.eos_id
   `);
   return {
-    roles: (roleRows as unknown as RoleSqlRow[]).map((row) => ({
+    roles: roleRows.map((row) => ({
       name: row.name,
       squadPermissions: row.squad_permissions ?? [],
     })),
-    admins: (adminRows as unknown as AdminSqlRow[]).map((row) => ({
+    admins: adminRows.map((row) => ({
       eosId: row.eos_id,
       roleName: row.role_name,
       comment: row.comment ?? null,
     })),
-    clanPriority: (clanPriorityRows as unknown as ClanPrioritySqlRow[]).map((row) => ({
+    clanPriority: clanPriorityRows.map((row) => ({
       eosId: row.eos_id,
       clanName: row.clan_name,
     })),
