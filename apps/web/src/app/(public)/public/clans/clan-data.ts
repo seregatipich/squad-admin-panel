@@ -1,4 +1,5 @@
 import { apiFetch } from '@/lib/api';
+import { forwardedClientHeaders } from '@/lib/forwarded-client';
 
 export interface PublicClanSummary {
   id: string;
@@ -38,14 +39,22 @@ export interface PublicClan {
   }>;
 }
 
-/** Loads the PII-free anonymous clan directory. */
+/**
+ * Loads the PII-free anonymous clan directory. Relays the visitor's IP so the
+ * API rate-limits each visitor, not the web container as a whole.
+ */
 export async function getPublicClans(): Promise<{ items: PublicClanSummary[]; total: number }> {
-  return apiFetch('/api/v1/public/clans');
+  return apiFetch('/api/v1/public/clans', { headers: await forwardedClientHeaders() });
 }
 
-/** Loads one public clan page; the API returns 404 when visibility is disabled. */
+/**
+ * Loads one public clan page; the API returns 404 when visibility is disabled.
+ * Relays the visitor's IP so the API rate-limits each visitor separately.
+ */
 export async function getPublicClan(id: string): Promise<PublicClan> {
-  return apiFetch<PublicClan>(`/api/v1/public/clans/${encodeURIComponent(id)}`);
+  return apiFetch<PublicClan>(`/api/v1/public/clans/${encodeURIComponent(id)}`, {
+    headers: await forwardedClientHeaders(),
+  });
 }
 
 export function formatOnlineHours(seconds: number): string {
