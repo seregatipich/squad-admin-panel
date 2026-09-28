@@ -28,6 +28,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { announcesMatchBoundary } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendMatchPage,
@@ -304,8 +305,13 @@ export function MatchesBrowser() {
       })
       .catch(() => {});
   }, [filters]);
-  useLiveSubscription('match.started', refreshHead);
-  useLiveSubscription('match.ended', refreshHead);
+  const onEventsAppended = useCallback(
+    (event: { data: { server_id: string | null; kinds: string[] } }) => {
+      if (announcesMatchBoundary(event.data)) refreshHead();
+    },
+    [refreshHead],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   const serverOptions = useMemo(() => {
     const merged = new Map<string, ServerOption>();

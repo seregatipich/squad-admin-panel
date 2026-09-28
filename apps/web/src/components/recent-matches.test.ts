@@ -17,10 +17,22 @@ function winrate(overrides: Partial<Winrate> = {}): Winrate {
 
 describe('outcomeLabel', () => {
   it('maps every outcome to its Russian label', () => {
-    expect(outcomeLabel('win')).toBe('Победа');
-    expect(outcomeLabel('loss')).toBe('Поражение');
-    expect(outcomeLabel('draw')).toBe('Ничья');
-    expect(outcomeLabel(null)).toBe('В процессе');
+    const ended = '2026-06-01T11:00:00.000Z';
+    expect(outcomeLabel({ outcome: 'win', ended_at: ended })).toBe('Победа');
+    expect(outcomeLabel({ outcome: 'loss', ended_at: ended })).toBe('Поражение');
+    expect(outcomeLabel({ outcome: 'draw', ended_at: ended })).toBe('Ничья');
+  });
+
+  it('labels a match without an end time as in progress', () => {
+    expect(outcomeLabel({ outcome: null, ended_at: null })).toBe('В процессе');
+  });
+
+  it('labels a finished match without a recorded winner as unknown, not in progress', () => {
+    // #804: the API returns outcome=null for an aborted match (winner=null) or an
+    // unknown team, so a finished match must not read «В процессе».
+    expect(outcomeLabel({ outcome: null, ended_at: '2026-06-01T11:00:00.000Z' })).toBe(
+      'Неизвестно',
+    );
   });
 });
 
@@ -93,7 +105,7 @@ describe('RecentMatch shape', () => {
       play_seconds: 3000,
       outcome: 'win',
     };
-    expect(outcomeLabel(row.outcome)).toBe('Победа');
+    expect(outcomeLabel(row)).toBe('Победа');
     expect(formatMatchDuration(row.play_seconds)).toBe('50м 0с');
   });
 });

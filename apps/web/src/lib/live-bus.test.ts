@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getLiveBus } from './live-bus';
+import { announcesMatchBoundary, getLiveBus } from './live-bus';
 
 describe('getLiveBus (SSR / no-window environment)', () => {
   it('returns a handle with state() === closed', () => {
@@ -50,5 +50,28 @@ describe('getLiveBus (SSR / no-window environment)', () => {
     const b = getLiveBus();
     expect(a.state()).toBe('closed');
     expect(b.state()).toBe('closed');
+  });
+});
+
+describe('announcesMatchBoundary', () => {
+  it('is true when the batch carries a match start or end', () => {
+    expect(announcesMatchBoundary({ server_id: 'srv-1', kinds: ['match.started'] })).toBe(true);
+    expect(
+      announcesMatchBoundary({ server_id: 'srv-1', kinds: ['combat_death', 'match.ended'] }),
+    ).toBe(true);
+  });
+
+  it('is false for batches without a match boundary', () => {
+    expect(announcesMatchBoundary({ server_id: 'srv-1', kinds: ['player.joined'] })).toBe(false);
+    expect(announcesMatchBoundary({ server_id: 'srv-1', kinds: [] })).toBe(false);
+  });
+
+  it('checks the server when one is given', () => {
+    const batch = { server_id: 'srv-1', kinds: ['match.started'] };
+    expect(announcesMatchBoundary(batch, 'srv-1')).toBe(true);
+    expect(announcesMatchBoundary(batch, 'srv-2')).toBe(false);
+    expect(announcesMatchBoundary({ server_id: null, kinds: ['match.started'] }, 'srv-1')).toBe(
+      false,
+    );
   });
 });
