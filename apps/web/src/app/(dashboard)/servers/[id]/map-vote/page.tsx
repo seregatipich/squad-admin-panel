@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -114,59 +114,75 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/servers/${id}/map-vote`, { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/servers/${id}/map-vote/preview`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-        fetch(`/api/v1/servers/${id}/map-vote/picks?limit=20`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-        fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/servers/${id}/map-vote/versions?limit=20`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-      ]);
-      for (const res of [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes]) {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      }
-      const me = (await meRes.json()) as Me;
-      const state = (await stateRes.json()) as MapVoteResponse;
-      const previewBody = (await previewRes.json()) as PreviewResponse;
-      const picksBody = (await picksRes.json()) as { picks: PickRow[] };
-      const layersBody = (await layersRes.json()) as { rows: CatalogLayer[] };
-      const versionsBody = (await versionsRes.json()) as {
-        can_restore: boolean;
-        versions: VersionRow[];
-      };
+  // Snapshots of what `load` last put into `form`/`candidates`, so a save in
+  // one section can tell whether the *other* section has unsaved edits
+  // before `load()` refetches everything: settings and candidates are saved
+  // by two separate endpoints, but both come back from the one combined
+  // GET /map-vote, and overwriting a still-dirty section with the server's
+  // last-saved copy silently threw away whatever the operator was mid-typing
+  // there (#624).
+  const lastLoadedFormRef = useRef<string | null>(null);
+  const lastLoadedCandidatesRef = useRef<string | null>(null);
 
-      setForm({
-        enabled: state.enabled,
-        selection: state.selection,
-        layerCooldown: state.layer_cooldown,
-        mapCooldown: state.map_cooldown,
-        broadcastTemplate: state.broadcast_template ?? '',
-      });
-      setCandidates(state.candidates);
-      setPreview(previewBody);
-      setPicks(picksBody.picks);
-      setPool(layersBody.rows);
-      setVersions(versionsBody.versions);
-      setCanRestore(versionsBody.can_restore);
-      setCanEdit(state.can_edit && me.squad_permissions.includes('changemap'));
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
+  const load = useCallback(
+    async (preserve: { settings?: boolean; candidates?: boolean } = {}) => {
+      setErr(null);
+      try {
+        const [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes] = await Promise.all([
+          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+          fetch(`/api/v1/servers/${id}/map-vote`, { credentials: 'include', cache: 'no-store' }),
+          fetch(`/api/v1/servers/${id}/map-vote/preview`, {
+            credentials: 'include',
+            cache: 'no-store',
+          }),
+          fetch(`/api/v1/servers/${id}/map-vote/picks?limit=20`, {
+            credentials: 'include',
+            cache: 'no-store',
+          }),
+          fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
+          fetch(`/api/v1/servers/${id}/map-vote/versions?limit=20`, {
+            credentials: 'include',
+            cache: 'no-store',
+          }),
+        ]);
+        for (const res of [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes]) {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        }
+        const me = (await meRes.json()) as Me;
+        const state = (await stateRes.json()) as MapVoteResponse;
+        const previewBody = (await previewRes.json()) as PreviewResponse;
+        const picksBody = (await picksRes.json()) as { picks: PickRow[] };
+        const layersBody = (await layersRes.json()) as { rows: CatalogLayer[] };
+        const versionsBody = (await versionsRes.json()) as {
+          can_restore: boolean;
+          versions: VersionRow[];
+        };
+
+        const loadedForm: MapVoteSettingsForm = {
+          enabled: state.enabled,
+          selection: state.selection,
+          layerCooldown: state.layer_cooldown,
+          mapCooldown: state.map_cooldown,
+          broadcastTemplate: state.broadcast_template ?? '',
+        };
+        lastLoadedFormRef.current = JSON.stringify(loadedForm);
+        lastLoadedCandidatesRef.current = JSON.stringify(state.candidates);
+        if (!preserve.settings) setForm(loadedForm);
+        if (!preserve.candidates) setCandidates(state.candidates);
+        setPreview(previewBody);
+        setPicks(picksBody.picks);
+        setPool(layersBody.rows);
+        setVersions(versionsBody.versions);
+        setCanRestore(versionsBody.can_restore);
+        setCanEdit(state.can_edit && me.squad_permissions.includes('changemap'));
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [id],
+  );
 
   useEffect(() => {
     void load();
@@ -213,8 +229,22 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  /** Candidate count last confirmed saved on the server, from `load`'s snapshot. */
+  function savedCandidateCount(): number {
+    if (!lastLoadedCandidatesRef.current) return candidates.length;
+    try {
+      return (JSON.parse(lastLoadedCandidatesRef.current) as MapVoteCandidate[]).length;
+    } catch {
+      return candidates.length;
+    }
+  }
+
   async function saveSettings() {
-    const validation = validateSettings(form, candidates.length);
+    // Enabling autopick needs a *saved* candidate pool, not whatever is
+    // sitting unsaved in the candidates editor below (#624) — the two
+    // sections save through different endpoints, and the pool the operator
+    // is mid-editing here may not exist on the server yet.
+    const validation = validateSettings(form, savedCandidateCount());
     if (validation) {
       setErr(validation);
       return;
@@ -231,7 +261,10 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       setMsg('Настройки сохранены');
-      await load();
+      // Candidates below may still be mid-edit and unsaved — reloading must
+      // not silently discard them just because settings were saved (#624).
+      const candidatesDirty = JSON.stringify(candidates) !== lastLoadedCandidatesRef.current;
+      await load({ candidates: candidatesDirty });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -257,7 +290,9 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       setMsg('Кандидаты сохранены');
-      await load();
+      // Settings above may still be mid-edit and unsaved (#624).
+      const settingsDirty = JSON.stringify(form) !== lastLoadedFormRef.current;
+      await load({ settings: settingsDirty });
     } catch (e) {
       setErr((e as Error).message);
     } finally {

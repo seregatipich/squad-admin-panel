@@ -308,3 +308,42 @@ describe('MapVotePage — история изменений', () => {
     expect(screen.queryByRole('button', { name: 'Откатить' })).not.toBeInTheDocument();
   });
 });
+
+describe('MapVotePage — независимые несохранённые правки (#624)', () => {
+  it('сохранение настроек не стирает несохранённую правку в пуле кандидатов', async () => {
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+
+    // An unsaved edit in the candidates section below…
+    const weightField = screen.getByLabelText('Вес Yehorivka RAAS v11');
+    fireEvent.change(weightField, { target: { value: '9' } });
+    expect(weightField).toHaveValue(9);
+
+    // …must survive saving the settings section, which reloads from the
+    // server via the same combined GET /map-vote.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    });
+    await waitFor(() => expect(screen.getByText('Настройки сохранены')).toBeInTheDocument());
+
+    expect(screen.getByLabelText('Вес Yehorivka RAAS v11')).toHaveValue(9);
+  });
+
+  it('сохранение кандидатов не стирает несохранённую правку в настройках', async () => {
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+
+    // An unsaved edit in the settings section above…
+    const cooldownField = screen.getByLabelText('Кулдаун слоя (матчей)');
+    fireEvent.change(cooldownField, { target: { value: '7' } });
+    expect(cooldownField).toHaveValue(7);
+
+    // …must survive saving the candidates section.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Сохранить кандидатов' }));
+    });
+    await waitFor(() => expect(screen.getByText('Кандидаты сохранены')).toBeInTheDocument());
+
+    expect(screen.getByLabelText('Кулдаун слоя (матчей)')).toHaveValue(7);
+  });
+});
