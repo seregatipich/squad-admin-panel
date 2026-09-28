@@ -1,6 +1,7 @@
 import { mediaFiles, mediaLinks, moderationActions, players, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -55,20 +56,10 @@ const revertBody = z.object({
   reason: z.string().trim().min(1).max(300),
 });
 
-interface ModerationActionApiRow {
-  id: string;
-  action_type: string;
-  reason: string | null;
-  context: unknown;
-  report_id: string | null;
-  created_at: Date | string;
-  reverted_at: Date | string | null;
-  server_id: string | null;
-  server_name: string | null;
-  author_player_id: string | null;
-  author_name: string | null;
-  author_system_label: string | null;
-}
+const actionAuthor = alias(players, 'action_author');
+
+/** Row shape of {@link fetchActionRows}, inferred from the schema. */
+type ModerationActionApiRow = Awaited<ReturnType<typeof fetchActionRows>>[number];
 
 /** One `media_files` row attached to a moderation action, as serialized into `evidence[]`. */
 interface EvidenceItem {
@@ -110,24 +101,19 @@ function moderationWriteGuard(
   return null;
 }
 
-function toIso(value: Date | string | null): string | null {
-  if (value == null) return null;
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
 function serializeActionRow(row: ModerationActionApiRow, evidence: EvidenceItem[] = []) {
   return {
     id: row.id,
-    action_type: row.action_type,
+    action_type: row.actionType,
     reason: row.reason,
     context: row.context ?? {},
-    report_id: row.report_id,
-    created_at: toIso(row.created_at),
-    reverted_at: toIso(row.reverted_at),
-    server: row.server_id ? { id: row.server_id, name: row.server_name } : null,
-    author: row.author_player_id
-      ? { kind: 'player' as const, id: row.author_player_id, name: row.author_name }
-      : { kind: 'system' as const, label: row.author_system_label },
+    report_id: row.reportId,
+    created_at: row.createdAt.toISOString(),
+    reverted_at: row.revertedAt ? row.revertedAt.toISOString() : null,
+    server: row.serverId ? { id: row.serverId, name: row.serverName } : null,
+    author: row.authorPlayerId
+      ? { kind: 'player' as const, id: row.authorPlayerId, name: row.authorName }
+      : { kind: 'system' as const, label: row.authorSystemLabel },
     evidence,
     evidence_count: evidence.length,
   };
@@ -193,32 +179,36 @@ async function loadEvidenceForActions(
   return byAction;
 }
 
+/**
+ * Moderation-action rows with their author and server names, newest first.
+ * Built with the query builder so the row type follows the schema.
+ */
 async function fetchActionRows(
   app: Parameters<FastifyPluginAsync>[0],
-  where: SQL,
+  where: SQL | undefined,
   limit: number,
-): Promise<ModerationActionApiRow[]> {
-  return (await app.db.execute(sql`
-    SELECT
-      ma.id,
-      ma.action_type,
-      ma.reason,
-      ma.context,
-      ma.report_id,
-      ma.created_at,
-      ma.reverted_at,
-      ma.server_id,
-      s.display_name AS server_name,
-      ma.author_player_id,
-      ap.canonical_name AS author_name,
-      ma.author_system_label
-    FROM moderation_actions ma
-    LEFT JOIN players ap ON ap.id = ma.author_player_id
-    LEFT JOIN servers s ON s.id = ma.server_id
-    WHERE ${where}
-    ORDER BY ma.created_at DESC, ma.id DESC
-    LIMIT ${limit}
-  `)) as unknown as ModerationActionApiRow[];
+) {
+  return app.db
+    .select({
+      id: moderationActions.id,
+      actionType: moderationActions.actionType,
+      reason: moderationActions.reason,
+      context: moderationActions.context,
+      reportId: moderationActions.reportId,
+      createdAt: moderationActions.createdAt,
+      revertedAt: moderationActions.revertedAt,
+      serverId: moderationActions.serverId,
+      serverName: servers.displayName,
+      authorPlayerId: moderationActions.authorPlayerId,
+      authorName: actionAuthor.canonicalName,
+      authorSystemLabel: moderationActions.authorSystemLabel,
+    })
+    .from(moderationActions)
+    .leftJoin(actionAuthor, eq(actionAuthor.id, moderationActions.authorPlayerId))
+    .leftJoin(servers, eq(servers.id, moderationActions.serverId))
+    .where(where)
+    .orderBy(desc(moderationActions.createdAt), desc(moderationActions.id))
+    .limit(limit);
 }
 
 /** Input for {@link unbanPlayerOnServer}. */
@@ -233,8 +223,9 @@ export interface UnbanPlayerParams {
   /** Free-form reason recorded on the `unban` ledger row and the config version. */
   reason: string;
   /**
-   * The specific ban row the unban is invoked from. Always included in the
-   * revert set, so calling this twice for the same action stays idempotent.
+   * The specific ban row the unban is invoked from. When another unban has
+   * already reverted it, nothing is recorded and `already_reverted` is
+   * returned.
    */
   targetActionId: string;
   /** Extra `context` jsonb keys for the `unban` row (e.g. `appeal_id`). */
@@ -243,7 +234,7 @@ export interface UnbanPlayerParams {
 
 /** Outcome of {@link unbanPlayerOnServer}. */
 export type UnbanPlayerResult =
-  | { ok: false; error: 'bans_cfg_conflict' }
+  | { ok: false; error: 'bans_cfg_conflict' | 'already_reverted' }
   | {
       ok: true;
       unbanActionId: string;
@@ -272,7 +263,9 @@ export type UnbanPlayerResult =
  * @param params - The player, server, actor and reason for the unban.
  * @returns `{ ok: false, error: 'bans_cfg_conflict' }` when a concurrent
  *   editor kept winning the read-verify-write race (nothing is persisted);
- *   otherwise the ids of the new `unban` row and every reverted ban row.
+ *   `{ ok: false, error: 'already_reverted' }` when another unban reverted
+ *   `targetActionId` first (no unban row or event is recorded); otherwise the
+ *   ids of the new `unban` row and every reverted ban row.
  */
 export async function unbanPlayerOnServer(
   app: FastifyInstance,
@@ -331,8 +324,12 @@ export async function unbanPlayerOnServer(
     playerId: params.playerId,
     serverId,
     actorPlayerId: params.actorPlayerId,
-    targetActionId: params.targetActionId,
   });
+  // A concurrent unban already claimed the target row: it owns the ledger
+  // row and the event, so this call records neither.
+  if (!revertedActionIds.includes(params.targetActionId)) {
+    return { ok: false, error: 'already_reverted' };
+  }
 
   const [inserted] = await app.db
     .insert(moderationActions)
@@ -401,16 +398,16 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
       const { playerId } = req.params;
       const { limit, action_type: actionType, server_id: serverId, cursor } = req.query;
 
-      const conditions: SQL[] = [sql`ma.player_id = ${playerId}`];
-      if (actionType) conditions.push(sql`ma.action_type = ${actionType}`);
-      if (serverId) conditions.push(sql`ma.server_id = ${serverId}`);
+      const conditions: SQL[] = [eq(moderationActions.playerId, playerId)];
+      if (actionType) conditions.push(eq(moderationActions.actionType, actionType));
+      if (serverId) conditions.push(eq(moderationActions.serverId, serverId));
       if (cursor) {
         conditions.push(
-          sql`(ma.created_at, ma.id) < (SELECT created_at, id FROM moderation_actions WHERE id = ${cursor})`,
+          sql`(${moderationActions.createdAt}, ${moderationActions.id}) < (SELECT created_at, id FROM moderation_actions WHERE id = ${cursor})`,
         );
       }
 
-      const rows = await fetchActionRows(app, sql.join(conditions, sql` AND `), limit);
+      const rows = await fetchActionRows(app, and(...conditions), limit);
       const evidenceByAction = await loadEvidenceForActions(
         app,
         rows.map((row) => row.id),
@@ -528,7 +525,7 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
-      const rows = await fetchActionRows(app, sql`ma.id = ${result.actionId}`, 1);
+      const rows = await fetchActionRows(app, eq(moderationActions.id, result.actionId), 1);
       const row = rows[0];
       if (!row) throw new Error('moderation action row missing immediately after insert');
       const evidenceByAction = await loadEvidenceForActions(app, [row.id]);
@@ -559,6 +556,7 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
           playerId: moderationActions.playerId,
           serverId: moderationActions.serverId,
           actionType: moderationActions.actionType,
+          revertedAt: moderationActions.revertedAt,
         })
         .from(moderationActions)
         .where(eq(moderationActions.id, req.params.id))
@@ -567,9 +565,19 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'moderation_action_not_found' };
       }
+      // The audit row is about the player (resource 'player'), not the
+      // moderation_actions row named by `:id`.
+      req.auditSnapshots = {
+        targetId: target.playerId,
+        before: { moderation_action_id: target.id },
+      };
       if (target.actionType !== 'ban') {
         reply.code(400);
         return { error: 'not_a_ban_action' };
+      }
+      if (target.revertedAt) {
+        reply.code(409);
+        return { error: 'already_reverted' };
       }
       if (!target.serverId) {
         reply.code(409);
@@ -607,7 +615,17 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: result.error };
       }
 
-      const rows = await fetchActionRows(app, sql`ma.id = ${result.unbanActionId}`, 1);
+      req.auditSnapshots = {
+        targetId: target.playerId,
+        before: { moderation_action_id: target.id },
+        after: {
+          unban_action_id: result.unbanActionId,
+          reverted_action_ids: result.revertedActionIds,
+          reason: req.body.reason,
+        },
+      };
+
+      const rows = await fetchActionRows(app, eq(moderationActions.id, result.unbanActionId), 1);
       const row = rows[0];
       if (!row) throw new Error('unban moderation action row missing immediately after insert');
 

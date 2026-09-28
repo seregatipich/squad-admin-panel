@@ -430,6 +430,65 @@ describe('POST /api/v1/moderation-actions/:id/revert', () => {
     expect(reverted?.revertedAt).not.toBeNull();
   });
 
+  it('refuses to revert an already-reverted ban and keeps who reverted it (#70)', async () => {
+    const targetId = await seedPlayer(testSteamId(977125), 'RevertTwice');
+    const [ban] = await h.db
+      .insert(moderationActions)
+      .values({
+        playerId: targetId,
+        serverId,
+        actionType: 'ban',
+        authorPlayerId: actorId,
+        reason: 'wallhack',
+        context: { ban_length: '0' },
+      })
+      .returning({ id: moderationActions.id });
+    if (!ban) throw new Error('failed to seed ban action');
+    const revert = () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/moderation-actions/${ban.id}/revert`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ reason: 'appeal accepted' }),
+      });
+
+    expect((await revert()).statusCode).toBe(200);
+    const audit = await assertAuditRow(h, {
+      action: 'moderation.revert',
+      resource: 'player',
+      targetId,
+    });
+    expect(audit.targetId).toBe(targetId);
+
+    const [first] = await h.db
+      .select({
+        revertedAt: moderationActions.revertedAt,
+        revertedBy: moderationActions.revertedBy,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, ban.id));
+
+    const again = await revert();
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toEqual({ error: 'already_reverted' });
+
+    const [after] = await h.db
+      .select({
+        revertedAt: moderationActions.revertedAt,
+        revertedBy: moderationActions.revertedBy,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, ban.id));
+    expect(after).toEqual(first);
+    const unbans = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(
+        and(eq(moderationActions.playerId, targetId), eq(moderationActions.actionType, 'unban')),
+      );
+    expect(unbans).toHaveLength(1);
+  });
+
   it('revert marks every active ban row for that player and server as reverted', async () => {
     const targetId = await seedPlayer(testSteamId(977123), 'DoubleBanned');
     const targetSteamId = String(testSteamId(977123));
