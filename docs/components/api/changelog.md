@@ -1,5 +1,18 @@
 # `api` — changelog
 
+## 2026-09-27 — Маршруты игроков, логов и медиа: права и корректность (#40)
+
+### Security
+
+- Метки игроков: `POST /api/v1/players/:playerId/marks` и `DELETE …/marks/:markId` требуют `player:set_flags` (право больше не `unimplemented`), чтение меток, `GET /api/v1/mark-types` и `GET /api/v1/marks/active-summary` — `player:view`. Раньше хватало `panel_access`, и API-токен с любым посторонним scope мог ставить и снимать метки.
+- `GET /api/v1/players/:playerId/compare-online`, `/coplay`, `/ban-alt-warning` и `/dossier` объявляют `player:view`, поэтому scopes API-токена сужают и их.
+- `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats` и `/vehicle-stats` требуют `player:view` и, как `/dossier`, `combat_view` для чужого игрока (свой игрок открыт без него).
+
+### Fixed
+
+- `GET /api/v1/logs` применяет фильтры во время сканирования стрима: читает порциями, пока не наберёт `limit` совпадений или не просканирует 20 000 записей, и возвращает `newest_scanned_id`/`oldest_scanned_id`. Живой хвост в «Логах» продвигает `after` до `newest_scanned_id` даже при пустой выдаче, поэтому длинная серия неподходящих записей больше не останавливает его.
+- `DELETE /api/v1/media/:id/publications/:destination` отвечает `409 publication_in_progress`, если воркер уже загружает публикацию (`status = 'uploading'`), и не удаляет строку.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

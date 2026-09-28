@@ -8,7 +8,7 @@ import {
   mediaPublishInput,
   mediaPublishingSettingsInput,
 } from '@squad/shared-types';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -210,17 +210,28 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'media_not_found' };
       }
 
+      const target = and(
+        eq(mediaPublications.mediaId, media.id),
+        eq(mediaPublications.destination, req.params.destination),
+      );
+      // A row the media-publisher worker already claimed is left alone: the
+      // upload is in flight and cannot be recalled, and deleting the row would
+      // lose its outcome and let a new POST queue a duplicate public post.
       const removed = await app.db
         .delete(mediaPublications)
-        .where(
-          and(
-            eq(mediaPublications.mediaId, media.id),
-            eq(mediaPublications.destination, req.params.destination),
-          ),
-        )
+        .where(and(target, ne(mediaPublications.status, 'uploading')))
         .returning();
       const row = removed[0];
       if (!row) {
+        const [existing] = await app.db
+          .select({ status: mediaPublications.status })
+          .from(mediaPublications)
+          .where(target)
+          .limit(1);
+        if (existing) {
+          reply.code(409);
+          return { error: 'publication_in_progress' };
+        }
         reply.code(404);
         return { error: 'publication_not_found' };
       }

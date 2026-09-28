@@ -439,6 +439,32 @@ describe('DELETE /api/v1/media/:id/publications/:destination', () => {
     expect(res.json()).toEqual({ error: 'publication_not_found' });
   });
 
+  // Regression (#40, #198): a row the worker already claimed (`uploading`)
+  // was deleted anyway, so the upload finished with no panel record and a
+  // retry queued a duplicate public post.
+  it('refuses to delete a publication that is already uploading with 409', async () => {
+    const mediaId = await insertStoredMedia();
+    await queueTelegram(mediaId);
+    await h.db
+      .update(mediaPublications)
+      .set({ status: 'uploading' })
+      .where(eq(mediaPublications.mediaId, mediaId));
+
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/media/${mediaId}/publications/telegram`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'publication_in_progress' });
+    const rows = await h.db
+      .select({ status: mediaPublications.status })
+      .from(mediaPublications)
+      .where(eq(mediaPublications.mediaId, mediaId));
+    expect(rows).toEqual([{ status: 'uploading' }]);
+  });
+
   it('rejects an unknown destination with 400', async () => {
     const mediaId = await insertStoredMedia();
 
