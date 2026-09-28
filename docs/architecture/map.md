@@ -789,7 +789,7 @@ Seven paths are reachable without a session, plus two implicit ones. What protec
 | `GET /api/v1/public/clans`, `/public/clans/:id` | `public-clans.ts:55,78` | `rateLimit { max: 60, '1 minute' }` |
 | `GET /api/v1/public/banlist` | `public-banlist.ts:104` | 30/min + `banlist:read` scope + the `banlist_publication_settings` master switch (404 when off) + ETag/304. Never emits IPs or admin notes |
 | `GET /api/v1/public/whitelist/settings` | `whitelist-applications.ts:183` | 60/min |
-| `POST /api/v1/public/whitelist/applications` | `whitelist-applications.ts:197` | **5/hour**, plus a partial unique index on `status='pending'` → 409 |
+| `POST /api/v1/public/whitelist/applications` | `whitelist-applications.ts` | **5/hour**, a Steam session is required (the SteamID64 comes from it, #44), plus a partial unique index on `status='pending'` → 409 |
 | `GET/…/api/v1/auth/steam/*` | `auth-steam.ts:22,48` | 30/min and 10/min |
 | `GET /api/v1/setup/status` | `setup.ts` | None — no `permissions` key, so the auth hook returns early |
 | `GET /api/v1/host/bridge-status` | `host.ts:44-46` | None — an unintended hole, leaking bridge version and hostname |
