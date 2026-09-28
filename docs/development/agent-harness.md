@@ -61,7 +61,7 @@ The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and 
 scripts/apply-rulesets.sh   # requires gh with admin access
 ```
 
-> **Not applied yet (checked 2026-09-26):** the repository is public, so GitHub accepts rulesets on it, but `gh api repos/seregatipich/squad-admin-panel/rulesets` returns `[]` — `scripts/apply-rulesets.sh` has not been run since the move to this repository (the former private organization repository could not have rulesets without GitHub Pro/Team). Until it is run, the client hooks and the `branch-guard` audit are the only enforcement.
+> **Applied (2026-09-28):** `scripts/apply-rulesets.sh` has been run against this repository — `gh api repos/seregatipich/squad-admin-panel/rulesets` now lists `block-main`, `protect-dev` and `protect-master`, all `enforcement: active`. Re-run the script after editing any file under `.github/rulesets/` to push the change (idempotent create-or-update by name).
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
