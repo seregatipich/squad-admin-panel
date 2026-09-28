@@ -12,6 +12,7 @@
 # Usage:
 #   eval "$(bash scripts/new-test-db.sh <slug>)"     # provision + export both vars
 #   bash scripts/new-test-db.sh <slug>               # just print the export lines
+#   bash scripts/new-test-db.sh --drop <slug>        # drop a database this created
 #
 # Progress goes to stderr; ONLY the two `export …` lines go to stdout, so the
 # command is safe to `eval`. Idempotent: re-running for the same slug reuses the DB.
@@ -26,26 +27,49 @@ die() {
   exit 1
 }
 
+# Normalises a slug into the same valid, collision-resistant database
+# identifier the provisioning path below computes, so a caller that wants to
+# drop "its" database later (e.g. a --drop invocation) always names the same
+# database this script would create or reuse for that slug.
+dbname_for_slug() {
+  local slug=$1 db_slug dbname hash prefix_len
+  db_slug=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
+  dbname="test_${db_slug}"
+  # Postgres identifiers are truncated to NAMEDATALEN-1 (63 bytes). A long
+  # slug (agent worktree/branch-derived names easily exceed this) would
+  # otherwise get silently truncated by CREATE DATABASE while an existence
+  # check still compared against the full, untruncated name — so a re-run
+  # never found "its" database and CREATE DATABASE failed with "already
+  # exists". Truncate here, deterministically; when truncation would
+  # collide two different long slugs, mix in a short hash of the full name
+  # so they still land on different databases.
+  if [ ${#dbname} -gt 63 ]; then
+    hash=$(printf '%s' "$dbname" | cksum | cut -d' ' -f1)
+    hash=$(printf '%08x' "$hash")
+    prefix_len=$((63 - 1 - ${#hash}))
+    dbname="${dbname:0:$prefix_len}_${hash}"
+  fi
+  printf '%s' "$dbname"
+}
+
+if [ "${1:-}" = "--drop" ]; then
+  slug=${2:-}
+  [ -n "$slug" ] || die "usage: new-test-db.sh --drop <slug>"
+  dbname=$(dbname_for_slug "$slug")
+  container=${PG_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 'postgres' || true)}
+  [ -n "$container" ] || die "no running postgres container found (set PG_CONTAINER); is the local stack up?"
+  PG_USER=${PG_USER:-admin}
+  log "→ dropping database ${dbname}"
+  docker exec "$container" psql -U "$PG_USER" -d "$PG_USER" -q -c \
+    "DROP DATABASE IF EXISTS \"${dbname}\" WITH (FORCE)" >/dev/null 2>&1 ||
+    die "failed to drop database ${dbname}"
+  log "✓ dropped ${dbname}"
+  exit 0
+fi
+
 slug=${1:-}
 [ -n "$slug" ] || die "usage: new-test-db.sh <slug>"
-# Normalise the slug into a valid, collision-resistant database identifier.
-db_slug=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
-dbname="test_${db_slug}"
-
-# Postgres identifiers are truncated to NAMEDATALEN-1 (63 bytes). A long slug
-# (agent worktree/branch-derived names easily exceed this) would otherwise
-# get silently truncated by CREATE DATABASE while the existence check above
-# still compares against the full, untruncated name — so a re-run never
-# finds "its" database and CREATE DATABASE fails with "already exists".
-# Truncate here, deterministically, before either query runs; when
-# truncation would collide two different long slugs, mix in a short hash of
-# the full name so they still land on different databases.
-if [ ${#dbname} -gt 63 ]; then
-  hash=$(printf '%s' "$dbname" | cksum | cut -d' ' -f1)
-  hash=$(printf '%08x' "$hash")
-  prefix_len=$((63 - 1 - ${#hash}))
-  dbname="${dbname:0:$prefix_len}_${hash}"
-fi
+dbname=$(dbname_for_slug "$slug")
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 env_file="$repo_root/.env"
