@@ -225,4 +225,69 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
       await fixture.sql.end({ timeout: 5 });
     }
   });
+
+  /**
+   * #49: the bigserial default used to hand out the id before the trigger took
+   * the chain lock, so a writer that got its id first but the lock second was
+   * chained after a higher id. The verifier walks by id and reported a false
+   * "Chain break". The session holding advisory lock 42 parks the first
+   * insert between id allocation and the trigger to force that interleaving.
+   */
+  it('keeps id order equal to chain order when concurrent inserts race for the lock', async () => {
+    const fixture = await auditDatabase();
+    const gate = postgres(fixture.url, { max: 1, prepare: false });
+    const slow = postgres(fixture.url, { max: 1, prepare: false });
+    try {
+      await gate`SELECT pg_advisory_lock(42)`;
+      const slowInsert = slow`
+        INSERT INTO audit_log (
+          created_at, actor_kind, actor_system_label, action_type, context
+        )
+        VALUES (
+          ${new Date('2026-08-13T10:00:00.000Z')},
+          ${'system'},
+          ${'audit-chain-test'},
+          ${'slow.writer'},
+          (SELECT '{}'::jsonb FROM (SELECT pg_advisory_lock(42)) AS parked)
+        )
+      `.execute();
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const [waiting] = await fixture.sql<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM pg_locks
+          WHERE locktype = 'advisory' AND objid = 42 AND NOT granted
+        `;
+        if (waiting?.count === '1') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await fixture.sql`
+        INSERT INTO audit_log (
+          created_at, actor_kind, actor_system_label, action_type, context
+        )
+        VALUES (
+          ${new Date('2026-08-13T10:00:01.000Z')},
+          ${'system'},
+          ${'audit-chain-test'},
+          ${'fast.writer'},
+          ${fixture.sql.json({})}
+        )
+      `;
+      await gate`SELECT pg_advisory_unlock(42)`;
+      await slowInsert;
+
+      const rows = await fixture.sql<{ action_type: string }[]>`
+        SELECT action_type FROM audit_log ORDER BY id ASC
+      `;
+      assert.deepEqual(
+        rows.map((row) => row.action_type),
+        ['fast.writer', 'slow.writer'],
+      );
+      const result = runCli(fixture.url);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'ok: audit chain intact (2 rows)\n');
+    } finally {
+      await gate.end({ timeout: 5 });
+      await slow.end({ timeout: 5 });
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
 });
