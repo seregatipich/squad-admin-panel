@@ -244,7 +244,11 @@ export function ServerControls({ serverId }: { serverId: string }) {
             method: 'POST',
             credentials: 'include',
           });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          // The dialog shows this message, so carry the API's error code.
+          if (!r.ok) {
+            const body = (await r.json().catch(() => null)) as { error?: string } | null;
+            throw new Error(body?.error ?? `HTTP ${r.status}`);
+          }
           void refresh();
         }}
       />

@@ -6,7 +6,13 @@ const push = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ push, refresh: vi.fn() })),
 }));
-vi.mock('@/components/ForceStopDialog', () => ({ ForceStopDialog: () => null }));
+let latestForceStopProps: { onConfirm: () => Promise<void> } | undefined;
+vi.mock('@/components/ForceStopDialog', () => ({
+  ForceStopDialog: (props: { onConfirm: () => Promise<void> }) => {
+    latestForceStopProps = props;
+    return null;
+  },
+}));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
 let latestProgressModalProps:
@@ -61,6 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   push.mockReset();
   latestProgressModalProps = undefined;
+  latestForceStopProps = undefined;
 });
 
 describe('ServerControls', () => {
@@ -208,5 +215,18 @@ describe('ServerControls', () => {
     await renderControls();
 
     expect(screen.queryByRole('button', { name: /Опасная зона/ })).not.toBeInTheDocument();
+  });
+
+  // #780: ForceStopDialog shows the rejection message, so it must name the API's reason.
+  it('rejects the force-stop confirmation with the API error code', async () => {
+    stubFetch('running', undefined, (url, init) =>
+      url === `/api/v1/servers/${SERVER_ID}/force-stop` && init?.method === 'POST'
+        ? ({ ok: false, status: 403, json: async () => ({ error: 'forbidden' }) } as Response)
+        : undefined,
+    );
+    await renderControls();
+    await screen.findByRole('button', { name: 'Стоп' });
+
+    await expect(latestForceStopProps?.onConfirm()).rejects.toThrow('forbidden');
   });
 });
