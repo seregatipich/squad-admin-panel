@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
@@ -101,6 +102,33 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       app.log.warn({ err: (err as Error).message }, 'hostInfo failed');
       return null;
     }
+  }
+
+  /**
+   * Creates and starts a server's container from its settings, for when no
+   * container exists (never created, or removed out of band).
+   *
+   * @returns The new container's id.
+   */
+  async function runServerContainer(
+    serverId: string,
+    settings: typeof serverSettings.$inferSelect,
+  ): Promise<string> {
+    const runRes = await app.bridge.containerRun({
+      server_id: serverId,
+      image: SERVER_IMAGE,
+      game_port: settings.gamePort,
+      query_port: settings.queryPort,
+      beacon_port: settings.beaconPort,
+      rcon_port: settings.rconPort,
+      max_players: settings.maxPlayers,
+      tickrate: settings.tickrate,
+      multihome: settings.multihome,
+      configs_host: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`,
+      saved_host: `${PANEL_SAVED_ROOT}/${serverId}`,
+      depot_volume: DEPOT_VOLUME_NAME,
+    });
+    return runRes.container_id;
   }
 
   fast.get(
@@ -208,46 +236,54 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         };
       }
 
-      await app.db.transaction(async (tx) => {
-        await tx.insert(servers).values({
-          id,
-          displayName: body.display_name,
-          slug: body.slug,
-          description: body.description ?? null,
-          status: 'pending',
-          runtime: 'container',
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(servers).values({
+            id,
+            displayName: body.display_name,
+            slug: body.slug,
+            description: body.description ?? null,
+            status: 'pending',
+            runtime: 'container',
+          });
+          await tx.insert(serverSettings).values({
+            serverId: id,
+            installPath: `${PANEL_CONFIGS_ROOT}/${id}`,
+            gamePort: body.game_port,
+            queryPort: body.query_port,
+            beaconPort: body.beacon_port,
+            rconPort: body.rcon_port,
+            maxPlayers: body.max_players ?? 100,
+            tickrate: body.tickrate ?? 50,
+            multihome: body.multihome ?? '0.0.0.0',
+            extraArgs: body.extra_args ?? '',
+            launchArgsOverride: body.launch_args_override ?? null,
+            cpuAffinity: body.cpu_affinity ?? null,
+            cpuWeight: body.cpu_weight ?? null,
+            niceness: body.niceness ?? null,
+            memoryHighMb: body.memory_high_mb ?? null,
+            memoryMaxMb: body.memory_max_mb ?? null,
+            ioWeight: body.io_weight ?? null,
+          });
+          const rconPassword = randomBytes(24).toString('base64url');
+          const blob = encrypt(app.encryptionKey, rconPassword);
+          // Leave rconHost unset so each downstream caller (api vs worker-rcon)
+          // resolves it against its own RCON_HOST_DEFAULT env var at connect
+          // time — see apps/workers/rcon/src/index.ts reconcile() and
+          // server-configs.ts reloadServerConfig().
+          await tx.insert(serverCredentials).values({
+            serverId: id,
+            rconPort: body.rcon_port,
+            rconPasswordEncrypted: serialize(blob),
+          });
         });
-        await tx.insert(serverSettings).values({
-          serverId: id,
-          installPath: `${PANEL_CONFIGS_ROOT}/${id}`,
-          gamePort: body.game_port,
-          queryPort: body.query_port,
-          beaconPort: body.beacon_port,
-          rconPort: body.rcon_port,
-          maxPlayers: body.max_players ?? 100,
-          tickrate: body.tickrate ?? 50,
-          multihome: body.multihome ?? '0.0.0.0',
-          extraArgs: body.extra_args ?? '',
-          launchArgsOverride: body.launch_args_override ?? null,
-          cpuAffinity: body.cpu_affinity ?? null,
-          cpuWeight: body.cpu_weight ?? null,
-          niceness: body.niceness ?? null,
-          memoryHighMb: body.memory_high_mb ?? null,
-          memoryMaxMb: body.memory_max_mb ?? null,
-          ioWeight: body.io_weight ?? null,
-        });
-        const rconPassword = randomBytes(24).toString('base64url');
-        const blob = encrypt(app.encryptionKey, rconPassword);
-        // Leave rconHost unset so each downstream caller (api vs worker-rcon)
-        // resolves it against its own RCON_HOST_DEFAULT env var at connect
-        // time — see apps/workers/rcon/src/index.ts reconcile() and
-        // server-configs.ts reloadServerConfig().
-        await tx.insert(serverCredentials).values({
-          serverId: id,
-          rconPort: body.rcon_port,
-          rconPasswordEncrypted: serialize(blob),
-        });
-      });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          reply.code(409);
+          return { error: 'slug_in_use', message: 'An active server already uses this slug.' };
+        }
+        throw err;
+      }
       reply.code(201);
       return { id, status: 'pending' };
     },
@@ -305,11 +341,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           });
         });
       } catch (err) {
-        // Drizzle wraps the driver error in DrizzleQueryError; the Postgres
-        // SQLSTATE lives on `cause` there and on the error itself elsewhere.
-        const code =
-          (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
-        if (code === '23505') {
+        if (isUniqueViolation(err)) {
           reply.code(409);
           return { error: 'slug_in_use', message: 'An active server already uses this slug.' };
         }
@@ -624,21 +656,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         if (inspect && inspect.state !== 'not_found') {
           await app.bridge.containerStart({ name });
         } else {
-          const runRes = await app.bridge.containerRun({
-            server_id: s.id,
-            image: SERVER_IMAGE,
-            game_port: settings.gamePort,
-            query_port: settings.queryPort,
-            beacon_port: settings.beaconPort,
-            rcon_port: settings.rconPort,
-            max_players: settings.maxPlayers,
-            tickrate: settings.tickrate,
-            multihome: settings.multihome,
-            configs_host: `${PANEL_CONFIGS_ROOT}/${s.id}/ServerConfig`,
-            saved_host: `${PANEL_SAVED_ROOT}/${s.id}`,
-            depot_volume: DEPOT_VOLUME_NAME,
-          });
-          containerId = runRes.container_id;
+          containerId = await runServerContainer(s.id, settings);
         }
         await req.diag.emit({
           component: 'api',
@@ -955,6 +973,24 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'depot_update_in_progress' };
       }
+      const settings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, s.id),
+      });
+      if (!settings) {
+        reply.code(400);
+        return { error: 'server_not_installed' };
+      }
+      const actorPlayerId = req.user?.playerId;
+      const restartT0 = Date.now();
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restart.requested',
+        severity: 'info',
+        serverId: s.id,
+        actorPlayerId,
+        message: 'restart requested',
+        payload: {},
+      });
       const name = containerName(s.id);
       await app.db
         .update(servers)
@@ -965,8 +1001,71 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         ts: new Date().toISOString(),
         data: { server_id: s.id, status: 'starting', source: 'restart' },
       });
-      await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
-      await app.bridge.containerStart({ name });
+      try {
+        const inspect = await app.bridge.containerInspect({ name }).catch(() => null);
+        if (inspect?.state === 'not_found') {
+          // Removed out of band: recreate it, as /start does.
+          await runServerContainer(s.id, settings);
+        } else {
+          try {
+            await app.bridge.containerStop({ name, timeout_sec: 60 });
+          } catch (stopErr) {
+            req.log.warn(
+              { err: (stopErr as Error).message, id: s.id },
+              'container_stop failed during restart',
+            );
+            // `docker start` on a still-running container does nothing, so a
+            // failed stop that left it up must not be reported as a restart.
+            const after = await app.bridge.containerInspect({ name }).catch(() => null);
+            if (after?.running !== false) {
+              await app.db
+                .update(servers)
+                .set({ status: 'running', updatedAt: new Date() })
+                .where(eq(servers.id, s.id));
+              await req.diag.emit({
+                component: 'api',
+                kind: 'server.restart.failed',
+                severity: 'error',
+                serverId: s.id,
+                actorPlayerId,
+                message: `restart failed: container_stop: ${(stopErr as Error).message}`,
+                payload: {
+                  stage: 'container_stop',
+                  errorMessage: (stopErr as Error).message,
+                  durationMs: Date.now() - restartT0,
+                },
+              });
+              reply.code(502);
+              return {
+                error: 'container_stop_failed',
+                message: 'The container could not be stopped, so it was not restarted.',
+              };
+            }
+          }
+          await app.bridge.containerStart({ name });
+        }
+      } catch (err) {
+        const errorMessage = (err as Error).message;
+        await req.diag.emit({
+          component: 'api',
+          kind: 'server.restart.failed',
+          severity: 'error',
+          serverId: s.id,
+          actorPlayerId,
+          message: `restart failed: ${errorMessage}`,
+          payload: { errorMessage, durationMs: Date.now() - restartT0 },
+        });
+        throw err;
+      }
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restart.done',
+        severity: 'info',
+        serverId: s.id,
+        actorPlayerId,
+        message: 'restart succeeded',
+        payload: { durationMs: Date.now() - restartT0 },
+      });
       // The sidecar was not part of the restart, but a prior manual stop may
       // have left it down; relaunch it so a restarted cutover server keeps its
       // log publisher. Non-fatal: the squad container is already restarting.
