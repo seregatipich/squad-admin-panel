@@ -33,8 +33,18 @@ function pendingItem(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function mockFetch(opts: { items?: unknown[]; patchStatus?: number } = {}) {
+function mockFetch(
+  opts: {
+    items?: unknown[];
+    patchStatus?: number;
+    /** Total rows the API reports — may exceed `items.length` for a single page. */
+    total?: number;
+    /** Serves a different page's items keyed by the requested `page` param. */
+    pages?: Record<string, unknown[]>;
+  } = {},
+) {
   const items = opts.items ?? [pendingItem()];
+  const total = opts.total ?? items.length;
   const patchStatus = opts.patchStatus ?? 200;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -55,10 +65,13 @@ function mockFetch(opts: { items?: unknown[]; patchStatus?: number } = {}) {
       return Promise.resolve(new Response(body, { status }));
     }
     if (url.includes('/api/v1/whitelist/applications')) {
+      const requestedPage = new URL(url, 'http://localhost').searchParams.get('page') ?? '1';
+      const pageItems = opts.pages?.[requestedPage] ?? items;
       return Promise.resolve(
-        new Response(JSON.stringify({ items, total: items.length, page: 1, page_size: 20 }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ items: pageItems, total, page: Number(requestedPage), page_size: 20 }),
+          { status: 200 },
+        ),
       );
     }
     if (url.endsWith('/api/v1/roles')) {
@@ -94,6 +107,39 @@ describe('ApplicationsSection', () => {
       vi.stubGlobal('fetch', fn);
       render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       expect(await screen.findByText(/заявок нет/i)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows the true total, not just the current page size, and paginates beyond the first page (#722)',
+    async () => {
+      const firstPage = Array.from({ length: 20 }, (_, i) =>
+        pendingItem({
+          id: `app-${i + 1}`,
+          steam_id64: `7656119800000${String(i + 1).padStart(4, '0')}`,
+        }),
+      );
+      const secondPageItem = pendingItem({ id: 'app-21', steam_id64: '76561198000099999' });
+      const { fn, calls } = mockFetch({
+        items: firstPage,
+        total: 21,
+        pages: { '1': firstPage, '2': [secondPageItem] },
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+
+      // The header count must reflect the API's `total`, not `items.length`
+      // (which is capped at the page size).
+      expect(await screen.findByText('21')).toBeInTheDocument();
+      expect(screen.queryByText('76561198000099999')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+
+      expect(await screen.findByText('76561198000099999')).toBeInTheDocument();
+      const listCalls = calls.filter((c) => c.url.includes('/api/v1/whitelist/applications?'));
+      expect(listCalls.at(-1)?.url).toContain('page=2');
+      expect(listCalls.at(-1)?.url).toContain('page_size=20');
     },
     TEST_TIMEOUT_MS,
   );

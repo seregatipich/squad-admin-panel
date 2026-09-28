@@ -10,6 +10,7 @@ import {
   EmptyState,
   FieldRow,
   InlineBanner,
+  Pagination,
   SegmentedControl,
   Select,
   TextInput,
@@ -66,6 +67,8 @@ const TERM_PRESETS: { value: string; label: string; days: number | null | 'defau
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Mirrors PAGE_SIZE_DEFAULT in apps/api/src/routes/whitelist-applications.ts. */
+const PAGE_SIZE = 20;
 
 /** Russian text for the approval refusals of the whitelist role guard (#8). */
 const DECISION_ERROR_TEXT: Record<string, string> = {
@@ -108,6 +111,8 @@ export function ApplicationsSection({
   const [enabled, setEnabled] = useState(false);
   const [defaultDays, setDefaultDays] = useState('');
   const [items, setItems] = useState<ApplicationItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
   const [savingSettings, setSavingSettings] = useState(false);
@@ -120,14 +125,20 @@ export function ApplicationsSection({
   const [termPick, setTermPick] = useState<Record<string, string>>({});
   const [notePick, setNotePick] = useState<Record<string, string>>({});
 
-  const loadList = useCallback(async (status: StatusFilter) => {
-    const res = await fetch(`/api/v1/whitelist/applications?status=${status}`, {
+  const loadList = useCallback(async (status: StatusFilter, requestedPage: number) => {
+    const params = new URLSearchParams({
+      status,
+      page: String(requestedPage),
+      page_size: String(PAGE_SIZE),
+    });
+    const res = await fetch(`/api/v1/whitelist/applications?${params.toString()}`, {
       credentials: 'include',
       cache: 'no-store',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { items: ApplicationItem[] };
+    const body = (await res.json()) as { items: ApplicationItem[]; total: number };
     setItems(body.items);
+    setTotal(body.total);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -149,11 +160,11 @@ export function ApplicationsSection({
         throw new Error(`HTTP ${settingsRes.status}`);
       }
       if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-      await loadList(statusFilter);
+      await loadList(statusFilter, page);
     } catch (e) {
       setError(`Не удалось загрузить заявки: ${(e as Error).message}`);
     }
-  }, [loadList, statusFilter]);
+  }, [loadList, statusFilter, page]);
 
   useEffect(() => {
     void refresh();
@@ -231,7 +242,7 @@ export function ApplicationsSection({
         return;
       }
       setNotice(status === 'approved' ? 'Заявка одобрена.' : 'Заявка отклонена.');
-      await loadList(statusFilter);
+      await loadList(statusFilter, page);
     } catch (e) {
       setError(`Ошибка сети: ${(e as Error).message}`);
     } finally {
@@ -249,7 +260,7 @@ export function ApplicationsSection({
     <Card padding="none">
       <CardHeader
         title="Заявки на whitelist"
-        count={items.length}
+        count={total}
         description={
           <>
             Публичный портал <code>/public/whitelist</code>: любой игрок оставляет заявку, а вы
@@ -314,7 +325,13 @@ export function ApplicationsSection({
           ariaLabel="Статус заявок"
           items={STATUS_FILTERS}
           value={statusFilter}
-          onChange={(next) => setStatusFilter(next as StatusFilter)}
+          onChange={(next) => {
+            // A status change starts a fresh listing — otherwise a page
+            // number carried over from a longer queue could ask for a page
+            // past the end of a shorter one (#722).
+            setStatusFilter(next as StatusFilter);
+            setPage(1);
+          }}
         />
 
         {items.length === 0 ? (
@@ -412,6 +429,22 @@ export function ApplicationsSection({
             ))}
           </ul>
         )}
+
+        {total > PAGE_SIZE ? (
+          <div className="flex justify-end">
+            <Pagination
+              page={page}
+              pageCount={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+              onChange={setPage}
+              allowJump
+              labels={{
+                previous: 'Назад',
+                next: 'Вперёд',
+                page: (current, of) => `Стр. ${current} из ${of}`,
+              }}
+            />
+          </div>
+        ) : null}
       </CardBody>
     </Card>
   );

@@ -64,7 +64,9 @@ describe('GeoipIntegrationPage', () => {
   it(
     'disables Save (and never sends a PUT) while settings failed to load (#713)',
     async () => {
-      const fn = vi.fn(() => Promise.resolve(new Response('{}', { status: 500 })));
+      const fn = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+        Promise.resolve(new Response('{}', { status: 500 })),
+      );
       vi.stubGlobal('fetch', fn);
       render(<GeoipIntegrationPage />);
 
@@ -75,9 +77,7 @@ describe('GeoipIntegrationPage', () => {
       fireEvent.click(saveButton);
       // Only the initial GET (and the reload it never triggered) should have
       // been made — no PUT slipped through a disabled button.
-      expect(
-        fn.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PUT'),
-      ).toHaveLength(0);
+      expect(fn.mock.calls.filter((call) => call[1]?.method === 'PUT')).toHaveLength(0);
     },
     TEST_TIMEOUT_MS,
   );
