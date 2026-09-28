@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { requestUser } from '../lib/request-user.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -78,12 +79,13 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
   return { from, to };
 }
 
+/**
+ * Answers 403 for a caller without `panel_access`. Authentication itself is
+ * enforced by the fail-closed hook in `plugins/auth.ts`, which answers 401
+ * before this handler can run (#98).
+ */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
+  if (!requestUser(req).permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
   }

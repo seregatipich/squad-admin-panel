@@ -13,6 +13,7 @@ import {
   exchangeCode,
   fetchDiscordUser,
 } from '../lib/discord-oauth.js';
+import { requestUser } from '../lib/request-user.js';
 
 const STATE_COOKIE = '__Host-discord-state';
 const STATE_TTL_SECONDS = 300;
@@ -23,13 +24,27 @@ const AUDIT_LINK = 'integration.discord.link';
 const AUDIT_UNLINK = 'integration.discord.unlink';
 
 const PG_UNIQUE_VIOLATION = '23505';
+const DISCORD_USER_ID_UNIQUE = 'player_discord_links_discord_user_id_unique';
 
-/** Drizzle wraps the driver error, so the SQLSTATE can sit one level down. */
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    (err as { code?: string }).code === PG_UNIQUE_VIOLATION ||
-    (err as { cause?: { code?: string } }).cause?.code === PG_UNIQUE_VIOLATION
+/**
+ * Maps a unique violation on `player_discord_links` to the conflict it
+ * reports (#95). The table has two unique constraints: the `player_id`
+ * primary key (the caller already has a link — also what two concurrent
+ * callbacks of one player race into) and `discord_user_id` (the Discord
+ * account belongs to another player). Drizzle wraps the driver error, so the
+ * SQLSTATE and constraint name can sit one level down.
+ *
+ * @returns the 409 error code, or null when `err` is not a unique violation.
+ */
+function linkConflict(err: unknown): 'already_linked_self' | 'already_linked_other' | null {
+  type PgError = { code?: string; constraint_name?: string } | undefined;
+  const pgError = [err as PgError, (err as { cause?: PgError }).cause].find(
+    (candidate) => candidate?.code === PG_UNIQUE_VIOLATION,
   );
+  if (!pgError) return null;
+  return pgError.constraint_name === DISCORD_USER_ID_UNIQUE
+    ? 'already_linked_other'
+    : 'already_linked_self';
 }
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -46,28 +61,13 @@ const linkResponse = z.object({
 });
 
 /**
- * Rejects a caller without a session. `panel_access` is not checked
- * separately: `plugins/auth.ts` only ever populates `req.user` for a live
- * panel session, so holding one *is* the self-service entitlement the task
- * specifies for linking one's own Discord account.
- */
-function requireSession(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return false;
-  }
-  return true;
-}
-
-/**
  * File-local hand-guard for the force-unlink route. The task gates removing
  * *someone else's* link on the `can_assign_roles` role flag rather than on a
  * catalogue permission key (`discord:link` stays `unimplemented`), and the
  * declarative `config.permissions` mechanism only understands catalogue keys.
  */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!requireSession(req, reply)) return false;
-  if (!req.user?.permissions.canAssignRoles) {
+  if (!requestUser(req).permissions.canAssignRoles) {
     reply.code(403).send({ error: 'forbidden', required: 'can_assign_roles' });
     return false;
   }
@@ -87,7 +87,7 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/auth/discord/login',
     { config: { audit: false, rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
-      if (!requireSession(req, reply)) return reply;
+      const { playerId } = requestUser(req);
       const clientId = app.config.DISCORD_CLIENT_ID;
       if (!clientId || !app.config.DISCORD_CLIENT_SECRET) {
         return reply.code(503).send({ error: 'oauth_not_configured' });
@@ -96,7 +96,7 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
       const state = randomBytes(16).toString('base64url');
       await app.redis.set(
         `${STATE_REDIS_PREFIX}${state}`,
-        JSON.stringify({ playerId: req.user?.playerId, ts: Date.now() }),
+        JSON.stringify({ playerId, ts: Date.now() }),
         'EX',
         STATE_TTL_SECONDS,
       );
@@ -136,20 +136,20 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
       const cookieState = req.cookies[STATE_COOKIE];
       reply.clearCookie(STATE_COOKIE, { path: '/' });
 
-      if (!requireSession(req, reply)) return reply;
-      const playerId = req.user?.playerId as string;
+      const { playerId } = requestUser(req);
 
       const { code, state } = req.query;
       if (!code || !state || !cookieState || cookieState !== state) {
         return reply.code(403).send({ error: 'state_mismatch' });
       }
 
-      const stored = await app.redis.get(`${STATE_REDIS_PREFIX}${state}`);
+      // Single-use, atomically (#95): GETDEL hands the record to exactly one
+      // of any concurrent callbacks, so a replayed state never reaches the
+      // exchange twice.
+      const stored = await app.redis.getdel(`${STATE_REDIS_PREFIX}${state}`);
       if (!stored) {
         return reply.code(400).send({ error: 'state_expired' });
       }
-      // Single-use: a replayed code can never reach the exchange twice.
-      await app.redis.del(`${STATE_REDIS_PREFIX}${state}`);
 
       let statePlayerId: string | null = null;
       try {
@@ -184,15 +184,6 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(502).send({ error: 'discord_exchange_failed' });
       }
 
-      const existing = await app.db
-        .select({ playerId: playerDiscordLinks.playerId })
-        .from(playerDiscordLinks)
-        .where(eq(playerDiscordLinks.playerId, playerId))
-        .limit(1);
-      if (existing[0]) {
-        return reply.code(409).send({ error: 'already_linked_self' });
-      }
-
       try {
         await app.db.insert(playerDiscordLinks).values({
           playerId,
@@ -200,11 +191,8 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
           discordUsername,
         });
       } catch (err) {
-        // 23505 here can only be the discord_user_id unique index: the
-        // player's own row was just proven absent.
-        if (isUniqueViolation(err)) {
-          return reply.code(409).send({ error: 'already_linked_other' });
-        }
+        const conflict = linkConflict(err);
+        if (conflict) return reply.code(409).send({ error: conflict });
         throw err;
       }
 
@@ -233,10 +221,9 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/me/discord/link',
     { config: { audit: { action: AUDIT_UNLINK, resource: AUDIT_RESOURCE } } },
     async (req, reply) => {
-      if (!requireSession(req, reply)) return reply;
       const deleted = await app.db
         .delete(playerDiscordLinks)
-        .where(eq(playerDiscordLinks.playerId, req.user?.playerId as string))
+        .where(eq(playerDiscordLinks.playerId, requestUser(req).playerId))
         .returning({ playerId: playerDiscordLinks.playerId });
       if (deleted.length === 0) {
         return reply.code(404).send({ error: 'not_linked' });

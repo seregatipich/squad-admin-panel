@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 import {
   establishAuthenticatedPlayerSession,
   type PlayerIdentity,
@@ -13,15 +15,31 @@ const NONCE_REDIS_PREFIX = 'steam-nonce:';
 const RESPONSE_NONCE_REDIS_PREFIX = 'steam-response-nonce:';
 const RESPONSE_NONCE_TTL_SECONDS = 3600;
 
+/**
+ * Steam OpenID callback query (#96): our nonce `n` plus the provider's
+ * `openid.*` fields. Every value must be a single string — a repeated key
+ * (which the querystring parser turns into an array) is a 400 instead of
+ * being dropped before signature verification. `n` stays optional so a
+ * missing nonce still answers the specific `nonce_mismatch`.
+ */
+const callbackQuery = z
+  .object({
+    n: z.string().optional(),
+    'openid.return_to': z.string().optional(),
+  })
+  .catchall(z.string());
+
 const steamRoutes: FastifyPluginAsync = async (app) => {
+  const fast = app.withTypeProvider<ZodTypeProvider>();
+
   app.get(
     '/api/v1/auth/steam/login',
     { config: { audit: false, public: true, rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req, reply) => {
+    async (_req, reply) => {
       const nonce = randomBytes(16).toString('base64url');
       await app.redis.set(
         `${NONCE_REDIS_PREFIX}${nonce}`,
-        JSON.stringify({ ts: Date.now(), ip: req.ip ?? null }),
+        JSON.stringify({ ts: Date.now() }),
         'EX',
         NONCE_TTL_SECONDS,
       );
@@ -40,11 +58,14 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.get(
+  fast.get(
     '/api/v1/auth/steam/callback',
-    { config: { audit: false, public: true, rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    {
+      schema: { querystring: callbackQuery },
+      config: { audit: false, public: true, rateLimit: { max: 10, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
-      const q = req.query as Record<string, string | undefined>;
+      const q = req.query;
       const queryNonce = q.n;
       const cookieNonce = req.cookies[NONCE_COOKIE];
       reply.clearCookie(NONCE_COOKIE, { path: '/' });
@@ -53,8 +74,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'nonce_mismatch' });
       }
 
-      const stored = await app.redis.get(`${NONCE_REDIS_PREFIX}${queryNonce}`);
-      await app.redis.del(`${NONCE_REDIS_PREFIX}${queryNonce}`);
+      const stored = await app.redis.getdel(`${NONCE_REDIS_PREFIX}${queryNonce}`);
       if (!stored) {
         return reply.code(400).send({ error: 'nonce_expired' });
       }
@@ -70,7 +90,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       try {
         const params: Record<string, string> = {};
         for (const [k, v] of Object.entries(q)) {
-          if (k.startsWith('openid.') && typeof v === 'string') params[k] = v;
+          if (k.startsWith('openid.') && v !== undefined) params[k] = v;
         }
         const verified = await verifyWithSteam(params);
         steamId64 = verified.steamId64;
