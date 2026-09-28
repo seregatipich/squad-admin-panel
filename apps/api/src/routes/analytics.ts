@@ -90,10 +90,18 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   return null;
 }
 
-/** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
+/**
+ * Escapes a value for embedding as a single CSV field (RFC 4180 quoting).
+ *
+ * Values starting with `=`, `+`, `-`, `@`, tab, or carriage return are
+ * prefixed with a leading apostrophe so spreadsheet applications (Excel,
+ * LibreOffice) treat them as literal text instead of evaluating them as a
+ * formula (CSV/formula injection).
+ */
 export function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
+  const safeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  if (/[",\r\n]/.test(safeValue)) return `"${safeValue.replace(/"/g, '""')}"`;
+  return safeValue;
 }
 
 /**

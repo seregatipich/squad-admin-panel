@@ -984,7 +984,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/reconcile',
     {
       config: {
-        permissions: ['server:view'],
+        // Triggers a bridge containerInspect call, a DB status write, a
+        // live-event publish, and an audit entry — a mutating action, so it
+        // requires a mutating permission, not the read-only server:view.
+        permissions: ['server:restart'],
         audit: { action: 'server.reconcile', resource: 'server' },
       },
       schema: { params: serverIdParams },

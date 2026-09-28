@@ -59,9 +59,18 @@ function parseCsvRow(raw: string): { steamId64: string; comment: string | null }
   return { steamId64, comment: comment ? comment : null };
 }
 
-function csvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
+/**
+ * Escapes a value for embedding as a single CSV field (RFC 4180 quoting).
+ *
+ * Values starting with `=`, `+`, `-`, `@`, tab, or carriage return are
+ * prefixed with a leading apostrophe so spreadsheet applications (Excel,
+ * LibreOffice) treat them as literal text instead of evaluating them as a
+ * formula (CSV/formula injection) — `canonicalName` is player-controlled.
+ */
+export function csvCell(value: string): string {
+  const safeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  if (/[",\r\n]/.test(safeValue)) return `"${safeValue.replace(/"/g, '""')}"`;
+  return safeValue;
 }
 
 const whitelistRoutes: FastifyPluginAsync = async (app) => {
