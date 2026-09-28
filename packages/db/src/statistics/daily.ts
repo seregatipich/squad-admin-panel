@@ -75,6 +75,7 @@ export async function recomputeServerDailyStats(
       grid AS (
         SELECT s.id AS server_id, d.day_number
         FROM servers s CROSS JOIN days d
+        WHERE s.deleted_at IS NULL
       ),
       spans AS (
         SELECT
