@@ -190,6 +190,141 @@ describe('RotationCalendarPage', () => {
     expect(screen.getByText('Профили не настроены.')).toBeInTheDocument();
   }, 15_000);
 
+  it('requests a week range ending 1ms before the next Monday, not truncated to :59:00', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/rotation-schedule')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [],
+              history: [],
+              profiles: [],
+              warnings: {},
+              can_edit: true,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ rows: [] }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <RotationCalendarPage params={Promise.resolve({ id: 'server-1' })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByTestId('rotation-calendar-grid');
+    const [calendarUrl] = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('/rotation-schedule'));
+    const to = new URL(calendarUrl ?? '', 'http://localhost').searchParams.get('to');
+    expect(to).toMatch(/T23:59:59\.999Z$/);
+  });
+
+  it('fetches the layer catalog once, not again on every week switch', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/rotation-schedule')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [],
+              history: [],
+              profiles: [],
+              warnings: {},
+              can_edit: true,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ rows: [{ name: 'Yehorivka RAAS v11' }] }), { status: 200 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <RotationCalendarPage params={Promise.resolve({ id: 'server-1' })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByTestId('rotation-calendar-grid');
+    const layersCallsBefore = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes('/layers'),
+    ).length;
+    expect(layersCallsBefore).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Неделя →' }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('/rotation-schedule')).length,
+      ).toBeGreaterThan(1),
+    );
+    const layersCallsAfter = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes('/layers'),
+    ).length;
+    expect(layersCallsAfter).toBe(1);
+  });
+
+  it('does not discard an unsaved profile edit when a mutation reloads the calendar', async () => {
+    const entryDate = new Date();
+    entryDate.setUTCHours(12, 0, 0, 0);
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('/rotation-schedule') && init?.method) {
+        return Promise.resolve(new Response(JSON.stringify({ warnings: [] }), { status: 200 }));
+      }
+      if (url.includes('/rotation-schedule')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [
+                {
+                  id: 'entry-1',
+                  scheduled_at: entryDate.toISOString(),
+                  layer: 'Yehorivka RAAS v11',
+                  mode: 'force_change',
+                  enabled: true,
+                },
+              ],
+              history: [],
+              profiles: [{ name: 'Weekday', weekday: 1, layers: [] }],
+              warnings: {},
+              can_edit: true,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ rows: [{ name: 'Yehorivka RAAS v11' }] }), { status: 200 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <RotationCalendarPage params={Promise.resolve({ id: 'server-1' })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByTestId('rotation-calendar-grid');
+
+    fireEvent.change(screen.getByLabelText('Название профиля'), {
+      target: { value: 'Unsaved edit' },
+    });
+    // Toggling an entry re-runs load(), which used to always overwrite the
+    // profiles draft from the server response.
+    fireEvent.click(screen.getByRole('button', { name: 'выключить' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    expect(screen.getByLabelText('Название профиля')).toHaveValue('Unsaved edit');
+  });
+
   it('shows calendar and layer-load errors', async () => {
     vi.stubGlobal(
       'fetch',
@@ -211,15 +346,30 @@ describe('RotationCalendarPage', () => {
     expect(await screen.findByText('HTTP 503')).toBeInTheDocument();
 
     cleanup();
+    // The layer catalog is fetched independently of the calendar (#638), so a
+    // layers failure must surface without a healthy calendar response being
+    // mistaken for one.
     vi.stubGlobal(
       'fetch',
-      vi.fn((url: string) =>
-        Promise.resolve(
-          new Response(JSON.stringify({ error: 'layers down' }), {
-            status: url.includes('/layers') ? 503 : 200,
-          }),
-        ),
-      ),
+      vi.fn((url: string) => {
+        if (url.includes('/layers')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'layers down' }), { status: 503 }),
+          );
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [],
+              history: [],
+              profiles: [],
+              warnings: {},
+              can_edit: true,
+            }),
+            { status: 200 },
+          ),
+        );
+      }),
     );
     await act(async () => {
       render(
@@ -229,6 +379,7 @@ describe('RotationCalendarPage', () => {
       );
     });
     expect(await screen.findByText('HTTP 503')).toBeInTheDocument();
+    expect(screen.getByTestId('rotation-calendar-grid')).toBeInTheDocument();
   });
 
   it('surfaces failures from entry and profile mutations', async () => {
