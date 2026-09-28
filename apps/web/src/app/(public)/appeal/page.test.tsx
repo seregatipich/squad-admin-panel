@@ -103,6 +103,22 @@ describe('PublicAppealPage', () => {
   );
 
   it(
+    'renders the tracking link as an absolute, clickable URL (#757)',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ token: 'abs-token-5678' }).fn);
+      render(<PublicAppealPage />);
+
+      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
+      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
+
+      const expected = `${window.location.origin}/appeal/abs-token-5678`;
+      const link = await screen.findByRole('link', { name: expected });
+      expect(link).toHaveAttribute('href', expected);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'sends the optional contact field when it is filled in',
     async () => {
       const { fn, calls } = mockFetch();

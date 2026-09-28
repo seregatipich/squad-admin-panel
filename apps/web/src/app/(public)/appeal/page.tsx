@@ -24,13 +24,23 @@ interface SubmittedAppeal {
 }
 
 /**
+ * Absolute tracking URL for an appeal. The applicant saves this text outside
+ * the panel (Discord, notes), so it must carry the panel's origin — a bare
+ * `/appeal/<token>` path is useless once copied away from the page.
+ */
+function trackingUrl(token: string): string {
+  return `${window.location.origin}/appeal/${encodeURIComponent(token)}`;
+}
+
+/**
  * Public, no-session ban-appeal portal (MOD-5, #62). A banned player cannot
  * hold a panel session, so this page submits straight to the anonymous
  * `POST /api/v1/public/appeals` with no auth of any kind.
  *
  * The tracking link shown after a successful submission is the applicant's
  * only handle on their appeal — the API returns the token exactly once — so
- * it is rendered prominently and paired with an explicit "save this link".
+ * it is rendered prominently as an absolute, clickable URL and paired with an
+ * explicit "save this link".
  */
 export default function PublicAppealPage() {
   const [steamId64, setSteamId64] = useState('');
@@ -102,7 +112,9 @@ export default function PublicAppealPage() {
             <>
               <p>Сохраните эту ссылку — по ней и только по ней вы узнаете решение:</p>
               <p className="mt-2 break-all rounded-ctl border border-line bg-raised px-2.5 py-2 font-mono text-xs text-ink">
-                {`/appeal/${submitted.tracking_token}`}
+                <a href={trackingUrl(submitted.tracking_token)} className="underline">
+                  {trackingUrl(submitted.tracking_token)}
+                </a>
               </p>
             </>
           }
