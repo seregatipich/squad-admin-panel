@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DepotUpdateModal } from '@/components/DepotUpdateModal';
 import { DiskBreakdownModal } from '@/components/DiskBreakdownModal';
 import { DockerPruneButton } from '@/components/DockerPruneButton';
@@ -232,12 +232,17 @@ const ACTIVITY_FILTER_LABEL: Record<ActivityFilter, string> = {
 export default function DashboardPage() {
   const [bridge, setBridge] = useState<BridgeStatus | null>(null);
   const [info, setInfo] = useState<HostInfo | null>(null);
+  const [infoError, setInfoError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<HostMetrics | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [serversError, setServersError] = useState<string | null>(null);
   const [recent, setRecent] = useState<AuditRow[]>([]);
+  const [auditError, setAuditError] = useState<string | null>(null);
   const [ready, setReady] = useState<ReadyCheck | null>(null);
+  const [readyError, setReadyError] = useState<string | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [workersError, setWorkersError] = useState<string | null>(null);
   // Первый ответ ещё не пришёл: без этого флага пустой список неотличим от
   // загрузки, и оператор видит «Серверов нет» там, где идёт первый запрос (§8).
   const [loaded, setLoaded] = useState(false);
@@ -247,43 +252,114 @@ export default function DashboardPage() {
   const [depotModalOpen, setDepotModalOpen] = useState(false);
   const [depotProgressOpen, setDepotProgressOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    const results = await Promise.allSettled([
-      fetchJson<BridgeStatus>('/api/v1/host/bridge-status'),
-      fetchJson<HostInfo>('/api/v1/host/info'),
-      fetchJson<HostMetrics>('/api/v1/host/metrics'),
-      fetchJson<{ items: ServerRow[] }>('/api/v1/servers'),
-      fetchJson<{ items: AuditRow[] }>('/api/v1/audit?page_size=25'),
-      fetch('/ready', { cache: 'no-store' }).then((r) => r.json() as Promise<ReadyCheck>),
-      fetchJson<{ items: Worker[] }>('/api/v1/health/workers'),
-    ]);
-    setLoaded(true);
-    if (results[0].status === 'fulfilled') setBridge(results[0].value);
-    else setBridge({ connected: false, error: (results[0].reason as Error).message });
-    if (results[1].status === 'fulfilled') setInfo(results[1].value);
-    if (results[2].status === 'fulfilled') setMetrics(results[2].value);
-    if (results[3].status === 'fulfilled') {
-      setServers(results[3].value.items);
-      setServersError(null);
-    } else {
-      setServersError((results[3].reason as Error).message);
+  /**
+   * `host/info` is fetched separately from the hot poll below: on the bridge
+   * it forks `docker --version` and rereads `/etc/os-release`/`/proc` on
+   * every call (apps/bridge/internal/metrics/host.go), but its data (OS,
+   * kernel, CPU, IP) is effectively static, so polling it every POLL_MS was
+   * pure waste (DASH-546 / DASH-1334).
+   */
+  const loadInfo = useCallback(async () => {
+    try {
+      const value = await fetchJson<HostInfo>('/api/v1/host/info');
+      setInfo(value);
+      setInfoError(null);
+    } catch (err) {
+      setInfoError((err as Error).message);
     }
-    if (results[4].status === 'fulfilled') setRecent(results[4].value.items);
-    if (results[5].status === 'fulfilled') setReady(results[5].value);
-    if (results[6].status === 'fulfilled') setWorkers(results[6].value.items);
+  }, []);
+
+  // Guards against overlapping poll ticks: if the bridge is slow and one
+  // load() is still in flight when the next tick fires, the late tick is
+  // skipped instead of racing the in-flight one and letting whichever
+  // request settles last win regardless of which is freshest (DASH-546).
+  const loadInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  const load = useCallback(async () => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    try {
+      const results = await Promise.allSettled([
+        fetchJson<BridgeStatus>('/api/v1/host/bridge-status'),
+        fetchJson<HostMetrics>('/api/v1/host/metrics'),
+        fetchJson<{ items: ServerRow[] }>('/api/v1/servers'),
+        fetchJson<{ items: AuditRow[] }>('/api/v1/audit?page_size=25'),
+        fetch('/ready', { cache: 'no-store' }).then((r) => r.json() as Promise<ReadyCheck>),
+        fetchJson<{ items: Worker[] }>('/api/v1/health/workers'),
+      ]);
+      if (!mountedRef.current) return;
+      setLoaded(true);
+      if (results[0].status === 'fulfilled') setBridge(results[0].value);
+      else setBridge({ connected: false, error: (results[0].reason as Error).message });
+
+      // Every source below tracks its own error instead of silently keeping
+      // whatever the last successful poll left behind: a bridge/API outage
+      // or a 403 from a missing permission must not look like stale «healthy»
+      // data (DASH-545).
+      if (results[1].status === 'fulfilled') {
+        setMetrics(results[1].value);
+        setMetricsError(null);
+      } else {
+        setMetrics(null);
+        setMetricsError((results[1].reason as Error).message);
+      }
+
+      if (results[2].status === 'fulfilled') {
+        setServers(results[2].value.items);
+        setServersError(null);
+      } else {
+        setServersError((results[2].reason as Error).message);
+      }
+
+      if (results[3].status === 'fulfilled') {
+        setRecent(results[3].value.items);
+        setAuditError(null);
+      } else {
+        setAuditError((results[3].reason as Error).message);
+      }
+
+      if (results[4].status === 'fulfilled') {
+        setReady(results[4].value);
+        setReadyError(null);
+      } else {
+        setReady(null);
+        setReadyError((results[4].reason as Error).message);
+      }
+
+      if (results[5].status === 'fulfilled') {
+        setWorkers(results[5].value.items);
+        setWorkersError(null);
+      } else {
+        setWorkers([]);
+        setWorkersError((results[5].reason as Error).message);
+      }
+    } finally {
+      loadInFlightRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void load().catch(() => {});
-    const t = setInterval(() => {
-      if (!cancelled) void load().catch(() => {});
-    }, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
+    mountedRef.current = true;
+    void loadInfo();
+    const tick = () => {
+      // A hidden tab pauses the poll instead of hammering the bridge and the
+      // API for a dashboard nobody is looking at (DASH-546 / DASH-1334).
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load().catch(() => {});
     };
-  }, [load]);
+    tick();
+    const t = setInterval(tick, POLL_MS);
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) tick();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [load, loadInfo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -337,8 +413,8 @@ export default function DashboardPage() {
 
   const health = computeHostHealth(info, metrics, bridge);
   const connectionRows = useMemo(
-    () => buildConnectionRows(ready, bridge, workers),
-    [ready, bridge, workers],
+    () => buildConnectionRows(ready, bridge, workers, readyError),
+    [ready, bridge, workers, readyError],
   );
   const connectionsHealthy = connectionRows.filter((r) => r.state === 'good').length;
 
@@ -351,7 +427,12 @@ export default function DashboardPage() {
             <Button onClick={() => setDepotModalOpen(true)} title="Обновить Squad через SteamCMD">
               Обновить Squad
             </Button>
-            <Button onClick={() => void load()}>
+            <Button
+              onClick={() => {
+                void load();
+                void loadInfo();
+              }}
+            >
               <RefreshIcon />
               Обновить
             </Button>
@@ -403,7 +484,9 @@ export default function DashboardPage() {
           <HostBlock
             bridge={bridge}
             info={info}
+            infoError={infoError}
             metrics={metrics}
+            metricsError={metricsError}
             health={health}
             diskBreakdown={diskBreakdown}
             onDiskClick={() => setDiskModalOpen(true)}
@@ -416,6 +499,7 @@ export default function DashboardPage() {
           <RecentActivity
             rows={recent}
             loading={!loaded}
+            error={auditError}
             filter={activityFilter}
             onFilter={setActivityFilter}
           />
@@ -426,6 +510,7 @@ export default function DashboardPage() {
             healthyCount={connectionsHealthy}
             totalCount={connectionRows.length}
             bridgeConnected={bridge?.connected ?? false}
+            workersError={workersError}
           />
         </div>
       </div>
@@ -739,14 +824,18 @@ function RelativeTime({ ts }: { ts: string }) {
 function HostBlock({
   bridge,
   info,
+  infoError,
   metrics,
+  metricsError,
   health,
   diskBreakdown,
   onDiskClick,
 }: {
   bridge: BridgeStatus | null;
   info: HostInfo | null;
+  infoError: string | null;
   metrics: HostMetrics | null;
+  metricsError: string | null;
   health: ReturnType<typeof computeHostHealth>;
   diskBreakdown: DiskBreakdown | null;
   onDiskClick: () => void;
@@ -791,6 +880,12 @@ function HostBlock({
             </>
           ) : bridgeDown ? (
             'Имя, ОС и аптайм читает агент — он не отвечает.'
+          ) : infoError ? (
+            infoError.includes(' 403') ? (
+              'Нет прав на просмотр сведений о хосте.'
+            ) : (
+              `Не удалось загрузить сведения о хосте: ${infoError}`
+            )
           ) : (
             'Загружаем сведения о хосте…'
           )}
@@ -816,13 +911,34 @@ function HostBlock({
         </div>
       </CardBody>
 
-      <CardBody className={noMetrics && bridgeDown ? undefined : 'grid gap-4 sm:grid-cols-2'}>
+      <CardBody
+        className={
+          noMetrics && (bridgeDown || metricsError) ? undefined : 'grid gap-4 sm:grid-cols-2'
+        }
+      >
         {noMetrics ? (
           bridgeDown ? (
             <InlineBanner
               tone="warn"
               title="Метрики хоста недоступны"
               description="Агент panel-host-bridge не отвечает, поэтому CPU, память, диск и сеть панели неоткуда взять. Запустите агент на хосте — плитки заполнятся сами."
+            />
+          ) : metricsError ? (
+            // Без отдельного баннера 403 от отсутствующего host:metrics выглядел
+            // как вечная загрузка: bridge подключён, а метрики всё равно не
+            // появляются (DASH-545).
+            <InlineBanner
+              tone="crit"
+              title={
+                metricsError.includes(' 403')
+                  ? 'Нет прав на просмотр метрик хоста'
+                  : 'Не удалось загрузить метрики хоста'
+              }
+              description={
+                metricsError.includes(' 403')
+                  ? 'Обратитесь к администратору за правом host:metrics.'
+                  : metricsError
+              }
             />
           ) : (
             <>
@@ -1015,11 +1131,13 @@ function SystemCell({ label, value }: { label: string; value: string }) {
 function RecentActivity({
   rows,
   loading,
+  error,
   filter,
   onFilter,
 }: {
   rows: AuditRow[];
   loading: boolean;
+  error: string | null;
   filter: ActivityFilter;
   onFilter: (f: ActivityFilter) => void;
 }) {
@@ -1058,6 +1176,17 @@ function RecentActivity({
         <CardBody>
           <SkeletonTable rows={5} cols={4} label="Загружаем последние действия" />
         </CardBody>
+      ) : rows.length === 0 && error ? (
+        // Ошибка молча проглатывалась: пустой журнал из-за сбоя API/Redis или
+        // отсутствия права audit:view выглядел неотличимо от «событий пока
+        // правда нет» (DASH-545).
+        <EmptyState
+          variant="initial"
+          title={error.includes(' 403') ? 'Нет прав на просмотр журнала' : 'Журнал не загрузился'}
+          description={
+            error.includes(' 403') ? 'Обратитесь к администратору за правом audit:view.' : error
+          }
+        />
       ) : filtered.length === 0 ? (
         <EmptyState
           variant={rows.length === 0 ? 'initial' : 'filtered'}
@@ -1176,16 +1305,27 @@ function buildConnectionRows(
   ready: ReadyCheck | null,
   bridge: BridgeStatus | null,
   workers: Worker[],
+  readyError: string | null,
 ): ConnectionRow[] {
   const rows: ConnectionRow[] = [];
 
+  // `/ready` failing outright (API/Redis outage) is not the same as it
+  // answering with a check that reports unhealthy — the first must not read
+  // as merely «нет данных» (DASH-545).
   const pgState = ready?.checks.postgres;
   rows.push({
     key: 'postgres',
     group: 'core',
     name: 'PostgreSQL',
-    status: pgState === 'ok' ? 'здоров' : pgState ? 'недоступен' : 'нет данных',
-    state: pgState === 'ok' ? 'good' : pgState ? 'crit' : 'idle',
+    status:
+      pgState === 'ok'
+        ? 'здоров'
+        : pgState
+          ? 'недоступен'
+          : readyError
+            ? 'ошибка проверки'
+            : 'нет данных',
+    state: pgState === 'ok' ? 'good' : pgState || readyError ? 'crit' : 'idle',
   });
 
   const redisState = ready?.checks.redis;
@@ -1193,8 +1333,15 @@ function buildConnectionRows(
     key: 'redis',
     group: 'core',
     name: 'Redis',
-    status: redisState === 'ok' ? 'здоров' : redisState ? 'недоступен' : 'нет данных',
-    state: redisState === 'ok' ? 'good' : redisState ? 'crit' : 'idle',
+    status:
+      redisState === 'ok'
+        ? 'здоров'
+        : redisState
+          ? 'недоступен'
+          : readyError
+            ? 'ошибка проверки'
+            : 'нет данных',
+    state: redisState === 'ok' ? 'good' : redisState || readyError ? 'crit' : 'idle',
   });
 
   rows.push({
@@ -1210,7 +1357,14 @@ function buildConnectionRows(
 
   const expected = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition'];
   const byName = new Map(workers.map((w) => [w.name, w]));
-  for (const name of expected) {
+  // `expected` only names the four best-known workers; ~17 more (scheduler,
+  // backup, ban-sync, …) also write a heartbeat and must not be silently
+  // dropped just because they aren't in that hardcoded list (DASH-544).
+  const extraNames = workers
+    .map((w) => w.name)
+    .filter((name) => !expected.includes(name))
+    .sort((a, b) => a.localeCompare(b));
+  for (const name of [...expected, ...extraNames]) {
     const w = byName.get(name);
     if (!w) {
       rows.push({
@@ -1242,11 +1396,13 @@ function ConnectionsHealth({
   healthyCount,
   totalCount,
   bridgeConnected,
+  workersError,
 }: {
   rows: ConnectionRow[];
   healthyCount: number;
   totalCount: number;
   bridgeConnected: boolean;
+  workersError: string | null;
 }) {
   const summaryState: StatusState =
     healthyCount === totalCount ? 'good' : healthyCount > 0 ? 'warn' : 'crit';
@@ -1267,15 +1423,26 @@ function ConnectionsHealth({
       />
       <CardBody className="space-y-4">
         <ConnectionGroup label="Базовые службы" rows={core} />
-        <ConnectionGroup
-          label="Воркеры"
-          rows={workers}
-          footnote={
-            bridgeConnected
-              ? 'Перезапуск воркеров выполняется через docker compose.'
-              : 'Bridge оффлайн — состояние воркеров может быть устаревшим.'
-          }
-        />
+        {workersError ? (
+          // Список воркеров не загрузился: без баннера все ожидаемые воркеры
+          // молча падают в «нет heartbeat», неотличимо от реального сбоя
+          // heartbeat (DASH-545).
+          <InlineBanner
+            tone="warn"
+            title="Не удалось получить список воркеров"
+            description={workersError}
+          />
+        ) : (
+          <ConnectionGroup
+            label="Воркеры"
+            rows={workers}
+            footnote={
+              bridgeConnected
+                ? 'Перезапуск воркеров выполняется через docker compose.'
+                : 'Bridge оффлайн — состояние воркеров может быть устаревшим.'
+            }
+          />
+        )}
       </CardBody>
     </Card>
   );
