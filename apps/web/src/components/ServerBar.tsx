@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
+import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
 interface ServerChip {
@@ -15,6 +16,13 @@ interface ServerChip {
 
 /** Paths where the server switcher is context rather than clutter. */
 const CONTEXT_PREFIXES = ['/dashboard', '/servers', '/statistics', '/matches', '/chat'];
+
+/**
+ * Quiet period before a live status event refetches the list, so a burst
+ * (a restart walks through several states; a bulk delete emits one event per
+ * server) costs one `GET /api/v1/servers` instead of one per event.
+ */
+const REFRESH_DEBOUNCE_MS = 500;
 
 const STATUS_DOT: Record<string, string> = {
   running: 'bg-good',
@@ -38,6 +46,12 @@ const STATUS_DOT: Record<string, string> = {
  *
  * The player count is whatever the RCON poller last wrote to Redis; a server
  * that has never been polled shows no number rather than a misleading zero.
+ *
+ * Live updates are cheap on purpose, because the bar is mounted in the shared
+ * layout of every page: events are ignored where the bar is hidden,
+ * `rcon.status` (emitted on nearly every poll) patches the count in place,
+ * and `server.status`/`server.deleted` refetch once per burst, with each new
+ * request aborting the previous one so an older response never lands last.
  */
 export function ServerBar() {
   const pathname = usePathname() ?? '';
@@ -49,20 +63,62 @@ export function ServerBar() {
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
 
+  const inContextRef = useRef(inContext);
+  inContextRef.current = inContext;
+  const requestRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const refresh = useCallback(() => {
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    fetch('/api/v1/servers', {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { items?: ServerChip[] } | null) => setServers(data?.items ?? []))
+      .then((data: { items?: ServerChip[] } | null) => {
+        if (controller.signal.aborted) return;
+        setServers(data?.items ?? []);
+      })
       .catch(() => {});
+  }, []);
+
+  const scheduleRefresh = useCallback(() => {
+    if (!inContextRef.current) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      refresh();
+    }, REFRESH_DEBOUNCE_MS);
+  }, [refresh]);
+
+  const onRconStatus = useCallback((event: Extract<LiveEvent, { type: 'rcon.status' }>) => {
+    if (!inContextRef.current) return;
+    const { server_id: serverId, player_count: playerCount } = event.data;
+    if (playerCount === undefined) return;
+    setServers((prev) =>
+      prev.map((server) =>
+        server.id === serverId ? { ...server, player_count: playerCount } : server,
+      ),
+    );
   }, []);
 
   useEffect(() => {
     if (!inContext) return;
     refresh();
   }, [inContext, refresh]);
-  useLiveSubscription('server.status', refresh);
-  useLiveSubscription('server.deleted', refresh);
-  useLiveSubscription('rcon.status', refresh);
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      requestRef.current?.abort();
+    },
+    [],
+  );
+  useLiveSubscription('server.status', scheduleRefresh);
+  useLiveSubscription('server.deleted', scheduleRefresh);
+  useLiveSubscription('rcon.status', onRconStatus);
 
   // Высота всей прилипающей хромы публикуется в `--chrome-h`, а не считается
   // на месте: полоса серверов переносится на вторую строку, когда серверов
