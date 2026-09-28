@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 const DEFAULT_WINDOW_DAYS = 30;
 const MAX_WINDOW_DAYS = 366;
@@ -86,17 +87,10 @@ interface VoteAnalyticsPayload {
   serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
 }
 
-function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
 function toCsv(payload: VoteAnalyticsPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(value)].join(','));
   };
   push('meta', 'server_id', payload.server_id ?? 'all');
   push('meta', 'from', payload.from);

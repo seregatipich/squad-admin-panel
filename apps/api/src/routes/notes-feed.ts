@@ -18,6 +18,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 100;
@@ -138,13 +139,6 @@ const CSV_COLUMNS = [
   'deleted_at',
   'deleted_by',
 ] as const;
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
 
 function csvRow(dto: FeedDto): string {
   const cells = [

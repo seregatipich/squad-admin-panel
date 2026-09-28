@@ -5,6 +5,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 100;
@@ -378,13 +379,6 @@ interface CsvSourceRow {
   victimVehicle: string | null;
   attackerVehicle: string | null;
   isTeamkill: boolean;
-}
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
 }
 
 function csvRow(row: CsvSourceRow): string {

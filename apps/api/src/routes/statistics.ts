@@ -2,7 +2,8 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { escapeCsvField, MAX_WINDOW_DAYS, resolveWindow } from './analytics.js';
+import { csvCell } from '../lib/csv.js';
+import { MAX_WINDOW_DAYS, resolveWindow } from './analytics.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_SECONDS = 3600;
@@ -161,13 +162,9 @@ export function toStatisticsCsv(payload: StatisticsPayload): string {
   const lines: string[] = ['section,metric,server_id,key,value'];
   const push = (section: string, metric: string, serverId: string, key: string, value: string) => {
     lines.push(
-      [
-        escapeCsvField(section),
-        escapeCsvField(metric),
-        escapeCsvField(serverId),
-        escapeCsvField(key),
-        escapeCsvField(value),
-      ].join(','),
+      [csvCell(section), csvCell(metric), csvCell(serverId), csvCell(key), csvCell(value)].join(
+        ',',
+      ),
     );
   };
 

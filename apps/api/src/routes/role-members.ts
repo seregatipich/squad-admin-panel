@@ -5,6 +5,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { csvCell } from '../lib/csv.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
@@ -68,12 +69,6 @@ function parseImportRow(raw: string): { steamId64: string; comment: string | nul
   const steamId64 = raw.slice(0, semi).trim();
   const comment = raw.slice(semi + 1).trim();
   return { steamId64, comment: comment.length > 0 ? comment : null };
-}
-
-/** Escape a CSV cell (quote when it contains a delimiter, quote, or newline). */
-function csvCell(value: string): string {
-  if (/[";,\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
 }
 
 const roleMembersRoutes: FastifyPluginAsync = async (app) => {
