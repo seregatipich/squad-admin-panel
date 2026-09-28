@@ -33,6 +33,11 @@
       "types": "./dist/squad-permissions.d.ts",
       "development": "./src/squad-permissions.ts",
       "default": "./dist/squad-permissions.js"
+    },
+    "./heartbeat": {
+      "types": "./dist/heartbeat.d.ts",
+      "development": "./src/heartbeat.ts",
+      "default": "./dist/heartbeat.js"
     }
   },
   "scripts": {

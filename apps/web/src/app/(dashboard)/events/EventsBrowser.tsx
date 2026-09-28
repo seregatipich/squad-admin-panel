@@ -105,6 +105,10 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const [items, setItems] = useState<EventListItem[]>([]);
+  const itemsRef = useRef<EventListItem[]>(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -159,9 +163,11 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
-      .then((data) => {
-        if (!cancelled) setTotal(data.total);
+      // A failed count is unknown, not zero — `total: 0` would render "Всего:
+      // 0" and read as "there are no events" instead of "count unavailable".
+      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }).total : null))
+      .then((value) => {
+        if (!cancelled) setTotal(value);
       })
       .catch(() => {});
     return () => {
@@ -231,12 +237,16 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       );
       if (!res.ok) return;
       const data = (await res.json()) as EventListResponse;
-      setItems((prev) => {
-        const known = new Set(prev.map((event) => event.event_id));
-        const added = data.items.filter((event) => !known.has(event.event_id)).length;
-        if (added > 0) setTotal((current) => (current === null ? current : current + added));
-        return mergeEventPage(data.items, prev);
-      });
+      // `added` is counted off `itemsRef` (kept in sync with `items` by the
+      // effect below), not inside the `setItems` updater: an updater must
+      // be pure, and calling `setTotal` from inside it double-counted
+      // `added` under React StrictMode's dev double-invoke.
+      const known = new Set(itemsRef.current.map((event) => event.event_id));
+      const added = data.items.filter((event) => !known.has(event.event_id)).length;
+      setItems((prev) => mergeEventPage(data.items, prev));
+      if (added > 0) {
+        setTotal((current) => (current === null ? current : current + added));
+      }
     } catch {
       // Живое обновление — надбавка; при ошибке список просто ждёт следующего кадра.
     } finally {

@@ -1,4 +1,5 @@
 'use client';
+import { HEARTBEAT_INTERVAL_MS, HEARTBEAT_TTL_SECONDS } from '@squad/shared-config/heartbeat';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DepotUpdateModal } from '@/components/DepotUpdateModal';
@@ -140,8 +141,12 @@ const POLL_MS = 4000;
 // Журнал сокращает только UUID: восемь первых символов однозначно узнаются
 // в таблице, а `localhost`, `days:30` или `1` от усечения лишь теряют смысл.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const WORKER_STALE_MS = 15_000;
-const WORKER_OK_MS = 10_000;
+// Mirrors the heartbeat contract in packages/shared-config/src/heartbeat.ts:
+// a key older than 2× the publish interval is "behind" (slow tick, GC
+// pause), and it disappears entirely once the TTL elapses — so "crit"
+// tracks the TTL, not a value hardcoded independently of it.
+const WORKER_OK_MS = 2 * HEARTBEAT_INTERVAL_MS;
+const WORKER_STALE_MS = HEARTBEAT_TTL_SECONDS * 1_000;
 
 const HEALTH_LABEL: Record<HealthLevel, string> = {
   healthy: 'Здоровый',

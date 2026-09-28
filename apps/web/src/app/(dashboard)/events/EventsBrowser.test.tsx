@@ -206,4 +206,56 @@ describe('EventsBrowser — живая лента', () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(listCalls(fetchMock)).toBe(2);
   });
+
+  it('bumps "Всего" by exactly the number of new events, not double (#555)', async () => {
+    const fetchMock = listFetch([
+      [eventItem('evt00001')],
+      [eventItem('evt00002'), eventItem('evt00001')],
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EventsBrowser lockedServerId="srv-1" />);
+    await screen.findByText('Всего: 1');
+
+    await act(async () => {
+      liveHandlers.get('server.events.appended')?.({
+        type: 'server.events.appended',
+        ts: '2026-09-25T10:00:01.000Z',
+        data: { server_id: 'srv-1', kinds: ['player.connected'] },
+      });
+    });
+
+    await screen.findByText('evt00002');
+    // One event was added on top of the count already reported by
+    // /events/count (1) — never doubled by a StrictMode-style re-invoke of
+    // the setItems updater that used to carry this side effect.
+    expect(await screen.findByText('Всего: 2')).toBeInTheDocument();
+  });
+});
+
+describe('EventsBrowser — счётчик "Всего"', () => {
+  it('shows an unknown state instead of zero when /events/count fails (#555)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/events/count')) {
+          return Promise.resolve(new Response('fail', { status: 500 }));
+        }
+        if (url.startsWith('/api/v1/events')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items: [], next_cursor: null, limit: 50 }), {
+              status: 200,
+            }),
+          );
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    render(<EventsBrowser />);
+    expect(await screen.findByText('Всего: …')).toBeInTheDocument();
+    expect(screen.queryByText('Всего: 0')).not.toBeInTheDocument();
+  });
 });
