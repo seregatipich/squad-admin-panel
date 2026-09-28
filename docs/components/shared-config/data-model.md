@@ -40,6 +40,7 @@ Streaming methods (deliver `BridgeStreamFrame` before the final response): `cont
 | `configs` | `config:rollback` | | |
 | `players` | `player:view` | | |
 | `players` | `player:view_ips` | | |
+| `players` | `player:manage_alt_detection` | ✓ | |
 | `players` | `player:view_notes` | | ✓ |
 | `players` | `player:edit_notes` | | ✓ |
 | `players` | `player:set_flags` | | ✓ |

@@ -755,7 +755,7 @@ Thirteen modules. There is **no generic key/value settings table**: each group g
 
 | Module | Representative endpoints | Permission | Notable side effects |
 |---|---|---|---|
-| `settings-alt-detection.ts` / `settings-coplay.ts` | weights, thresholds, `POST/DELETE …/ignored-ips` | `config.permissions: ['player:view_ips']` (coplay's PUT too, despite involving no IPs) | Singleton upsert + imperative audit with before/after |
+| `settings-alt-detection.ts` / `settings-coplay.ts` | weights, thresholds, `POST/DELETE …/ignored-ips` | alt-detection: GET `player:view_ips`, writes `player:manage_alt_detection` (needs `can_view_ips` + `can_edit_roles`, #43); coplay: `player:view_ips` (its PUT too, despite involving no IPs) | Singleton upsert + imperative audit with before/after |
 | `settings-economy.ts` / `settings-clan-guard.ts` / `settings-chat-flags.ts` | economy coefficients, kill-switch, chat-flag rule CRUD + reindex | **split guard** in economy (`canManageEconomy` vs `canEditRoles` per field group); `canManageClans`; `canEditRoles` | Reindex re-scans N days of chat and rewrites flags |
 | `integrations-discord.ts` | integration singleton, webhook CRUD + `/test`, template CRUD/reset/preview | `integration:manage` | Encrypts bot token and webhook URL at rest; URLs validated against a strict `discord.com/api/webhooks/...` host allowlist (`lib/discord.ts:2-3`); `/test` hand-rolls a 5 s `fetch` instead of reusing the worker sender |
 | `integrations-geoip.ts` | MaxMind account/license/enable | `integration:manage` | `db_present` is permanently `false` — `packages/db/src/geoip/` has no caller in `apps/` |

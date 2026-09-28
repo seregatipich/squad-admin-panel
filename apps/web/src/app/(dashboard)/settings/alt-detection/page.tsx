@@ -57,6 +57,8 @@ export default function AltDetectionPage() {
   const [ignoredIps, setIgnoredIps] = useState<IgnoredIp[]>([]);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  // Изменения требуют права player:manage_alt_detection, а не только «История IP».
+  const [canEdit, setCanEdit] = useState(false);
   const [banner, setBanner] = useState<Banner>(null);
 
   const [newCidr, setNewCidr] = useState('');
@@ -78,11 +80,14 @@ export default function AltDetectionPage() {
       setForbidden(true);
       return;
     }
-    const body = await readJson<{ settings: AltDetectionSettingsView; ignored_ips: IgnoredIp[] }>(
-      res,
-    );
+    const body = await readJson<{
+      settings: AltDetectionSettingsView;
+      ignored_ips: IgnoredIp[];
+      can_edit: boolean;
+    }>(res);
     setSettings(body.settings);
     setIgnoredIps(body.ignored_ips);
+    setCanEdit(body.can_edit);
   }, []);
 
   const reload = useCallback(async () => {
@@ -212,6 +217,13 @@ export default function AltDetectionPage() {
         subtitle="Настройки движка поиска кандидатов в альты по общим IP (см. карточку игрока → «Возможные альты»): исключения адресов из подсчёта очков и веса эвристик."
       />
 
+      {canEdit ? null : (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="Менять веса, пороги и исключения может роль с доступом «История IP» и правом редактировать роли."
+        />
+      )}
       {banner?.kind === 'ok' ? (
         <InlineBanner
           tone="good"
@@ -271,50 +283,54 @@ export default function AltDetectionPage() {
                     {new Date(row.created_at).toLocaleString('ru-RU')}
                   </Td>
                   <Td align="right">
-                    <Button size="sm" disabled={deleting} onClick={() => setPendingDelete(row)}>
-                      Удалить
-                    </Button>
+                    {canEdit ? (
+                      <Button size="sm" disabled={deleting} onClick={() => setPendingDelete(row)}>
+                        Удалить
+                      </Button>
+                    ) : null}
                   </Td>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
-        <form onSubmit={addIgnoredIp}>
-          <CardBody className="flex flex-wrap items-end gap-3 border-t border-line">
-            <FieldRow label="IP или CIDR" htmlFor={cidrInputId} className="w-48">
-              <TextInput
-                id={cidrInputId}
-                type="text"
-                value={newCidr}
-                onChange={(e) => setNewCidr(e.target.value)}
-                placeholder="10.0.0.0/24"
-              />
-            </FieldRow>
-            <FieldRow
-              label="Заметка"
-              htmlFor={noteInputId}
-              hint="VPN, CGNAT, интернет-кафе…"
-              className="w-64"
-            >
-              <TextInput
-                id={noteInputId}
-                type="text"
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                maxLength={500}
-              />
-            </FieldRow>
-            <Button
-              type="submit"
-              variant="primary"
-              loading={addingIp}
-              disabled={newCidr.trim() === ''}
-            >
-              Добавить
-            </Button>
-          </CardBody>
-        </form>
+        {canEdit ? (
+          <form onSubmit={addIgnoredIp}>
+            <CardBody className="flex flex-wrap items-end gap-3 border-t border-line">
+              <FieldRow label="IP или CIDR" htmlFor={cidrInputId} className="w-48">
+                <TextInput
+                  id={cidrInputId}
+                  type="text"
+                  value={newCidr}
+                  onChange={(e) => setNewCidr(e.target.value)}
+                  placeholder="10.0.0.0/24"
+                />
+              </FieldRow>
+              <FieldRow
+                label="Заметка"
+                htmlFor={noteInputId}
+                hint="VPN, CGNAT, интернет-кафе…"
+                className="w-64"
+              >
+                <TextInput
+                  id={noteInputId}
+                  type="text"
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value)}
+                  maxLength={500}
+                />
+              </FieldRow>
+              <Button
+                type="submit"
+                variant="primary"
+                loading={addingIp}
+                disabled={newCidr.trim() === ''}
+              >
+                Добавить
+              </Button>
+            </CardBody>
+          </form>
+        ) : null}
       </Card>
 
       <Card padding="none">
@@ -331,47 +347,56 @@ export default function AltDetectionPage() {
             <CardBody>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <NumberField
+                  disabled={!canEdit}
                   label="Вес: общий IP"
                   value={settings.weight_shared_ip}
                   onChange={(v) => updateField('weight_shared_ip', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Вес: общий ник"
                   value={settings.weight_shared_name}
                   onChange={(v) => updateField('weight_shared_name', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Вес: молодой аккаунт"
                   value={settings.weight_young_account}
                   onChange={(v) => updateField('weight_young_account', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Вес: близкий SteamID64"
                   value={settings.weight_steamid_proximity}
                   onChange={(v) => updateField('weight_steamid_proximity', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Порог дельты SteamID64"
                   value={settings.steamid_delta_threshold}
                   onChange={(v) => updateField('steamid_delta_threshold', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Порог доверия: средний"
                   value={settings.medium_threshold}
                   onChange={(v) => updateField('medium_threshold', v)}
                 />
                 <NumberField
+                  disabled={!canEdit}
                   label="Порог доверия: высокий"
                   value={settings.high_threshold}
                   onChange={(v) => updateField('high_threshold', v)}
                 />
               </div>
             </CardBody>
-            <CardFooter>
-              <Button type="submit" variant="primary" loading={savingSettings}>
-                Сохранить
-              </Button>
-            </CardFooter>
+            {canEdit ? (
+              <CardFooter>
+                <Button type="submit" variant="primary" loading={savingSettings}>
+                  Сохранить
+                </Button>
+              </CardFooter>
+            ) : null}
           </form>
         )}
       </Card>
@@ -399,7 +424,12 @@ export default function AltDetectionPage() {
 }
 
 /** Числовой параметр оценки: подпись, поле и общий для страницы шаг вёрстки. */
-function NumberField(props: { label: string; value: number; onChange: (value: string) => void }) {
+function NumberField(props: {
+  label: string;
+  value: number;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
   const id = useId();
   return (
     <FieldRow label={props.label} htmlFor={id}>
@@ -407,6 +437,7 @@ function NumberField(props: { label: string; value: number; onChange: (value: st
         id={id}
         type="number"
         min={0}
+        disabled={props.disabled}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
       />

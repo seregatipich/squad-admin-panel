@@ -14,6 +14,9 @@ import {
 
 const OWNER_STEAM = testSteamId(820001);
 const TEST_PLAYER_LIMITED_VIEWER = testSteamId(820002);
+// Writes settings successfully, so its audit rows pin the player row (audit_log
+// is append-only): it gets its own steam id and is never deleted.
+const TEST_PLAYER_ALT_EDITOR = testSteamId(820003);
 
 let h: IntegrationHarness;
 let auditBaseline = 0n;
@@ -73,10 +76,18 @@ async function expectAuditRowFromThisCase(action: string, resource: string): Pro
 }
 
 async function loginAsRoleWithoutViewIps(): Promise<string> {
+  return loginAsLimitedRole({ can_view_ips: false });
+}
+
+/** Logs in as a panel_access role with only the given role flags set. */
+async function loginAsLimitedRole(
+  flags: Record<string, boolean>,
+  steamId: bigint = TEST_PLAYER_LIMITED_VIEWER,
+): Promise<string> {
   const [row] = await h.db
     .insert(players)
     .values({
-      steamId64: TEST_PLAYER_LIMITED_VIEWER,
+      steamId64: steamId,
       canonicalName: 'LimitedViewer',
       canonicalNameNormalized: 'limitedviewer',
     })
@@ -88,18 +99,15 @@ async function loginAsRoleWithoutViewIps(): Promise<string> {
     url: '/api/v1/roles',
     headers: { cookie: ownerCookie, 'content-type': 'application/json' },
     payload: JSON.stringify({
-      name: `no-view-ips-${Date.now()}`,
+      name: `alt-limited-${Date.now()}`,
       color: '#123456',
       squad_permissions: [],
       panel_access: true,
-      can_view_ips: false,
+      ...flags,
     }),
   });
   const roleId = (created.json() as { id: string }).id;
-  await h.db
-    .update(players)
-    .set({ roleId })
-    .where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, steamId));
   invalidateAllPermissionCaches();
 
   const { token } = await createSession(h.db, h.redis, {
@@ -361,5 +369,87 @@ describe('POST/DELETE /api/v1/settings/alt-detection/ignored-ips', () => {
       headers: { cookie },
     });
     expect(del.statusCode).toBe(403);
+  });
+});
+
+// Regression (#43 finding 334): every write here was gated on the read-only
+// `player:view_ips`, so a role granted only IP history could disable alt
+// detection panel-wide (e.g. ignore 0.0.0.0/0 and ::/0).
+describe('alt-detection writes need player:manage_alt_detection', () => {
+  it('lets an IP-history-only role read the settings but not change them', async () => {
+    const cookie = await loginAsLimitedRole({ can_view_ips: true });
+
+    const get = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie },
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toMatchObject({ can_edit: false });
+
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ weight_shared_ip: 0 }),
+    });
+    expect(put.statusCode).toBe(403);
+
+    const post = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/settings/alt-detection/ignored-ips',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ cidr: '10.0.0.0/8' }),
+    });
+    expect(post.statusCode).toBe(403);
+
+    const del = await h.app.inject({
+      method: 'DELETE',
+      url: '/api/v1/settings/alt-detection/ignored-ips/00000000-0000-0000-0000-000000000000',
+      headers: { cookie },
+    });
+    expect(del.statusCode).toBe(403);
+  });
+
+  it('lets a role that can view IPs and edit roles change the settings', async () => {
+    const cookie = await loginAsLimitedRole(
+      { can_view_ips: true, can_edit_roles: true },
+      TEST_PLAYER_ALT_EDITOR,
+    );
+
+    const get = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie },
+    });
+    expect(get.json()).toMatchObject({ can_edit: true });
+
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ weight_shared_ip: 40 }),
+    });
+    expect(put.statusCode).toBe(200);
+  });
+
+  it('rejects an ignore entry broad enough to switch IP matching off', async () => {
+    const cookie = await loginAsOwner(h);
+    for (const cidr of ['0.0.0.0/0', '10.0.0.0/7', '::/0', '2001:db8::/31']) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/settings/alt-detection/ignored-ips',
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ cidr }),
+      });
+      expect(res.statusCode, cidr).toBe(400);
+    }
+    const narrowest = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/settings/alt-detection/ignored-ips',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ cidr: '10.0.0.0/8' }),
+    });
+    expect(narrowest.statusCode).toBe(201);
   });
 });
