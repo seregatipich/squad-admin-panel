@@ -364,10 +364,14 @@ export function eventsBatchAffectsList(
   batch: EventsAppendedBatch,
   filters: EventFilters,
   lockedServerId?: string,
+  now: Date = new Date(),
 ): boolean {
   if (filters.order !== 'desc') return false;
   if (filters.preset === 'yesterday') return false;
-  if (filters.preset === 'custom' && filters.to) return false;
+  if (filters.preset === 'custom') {
+    const { dateTo } = resolveDateRange(filters, now);
+    if (dateTo && dateTo.getTime() < now.getTime()) return false;
+  }
   if (lockedServerId) {
     if (batch.server_id !== lockedServerId) return false;
   } else if (filters.servers.length > 0) {

@@ -45,6 +45,10 @@ describe('parseFilters', () => {
       offset: 0,
     });
   });
+
+  it('clamps limit to the API upper bound of 100', () => {
+    expect(parseFilters(params({ limit: '200' })).limit).toBe(100);
+  });
 });
 
 describe('buildQueryString', () => {

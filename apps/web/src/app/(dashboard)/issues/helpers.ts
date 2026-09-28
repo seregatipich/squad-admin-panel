@@ -19,12 +19,6 @@ export const STATE_LABELS: Record<IssueState, string> = {
   closed: 'Закрыт',
 };
 
-export const STATE_BADGE_CLASSES: Record<IssueState, string> = {
-  open: 'bg-emerald-950/50 text-emerald-300 border border-emerald-900',
-  in_progress: 'bg-amber-950/50 text-amber-300 border border-amber-900',
-  closed: 'bg-neutral-800 text-neutral-400 border border-neutral-700',
-};
-
 export const STATE_FILTERS: Array<{ value: '' | IssueState; label: string }> = [
   { value: '', label: 'Все' },
   { value: 'open', label: 'Открытые' },

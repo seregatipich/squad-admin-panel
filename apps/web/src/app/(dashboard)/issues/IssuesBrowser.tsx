@@ -91,6 +91,7 @@ export function IssuesBrowser() {
   const [showCreate, setShowCreate] = useState(false);
   const [assigneeName, setAssigneeName] = useState<string | null>(null);
   const idsRef = useRef<Set<string>>(new Set());
+  const loadRequestId = useRef(0);
 
   const navigate = useCallback(
     (partial: Partial<IssueFilters>) => {
@@ -119,6 +120,7 @@ export function IssuesBrowser() {
   }, []);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setError(null);
     try {
@@ -126,8 +128,10 @@ export function IssuesBrowser() {
         credentials: 'include',
         cache: 'no-store',
       });
+      if (requestId !== loadRequestId.current) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as IssueListResponse;
+      if (requestId !== loadRequestId.current) return;
       idsRef.current = new Set(data.items.map((issue) => issue.id));
       setIssues(data.items);
       setTotal(data.total);
@@ -137,9 +141,9 @@ export function IssuesBrowser() {
         : null;
       if (assigned) setAssigneeName(assigned.name);
     } catch (e) {
-      setError((e as Error).message);
+      if (requestId === loadRequestId.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [filters]);
 

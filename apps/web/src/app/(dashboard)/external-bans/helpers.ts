@@ -6,6 +6,8 @@ export {
 } from '../all-players/[id]/external-bans';
 
 export const DEFAULT_LIMIT = 25;
+/** Matches the `limit` upper bound enforced by `GET /api/v1/external-bans` (see apps/api/src/routes/external-bans.ts). */
+export const MAX_LIMIT = 100;
 
 export interface ExternalBansFilters {
   q: string;
@@ -30,7 +32,8 @@ export function parseFilters(params: ParamsLike): ExternalBansFilters {
     q,
     permanentOnly,
     sourceId,
-    limit: Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : DEFAULT_LIMIT,
+    limit:
+      Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, MAX_LIMIT) : DEFAULT_LIMIT,
     offset: Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0,
   };
 }
