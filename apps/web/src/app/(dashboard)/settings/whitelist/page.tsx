@@ -44,6 +44,8 @@ interface ImportSkippedRow {
     | 'malformed_row'
     | 'invalid_steam_id64'
     | 'player_not_found'
+    | 'duplicate_steam_id64'
+    | 'comment_too_long'
     | 'owner_role_protected'
     | 'role_assignment_forbidden';
 }
@@ -62,6 +64,8 @@ const SKIP_REASON_LABEL: Record<ImportSkippedRow['reason'], string> = {
   malformed_row: 'некорректная строка',
   invalid_steam_id64: 'некорректный SteamID64',
   player_not_found: 'игрок не найден',
+  duplicate_steam_id64: 'SteamID64 уже встречался выше в файле',
+  comment_too_long: 'комментарий длиннее 512 символов',
   owner_role_protected: 'владелец панели — роль не меняется',
   role_assignment_forbidden: 'у игрока другая роль — заменить её может только управляющий ролями',
 };
