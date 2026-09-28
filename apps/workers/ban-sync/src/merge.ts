@@ -1,6 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { externalBans } from '@squad/db/schema';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, inArray, isNull, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedBan } from './adapters/index.js';
 
@@ -122,53 +122,80 @@ export function planMerge(existing: ExistingBanRow[], incoming: ParsedBan[]): Me
   return { toInsert, toUpdate, toRevokeIds, skippedDuplicateKeys };
 }
 
-/** Applies a `MergePlan` to `external_bans`: insert, per-row update, and a single batched revoke — never a DELETE. */
+/** Rows per batched `UPDATE ... FROM (VALUES ...)`, well under Postgres's bind-parameter limit. */
+const UPDATE_BATCH_ROWS = 500;
+
+/**
+ * Applies a `MergePlan` to `external_bans` — insert, batched update and a
+ * single batched revoke, never a DELETE — in one transaction (#854), so a
+ * failure or a shutdown mid-apply leaves the previous state intact instead of
+ * new bans without the revocations that belong with them.
+ *
+ * Inserts skip rows that already exist (`ON CONFLICT DO NOTHING` on the
+ * `external_bans_dedup_key` index): a manual sync overlapping a scheduled one
+ * must not fail on a ban the other just inserted (#853). `added` counts the
+ * rows actually inserted.
+ */
 export async function applyMergePlan(
   db: DatabaseClient,
   sourceId: string,
   plan: MergePlan,
 ): Promise<ApplyMergeResult> {
-  if (plan.toInsert.length > 0) {
-    await db.insert(externalBans).values(
-      plan.toInsert.map((record) => ({
-        id: uuidv7(),
-        sourceId,
-        steamId64: record.steamId64,
-        eosId: record.eosId,
-        nickname: record.nickname,
-        reason: record.reason,
-        adminName: record.adminName,
-        issuedAt: record.issuedAt,
-        expiresAt: record.expiresAt,
-        raw: record.raw ?? {},
-      })),
-    );
-  }
+  return db.transaction(async (tx) => {
+    let added = 0;
+    if (plan.toInsert.length > 0) {
+      const inserted = await tx
+        .insert(externalBans)
+        .values(
+          plan.toInsert.map((record) => ({
+            id: uuidv7(),
+            sourceId,
+            steamId64: record.steamId64,
+            eosId: record.eosId,
+            nickname: record.nickname,
+            reason: record.reason,
+            adminName: record.adminName,
+            issuedAt: record.issuedAt,
+            expiresAt: record.expiresAt,
+            raw: record.raw ?? {},
+          })),
+        )
+        .onConflictDoNothing()
+        .returning({ id: externalBans.id });
+      added = inserted.length;
+    }
 
-  for (const update of plan.toUpdate) {
-    await db
-      .update(externalBans)
-      .set({
-        nickname: update.nickname,
-        reason: update.reason,
-        adminName: update.adminName,
-        expiresAt: update.expiresAt,
-        raw: update.raw ?? {},
-        revokedAt: update.revokedAt,
-      })
-      .where(eq(externalBans.id, update.id));
-  }
+    for (let start = 0; start < plan.toUpdate.length; start += UPDATE_BATCH_ROWS) {
+      const rows = plan.toUpdate
+        .slice(start, start + UPDATE_BATCH_ROWS)
+        .map(
+          (update) =>
+            sql`(${update.id}::uuid, ${update.nickname}::text, ${update.reason}::text, ${update.adminName}::text, ${update.expiresAt}::timestamptz, ${JSON.stringify(update.raw ?? {})}::jsonb)`,
+        );
+      await tx.execute(sql`
+        UPDATE external_bans AS target
+        SET nickname = source.nickname,
+            reason = source.reason,
+            admin_name = source.admin_name,
+            expires_at = source.expires_at,
+            raw = source.raw,
+            revoked_at = NULL
+        FROM (VALUES ${sql.join(rows, sql`, `)})
+          AS source (id, nickname, reason, admin_name, expires_at, raw)
+        WHERE target.id = source.id`);
+    }
 
-  if (plan.toRevokeIds.length > 0) {
-    await db
-      .update(externalBans)
-      .set({ revokedAt: new Date() })
-      .where(and(inArray(externalBans.id, plan.toRevokeIds), isNull(externalBans.revokedAt)));
-  }
+    if (plan.toRevokeIds.length > 0) {
+      await tx
+        .update(externalBans)
+        .set({ revokedAt: new Date() })
+        .where(and(inArray(externalBans.id, plan.toRevokeIds), isNull(externalBans.revokedAt)));
+    }
 
-  return {
-    added: plan.toInsert.length,
-    updated: plan.toUpdate.length,
-    revoked: plan.toRevokeIds.length,
-  };
+    return {
+      added,
+      updated: plan.toUpdate.length,
+      revoked: plan.toRevokeIds.length,
+    };
+  });
 }

@@ -10,6 +10,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { runManualQueueLoop } from './manual-queue.js';
 import { createSyncSourceDeps, syncSource } from './sync-source.js';
 import type { DueSource } from './tick.js';
 import { type BackoffMap, createTickDeps, runBanSyncTick } from './tick.js';
@@ -18,9 +19,6 @@ const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   base: { service: 'worker-ban-sync' },
 });
-
-const MANUAL_STREAM = 'bansync:manual';
-const MANUAL_GROUP = 'ban-sync';
 
 const TICK_INTERVAL_MS = Number(process.env.BAN_SYNC_INTERVAL_MS ?? 60_000);
 const MANUAL_BLOCK_MS = 5_000;
@@ -32,22 +30,6 @@ function requiredEnv(name: string): string {
     process.exit(1);
   }
   return value;
-}
-
-interface ManualJob {
-  source_id?: string;
-  actor_player_id?: string | null;
-  request_id?: string;
-  enqueued_at?: string;
-}
-
-async function ensureManualGroup(redis: Redis): Promise<void> {
-  try {
-    await redis.xgroup('CREATE', MANUAL_STREAM, MANUAL_GROUP, '$', 'MKSTREAM');
-  } catch (err) {
-    if ((err as Error).message?.includes('BUSYGROUP')) return;
-    throw err;
-  }
 }
 
 async function loadSourceById(db: DatabaseClient, sourceId: string): Promise<DueSource | null> {
@@ -95,9 +77,13 @@ async function main() {
   );
 
   const diag: Diag = createDiag({ redis, log });
-  const syncSourceDeps = createSyncSourceDeps(db, redis, diag, encryptionKey);
+  const syncSourceDeps = createSyncSourceDeps(db, redis, diag, encryptionKey, log);
   const backoff: BackoffMap = new Map();
-  const tickDeps = createTickDeps(db, syncSourceDeps, backoff);
+  // Shared by the scheduled tick and the manual queue so one source is never
+  // synced twice at once (#853).
+  const inFlight = new Set<string>();
+  let stopped = false;
+  const tickDeps = createTickDeps(db, syncSourceDeps, backoff, inFlight, () => stopped);
 
   // Heartbeat starts before any DB-dependent work below, so a slow/
   // unreachable Postgres never delays the liveness signal (mirrors
@@ -109,8 +95,8 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
-  let stopped = false;
   let interval: NodeJS.Timeout | null = null;
+  let runningTick: Promise<void> | null = null;
   let manualLoop: Promise<void> = Promise.resolve();
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
@@ -130,6 +116,9 @@ async function main() {
       // under this consumer, exactly as when the process is killed mid-read.
       manualRedis.disconnect();
       await manualLoop;
+      // The tick stops between sources once `stopped` is set; waiting for the
+      // source in progress keeps its merge from being cut off by `sql.end`.
+      await runningTick;
       await sql.end({ timeout: 5 });
       await redis.quit().catch(() => undefined);
     },
@@ -153,84 +142,41 @@ async function main() {
     }
   }
 
-  await ensureManualGroup(redis);
-  const consumerName = `ban-sync-${process.pid}`;
-
-  async function processManualQueue(): Promise<void> {
-    while (!stopped) {
-      let result: [string, [string, string[]][]][] | null = null;
-      try {
-        result = (await manualRedis.xreadgroup(
-          'GROUP',
-          MANUAL_GROUP,
-          consumerName,
-          'BLOCK',
-          MANUAL_BLOCK_MS,
-          'STREAMS',
-          MANUAL_STREAM,
-          '>',
-        )) as [string, [string, string[]][]][] | null;
-      } catch (err) {
-        // Shutdown closed the connection under the blocked read.
-        if (stopped) return;
-        log.warn({ err: (err as Error).message }, 'manual-queue xreadgroup failed');
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        continue;
-      }
-      if (!result) continue;
-
-      for (const [, entries] of result) {
-        for (const [entryId, fields] of entries) {
-          const idx = fields.indexOf('job');
-          const raw = idx >= 0 ? fields[idx + 1] : undefined;
-          if (!raw) {
-            await redis.xack(MANUAL_STREAM, MANUAL_GROUP, entryId);
-            continue;
-          }
-          let job: ManualJob;
-          try {
-            job = JSON.parse(raw) as ManualJob;
-          } catch (err) {
-            log.warn({ err: (err as Error).message, entryId }, 'malformed bansync:manual job');
-            await redis.xack(MANUAL_STREAM, MANUAL_GROUP, entryId);
-            continue;
-          }
-          if (!job.source_id) {
-            await redis.xack(MANUAL_STREAM, MANUAL_GROUP, entryId);
-            continue;
-          }
-          try {
-            const source = await loadSourceById(db, job.source_id);
-            if (source) {
-              // Manual sync bypasses the due-time check and the in-memory
-              // backoff map entirely — it always runs immediately.
-              const report = await syncSource(syncSourceDeps, source);
-              if (report.ok) backoff.delete(source.id);
-              log.info({ sourceId: source.id, ...report }, 'manual ban-sync');
-            } else {
-              log.warn({ sourceId: job.source_id }, 'manual sync requested for unknown source');
-            }
-          } catch (err) {
-            log.error(
-              { err: (err as Error).message, sourceId: job.source_id },
-              'manual ban-sync failed',
-            );
-          }
-          await redis.xack(MANUAL_STREAM, MANUAL_GROUP, entryId);
-        }
-      }
+  /** Starts a tick unless the previous one is still running (#853). */
+  function startTick(): Promise<void> {
+    if (runningTick) {
+      log.warn('previous ban-sync tick still running; this tick skipped');
+      return runningTick;
     }
+    runningTick = tick().finally(() => {
+      runningTick = null;
+    });
+    return runningTick;
   }
 
-  await tick();
+  await startTick();
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(() => {
-    tick().catch((err) => log.error({ err: (err as Error).message }, 'ban-sync tick failed'));
-  }, TICK_INTERVAL_MS);
+  interval = setInterval(startTick, TICK_INTERVAL_MS);
 
-  manualLoop = processManualQueue().catch((err) => {
-    log.error({ err: (err as Error).message }, 'manual-queue loop crashed');
+  manualLoop = runManualQueueLoop({
+    redis,
+    readRedis: manualRedis,
+    consumer: `ban-sync-${process.pid}`,
+    blockMs: MANUAL_BLOCK_MS,
+    loadSource: (sourceId) => loadSourceById(db, sourceId),
+    syncOne: (source) => syncSource(syncSourceDeps, source),
+    inFlight,
+    onSynced: (source, report) => {
+      if (report.ok) backoff.delete(source.id);
+    },
+    log,
+    shouldStop: () => stopped,
+  }).catch((err) => {
+    // The loop contains its own failures, so reaching this is a bug. Exit
+    // rather than heartbeat while manual syncs are no longer consumed (#1292).
+    log.fatal({ err: (err as Error).message }, 'manual-queue loop crashed; exiting');
+    process.exit(1);
   });
 }
 
