@@ -4,6 +4,36 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-28
+
+### Schema integrity and storage hardening (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_schema_integrity_hardening.sql`, `packages/db/src/schema/{audit-log,config-versions,ban-appeals,rotation-schedule,seed-schedule,matches,game-votes,role-squad-permissions,player-kit-time,media-links,issue-links,automation-rules,layers}.ts`, `packages/db/test/schema-integrity.migration.test.ts`
+
+Issue #77.
+
+- `audit_log.actor_player_id`, `audit_log.actor_token_id` and `config_versions.author_player_id` are NO ACTION instead of `ON DELETE SET NULL`. The SET NULL action is an UPDATE, which the append-only triggers and the actor CHECK constraints reject, so deleting a referenced player or token already failed — now with an explicit foreign-key violation (#1069, #1076).
+- `audit_log_append()` assigns the row id after taking its advisory lock and the `id` column default is dropped, so ids follow the chain order even when a session drew its id before another took the lock (#1066). The canonical timestamp is `audit_log_created_at_text(created_at)`, a function pinned to `TimeZone = 'UTC'` and `DateStyle = 'ISO, MDY'`; the API route `GET /api/v1/audit/verify-chain` and `scripts/verify-audit-chain.ts` use it too, so neither writer nor verifier depends on its session settings (#1067). Existing rows were hashed in UTC and still verify.
+- `config_versions.parent_version_id` references `config_versions(id)` again (lost when 0008 recreated the table), added `NOT VALID` and validated when no orphan exists (#1070).
+- Dropped `matches_server_started_idx`, `game_votes_server_started_idx`, `role_squad_permissions_role_idx`, `player_kit_time_player_id_idx`, `media_links_media_idx`, `issue_links_issue_idx` and `automation_rules_enabled_idx` (#1077, #1082).
+- New partial indexes `rotation_schedule_pending_idx` and `seed_schedule_active_idx` match the scheduler's reads, which now skip executed one-off entries in SQL (#1083).
+- `ban_appeals.tracking_token_hash` (sha256 hex, unique, NOT NULL) replaces the plaintext bearer token; existing tokens are hashed and cleared, and a trigger hashes any plaintext the previous release writes (#1084).
+- `trg_events_notify_appended` fires once per statement over a transition table and notifies each distinct `(server_id, kind)`; channel and payload are unchanged (#1089).
+- `packages/db/sql/chat-messages.sql` gains `matched_rule_id` and the `'rcon'` source; `player-coplay.sql` cites `0036_player_coplay.sql` (#1092).
+- `pnpm db:generate` now fails with a pointer to the hand-written workflow, and the stale `meta/0008_snapshot.json` is gone (#1090). `scripts/test-migration-lint.sh` (CI) rejects explicit `BEGIN;`/`COMMIT;` in new migrations and CHECK constraints on large partitioned tables added without `NOT VALID` (#1068, #1330).
+
+Rollback: the previous release does not delete players or tokens, never sets `audit_log.id`, verifies the chain in a UTC session, and works without the dropped indexes. Its appeal status page looks tokens up in plaintext, so it answers "not found" until the next roll forward; submissions keep working.
+
+### `relayAdminsCfgSyncOutbox` relays one row per transaction; ALT-7 alert frames are classifiable (no migration)
+
+**Files:** `packages/db/src/admins-cfg-outbox.ts`, `packages/db/src/admins-cfg-sync.ts`, `packages/db/src/alt-ban.ts`
+
+- The outbox relay commits each published row on its own, so a Redis stall holds one row lock for at most one bounded `XADD` and a failure never re-publishes rows already relayed. A failing row is skipped for the rest of the run instead of blocking every server behind it, the run stops after `maxConsecutiveFailures` (default 3) failures in a row and then rejects with the first failure. The unused `batchSize` option is replaced by `maxConsecutiveFailures`. A payload that is not a JSON object is refused (`admins_cfg_outbox_invalid_payload`); the enqueue helpers take `payload: object` (#1096, #1100).
+- `snapshotRolesAndAdmins` reads the typed `execute()` rows without `as unknown as` casts (#1099).
+- `raiseAltBanAlert` writes all matching `alert_events` in one insert before publishing, and each `alert.triggered` frame carries `event_kind: 'alt.ban_evasion_suspected'`, `alert_event_id`, `rule_id`, `severity`, `trigger` (and `server_id` on connect) instead of the raw payload with player ids (#1095).
+
+---
+
 ## 2026-09-27
 
 ### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)

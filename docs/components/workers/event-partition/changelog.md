@@ -1,5 +1,11 @@
 # Changelog — worker-event-partition
 
+## 2026-09-28
+
+### Added
+
+- Journal-table retention (issue #77): `pruneJournalTables(sql)` in `src/retention.ts`, run by every `runPartitionTick`, deletes delivered alerts after 90 days (any alert after 365), relayed `admins_cfg_sync_outbox` rows after 30 days, `scheduled_task_runs`, `chat_command_invocations` and `automation_runs` after 90 days, spent `media_upload_tokens` after 7 days, and clears `ban_appeals.submitter_ip` 30 days after the decision (90 days after submission at the latest). Rows still referenced by `expiry_notifications` or `media_files` are kept. Deletes run in batches of 5 000. `test/journal-retention.test.ts` covers every table and a backlog larger than one batch.
+
 ## 2026-09-27
 
 ### Fixed

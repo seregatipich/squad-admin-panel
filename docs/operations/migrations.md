@@ -46,17 +46,29 @@ If a migration shipped to production must be reverted, the path is:
 | 0116 | `0116_events_appended_notify` | Adds `events_notify_appended()` and the AFTER INSERT row trigger `trg_events_notify_appended` on `events` (cloned onto every partition): `pg_notify('events_appended', {server_id, kind})`. The API LISTENs to push `server.events.appended` to open event lists. Additive, rollback-safe. |
 | 0117 | `0117_monthly_partition_defaults` | Issue #6: adds DEFAULT partitions `chat_messages_default` and `bonus_transactions_default`, and creates the current UTC month and three months ahead for `chat_messages`, `bonus_transactions` and `combat_events` (each missing month is built with `LIKE`, receives the DEFAULT partition's rows for its range, then is attached). `worker-event-partition` keeps rotating them from then on. Additive, rollback-safe. |
 | 0118 | `0118_clan_members_release_disbanded` | Data-only: deletes `clan_members` rows of soft-deleted (disbanded) clans, which blocked those players from joining any other clan through the global `clan_members_player_unique_idx` (#14). Disband now removes the roster itself. No schema change, rollback-safe. |
+| 0119 | `0119_schema_integrity_hardening` | Issue #77. `audit_log`/`config_versions` actor and author FKs become NO ACTION (SET NULL was unreachable behind the append-only triggers); `audit_log_append()` draws the row id after its advisory lock (the column default is dropped) and hashes `created_at` through `audit_log_created_at_text()`, pinned to UTC/ISO; `config_versions.parent_version_id` gets its FK back (NOT VALID, validated when no orphans exist); seven redundant indexes are dropped; partial indexes back the scheduler's pending-entry reads; `ban_appeals` stores only `tracking_token_hash` (a trigger hashes and clears any plaintext); the `events_appended` NOTIFY trigger fires once per statement. Rollback-safe: after a rollback the previous release's appeal status page cannot find tokens (it looks up plaintext) until the next roll forward. |
 | 0020 | `0020_uuid_player_id` | Data-preserving identity migration: gives `players` a UUID primary key, keeps `steam_id64` as a nullable unique external identity, migrates all child FKs to UUID player IDs, and adds setup-wizard metadata. |
 
 ## Adding a migration
 
-1. Edit the relevant schema TS file under `packages/db/src/schema/`.
-2. Run `pnpm db:generate`. Drizzle creates `packages/db/drizzle/NNNN_slug.sql` and updates `_journal.json`.
-3. **Inspect the generated SQL.** Drizzle cannot generate: audit triggers, `pg_trigger_depth()` guards, monthly partition DDL, `ON CONFLICT` clauses, advisory locks. Add hand-written DDL inside the generated file where needed.
-4. Apply locally: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate`.
+Migrations are **hand-written**. `drizzle-kit generate` cannot be used: the only snapshot it could diff against was from migration 0008, and it numbers files by journal index, which no longer matches the file numbers. `pnpm db:generate` therefore fails on purpose.
+
+1. Edit the relevant schema TS file under `packages/db/src/schema/` so the Drizzle schema matches the database after the migration.
+2. Write `packages/db/drizzle/NNNN_short_descriptive_slug.sql` (next free number, lowercase, underscores) with an opening ticket comment. Separate statements with `--> statement-breakpoint` and keep them idempotent (`IF NOT EXISTS`, `DROP … IF EXISTS` before `ADD`).
+3. Append the entry to `packages/db/drizzle/meta/_journal.json`: next `idx`, `"version": "7"`, a `when` later than the previous entry's, the file name without `.sql` as `tag`, `"breakpoints": true`.
+4. Apply locally: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate`, and cover the change with a test under `packages/db/test/`.
 5. Stage both the schema change and the migration file in the same commit.
 
-Naming convention: `NNNN_short_descriptive_slug.sql` (lowercase, underscores). The `NNNN` prefix is assigned by Drizzle from the journal sequence — never renumber existing files.
+Never renumber or edit an applied migration file — not even a comment.
+
+### Writing a migration
+
+`bash scripts/test-migration-lint.sh` (run in CI) enforces the first two rules:
+
+- **No `BEGIN;` / `COMMIT;`.** `drizzle-orm`'s `migrate()` runs every pending migration in one transaction. An explicit `COMMIT` ends it early, and every later migration then runs in autocommit, so a failure half-way leaves a partially applied schema and no journal row. Migrations 0008–0020 predate this rule and are grandfathered.
+- **CHECK constraints on large partitioned tables are added `NOT VALID`** (`events`, `chat_messages`, `combat_events`, `diagnostic_events`, `bonus_transactions`, `player_sessions`), followed by `VALIDATE CONSTRAINT` in its own statement. A plain `ADD CONSTRAINT … CHECK` scans every partition under an ACCESS EXCLUSIVE lock that is held until the migration transaction commits; `VALIDATE` only takes SHARE UPDATE EXCLUSIVE. The same applies to foreign keys on large tables.
+- **Indexes on large partitioned tables** are built per partition: `CREATE INDEX … ON ONLY parent`, one index per partition, then `ALTER INDEX … ATTACH PARTITION`.
+- **Stay compatible with the previous release**, which keeps running against the new schema after a rollback: add first, drop what it still reads only in a later release.
 
 ### Hand-written constraint DDL
 

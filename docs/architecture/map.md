@@ -703,7 +703,7 @@ const inserted = await db.insert(adminsCfgSyncOutbox)
 ```
 `apps/api/src/lib/admins-cfg-sync.ts`
 
-Rows are inserted **inside the caller's transaction** and become visible to `relayAdminsCfgSyncOutbox` only after commit. The relay uses `FOR UPDATE SKIP LOCKED`, publishes one row per active-server snapshot to `events:admins-cfg-sync:<serverId>`, and never trims unacknowledged cfg-sync entries with `MAXLEN`.
+Rows are inserted **inside the caller's transaction** and become visible to `relayAdminsCfgSyncOutbox` only after commit. The relay claims and publishes one row per transaction (`FOR UPDATE SKIP LOCKED`, then `XADD`, then `relayed_at`, then commit) to `events:admins-cfg-sync:<serverId>`, skips a row whose publish fails for the rest of the run so one server cannot block the others, stops after three consecutive failures, and never trims unacknowledged cfg-sync entries with `MAXLEN`.
 
 ### 4.4 Live game ops & analytics
 
@@ -1717,7 +1717,7 @@ export function createDatabaseClient(url: string) {
 
 Three facts about the migration set matter more than the count:
 
-- **Snapshots are effectively absent.** `packages/db/drizzle/meta/` contains only `_journal.json` and `0008_snapshot.json`. Drizzle-kit normally writes one snapshot per generated migration; snapshots for `idx` 9–78 do not exist, so `drizzle-kit generate` cannot diff against journal state past migration 0008. Only 23 of the 79 files contain the `--> statement-breakpoint` marker; the other 56 are hand-authored. `packages/db/drizzle/0022_wave5_batch2.sql:1-3` says why in-file: *"Hand-authored additive migration (drizzle generate unreliable vs drifted snapshot)."* This is the single largest deviation from stock Drizzle workflow in the repo, and it is deliberate — hand-written SQL is what enables partitioning, BRIN/GIN indexes, `NULLS NOT DISTINCT`, triggers and `DO $$` blocks.
+- **Snapshots are effectively absent.** `packages/db/drizzle/meta/` contained only `_journal.json` and `0008_snapshot.json` (the stale snapshot was removed and `pnpm db:generate` turned into a guard that fails with a pointer to the hand-written workflow in issue #77). Drizzle-kit normally writes one snapshot per generated migration; snapshots for `idx` 9–78 do not exist, so `drizzle-kit generate` cannot diff against journal state past migration 0008. Only 23 of the 79 files contain the `--> statement-breakpoint` marker; the other 56 are hand-authored. `packages/db/drizzle/0022_wave5_batch2.sql:1-3` says why in-file: *"Hand-authored additive migration (drizzle generate unreliable vs drifted snapshot)."* This is the single largest deviation from stock Drizzle workflow in the repo, and it is deliberate — hand-written SQL is what enables partitioning, BRIN/GIN indexes, `NULLS NOT DISTINCT`, triggers and `DO $$` blocks.
 - **Filename order is not apply order.** The last file is `0093_vip_tier_price.sql` but there are only 79 files: 15 prefixes are simply absent (`0051`, `0056`–`0057`, `0059`–`0064`, `0069`–`0070`, `0072`, `0074`–`0076`). Worse, 30 of the 79 journal entries have an `idx` that disagrees with the filename prefix (`idx: 49 → 0050_clan_guard_settings`, `idx: 53 → 0049_clan_priority_expiry`). Apply order is the journal's array order. This is the fingerprint of the repo's parallel-wave branching model: concurrent branches each claimed a prefix, and the serial integrator appended them in merge order without renumbering.
 - **Two migrations are deliberate no-ops** reserving a journal slot: `0001_seed_system_roles.sql` (`SELECT 1;` — roles are created per-org by the setup wizard) and `0018_diagnostic_events_utc_invariant.sql` ("Documentation-only migration. No DDL."), which records that partition bounds must be UTC-derived. There is essentially no SQL seed data anywhere; runtime seeding lives in TypeScript.
 
@@ -1814,6 +1814,11 @@ Until issue #6 the last four tables had **no rotator at all**: `player_sessions`
 | `audit_log` | PG | **never pruned, by design** | `audit_log_deny` triggers | deletion is *impossible*, not merely unimplemented |
 | `config_versions` | PG | never pruned | same append-only triggers (`0003:28-39`) | unbounded |
 | `processed_events` | PG | never pruned (`0000_init.sql:280`) | — | unbounded |
+| `alert_events` | PG | delivered: 90 days; any: 365 days (`JOURNAL_RETENTION`, `event-partition/src/retention.ts`) | event-partition worker, hourly | batched `DELETE`; rows an `expiry_notifications` row references are kept |
+| `admins_cfg_sync_outbox` | PG | 30 days after `relayed_at`; pending rows never | event-partition worker, hourly | batched `DELETE` |
+| `scheduled_task_runs`, `chat_command_invocations`, `automation_runs` | PG | 90 days | event-partition worker, hourly | batched `DELETE` |
+| `media_upload_tokens` | PG | 7 days after expiry or use | event-partition worker, hourly | batched `DELETE`; tokens a `media_files` row references are kept |
+| `ban_appeals.submitter_ip` | PG | 30 days after the decision, 90 days after submission at the latest | event-partition worker, hourly | column set to NULL; the appeal row stays |
 | `sessions` | PG | `pruneExpired()` exists but has **no caller** | — | dead code; expired rows accumulate |
 | `moderation_actions`, `external_bans`, `player_ip_history` | PG | never pruned | — | `player_ip_history` is bounded by distinct IPs per player (UPSERT on `(playerId, ip)`, `geoip/observe.ts:22-42`) — the one natural brake |
 | `media_files` rows + blobs | PG + disk | soft delete only (`routes/media.ts:361`) | — | blob is **never unlinked**; dedup lookup filters `isNull(deletedAt)`, so soft-deleting the last active row orphans the file *and* makes the next identical upload write a second copy. No reaper exists. |

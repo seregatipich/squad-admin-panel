@@ -1,5 +1,15 @@
 # `bridge-client` — changelog
 
+## 2026-09-28
+
+### Changed
+
+- Incoming frames are reassembled by the new `FrameAccumulator` (`src/frame.ts`) instead of `Buffer.concat` of the whole buffer on every chunk; a 4 MiB frame in 64 KiB chunks went from ~170 MB of copying to about twice its size (#1050).
+- Every received frame is validated against a zod envelope schema before routing. A malformed response fails its pending call with `BridgeError('internal', …)` instead of timing out, a JSON `null` frame no longer throws inside the socket listener, and an unknown bridge error code degrades to `internal` with the bridge's message (#1051).
+- `ContainerControlParams` no longer has `force`: the Go bridge never read it and `container_rm` always force-removes (#1060).
+- `BridgeError` moved to `src/errors.ts` so it counts toward the 100% coverage gate; `types.ts` now holds type declarations only (#1063). It is still exported from the package root.
+- Dropped the deprecated `@types/uuid` stub (uuid 14 ships its own types); `zod` is now actually used (#1052). Test files are typechecked through `tsconfig.test.json`.
+
 ## 2026-07-07
 
 ### Added

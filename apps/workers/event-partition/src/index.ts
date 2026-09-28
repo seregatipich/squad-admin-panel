@@ -5,6 +5,7 @@ import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { pruneJournalTables } from './retention.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -215,6 +216,12 @@ export interface PartitionTickDeps {
   diag: Diag;
 }
 
+/**
+ * One hourly maintenance pass: rotates every partitioned table and applies the
+ * journal-table retention ({@link pruneJournalTables}). The steps run
+ * independently; failures are collected into one `event_partition.run_failed`
+ * diag event.
+ */
 export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
   const { sql, diag } = deps;
   const failures: string[] = [];
@@ -226,6 +233,7 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
     ...DEFAULT_BACKED_MONTHLY_TABLES.map((table) =>
       ensureDefaultBackedMonthlyPartitions(sql, table),
     ),
+    pruneJournalTables(sql).then((pruned) => log.info({ pruned }, 'journal retention applied')),
   ]);
   for (const r of results) {
     if (r.status === 'rejected') {
