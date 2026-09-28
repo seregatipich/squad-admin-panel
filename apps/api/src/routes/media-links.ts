@@ -14,7 +14,7 @@ import {
   mediaLinkAttachInput,
   mediaLinkDetachQuery,
 } from '@squad/shared-types';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -23,6 +23,12 @@ import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile, serializeMediaFile } from './media.js';
+
+/**
+ * Most evidence items `GET /api/v1/players/:playerId/media` returns, newest
+ * link first; bounds the response for a player with a long moderation history.
+ */
+export const PLAYER_MEDIA_LIMIT = 500;
 
 const mediaIdParams = z.object({ id: z.string().uuid() });
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -257,33 +263,35 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const actionRows = await app.db
-        .select({ id: moderationActions.id })
-        .from(moderationActions)
-        .where(eq(moderationActions.playerId, req.params.playerId));
-      const actionIds = actionRows.map((row) => row.id);
-
-      const directLinks = await app.db
-        .select()
+      const { playerId } = req.params;
+      const rows = await app.db
+        .select({ link: mediaLinks, media: mediaFiles })
         .from(mediaLinks)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, mediaLinks.mediaId))
         .where(
-          and(eq(mediaLinks.entityType, 'player'), eq(mediaLinks.entityId, req.params.playerId)),
-        );
-
-      const actionLinks =
-        actionIds.length > 0
-          ? await app.db
-              .select()
-              .from(mediaLinks)
-              .where(
-                and(
-                  eq(mediaLinks.entityType, 'moderation_action'),
-                  inArray(mediaLinks.entityId, actionIds),
+          and(
+            isNull(mediaFiles.deletedAt),
+            or(
+              and(eq(mediaLinks.entityType, 'player'), eq(mediaLinks.entityId, playerId)),
+              and(
+                eq(mediaLinks.entityType, 'moderation_action'),
+                inArray(
+                  mediaLinks.entityId,
+                  app.db
+                    .select({ id: moderationActions.id })
+                    .from(moderationActions)
+                    .where(eq(moderationActions.playerId, playerId)),
                 ),
-              )
-          : [];
-
-      const items = await loadLinkedFiles(app.db, [...directLinks, ...actionLinks]);
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(mediaLinks.createdAt), desc(mediaLinks.id))
+        .limit(PLAYER_MEDIA_LIMIT);
+      const items: MediaLinkedFileResponse[] = rows.map((row) => ({
+        link: serializeMediaLink(row.link),
+        media: serializeMediaFile(row.media),
+      }));
       return { items };
     },
   );

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
+import { PLAYER_MEDIA_LIMIT } from '../src/routes/media-links.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -342,6 +343,55 @@ describe('GET evidence listing', () => {
     expect(playerMedia.statusCode).toBe(200);
     const items = playerMedia.json().items as Array<{ media: { id: string } }>;
     expect(items.some((it) => it.media.id === mediaId)).toBe(true);
+  });
+});
+
+describe('GET /api/v1/players/:playerId/media bounds (#70)', () => {
+  it('returns at most PLAYER_MEDIA_LIMIT links, newest first, skipping deleted media', async () => {
+    const playerId = await insertPlayer({
+      steamId64: testSteamId(978030),
+      canonicalName: 'MediaLinksBulk',
+    });
+    const actionId = await insertModerationAction(playerId);
+    const mediaIds: string[] = [];
+    for (let i = 0; i < PLAYER_MEDIA_LIMIT + 5; i++) mediaIds.push(randomUUID());
+    await h.db.insert(mediaFiles).values(
+      mediaIds.map((id) => ({
+        id,
+        uploaderPlayerId: null,
+        kind: 'external_link',
+        originalFilename: `bulk-${id}.mp4`,
+        mimeType: 'text/uri-list',
+        sizeBytes: 0,
+        sha256: randomUUID().replace(/-/g, ''),
+        storagePath: null,
+        externalUrl: `https://clips.example.com/${id}`,
+      })),
+    );
+    const base = Date.parse('2026-01-01T00:00:00Z');
+    await h.db.insert(mediaLinks).values(
+      mediaIds.map((mediaId, i) => ({
+        id: randomUUID(),
+        mediaId,
+        entityType: i % 2 === 0 ? 'player' : 'moderation_action',
+        entityId: i % 2 === 0 ? playerId : actionId,
+        createdAt: new Date(base + i * 1000),
+      })),
+    );
+    const newest = mediaIds.at(-1) as string;
+    const deleted = mediaIds.at(-2) as string;
+    await h.db.update(mediaFiles).set({ deletedAt: new Date() }).where(eq(mediaFiles.id, deleted));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${playerId}/media`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<{ media: { id: string } }>;
+    expect(items).toHaveLength(PLAYER_MEDIA_LIMIT);
+    expect(items[0]?.media.id).toBe(newest);
+    expect(items.some((it) => it.media.id === deleted)).toBe(false);
   });
 });
 
