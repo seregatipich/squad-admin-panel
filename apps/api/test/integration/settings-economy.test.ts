@@ -308,6 +308,39 @@ describeIfDb('PUT /api/v1/settings/economy', () => {
     expect(after).toEqual(before);
   });
 
+  // Regression test for finding #347: a previously-saved seed reward role
+  // that later becomes invalid (granted panel_access here) must not block an
+  // unrelated economy update that never touches the seed reward fields.
+  it('allows an unrelated update even when the saved seed reward role has since gained panel access', async () => {
+    const rewardRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: rewardRoleId,
+      name: `SeedRewardStale_${rewardRoleId}`,
+      color: '#8B5CF6',
+      panelAccess: false,
+    });
+    const configured = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: { seed_reward_threshold_hours_per_month: 10, seed_reward_role_id: rewardRoleId },
+    });
+    expect(configured.statusCode).toBe(200);
+
+    // The role is later granted panel_access (or could equally be deleted),
+    // outside of this route — e.g. through role management.
+    await h.db.update(roles).set({ panelAccess: true }).where(eq(roles.id, rewardRoleId));
+
+    const unrelatedUpdate = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: { k_online: 2 },
+    });
+    expect(unrelatedUpdate.statusCode).toBe(200);
+    expect(unrelatedUpdate.json()).toMatchObject({ k_online: 2 });
+  });
+
   it('rejects a negative coefficient with 400', async () => {
     const res = await h.app.inject({
       method: 'PUT',

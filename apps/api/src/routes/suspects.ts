@@ -115,13 +115,26 @@ function encodeCursor(row: { lastSeenAt: Date; id: string }): string {
   return `${row.lastSeenAt.getTime()}_${row.id}`;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Parses a `<millis>_<uuid>` keyset cursor. Returns `null` — turned into a
+ * 400 `invalid_cursor` by the caller — for anything that would otherwise
+ * reach Postgres and 500 there: a non-UUID-shaped id (the old
+ * `/^[0-9a-f-]{36}$/` accepted any 36 hex-or-dash characters, not just a real
+ * UUID) or a millis value producing an `Invalid Date` (`Number.isFinite`
+ * alone doesn't reject out-of-range values like `1e17`, which `new Date()`
+ * turns into `Invalid Date` — finding #353).
+ */
 function parseCursor(raw: string): { lastSeenAt: Date; id: string } | null {
   const sep = raw.indexOf('_');
   if (sep === -1) return null;
   const millis = Number(raw.slice(0, sep));
   const id = raw.slice(sep + 1);
-  if (!Number.isFinite(millis) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
-  return { lastSeenAt: new Date(millis), id };
+  if (!UUID_RE.test(id)) return null;
+  const lastSeenAt = new Date(millis);
+  if (Number.isNaN(lastSeenAt.getTime())) return null;
+  return { lastSeenAt, id };
 }
 
 const suspectsRoutes: FastifyPluginAsync = async (app) => {

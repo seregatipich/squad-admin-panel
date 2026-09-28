@@ -144,6 +144,33 @@ describeIfDb('GET /api/v1/suspects', () => {
     expect(res.json()).toEqual({ error: 'invalid_cursor' });
   });
 
+  // Regression tests for finding #353: both shapes below used to slip past
+  // parseCursor's old checks and 500 inside Postgres/the driver instead of
+  // being turned into a 400 invalid_cursor.
+  it('rejects a cursor whose id is 36 hex/dash characters but not a real UUID with 400', async () => {
+    // 36 dashes: matches the old /^[0-9a-f-]{36}$/ but is not a UUID shape,
+    // so Postgres would reject it with "invalid input syntax for type uuid".
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/suspects?cursor=${Date.now()}_${'-'.repeat(36)}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
+  it('rejects a cursor with an out-of-range millis timestamp with 400', async () => {
+    // 1e17 ms is outside the range new Date() can represent, so it becomes
+    // Invalid Date and toISOString() would throw a RangeError downstream.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/suspects?cursor=100000000000000000_019dbac8-ceb0-77ab-859b-bfa9a282ee2c`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
   it('returns one row with both marks for a player with two active marks', async () => {
     const playerId = await seedPlayer(811010, 'SuspectTwoMarks');
     await setMark(playerId, 1, ownerCookie);
