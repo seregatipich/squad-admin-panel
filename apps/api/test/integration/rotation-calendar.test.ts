@@ -1,7 +1,15 @@
-import { events, matches, players, roles, seedSchedule, servers } from '@squad/db/schema';
+import {
+  events,
+  matches,
+  players,
+  roles,
+  rotationSchedule,
+  seedSchedule,
+  servers,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -151,6 +159,85 @@ describe('ROT-4 rotation calendar API', () => {
       resource: 'server',
       targetId: SERVER_ID,
     });
+  });
+
+  // Regression (#43 finding 313): the read loaded every schedule row ever
+  // written and re-queried seed_schedule plus depot:updating once per row.
+  it('limits entries to the range and loads warning inputs once per request', async () => {
+    const serverId = uuidv7();
+    await h.db.insert(servers).values({
+      id: serverId,
+      displayName: 'Rotation Calendar Range Server',
+      slug: `rotation-calendar-range-${serverId}`,
+      timezone: 'UTC',
+    });
+    await h.db.insert(seedSchedule).values({
+      id: uuidv7(),
+      serverId,
+      startsAt: new Date('2026-08-10T10:30:00Z'),
+      seedLayer: 'Sumari Seed v1',
+    });
+    const pendingId = uuidv7();
+    const pendingLaterId = uuidv7();
+    const executedId = uuidv7();
+    const outOfRangeId = uuidv7();
+    await h.db.insert(rotationSchedule).values([
+      {
+        id: pendingId,
+        serverId,
+        scheduledAt: new Date('2026-08-10T10:00:00Z'),
+        layer: KNOWN_LAYER,
+      },
+      {
+        id: pendingLaterId,
+        serverId,
+        scheduledAt: new Date('2026-08-10T11:00:00Z'),
+        layer: KNOWN_LAYER,
+      },
+      {
+        id: executedId,
+        serverId,
+        scheduledAt: new Date('2026-08-10T10:15:00Z'),
+        layer: KNOWN_LAYER,
+        lastExecutedAt: new Date('2026-08-10T10:15:05Z'),
+      },
+      {
+        id: outOfRangeId,
+        serverId,
+        scheduledAt: new Date('2026-09-20T10:00:00Z'),
+        layer: KNOWN_LAYER,
+      },
+    ]);
+    const cookie = await loginAsOwner(h);
+    const redisGet = vi.spyOn(h.app.redis, 'get');
+    try {
+      const response = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/servers/${serverId}/rotation-schedule?from=2026-08-09T00:00:00.000Z&to=2026-08-11T00:00:00.000Z`,
+        headers: { cookie },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        entries: Array<{ id: string }>;
+        warnings: Record<string, Array<{ type: string }>>;
+      }>();
+      expect(body.entries.map((entry) => entry.id)).toEqual([
+        pendingId,
+        executedId,
+        pendingLaterId,
+      ]);
+      expect(body.warnings[pendingId]).toEqual([
+        expect.objectContaining({ type: 'seed_schedule_overlap' }),
+      ]);
+      expect(body.warnings[pendingLaterId]).toEqual([
+        expect.objectContaining({ type: 'seed_schedule_overlap' }),
+      ]);
+      expect(body.warnings[executedId]).toBeUndefined();
+      expect(redisGet.mock.calls.filter(([key]) => key === 'depot:updating')).toHaveLength(1);
+    } finally {
+      redisGet.mockRestore();
+    }
   });
 
   it('gates writes by changemap while retaining read-only calendar access', async () => {
