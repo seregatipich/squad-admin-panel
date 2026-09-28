@@ -10,6 +10,7 @@ import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calendarDaySchema } from '../lib/calendar-day.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
@@ -21,19 +22,13 @@ const BONUS_FORMULA_LABEL = 'online + 2×boost';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const presenceQuery = z.object({
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 const DAILY_RANGE_DAYS = { '30': 30, '90': 90, '365': 365 } as const;
 const dailyPresenceQuery = z.object({
   range: z.enum(['30', '90', '365']).default('30'),
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 function resolveDailyWindow(

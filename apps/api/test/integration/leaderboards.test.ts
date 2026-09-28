@@ -372,8 +372,31 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(body.combat_available).toBe(true);
   });
 
+  it('rejects a period_start that is not a calendar day with 400 (#70)', async () => {
+    for (const day of ['9999-99-99', '2026-13-45', '2026-02-30']) {
+      const res = await fetchLeaderboard(`?metric=online&period=day&period_start=${day}`);
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it('returns an opaque error envelope when the query fails (no SQL leaked)', async () => {
-    const res = await fetchLeaderboard('?metric=online&period=day&period_start=9999-99-99');
+    // A failing query whose message carries SQL, as a driver error would.
+    const db = h.app.db as unknown as { select: (fields?: object) => unknown };
+    const realSelect = db.select;
+    db.select = (fields?: object) => {
+      if (fields && 'metricValue' in fields) {
+        throw new Error(
+          'Failed query: select * from player_stat_periods — invalid input syntax for type date/time',
+        );
+      }
+      return realSelect.call(h.app.db, fields);
+    };
+    let res: Awaited<ReturnType<typeof fetchLeaderboard>>;
+    try {
+      res = await fetchLeaderboard('?metric=online&period=day&period_start=2026-06-15');
+    } finally {
+      db.select = realSelect;
+    }
     expect(res.statusCode).toBe(500);
     const body = res.json() as { error: { code: string; message: string } };
     expect(body.error.code).toBe('internal_error');

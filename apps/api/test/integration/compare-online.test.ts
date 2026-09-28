@@ -168,6 +168,32 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     expect(res.json()).toMatchObject({ error: 'same_player' });
   });
 
+  it('rejects the same player spelled in another UUID case with 422 same_player (#70)', async () => {
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/compare-online?other=${idA.toUpperCase()}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: 'same_player' });
+  });
+
+  it('rejects from/to that are not calendar days with 400 (#70)', async () => {
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
+    const cookie = await loginAsOwner(h);
+    for (const window of ['from=2026-02-30&to=2026-03-05', 'from=2026-03-01&to=2026-13-45']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${idA}/compare-online?other=${idB}&${window}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it('rejects from > to with 422 invalid_window', async () => {
     const idA = await seedPlayer(playerASteam, 'PlayerA');
     const idB = await seedPlayer(playerBSteam, 'PlayerB');

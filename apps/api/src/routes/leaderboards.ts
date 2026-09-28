@@ -12,6 +12,7 @@ import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calendarDaySchema } from '../lib/calendar-day.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const METRIC_COLUMNS = {
@@ -53,10 +54,7 @@ const leaderboardsQuery = z.object({
     'boost',
   ]),
   period: z.enum(['day', 'week', 'month', 'season', 'alltime']).default('alltime'),
-  period_start: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  period_start: calendarDaySchema.optional(),
   server_id: z.union([z.literal('all'), z.string().uuid()]).default('all'),
   order: z.enum(['asc', 'desc']).default('desc'),
   search: z.string().trim().min(1).max(64).optional(),
