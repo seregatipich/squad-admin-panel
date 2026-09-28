@@ -9,8 +9,8 @@
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
 | `PANEL_PUBLIC_URL` | yes | — | api | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID; must be an HTTPS origin in production. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
-| `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
-| `DUCKDNS_TOKEN` | only for the stand host | — | caddy (the stand host) | DuckDNS API token for DNS-01 TLS (`docker/compose.stand.yml` / `docker/Caddyfile.stand`) when port 80 is not forwarded. | yes |
+| `ACME_EMAIL` | only if `TLS_ISSUER=acme`; always on the stand host | — | all | Contact email used by Let's Encrypt. `docker/compose.stand.yml` always issues via ACME and fails fast with `ACME_EMAIL_is_required` when unset — `admin@example.com` is a reserved domain Let's Encrypt rejects, so no default is provided there. | no |
+| `DUCKDNS_TOKEN` | only for the stand host | — | caddy (the stand host) | DuckDNS API token for DNS-01 TLS (`docker/compose.stand.yml` / `docker/Caddyfile.stand`) when port 80 is not forwarded. `docker/compose.stand.yml` fails fast with `DUCKDNS_TOKEN_is_required` when unset. | yes |
 | `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |

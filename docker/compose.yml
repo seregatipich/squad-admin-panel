@@ -15,6 +15,7 @@ services:
     image: caddy:2-alpine
     init: true
     restart: unless-stopped
+    pids_limit: 256
     ports:
       - '80:80'
       - '443:443'
@@ -57,6 +58,7 @@ services:
       context: ..
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    pids_limit: 256
     environment:
       NODE_ENV: production
       API_HOST: 0.0.0.0
@@ -104,6 +106,7 @@ services:
     # otherwise every RPC fails with `rejected untrusted peer`. See
     # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
       - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
@@ -128,6 +131,8 @@ services:
       context: ..
       dockerfile: docker/web.Dockerfile
     restart: unless-stopped
+    init: true
+    pids_limit: 256
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
@@ -144,6 +149,7 @@ services:
       args:
         WORKER: log-ingest
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -156,6 +162,7 @@ services:
     # otherwise every RPC fails with `rejected untrusted peer`. See
     # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -174,6 +181,7 @@ services:
       args:
         WORKER: config-sync
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -184,6 +192,7 @@ services:
     # otherwise every RPC fails with `rejected untrusted peer`. See
     # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -202,6 +211,7 @@ services:
       args:
         WORKER: rcon
     restart: unless-stopped
+    pids_limit: 256
     network_mode: host
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
@@ -224,6 +234,7 @@ services:
   worker-audit-archiver:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -237,6 +248,7 @@ services:
   worker-event-partition:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -250,6 +262,7 @@ services:
   worker-presence-daily:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -263,6 +276,7 @@ services:
   worker-role-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -281,6 +295,7 @@ services:
   worker-seed-reward:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -300,6 +315,7 @@ services:
   worker-steam-refresh:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -320,6 +336,7 @@ services:
   worker-media-publisher:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -347,6 +364,7 @@ services:
   worker-leaderboard-aggregator:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -360,6 +378,7 @@ services:
   worker-diag-flush:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -387,6 +406,7 @@ services:
       args:
         WORKER: metrics-sampler
     restart: unless-stopped
+    pids_limit: 256
     environment:
       REDIS_URL: redis://redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -396,6 +416,7 @@ services:
     # otherwise every RPC fails with `rejected untrusted peer`. See
     # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -406,6 +427,7 @@ services:
   worker-clan-guard:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -424,6 +446,7 @@ services:
   worker-automation:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -439,6 +462,7 @@ services:
   worker-scheduler:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -447,6 +471,7 @@ services:
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -461,6 +486,7 @@ services:
   worker-ban-sync:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -478,6 +504,7 @@ services:
   worker-clan-priority-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -494,6 +521,7 @@ services:
   worker-discord:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
     restart: unless-stopped
+    pids_limit: 256
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
@@ -511,6 +539,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    pids_limit: 256
     environment:
       POSTGRES_DB: admin
       POSTGRES_USER: admin
@@ -530,6 +559,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    pids_limit: 256
     command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
     ports:
       - '127.0.0.1:6379:6379'
@@ -590,6 +620,7 @@ services:
       dockerfile: docker/restic.Dockerfile
     image: squad-panel/restic:latest
     restart: unless-stopped
+    pids_limit: 256
     profiles: ['backup']
     depends_on:
       postgres:

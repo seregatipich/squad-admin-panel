@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "experimentalScannerIgnores": [".claude", ".playwright-mcp", "apps/web/public/monaco"],
+    "experimentalScannerIgnores": [".claude", ".playwright-mcp", "monaco"],
     "includes": [
       "**",
       "!**/.claude",

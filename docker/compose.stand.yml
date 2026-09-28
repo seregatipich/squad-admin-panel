@@ -468,6 +468,7 @@ services:
   web:
     image: ${WEB_IMAGE:?WEB_IMAGE_is_required}
     restart: unless-stopped
+    init: true
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
@@ -497,10 +498,13 @@ services:
     ports:
       - '443:443'
     environment:
-      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      # Let's Encrypt rejects contact addresses on the reserved example.com
+      # domain, so a missing value must fail fast rather than silently break
+      # certificate issuance/renewal.
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL_is_required}
       # The site Caddyfile.stand serves; it lives in the host's .env.stand.
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
-      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:?DUCKDNS_TOKEN_is_required}
       # Hash of docker/Caddyfile.stand, from .release.env. Compose cannot see
       # a bind-mounted file change, and a single-file mount keeps showing the
       # replaced inode after rsync, so a Caddyfile edit must recreate caddy.
@@ -513,7 +517,7 @@ services:
       api:
         condition: service_healthy
       web:
-        condition: service_started
+        condition: service_healthy
     logging: *default-logging
 
   # The bridge launches one squad-server container per panel server (named
