@@ -23,6 +23,7 @@ import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runScheduledTaskTick } from './scheduled-task-tick.js';
 import { runSeasonFinalizeTick } from './season-finalize-tick.js';
 import { runSeedScheduleTick } from './seed-schedule-tick.js';
+import { startTickLoop } from './tick-loop.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -76,7 +77,7 @@ async function main() {
     statusFn: () => (lastTickAt ? `running (last tick ${lastTickAt})` : 'starting'),
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
-  const runtimeDeps = createSeedScheduleDeps(db, redis);
+  const runtimeDeps = createSeedScheduleDeps(db, redis, bridge);
   const rotationScheduleDeps = createRotationScheduleDeps(db, redis);
   const rotationProfileDeps = createRotationProfileDeps(db, bridge);
   const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
@@ -114,11 +115,16 @@ async function main() {
     );
   }
 
-  let interval: NodeJS.Timeout | null = null;
+  // startTickLoop (#1000, #1015) skips an interval fire while a tick is
+  // still running instead of starting a concurrent one, and lets shutdown
+  // wait for the in-flight tick before closing the DB/bridge/Redis
+  // connections out from under it.
+  let tickLoop: ReturnType<typeof startTickLoop> | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
+      tickLoop?.stop();
+      await tickLoop?.waitForCurrentTick();
       await diag.emit({
         component: 'worker-scheduler',
         kind: 'scheduler.stopped',
@@ -156,9 +162,12 @@ async function main() {
   await tick();
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(() => {
-    tick().catch((err) => log.error({ err: (err as Error).message }, 'seed-schedule tick failed'));
-  }, TICK_INTERVAL_MS);
+  tickLoop = startTickLoop({
+    tick,
+    intervalMs: TICK_INTERVAL_MS,
+    onSkip: () => log.warn('previous scheduler tick still running — skipping this interval fire'),
+    onError: (err) => log.error({ err: (err as Error).message }, 'scheduler tick failed'),
+  });
 }
 
 function isMainEntrypoint(): boolean {

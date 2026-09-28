@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  PermanentTaskDispatchError,
   resolveDueOccurrence,
   runScheduledTaskTick,
   type ScheduledTaskEntry,
@@ -234,6 +235,30 @@ describe('runScheduledTaskTick', () => {
     );
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'scheduled_task.dispatch_failed', severity: 'error' }),
+    );
+  });
+
+  it('advances the cursor past a permanent dispatch failure so it does not retry forever (#1016)', async () => {
+    const entry = makeEntry({ taskType: 'restart' });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+      restartServer: vi
+        .fn()
+        .mockRejectedValue(new PermanentTaskDispatchError('server is external')),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(result).toEqual({ executed: 0, skippedDepotUpdate: 0, failed: 1 });
+    // Unlike a transient failure, the cursor DOES advance past a permanent one.
+    expect(deps.setLastExecutedAt).toHaveBeenCalledWith(entry.id, entry.scheduledAt);
+    expect(deps.recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: entry.id,
+        status: 'failed',
+        detail: expect.objectContaining({ permanent: true }),
+      }),
     );
   });
 

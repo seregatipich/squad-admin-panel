@@ -1,5 +1,5 @@
 import type { Diag } from '@squad/diag';
-import { expandCron5Occurrences, type RconOperatorCommandName } from '@squad/shared-types';
+import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
 
 /** One row of the `seed_schedule` table (SEED-3, #142). */
 export interface SeedScheduleEntry {
@@ -59,12 +59,13 @@ export interface SeedScheduleTickResult {
  *
  * - One-off (`recurrence === null`): due once `startsAt <= now`, and only if
  *   it has never executed (`lastExecutedAt === null`).
- * - Recurring: due when {@link expandCron5Occurrences} finds at least one
- *   matching minute strictly after the last-known cursor
- *   (`lastExecutedAt`, or `createdAt` if it has never executed) and at or
- *   before `now`. When multiple occurrences were missed between ticks, only
- *   the most recent is returned — the tick fires once, advancing the cursor
- *   past every missed occurrence at once, rather than replaying each one.
+ * - Recurring: due when {@link findLastCron5Occurrence} finds a matching
+ *   minute strictly after the last-known cursor (`lastExecutedAt`, or
+ *   `createdAt` if it has never executed) and at or before `now`. When
+ *   multiple occurrences were missed between ticks, only the most recent is
+ *   returned — the tick fires once, advancing the cursor past every missed
+ *   occurrence at once, rather than replaying each one — regardless of how
+ *   far behind the cursor has fallen.
  */
 export function resolveDueOccurrence(entry: SeedScheduleEntry, now: Date): Date | null {
   if (entry.recurrence === null) {
@@ -79,8 +80,7 @@ export function resolveDueOccurrence(entry: SeedScheduleEntry, now: Date): Date 
   const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
   if (from.getTime() > now.getTime()) return null;
 
-  const occurrences = expandCron5Occurrences(entry.recurrence, from, now);
-  return occurrences.length > 0 ? (occurrences.at(-1) ?? null) : null;
+  return findLastCron5Occurrence(entry.recurrence, from, now);
 }
 
 /**

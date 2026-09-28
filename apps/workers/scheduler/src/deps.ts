@@ -43,12 +43,13 @@ import type {
   RotationScheduleEntry,
   RotationScheduleTickDeps,
 } from './rotation-schedule-tick.js';
-import type {
-  ScheduledBroadcastEcho,
-  ScheduledTaskAuditEntry,
-  ScheduledTaskEntry,
-  ScheduledTaskRunRecord,
-  ScheduledTaskTickDeps,
+import {
+  PermanentTaskDispatchError,
+  type ScheduledBroadcastEcho,
+  type ScheduledTaskAuditEntry,
+  type ScheduledTaskEntry,
+  type ScheduledTaskRunRecord,
+  type ScheduledTaskTickDeps,
 } from './scheduled-task-tick.js';
 import type {
   ActiveSeason,
@@ -66,33 +67,25 @@ import type {
 const RCON_STREAM_MAXLEN = 500;
 const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
 
-function seedPublicHost(): string {
-  const panelUrl = process.env.PANEL_PUBLIC_URL;
-  if (panelUrl) {
-    try {
-      return new URL(panelUrl).hostname;
-    } catch {
-      // Fall through to the service's configured RCON host.
-    }
-  }
-  return process.env.RCON_HOST_DEFAULT ?? '127.0.0.1';
-}
-
 export async function loadEnabledSeedScheduleEntries(
   db: DatabaseClient,
 ): Promise<SeedScheduleEntry[]> {
-  const rows = await db.select().from(seedSchedule).where(eq(seedSchedule.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    startsAt: row.startsAt,
-    seedLayer: row.seedLayer,
-    broadcastText: row.broadcastText,
-    notifyMinutesBefore: row.notifyMinutesBefore,
-    recurrence: row.recurrence,
-    lastExecutedAt: row.lastExecutedAt,
-    createdAt: row.createdAt,
-  }));
+  const rows = await db
+    .select({
+      id: seedSchedule.id,
+      serverId: seedSchedule.serverId,
+      startsAt: seedSchedule.startsAt,
+      seedLayer: seedSchedule.seedLayer,
+      broadcastText: seedSchedule.broadcastText,
+      notifyMinutesBefore: seedSchedule.notifyMinutesBefore,
+      recurrence: seedSchedule.recurrence,
+      lastExecutedAt: seedSchedule.lastExecutedAt,
+      createdAt: seedSchedule.createdAt,
+    })
+    .from(seedSchedule)
+    .innerJoin(servers, eq(servers.id, seedSchedule.serverId))
+    .where(and(eq(seedSchedule.enabled, true), isNull(servers.deletedAt)));
+  return rows;
 }
 
 export async function isDepotUpdating(redis: Pick<Redis, 'get'>): Promise<boolean> {
@@ -184,19 +177,23 @@ export async function writeSeedScheduleAuditEntry(
   });
 }
 
-/** Loads enabled one-off rotation changes for the scheduler tick. */
+/** Loads enabled one-off rotation changes for the scheduler tick, excluding soft-deleted servers. */
 export async function loadEnabledRotationScheduleEntries(
   db: DatabaseClient,
 ): Promise<RotationScheduleEntry[]> {
-  const rows = await db.select().from(rotationSchedule).where(eq(rotationSchedule.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    scheduledAt: row.scheduledAt,
-    layer: row.layer,
-    mode: row.mode,
-    lastExecutedAt: row.lastExecutedAt,
-  }));
+  const rows = await db
+    .select({
+      id: rotationSchedule.id,
+      serverId: rotationSchedule.serverId,
+      scheduledAt: rotationSchedule.scheduledAt,
+      layer: rotationSchedule.layer,
+      mode: rotationSchedule.mode,
+      lastExecutedAt: rotationSchedule.lastExecutedAt,
+    })
+    .from(rotationSchedule)
+    .innerJoin(servers, eq(servers.id, rotationSchedule.serverId))
+    .where(and(eq(rotationSchedule.enabled, true), isNull(servers.deletedAt)));
+  return rows;
 }
 
 /** Advances a rotation schedule cursor only after its RCON request is queued. */
@@ -285,16 +282,57 @@ export async function writeRotationProfileAuditEntry(
 }
 
 /**
- * Publishes the scheduled SEED-4 call once per cooldown window. The scheduler
- * has no bridge dependency, so it uses the public panel host (the deployment
- * host in the supported compose files) and the configured game port.
+ * Resolves the SEED-4 join link through the host bridge exactly like
+ * `POST /api/v1/servers/:id/seed-call` does (`loadServerContext` in
+ * `apps/api/src/routes/server-seed-notifications.ts`): `host_info`'s
+ * `hostname`, falling back to its first `ip_addresses` entry. Returns `null`
+ * when the bridge call fails or neither is set, the same "host unavailable"
+ * condition the API route surfaces as a 503 rather than a broken
+ * `steam://connect/127.0.0.1:...` link.
+ */
+async function resolveSeedJoinLink(
+  bridge: Pick<BridgeClient, 'hostInfo'>,
+  gamePort: number,
+): Promise<string | null> {
+  let host: Awaited<ReturnType<BridgeClient['hostInfo']>>;
+  try {
+    host = await bridge.hostInfo();
+  } catch {
+    return null;
+  }
+  const address = host.hostname || host.ip_addresses[0];
+  return address ? `steam://connect/${address}:${gamePort}` : null;
+}
+
+/**
+ * Publishes the scheduled SEED-4 call once per cooldown window.
+ *
+ * Loads the server, its settings, and the join-link host BEFORE claiming the
+ * cooldown key (#1003): a deleted/misconfigured server or an unreachable
+ * bridge returns early without touching Redis, so the operator's next manual
+ * `POST /seed-call` is not blocked by a cooldown that was claimed but never
+ * actually notified anyone. Once claimed, an error while inserting the event
+ * or notifying subscribers releases the cooldown key again rather than
+ * silently burning the 2-hour window with zero notifications sent.
  */
 export async function notifyScheduledSeeders(
   db: DatabaseClient,
-  redis: Pick<Redis, 'set' | 'xadd' | 'publish'>,
+  redis: Pick<Redis, 'set' | 'xadd' | 'publish' | 'del'>,
+  bridge: Pick<BridgeClient, 'hostInfo'>,
   entry: SeedScheduleEntry,
   occurrence: Date,
 ): Promise<void> {
+  const [server, settings] = await Promise.all([
+    db.query.servers.findFirst({
+      where: and(eq(servers.id, entry.serverId), isNull(servers.deletedAt)),
+    }),
+    db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, entry.serverId) }),
+  ]);
+  if (!server || !settings) return;
+
+  const joinLink = await resolveSeedJoinLink(bridge, settings.gamePort);
+  if (!joinLink) return;
+
   const key = `seed:call:cooldown:${entry.serverId}`;
   const claimed = await redis.set(
     key,
@@ -305,83 +343,85 @@ export async function notifyScheduledSeeders(
   );
   if (!claimed) return;
 
-  const [server, settings] = await Promise.all([
-    db.query.servers.findFirst({
-      where: and(eq(servers.id, entry.serverId), isNull(servers.deletedAt)),
-    }),
-    db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, entry.serverId) }),
-  ]);
-  if (!server || !settings) return;
-
-  const payload = seedCallSentPayload.parse({
-    server_name: server.displayName,
-    join_link: `steam://connect/${seedPublicHost()}:${settings.gamePort}`,
-    seed_layer: entry.seedLayer,
-    scheduled_for: occurrence.toISOString(),
-    source: 'schedule',
-    message: entry.broadcastText ?? 'Нужен сид',
-  });
-  const eventId = uuidv7();
-  const ts = new Date();
-  const envelope: EventEnvelope = {
-    event_id: eventId,
-    version: 1,
-    type: 'seed.call_sent',
-    server_id: entry.serverId,
-    ts: ts.toISOString(),
-    actor: { kind: 'system', id: null },
-    correlation_id: null,
-    payload,
-  };
-  await db.insert(events).values({
-    eventId,
-    serverId: entry.serverId,
-    occurredAt: ts,
-    kind: envelope.type,
-    version: envelope.version,
-    actorKind: 'system',
-    actorId: null,
-    correlationId: null,
-    payload,
-  });
-  await redis.xadd(
-    STREAM_NAME.eventsServer(entry.serverId),
-    'MAXLEN',
-    '~',
-    '10000',
-    '*',
-    'envelope',
-    JSON.stringify(envelope),
-  );
-  const notified = await notifySeedSubscribers(db, redis, {
-    serverId: entry.serverId,
-    eventKind: 'seed.call_sent',
-    payload,
-  });
-  await writeSeedScheduleAuditEntry(db, {
-    actor: { kind: 'system', label: 'seed-scheduler' },
-    actionType: 'seed.call_sent',
-    targetType: 'seed_schedule',
-    targetId: entry.id,
-    context: {
-      server_id: entry.serverId,
+  try {
+    const payload = seedCallSentPayload.parse({
+      server_name: server.displayName,
+      join_link: joinLink,
+      seed_layer: entry.seedLayer,
+      scheduled_for: occurrence.toISOString(),
+      source: 'schedule',
+      message: entry.broadcastText ?? 'Нужен сид',
+    });
+    const eventId = uuidv7();
+    const ts = new Date();
+    const envelope: EventEnvelope = {
       event_id: eventId,
-      occurrence: occurrence.toISOString(),
-      notified,
-    },
-  });
+      version: 1,
+      type: 'seed.call_sent',
+      server_id: entry.serverId,
+      ts: ts.toISOString(),
+      actor: { kind: 'system', id: null },
+      correlation_id: null,
+      payload,
+    };
+    await db.insert(events).values({
+      eventId,
+      serverId: entry.serverId,
+      occurredAt: ts,
+      kind: envelope.type,
+      version: envelope.version,
+      actorKind: 'system',
+      actorId: null,
+      correlationId: null,
+      payload,
+    });
+    await redis.xadd(
+      STREAM_NAME.eventsServer(entry.serverId),
+      'MAXLEN',
+      '~',
+      '10000',
+      '*',
+      'envelope',
+      JSON.stringify(envelope),
+    );
+    const notified = await notifySeedSubscribers(db, redis, {
+      serverId: entry.serverId,
+      eventKind: 'seed.call_sent',
+      payload,
+    });
+    await writeSeedScheduleAuditEntry(db, {
+      actor: { kind: 'system', label: 'seed-scheduler' },
+      actionType: 'seed.call_sent',
+      targetType: 'seed_schedule',
+      targetId: entry.id,
+      context: {
+        server_id: entry.serverId,
+        event_id: eventId,
+        occurrence: occurrence.toISOString(),
+        notified,
+      },
+    });
+  } catch (err) {
+    // The notification never went out — release the cooldown so a manual
+    // seed-call or the next scheduled occurrence isn't blocked for 2 hours
+    // over nothing sent.
+    await redis.del(key).catch(() => undefined);
+    throw err;
+  }
 }
 
 export function createSeedScheduleDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'get' | 'set' | 'xadd' | 'publish'>,
+  redis: Pick<Redis, 'get' | 'set' | 'xadd' | 'publish' | 'del'>,
+  bridge: Pick<BridgeClient, 'hostInfo'>,
 ): Omit<SeedScheduleTickDeps, 'now' | 'diag'> {
   return {
     loadEnabledEntries: () => loadEnabledSeedScheduleEntries(db),
     isDepotUpdating: () => isDepotUpdating(redis),
     getSeedingLiveness: (serverId) => getSeedingLiveness(redis, serverId),
     sendRconCommand: (input) => sendRconCommand(redis, input),
-    notifySeeders: (entry, occurrence) => notifyScheduledSeeders(db, redis, entry, occurrence),
+    notifySeeders: (entry, occurrence) =>
+      notifyScheduledSeeders(db, redis, bridge, entry, occurrence),
     setLastExecutedAt: (entryId, executedAt) => setLastExecutedAt(db, entryId, executedAt),
     writeAuditEntry: (entry) => writeSeedScheduleAuditEntry(db, entry),
   };
@@ -579,22 +619,26 @@ export function createRotationProfileDeps(
   };
 }
 
-/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick. */
+/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick, excluding soft-deleted servers. */
 export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<ScheduledTaskEntry[]> {
-  const rows = await db.select().from(scheduledTasks).where(eq(scheduledTasks.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    name: row.name,
-    taskType: row.taskType,
-    params: row.params ?? {},
-    scheduledAt: row.scheduledAt,
-    recurrence: row.recurrence,
-    lastExecutedAt: row.lastExecutedAt,
-    rotationIndex: row.rotationIndex,
-    createdBy: row.createdBy,
-    createdAt: row.createdAt,
-  }));
+  const rows = await db
+    .select({
+      id: scheduledTasks.id,
+      serverId: scheduledTasks.serverId,
+      name: scheduledTasks.name,
+      taskType: scheduledTasks.taskType,
+      params: scheduledTasks.params,
+      scheduledAt: scheduledTasks.scheduledAt,
+      recurrence: scheduledTasks.recurrence,
+      lastExecutedAt: scheduledTasks.lastExecutedAt,
+      rotationIndex: scheduledTasks.rotationIndex,
+      createdBy: scheduledTasks.createdBy,
+      createdAt: scheduledTasks.createdAt,
+    })
+    .from(scheduledTasks)
+    .innerJoin(servers, eq(servers.id, scheduledTasks.serverId))
+    .where(and(eq(scheduledTasks.enabled, true), isNull(servers.deletedAt)));
+  return rows.map((row) => ({ ...row, params: row.params ?? {} }));
 }
 
 /** Advances a scheduled task's execution cursor after a successful dispatch. */
@@ -679,7 +723,18 @@ export async function writeScheduledTaskAuditEntry(
  * Restarts a server via the SRV-3 container-restart mechanism — the same
  * `containerStop` + `containerStart` on `squad-<serverId>` that
  * `POST /api/v1/servers/:id/restart` performs, driven here through the host
- * bridge the scheduler already holds.
+ * bridge the scheduler already holds. `containerStop` errors are swallowed
+ * the same way the API route swallows them (Docker's `start` on an already-
+ * running or already-stopped container is itself a no-op success), so this
+ * mirrors that route's container-level behavior.
+ *
+ * It does NOT reproduce the rest of that route: it does not flip
+ * `servers.status` to `'starting'` in the DB, publish to `liveBus` (the
+ * scheduler worker has no websocket fan-out), or call `relaunchSidecar`
+ * (API-only `apps/api/src/lib` logic worker packages do not import — see
+ * `docs/development/conventions.md`). A scheduled restart is therefore
+ * visible to the UI only once the status reconciler's next pass catches up,
+ * and a sidecar stopped manually before the scheduled restart stays down.
  */
 export async function restartServerContainer(
   bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
@@ -701,14 +756,22 @@ export function createScheduledTaskDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     restartServer: async (serverId) => {
       // A scheduled restart drives the panel's own container; an external
-      // server's process is not ours to bounce, so the run is recorded as
-      // failed instead of silently touching a non-existent container.
+      // server's process is not ours to bounce, and a soft-deleted server's
+      // container is gone too, so both are recorded as failed instead of
+      // retrying forever against a non-existent container.
       const row = await db.query.servers.findFirst({
-        where: eq(servers.id, serverId),
+        where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
         columns: { runtime: true },
       });
-      if (row?.runtime === 'external') {
-        throw new Error(`server ${serverId} is external: restart is not available`);
+      if (!row) {
+        throw new PermanentTaskDispatchError(
+          `server ${serverId} not found or deleted: restart is not available`,
+        );
+      }
+      if (row.runtime === 'external') {
+        throw new PermanentTaskDispatchError(
+          `server ${serverId} is external: restart is not available`,
+        );
       }
       await restartServerContainer(bridge, serverId);
     },
