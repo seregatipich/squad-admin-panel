@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import {
   Badge,
@@ -70,6 +70,10 @@ export function BonusSection({ playerId }: { playerId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  // Tracks the most recently started load()/loadMore() request; a response is
+  // applied only if it is still current, so a slower loadMore() can never
+  // overwrite a fresher filter-driven load() (see finding #433).
+  const requestIdRef = useRef(0);
   const typeFilterId = useId();
   const fromFilterId = useId();
   const toFilterId = useId();
@@ -95,6 +99,7 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   const load = useCallback(
     async (next: BonusFilters) => {
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -104,12 +109,14 @@ export function BonusSection({ playerId }: { playerId: string }) {
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const page = (await res.json()) as BonusPage;
+        if (requestIdRef.current !== requestId) return;
         setTransactions(mergeBonusPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
+        if (requestIdRef.current !== requestId) return;
         setError((e as Error).message);
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === requestId) setLoading(false);
       }
     },
     [playerId],
@@ -123,6 +130,7 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   async function loadMore() {
     if (nextCursor == null || busy) return;
+    const requestId = ++requestIdRef.current;
     setBusy(true);
     try {
       const res = await fetch(
@@ -131,12 +139,14 @@ export function BonusSection({ playerId }: { playerId: string }) {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const page = (await res.json()) as BonusPage;
+      if (requestIdRef.current !== requestId) return;
       setTransactions((prev) => mergeBonusPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (requestIdRef.current === requestId) setBusy(false);
     }
   }
 
