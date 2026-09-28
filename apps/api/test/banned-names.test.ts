@@ -153,6 +153,28 @@ describe('GET /api/v1/banned-names', () => {
     expect(inactiveBody.items[0]?.pattern).toBe('nigger');
   });
 
+  it('treats LIKE wildcards and backslashes in search literally (#120)', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: 'bad_name', match_type: 'exact' });
+    await createRule(cookie, { pattern: 'badxname', match_type: 'exact' });
+    await createRule(cookie, { pattern: '100%troll', match_type: 'substring' });
+    await createRule(cookie, { pattern: 'back\\slash', match_type: 'substring' });
+
+    const search = async (term: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/banned-names?search=${encodeURIComponent(term)}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { items: Array<{ pattern: string }> }).items.map((i) => i.pattern);
+    };
+
+    expect(await search('d_n')).toEqual(['bad_name']);
+    expect(await search('%')).toEqual(['100%troll']);
+    expect(await search('k\\s')).toEqual(['back\\slash']);
+  });
+
   it('paginates via page/page_size', async () => {
     const cookie = await loginAsOwner(h);
     for (let i = 0; i < 5; i++) {

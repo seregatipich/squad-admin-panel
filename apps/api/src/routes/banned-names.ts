@@ -2,7 +2,6 @@ import { bannedNameRules, players } from '@squad/db/schema';
 import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
-  type BannedNameMatchType,
   findBannedNameRuleMatch,
   isBannedNameAction,
   isBannedNameMatchType,
@@ -14,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { requestUser } from '../lib/request-user.js';
 
 const matchTypeSchema = z.enum(BANNED_NAME_MATCH_TYPES);
 const actionSchema = z.enum(BANNED_NAME_ACTIONS);
@@ -98,15 +98,16 @@ function snapshot(row: typeof bannedNameRules.$inferSelect) {
  * API tokens arrive here already narrowed by `narrowToTokenScopes`.
  */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
+  if (!requestUser(req).permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
   }
   return null;
+}
+
+/** Escapes LIKE wildcards so `search` matches literally (#120). */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function hasBanPermission(req: FastifyRequest): boolean {
@@ -126,9 +127,12 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
       after: unknown;
     },
   ): Promise<void> {
-    if (!req.user) return;
     await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
+      actor: {
+        kind: 'steam',
+        playerId: requestUser(req).playerId,
+        tokenId: req.apiTokenId ?? null,
+      },
       actorIp: req.ip ?? null,
       actionType: input.action,
       targetType: 'banned_name',
@@ -148,7 +152,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
       const { search, match_type, is_active, page, page_size } = req.query;
       const conditions: SQL[] = [];
-      if (search) conditions.push(ilike(bannedNameRules.pattern, `%${search}%`));
+      if (search) conditions.push(ilike(bannedNameRules.pattern, `%${escapeLike(search)}%`));
       if (match_type) conditions.push(eq(bannedNameRules.matchType, match_type));
       if (is_active !== undefined)
         conditions.push(eq(bannedNameRules.isActive, is_active === 'true'));
@@ -214,14 +218,26 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         .from(bannedNameRules)
         .where(eq(bannedNameRules.isActive, true))
         .orderBy(asc(bannedNameRules.createdAt), asc(bannedNameRules.id));
-      const activeRules = rows.map((row) => ({
-        id: row.id,
-        pattern: row.pattern,
-        match_type: isBannedNameMatchType(row.match_type) ? row.match_type : ('exact' as const),
-        action: isBannedNameAction(row.action) ? row.action : ('kick' as const),
-        reason: row.reason,
-        is_active: row.is_active,
-      }));
+      // The CHECK constraints make an unknown match_type/action unreachable;
+      // should one appear, fail loudly rather than silently re-reading a
+      // regex rule as `exact` (#121).
+      const activeRules = rows.map((row) => {
+        const matchType = row.match_type;
+        const action = row.action;
+        if (!isBannedNameMatchType(matchType) || !isBannedNameAction(action)) {
+          throw new Error(
+            `banned_name_rules ${row.id} has match_type=${matchType} action=${action}`,
+          );
+        }
+        return {
+          id: row.id,
+          pattern: row.pattern,
+          match_type: matchType,
+          action,
+          reason: row.reason,
+          is_active: row.is_active,
+        };
+      });
       const matched = findBannedNameRuleMatch(activeRules, req.query.nick);
       return {
         matched: matched !== null,
@@ -246,14 +262,13 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
-      // biome-ignore lint/style/noNonNullAssertion: panelGuard already 401s when req.user is missing
-      const user = req.user!;
+      const user = requestUser(req);
       if (!hasBanPermission(req)) {
         reply.code(403);
         return { error: 'forbidden', required_squad_permission: 'ban' };
       }
       const pattern = req.body.pattern.trim();
-      const matchType = req.body.match_type as BannedNameMatchType;
+      const matchType = req.body.match_type;
       const validation = validateBannedNamePattern(pattern, matchType);
       if (!validation.ok) {
         reply.code(422);
@@ -323,7 +338,10 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
       }
       const nextPattern =
         req.body.pattern !== undefined ? req.body.pattern.trim() : existing.pattern;
-      const nextMatchType = (req.body.match_type ?? existing.matchType) as BannedNameMatchType;
+      const nextMatchType = req.body.match_type ?? existing.matchType;
+      if (!isBannedNameMatchType(nextMatchType)) {
+        throw new Error(`banned_name_rules ${existing.id} has match_type=${nextMatchType}`);
+      }
       if (req.body.pattern !== undefined || req.body.match_type !== undefined) {
         const validation = validateBannedNamePattern(nextPattern, nextMatchType);
         if (!validation.ok) {
@@ -358,9 +376,10 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
           throw err;
         }
       }
+      // An empty RETURNING means a concurrent DELETE won the race (#121).
       if (!updated) {
-        reply.code(500);
-        return { error: 'update_failed' };
+        reply.code(404);
+        return { error: 'rule_not_found' };
       }
       await auditMutation(req, reply, {
         action: 'banned_name.update',

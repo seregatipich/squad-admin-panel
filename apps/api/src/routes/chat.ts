@@ -9,10 +9,14 @@ import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { requestUser } from '../lib/request-user.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;
-const STEAM_ID_RE = /^\d{16,20}$/;
+/** A SteamID64 is always 17 digits, so it always fits Postgres int8 (#119). */
+const STEAM_ID_RE = /^\d{17}$/;
+/** Largest value of Postgres `bigint`; a cursor id past it would 500 in SQL. */
+const INT8_MAX = 9_223_372_036_854_775_807n;
 
 const scopeEnum = z.enum(CHAT_SCOPES);
 const sourceEnum = z.enum(CHAT_SOURCES);
@@ -67,18 +71,19 @@ function decodeCursor(raw: string): { sentAt: Date; id: bigint } | null {
     if (sep < 0) return null;
     const sentAt = new Date(decoded.slice(0, sep));
     if (Number.isNaN(sentAt.getTime())) return null;
-    return { sentAt, id: BigInt(decoded.slice(sep + 1)) };
+    const rawId = decoded.slice(sep + 1);
+    if (!/^\d{1,19}$/.test(rawId)) return null;
+    const id = BigInt(rawId);
+    if (id > INT8_MAX) return null;
+    return { sentAt, id };
   } catch {
     return null;
   }
 }
 
+/** 403 for a caller without `panel_access`; the auth hook has already answered 401. */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
+  if (!requestUser(req).permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
   }
