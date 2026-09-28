@@ -25,6 +25,7 @@ import {
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { escapeLikePattern } from '../lib/sql-like.js';
 
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 100;
@@ -174,9 +175,12 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
 
   /** Matches `q` (normalized substring) against a player's current name or any historical name. */
   function nickMatches(q: string): SQL {
-    const pattern = `%${normalizePlayerName(q)}%`;
+    // Escaped so a literal `%`/`_`/`\` in the query — `_` in particular is
+    // common in Squad clan tags — isn't treated as a LIKE wildcard, widening
+    // the match far beyond what the caller typed (finding #358).
+    const pattern = `%${escapeLikePattern(normalizePlayerName(q))}%`;
     return or(
-      sql`${players.canonicalNameNormalized} LIKE ${pattern}`,
+      sql`${players.canonicalNameNormalized} LIKE ${pattern} ESCAPE '\\'`,
       exists(
         app.db
           .select({ one: sql`1` })
@@ -184,7 +188,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
           .where(
             and(
               eq(playerNameHistory.playerId, players.id),
-              sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`,
+              sql`${playerNameHistory.nameNormalized} LIKE ${pattern} ESCAPE '\\'`,
             ),
           ),
       ),
