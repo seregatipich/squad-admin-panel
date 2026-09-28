@@ -21,7 +21,11 @@ export type NotifyReporterOutcome =
   | {
       attempted: false;
       notified: false;
-      reason: 'reporter_not_found' | 'reporter_identity_missing' | 'reporter_offline';
+      reason:
+        | 'reporter_not_found'
+        | 'reporter_identity_missing'
+        | 'reporter_offline'
+        | 'lookup_failed';
     }
   | { attempted: true; notified: true }
   | { attempted: true; notified: false; reason: string };
@@ -30,7 +34,9 @@ export type NotifyReporterOutcome =
  * Sends the report-status AdminWarn template to a reporter, if they are
  * currently online on the report's server (checked against the live roster
  * cached by MOD-1 polling). Never throws — every failure mode is reported in
- * the returned outcome so callers can treat notification as best-effort.
+ * the returned outcome so callers can treat notification as best-effort: a
+ * database or Redis fault while looking the reporter up is `lookup_failed`,
+ * and one inside the worker handoff is `worker_unavailable`.
  */
 export async function notifyReporter(
   db: DatabaseClient,
@@ -42,18 +48,25 @@ export async function notifyReporter(
     actorPlayerId: string | null;
   },
 ): Promise<NotifyReporterOutcome> {
-  const [reporter] = await db
-    .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
-    .from(players)
-    .where(eq(players.id, opts.reporterPlayerId))
-    .limit(1);
-  if (!reporter) return { attempted: false, notified: false, reason: 'reporter_not_found' };
+  let reporter: { id: string; eosId: string | null; steamId64: bigint | null } | undefined;
+  let rawRoster: string | null;
+  try {
+    [reporter] = await db
+      .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
+      .from(players)
+      .where(eq(players.id, opts.reporterPlayerId))
+      .limit(1);
+    if (!reporter) return { attempted: false, notified: false, reason: 'reporter_not_found' };
+    rawRoster = await redis.get(`rcon:roster:${opts.serverId}`);
+  } catch {
+    return { attempted: false, notified: false, reason: 'lookup_failed' };
+  }
 
   const reporterSteamId = reporter.steamId64 != null ? reporter.steamId64.toString() : null;
   const target = reporter.eosId ?? reporterSteamId;
   if (!target) return { attempted: false, notified: false, reason: 'reporter_identity_missing' };
 
-  const stored = parseStoredRoster(await redis.get(`rcon:roster:${opts.serverId}`));
+  const stored = parseStoredRoster(rawRoster);
   const online = (stored?.players ?? []).some(
     (entry) =>
       (reporter.eosId && entry.eos_id === reporter.eosId) ||
@@ -68,9 +81,5 @@ export async function notifyReporter(
     actorPlayerId: opts.actorPlayerId,
   });
   if (outcome.attempted && outcome.ok) return { attempted: true, notified: true };
-  return {
-    attempted: true,
-    notified: false,
-    reason: outcome.attempted ? outcome.reason : outcome.reason,
-  };
+  return { attempted: true, notified: false, reason: outcome.reason };
 }

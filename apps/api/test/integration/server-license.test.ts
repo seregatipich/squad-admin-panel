@@ -8,6 +8,8 @@ import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { rconCommandStream } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { encrypt, serialize } from '../../src/lib/crypto.js';
+import { syncLicenseCfg } from '../../src/lib/license-cfg.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -159,6 +161,25 @@ describeIfDb('server license (SRV-6 #45)', () => {
     expect((await getLicense()).restart_required).toBe(true);
   });
 
+  it.each([
+    ['license_id', { license_id: 'ID\nLicenseKey=INJECTED', license_key: 'KEY' }],
+    ['license_key', { license_id: 'ID', license_key: 'KEY\r\nExtra=1' }],
+  ])(
+    'PATCH rejects a line break in %s instead of injecting License.cfg lines (#66)',
+    async (_field, payload) => {
+      const resp = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/servers/${serverId}`,
+        headers: { cookie },
+        payload,
+      });
+      expect(resp.statusCode).toBe(400);
+      expect(h.bridge.files.get(licensePath)?.toString('utf-8')).toBe(
+        `LicenseId=${LICENSE_ID}\nLicenseKey=${LICENSE_KEY}\n`,
+      );
+    },
+  );
+
   it('PATCH with only license_key → 422 license_incomplete', async () => {
     const resp = await h.app.inject({
       method: 'PATCH',
@@ -239,5 +260,19 @@ describeIfDb('server license (SRV-6 #45)', () => {
     }>().server.license;
     expect(license.configured).toBe(false);
     expect(license.restart_required).toBe(false);
+  });
+
+  it('syncLicenseCfg refuses to render a stored key containing a line break (#66)', async () => {
+    const before = h.bridge.files.get(licensePath)?.toString('utf-8');
+    await h.db
+      .update(serverCredentials)
+      .set({
+        licenseId: 'ID',
+        licenseKeyEncrypted: serialize(encrypt(h.app.encryptionKey, 'KEY\nExtra=1')),
+      })
+      .where(eq(serverCredentials.serverId, serverId));
+
+    await expect(syncLicenseCfg(h.app, serverId, null, null)).rejects.toThrow('control character');
+    expect(h.bridge.files.get(licensePath)?.toString('utf-8')).toBe(before);
   });
 });

@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { z } from 'zod';
 
 const ALGO = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -7,7 +8,12 @@ const AUTH_TAG_BYTES = 16;
 export interface EncryptedBlob {
   /** Version tag; bumped whenever the scheme changes. */
   v: 1;
-  /** Key version used to encrypt; allows rotation. */
+  /**
+   * Key version recorded at encryption time. Informational only: key rotation
+   * is not implemented, `decrypt` ignores this field and always uses the single
+   * configured `APP_ENCRYPTION_KEY`, so changing that key makes every existing
+   * blob undecryptable.
+   */
   kv: number;
   /** Base64 IV (12 bytes). */
   iv: string;
@@ -62,6 +68,32 @@ export function serialize(blob: EncryptedBlob): Buffer {
   return Buffer.from(JSON.stringify(blob), 'utf-8');
 }
 
+const encryptedBlobSchema = z.object({
+  v: z.literal(1),
+  kv: z.number().int(),
+  iv: z.string().base64(),
+  tag: z.string().base64(),
+  ct: z.string().base64(),
+});
+
+/**
+ * Parses a serialized {@link EncryptedBlob} read from a `bytea` column.
+ *
+ * @throws {Error} `invalid encrypted blob` when the bytes are not JSON or do not
+ *   have the version-1 blob shape, instead of failing later inside `decrypt`.
+ */
 export function deserialize(buf: Buffer): EncryptedBlob {
-  return JSON.parse(buf.toString('utf-8')) as EncryptedBlob;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(buf.toString('utf-8'));
+  } catch {
+    throw new Error('invalid encrypted blob: not JSON');
+  }
+  const parsed = encryptedBlobSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `invalid encrypted blob: ${parsed.error.issues.map((i) => i.path.join('.') || 'value').join(', ')}`,
+    );
+  }
+  return parsed.data;
 }

@@ -42,7 +42,7 @@ const putBody = z
   .refine((value) => Object.keys(value).length > 0, { message: 'empty_update' });
 
 const createIgnoredIpBody = z.object({
-  cidr: z.string().refine(isValidIpOrCidr, { message: 'invalid_cidr' }),
+  cidr: z.string().trim().refine(isValidIpOrCidr, { message: 'invalid_cidr' }),
   note: z.string().trim().max(500).optional(),
 });
 

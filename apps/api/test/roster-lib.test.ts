@@ -85,6 +85,14 @@ describe('parseStoredRoster', () => {
     const parsed = parseStoredRoster(JSON.stringify(storedRoster([entry({})])));
     expect(parsed?.players).toHaveLength(1);
   });
+
+  it.each([
+    ['an object without players', '{"polled_at":"2026-01-01T00:00:00Z"}'],
+    ['a non-array players field', '{"players":{"0":{}}}'],
+    ['a JSON null', 'null'],
+  ])('returns null for %s instead of a shape that crashes the route (#66)', (_label, raw) => {
+    expect(parseStoredRoster(raw)).toBeNull();
+  });
 });
 
 describe('parseStoredSquads', () => {
@@ -168,6 +176,15 @@ describe('collectRosterLookups', () => {
       entry({ eos_id: EOS_ONLY, steam_id64: null }),
     ]);
     expect(eosIds).toEqual([LINKED_EOS, EOS_ONLY]);
+    expect(steamIds).toEqual([BigInt(LINKED_STEAM)]);
+  });
+
+  it('skips a malformed steam_id64 instead of throwing from BigInt (#66)', () => {
+    const { steamIds } = collectRosterLookups([
+      entry({ eos_id: LINKED_EOS, steam_id64: 'not-a-number' }),
+      entry({ eos_id: EOS_ONLY, steam_id64: '12' }),
+      entry({ eos_id: UNKNOWN_EOS, steam_id64: LINKED_STEAM }),
+    ]);
     expect(steamIds).toEqual([BigInt(LINKED_STEAM)]);
   });
 });
