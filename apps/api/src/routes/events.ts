@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { events, playerNameHistory, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -8,6 +9,8 @@ import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
 const EXPORT_MAX = 50_000;
+/** Rows fetched per keyset page while streaming an export; bounds per-request memory. */
+const EXPORT_BATCH = 1_000;
 
 const kindSchema = z.string().trim().min(1).max(64);
 const orderSchema = z.enum(['asc', 'desc']);
@@ -62,7 +65,7 @@ function decodeCursor(raw: string): Cursor | null {
     const occurredAt = new Date(decoded.slice(0, sep));
     const eventId = decoded.slice(sep + 1);
     if (Number.isNaN(occurredAt.getTime())) return null;
-    if (!/^[0-9a-f-]{36}$/i.test(eventId)) return null;
+    if (!z.string().uuid().safeParse(eventId).success) return null;
     return { occurredAt, eventId };
   } catch {
     return null;
@@ -326,23 +329,77 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const { clauses, empty } = await buildFilters(req.query);
-      const rows = empty
-        ? []
-        : await fullSelection()
-            .where(clauses.length > 0 ? and(...clauses) : undefined)
-            .orderBy(desc(events.occurredAt), desc(events.eventId))
-            .limit(EXPORT_MAX);
-
       const includeIps = canViewIps(req);
-      const lines = [CSV_COLUMNS.join(','), ...rows.map((row) => csvRow(row, includeIps))];
-      const body = `${lines.join('\r\n')}\r\n`;
       const stamp = new Date().toISOString().slice(0, 10);
 
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', `attachment; filename="events-${stamp}.csv"`);
-      return reply.send(body);
+      return reply.send(
+        Readable.from(exportCsvChunks(clauses, empty, includeIps), { objectMode: false }),
+      );
     },
   );
+
+  /**
+   * Yield the CSV export in keyset pages of EXPORT_BATCH rows, newest first,
+   * capped at EXPORT_MAX rows, so memory per request stays at one page instead
+   * of the whole result set. The cursor carries the row's own `occurred_at`
+   * text rather than a JS Date, whose millisecond precision would skip or
+   * repeat rows that differ only in microseconds.
+   */
+  async function* exportCsvChunks(
+    baseClauses: SQL[],
+    empty: boolean,
+    includeIps: boolean,
+  ): AsyncGenerator<string> {
+    yield `${CSV_COLUMNS.join(',')}\r\n`;
+    if (empty) return;
+
+    let cursor: { occurredAtText: string; eventId: string } | null = null;
+    let remaining = EXPORT_MAX;
+    while (remaining > 0) {
+      const batchSize = Math.min(EXPORT_BATCH, remaining);
+      const pageClauses = [...baseClauses];
+      if (cursor) {
+        pageClauses.push(
+          sql`(${events.occurredAt} < ${cursor.occurredAtText}::timestamptz OR (${events.occurredAt} = ${cursor.occurredAtText}::timestamptz AND ${events.eventId} < ${cursor.eventId}::uuid))`,
+        );
+      }
+      const rows = await app.db
+        .select({
+          eventId: events.eventId,
+          serverId: events.serverId,
+          serverName: servers.displayName,
+          serverSlug: servers.slug,
+          occurredAt: events.occurredAt,
+          occurredAtText: sql<string>`${events.occurredAt}::text`,
+          kind: events.kind,
+          version: events.version,
+          actorKind: events.actorKind,
+          actorId: events.actorId,
+          actorNickname: players.canonicalName,
+          correlationId: events.correlationId,
+          payload: events.payload,
+        })
+        .from(events)
+        .leftJoin(servers, eq(servers.id, events.serverId))
+        .leftJoin(players, actorJoin)
+        .where(pageClauses.length > 0 ? and(...pageClauses) : undefined)
+        .orderBy(desc(events.occurredAt), desc(events.eventId))
+        .limit(batchSize);
+
+      const tail = rows.at(-1);
+      if (!tail) return;
+
+      let chunk = '';
+      for (const row of rows) chunk += `${csvRow(row, includeIps)}\r\n`;
+      yield chunk;
+
+      cursor = { occurredAtText: tail.occurredAtText, eventId: tail.eventId };
+      remaining -= rows.length;
+      if (rows.length < batchSize) return;
+    }
+  }
 
   fast.get(
     '/api/v1/events/:eventId',

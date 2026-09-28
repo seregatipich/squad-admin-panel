@@ -340,6 +340,19 @@ describeIfDb('events API (EVT-2)', () => {
     expect(res.json()).toMatchObject({ error: 'invalid_cursor' });
   });
 
+  it('rejects a cursor whose event id is 36 characters but not a UUID with 400, not 500', async () => {
+    const forged = Buffer.from(`${at(0).toISOString()}~${'-'.repeat(36)}`, 'utf-8').toString(
+      'base64url',
+    );
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/events?cursor=${forged}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'invalid_cursor' });
+  });
+
   it('counts events honoring filters', async () => {
     const server = await seedServer(h.db, 'EvtCountSrv');
     await seedEvent(h.db, { serverId: server, occurredAt: at(80), kind: 'player.connected' });
@@ -425,6 +438,44 @@ describeIfDb('events API (EVT-2)', () => {
     expect(lines).toHaveLength(2);
     expect(lines[1]).toContain(withComma);
     expect(body).toContain('"Comma, Man"');
+  });
+
+  it('streams an export spanning several keyset batches with every row exactly once, newest first', async () => {
+    const server = await seedServer(h.db, 'EvtCsvBatchSrv');
+    const total = 2_505;
+    const ids: string[] = [];
+    const rows = Array.from({ length: total }, (_, i) => {
+      const eventId = uuidv7();
+      ids.push(eventId);
+      // Pairs share a timestamp so the event_id tie-break is exercised at batch edges.
+      return {
+        eventId,
+        serverId: server,
+        occurredAt: new Date(at(200).getTime() + Math.floor(i / 2) * 1_000),
+        kind: 'player.connected',
+        version: 1,
+        payload: { n: i },
+      };
+    });
+    for (let i = 0; i < rows.length; i += 500) {
+      await h.db.insert(events).values(rows.slice(i, i + 500));
+    }
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/events/export?serverId=${server}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.trim().split('\r\n');
+    expect(lines).toHaveLength(total + 1);
+    const exported = lines.slice(1).map((line) => line.split(',')[0] as string);
+    expect(new Set(exported).size).toBe(total);
+    expect(new Set(exported)).toEqual(new Set(ids));
+    const stamps = lines.slice(1).map((line) => Date.parse(line.split(',')[3] as string));
+    for (let i = 1; i < stamps.length; i += 1) {
+      expect(stamps[i] as number).toBeLessThanOrEqual(stamps[i - 1] as number);
+    }
   });
 
   describe('ruleId filter (BANNAME-3 — «Срабатывания» per banned-name rule)', () => {
