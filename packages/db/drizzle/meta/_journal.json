@@ -729,6 +729,13 @@
       "when": 1788473460000,
       "tag": "0118_clan_members_release_disbanded",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1788473520000,
+      "tag": "0119_appeal_token_hash_and_api_token_index",
+      "breakpoints": true
     }
   ]
 }

@@ -137,6 +137,32 @@ describeIfDb('recordIpObservation', () => {
     expect(row?.observationCount).toBe(2);
   });
 
+  it('backfills geo on a later observation when the first observation had none', async () => {
+    await recordIpObservation(db, { playerId: PLAYER_ID, ip: '203.0.113.50' });
+    let row = await rowFor('203.0.113.50');
+    expect(row?.countryCode).toBeNull();
+
+    await recordIpObservation(db, {
+      playerId: PLAYER_ID,
+      ip: '203.0.113.50',
+      geo: BERLIN_GEO,
+    });
+    row = await rowFor('203.0.113.50');
+    expect(row?.countryCode).toBe('DE');
+    expect(row?.city).toBe('Berlin');
+    expect(row?.observationCount).toBe(2);
+
+    // Still frozen once known: a third, different geo must not overwrite it.
+    await recordIpObservation(db, {
+      playerId: PLAYER_ID,
+      ip: '203.0.113.50',
+      geo: PARIS_GEO,
+    });
+    row = await rowFor('203.0.113.50');
+    expect(row?.countryCode).toBe('DE');
+    expect(row?.observationCount).toBe(3);
+  });
+
   it('records the observation with null geo when no MaxMind key is configured', async () => {
     await recordIpObservation(db, { playerId: PLAYER_ID, ip: '203.0.113.40' });
 

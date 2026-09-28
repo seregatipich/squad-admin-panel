@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   banAppeals,
   discordWebhooks,
@@ -245,7 +246,13 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
       .where(eq(banAppeals.steamId64, steamId64))
       .limit(1);
     expect(row?.status).toBe('pending');
-    expect(row?.trackingToken).toBe(body.tracking_token);
+    // Only the sha-256 hash of the raw tracking token is ever persisted
+    // (packages/db/src/schema/ban-appeals.ts) — the row must never hold the
+    // plaintext value the caller was given.
+    expect(row?.trackingTokenHash).toBe(
+      createHash('sha256').update(body.tracking_token).digest('base64url'),
+    );
+    expect(row?.trackingTokenHash).not.toBe(body.tracking_token);
     expect(row?.submitterIp).toBe('127.0.0.1');
   });
 

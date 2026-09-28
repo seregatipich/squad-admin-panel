@@ -40,6 +40,17 @@ export async function recordIpObservation(
       set: {
         lastSeenAt: now,
         observationCount: sql`${playerIpHistory.observationCount} + 1`,
+        // Geo is frozen once known (a later resolve never overwrites it —
+        // see the "freezes geo at first observation" test), but a row first
+        // recorded before geo lookup was available must still be able to
+        // backfill it once it is: COALESCE only replaces a still-NULL field.
+        countryCode: sql`COALESCE(${playerIpHistory.countryCode}, ${geo.countryCode})`,
+        countryName: sql`COALESCE(${playerIpHistory.countryName}, ${geo.countryName})`,
+        region: sql`COALESCE(${playerIpHistory.region}, ${geo.region})`,
+        city: sql`COALESCE(${playerIpHistory.city}, ${geo.city})`,
+        timezoneOffset: sql`COALESCE(${playerIpHistory.timezoneOffset}, ${geo.timezoneOffset})`,
+        latitude: sql`COALESCE(${playerIpHistory.latitude}, ${geo.latitude})`,
+        longitude: sql`COALESCE(${playerIpHistory.longitude}, ${geo.longitude})`,
       },
     });
 

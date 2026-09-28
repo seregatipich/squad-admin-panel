@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { banAppeals, moderationActions, players } from '@squad/db/schema';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -39,6 +39,11 @@ const submitBody = z.object({
 });
 
 const tokenParams = z.object({ token: z.string().min(TOKEN_MIN).max(TOKEN_MAX) });
+
+/** sha-256 of the raw tracking token — the only form persisted (see `ban-appeals.ts`). */
+function hashTrackingToken(raw: string): string {
+  return createHash('sha256').update(raw).digest('base64url');
+}
 
 /**
  * Public, unauthenticated half of the ban-appeal portal (MOD-5, #62).
@@ -155,7 +160,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
             body: req.body.body,
             contact: req.body.contact?.trim() || null,
             status: 'pending',
-            trackingToken,
+            trackingTokenHash: hashTrackingToken(trackingToken),
             submitterIp: ip,
           })
           .returning({
@@ -229,7 +234,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
           decisionNote: banAppeals.decisionNote,
         })
         .from(banAppeals)
-        .where(eq(banAppeals.trackingToken, req.params.token))
+        .where(eq(banAppeals.trackingTokenHash, hashTrackingToken(req.params.token)))
         .limit(1);
       if (!row) {
         reply.code(404);

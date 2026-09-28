@@ -111,7 +111,15 @@ export function periodsToRecompute(now: Date = new Date()): PeriodDescriptor[] {
   const today = utcDayKey(now);
   const yesterday = utcDayKey(new Date(now.getTime() - DAY_MS));
   const lastWeek = utcDayKey(new Date(now.getTime() - 7 * DAY_MS));
-  const lastMonth = utcDayKey(new Date(now.getTime() - 31 * DAY_MS));
+  // A fixed 31-day lookback lands in the wrong month whenever the current
+  // month is shorter than 31 days (e.g. 3 March minus 31 days is 31 January,
+  // skipping February entirely) — computed from the calendar instead, one
+  // month before the first day of the current month.
+  const [currentYear, currentMonth] = periodStartFor('month', today).split('-').map(Number) as [
+    number,
+    number,
+  ];
+  const lastMonth = utcDayKey(new Date(Date.UTC(currentYear, currentMonth - 2, 1)));
 
   const descriptors: PeriodDescriptor[] = [
     { periodType: 'day', periodStart: periodStartFor('day', today) },

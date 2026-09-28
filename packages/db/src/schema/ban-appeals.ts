@@ -28,6 +28,9 @@ import { players } from './players.js';
  *
  * {@link trackingToken} is the applicant's only handle on the appeal: it is
  * returned once at submission and is the sole key to the public status page.
+ * Only the sha-256 hash of that value is stored (mirroring
+ * `media_upload_tokens.token_hash` / `player_api_tokens.token_hash`), so a
+ * database read or leak cannot itself be used to pull up anyone's appeal.
  * {@link decisionNote} is shown to the applicant through that page;
  * {@link internalNote} never leaves the panel.
  *
@@ -54,7 +57,7 @@ export const banAppeals = pgTable(
     }),
     decisionNote: text('decision_note'),
     internalNote: text('internal_note'),
-    trackingToken: text('tracking_token').notNull(),
+    trackingTokenHash: text('tracking_token_hash').notNull(),
     submitterIp: inet('submitter_ip'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -62,7 +65,9 @@ export const banAppeals = pgTable(
   },
   (table) => ({
     numberKey: uniqueIndex('ban_appeals_number_key').on(table.number),
-    trackingTokenKey: uniqueIndex('ban_appeals_tracking_token_key').on(table.trackingToken),
+    trackingTokenHashKey: uniqueIndex('ban_appeals_tracking_token_hash_key').on(
+      table.trackingTokenHash,
+    ),
     statusCreatedIdx: index('ban_appeals_status_created_idx').on(table.status, table.createdAt),
     playerIdx: index('ban_appeals_player_idx').on(table.playerId),
     actionIdx: index('ban_appeals_action_idx').on(table.moderationActionId),
