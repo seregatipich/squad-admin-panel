@@ -5,12 +5,13 @@ import {
   players,
   roleSquadPermissions,
   roles,
+  serverCredentials,
   serverSettings,
   servers,
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -284,5 +285,90 @@ describe('SEED-4 seed-call notifications', () => {
     } finally {
       await Promise.all([closeSocket(subscriberSocket.socket), closeSocket(actorSocket.socket)]);
     }
+  });
+
+  // Regression (#43 finding 325): the join link always pointed at the panel
+  // host, even for an external server hosted elsewhere, and every read hit the
+  // bridge's host_info RPC.
+  it('builds the join link from the RCON host of an external server', async () => {
+    const externalId = uuidv7();
+    await h.db.insert(servers).values({
+      id: externalId,
+      displayName: 'External Seed Server',
+      slug: `seed-external-${externalId}`,
+      status: 'running',
+      runtime: 'external',
+    });
+    await h.db.insert(serverSettings).values({
+      serverId: externalId,
+      installPath: '',
+      gamePort: 7800,
+      queryPort: 27200,
+      beaconPort: 15000,
+      rconPort: 21200,
+    });
+    await h.db.insert(serverCredentials).values({
+      serverId: externalId,
+      rconHost: '203.0.113.7',
+      rconPort: 21200,
+      rconPasswordEncrypted: Buffer.from('unused'),
+    });
+    const hostInfo = vi.spyOn(h.bridge, 'hostInfo');
+    try {
+      const cookie = await loginAsOwner(h);
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/servers/${externalId}/seed-call`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().join_link).toBe('steam://connect/203.0.113.7:7800');
+      expect(hostInfo).not.toHaveBeenCalled();
+    } finally {
+      hostInfo.mockRestore();
+    }
+  });
+
+  it('caches the panel host between seed-call reads', async () => {
+    const hostInfo = vi.spyOn(h.bridge, 'hostInfo');
+    try {
+      const cookie = await loginAsOwner(h);
+      for (let i = 0; i < 3; i++) {
+        const res = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/servers/${serverId}/seed-call`,
+          headers: { cookie },
+        });
+        expect(res.json().join_link).toBe('steam://connect/test-host:7787');
+      }
+      expect(hostInfo.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      hostInfo.mockRestore();
+    }
+  });
+
+  // Regression (#43 finding 326): the 2-hour cooldown was claimed before the
+  // event was published and never released when publishing failed.
+  it('releases the cooldown when publishing the seed call fails', async () => {
+    const cookie = await asRoleWithSquadPermissions(['manageserver']);
+    const xadd = vi.spyOn(h.app.redis, 'xadd').mockRejectedValueOnce(new Error('redis down'));
+    try {
+      const failed = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/servers/${serverId}/seed-call`,
+        headers: { cookie },
+      });
+      expect(failed.statusCode).toBe(500);
+    } finally {
+      xadd.mockRestore();
+    }
+    expect(await h.redis.exists(`seed:call:cooldown:${serverId}`)).toBe(0);
+
+    const retried = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/seed-call`,
+      headers: { cookie },
+    });
+    expect(retried.statusCode).toBe(200);
   });
 });
