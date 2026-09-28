@@ -164,7 +164,7 @@ writeVersion():
       ← NO disk write, NO DB row, NO RCON. History stays clean.
   Step 3 — atomic disk write (synchronous)
     bridge.fileAtomicWrite({path: "${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/${name}", content})
-    ← write to sibling ".new" → fsync → rename(2) → existing file → ".bak"
+    ← write to a unique hidden sibling temp file (".<name>.*.tmp") → fsync → rename(2) over the existing file
     ← Squad sees the new content the instant rename(2) completes:
       the host directory is bind-mounted RW into squad-${id} as
       /squad/SquadGame/ServerConfig, so the kernel exposes the same

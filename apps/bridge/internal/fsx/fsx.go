@@ -41,39 +41,39 @@ var writableRoots = []string{
 }
 
 // mkdirAllWithMode is like os.MkdirAll but re-applies `perm` to every
-// path segment it created. os.MkdirAll honours the process umask when
+// directory it created. os.MkdirAll honours the process umask when
 // creating directories, and the panel-host-bridge systemd unit runs
-// with UMask=0077 — which would otherwise leave configs/ at 0700 so
-// Squad (uid 1001) cannot read the .cfg files bind-mounted into its
+// with UMask=0077 — which would otherwise leave configs/{uuid}/ at 0700
+// so Squad (uid 1001) cannot read the .cfg files bind-mounted into its
 // container.
+//
+// Directories that already existed are never touched: the installer
+// deliberately keeps configs/ and saved/ at 0750 because the files
+// inside (Rcon.cfg with the plaintext RCON password) are 0644, so
+// widening an existing ancestor would expose them to every local user.
 func mkdirAllWithMode(p string, perm os.FileMode) error {
-	if err := os.MkdirAll(p, perm); err != nil {
-		return err
-	}
-	// Walk upward and chmod each segment that lies under the panel root;
-	// stop at the first one that already has the right permissions.
-	segments := []string{}
-	cur := p
-	for cur != "/" && cur != "." {
-		segments = append(segments, cur)
+	// Collect the missing segments, deepest first, up to the nearest
+	// existing ancestor.
+	var created []string
+	for cur := filepath.Clean(p); ; {
+		if _, err := os.Lstat(cur); err == nil {
+			break
+		}
+		created = append(created, cur)
 		parent := filepath.Dir(cur)
 		if parent == cur {
 			break
 		}
 		cur = parent
 	}
-	for _, seg := range segments {
-		info, err := os.Stat(seg)
-		if err != nil {
-			continue
-		}
-		if info.Mode().Perm() == perm {
-			break
-		}
-		if err := os.Chmod(seg, perm); err != nil {
-			// Not fatal — Squad only needs the leaf + one level up to be
-			// readable. Stop trying higher up the tree.
-			break
+	if err := os.MkdirAll(p, perm); err != nil {
+		return err
+	}
+	// Chmod from the shallowest created segment down so each level is
+	// traversable before its child is adjusted.
+	for i := len(created) - 1; i >= 0; i-- {
+		if err := os.Chmod(created[i], perm); err != nil {
+			return fmt.Errorf("chmod %s: %w", created[i], err)
 		}
 	}
 	return nil
@@ -100,6 +100,11 @@ func Write(p string, content []byte, mode os.FileMode) error {
 	return os.Chmod(p, mode)
 }
 
+// AtomicWrite replaces p with content via a unique temp file in the same
+// directory, fsync and rename, so readers see either the old or the new
+// file and concurrent writers of one path never corrupt each other (the
+// last rename wins). Parent directories are created as in Write; the
+// final file gets `mode` regardless of the process umask.
 func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 	_, err := validate.Path(p, writableRoots...)
 	if err != nil {
@@ -113,38 +118,43 @@ func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 		return fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
 	}
 
-	newPath := p + ".new"
-	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	// A unique temp file per call (O_EXCL inside CreateTemp): with a fixed
+	// name, concurrent writers of the same config would share one inode
+	// through separate fds and interleave their bytes before the rename.
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(p)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("create new: %w", err)
+		return fmt.Errorf("create temp: %w", err)
 	}
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		_ = os.Remove(newPath)
-		return fmt.Errorf("write new: %w", err)
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(newPath)
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("sync: %w", err)
 	}
-	if err := f.Close(); err != nil {
+	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close: %w", err)
 	}
-	// Chmod explicitly — O_CREAT honours UMask, so the file we just made
-	// is probably 0600 even though `mode` was 0644.
-	if err := os.Chmod(newPath, mode); err != nil {
-		_ = os.Remove(newPath)
-		return fmt.Errorf("chmod new: %w", err)
+	// CreateTemp makes the file 0600; apply the requested mode explicitly.
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
 	}
 
 	// Atomic rename: tmp -> final. Existing file (if any) is overwritten
 	// atomically on POSIX; no .bak needed because the previous version
 	// is preserved by config_versions / role_squad_permissions snapshots.
-	if err := os.Rename(newPath, p); err != nil {
-		_ = os.Remove(newPath)
+	if err := os.Rename(tmpPath, p); err != nil {
 		return fmt.Errorf("rename into place: %w", err)
 	}
+	committed = true
 
 	// fsync the parent directory so the rename survives a power loss
 	// (POSIX requires the directory entry change to be flushed in a
