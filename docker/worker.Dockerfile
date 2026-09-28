@@ -57,6 +57,9 @@ RUN pnpm turbo run build --filter="./apps/workers/*" --cache=local:,remote: && \
     cp -a --parents packages/*/dist apps/workers/*/dist /out/
 
 FROM base AS runtime
+# Spared by the panel's docker prune (--filter label!=panel.preserve=true) so the
+# previous release stays loaded for scripts/rollback-stand.sh.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 # systemd provides journalctl for worker-diag-flush's journald forwarding; it
 # is installed for every worker because they share this image.

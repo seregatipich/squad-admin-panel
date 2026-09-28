@@ -60,6 +60,9 @@ RUN pnpm turbo run build --filter=@squad/web... --cache=local:,remote: && \
     cp -a --parents packages/*/dist apps/web/.next apps/web/public apps/web/next.config.mjs /out/
 
 FROM base AS runtime
+# Spared by the panel's docker prune (--filter label!=panel.preserve=true) so the
+# previous release stays loaded for scripts/rollback-stand.sh.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 ENV PORT=3000
 COPY --from=prod-deps /app /app
