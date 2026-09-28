@@ -126,4 +126,34 @@ describe('LogList', () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('src='))).toBe(true),
     );
   });
+
+  it('requests the 1000 entries the subtitle promises (LOGS: subtitle vs. the API default of 500)', async () => {
+    const fetchMock = stubFetch();
+    render(<LogList servers={SERVERS} />);
+    await screen.findByText('запрос обработан');
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(new URL(url, 'http://localhost').searchParams.get('limit')).toBe('1000');
+  });
+
+  it('keeps polling for the first entry when the initial load returned none', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let call = 0;
+    const fetchMock = vi.fn(() => {
+      call += 1;
+      // Первый запрос (без after=) пуст, второй — с записью: без курсора
+      // опрос не должен был бы вовсе повториться.
+      const entries = call === 1 ? [] : [ENTRIES[1]];
+      return Promise.resolve(new Response(JSON.stringify({ entries }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<LogList servers={SERVERS} />);
+
+    await vi.waitFor(() => expect(screen.getByText('Записей нет')).toBeInTheDocument());
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(screen.getByText('запрос обработан')).toBeInTheDocument());
+
+    vi.useRealTimers();
+  });
 });
