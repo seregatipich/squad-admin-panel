@@ -48,7 +48,7 @@ Latency budget: < 1 ms in-process; 1–5 ms cross-process via Redis on a healthy
 1. Replica A calls `liveBus.publish(event)` — local subs served.
 2. Redis broadcasts to every subscriber, including Replica A's own `subscriber` connection AND Replica B's.
 3. Replica A's subscriber sees its own message and re-emits it locally; the route handler dedupes by being already-served (the in-process emit happens BEFORE the publish, so listeners may receive the same event twice — acceptable for idempotent UI updates: setting `status: 'running'` twice is a no-op).
-4. Replica B's subscriber sees the message, re-emits to its own listeners.
+4. Replica B's subscriber sees the message, re-emits to its own listeners. Every frame read from Redis is validated first (`type`/`ts` strings, `data` object; `rcon:status:changed` needs `server_id` and `state`); a malformed frame is logged and dropped, never fanned out.
 
 > Trade-off: we accept the double-delivery on the originating replica in exchange for keeping the publish path async. UI updates are CRDT-safe (last-writer-wins on a primitive status string) so this is benign.
 

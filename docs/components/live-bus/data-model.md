@@ -15,7 +15,6 @@ type LiveEvent =
   | { type: 'server.restored';   ts: ISO8601; data: ServerRestoredData }
   | { type: 'rcon.status';       ts: ISO8601; data: RconStatusData }
   | { type: 'bridge.connection'; ts: ISO8601; data: BridgeConnectionData }
-  | { type: 'worker.heartbeat';  ts: ISO8601; data: WorkerHeartbeatData };
 ```
 
 `ts` is always set by the producer (or by the `live-bus` plugin when wrapping an `rcon:status:changed` payload). It is informational; the receiver MUST NOT use it for ordering — Redis pub/sub does not guarantee ordering across replicas.
@@ -29,7 +28,6 @@ type LiveEvent =
 | `server.restored` | `old_server_id: uuid`, `new_server_id: uuid` | `POST /api/v1/servers/archive/:id/restore` in [`apps/api/src/routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts). | Emitted right after the new `servers` row is inserted. The new server is still in `pending`; subsequent install + restore-configs do not emit a separate restore event — UI shows progress through `server.status` instead. |
 | `rcon.status` | `server_id: uuid`, `state: 'connected'\|'connecting'\|'disconnected'`, `player_count?: number` | `worker-rcon` `PerServerSupervisor` via Redis `PUBLISH rcon:status:changed` | The full extra payload that lives under `rcon:status:{id}` (e.g. `tickrate_rt`, `current_map`) is NOT forwarded — only the headline state and player count. UI fetches detail via REST. |
 | `bridge.connection` | `state: 'up'\|'down'`, `down_for_s: number` | `bridge-heartbeat` plugin | `down_for_s` is `0` on a fresh `down` edge; the value is computed and emitted again on the recovering `up` edge. |
-| `worker.heartbeat` | `worker: string`, `healthy: boolean` | Reserved for future use | Not emitted yet. |
 
 ## Redis channels
 

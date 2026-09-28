@@ -49,11 +49,6 @@ export type LiveEvent =
       data: { state: 'up' | 'down'; down_for_s: number };
     }
   | {
-      type: 'worker.heartbeat';
-      ts: string;
-      data: { worker: string; healthy: boolean };
-    }
-  | {
       type: 'note.created';
       ts: string;
       data: { player_id: string; note: PlayerNote };
