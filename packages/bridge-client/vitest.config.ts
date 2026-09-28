@@ -8,6 +8,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],
       include: ['src/**/*.ts'],
+      // types.ts is excluded because it holds only type declarations (no runtime code).
       exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/**/types.ts'],
       thresholds: {
         lines: 100,

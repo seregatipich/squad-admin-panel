@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BridgeError } from '../src/errors.js';
 import { FrameTooLargeError } from '../src/frame.js';
-import { BridgeError } from '../src/types.js';
 
 describe('BridgeError', () => {
   it('preserves code, message, and detail', () => {

@@ -38,7 +38,7 @@ const forceStopRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'server_not_stoppable', status: s.status };
       }
 
-      await app.bridge.containerRm({ name: `squad-${s.id}`, force: true });
+      await app.bridge.containerRm({ name: `squad-${s.id}` });
 
       await app.db
         .update(servers)
