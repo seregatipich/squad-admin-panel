@@ -120,6 +120,25 @@ describe('startHeartbeat', () => {
     expect(r.calls.length).toBe(before);
   });
 
+  it('routes a throwing statusFn to onError instead of rejecting unhandled', async () => {
+    const onError = vi.fn();
+    const r = fakeRedis();
+    const stop = startHeartbeat({
+      redis: r as never,
+      name: 'rcon',
+      intervalMs: 50,
+      onError,
+      statusFn: () => {
+        throw new Error('status boom');
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).toHaveBeenCalledOnce();
+    expect((onError.mock.calls[0][0] as Error).message).toBe('status boom');
+    expect(r.calls).toHaveLength(0);
+    stop();
+  });
+
   it('omits status when statusFn returns undefined', async () => {
     const r = fakeRedis();
     const stop = startHeartbeat({

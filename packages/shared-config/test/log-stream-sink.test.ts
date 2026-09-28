@@ -46,6 +46,16 @@ describe('redisSinkStream', () => {
     expect(flat).toContain('B');
   });
 
+  it('routes "config-sync" src to its own code instead of falling back to defaultSource', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 30, msg: 'synced', src: 'config-sync' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    const flat = r.calls[0].args.flat();
+    expect(flat).not.toContain('A');
+  });
+
   it('attaches serverId from log payload', async () => {
     const r = fakeRedis();
     const stream = redisSinkStream({ redis: r as never, defaultSource: 'rcon' });

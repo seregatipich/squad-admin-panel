@@ -391,8 +391,13 @@ describe('findManagedSegment', () => {
     expect(findManagedSegment('plain old config')).toBeNull();
   });
 
-  it('returns null when the begin marker is present but the end marker is missing', () => {
-    expect(findManagedSegment(`prefix\n${BEGIN_MARKER}\nGroup=X:kick\n`)).toBeNull();
+  it('treats an orphaned begin marker (no end marker) as a corrupt segment running to EOF', () => {
+    const text = `prefix\n${BEGIN_MARKER}\nGroup=X:kick\n`;
+    const out = findManagedSegment(text);
+    expect(out).not.toBeNull();
+    expect(out?.start).toBe(text.indexOf(BEGIN_MARKER));
+    expect(out?.end).toBe(text.length);
+    expect(out?.segment).toBe(text.slice(text.indexOf(BEGIN_MARKER)));
   });
 
   it('finds the segment between markers with correct offsets', () => {
@@ -423,5 +428,15 @@ describe('spliceManagedSegment', () => {
     const fresh = `${BEGIN_MARKER}\r\n${END_MARKER}`;
     const result = spliceManagedSegment('user content\r\n', fresh);
     expect(result).toBe(`${fresh}\r\n\r\nuser content\r\n`);
+  });
+
+  it('replaces an orphaned begin marker (no end marker) instead of leaving it and prepending a duplicate', () => {
+    const before = `prelude\r\n${BEGIN_MARKER}\r\nGroup=Admin:kick\r\n`;
+    const fresh = `${BEGIN_MARKER}\r\nfresh\r\n${END_MARKER}`;
+    const result = spliceManagedSegment(before, fresh);
+    expect(result).toBe(`prelude\r\n${fresh}`);
+    expect(result.includes('Group=Admin:kick')).toBe(false);
+    // Only one BEGIN marker survives — no duplicate segment prepended in front.
+    expect(result.split(BEGIN_MARKER)).toHaveLength(2);
   });
 });

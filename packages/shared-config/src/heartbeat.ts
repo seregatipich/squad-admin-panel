@@ -58,16 +58,16 @@ export function startHeartbeat(opts: StartHeartbeatOptions): () => void {
   const started = new Date().toISOString();
 
   const publish = async () => {
-    const payload: HeartbeatPayload = {
-      name: opts.name,
-      ts: new Date().toISOString(),
-      pid: process.pid,
-      hostname: process.env.HOSTNAME,
-      version: opts.version,
-      started_at: started,
-      status: opts.statusFn?.(),
-    };
     try {
+      const payload: HeartbeatPayload = {
+        name: opts.name,
+        ts: new Date().toISOString(),
+        pid: process.pid,
+        hostname: process.env.HOSTNAME,
+        version: opts.version,
+        started_at: started,
+        status: opts.statusFn?.(),
+      };
       await opts.redis.set(heartbeatKey(opts.name), JSON.stringify(payload), 'EX', ttl);
     } catch (err) {
       opts.onError?.(err as Error);
