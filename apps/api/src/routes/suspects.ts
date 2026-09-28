@@ -16,7 +16,6 @@ import {
   gt,
   inArray,
   isNull,
-  lt,
   not,
   or,
   type SQL,
@@ -62,6 +61,8 @@ interface SuspectRow {
   eosId: string | null;
   canonicalName: string;
   lastSeenAt: Date;
+  /** `last_seen_at` as integer microseconds since the epoch — the cursor key. */
+  lastSeenMicros: string;
   roleId: string | null;
   roleName: string | null;
   roleColor: string | null;
@@ -111,18 +112,29 @@ function parseMarkTypeIds(raw: string | undefined): number[] | null | 'invalid' 
   return ids.length > 0 ? [...new Set(ids)] : null;
 }
 
-function encodeCursor(row: { lastSeenAt: Date; id: string }): string {
-  return `${row.lastSeenAt.getTime()}_${row.id}`;
+/**
+ * Keyset cursor `<last_seen_at µs since epoch>_<player id>`.
+ *
+ * Microseconds, not `Date.getTime()` milliseconds: `last_seen_at` is a
+ * microsecond `timestamptz` (often `DEFAULT now()`), and a millisecond key made
+ * ascending pages repeat the cursor row and descending pages skip rows sharing
+ * its millisecond (#352).
+ */
+function encodeCursor(row: { lastSeenMicros: string; id: string }): string {
+  return `${row.lastSeenMicros}_${row.id}`;
 }
 
-function parseCursor(raw: string): { lastSeenAt: Date; id: string } | null {
+function parseCursor(raw: string): { lastSeenMicros: string; id: string } | null {
   const sep = raw.indexOf('_');
   if (sep === -1) return null;
-  const millis = Number(raw.slice(0, sep));
+  const lastSeenMicros = raw.slice(0, sep);
   const id = raw.slice(sep + 1);
-  if (!Number.isFinite(millis) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
-  return { lastSeenAt: new Date(millis), id };
+  if (!/^-?\d{1,19}$/.test(lastSeenMicros) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  return { lastSeenMicros, id };
 }
+
+/** `players.last_seen_at` as integer microseconds; `extract` returns exact numeric on PG 14+. */
+const lastSeenMicrosSql = sql<string>`(extract(epoch from ${players.lastSeenAt}) * 1000000)::bigint::text`;
 
 const suspectsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -194,7 +206,6 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
       const sort: SortOption = req.query.sort;
       const limit = req.query.limit ?? PAGE_SIZE_DEFAULT;
       const descending = sort !== 'last_seen_asc';
-      const compare = descending ? lt : gt;
 
       const clauses: SQL[] = [activeMarkExists(markTypeIds)];
       if (req.query.q) clauses.push(nickMatches(req.query.q));
@@ -206,11 +217,9 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'invalid_cursor' };
         }
+        const cursorAt = sql`(timestamptz 'epoch' + ${parsed.lastSeenMicros}::bigint * interval '1 microsecond')`;
         clauses.push(
-          or(
-            compare(players.lastSeenAt, parsed.lastSeenAt),
-            and(eq(players.lastSeenAt, parsed.lastSeenAt), compare(players.id, parsed.id)),
-          ) as SQL,
+          sql`(${players.lastSeenAt}, ${players.id}) ${sql.raw(descending ? '<' : '>')} (${cursorAt}, ${parsed.id}::uuid)`,
         );
       }
 
@@ -225,6 +234,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
           eosId: players.eosId,
           canonicalName: players.canonicalName,
           lastSeenAt: players.lastSeenAt,
+          lastSeenMicros: lastSeenMicrosSql,
           roleId: roles.id,
           roleName: roles.name,
           roleColor: roles.color,
