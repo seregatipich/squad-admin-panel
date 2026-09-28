@@ -32,6 +32,21 @@ slug=${1:-}
 db_slug=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
 dbname="test_${db_slug}"
 
+# Postgres identifiers are truncated to NAMEDATALEN-1 (63 bytes). A long slug
+# (agent worktree/branch-derived names easily exceed this) would otherwise
+# get silently truncated by CREATE DATABASE while the existence check above
+# still compares against the full, untruncated name — so a re-run never
+# finds "its" database and CREATE DATABASE fails with "already exists".
+# Truncate here, deterministically, before either query runs; when
+# truncation would collide two different long slugs, mix in a short hash of
+# the full name so they still land on different databases.
+if [ ${#dbname} -gt 63 ]; then
+  hash=$(printf '%s' "$dbname" | cksum | cut -d' ' -f1)
+  hash=$(printf '%08x' "$hash")
+  prefix_len=$((63 - 1 - ${#hash}))
+  dbname="${dbname:0:$prefix_len}_${hash}"
+fi
+
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 env_file="$repo_root/.env"
 [ -f "$env_file" ] || die ".env not found at $env_file (needed for POSTGRES_PASSWORD)"
