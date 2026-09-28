@@ -1,5 +1,11 @@
 # `live-bus` — changelog
 
+## 2026-09-28 — #62: кадры `combat.vehicle` больше не обходят `combat:view`
+
+### Security
+
+- `apps/api/src/routes/live.ts` отсекал без `combat:view` только тип `combat.event`, а кадры `combat.vehicle` от worker-log-ingest (атакующий, оружие, урон, техника) уходили всем с `server:view`. Теперь фильтр срабатывает на любой тип с префиксом `combat.`. Регрессионный тест: `apps/api/test/combat-live-replay.test.ts`.
+
 ## 2026-09-27 — #12: сервер сам закрывает `/api/v1/ws/live` при отзыве сессии или потере прав
 
 ### Changed

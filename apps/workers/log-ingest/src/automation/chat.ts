@@ -10,6 +10,10 @@
  * A matching rule executes its action through the shared, pure `runMatch`
  * (`@squad/shared-types`) — enqueuing an RCON command / warn / kick, or logging
  * a notify — and records the firing to `automation_runs` + `audit_log`.
+ *
+ * Each rule fires at most once per player per server within
+ * `AUTOMATION_CHAT_COOLDOWN_SECONDS`: a player repeating the keyword must not
+ * grow the append-only `audit_log` or flood worker-rcon's capped stream.
  */
 import { auditLog, automationRules, automationRuns, type DatabaseClient } from '@squad/db';
 import {
@@ -19,8 +23,16 @@ import {
   runMatch,
 } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
-import { type RconEnqueue, sendRconCommand } from '../chat/commands.js';
+import {
+  type ChatRedis,
+  chatSenderIdentity,
+  type RconEnqueue,
+  sendRconCommand,
+} from '../chat/commands.js';
 import type { ParsedChat } from '../parser/chat.js';
+
+/** Minimum gap between two firings of one rule for one player on one server. */
+export const AUTOMATION_CHAT_COOLDOWN_SECONDS = 60;
 
 async function loadChatKeywordRules(db: DatabaseClient) {
   const rows = await db
@@ -85,12 +97,14 @@ function createDeps(db: DatabaseClient, redis: RconEnqueue): RunMatchDeps {
 
 /**
  * Evaluates the enabled `chat_keyword` rules against one chat line and fires
- * every match. Returns the recorded drafts (for tests). Never throws — a
+ * every match that is not on cooldown for this player
+ * (`automation:chat-cooldown:<rule>:<server>:<player>`, claimed with
+ * `SET NX EX`). Returns the recorded drafts (for tests). Never throws — a
  * failure is the caller's to log, matching the other `onChat` handlers.
  */
 export async function handleAutomationChat(
   db: DatabaseClient,
-  redis: RconEnqueue | null,
+  redis: ChatRedis | null,
   { serverId, chat }: { serverId: string; chat: ParsedChat },
 ): Promise<AutomationRunDraft[]> {
   const rules = await loadChatKeywordRules(db);
@@ -112,7 +126,19 @@ export async function handleAutomationChat(
   if (matches.length === 0) return [];
   const deps = createDeps(db, redis ?? { xadd: async () => null });
   const drafts: AutomationRunDraft[] = [];
+  const identity = chatSenderIdentity(chat);
   for (const match of matches) {
+    if (redis) {
+      const cooldownKey = `automation:chat-cooldown:${match.ruleId}:${serverId}:${identity}`;
+      const claimed = await redis.set(
+        cooldownKey,
+        '1',
+        'EX',
+        AUTOMATION_CHAT_COOLDOWN_SECONDS,
+        'NX',
+      );
+      if (!claimed) continue;
+    }
     drafts.push(await runMatch(deps, match, { dryRun: false }));
   }
   return drafts;

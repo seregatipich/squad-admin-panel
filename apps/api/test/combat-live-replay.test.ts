@@ -145,4 +145,36 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     expect(received).toHaveLength(0);
     await close(ws);
   });
+
+  it("does not deliver the worker's combat.vehicle frames to a user without combat:view (#62)", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, {
+      headers: { [COMBAT_VIEW_HEADER]: 'false' },
+    });
+    const types: string[] = [];
+    ws.on('message', (raw) => {
+      types.push((JSON.parse(raw.toString()) as { type: string }).type);
+    });
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+
+    // Shape published by apps/workers/log-ingest/src/combat/store.ts handleVehicle.
+    app.liveBus.publish({
+      type: 'combat.vehicle',
+      ts: '2026-07-09T11:05:00.000Z',
+      data: {
+        server_id: SERVER_ID,
+        match_id: null,
+        kind: 'vehicle_destroyed',
+        attacker_player_id: 'attacker-1',
+        victim_vehicle: 'BP_BTR80',
+        attacker_vehicle: null,
+        weapon: 'BP_RPG7',
+        damage: 900,
+        occurred_at: '2026-07-09T11:05:00.000Z',
+      },
+    } as unknown as LiveEvent);
+    await settle();
+
+    expect(types.filter((type) => type.startsWith('combat.'))).toEqual([]);
+    await close(ws);
+  });
 });

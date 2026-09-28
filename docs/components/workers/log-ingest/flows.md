@@ -78,6 +78,14 @@ For each command:
 
 1. Resolve (or create) the attacker/victim `players` rows, detect teamkill from the
    RCON roster cache, and resolve the open `matches` row — all before the transaction.
+   The log names a victim without ids, so its ids come from the `rcon:roster:{id}`
+   snapshot when exactly one roster member carries that name; several roster
+   members with the name, two players currently holding it, or (with no current
+   holder) two players with it in their name history leave the victim `NULL`
+   instead of guessing (#62). When an EOS id and a SteamID resolve to two
+   different `players` rows the EOS row is used and no identity backfill is
+   attempted; a backfill that loses a race on the unique index is skipped, so
+   the event is still recorded.
 2. In one `db.transaction`:
    - Insert the generic `events` envelope (`onConflictDoNothing` on `(event_id, occurred_at)`).
    - **Only if that insert actually inserted:** insert the typed `combat_events` row
@@ -86,7 +94,8 @@ For each command:
      `vehicle_damage→damage`), then fold it into the dossier aggregates with
      `applyCombatEventToDossier(tx, …)`.
 3. After the transaction commits, if the envelope was newly inserted, publish the
-   `combat.event` / `combat.vehicle` frame on the `live-bus` Redis channel.
+   `combat.event` / `combat.vehicle` frame on the `live-bus` Redis channel. The API
+   delivers every `combat.*` frame only to sockets with `combat:view`.
 
 Idempotency: on offset replay the envelope conflicts, `wasInserted` is false, and
 the `combat_events` insert, the aggregate fold **and** the live-bus publish are all
