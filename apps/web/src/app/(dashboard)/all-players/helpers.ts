@@ -18,10 +18,6 @@ export const COLUMN_DEFAULT_DIR: Record<PlayerSortKey, SortDir> = {
   total_time: 'desc',
 };
 
-export const SORT_GLYPH_INACTIVE = '↕';
-export const SORT_GLYPH_ASC = '↑';
-export const SORT_GLYPH_DESC = '↓';
-
 /**
  * Clicking the active column flips its direction; any other column starts at
  * its default. Two-state on purpose: the server always applies an `ORDER BY`,
@@ -36,18 +32,6 @@ export function nextSortState(current: PlayerSortState, clicked: PlayerSortKey):
     return { key: clicked, dir: current.dir === 'asc' ? 'desc' : 'asc' };
   }
   return { key: clicked, dir: COLUMN_DEFAULT_DIR[clicked] };
-}
-
-/**
- * The glyph for one header: the neutral one unless `column` is the active sort.
- *
- * @param current - The sort currently applied to the list.
- * @param column - The column whose header is being rendered.
- * @returns One of {@link SORT_GLYPH_INACTIVE}, {@link SORT_GLYPH_ASC}, {@link SORT_GLYPH_DESC}.
- */
-export function sortIndicator(current: PlayerSortState, column: PlayerSortKey): string {
-  if (current.key !== column) return SORT_GLYPH_INACTIVE;
-  return current.dir === 'asc' ? SORT_GLYPH_ASC : SORT_GLYPH_DESC;
 }
 
 /**

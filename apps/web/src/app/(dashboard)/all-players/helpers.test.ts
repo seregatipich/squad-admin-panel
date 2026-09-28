@@ -1,14 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildPlayersListQuery,
-  DEFAULT_SORT_STATE,
-  nextSortState,
-  type PlayerSortState,
-  SORT_GLYPH_ASC,
-  SORT_GLYPH_DESC,
-  SORT_GLYPH_INACTIVE,
-  sortIndicator,
-} from './helpers';
+import { buildPlayersListQuery, DEFAULT_SORT_STATE, nextSortState } from './helpers';
 
 describe('nextSortState', () => {
   it('nextSortState flips the direction when the active column is clicked again', () => {
@@ -40,22 +31,6 @@ describe('nextSortState', () => {
       key: 'nickname',
       dir: 'asc',
     });
-  });
-});
-
-describe('sortIndicator', () => {
-  const active: PlayerSortState = { key: 'created', dir: 'asc' };
-
-  it('sortIndicator returns the neutral glyph for an inactive column', () => {
-    expect(sortIndicator(active, 'nickname')).toBe(SORT_GLYPH_INACTIVE);
-  });
-
-  it('sortIndicator returns the ascending glyph for the active ascending column', () => {
-    expect(sortIndicator(active, 'created')).toBe(SORT_GLYPH_ASC);
-  });
-
-  it('sortIndicator returns the descending glyph for the active descending column', () => {
-    expect(sortIndicator({ key: 'created', dir: 'desc' }, 'created')).toBe(SORT_GLYPH_DESC);
   });
 });
 
