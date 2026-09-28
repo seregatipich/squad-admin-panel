@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchSteamProfiles, STEAM_BATCH_SIZE } from '../src/index.js';
+import {
+  fetchSteamBans,
+  fetchSteamOwnedGames,
+  fetchSteamProfiles,
+  STEAM_BATCH_SIZE,
+} from '../src/index.js';
 
 function memoryRedis() {
   const store = new Map<string, string>();
@@ -103,5 +108,61 @@ describe('fetchSteamProfiles', () => {
     expect(
       (request.mock.calls[1]?.[0] as URL).searchParams.get('steamids')?.split(','),
     ).toHaveLength(1);
+  });
+});
+
+// #53 (#1188): a hung api.steampowered.com used to hold Steam login (and the
+// steam-refresh tick) for undici's 300 s default.
+describe('Steam request deadline', () => {
+  /** A fetch that never answers on its own — it settles only when aborted. */
+  function hangingFetch() {
+    return vi.fn(
+      (_url: URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return;
+          signal.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+  }
+
+  const calls = [
+    [
+      'fetchSteamProfiles',
+      (deps: Parameters<typeof fetchSteamProfiles>[1]) =>
+        fetchSteamProfiles([76561198000000001n], deps),
+    ],
+    [
+      'fetchSteamBans',
+      (deps: Parameters<typeof fetchSteamBans>[1]) => fetchSteamBans([76561198000000001n], deps),
+    ],
+    [
+      'fetchSteamOwnedGames',
+      (deps: Parameters<typeof fetchSteamOwnedGames>[1]) =>
+        fetchSteamOwnedGames(76561198000000001n, deps),
+    ],
+  ] as const;
+
+  it.each(calls)('%s aborts a hung request after timeoutMs', async (_name, call) => {
+    const request = hangingFetch();
+    const started = Date.now();
+    await expect(
+      call({
+        apiKey: 'key',
+        redis: memoryRedis(),
+        fetch: request as unknown as typeof fetch,
+        timeoutMs: 50,
+      }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it.each(calls)('%s always sends an abort signal (default deadline)', async (_name, call) => {
+    const request = vi.fn(async (_url: URL, _init?: RequestInit) => ({
+      ok: false,
+      json: async () => ({}),
+    }));
+    await call({ apiKey: 'key', redis: memoryRedis(), fetch: request as unknown as typeof fetch });
+    expect(request.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });
