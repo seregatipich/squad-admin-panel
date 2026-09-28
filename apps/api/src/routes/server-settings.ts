@@ -24,8 +24,10 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
    * PUT /api/v1/servers/:id/settings
    * Partially updates the server_settings row.
    * - Port changes only allowed when server is stopped/ready/pending/failed.
-   * - Resource-limit fields (cpu_affinity, cpu_weight, niceness, memory_high_mb,
-   *   memory_max_mb, io_weight) may be changed at any time.
+   * - `extra_args` and the resource-limit fields (cpu_affinity, cpu_weight,
+   *   niceness, memory_high_mb, memory_max_mb, io_weight) are stored and
+   *   returned only: no `container_run` call passes them, so they have no
+   *   effect on the running server.
    * - New ports must not conflict with other active servers' ports.
    * - Same-server ports (across all four port fields) must all be distinct.
    * - If ports change, UFW rules are updated via the bridge.

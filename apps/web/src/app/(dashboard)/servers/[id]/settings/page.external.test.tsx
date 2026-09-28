@@ -174,7 +174,20 @@ describe('SettingsPage — внешний сервер', () => {
     });
     await screen.findByText('Сеть');
     expect(screen.queryByText('RCON-подключение')).not.toBeInTheDocument();
-    expect(screen.getByText('Ресурсы')).toBeInTheDocument();
+  });
+
+  // Регрессия (#43, находка 324): лимиты ресурсов и CPU affinity сохранялись,
+  // но нигде не применялись к контейнеру, а страница обещала «применяется при
+  // следующем запуске». Поля без эффекта не показываются.
+  it('не показывает поля лимитов ресурсов, которые не применяются к контейнеру', async () => {
+    stubFetch('container');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Сеть');
+    expect(screen.queryByText('Ресурсы')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Память, жёсткий предел (МБ)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Привязка к ядрам (CPU affinity)')).not.toBeInTheDocument();
   });
 });
 
