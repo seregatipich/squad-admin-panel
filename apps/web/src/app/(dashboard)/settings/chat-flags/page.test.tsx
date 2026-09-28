@@ -16,8 +16,9 @@ const RULE = {
   created_at: '2026-07-20T10:00:00.000Z',
 };
 
-function mockFetch(opts: { permissions?: string[] } = {}) {
+function mockFetch(opts: { permissions?: string[]; reindexStatus?: number } = {}) {
   const permissions = opts.permissions ?? ['role:edit'];
+  const reindexStatus = opts.reindexStatus ?? 200;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
@@ -27,6 +28,13 @@ function mockFetch(opts: { permissions?: string[] } = {}) {
     }
     if (url.endsWith('/api/v1/settings/chat-flag-rules')) {
       return Promise.resolve(new Response(JSON.stringify({ items: [RULE] }), { status: 200 }));
+    }
+    if (url.endsWith('/api/v1/settings/chat-flag-rules/reindex') && init?.method === 'POST') {
+      const body =
+        reindexStatus === 200
+          ? { days: 7, scanned: 0, flagged: 0, changed: 0 }
+          : { error: 'reindex_in_progress' };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: reindexStatus }));
     }
     if (url.includes('/api/v1/settings/chat-flag-rules/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
@@ -79,6 +87,21 @@ describe('ChatFlagsPage', () => {
         expect(calls.some((c) => c.init?.method === 'DELETE')).toBe(true);
       });
       expect(await screen.findByText('Правило удалено.')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'explains a 409 from reindex as a run already in progress (#345)',
+    async () => {
+      const { fn } = mockFetch({ reindexStatus: 409 });
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+      fireEvent.click(screen.getByRole('button', { name: 'Переиндексировать' }));
+      expect(
+        await screen.findByText('Переиндексация уже выполняется — дождитесь её завершения.'),
+      ).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
