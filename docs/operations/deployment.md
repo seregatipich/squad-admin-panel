@@ -381,7 +381,7 @@ curl -skI https://${APP_DOMAIN}/api/docs
 
 Expected results:
 
-- `verify-bridge.sh` exits `0` and covers every bridge RPC method.
+- `verify-bridge.sh` exits `0`: the read-only probes succeed and the path and image allowlist probes are refused with `forbidden` (it is a smoke test, not per-method coverage — that lives in the `apps/bridge` Go tests).
 - `/health` returns `{"status":"ok", ...}`.
 - `/ready` returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
 - `/api/docs` returns an HTTP 200/30x response from the API docs UI.

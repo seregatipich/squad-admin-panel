@@ -83,13 +83,18 @@ force.
 ## Verifying the install
 
 ```bash
-sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-tests every bridge method
+sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-tests the bridge and its allowlists
 curl -sk https://${APP_DOMAIN}/health         # {"status":"ok"}
 curl -sk https://${APP_DOMAIN}/ready          # {"status":"ok","checks":{...}}
 curl -skI https://${APP_DOMAIN}/api/docs       # API docs UI responds
 ```
 
-`scripts/verify-bridge.sh` exits non-zero on any unexpected response.
+`scripts/verify-bridge.sh` calls `ping`, `host_info`, `host_metrics`, `process_info` and
+`container_inspect` (each must succeed) and three allowlist probes — `file_read` of
+`/etc/shadow`, `file_atomic_write` outside the permitted roots, and `container_run` with a
+non-allowlisted image — that must each be refused with error code `forbidden`. It exits
+non-zero on any other response, and never prints the body of a probe that should have been
+refused.
 
 ## First Squad server
 
