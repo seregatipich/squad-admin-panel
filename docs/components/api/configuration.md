@@ -27,7 +27,7 @@ Inside the container the API binds `0.0.0.0:3000`. Caddy proxies `/api/*` and th
 
 These are not env-driven; change in code if needed.
 
-- `@fastify/rate-limit`: 1200 req/min per `(IP, playerId)`. Steam callback is IP-keyed before a user context exists.
+- `@fastify/rate-limit` (`src/plugins/rate-limit.ts`): 1200 req/min per `(IP, playerId)` on every route, counted after authentication; plus a pre-auth limit of 3000 req/min per IP, checked before the auth hook, so anonymous or forged-credential traffic answers 429 before any session/token lookup. Steam callback is IP-keyed before a user context exists.
 - Cookie session TTL: 6 h sliding (configurable via `SESSION_TTL_SECONDS`). Touch throttled to one DB write per 60 s (`SESSION_TOUCH_THROTTLE_SECONDS`).
 - `status-reconciler` poll interval: 4 s (`RECONCILE_INTERVAL_MS` in [`status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)). The first tick fires on `onReady`, then every 4 s. Lower means faster UI feedback, more `container_inspect` load.
 - `status-reconciler` per-tick budget: 12 s (`TICK_BUDGET_MS`). `Promise.allSettled` across all transient servers races against a timer of this length. Servers that don't finish before budget retry on the next interval. `last_tick_budget_exceeded` in the health endpoint flags when this kicked in.
