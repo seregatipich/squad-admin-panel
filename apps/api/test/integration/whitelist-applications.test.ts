@@ -1,4 +1,11 @@
-import { adminsCfgSyncOutbox, auditLog, players, roles, servers } from '@squad/db/schema';
+import {
+  adminsCfgSyncOutbox,
+  auditLog,
+  players,
+  roles,
+  servers,
+  whitelistApplications,
+} from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -97,14 +104,52 @@ async function setSettings(enabled: boolean, defaultDays: number | null): Promis
   if (res.statusCode !== 200) throw new Error(`setSettings failed: ${res.statusCode} ${res.body}`);
 }
 
-async function submit(steamId64: bigint, body = 'please whitelist me'): Promise<string> {
-  const res = await h.app.inject({
+/**
+ * A Steam-verified session for the applicant, as `auth-steam.ts` mints it for a
+ * player without panel access (#375: applications are tied to a proven
+ * SteamID64). Creates the players row first when the SteamID is new, exactly as
+ * a first Steam login does.
+ */
+async function applicantCookie(steamId64: bigint): Promise<string> {
+  const [existing] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  const playerId = existing?.id ?? (await createPlayer(steamId64));
+  invalidateAllPermissionCaches();
+  const { token } = await createSession(h.db, h.redis, {
+    playerId,
+    ip: null,
+    userAgent: 'wl3-applicant',
+    ttlMs: 21_600_000,
+    scope: 'self_service',
+  });
+  return `__Host-sid=${token}`;
+}
+
+function postApplication(cookie: string | null, payload: Record<string, unknown>) {
+  return h.app.inject({
     method: 'POST',
     url: '/api/v1/public/whitelist/applications',
-    payload: { steam_id64: steamId64.toString(), body },
+    headers: cookie ? { cookie } : {},
+    payload,
   });
+}
+
+async function submit(steamId64: bigint, body = 'please whitelist me'): Promise<string> {
+  const res = await postApplication(await applicantCookie(steamId64), { body });
   if (res.statusCode !== 201) throw new Error(`submit failed: ${res.statusCode} ${res.body}`);
   return res.json<{ id: string }>().id;
+}
+
+function patchApplication(applicationId: string, payload: Record<string, unknown>) {
+  return h.app.inject({
+    method: 'PATCH',
+    url: `/api/v1/whitelist/applications/${applicationId}`,
+    headers: { cookie: ownerCookie },
+    payload,
+  });
 }
 
 async function outboxRows(): Promise<Array<{ serverId: string; reason: string }>> {
@@ -162,14 +207,32 @@ describeIfDb('public portal — settings + submit', () => {
     expect(res.json()).toEqual({ enabled: true });
   });
 
-  it('accepts an anonymous submission (201 pending) and audits it as a system actor', async () => {
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/public/whitelist/applications',
-      payload: {
-        steam_id64: HAPPY_STEAM.toString(),
-        body: 'main-server regular, please whitelist',
-      },
+  it('refuses an anonymous submission: the SteamID64 must be proven by a Steam login (#375)', async () => {
+    const res = await postApplication(null, {
+      steam_id64: HAPPY_STEAM.toString(),
+      body: 'someone else pre-empting this SteamID',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('steam_login_required');
+    const pending = await h.db
+      .select({ id: whitelistApplications.id })
+      .from(whitelistApplications)
+      .where(eq(whitelistApplications.steamId64, HAPPY_STEAM));
+    expect(pending).toHaveLength(0);
+  });
+
+  it('refuses a submission for a SteamID64 other than the signed-in one (#375)', async () => {
+    const res = await postApplication(await applicantCookie(HAPPY_STEAM), {
+      steam_id64: DUP_STEAM.toString(),
+      body: 'impersonation attempt',
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('steam_id_mismatch');
+  });
+
+  it('accepts a submission from the Steam session (201 pending) and audits the applicant', async () => {
+    const res = await postApplication(await applicantCookie(HAPPY_STEAM), {
+      body: 'main-server regular, please whitelist',
     });
     expect(res.statusCode).toBe(201);
     const body = res.json<{
@@ -179,8 +242,8 @@ describeIfDb('public portal — settings + submit', () => {
       player_id: string | null;
     }>();
     expect(body.status).toBe('pending');
+    // The SteamID64 comes from the session, never from the request body.
     expect(body.steam_id64).toBe(HAPPY_STEAM.toString());
-    // player_id resolved best-effort (this SteamID has a players row).
     expect(body.player_id).toBe(happyPlayerId);
 
     const [audit] = await h.db
@@ -194,26 +257,21 @@ describeIfDb('public portal — settings + submit', () => {
       )
       .orderBy(desc(auditLog.createdAt))
       .limit(1);
-    expect(audit?.actorKind).toBe('system');
-    expect(audit?.actorSystemLabel).toBe('http-anonymous');
+    expect(audit?.actorKind).toBe('steam');
+    expect(audit?.actorPlayerId).toBe(happyPlayerId);
   });
 
   it('rejects a malformed steam_id64 with 400', async () => {
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/public/whitelist/applications',
-      payload: { steam_id64: BAD_STEAM, body: 'hi' },
+    const res = await postApplication(await applicantCookie(testSteamId(167098)), {
+      steam_id64: BAD_STEAM,
+      body: 'hi',
     });
     expect(res.statusCode).toBe(400);
   });
 
   it('rejects a second pending application for the same SteamID64 with 409', async () => {
     await submit(DUP_STEAM);
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/public/whitelist/applications',
-      payload: { steam_id64: DUP_STEAM.toString(), body: 'again' },
-    });
+    const res = await postApplication(await applicantCookie(DUP_STEAM), { body: 'again' });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('application_already_pending');
   });
@@ -227,10 +285,8 @@ describeIfDb('public portal — settings + submit', () => {
       });
       expect(settingsRes.json()).toEqual({ enabled: false });
 
-      const res = await h.app.inject({
-        method: 'POST',
-        url: '/api/v1/public/whitelist/applications',
-        payload: { steam_id64: testSteamId(167099).toString(), body: 'hi' },
+      const res = await postApplication(await applicantCookie(testSteamId(167099)), {
+        body: 'hi',
       });
       expect(res.statusCode).toBe(404);
       expect(res.json().error).toBe('applications_disabled');
@@ -455,7 +511,13 @@ describeIfDb('rejection — no role side-effects', () => {
 
 describeIfDb('approval failures', () => {
   it('returns 404 when no players row exists for the SteamID64', async () => {
-    const appId = await submit(NO_PLAYER_STEAM);
+    // Only an application filed before submissions required a Steam login can
+    // point at a SteamID64 the panel has never seen.
+    const [legacy] = await h.db
+      .insert(whitelistApplications)
+      .values({ steamId64: NO_PLAYER_STEAM, body: 'legacy', source: 'public', status: 'pending' })
+      .returning({ id: whitelistApplications.id });
+    const appId = legacy?.id ?? '';
     const res = await h.app.inject({
       method: 'PATCH',
       url: `/api/v1/whitelist/applications/${appId}`,
@@ -610,5 +672,60 @@ describeIfDb('auto-expiry chain (VIPSUB-1 reuse — acceptance criterion)', () =
     expect(rows).toHaveLength(1);
     expect(rows[0]?.serverId).toBe(activeServerId);
     expect(rows[0]?.reason).toBe('player.role.expire');
+  });
+});
+
+describeIfDb('concurrent review decisions (#374)', () => {
+  it('lets exactly one of two simultaneous decisions win and keeps role and status consistent', async () => {
+    const steam = testSteamId(167040);
+    await createPlayer(steam);
+    for (let round = 0; round < 5; round += 1) {
+      const appId = await submit(steam, `race round ${round}`);
+      const [approve, reject] = await Promise.all([
+        patchApplication(appId, { status: 'approved', role_id: vipRoleId }),
+        patchApplication(appId, { status: 'rejected', review_note: 'no' }),
+      ]);
+      const codes = [approve.statusCode, reject.statusCode].sort();
+      expect(codes, `round ${round}`).toEqual([200, 409]);
+
+      const [app] = await h.db
+        .select({ status: whitelistApplications.status })
+        .from(whitelistApplications)
+        .where(eq(whitelistApplications.id, appId));
+      const [player] = await h.db
+        .select({ roleId: players.roleId })
+        .from(players)
+        .where(eq(players.steamId64, steam));
+      if (approve.statusCode === 200) {
+        expect(app?.status).toBe('approved');
+        expect(player?.roleId).toBe(vipRoleId);
+      } else {
+        expect(app?.status).toBe('rejected');
+        expect(player?.roleId).toBeNull();
+      }
+      // Reset for the next round.
+      await h.db
+        .update(players)
+        .set({ roleId: null, roleExpiresAt: null })
+        .where(eq(players.steamId64, steam));
+    }
+  });
+
+  it('never approves the same application twice', async () => {
+    const steam = testSteamId(167041);
+    await createPlayer(steam);
+    const appId = await submit(steam, 'double click');
+    const results = await Promise.all([
+      patchApplication(appId, { status: 'approved', role_id: vipRoleId }),
+      patchApplication(appId, { status: 'approved', role_id: vipRoleId }),
+    ]);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+    const reviews = await h.db
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        and(eq(auditLog.actionType, 'whitelist.application.review'), eq(auditLog.targetId, appId)),
+      );
+    expect(reviews).toHaveLength(1);
   });
 });
