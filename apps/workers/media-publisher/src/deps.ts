@@ -5,11 +5,13 @@ import { mediaFiles, mediaPublications, mediaPublishSettings } from '@squad/db/s
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { createTelegramPublisher } from './publishers/telegram.js';
 import { createYouTubePublisher } from './publishers/youtube.js';
-import type {
-  MediaPublicationDestination,
-  MediaPublicationJob,
-  MediaPublisher,
-  MediaPublisherTickDeps,
+import {
+  MEDIA_PUBLISH_INTERRUPTED_ERROR,
+  MEDIA_PUBLISH_LEASE_MS,
+  type MediaPublicationDestination,
+  type MediaPublicationJob,
+  type MediaPublisher,
+  type MediaPublisherTickDeps,
 } from './tick.js';
 
 /** Environment slice carrying the third-party publishing credentials. */
@@ -44,6 +46,7 @@ interface ClaimedRow {
   title: string | null;
   description: string | null;
   original_filename: string;
+  interrupted: boolean;
 }
 
 export function createMediaPublisherDeps(
@@ -79,32 +82,46 @@ export function createMediaPublisherDeps(
     /**
      * Claims due publications in a single statement.
      *
-     * `FOR UPDATE ... SKIP LOCKED` inside the CTE plus the `status = 'queued'`
-     * re-check on the UPDATE is what makes a second worker (or a second tick
-     * overlapping a slow one) unable to pick up the same row: whichever
-     * statement gets the lock flips the status, and the other either skips the
-     * locked row or finds it no longer queued.
+     * `FOR UPDATE ... SKIP LOCKED` inside the CTE plus the status re-check on
+     * the UPDATE is what makes a second worker (or a second tick overlapping a
+     * slow one) unable to pick up the same row: whichever statement gets the
+     * lock flips the status, and the other either skips the locked row or
+     * finds it no longer due.
+     *
+     * A claim is a lease: `next_attempt_at` is set to `now + MEDIA_PUBLISH_LEASE_MS`.
+     * An `uploading` row whose lease has run out belongs to a worker that died
+     * mid-upload (nothing else leaves a row there), so it is claimed again with
+     * `attempts + 1` and `error = 'upload_interrupted'`; without this it would
+     * be stranded for good, since the `(media_id, destination)` unique index
+     * blocks queueing the publication again.
      */
     async claimDue(now: Date, limit: number): Promise<MediaPublicationJob[]> {
+      const nowIso = now.toISOString();
+      const leaseUntil = new Date(now.getTime() + MEDIA_PUBLISH_LEASE_MS).toISOString();
       const rows = (await db.execute(sql`
         WITH due AS (
-          SELECT p.id
+          SELECT p.id, p.status = 'uploading' AS interrupted
           FROM media_publications p
           JOIN media_files m ON m.id = p.media_id
-          WHERE p.status = 'queued'
+          WHERE p.status IN ('queued', 'uploading')
             AND p.next_attempt_at IS NOT NULL
-            AND p.next_attempt_at <= ${now.toISOString()}::timestamptz
+            AND p.next_attempt_at <= ${nowIso}::timestamptz
             AND m.deleted_at IS NULL
           ORDER BY p.next_attempt_at ASC
           LIMIT ${limit}
           FOR UPDATE OF p SKIP LOCKED
         )
         UPDATE media_publications p
-        SET status = 'uploading', updated_at = now()
+        SET status = 'uploading',
+            attempts = p.attempts + CASE WHEN p.status = 'uploading' THEN 1 ELSE 0 END,
+            error = CASE WHEN p.status = 'uploading' THEN ${MEDIA_PUBLISH_INTERRUPTED_ERROR} ELSE p.error END,
+            next_attempt_at = ${leaseUntil}::timestamptz,
+            updated_at = now()
         FROM due, media_files m
         WHERE p.id = due.id
           AND m.id = p.media_id
-          AND p.status = 'queued'
+          AND p.status IN ('queued', 'uploading')
+          AND p.next_attempt_at <= ${nowIso}::timestamptz
         RETURNING
           p.id,
           p.media_id,
@@ -115,7 +132,8 @@ export function createMediaPublisherDeps(
           m.size_bytes,
           m.title,
           m.description,
-          m.original_filename
+          m.original_filename,
+          due.interrupted
       `)) as unknown as ClaimedRow[];
 
       return rows.map((row) => ({
@@ -129,6 +147,7 @@ export function createMediaPublisherDeps(
         title: row.title,
         description: row.description,
         originalFilename: row.original_filename,
+        interrupted: row.interrupted,
       }));
     },
 

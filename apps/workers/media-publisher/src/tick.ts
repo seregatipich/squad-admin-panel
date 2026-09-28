@@ -8,6 +8,15 @@ export const MEDIA_PUBLISH_BACKOFF_BASE_MS = 60_000;
 export const MEDIA_PUBLISH_BACKOFF_MAX_MS = 6 * 3_600_000;
 /** How many ordinary failures a publication absorbs before it is declared dead. */
 export const MEDIA_PUBLISH_MAX_ATTEMPTS = 8;
+/**
+ * How long a claimed publication may stay `uploading` before another claim
+ * treats the upload as interrupted (worker killed mid-upload) and takes it
+ * back. Far above any real upload, because reclaiming a live upload would
+ * publish the media twice.
+ */
+export const MEDIA_PUBLISH_LEASE_MS = 6 * 3_600_000;
+/** Error recorded on a publication reclaimed after its upload lease expired. */
+export const MEDIA_PUBLISH_INTERRUPTED_ERROR = 'upload_interrupted';
 /** How long a publication waits when its destination has no credentials at all. */
 export const MEDIA_PUBLISH_UNCONFIGURED_DELAY_MS = 3_600_000;
 
@@ -23,6 +32,8 @@ export interface MediaPublicationJob {
   title: string | null;
   description: string | null;
   originalFilename: string;
+  /** True when this claim took back an `uploading` row whose lease expired. */
+  interrupted: boolean;
 }
 
 /**
@@ -48,7 +59,11 @@ export type MediaPublisher = (job: MediaPublicationJob) => Promise<PublishOutcom
 export interface MediaPublisherTickDeps {
   now?: Date;
   batchSize?: number;
-  /** Atomically claims due publications, flipping them to `uploading`. */
+  /**
+   * Atomically claims due publications, flipping them to `uploading` under a
+   * {@link MEDIA_PUBLISH_LEASE_MS} lease. A publication whose lease expired
+   * while `uploading` is reclaimed with one more attempt counted.
+   */
   claimDue(now: Date, limit: number): Promise<MediaPublicationJob[]>;
   /** Only destinations with credentials are present; the rest are deferred, not failed. */
   publishers: Partial<Record<MediaPublicationDestination, MediaPublisher>>;
@@ -111,6 +126,26 @@ export async function runMediaPublisherTick(
   };
 
   for (const job of jobs) {
+    if (job.interrupted && job.attempts >= MEDIA_PUBLISH_MAX_ATTEMPTS) {
+      // An upload that keeps dying with the worker (a file that OOMs it, say)
+      // must end in 'failed' rather than be reclaimed forever.
+      await deps.markFailed(job.id, MEDIA_PUBLISH_INTERRUPTED_ERROR, job.attempts);
+      result.failed += 1;
+      await deps.diag.emit({
+        component: 'worker-media-publisher',
+        kind: 'media_publish.failed',
+        severity: 'error',
+        message: `publication to ${job.destination} failed permanently`,
+        payload: {
+          publication_id: job.id,
+          destination: job.destination,
+          error: MEDIA_PUBLISH_INTERRUPTED_ERROR,
+          attempts: job.attempts,
+        },
+      });
+      continue;
+    }
+
     const publisher = deps.publishers[job.destination];
     if (!publisher) {
       const nextAttemptAt = new Date(now.getTime() + MEDIA_PUBLISH_UNCONFIGURED_DELAY_MS);
