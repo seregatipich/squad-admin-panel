@@ -133,6 +133,40 @@ describe('/api/v1/servers/:id/logs/ws', () => {
     const last = frames.at(-1) as { done?: boolean };
     expect(last.done).toBe(true);
   });
+
+  // #296: an external server (runtime='external') is marked status='running'
+  // at creation with no panel-managed container; without this check the
+  // `installed` branch above would pass and ask the bridge to follow logs
+  // for a container that was never created.
+  it('refuses to follow an external server instead of asking the bridge for a nonexistent container', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'External Box',
+      status: 'running',
+      runtime: 'external',
+    });
+    const frames: Array<Record<string, unknown>> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+    ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    expect(frames).toEqual([{ error: 'external_server' }]);
+  });
+
+  // #295: `findFirst` used to run before the try block, so a DB failure
+  // rejected the background IIFE with nothing awaiting it — the client saw
+  // no {error} and the socket stayed open on heartbeats alone.
+  it('sends an error frame and closes the socket when the DB lookup fails', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => {
+      throw new Error('db unavailable');
+    };
+    const frames: Array<Record<string, unknown>> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+    ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    expect(frames).toEqual([{ error: 'db unavailable' }]);
+  });
 });
 
 async function waitFor(pred: () => boolean, timeoutMs = 2000) {

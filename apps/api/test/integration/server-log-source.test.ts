@@ -66,8 +66,8 @@ async function createExternal(cookie: string, slug = externalBody.slug): Promise
 }
 
 describe('generateSshKeyPair', () => {
-  it('produces a PKCS#1 PEM ssh2 can dial with and a matching authorized_keys line', () => {
-    const pair = generateSshKeyPair('squad-admin-panel@stand.example');
+  it('produces a PKCS#1 PEM ssh2 can dial with and a matching authorized_keys line', async () => {
+    const pair = await generateSshKeyPair('squad-admin-panel@stand.example');
     expect(pair.privateKeyPem).toMatch(/^-----BEGIN RSA PRIVATE KEY-----/);
     const [type, blob, comment] = pair.publicKeyLine.split(' ');
     expect(type).toBe('ssh-rsa');
@@ -223,6 +223,40 @@ describe('PUT /api/v1/servers/:id/log-source', () => {
       .from(serverLogSources)
       .where(eq(serverLogSources.serverId, id));
     expect(rows).toHaveLength(0);
+  });
+
+  // #297: two concurrent first PUTs used to both see no existing row via a
+  // plain SELECT-then-INSERT, so the second INSERT hit the server_id primary
+  // key and 500ed instead of upserting. The fix serializes concurrent PUTs
+  // for the same server with an advisory lock + SELECT ... FOR UPDATE.
+  it('serializes two concurrent PUTs instead of racing an INSERT into a 500', async () => {
+    const cookie = await loginAsOwner(h);
+    const id = await createExternal(cookie);
+    const [first, second] = await Promise.all([
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/log-source`,
+        headers: { cookie },
+        payload: sourceBody,
+      }),
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/log-source`,
+        headers: { cookie },
+        payload: sourceBody,
+      }),
+    ]);
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const rows = await h.db
+      .select()
+      .from(serverLogSources)
+      .where(eq(serverLogSources.serverId, id));
+    expect(rows).toHaveLength(1);
+    // Both requests raced with regenerate_key defaulted to false; only the
+    // one that actually created the row should have set keyVersion, and the
+    // second (no-op update) must not have raced it into a duplicate bump.
+    expect(rows[0]?.keyVersion).toBe(1);
   });
 });
 

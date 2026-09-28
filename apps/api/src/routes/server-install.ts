@@ -204,10 +204,7 @@ async function runInstall(
 
   await ensureDepot(app, sink);
 
-  const rconPassword = decryptString(
-    app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
-  );
+  const rconPassword = decryptString(app.encryptionKey, deserialize(creds.rconPasswordEncrypted));
   const seedT0 = Date.now();
   const { seededCount } = await seedConfigs(
     app,
@@ -242,7 +239,7 @@ async function runInstall(
       const r = await app.bridge.ufwRule({
         action: 'add',
         proto,
-        port: port as number,
+        port,
         comment: `${comment}-${serverId.slice(0, 8)}`,
       });
       emit('ufw', `${proto}/${port} ${r.status}`, 'stdout');
@@ -365,6 +362,11 @@ export function rewriteRconCfg(existing: string, opts: { port: number; password:
 }
 
 export function rewriteServerCfg(existing: string, displayName: string): string {
+  // #293: display_name is validated (no quotes/CR/LF) at the zod schema, but
+  // this is the last line of defense before it becomes a raw Server.cfg
+  // directive — strip anything that could break out of the ServerName value
+  // or inject additional lines.
+  const safeName = displayName.replace(/[\r\n"]/g, '');
   const lines = existing.split(/\r?\n/);
   const result: string[] = [];
   let seenName = false;
@@ -372,12 +374,12 @@ export function rewriteServerCfg(existing: string, displayName: string): string 
     const m = /^\s*ServerName\s*=/i.exec(raw);
     if (m) {
       seenName = true;
-      result.push(`ServerName="${displayName}"`);
+      result.push(`ServerName="${safeName}"`);
     } else {
       result.push(raw);
     }
   }
-  if (!seenName) result.push(`ServerName="${displayName}"`);
+  if (!seenName) result.push(`ServerName="${safeName}"`);
   return result.join('\n').replace(/\n+$/, '\n');
 }
 
@@ -507,7 +509,13 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             });
           }
         }
-      })();
+      })().catch((err) => {
+        // #295: if the `catch` block above itself fails (e.g. the
+        // status='failed' UPDATE), this IIFE used to reject with nothing
+        // awaiting it — the row stays 'installing' until the 30-minute
+        // watchdog, and a retry gets 409 the whole time.
+        app.log.error({ err, server_id: id }, 'install failure handling itself failed');
+      });
       return { status: 'installing', server_id: id };
     },
   );

@@ -12,6 +12,8 @@ const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
 /** Matches the `loadUserPermissions` cache TTL, so a re-check never reads older data than a request would. */
 const DEFAULT_REVALIDATE_INTERVAL_MS = 30_000;
+/** #1340: caps the ws send buffer before frames are silently dropped for a slow client. */
+const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const CHAT_BUFFER_PER_SERVER = 100;
 const COMBAT_BUFFER_PER_SERVER = 100;
 
@@ -85,6 +87,10 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
 
       const safeSend = (payload: unknown): void => {
         if (closed) return;
+        // #1340: a slow client that still answers pings otherwise lets the
+        // fanned-out event stream pile up in the ws library's send buffer
+        // without limit.
+        if ((socket.bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) return;
         try {
           socket.send(JSON.stringify(payload));
         } catch (err) {

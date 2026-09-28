@@ -737,7 +737,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           try {
             const password = decryptString(
               app.encryptionKey,
-              deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+              deserialize(creds.rconPasswordEncrypted),
             );
             const target = {
               host: resolveRconHost(creds.rconHost),

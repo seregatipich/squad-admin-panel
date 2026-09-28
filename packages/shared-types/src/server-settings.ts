@@ -40,7 +40,12 @@ export type ServerSettingsUpdate = z.infer<typeof serverSettingsUpdate>;
 
 export const serverPatch = z
   .object({
-    display_name: z.string().min(1).max(120).optional(),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines')
+      .optional(),
     description: z.string().max(500).nullable().optional(),
     tags: z.array(z.string().min(1).max(50)).max(20).optional(),
     license_id: z.string().trim().min(1).max(200).nullable().optional(),

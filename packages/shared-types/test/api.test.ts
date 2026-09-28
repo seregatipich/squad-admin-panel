@@ -186,6 +186,21 @@ describe('serverCreateInput', () => {
     expect(serverCreateInput.safeParse({ ...minimal, display_name: '' }).success).toBe(false);
   });
 
+  // #293: display_name is interpolated unescaped into Server.cfg's
+  // `ServerName="${displayName}"` directive; a quote or newline lets a holder
+  // of server:create/server:install inject arbitrary Server.cfg directives.
+  it('rejects display_name containing a double quote', () => {
+    expect(
+      serverCreateInput.safeParse({ ...minimal, display_name: 'Box" \nMaxPlayers=1' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects display_name containing a newline', () => {
+    expect(
+      serverCreateInput.safeParse({ ...minimal, display_name: 'Box\nMaxPlayers=1' }).success,
+    ).toBe(false);
+  });
+
   it('rejects slug starting with hyphen', () => {
     expect(serverCreateInput.safeParse({ ...minimal, slug: '-bad' }).success).toBe(false);
   });

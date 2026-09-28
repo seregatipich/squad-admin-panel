@@ -54,7 +54,11 @@ export type ServerStatus = z.infer<typeof serverStatus>;
 
 export const serverCreateInput = z
   .object({
-    display_name: z.string().min(1).max(120),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines'),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     description: z.string().max(500).nullable().optional(),
     game_port: z.number().int().min(1024).max(65_535),
@@ -109,7 +113,11 @@ export const rconHostString = z
  */
 export const externalServerCreateInput = z
   .object({
-    display_name: z.string().min(1).max(120),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines'),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     description: z.string().max(500).nullable().optional(),
     rcon_host: rconHostString,
