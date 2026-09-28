@@ -20,9 +20,12 @@ DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/ap
 DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin \
   pnpm --filter @squad/api exec vitest run test/property/
 
-# Security suite only (uses dedicated config with hookTimeout=300 s)
+# Security suite only (same config, harness and isolated DB as every other suite)
 DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin \
-  pnpm --filter @squad/api exec vitest run --config vitest.security.config.ts test/security/
+  pnpm --filter @squad/api exec vitest run test/security/
+
+# Type-check src and the tests (test/, *.config.ts) — `typecheck` runs both passes
+pnpm --filter @squad/api typecheck
 
 # Single file
 pnpm --filter @squad/api exec vitest run test/rcon-send.test.ts
