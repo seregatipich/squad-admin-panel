@@ -4,6 +4,7 @@ import {
   type EconomySettings,
   emptyTierForm,
   formatTierDuration,
+  formatTierPrice,
   formatUpdatedAt,
   settingsToForm,
   tierToForm,
@@ -192,6 +193,7 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
     role_id: overrides.role_id ?? 'role-1',
     description: overrides.description ?? null,
     default_days: overrides.default_days ?? null,
+    price_bonuses: overrides.price_bonuses ?? null,
     sort_order: overrides.sort_order ?? 0,
     is_active: overrides.is_active ?? true,
     created_at: overrides.created_at ?? '2026-07-01T00:00:00.000Z',
@@ -205,6 +207,7 @@ function makeTierForm(overrides: Partial<VipTierFormState> = {}): VipTierFormSta
     roleId: overrides.roleId ?? 'role-1',
     description: overrides.description ?? '',
     defaultDays: overrides.defaultDays ?? '',
+    priceBonuses: overrides.priceBonuses ?? '',
     sortOrder: overrides.sortOrder ?? '0',
     isActive: overrides.isActive ?? true,
   };
@@ -213,22 +216,32 @@ function makeTierForm(overrides: Partial<VipTierFormState> = {}): VipTierFormSta
 describe('tierToForm / emptyTierForm', () => {
   it('maps a tier into string-backed form fields', () => {
     const form = tierToForm(
-      makeTier({ description: 'reserve', default_days: 30, sort_order: 10, is_active: false }),
+      makeTier({
+        description: 'reserve',
+        default_days: 30,
+        price_bonuses: 500,
+        sort_order: 10,
+        is_active: false,
+      }),
     );
     expect(form).toEqual({
       name: 'VIP Bronze',
       roleId: 'role-1',
       description: 'reserve',
       defaultDays: '30',
+      priceBonuses: '500',
       sortOrder: '10',
       isActive: false,
     });
   });
 
-  it('maps null description and default_days to empty strings', () => {
-    const form = tierToForm(makeTier({ description: null, default_days: null }));
+  it('maps null description, default_days and price_bonuses to empty strings', () => {
+    const form = tierToForm(
+      makeTier({ description: null, default_days: null, price_bonuses: null }),
+    );
     expect(form.description).toBe('');
     expect(form.defaultDays).toBe('');
+    expect(form.priceBonuses).toBe('');
   });
 
   it('produces an empty active form for creation', () => {
@@ -237,6 +250,7 @@ describe('tierToForm / emptyTierForm', () => {
       roleId: '',
       description: '',
       defaultDays: '',
+      priceBonuses: '',
       sortOrder: '0',
       isActive: true,
     });
@@ -246,7 +260,12 @@ describe('tierToForm / emptyTierForm', () => {
 describe('validateVipTierForm', () => {
   it('accepts a valid tier form', () => {
     const result = validateVipTierForm(
-      makeTierForm({ description: ' reserve slot ', defaultDays: '30', sortOrder: '10' }),
+      makeTierForm({
+        description: ' reserve slot ',
+        defaultDays: '30',
+        priceBonuses: '500',
+        sortOrder: '10',
+      }),
     );
     expect(result).toEqual({
       ok: true,
@@ -255,6 +274,7 @@ describe('validateVipTierForm', () => {
         role_id: 'role-1',
         description: 'reserve slot',
         default_days: 30,
+        price_bonuses: 500,
         sort_order: 10,
         is_active: true,
       },
@@ -267,6 +287,7 @@ describe('validateVipTierForm', () => {
     if (result.ok) {
       expect(result.value.description).toBeNull();
       expect(result.value.default_days).toBeNull();
+      expect(result.value.price_bonuses).toBeNull();
     }
   });
 
@@ -307,6 +328,22 @@ describe('validateVipTierForm', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors.sortOrder).toBeTruthy();
   });
+
+  it('rejects price_bonuses out of range', () => {
+    const negative = validateVipTierForm(makeTierForm({ priceBonuses: '-1' }));
+    expect(negative.ok).toBe(false);
+    if (!negative.ok) expect(negative.errors.priceBonuses).toBeTruthy();
+
+    const tooHigh = validateVipTierForm(makeTierForm({ priceBonuses: '2147483648' }));
+    expect(tooHigh.ok).toBe(false);
+    if (!tooHigh.ok) expect(tooHigh.errors.priceBonuses).toBeTruthy();
+  });
+
+  it('requires a default duration when a price is set (mirrors the server price_requires_days rule)', () => {
+    const result = validateVipTierForm(makeTierForm({ priceBonuses: '500', defaultDays: '' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.defaultDays).toBeTruthy();
+  });
 });
 
 describe('formatTierDuration', () => {
@@ -330,5 +367,15 @@ describe('formatUpdatedAt', () => {
 
   it('formats a valid ISO timestamp', () => {
     expect(formatUpdatedAt('2026-07-05T00:00:00.000Z')).not.toBe('ещё не сохранялись');
+  });
+});
+
+describe('formatTierPrice', () => {
+  it('renders a bonus price', () => {
+    expect(formatTierPrice(500)).toBe('500 бонусов');
+  });
+
+  it('renders null as not purchasable', () => {
+    expect(formatTierPrice(null)).toBe('не продаётся');
   });
 });

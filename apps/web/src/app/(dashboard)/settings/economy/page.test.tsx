@@ -45,6 +45,7 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
     role_id: overrides.role_id ?? 'role-1',
     description: 'description' in overrides ? (overrides.description ?? null) : null,
     default_days: 'default_days' in overrides ? (overrides.default_days ?? null) : 30,
+    price_bonuses: 'price_bonuses' in overrides ? (overrides.price_bonuses ?? null) : null,
     sort_order: overrides.sort_order ?? 0,
     is_active: overrides.is_active ?? true,
     created_at: overrides.created_at ?? '2026-07-01T00:00:00.000Z',
@@ -63,6 +64,8 @@ function stubFetch(opts: {
   permissions?: string[];
   canManageEconomy?: boolean;
   settingsStatus?: number;
+  meStatus?: number;
+  refreshNetworkError?: boolean;
   onPost?: (body: Record<string, unknown>) => void;
   onPut?: (url: string, body: Record<string, unknown>) => void;
   onDelete?: (url: string) => void;
@@ -83,6 +86,7 @@ function stubFetch(opts: {
     const url = String(input);
     const method = init?.method ?? 'GET';
     if (url.endsWith('/api/v1/settings/economy') && method === 'GET') {
+      if (opts.refreshNetworkError) return Promise.reject(new Error('offline'));
       return Promise.resolve(
         new Response(JSON.stringify(makeSettings()), { status: opts.settingsStatus ?? 200 }),
       );
@@ -104,6 +108,13 @@ function stubFetch(opts: {
       );
     }
     if (url.endsWith('/api/v1/me')) {
+      if (opts.meStatus && opts.meStatus !== 200) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: opts.meStatus,
+          }),
+        );
+      }
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -443,6 +454,21 @@ describe('EconomySettingsPage — economy settings form', () => {
     expect(await screen.findByText('Не удалось загрузить настройки: 500')).toBeInTheDocument();
     expect(screen.getByText('Загрузка настроек экономики')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Сохранить' })).not.toBeInTheDocument();
+  });
+
+  it('shows a network-error banner with a retry action instead of failing silently', async () => {
+    stubFetch({ refreshNetworkError: true });
+    render(<EconomySettingsPage />);
+    expect(await screen.findByText(/Ошибка сети: offline/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+  });
+
+  it('surfaces a failed /api/v1/me response instead of hanging on the skeleton', async () => {
+    stubFetch({ meStatus: 500 });
+    render(<EconomySettingsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить данные пользователя: 500'),
+    ).toBeInTheDocument();
   });
 
   it('shows read-only notice and no save button without manage permission', async () => {

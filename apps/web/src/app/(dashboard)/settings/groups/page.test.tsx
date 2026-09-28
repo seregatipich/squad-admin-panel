@@ -37,6 +37,9 @@ function makeRole(f: RoleFixture) {
     can_manage_ban_sources: false,
     can_manage_clans: false,
     can_manage_economy: false,
+    can_manage_issues: false,
+    can_manage_integrations: false,
+    can_handle_reports: false,
     squad_permissions: f.squad_permissions,
     assigned_users_count: f.assigned_users_count ?? 0,
   };
@@ -237,7 +240,105 @@ describe('access flags — real switches (§6)', () => {
     fireEvent.click(await screen.findByRole('switch', { name: 'Доступ к панели' }));
 
     await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
-    expect(puts[0]).toMatchObject({ panel_access: false, can_view_ips: false });
+    expect(puts[0]).toMatchObject({
+      panel_access: false,
+      can_view_ips: false,
+      can_manage_issues: false,
+      can_manage_integrations: false,
+      can_handle_reports: false,
+    });
+  });
+
+  it('shows switches for the issues/integrations/reports flags stored by the API', async () => {
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+    });
+    render(<GroupsPage />);
+
+    expect(
+      await screen.findByRole('switch', { name: 'Может управлять обращениями (issues)' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: 'Может управлять интеграциями' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Может обрабатывать жалобы' })).toBeInTheDocument();
+  });
+});
+
+describe('overlapping saves do not lose an interleaved edit (#694)', () => {
+  it('keeps a permission toggled while an earlier PUT for the same role is still in flight', async () => {
+    try {
+      const role = makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] });
+      const puts: Record<string, unknown>[] = [];
+      // Two PUT requests are resolved out of order: the first (older) request's
+      // response arrives only after the second (newer) request has already
+      // been sent, mirroring the interleaved-edit race from the finding.
+      const resolvers: Array<(body: Record<string, unknown>) => void> = [];
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: ALL_PERMS }), { status: 200 }),
+          );
+        }
+        if (url.endsWith('/api/v1/roles') && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify([role]), { status: 200 }));
+        }
+        if (/\/api\/v1\/roles\/[^/]+$/.test(url) && method === 'PUT') {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          puts.push(body);
+          return new Promise<Response>((resolve) => {
+            resolvers.push((fresh) =>
+              resolve(new Response(JSON.stringify(fresh), { status: 200 })),
+            );
+          });
+        }
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<GroupsPage />);
+      const card = (await screen.findByRole('heading', { name: 'Admin' })).closest('section');
+      const scope = within(card as HTMLElement);
+
+      vi.useFakeTimers();
+      fireEvent.click(scope.getByLabelText('startvote'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(puts).toHaveLength(1);
+      expect(puts[0]).toEqual({ squad_permissions: ['startvote'] });
+
+      fireEvent.click(scope.getByLabelText('pause'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(puts).toHaveLength(2);
+      expect(puts[1]).toEqual({ squad_permissions: ['startvote', 'pause'] });
+
+      // The first (stale) request resolves with only `startvote` recorded server-side.
+      expect(resolvers[0]).toBeDefined();
+      await act(async () => {
+        resolvers[0]?.({ ...role, squad_permissions: ['startvote'] });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The interleaved `changemap` edit must survive the stale overwrite.
+      expect(scope.getByLabelText('pause')).toBeChecked();
+      expect(scope.getByLabelText('startvote')).toBeChecked();
+
+      await act(async () => {
+        resolvers[1]?.({ ...role, squad_permissions: ['startvote', 'pause'] });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(scope.getByLabelText('pause')).toBeChecked();
+      expect(scope.getByLabelText('startvote')).toBeChecked();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

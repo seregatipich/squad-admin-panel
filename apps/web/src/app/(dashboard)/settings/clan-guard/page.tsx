@@ -137,12 +137,15 @@ export default function ClanGuardSettingsPage() {
           <GroupedList footnote={`Последнее изменение: ${formatUpdatedAt(settings.updated_at)}`}>
             <GroupedRow
               label="Механизм защиты клан-тегов"
-              description="Глобальный выключатель. Выключение мгновенно останавливает все предупреждения и кики."
+              description="Глобальный выключатель. Изменение вступает в силу только после нажатия «Сохранить»."
               control={
                 <>
-                  <Badge tone={enabled ? 'good' : 'neutral'}>
-                    {enabled ? 'Механизм активен' : 'Механизм выключен'}
+                  <Badge tone={settings.enabled ? 'good' : 'neutral'}>
+                    {settings.enabled ? 'Механизм активен' : 'Механизм выключен'}
                   </Badge>
+                  {enabled !== settings.enabled ? (
+                    <Badge tone="warn">Есть несохранённые изменения</Badge>
+                  ) : null}
                   <Switch
                     label="Механизм защиты клан-тегов"
                     checked={enabled}

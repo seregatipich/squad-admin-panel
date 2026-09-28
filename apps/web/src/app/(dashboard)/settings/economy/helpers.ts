@@ -192,6 +192,8 @@ export const VIP_TIER_DEFAULT_DAYS_MIN = 1;
 export const VIP_TIER_DEFAULT_DAYS_MAX = 3650;
 export const VIP_TIER_SORT_ORDER_MIN = 0;
 export const VIP_TIER_SORT_ORDER_MAX = 100_000;
+export const VIP_TIER_PRICE_BONUSES_MIN = 0;
+export const VIP_TIER_PRICE_BONUSES_MAX = 2_147_483_647;
 
 /** Wire shape of GET/POST/PUT `/api/v1/vip-tiers` (server `serialize()`). */
 export interface VipTier {
@@ -200,6 +202,7 @@ export interface VipTier {
   role_id: string;
   description: string | null;
   default_days: number | null;
+  price_bonuses: number | null;
   sort_order: number;
   is_active: boolean;
   created_at: string;
@@ -212,6 +215,7 @@ export interface VipTierFormState {
   roleId: string;
   description: string;
   defaultDays: string;
+  priceBonuses: string;
   sortOrder: string;
   isActive: boolean;
 }
@@ -222,13 +226,22 @@ export interface VipTierBody {
   role_id: string;
   description: string | null;
   default_days: number | null;
+  price_bonuses: number | null;
   sort_order: number;
   is_active: boolean;
 }
 
 /** Blank form for creating a new tier (active by default, like the server). */
 export function emptyTierForm(): VipTierFormState {
-  return { name: '', roleId: '', description: '', defaultDays: '', sortOrder: '0', isActive: true };
+  return {
+    name: '',
+    roleId: '',
+    description: '',
+    defaultDays: '',
+    priceBonuses: '',
+    sortOrder: '0',
+    isActive: true,
+  };
 }
 
 /** Maps an API tier into the string-backed edit-form state. */
@@ -238,6 +251,7 @@ export function tierToForm(tier: VipTier): VipTierFormState {
     roleId: tier.role_id,
     description: tier.description ?? '',
     defaultDays: tier.default_days === null ? '' : String(tier.default_days),
+    priceBonuses: tier.price_bonuses === null ? '' : String(tier.price_bonuses),
     sortOrder: String(tier.sort_order),
     isActive: tier.is_active,
   };
@@ -280,6 +294,16 @@ export function validateVipTierForm(form: VipTierFormState): VipTierValidation {
   if (form.defaultDays.trim() !== '' && defaultDays === null) {
     errors.defaultDays = `Введите целое число от ${VIP_TIER_DEFAULT_DAYS_MIN} до ${VIP_TIER_DEFAULT_DAYS_MAX} или оставьте поле пустым.`;
   }
+  const priceBonuses =
+    form.priceBonuses.trim() === ''
+      ? null
+      : parseBoundedInt(form.priceBonuses, VIP_TIER_PRICE_BONUSES_MIN, VIP_TIER_PRICE_BONUSES_MAX);
+  if (form.priceBonuses.trim() !== '' && priceBonuses === null) {
+    errors.priceBonuses = `Введите целое число от ${VIP_TIER_PRICE_BONUSES_MIN} до ${VIP_TIER_PRICE_BONUSES_MAX} или оставьте поле пустым.`;
+  }
+  if (priceBonuses !== null && defaultDays === null) {
+    errors.defaultDays = 'Цена требует срок по умолчанию: укажите срок или очистите цену.';
+  }
   const sortOrder = parseBoundedInt(
     form.sortOrder,
     VIP_TIER_SORT_ORDER_MIN,
@@ -300,6 +324,7 @@ export function validateVipTierForm(form: VipTierFormState): VipTierValidation {
       role_id: form.roleId,
       description: description === '' ? null : description,
       default_days: defaultDays,
+      price_bonuses: priceBonuses,
       sort_order: sortOrder,
       is_active: form.isActive,
     },
@@ -309,4 +334,12 @@ export function validateVipTierForm(form: VipTierFormState): VipTierValidation {
 /** Renders a tier's default duration: `30 дн.` or `бессрочно` for `null`. */
 export function formatTierDuration(defaultDays: number | null): string {
   return defaultDays === null ? 'бессрочно' : `${defaultDays} дн.`;
+}
+
+/**
+ * Renders a tier's shop price: `500 бонусов` or a marker for tiers that are
+ * not purchasable through the bonus shop (`price_bonuses IS NULL`).
+ */
+export function formatTierPrice(priceBonuses: number | null): string {
+  return priceBonuses === null ? 'не продаётся' : `${priceBonuses} бонусов`;
 }

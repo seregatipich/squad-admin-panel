@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -50,5 +51,22 @@ describe('ClanGuardSettingsPage', () => {
       expect(screen.getByLabelText('Механизм защиты клан-тегов')).toBeChecked();
     });
     expect(screen.getByDisplayValue('300')).toBeInTheDocument();
+  });
+
+  it('keeps the badge on the saved state and warns about unsaved changes until Save succeeds', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<ClanGuardSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Механизм защиты клан-тегов')).toBeChecked();
+    });
+    expect(screen.getByText('Механизм активен')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('Механизм защиты клан-тегов'));
+
+    // The switch flips, but the badge must still reflect the saved (server) state
+    // and the page must surface that the change has not been saved yet.
+    expect(screen.getByText('Механизм активен')).toBeInTheDocument();
+    expect(screen.getByText(/несохранённые изменения/i)).toBeInTheDocument();
   });
 });
