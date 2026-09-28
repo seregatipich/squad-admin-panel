@@ -1,4 +1,4 @@
-import { index, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
 import { roles } from './roles.js';
 
 export const roleSquadPermissions = pgTable(
@@ -11,7 +11,6 @@ export const roleSquadPermissions = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.roleId, table.squadPermissionKey] }),
-    roleIdx: index('role_squad_permissions_role_idx').on(table.roleId),
   }),
 );
 

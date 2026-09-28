@@ -56,7 +56,6 @@ export const issueLinks = pgTable(
       table.entityId,
     ),
     entityIdx: index('issue_links_entity_idx').on(table.entityType, table.entityId),
-    issueIdx: index('issue_links_issue_idx').on(table.issueId),
   }),
 );
 

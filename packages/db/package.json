@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "generate": "drizzle-kit generate",
+    "generate": "echo 'Migrations are hand-written: drizzle-kit generate would diff against a stale snapshot and misnumber the file. See docs/operations/migrations.md.' >&2 && exit 1",
     "migrate": "tsx src/migrate.ts",
     "seed:demo": "tsx src/seed-demo.ts",
     "studio": "drizzle-kit studio",

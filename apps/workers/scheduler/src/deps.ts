@@ -24,7 +24,7 @@ import {
   STREAM_NAME,
   seedCallSentPayload,
 } from '@squad/shared-types';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import type {
@@ -78,10 +78,25 @@ function seedPublicHost(): string {
   return process.env.RCON_HOST_DEFAULT ?? '127.0.0.1';
 }
 
+/**
+ * Loads the seed-schedule entries the tick can still execute: enabled
+ * recurring entries, and enabled one-off entries that have not run yet.
+ * Filtering executed one-offs in SQL keeps the per-tick read from growing with
+ * the calendar's history; the query matches the partial index
+ * `seed_schedule_active_idx`.
+ */
 export async function loadEnabledSeedScheduleEntries(
   db: DatabaseClient,
 ): Promise<SeedScheduleEntry[]> {
-  const rows = await db.select().from(seedSchedule).where(eq(seedSchedule.enabled, true));
+  const rows = await db
+    .select()
+    .from(seedSchedule)
+    .where(
+      and(
+        eq(seedSchedule.enabled, true),
+        or(isNotNull(seedSchedule.recurrence), isNull(seedSchedule.lastExecutedAt)),
+      ),
+    );
   return rows.map((row) => ({
     id: row.id,
     serverId: row.serverId,
@@ -184,11 +199,19 @@ export async function writeSeedScheduleAuditEntry(
   });
 }
 
-/** Loads enabled one-off rotation changes for the scheduler tick. */
+/**
+ * Loads the enabled one-off rotation changes that have not run yet. Executed
+ * entries stay enabled for the calendar's history, so they are filtered here
+ * rather than re-read every tick; the query matches the partial index
+ * `rotation_schedule_pending_idx`.
+ */
 export async function loadEnabledRotationScheduleEntries(
   db: DatabaseClient,
 ): Promise<RotationScheduleEntry[]> {
-  const rows = await db.select().from(rotationSchedule).where(eq(rotationSchedule.enabled, true));
+  const rows = await db
+    .select()
+    .from(rotationSchedule)
+    .where(and(eq(rotationSchedule.enabled, true), isNull(rotationSchedule.lastExecutedAt)));
   return rows.map((row) => ({
     id: row.id,
     serverId: row.serverId,

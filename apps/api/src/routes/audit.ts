@@ -68,7 +68,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
           target_type,
           target_id,
           context::text AS context_text,
-          created_at::text AS created_at,
+          audit_log_created_at_text(created_at) AS created_at,
           encode(prev_hash, 'hex') AS prev_hash_hex,
           encode(row_hash, 'hex') AS row_hash_hex
         FROM audit_log

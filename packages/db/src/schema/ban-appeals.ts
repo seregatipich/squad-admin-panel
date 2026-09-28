@@ -26,8 +26,13 @@ import { players } from './players.js';
  * best-effort at submit time, and approving an appeal without a resolved
  * player simply has no bans to revert.
  *
- * {@link trackingToken} is the applicant's only handle on the appeal: it is
+ * The tracking token is the applicant's only handle on the appeal: it is
  * returned once at submission and is the sole key to the public status page.
+ * Only its sha256 hex ({@link trackingTokenHash}) is stored (migration 0119);
+ * {@link trackingToken} is the legacy plaintext column, always NULL — a
+ * trigger hashes and clears any plaintext a previous release still writes —
+ * and will be dropped in a later release. {@link submitterIp} is cleared by
+ * `worker-event-partition`'s retention sweep.
  * {@link decisionNote} is shown to the applicant through that page;
  * {@link internalNote} never leaves the panel.
  *
@@ -54,7 +59,8 @@ export const banAppeals = pgTable(
     }),
     decisionNote: text('decision_note'),
     internalNote: text('internal_note'),
-    trackingToken: text('tracking_token').notNull(),
+    trackingToken: text('tracking_token'),
+    trackingTokenHash: text('tracking_token_hash').notNull(),
     submitterIp: inet('submitter_ip'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -62,7 +68,9 @@ export const banAppeals = pgTable(
   },
   (table) => ({
     numberKey: uniqueIndex('ban_appeals_number_key').on(table.number),
-    trackingTokenKey: uniqueIndex('ban_appeals_tracking_token_key').on(table.trackingToken),
+    trackingTokenHashKey: uniqueIndex('ban_appeals_tracking_token_hash_key').on(
+      table.trackingTokenHash,
+    ),
     statusCreatedIdx: index('ban_appeals_status_created_idx').on(table.status, table.createdAt),
     playerIdx: index('ban_appeals_player_idx').on(table.playerId),
     actionIdx: index('ban_appeals_action_idx').on(table.moderationActionId),

@@ -21,18 +21,25 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   },
 });
 
+/**
+ * Append-only, SHA-256 hash-chained audit trail.
+ *
+ * The `trg_audit_log_ins` trigger (`audit_log_append()`, migration 0119) takes
+ * an advisory lock, assigns {@link auditLog.id} from the `audit_log_id_seq`
+ * sequence — the column has no default, so ids follow the chain order — and
+ * computes `prev_hash`/`row_hash` over the UTC/ISO rendering of `created_at`
+ * (`audit_log_created_at_text()`). UPDATE and DELETE are rejected by triggers,
+ * so the actor references are NO ACTION: a referenced player or token cannot
+ * be deleted, only anonymised.
+ */
 export const auditLog = pgTable(
   'audit_log',
   {
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     actorKind: text('actor_kind').notNull(),
-    actorPlayerId: uuid('actor_player_id').references(() => players.id, {
-      onDelete: 'set null',
-    }),
-    actorTokenId: uuid('actor_token_id').references(() => playerApiTokens.id, {
-      onDelete: 'set null',
-    }),
+    actorPlayerId: uuid('actor_player_id').references(() => players.id),
+    actorTokenId: uuid('actor_token_id').references(() => playerApiTokens.id),
     actorSystemLabel: text('actor_system_label'),
     actorIp: inet('actor_ip'),
     actionType: text('action_type').notNull(),

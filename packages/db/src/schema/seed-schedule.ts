@@ -52,6 +52,10 @@ export const seedSchedule = pgTable(
   },
   (table) => ({
     serverStartsIdx: index('seed_schedule_server_starts_idx').on(table.serverId, table.startsAt),
+    /** Matches the scheduler's read of entries it can still execute. */
+    activeIdx: index('seed_schedule_active_idx')
+      .on(table.startsAt)
+      .where(sql`enabled AND (recurrence IS NOT NULL OR last_executed_at IS NULL)`),
     notifyMinutesChk: check(
       'seed_schedule_notify_minutes_chk',
       sql`${table.notifyMinutesBefore} BETWEEN 0 AND 1440`,

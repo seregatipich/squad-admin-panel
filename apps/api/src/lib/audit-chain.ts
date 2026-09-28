@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 /**
  * A single `audit_log` row as text, exactly as the append trigger sees it.
  *
- * `context_text` and `created_at` MUST be the Postgres `::text` renderings of
- * the respective columns — the `audit_log_append()` trigger hashes
- * `NEW.context::text` and `NEW.created_at::text`, so any client-side
- * reconstruction of those values would diverge from the stored `row_hash`.
+ * `context_text` MUST be the Postgres `context::text` rendering and
+ * `created_at` the `audit_log_created_at_text(created_at)` rendering (UTC/ISO,
+ * independent of the session; migration 0119) — the `audit_log_append()`
+ * trigger hashes exactly those, so any client-side reconstruction of the
+ * values would diverge from the stored `row_hash`.
  * `prev_hash_hex`/`row_hash_hex` are the lowercase `encode(..,'hex')` of the
  * `bytea` hash columns; `prev_hash_hex` is `null` for the genesis row.
  */
@@ -37,8 +38,9 @@ export interface AuditChainResult {
 
 /**
  * The canonical string the DB trigger feeds to sha256 (after the prev hash):
- * `action_type|target_type|target_id|context::text|created_at::text`, with
- * NULL target fields rendered as the empty string.
+ * `action_type|target_type|target_id|context::text|<created_at>`, where
+ * `<created_at>` is `audit_log_created_at_text(created_at)`, with NULL target
+ * fields rendered as the empty string.
  */
 export function canonicalAuditString(row: AuditChainRow): string {
   return [
