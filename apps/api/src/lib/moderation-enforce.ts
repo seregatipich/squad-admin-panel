@@ -45,6 +45,11 @@ export interface EnforceModerationActionInput {
   source?: ModerationActionSource;
   /** Extra `context` jsonb keys the caller wants recorded (e.g. `external_ban_id`). */
   extraContext?: Record<string, unknown>;
+  /**
+   * The EVT-1 envelope's `correlation_id` — the record that caused the action
+   * (e.g. the external ban a local ban enforces). Defaults to `reportId`.
+   */
+  correlationId?: string | null;
 }
 
 export type EnforceModerationActionResult =
@@ -141,6 +146,7 @@ export async function enforceModerationAction(
     player: input.identity,
     serverId: input.serverId,
     reportId: input.reportId ?? null,
+    correlationId: input.correlationId,
     reason: input.reason,
     duration: input.actionType === 'ban' ? input.banLength : null,
   });
@@ -198,6 +204,8 @@ export async function publishModerationEvent(
     player: PlayerIdentity;
     serverId: string;
     reportId: string | null;
+    /** Envelope `correlation_id`; defaults to `reportId`. */
+    correlationId?: string | null;
     reason: string;
     duration: string | null;
   },
@@ -221,7 +229,7 @@ export async function publishModerationEvent(
     server_id: params.serverId,
     ts: new Date().toISOString(),
     actor: { kind: 'user', id: params.actorPlayerId },
-    correlation_id: params.reportId,
+    correlation_id: params.correlationId ?? params.reportId,
     payload,
   };
 
