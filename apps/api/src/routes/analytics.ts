@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -88,12 +89,6 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
     return { error: 'forbidden' };
   }
   return null;
-}
-
-/** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
-export function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
 }
 
 /**
@@ -266,9 +261,7 @@ export async function computeAnalyticsAggregates(
 function toCsv(payload: DashboardPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(value)].join(','));
   };
   push('meta', 'server_id', payload.server_id ?? 'all');
   push('meta', 'from', payload.from);

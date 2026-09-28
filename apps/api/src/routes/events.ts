@@ -1,13 +1,22 @@
+import { Readable } from 'node:stream';
 import { events, playerNameHistory, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
 const EXPORT_MAX = 50_000;
+/** Rows fetched per keyset page while streaming the CSV export. */
+const EXPORT_BATCH = 1_000;
+/**
+ * Above this planner estimate an unfiltered `/events/count` answers with the
+ * estimate instead of counting every partition row by row.
+ */
+const COUNT_ESTIMATE_MIN_ROWS = 100_000;
 
 const kindSchema = z.string().trim().min(1).max(64);
 const orderSchema = z.enum(['asc', 'desc']);
@@ -69,7 +78,27 @@ function decodeCursor(raw: string): Cursor | null {
   }
 }
 
-const actorJoin = sql`${players.id}::text = ${events.actorId}`;
+// `events.actor_id` is free text (a player uuid, or a label such as a worker
+// name). Casting only well-formed uuids — instead of casting `players.id` to
+// text — keeps the players primary key usable for the join.
+const actorJoin = sql`${players.id} = CASE WHEN ${events.actorId} ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN ${events.actorId}::uuid END`;
+
+/**
+ * Matches events whose actor has — or once had — a nickname containing
+ * `query`. Kept as a subquery (served by the pg_trgm indexes on both nickname
+ * columns) rather than a materialised id list, so a one-letter search cannot
+ * expand into an unbounded `IN (…)` of bind parameters.
+ */
+function actorNicknameMatches(query: string): SQL {
+  const pattern = `%${escapeLike(query.trim().toLowerCase())}%`;
+  return sql`${events.actorId} IN (
+    SELECT ${players.id}::text FROM ${players}
+    WHERE ${players.canonicalNameNormalized} LIKE ${pattern}
+    UNION
+    SELECT ${playerNameHistory.playerId}::text FROM ${playerNameHistory}
+    WHERE ${playerNameHistory.nameNormalized} LIKE ${pattern}
+  )`;
+}
 
 interface EventListRow {
   eventId: string;
@@ -122,13 +151,6 @@ function serializeEnvelope(row: EventFullRow, includeIps: boolean) {
   };
 }
 
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
-
 const CSV_COLUMNS = [
   'event_id',
   'server_id',
@@ -163,28 +185,7 @@ function csvRow(row: EventFullRow, includeIps: boolean): string {
 const eventsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolvePlayerIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    const pattern = `%${escapeLike(normalized)}%`;
-
-    const canonicalRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    for (const row of canonicalRows) ids.add(row.id);
-
-    const historyRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of historyRows) ids.add(row.id);
-
-    return Array.from(ids);
-  }
-
-  async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
+  function buildFilters(query: FilterInput): SQL[] {
     const clauses: SQL[] = [];
 
     const serverIds = asArray(query.serverId);
@@ -199,19 +200,28 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (query.playerId) {
       clauses.push(eq(events.actorId, query.playerId));
     } else if (query.playerQuery) {
-      const playerIds = await resolvePlayerIds(query.playerQuery);
-      if (playerIds.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(events.actorId, playerIds));
+      clauses.push(actorNicknameMatches(query.playerQuery));
     }
 
     // BANNAME-3: lets /banned-names link a rule's row to «its» events (e.g.
     // banname.matched hits), filtering on the rule_id carried in the event
     // payload rather than a dedicated column.
     if (query.ruleId) {
-      clauses.push(sql`${events.payload}->>'rule_id' = ${query.ruleId}`);
+      clauses.push(sql`(${events.payload} ->> 'rule_id') = ${query.ruleId}`);
     }
 
-    return { clauses, empty: false };
+    return clauses;
+  }
+
+  /** Sum of the planner's row estimates over every `events` partition. */
+  async function estimatedEventCount(): Promise<number> {
+    const rows = (await app.db.execute(sql`
+      SELECT coalesce(sum(c.reltuples) FILTER (WHERE c.reltuples > 0), 0)::bigint AS estimate
+      FROM pg_inherits i
+      JOIN pg_class c ON c.oid = i.inhrelid
+      WHERE i.inhparent = 'events'::regclass
+    `)) as unknown as Array<{ estimate: string | number }>;
+    return Number(rows[0]?.estimate ?? 0);
   }
 
   function listSelection() {
@@ -268,8 +278,7 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
     { schema: { querystring: listQuery }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
       const { order, limit } = req.query;
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { items: [], next_cursor: null, limit };
+      const clauses = buildFilters(req.query);
 
       if (req.query.cursor) {
         const cursor = decodeCursor(req.query.cursor);
@@ -307,14 +316,20 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/events/count',
     { schema: { querystring: countQuery }, config: { permissions: ['events:view'], audit: false } },
     async (req) => {
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { total: 0 };
+      const clauses = buildFilters(req.query);
+      if (clauses.length === 0) {
+        // The unfiltered journal spans every partition; an exact count(*) of
+        // it is a full scan on each filter change, so a large table answers
+        // with the planner's estimate and says so.
+        const estimate = await estimatedEventCount();
+        if (estimate >= COUNT_ESTIMATE_MIN_ROWS) return { total: estimate, estimated: true };
+      }
 
       const rows = await app.db
         .select({ total: sql<number>`count(*)::int` })
         .from(events)
         .where(clauses.length > 0 ? and(...clauses) : undefined);
-      return { total: rows[0]?.total ?? 0 };
+      return { total: rows[0]?.total ?? 0, estimated: false };
     },
   );
 
@@ -325,24 +340,45 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
       config: { permissions: ['events:view'], audit: false },
     },
     async (req, reply) => {
-      const { clauses, empty } = await buildFilters(req.query);
-      const rows = empty
-        ? []
-        : await fullSelection()
-            .where(clauses.length > 0 ? and(...clauses) : undefined)
-            .orderBy(desc(events.occurredAt), desc(events.eventId))
-            .limit(EXPORT_MAX);
-
+      const clauses = buildFilters(req.query);
       const includeIps = canViewIps(req);
-      const lines = [CSV_COLUMNS.join(','), ...rows.map((row) => csvRow(row, includeIps))];
-      const body = `${lines.join('\r\n')}\r\n`;
       const stamp = new Date().toISOString().slice(0, 10);
 
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', `attachment; filename="events-${stamp}.csv"`);
-      return reply.send(body);
+      return reply.send(Readable.from(csvLines(clauses, includeIps), { objectMode: false }));
     },
   );
+
+  /**
+   * Streams the export newest first in keyset pages of {@link EXPORT_BATCH}
+   * rows, up to {@link EXPORT_MAX}, so the whole file (jsonb payloads
+   * included) is never held in memory at once.
+   */
+  async function* csvLines(baseClauses: SQL[], includeIps: boolean): AsyncGenerator<string> {
+    yield `${CSV_COLUMNS.join(',')}\r\n`;
+
+    let cursor: Cursor | null = null;
+    let remaining = EXPORT_MAX;
+    while (remaining > 0) {
+      const batchSize = Math.min(EXPORT_BATCH, remaining);
+      const clauses: SQL[] = cursor
+        ? [...baseClauses, keysetPredicate('desc', cursor)]
+        : baseClauses;
+      const rows = await fullSelection()
+        .where(clauses.length > 0 ? and(...clauses) : undefined)
+        .orderBy(desc(events.occurredAt), desc(events.eventId))
+        .limit(batchSize);
+      if (rows.length === 0) break;
+
+      yield rows.map((row) => `${csvRow(row, includeIps)}\r\n`).join('');
+
+      const tail = rows.at(-1);
+      if (!tail || rows.length < batchSize) break;
+      cursor = { occurredAt: tail.occurredAt, eventId: tail.eventId };
+      remaining -= rows.length;
+    }
+  }
 
   fast.get(
     '/api/v1/events/:eventId',

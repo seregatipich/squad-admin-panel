@@ -51,7 +51,7 @@ import {
 } from './helpers';
 
 /** Минимальный промежуток между живыми перечитываниями первой страницы. */
-const LIVE_REFRESH_MS = 1000;
+const LIVE_REFRESH_MS = 5000;
 
 interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
@@ -110,6 +110,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
+  const [totalEstimated, setTotalEstimated] = useState(false);
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<EventListItem | null>(null);
@@ -159,9 +160,13 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
+      .then(async (res) =>
+        res.ok ? ((await res.json()) as { total: number; estimated?: boolean }) : { total: 0 },
+      )
       .then((data) => {
-        if (!cancelled) setTotal(data.total);
+        if (cancelled) return;
+        setTotal(data.total);
+        setTotalEstimated(data.estimated === true);
       })
       .catch(() => {});
     return () => {
@@ -363,7 +368,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
           </Button>
         }
         {...resetProps}
-        summary={total === null ? 'Всего: …' : `Всего: ${total}`}
+        summary={total === null ? 'Всего: …' : `Всего: ${totalEstimated ? '≈' : ''}${total}`}
         actions={
           <a href={exportHref} className={DOWNLOAD_LINK_CLASS}>
             Экспорт CSV

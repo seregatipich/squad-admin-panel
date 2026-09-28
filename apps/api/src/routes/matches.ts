@@ -4,6 +4,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
@@ -260,13 +261,6 @@ function sumNullableStat(rows: Array<Record<StatKey, number | null>>, key: StatK
     hasValue = true;
   }
   return hasValue ? total : null;
-}
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
 }
 
 const CSV_COLUMNS = [
