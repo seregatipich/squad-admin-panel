@@ -2,11 +2,32 @@ import { type DatabaseClient, events, playerNameHistory, playerReports, players 
 import { normalizePlayerName } from '@squad/shared-config';
 import { type EventEnvelope, playerReportPayload, STREAM_NAME } from '@squad/shared-types';
 import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
-import { v7 as uuidv7 } from 'uuid';
+import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import type { ParsedReport } from '../parser/report.js';
 
 export const REPORT_DEDUP_WINDOW_MS = 5 * 60 * 1000;
 export const LIVE_BUS_CHANNEL = 'live-bus';
+
+// Matches the deterministic-id idempotency scheme used elsewhere in the
+// ingestor (e.g. combat/store.ts's COMBAT_EVENT_NAMESPACE): a report row's id
+// is derived from the fields that make one `!report` log line unique, so a
+// replayed tail (reconnect re-reading the last N lines) resolves to the same
+// id instead of reprocessing the line as new input (#63 finding 940).
+const REPORT_NAMESPACE = '6a5c9c9e-9e0a-5c1a-9b7b-9b6a2b8e4b7a';
+
+function deterministicReportId(serverId: string, report: ParsedReport): string {
+  const key = [
+    serverId,
+    report.ts,
+    report.tick,
+    report.reporterEos ?? '',
+    report.reporterSteam ?? '',
+    report.reporterName,
+    report.targetRaw,
+    report.body,
+  ].join('|');
+  return uuidv5(key, REPORT_NAMESPACE);
+}
 
 const EOS_FORM = /^[0-9a-f]{32}$/i;
 const STEAM_FORM = /^\d{17}$/;
@@ -177,6 +198,29 @@ export async function handleReport(
   { serverId, report }: HandleReportParams,
 ): Promise<HandleReportResult> {
   const occurredAt = new Date(report.ts);
+  const deterministicId = deterministicReportId(serverId, report);
+  const replayed = await db
+    .select({
+      id: playerReports.id,
+      reporterPlayerId: playerReports.reporterPlayerId,
+      targetPlayerId: playerReports.targetPlayerId,
+    })
+    .from(playerReports)
+    .where(eq(playerReports.id, deterministicId))
+    .limit(1);
+  if (replayed[0]) {
+    // The exact same log line was already turned into this report row
+    // (or its append) in an earlier pass; treat this call as a no-op
+    // rather than re-appending the body or creating a duplicate pending
+    // report.
+    return {
+      reportId: replayed[0].id,
+      deduped: true,
+      reporterPlayerId: replayed[0].reporterPlayerId,
+      targetPlayerId: replayed[0].targetPlayerId,
+    };
+  }
+
   const reporterPlayerId = await resolveReporter(db, report);
   const targetPlayerId = await resolveTarget(db, report.targetRaw);
 
@@ -209,7 +253,7 @@ export async function handleReport(
     return { reportId: duplicate.id, deduped: true, reporterPlayerId, targetPlayerId };
   }
 
-  const reportId = uuidv7();
+  const reportId = deterministicId;
   await db.insert(playerReports).values({
     id: reportId,
     serverId,

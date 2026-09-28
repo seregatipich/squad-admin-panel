@@ -27,6 +27,7 @@ function makePublisher() {
 function makeReport(overrides: Partial<ParsedReport> = {}): ParsedReport {
   return {
     ts: new Date().toISOString(),
+    tick: 100,
     channel: 'ChatAll',
     reporterEos: REPORTER_EOS,
     reporterSteam: null,
@@ -197,6 +198,25 @@ describe('handleReport', () => {
 
     const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
     expect(eventRows).toHaveLength(2);
+  });
+
+  // Regression for #63 finding 940: playerReports.id used to be an
+  // unconditional uuidv7(), unlike the rest of the ingestor's uuidv5-based
+  // idempotency scheme. A replayed tail (reconnect re-reading the last N
+  // lines) reprocessed the same !report line as brand-new input, re-
+  // appending its body or creating a duplicate pending report.
+  it('replaying the exact same log line is a no-op, not a re-append or a duplicate row', async () => {
+    const report = makeReport({ body: 'first line', ts: new Date().toISOString(), tick: 555 });
+    const first = await handleReport(db, makePublisher(), { serverId: SERVER_ID, report });
+    const replay = await handleReport(db, makePublisher(), { serverId: SERVER_ID, report });
+
+    expect(replay.reportId).toBe(first.reportId);
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].body).toBe('first line');
+
+    const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
+    expect(eventRows).toHaveLength(1);
   });
 
   // Regression for #63 finding 941: the dedup append used to read the
