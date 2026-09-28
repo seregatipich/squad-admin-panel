@@ -151,6 +151,59 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     expect(body.points[0].cpu_percent).toBe(10);
   });
 
+  it('returns the freshest sample, not a stale one truncated from the front of a long window (#623)', async () => {
+    const id = uuidv7();
+    await h.db.insert(servers).values({
+      id,
+      displayName: 'Test',
+      slug: `t-${id}`,
+      status: 'running',
+      runtime: 'container',
+    });
+
+    const streamKey = `container:metrics:${id}`;
+    const start = new Date('2026-01-01T00:00:00Z').getTime();
+    // More entries than MAX_POINTS (1000) fit into the response, mirroring a
+    // 6h/24h chart window over a stream sampled every few seconds: XRANGE
+    // with COUNT would return only the oldest slice of this range, so the
+    // "current" point (the last one) would be stale by however much falls
+    // outside that slice.
+    const total = 2500;
+    for (let i = 0; i < total; i++) {
+      await h.redis.xadd(
+        streamKey,
+        `${start + i * 1000}-0`,
+        'v',
+        JSON.stringify({
+          cpu_percent: i,
+          mem_bytes: i,
+          mem_percent: i,
+          pids: i,
+          timestamp: new Date(start + i * 1000).toISOString(),
+        }),
+      );
+    }
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/metrics`,
+      headers: { cookie },
+      query: {
+        since: new Date(start).toISOString(),
+        until: new Date(start + total * 1000).toISOString(),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { points: Array<{ cpu_percent: number }> };
+    const last = body.points.at(-1);
+    // cpu_percent doubles as a sequence number here (0..1499): the last
+    // point in the response must be the freshest sample actually written,
+    // not one truncated near the start of the range.
+    expect(last?.cpu_percent).toBe(total - 1);
+  });
+
   it('returns 404 for deleted server', async () => {
     const id = uuidv7();
     await h.db.insert(servers).values({
