@@ -22,9 +22,12 @@ type PortalState = 'loading' | 'open' | 'closed' | 'error';
 /**
  * Public, no-session whitelist/VIP application portal (WL-3, #67). Reads the
  * open/closed master switch from `/api/v1/public/whitelist/settings` and, when
- * open, lets any visitor submit one pending application per SteamID64 via
- * `POST /api/v1/public/whitelist/applications`. No login, no PII beyond the
- * submitted SteamID64 and contact string.
+ * open, lets any visitor submit an application via
+ * `POST /api/v1/public/whitelist/applications`. No login is required; a
+ * visitor signed in through Steam (the request carries the session cookie)
+ * files a verified application for their own SteamID64, which an anonymous
+ * application naming the same SteamID64 can never block (#52). No PII beyond
+ * the submitted SteamID64 and contact string.
  */
 export default function PublicWhitelistPage() {
   const [state, setState] = useState<PortalState>('loading');
@@ -88,7 +91,13 @@ export default function PublicWhitelistPage() {
         return;
       }
       if (res.status === 409) {
-        setError('Заявка с этим SteamID64 уже на рассмотрении.');
+        setError(
+          'Заявка с этим SteamID64 уже на рассмотрении. Если вы её не подавали, войдите через Steam и отправьте заявку снова.',
+        );
+        return;
+      }
+      if (res.status === 403) {
+        setError('SteamID64 не совпадает с аккаунтом Steam, под которым вы вошли.');
         return;
       }
       if (res.status === 400) {
@@ -177,6 +186,15 @@ export default function PublicWhitelistPage() {
                   placeholder="Discord, Steam-профиль…"
                 />
               </FieldRow>
+
+              <p className="text-xs text-ink-3">
+                После входа через Steam заявка будет подтверждённой: подать её от вашего имени никто
+                не сможет. Войдя, вернитесь на эту страницу.{' '}
+                {/* A plain <a>: the login is a full-page redirect to Steam, not a client route. */}
+                <a href="/api/v1/auth/steam/login" className="text-accent-ink underline">
+                  Войти через Steam
+                </a>
+              </p>
 
               <Button type="submit" variant="primary" loading={submitting}>
                 Отправить заявку

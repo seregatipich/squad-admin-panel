@@ -107,6 +107,41 @@ describe('PublicWhitelistPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /отправить заявку/i }));
 
       await waitFor(() => expect(screen.getByText(/уже на рассмотрении/i)).toBeInTheDocument());
+      // Someone else may have filed for this SteamID64: point the owner at the
+      // Steam login, whose application is verified and is never blocked (#52).
+      expect(screen.getByText(/войдите через Steam/i)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'explains a 403 when the SteamID64 differs from the signed-in Steam account (#52)',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ enabled: true, postStatus: 403 }));
+      render(<PublicWhitelistPage />);
+
+      fireEvent.change(await screen.findByPlaceholderText('76561198000000000'), {
+        target: { value: '76561198000000001' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/расскажите о себе/i), {
+        target: { value: 'чужой id' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /отправить заявку/i }));
+
+      await waitFor(() =>
+        expect(screen.getByText(/не совпадает с аккаунтом Steam/i)).toBeInTheDocument(),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'offers a Steam login that verifies ownership of the SteamID64 (#52)',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ enabled: true }));
+      render(<PublicWhitelistPage />);
+      const link = await screen.findByRole('link', { name: /войти через steam/i });
+      expect(link).toHaveAttribute('href', '/api/v1/auth/steam/login');
     },
     TEST_TIMEOUT_MS,
   );

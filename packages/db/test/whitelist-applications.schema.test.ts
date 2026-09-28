@@ -29,6 +29,13 @@ describe('whitelist_applications schema (WL-3)', () => {
     expect(cols.decidedAt.notNull).toBe(false);
   });
 
+  it('records whether the SteamID64 was proven by a Steam login, defaulting to unverified (#52)', () => {
+    const cols = getTableColumns(schema.whitelistApplications);
+    expect(cols.verified.name).toBe('verified');
+    expect(cols.verified.notNull).toBe(true);
+    expect(cols.verified.default).toBe(false);
+  });
+
   it('defaults status to pending and source to public', () => {
     const cols = getTableColumns(schema.whitelistApplications);
     expect(cols.status.default).toBe('pending');

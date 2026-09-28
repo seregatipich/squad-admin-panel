@@ -736,6 +736,13 @@
       "when": 1788473520000,
       "tag": "0119_search_and_retention_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788473580000,
+      "tag": "0120_whitelist_application_verified",
+      "breakpoints": true
     }
   ]
 }

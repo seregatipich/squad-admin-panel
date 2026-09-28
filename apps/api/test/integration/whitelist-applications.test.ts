@@ -35,6 +35,8 @@ const REJECT_STEAM = testSteamId(167014);
 const NO_PLAYER_STEAM = testSteamId(167015);
 const DUP_STEAM = testSteamId(167016);
 const FALLBACK_STEAM = testSteamId(167017);
+const VICTIM_STEAM = testSteamId(167018);
+const SIGNED_IN_STEAM = testSteamId(167019);
 const BAD_STEAM = '123'; // not 17 digits
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
@@ -83,6 +85,25 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
     ip: null,
     userAgent: 'wl3-test',
     ttlMs: 21_600_000,
+  });
+  return `__Host-sid=${token}`;
+}
+
+/** A Steam login for a player without panel access, as `auth-steam.ts` mints it. */
+async function selfServiceCookie(steamId64: bigint): Promise<string> {
+  const [row] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!row) throw new Error(`No player for steamId64=${steamId64}`);
+  invalidateAllPermissionCaches();
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: row.id,
+    ip: null,
+    userAgent: 'wl3-test',
+    ttlMs: 21_600_000,
+    scope: 'self_service',
   });
   return `__Host-sid=${token}`;
 }
@@ -141,6 +162,8 @@ beforeAll(async () => {
   await createPlayer(REJECT_STEAM);
   await createPlayer(DUP_STEAM);
   await createPlayer(FALLBACK_STEAM);
+  await createPlayer(VICTIM_STEAM);
+  await createPlayer(SIGNED_IN_STEAM);
 
   activeServerId = uuidv7();
   await h.db
@@ -216,6 +239,76 @@ describeIfDb('public portal — settings + submit', () => {
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('application_already_pending');
+  });
+
+  it('does not let an anonymous submission for a foreign SteamID block its owner (#52 finding 1138)', async () => {
+    // Anyone can type any SteamID64 into the public form; the real owner must
+    // still be able to apply once Steam has proven the account is theirs.
+    const squatterId = await submit(VICTIM_STEAM, 'squatting on this id');
+    const victimCookie = await selfServiceCookie(VICTIM_STEAM);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      headers: { cookie: victimCookie },
+      payload: { steam_id64: VICTIM_STEAM.toString(), body: 'the real me' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ steam_id64: VICTIM_STEAM.toString(), verified: true });
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/whitelist/applications?status=pending&page_size=100',
+      headers: { cookie: ownerCookie },
+    });
+    const items = list.json<{ items: Array<{ id: string; verified: boolean }> }>().items;
+    expect(items.find((item) => item.id === squatterId)?.verified).toBe(false);
+  });
+
+  it('rejects a second verified pending application for the same SteamID64 with 409', async () => {
+    const cookie = await selfServiceCookie(SIGNED_IN_STEAM);
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      headers: { cookie },
+      payload: { body: 'signed in, no id typed' },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({
+      steam_id64: SIGNED_IN_STEAM.toString(),
+      verified: true,
+    });
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      headers: { cookie },
+      payload: { body: 'again' },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toBe('application_already_pending');
+  });
+
+  it('rejects a signed-in applicant naming a different SteamID64 with 403', async () => {
+    const cookie = await selfServiceCookie(SIGNED_IN_STEAM);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      headers: { cookie },
+      payload: { steam_id64: VICTIM_STEAM.toString(), body: 'not mine' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('steam_id_mismatch');
+  });
+
+  it('requires steam_id64 from an anonymous applicant', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      payload: { body: 'who am i' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('steam_id_required');
   });
 
   it('returns 404 when the portal is closed', async () => {

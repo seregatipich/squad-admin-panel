@@ -27,6 +27,7 @@ function pendingItem(over: Partial<Record<string, unknown>> = {}) {
     granted_role_name: null,
     granted_until: null,
     source: 'public',
+    verified: false,
     created_at: '2026-07-20T10:00:00.000Z',
     decided_at: null,
     ...over,
@@ -83,6 +84,24 @@ describe('ApplicationsSection', () => {
       render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       expect(await screen.findByText('76561198000000001')).toBeInTheDocument();
       expect(screen.getByText(/пустите меня/)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'marks whether the applicant proved ownership of the SteamID64 (#52)',
+    async () => {
+      const { fn } = mockFetch({
+        items: [
+          pendingItem(),
+          pendingItem({ id: 'app-2', steam_id64: '76561198000000002', verified: true }),
+        ],
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000002');
+      expect(screen.getByText('SteamID не подтверждён')).toBeInTheDocument();
+      expect(screen.getByText('SteamID подтверждён входом через Steam')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

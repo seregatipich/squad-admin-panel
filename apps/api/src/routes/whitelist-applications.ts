@@ -25,7 +25,8 @@ const PG_UNIQUE_VIOLATION = '23505';
 const statusEnum = z.enum(['pending', 'approved', 'rejected']);
 
 const submitBody = z.object({
-  steam_id64: z.string().regex(STEAM_ID64_RE),
+  /** Required when anonymous; a signed-in applicant's SteamID comes from the session. */
+  steam_id64: z.string().regex(STEAM_ID64_RE).optional(),
   body: z.string().trim().min(1).max(BODY_MAX),
   contact: z.string().trim().max(CONTACT_MAX).optional(),
 });
@@ -72,6 +73,7 @@ interface ApplicationRow {
   grantedRoleName: string | null;
   grantedUntil: Date | null;
   source: string;
+  verified: boolean;
   createdAt: Date;
   decidedAt: Date | null;
 }
@@ -94,6 +96,7 @@ function serializeApplication(row: ApplicationRow) {
     granted_role_name: row.grantedRoleName,
     granted_until: row.grantedUntil ? row.grantedUntil.toISOString() : null,
     source: row.source,
+    verified: row.verified,
     created_at: row.createdAt.toISOString(),
     decided_at: row.decidedAt ? row.decidedAt.toISOString() : null,
   };
@@ -109,8 +112,13 @@ function actorFrom(req: FastifyRequest): AuditActor {
  * Public whitelist/VIP application portal + panel approval workflow (WL-3, #67).
  *
  * The public half (`/api/v1/public/whitelist/*`) is unauthenticated and rate
- * limited: anyone can read whether the portal is open and submit one pending
- * application per SteamID64. The panel half (`/api/v1/whitelist/applications*`)
+ * limited: anyone can read whether the portal is open and submit an
+ * application. A submission made while signed in with Steam (any session,
+ * including a `self_service` one) is filed for the session's own SteamID64 and
+ * marked `verified`; an anonymous one names any SteamID64 and stays unverified.
+ * Each SteamID64 has at most one pending application per verification state,
+ * so an anonymous application for someone else's SteamID never blocks the
+ * owner (#52). The panel half (`/api/v1/whitelist/applications*`)
  * is gated on `whitelist:view`/`whitelist:edit` and drives the review queue.
  *
  * Approving a pending application grants the resolved role to the matching
@@ -164,6 +172,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         grantedRoleName: grantedRole.name,
         grantedUntil: whitelistApplications.grantedUntil,
         source: whitelistApplications.source,
+        verified: whitelistApplications.verified,
         createdAt: whitelistApplications.createdAt,
         decidedAt: whitelistApplications.decidedAt,
       })
@@ -199,6 +208,8 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       config: {
         audit: false,
         public: true,
+        // Only reads the caller's own SteamID64 from a self-service session.
+        selfService: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
     },
@@ -209,7 +220,22 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'applications_disabled' };
       }
 
-      const steamId64 = BigInt(req.body.steam_id64);
+      const sessionSteamId = req.user?.steamId64 ?? null;
+      if (
+        sessionSteamId !== null &&
+        req.body.steam_id64 !== undefined &&
+        BigInt(req.body.steam_id64) !== sessionSteamId
+      ) {
+        reply.code(403);
+        return { error: 'steam_id_mismatch' };
+      }
+      const claimedSteamId = sessionSteamId ?? req.body.steam_id64;
+      if (claimedSteamId === undefined) {
+        reply.code(400);
+        return { error: 'steam_id_required' };
+      }
+      const steamId64 = BigInt(claimedSteamId);
+      const verified = sessionSteamId !== null;
       const contact = req.body.contact?.trim() || null;
 
       // Best-effort applicant resolution — the portal accepts submissions for
@@ -232,6 +258,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             body: req.body.body,
             source: 'public',
             status: 'pending',
+            verified,
           })
           .returning({ id: whitelistApplications.id });
         // biome-ignore lint/style/noNonNullAssertion: insert...returning yields the row
