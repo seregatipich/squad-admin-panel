@@ -80,14 +80,20 @@ export function bucketByDay<T>(items: readonly T[], getDate: (item: T) => Date):
   return buckets;
 }
 
-/** Filters one-off entries to the currently rendered UTC range. */
+/**
+ * Filters one-off entries to the currently rendered UTC range.
+ *
+ * Disabled entries are kept — the calendar is their only home (there is no
+ * other consumer of GET /rotation-schedule), and the page renders them
+ * dimmed with an «включить» action. Filtering them out here would make that
+ * whole restore path dead code and turn «выключить» into a silent delete.
+ */
 export function entriesInRange(
   entries: readonly RotationScheduleEntry[],
   from: Date,
   to: Date,
 ): RotationScheduleEntry[] {
   return entries.filter((entry) => {
-    if (!entry.enabled) return false;
     const timestamp = Date.parse(entry.scheduled_at);
     return timestamp >= from.getTime() && timestamp <= to.getTime();
   });

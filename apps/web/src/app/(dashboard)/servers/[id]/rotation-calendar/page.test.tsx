@@ -295,3 +295,67 @@ describe('RotationCalendarPage', () => {
     expect(await screen.findByText('HTTP 503: down')).toBeInTheDocument();
   });
 });
+
+describe('RotationCalendarPage — disabled entries stay visible (#634)', () => {
+  it('keeps a disabled entry on the calendar with an «включить» action, instead of making it disappear', async () => {
+    const entryDate = new Date();
+    entryDate.setUTCHours(12, 0, 0, 0);
+    let enabled = true;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('/rotation-schedule') && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { enabled?: boolean };
+        if (typeof body.enabled === 'boolean') enabled = body.enabled;
+        return Promise.resolve(new Response(JSON.stringify({ warnings: [] }), { status: 200 }));
+      }
+      if (url.includes('/rotation-schedule')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [
+                {
+                  id: 'entry-1',
+                  scheduled_at: entryDate.toISOString(),
+                  layer: 'Yehorivka RAAS v11',
+                  mode: 'force_change',
+                  enabled,
+                },
+              ],
+              history: [],
+              profiles: [],
+              warnings: {},
+              can_edit: true,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ rows: [{ name: 'Yehorivka RAAS v11' }] }), { status: 200 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <RotationCalendarPage params={Promise.resolve({ id: 'server-1' })} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByRole('button', { name: /Yehorivka RAAS v11/ })).toBeInTheDocument();
+    expect(screen.getByText('Запланировано')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'выключить' }));
+    await waitFor(() => expect(enabled).toBe(false));
+
+    // Disabled — must still be on the grid, labelled and re-enableable, not
+    // silently gone (entriesInRange used to drop it here entirely).
+    expect(await screen.findByText('Выключено')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Yehorivka RAAS v11/ })).toBeInTheDocument();
+    const enableButton = await screen.findByRole('button', { name: 'включить' });
+
+    fireEvent.click(enableButton);
+    await waitFor(() => expect(enabled).toBe(true));
+    expect(await screen.findByText('Запланировано')).toBeInTheDocument();
+  });
+});
