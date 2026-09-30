@@ -170,7 +170,7 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
                   <Th>SteamID64 / EOS ID</Th>
                   <Th>Срок</Th>
                   <Th>Комментарий</Th>
-                  <Th>Был(а)</Th>
+                  <Th>Был(а) (UTC)</Th>
                 </tr>
               </TableHead>
               <TableBody>
@@ -213,7 +213,7 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
                       )}
                     </Td>
                     <Td className="whitespace-nowrap text-ink-3">
-                      {new Date(r.last_seen_at).toLocaleString('ru-RU')}
+                      {new Date(r.last_seen_at).toLocaleString('ru-RU', { timeZone: 'UTC' })}
                     </Td>
                   </TableRow>
                 ))}
