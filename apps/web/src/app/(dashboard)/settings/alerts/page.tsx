@@ -102,6 +102,11 @@ const READONLY_TYPE_LABELS: Record<string, string> = {
   role_expiring: 'Истечение VIP',
 };
 
+/** System-seeded rules are immutable: the API answers 409 to any PUT or DELETE on them. */
+function isSystemRule(rule: AlertRule): boolean {
+  return rule.type in READONLY_TYPE_LABELS;
+}
+
 function typeLabel(type: string): string {
   return (
     TYPE_OPTIONS.find((option) => option.value === type)?.label ??
@@ -442,10 +447,12 @@ export default function AlertsPage() {
                         <Switch
                           label={`Включить правило ${rule.name}`}
                           checked={rule.enabled}
-                          disabled={!canManage || busyId === rule.id}
+                          disabled={!canManage || isSystemRule(rule) || busyId === rule.id}
                           onChange={() => void toggleEnabled(rule)}
                         />
-                        {canManage ? (
+                        {isSystemRule(rule) ? (
+                          <Badge size="sm">Системное</Badge>
+                        ) : canManage ? (
                           <IconButton
                             icon={<TrashIcon />}
                             label={`Удалить правило ${rule.name}`}
