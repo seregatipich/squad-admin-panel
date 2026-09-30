@@ -40,6 +40,12 @@ vi.mock('@squad/db', () => ({
   },
   serverSettings: { serverId: 'serverId', logsEnabled: 'logsEnabled' },
 }));
+vi.mock('../src/geoip/provider.js', () => ({
+  GeoIpProvider: vi.fn(() => ({
+    refreshIfDue: vi.fn().mockResolvedValue(false),
+    getLookup: vi.fn().mockResolvedValue(null),
+  })),
+}));
 vi.mock('@squad/bridge-client', () => ({
   BridgeClient: vi.fn(() => ({
     connect: vi.fn().mockResolvedValue(undefined),

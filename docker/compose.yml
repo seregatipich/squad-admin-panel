@@ -195,6 +195,8 @@ services:
     user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
+      # GeoLite2 database downloaded once GeoIP is enabled in the panel.
+      - geoip_data:/var/lib/panel-geoip
     depends_on:
       postgres:
         condition: service_healthy
@@ -725,6 +727,7 @@ services:
     logging: *default-logging
 
 volumes:
+  geoip_data:
   media_data:
     driver: local
     driver_opts:

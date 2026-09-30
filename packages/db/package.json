@@ -29,6 +29,7 @@
   "dependencies": {
     "@squad/shared-config": "workspace:*",
     "drizzle-orm": "^0.45.0",
+    "maxmind": "^5",
     "postgres": "^3.4.5",
     "uuid": "^14.0.0",
     "zod": "^3.24.0"

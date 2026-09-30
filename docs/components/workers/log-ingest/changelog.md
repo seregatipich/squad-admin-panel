@@ -2,6 +2,10 @@
 
 ## 2026-09-30
 
+### Added
+
+- [#64](https://github.com/seregatipich/squad-admin-panel/issues/64) finding 1341: GeoIP is wired end to end. `GeoIpProvider` downloads the GeoLite2-City database (weekly, only while GeoIP is enabled and credentials are stored), and connect IPs are recorded in `player_ip_history` with country and city. New dependency `maxmind` in `@squad/db`; new compose volume `geoip_data` and env `GEOIP_DATA_DIR`. Tests: `test/geoip-archive.test.ts`, `test/geoip-provider.test.ts`, `test/player-identity.test.ts`.
+
 ### Fixed
 
 - [#93](https://github.com/seregatipich/squad-admin-panel/issues/93): `ADMIN COMMAND:` log lines are now published as `rcon.admin_command` (new in `EVENT_TYPES`, label «Админ-команда RCON» in the events filter) instead of `rcon.connected`, which only worker-rcon emits for a real RCON connection. Custom alert rules keyed on `rcon.connected` no longer fire for admin commands. Test: `test/ingest.test.ts`.

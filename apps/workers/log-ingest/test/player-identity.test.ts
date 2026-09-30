@@ -277,6 +277,42 @@ describe('handlePlayerConnected', () => {
     );
   });
 
+  it('stores the geo fields the GeoIP source resolves for the ip (#1341)', async () => {
+    const geo = {
+      countryCode: 'DE',
+      countryName: 'Germany',
+      region: 'Berlin',
+      city: 'Berlin',
+      timezoneOffset: 'Europe/Berlin',
+      latitude: 52.5,
+      longitude: 13.4,
+    };
+    const lookup = vi.fn(() => geo);
+    const db = makeDb({ existing: [] });
+    await handlePlayerConnected(db, connectEvent({ ip: '203.0.113.7' }), {
+      getLookup: async () => ({ lookup }),
+    });
+    expect(lookup).toHaveBeenCalledWith('203.0.113.7');
+    expect(recordIpObservation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ ip: '203.0.113.7', geo }),
+    );
+  });
+
+  it('records the ip without geo when no database is available (#1341)', async () => {
+    const db = makeDb({ existing: [] });
+    await handlePlayerConnected(db, connectEvent({ ip: '203.0.113.7' }), {
+      getLookup: async () => null,
+    });
+    expect(recordIpObservation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        ip: '203.0.113.7',
+        geo: expect.objectContaining({ countryCode: null }),
+      }),
+    );
+  });
+
   it('does not record an IP observation when the payload ip is null', async () => {
     const db = makeDb({ existing: [] });
     await handlePlayerConnected(db, connectEvent({ ip: null }));
