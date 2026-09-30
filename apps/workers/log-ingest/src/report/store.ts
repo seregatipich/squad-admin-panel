@@ -51,6 +51,7 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
     .select({ id: players.id })
     .from(players)
     .where(eq(players.canonicalNameNormalized, normalized))
+    .orderBy(desc(players.lastSeenAt))
     .limit(1);
   if (direct[0]) return direct[0].id;
   const historical = await db

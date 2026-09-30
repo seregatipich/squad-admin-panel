@@ -36,6 +36,17 @@ describe('tailContainerLogs', () => {
     stop();
   });
 
+  it('strips the trailing carriage return from CRLF lines like the SSH tail does', async () => {
+    const onLine = vi.fn();
+    const bridge = makeBridge(async (cb) => {
+      cb({ stream: 'stdout', data: 'crlf line\r\nplain\n' });
+    });
+    tailContainerLogs({ bridge, name: 'squad-srv-crlf', log: makeLogger(), onLine });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onLine.mock.calls.map((call) => call[0])).toEqual(['crlf line', 'plain']);
+  });
+
   it('splits multi-line stdout frames into individual onLine calls', async () => {
     const onLine = vi.fn();
     const onStopped = vi.fn();

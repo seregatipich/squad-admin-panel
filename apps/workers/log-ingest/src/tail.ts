@@ -1,5 +1,6 @@
 import type { BridgeClient } from '@squad/bridge-client';
 import type { Logger } from 'pino';
+import { createLineSplitter } from './line-splitter.js';
 
 export type TailStopReason = 'aborted' | 'stream-end' | 'stream-error';
 
@@ -12,10 +13,16 @@ export function tailContainerLogs(params: {
   onStopped?: (info: { reason: TailStopReason; error?: string }) => void;
 }): () => void {
   const { bridge, name, log, onLine, onStarted, onStopped } = params;
-  let buffer = '';
   let aborted = false;
   let bytesThisMinute = 0;
   let linesThisMinute = 0;
+  const splitLines = createLineSplitter(
+    (line) => {
+      linesThisMinute++;
+      onLine(line);
+    },
+    () => log.warn({ container: name }, 'tail line exceeded limit, discarded'),
+  );
 
   log.info({ container: name }, `tail start container=${name}`);
 
@@ -37,14 +44,7 @@ export function tailContainerLogs(params: {
         if (frame.stream !== 'stdout') return;
         const text = typeof frame.data === 'string' ? frame.data : String(frame.data ?? '');
         bytesThisMinute += text.length;
-        buffer += text;
-        const parts = buffer.split('\n');
-        buffer = parts.pop() ?? '';
-        for (const part of parts) {
-          if (part.length === 0) continue;
-          linesThisMinute++;
-          onLine(part);
-        }
+        splitLines(text);
       });
       if (!aborted) {
         log.warn({ container: name }, 'tail dropped → restart');

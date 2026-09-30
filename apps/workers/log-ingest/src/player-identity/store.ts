@@ -34,7 +34,7 @@ export type PlayerConnectedOutcome =
     };
 
 async function writeSystemAudit(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   action: string,
   targetId: string,
   context: Record<string, unknown>,
@@ -120,36 +120,40 @@ async function applyToExisting(
     updates.canonicalNameNormalized = normalizePlayerName(payload.name);
   }
 
-  await db.update(players).set(updates).where(eq(players.id, row.id));
+  // Player update, name history and audit rows commit together so an audit
+  // failure cannot leave a steam link or conflict flag without its audit row.
+  await db.transaction(async (tx) => {
+    await tx.update(players).set(updates).where(eq(players.id, row.id));
 
-  if (nameChanged) {
-    const normalized = normalizePlayerName(payload.name);
-    await db
-      .insert(playerNameHistory)
-      .values({ playerId: row.id, name: payload.name, nameNormalized: normalized })
-      .onConflictDoUpdate({
-        target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
-        set: {
-          lastSeenAt: now,
-          observationCount: sql`${playerNameHistory.observationCount} + 1`,
-        },
+    if (nameChanged) {
+      const normalized = normalizePlayerName(payload.name);
+      await tx
+        .insert(playerNameHistory)
+        .values({ playerId: row.id, name: payload.name, nameNormalized: normalized })
+        .onConflictDoUpdate({
+          target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
+          set: {
+            lastSeenAt: now,
+            observationCount: sql`${playerNameHistory.observationCount} + 1`,
+          },
+        });
+    }
+
+    if (steamLinked) {
+      await writeSystemAudit(tx, 'player.steam_linked', row.id, {
+        steam_id64: payload.steam_id64,
+        eos_id: payload.eos_id,
       });
-  }
+    }
 
-  if (steamLinked) {
-    await writeSystemAudit(db, 'player.steam_linked', row.id, {
-      steam_id64: payload.steam_id64,
-      eos_id: payload.eos_id,
-    });
-  }
-
-  if (conflict) {
-    await writeSystemAudit(db, 'player.eos_steam_conflict', row.id, {
-      eos_id: payload.eos_id,
-      stored_steam_id64: row.steamId64?.toString() ?? null,
-      observed_steam_id64: payload.steam_id64,
-    });
-  }
+    if (conflict) {
+      await writeSystemAudit(tx, 'player.eos_steam_conflict', row.id, {
+        eos_id: payload.eos_id,
+        stored_steam_id64: row.steamId64?.toString() ?? null,
+        observed_steam_id64: payload.steam_id64,
+      });
+    }
+  });
 
   if (payload.ip) {
     await recordIpObservation(db, { playerId: row.id, ip: payload.ip });
@@ -183,19 +187,34 @@ export async function handlePlayerConnected(
 
   const playerId = uuidv7();
   const normalized = normalizePlayerName(payload.name);
-  const inserted = await db
-    .insert(players)
-    .values({
-      id: playerId,
-      steamId64,
-      eosId: payload.eos_id,
-      canonicalName: payload.name,
-      canonicalNameNormalized: normalized,
-    })
-    .onConflictDoNothing()
-    .returning({ id: players.id });
+  const created = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(players)
+      .values({
+        id: playerId,
+        steamId64,
+        eosId: payload.eos_id,
+        canonicalName: payload.name,
+        canonicalNameNormalized: normalized,
+      })
+      .onConflictDoNothing()
+      .returning({ id: players.id });
+    if (inserted.length === 0) return false;
 
-  if (inserted.length === 0) {
+    await tx
+      .insert(playerNameHistory)
+      .values({ playerId, name: payload.name, nameNormalized: normalized })
+      .onConflictDoNothing();
+
+    await writeSystemAudit(tx, 'player.created', playerId, {
+      steam_id64: payload.steam_id64,
+      eos_id: payload.eos_id,
+      canonical_name: payload.name,
+    });
+    return true;
+  });
+
+  if (!created) {
     // A concurrent connect created the row first; fold onto it instead of
     // duplicating. If it still cannot be found the conflict was on a
     // constraint we do not own, so there is nothing safe to do.
@@ -203,17 +222,6 @@ export async function handlePlayerConnected(
     if (!raced) return { outcome: 'ignored' };
     return applyToExisting(db, raced, payload, steamId64);
   }
-
-  await db
-    .insert(playerNameHistory)
-    .values({ playerId, name: payload.name, nameNormalized: normalized })
-    .onConflictDoNothing();
-
-  await writeSystemAudit(db, 'player.created', playerId, {
-    steam_id64: payload.steam_id64,
-    eos_id: payload.eos_id,
-    canonical_name: payload.name,
-  });
 
   if (payload.ip) {
     await recordIpObservation(db, { playerId, ip: payload.ip });

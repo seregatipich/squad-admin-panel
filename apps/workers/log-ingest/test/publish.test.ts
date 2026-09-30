@@ -106,4 +106,15 @@ describe('publish', () => {
     expect(typeof setArgs[exIdx + 1]).toBe('number');
     expect(setArgs[exIdx + 1] as number).toBeGreaterThan(0);
   });
+
+  it('releases the dedup key when XADD fails so a retry can publish', async () => {
+    const redis = {
+      set: vi.fn().mockResolvedValue('OK'),
+      del: vi.fn().mockResolvedValue(1),
+      xadd: vi.fn().mockRejectedValue(new Error('redis down')),
+    };
+    await expect(publish(redis as never, makeEnvelope())).rejects.toThrow('redis down');
+
+    expect(redis.del).toHaveBeenCalledWith(redis.set.mock.calls[0][0]);
+  });
 });

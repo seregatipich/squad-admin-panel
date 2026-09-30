@@ -214,4 +214,56 @@ describe('handleVote', () => {
     const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
     expect(eventRows).toHaveLength(2);
   });
+
+  it('rolls the whole vote back when an event insert fails so a re-read can complete it', async () => {
+    // No events partition covers the year 2001, so the event insert fails after
+    // the game_votes row and ballots were written.
+    const startedAt = '2001-01-01T00:00:00.000Z';
+    const command = makeCommand({
+      startedAt,
+      endedAt: '2001-01-01T00:00:40.000Z',
+    });
+
+    await expect(handleVote(db, null, command)).rejects.toThrow();
+
+    const rows = await db
+      .select({ id: gameVotes.id })
+      .from(gameVotes)
+      .where(and(eq(gameVotes.serverId, SERVER_ID), eq(gameVotes.startedAt, new Date(startedAt))));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('resolves an ambiguous voter name to the most recently seen player', async () => {
+    const staleId = uuidv7();
+    const recentId = uuidv7();
+    const name = 'SharedNick';
+    await db.insert(players).values([
+      {
+        id: staleId,
+        eosId: '0005dddd0005dddd0005dddd0005dddd',
+        canonicalName: name,
+        canonicalNameNormalized: 'sharednick',
+        lastSeenAt: new Date('2024-01-01T00:00:00.000Z'),
+      },
+      {
+        id: recentId,
+        eosId: '0005eeee0005eeee0005eeee0005eeee',
+        canonicalName: name,
+        canonicalNameNormalized: 'sharednick',
+        lastSeenAt: new Date('2025-01-01T00:00:00.000Z'),
+      },
+    ]);
+    try {
+      const result = await handleVote(
+        db,
+        null,
+        makeCommand({ initiator: { eosId: null, steamId64: null, name } }),
+      );
+      expect(result.initiatorPlayerId).toBe(recentId);
+    } finally {
+      await db.delete(gameVotes).where(eq(gameVotes.serverId, SERVER_ID));
+      await db.delete(players).where(eq(players.id, staleId));
+      await db.delete(players).where(eq(players.id, recentId));
+    }
+  });
 });
