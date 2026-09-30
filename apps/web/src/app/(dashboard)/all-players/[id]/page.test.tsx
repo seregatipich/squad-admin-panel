@@ -494,7 +494,7 @@ describe('PlayerDetailPage', () => {
           </Suspense>,
         );
       });
-      expect(await screen.findByText('Некорректный идентификатор игрока.')).toBeInTheDocument();
+      expect(await screen.findByText('Некорректный идентификатор игрока')).toBeInTheDocument();
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
