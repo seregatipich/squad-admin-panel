@@ -36,10 +36,10 @@ export default defineConfig({
         'src/test-setup.ts',
       ],
       thresholds: {
-        lines: 1,
-        functions: 17,
+        lines: 85,
+        functions: 72,
         branches: 83,
-        statements: 1,
+        statements: 85,
       },
       reportsDirectory: './coverage',
     },

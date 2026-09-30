@@ -24,16 +24,9 @@ export function createNonce(): string {
   return btoa(crypto.randomUUID());
 }
 
-/** The Monaco config editor page, which needs a slightly wider policy. */
-export function isConfigsEditorPath(pathname: string): boolean {
-  return /^\/servers\/[^/]+\/configs\/?$/.test(pathname);
-}
-
 export interface PolicyOptions {
   /** This request's nonce from {@link createNonce}. */
   nonce: string;
-  /** Request path; selects the config editor policy. */
-  pathname: string;
   /**
    * `false` adds `'unsafe-eval'`: `next dev` compiles client chunks with an
    * eval-based devtool, and without it the framework runtime never executes.
@@ -42,19 +35,23 @@ export interface PolicyOptions {
   production: boolean;
 }
 
+/** Steam CDN hosts serving the `avatar_url` values stored by the steam-refresh worker. */
+const STEAM_AVATAR_HOSTS = 'https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com';
+
 /**
- * Builds the policy for one response.
+ * Builds the policy for one response. It is the same for every page: App Router
+ * soft navigation (`next/link`) keeps the policy of the document that was loaded
+ * first, so a per-route policy would apply to the wrong pages (#1307).
  *
- * On the config editor two directives are added: `font-src 'self' data:`
- * (Monaco inlines its codicon font as a `data:` URI) and
- * `worker-src 'self' blob:` (its language workers start from blob URLs). The
- * Monaco bundle is vendored into `public/monaco/vs`, so no CDN is allowed.
+ * Besides the defaults it allows `img-src` for `data:` URIs (Monaco's editor
+ * decorations) and the Steam avatar hosts (#1306), `font-src 'self' data:`
+ * (Monaco inlines its codicon font) and `worker-src 'self' blob:` (its language
+ * workers start from blob URLs). The Monaco bundle is vendored into
+ * `public/monaco/vs`, so no CDN is allowed.
  *
  * @returns The `Content-Security-Policy` header value.
  */
-export function contentSecurityPolicy({ nonce, pathname, production }: PolicyOptions): string {
+export function contentSecurityPolicy({ nonce, production }: PolicyOptions): string {
   const scriptSrc = `script-src 'self' 'nonce-${nonce}'${production ? '' : " 'unsafe-eval'"}`;
-  const base = `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; ${scriptSrc}; style-src 'self' 'unsafe-inline'`;
-  if (!isConfigsEditorPath(pathname)) return base;
-  return `${base}; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'`;
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${STEAM_AVATAR_HOSTS}; font-src 'self' data:; worker-src 'self' blob:`;
 }

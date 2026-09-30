@@ -1,3 +1,5 @@
+import { jitteredBackoffMs } from './ws-backoff';
+
 export type LiveEvent =
   | {
       type: 'server.status';
@@ -410,7 +412,6 @@ export interface LiveBusHandle {
   forceReconnect(): void;
 }
 
-const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 const IDLE_CLOSE_DELAY_MS = 5_000;
 
 let singleton: LiveBusHandle | null = null;
@@ -505,10 +506,8 @@ function makeLiveBus(): LiveBusHandle {
   const scheduleReconnect = (): void => {
     if (refCount() === 0) return;
     clearReconnect();
-    // Полный джиттер: после рестарта API вкладки не должны возвращаться
-    // одновременной волной.
-    const ceiling = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
-    const delay = Math.round(ceiling * (0.5 + Math.random() / 2));
+    // Джиттер: после рестарта API вкладки не должны возвращаться одновременной волной.
+    const delay = jitteredBackoffMs(attempts);
     attempts++;
     debug(`reconnect in ${delay}ms (attempt ${attempts})`);
     reconnectTimer = setTimeout(() => {

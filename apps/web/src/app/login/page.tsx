@@ -1,19 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { SteamLoginLink } from '@/components/SteamLoginLink';
 import { Card, InlineBanner, PageContainer, PageHeader } from '@/components/ui';
 import { useTranslator } from '@/i18n/LocaleProvider';
-
-/**
- * Ссылка входа — обычный `<a>`, а не `ButtonLink`.
- *
- * `/api/v1/auth/steam/login` начинает OpenID-обмен и обязан получить полную
- * навигацию документа: `next/link` перехватил бы клик маршрутизатором и
- * предзагрузил бы адрес заранее. Поэтому классы кнопки здесь выписаны вручную —
- * это единственное место участка, где примитив не подходит по поведению.
- */
-const STEAM_LINK_CLASS =
-  'inline-flex h-8 w-full items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -58,9 +48,7 @@ export default function LoginPage() {
         )}
 
         <Card>
-          <a href="/api/v1/auth/steam/login" className={STEAM_LINK_CLASS}>
-            {t('login.steamButton')}
-          </a>
+          <SteamLoginLink>{t('login.steamButton')}</SteamLoginLink>
         </Card>
       </PageContainer>
     </main>
