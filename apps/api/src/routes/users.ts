@@ -3,13 +3,22 @@ import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { encodeLastSeenCursor, parseLastSeenCursor } from '../lib/last-seen-cursor.js';
 import { steamId64Equals } from '../lib/player-search.js';
 import { containsPattern } from '../lib/sql-like.js';
+
+const PAGE_SIZE_DEFAULT = 200;
+const PAGE_SIZE_MAX = 500;
 
 const listQuery = z.object({
   q: z.string().min(1).max(64).optional(),
   role_id: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(PAGE_SIZE_MAX).default(PAGE_SIZE_DEFAULT),
+  cursor: z.string().max(80).optional(),
 });
+
+/** Response header carrying the keyset cursor of the next page; absent on the last page. */
+const NEXT_CURSOR_HEADER = 'x-next-cursor';
 
 const usersRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -20,7 +29,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
       schema: { querystring: listQuery },
       config: { permissions: ['user:view'], audit: false },
     },
-    async (req) => {
+    async (req, reply) => {
       type UserRow = {
         id: string;
         steam_id64: string | null;
@@ -33,6 +42,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         role_expires_at: string | null;
         role_comment: string | null;
         discord_linked: boolean;
+        last_seen_micros: string;
       };
       const q = req.query.q?.toLowerCase().trim();
       // canonical_name_normalized is populated by normalizePlayerName (strips
@@ -44,13 +54,20 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
       // treated as a wildcard.
       const namePattern = q ? containsPattern(normalizePlayerName(q)) : undefined;
       const roleId = req.query.role_id;
+      const { limit } = req.query;
+      const cursor = req.query.cursor ? parseLastSeenCursor(req.query.cursor) : null;
+      if (req.query.cursor && !cursor) {
+        reply.code(400);
+        return { error: 'invalid_cursor' };
+      }
       const rows = await app.db.execute<UserRow>(sql`
         SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.last_seen_at,
                r.id AS role_id, r.name AS role_name, r.color AS role_color,
                r.is_system_role AS role_is_system,
                p.role_expires_at::text AS role_expires_at,
                p.role_comment AS role_comment,
-               (pdl.player_id IS NOT NULL) AS discord_linked
+               (pdl.player_id IS NOT NULL) AS discord_linked,
+               (extract(epoch from p.last_seen_at) * 1000000)::bigint::text AS last_seen_micros
         FROM players p
         JOIN roles r ON r.id = p.role_id
         LEFT JOIN player_discord_links pdl ON pdl.player_id = p.id
@@ -61,9 +78,24 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
               ? sql`AND (p.canonical_name_normalized LIKE ${namePattern} OR ${steamId64Equals(sql`p.steam_id64`, q)})`
               : sql``
           }
-        ORDER BY p.last_seen_at DESC
+          ${
+            cursor
+              ? sql`AND (p.last_seen_at, p.id) < ((timestamptz 'epoch' + ${cursor.lastSeenMicros}::bigint * interval '1 microsecond'), ${cursor.id}::uuid)`
+              : sql``
+          }
+        ORDER BY p.last_seen_at DESC, p.id DESC
+        LIMIT ${limit + 1}
       `);
-      return (rows as unknown as UserRow[]).map((r) => ({
+      const fetched = rows as unknown as UserRow[];
+      const page = fetched.slice(0, limit);
+      const last = page.at(-1);
+      if (fetched.length > limit && last) {
+        void reply.header(
+          NEXT_CURSOR_HEADER,
+          encodeLastSeenCursor({ lastSeenMicros: last.last_seen_micros, id: last.id }),
+        );
+      }
+      return page.map((r) => ({
         id: r.id,
         steam_id64: r.steam_id64,
         canonical_name: r.canonical_name,
