@@ -40,6 +40,7 @@ function makeDeps(overrides: Partial<ClanGuardTickDeps> = {}): ClanGuardTickDeps
     loadProtectedClans: vi.fn().mockResolvedValue([makeClan()]),
     loadOnlinePlayers: vi.fn().mockResolvedValue([makePlayer()]),
     findLastWarn: vi.fn().mockResolvedValue(null),
+    hasRecordedKick: vi.fn().mockResolvedValue(false),
     sendRconCommand: vi.fn().mockResolvedValue(undefined),
     recordModerationAction: vi.fn().mockResolvedValue(undefined),
     writeAuditEntry: vi.fn().mockResolvedValue(undefined),
@@ -205,6 +206,21 @@ describe('runClanGuardTick', () => {
       expect.objectContaining({ command: 'AdminKick' }),
     );
     expect(deps.recordModerationAction).not.toHaveBeenCalled();
+  });
+
+  it('re-sends the kick but writes no second ledger or audit row once the session has a kick', async () => {
+    const lastWarnAt = new Date('2026-07-14T11:54:00.000Z');
+    const deps = makeDeps({
+      findLastWarn: vi.fn().mockResolvedValue({ createdAt: lastWarnAt }),
+      hasRecordedKick: vi.fn().mockResolvedValue(true),
+    });
+    const result = await runClanGuardTick(deps);
+    expect(result).toEqual({ skipped: false, warned: 0, kicked: 1, errors: 0 });
+    expect(deps.sendRconCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'AdminKick' }),
+    );
+    expect(deps.recordModerationAction).not.toHaveBeenCalled();
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
   });
 
   it('clan with is_tag_protected=false is ignored (not in loadProtectedClans result)', async () => {

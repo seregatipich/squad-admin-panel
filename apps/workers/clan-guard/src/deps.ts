@@ -104,8 +104,9 @@ export async function loadOnlinePlayers(db: DatabaseClient): Promise<OnlinePlaye
   }));
 }
 
-export async function findLastWarn(
+async function findLastPhaseAction(
   db: DatabaseClient,
+  phase: 'warn' | 'kick',
   playerId: string,
   serverId: string,
   connectedAt: Date,
@@ -118,7 +119,7 @@ export async function findLastWarn(
         eq(moderationActions.playerId, playerId),
         eq(moderationActions.serverId, serverId),
         eq(moderationActions.actionType, CLAN_TAG_PROTECTION_ACTION_TYPE),
-        sql`${moderationActions.context}->>'phase' = 'warn'`,
+        sql`${moderationActions.context}->>'phase' = ${phase}`,
         isNull(moderationActions.revertedAt),
         gte(moderationActions.createdAt, connectedAt),
       ),
@@ -127,6 +128,24 @@ export async function findLastWarn(
     .limit(1);
   const row = rows[0];
   return row ? { createdAt: row.createdAt } : null;
+}
+
+export function findLastWarn(
+  db: DatabaseClient,
+  playerId: string,
+  serverId: string,
+  connectedAt: Date,
+): Promise<LastWarn | null> {
+  return findLastPhaseAction(db, 'warn', playerId, serverId, connectedAt);
+}
+
+export async function hasRecordedKick(
+  db: DatabaseClient,
+  playerId: string,
+  serverId: string,
+  connectedAt: Date,
+): Promise<boolean> {
+  return (await findLastPhaseAction(db, 'kick', playerId, serverId, connectedAt)) !== null;
 }
 
 export async function recordModerationAction(
@@ -208,6 +227,8 @@ export function createClanGuardDeps(
     loadOnlinePlayers: () => loadOnlinePlayers(db),
     findLastWarn: (playerId, serverId, connectedAt) =>
       findLastWarn(db, playerId, serverId, connectedAt),
+    hasRecordedKick: (playerId, serverId, connectedAt) =>
+      hasRecordedKick(db, playerId, serverId, connectedAt),
     sendRconCommand: (input) => sendRconCommand(redis, input),
     recordModerationAction: (input) => recordModerationAction(db, input),
     writeAuditEntry: (input) => writeClanGuardAuditEntry(db, input),
