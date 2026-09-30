@@ -81,8 +81,7 @@ export const PERMISSIONS = [
   {
     key: 'player:set_flags',
     category: 'players',
-    label: 'Custom теги (toxic, helpful)',
-    unimplemented: true,
+    label: 'Ставить и снимать метки игроков',
   },
   {
     key: 'mod:kick',

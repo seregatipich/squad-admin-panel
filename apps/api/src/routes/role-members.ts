@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { csvCell } from '../lib/csv.js';
+import { steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
@@ -119,7 +120,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
             eq(players.roleId, req.params.id),
             or(
               ilike(players.canonicalNameNormalized, `%${q}%`),
-              sql`${players.steamId64}::text = ${q}`,
+              steamId64Equals(players.steamId64, q),
             ),
           )
         : eq(players.roleId, req.params.id);

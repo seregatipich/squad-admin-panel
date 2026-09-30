@@ -85,7 +85,10 @@ const playerCompareOnlineRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/compare-online',
-    { schema: { params: playerIdParams, querystring: compareQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: compareQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

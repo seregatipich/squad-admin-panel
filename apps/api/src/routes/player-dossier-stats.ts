@@ -1,26 +1,15 @@
 import { playerVehicleKills, playerVehicleStats, playerWeaponStats } from '@squad/db/schema';
 import { desc, eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { combatGuard } from '../lib/combat-guard.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 
 /** numeric columns come back as strings from postgres; expose null (UI renders "—") or a number. */
 function toNumber(value: string | null): number | null {
   return value === null ? null : Number(value);
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**
@@ -34,9 +23,9 @@ const playerDossierStatsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/weapon-stats',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
+      const denied = combatGuard(req, reply, req.params.playerId);
       if (denied) return denied;
 
       const rows = await app.db
@@ -67,9 +56,9 @@ const playerDossierStatsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/vehicle-stats',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
+      const denied = combatGuard(req, reply, req.params.playerId);
       if (denied) return denied;
 
       const fromVehicle = await app.db

@@ -141,19 +141,24 @@ describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
     });
   });
 
-  it('does not count an unban ledger row as an active ban (#36 finding 14)', async () => {
-    // The unban path marks the ban reverted and appends its own `unban` row
-    // with reverted_at NULL; `LIKE '%ban%'` used to match that row forever.
+  // Regression (#40, #1249/#216): the warning's "active ban" matched any
+  // action_type containing "ban", so an unbanned alt still showed as banned.
+  it('reports an alt as not banned once only unban/kick rows or a reverted ban remain', async () => {
     await h.db.insert(moderationActions).values([
       {
         playerId: altId,
         actionType: 'ban',
-        authorPlayerId: ownerId,
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '0' },
         revertedAt: new Date(),
-        revertedBy: ownerId,
       },
-      { playerId: altId, actionType: 'unban', authorPlayerId: ownerId },
-      { playerId: altId, actionType: 'external_ban_kick', authorSystemLabel: 'test' },
+      { playerId: altId, actionType: 'unban', authorSystemLabel: 'test-fixture', context: {} },
+      {
+        playerId: altId,
+        actionType: 'external_ban_kick',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+      },
     ]);
     const response = await h.app.inject({
       method: 'GET',
@@ -164,16 +169,21 @@ describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
     expect(response.json()).toMatchObject({
       confirmed: [{ player_id: altId, has_active_ban: false }],
     });
+  });
 
-    await h.db
-      .insert(moderationActions)
-      .values({ playerId: altId, actionType: 'ban', authorPlayerId: ownerId });
-    const banned = await h.app.inject({
+  it('reports an alt with an active temporary ban as banned', async () => {
+    await h.db.insert(moderationActions).values({
+      playerId: altId,
+      actionType: 'ban',
+      authorSystemLabel: 'test-fixture',
+      context: { ban_length: '7d' },
+    });
+    const response = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${targetId}/ban-alt-warning`,
       headers: { cookie: await loginAsOwner(h) },
     });
-    expect(banned.json()).toMatchObject({
+    expect(response.json()).toMatchObject({
       confirmed: [{ player_id: altId, has_active_ban: true }],
     });
   });

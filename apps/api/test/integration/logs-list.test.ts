@@ -135,4 +135,88 @@ describe('GET /api/v1/logs', () => {
     const body = res.json() as { entries: Array<{ id: string }> };
     expect(body.entries[0]?.id).toMatch(/^\d+-\d+$/);
   });
+
+  // Regression (#186): filters used to run after COUNT, so a run of more than
+  // `limit` non-matching entries hid every later match and froze the live tail.
+  it('finds matches behind more than `limit` non-matching entries on the initial load', async () => {
+    await seed([{ source: 'api', level: 'error', msg: 'old-error' }]);
+    await seed(
+      Array.from({ length: 30 }, (_, i) => ({
+        source: 'api' as const,
+        level: 'info' as const,
+        msg: `noise-${i}`,
+      })),
+    );
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/logs?lvl=error&limit=10',
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      entries: Array<{ msg: string }>;
+      newest_scanned_id: string | null;
+    };
+    expect(body.entries.map((e) => e.msg)).toEqual(['old-error']);
+    const [[tipId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+      [string, string[]]
+    >;
+    expect(body.newest_scanned_id).toBe(tipId);
+  });
+
+  it('advances the live-tail cursor past non-matching entries and reaches later matches', async () => {
+    await seed([{ source: 'api', level: 'error', msg: 'first-error' }]);
+    const first = h.app.inject({
+      method: 'GET',
+      url: '/api/v1/logs?lvl=error&limit=10',
+      headers: { cookie },
+    });
+    const firstBody = (await first).json() as { entries: Array<{ id: string }> };
+    const after = firstBody.entries[0]?.id as string;
+    await seed(
+      Array.from({ length: 30 }, (_, i) => ({
+        source: 'api' as const,
+        level: 'info' as const,
+        msg: `noise-${i}`,
+      })),
+    );
+    await seed([{ source: 'api', level: 'error', msg: 'second-error' }]);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/logs?lvl=error&limit=10&after=${after}`,
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      entries: Array<{ msg: string; id: string }>;
+      newest_scanned_id: string | null;
+    };
+    expect(body.entries.map((e) => e.msg)).toEqual(['second-error']);
+    expect(body.newest_scanned_id).toBe(body.entries[0]?.id);
+  });
+
+  it('returns the newest scanned id even when a live-tail poll matches nothing', async () => {
+    await seed([{ source: 'api', level: 'error', msg: 'first-error' }]);
+    const [[afterId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+      [string, string[]]
+    >;
+    await seed(
+      Array.from({ length: 5 }, (_, i) => ({
+        source: 'api' as const,
+        level: 'info' as const,
+        msg: `noise-${i}`,
+      })),
+    );
+    const [[tipId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+      [string, string[]]
+    >;
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/logs?lvl=error&limit=2&after=${afterId}`,
+      headers: { cookie },
+    });
+    const body = res.json() as { entries: unknown[]; newest_scanned_id: string | null };
+    expect(body.entries).toEqual([]);
+    expect(body.newest_scanned_id).toBe(tipId);
+  });
 });

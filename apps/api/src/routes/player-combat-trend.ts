@@ -1,9 +1,10 @@
 import { computeKdRatio } from '@squad/db';
 import { matches, matchPlayers, playerStatPeriods, players } from '@squad/db/schema';
 import { and, asc, eq, gt, isNull, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { combatGuard } from '../lib/combat-guard.js';
 
 const CACHE_PREFIX = 'player-combat:';
 const CACHE_TTL_SECONDS = 60;
@@ -21,18 +22,6 @@ const combatSummaryQuery = z.object({
     .optional(),
   serverId: z.union([z.literal('all'), z.string().uuid()]).default('all'),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * DOSSIER-4 (#191): combat summary + monthly K/D trend for a single player.
@@ -60,10 +49,10 @@ const playerCombatTrendRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/combat-summary',
     {
       schema: { params: playerIdParams, querystring: combatSummaryQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
+      const denied = combatGuard(req, reply, req.params.playerId);
       if (denied) return denied;
 
       const { playerId } = req.params;

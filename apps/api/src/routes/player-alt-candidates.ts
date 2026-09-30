@@ -14,11 +14,20 @@ import {
   confidenceFor,
   DEFAULT_ALT_SCORE_WEIGHTS,
 } from '../lib/alt-score.js';
+import { loadModerationBanStates } from '../lib/moderation-ban-state.js';
+import { uuidArrayParam } from '../lib/sql-params.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
 /** Caps `matches[]` per candidate (smallest time-delta first) to bound response size for CGNAT-heavy targets. */
 const MATCHES_PER_CANDIDATE_CAP = 20;
+/**
+ * Caps how many candidates one request scores. A target behind CGNAT or a
+ * shared server IP can share an address with tens of thousands of players;
+ * the candidates with the most non-ignored shared IPs (then the smallest
+ * time delta) are kept, since the rest cannot outscore them on that signal.
+ */
+const CANDIDATE_CAP = 1000;
 const DAY_MS = 86_400_000;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -45,8 +54,6 @@ interface CandidateInfoRow {
   current_name: string;
   steam_id64: string | null;
   created_at: Date | string;
-  has_active_mod_ban: boolean;
-  has_permanent_mod_ban: boolean;
   has_active_external_ban: boolean;
   has_permanent_external_ban: boolean;
 }
@@ -92,13 +99,17 @@ interface CandidateLink {
  * `player:view_ips` permission — without it the endpoint returns 403 and
  * leaks no IPs or candidates at all.
  *
- * Ban convention: `has_active_ban` is true when the candidate has either a
- * non-reverted `moderation_actions` row with `action_type = 'ban'` (the
- * `unban` and `external_ban_kick` rows are not bans — a substring match on
- * `ban` flagged every unbanned player forever, #36) or an
- * `external_bans` row that isn't revoked and isn't expired; `has_permanent_ban`
- * narrows that further to rows with no expiry (`context->>'expires_at'` /
- * `external_bans.expires_at` both absent).
+ * Ban convention: `has_active_ban` is true when the candidate has either an
+ * active moderation ban (see `loadModerationBanStates`: an unreverted,
+ * unexpired `action_type = 'ban'` row) or an `external_bans` row that isn't
+ * revoked and isn't expired; `has_permanent_ban` narrows that further to bans
+ * with no expiry. The young-account signal dates from the target's latest
+ * unreverted `ban` row — never from an `unban` or a kick.
+ *
+ * Scale: at most {@link CANDIDATE_CAP} candidates are scored per request and
+ * candidate ids travel as one array parameter, so a CGNAT-sized match set
+ * neither overflows Postgres' bind-parameter limit nor scores unboundedly.
+ * `total` counts the scored candidates.
  *
  * ALT-2 (issue #120) annotation: each candidate also carries `link`, the
  * durable admin verdict for that pair from `player_links` (`{id, link_type,
@@ -199,6 +210,11 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
           ) FILTER (WHERE rn <= ${MATCHES_PER_CANDIDATE_CAP}) AS matches
         FROM ranked
         GROUP BY candidate_id
+        ORDER BY
+          COUNT(*) FILTER (WHERE NOT ignored) DESC,
+          MIN(delta_seconds) FILTER (WHERE NOT ignored) ASC NULLS LAST,
+          candidate_id
+        LIMIT ${CANDIDATE_CAP}
       `)) as unknown as MatchAggRow[];
 
       if (matchRows.length === 0) {
@@ -206,10 +222,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const candidateIds = matchRows.map((row) => row.candidate_id);
-      const candidateIdList = sql.join(
-        candidateIds.map((id) => sql`${id}`),
-        sql`, `,
-      );
+      const candidateIdArray = uuidArrayParam(candidateIds);
 
       const nameRows = (await app.db.execute(sql`
         SELECT
@@ -218,7 +231,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
         FROM player_name_history h1
         JOIN player_name_history h2
           ON h2.name_normalized = h1.name_normalized AND h2.player_id <> h1.player_id
-        WHERE h1.player_id = ${playerId} AND h2.player_id IN (${candidateIdList})
+        WHERE h1.player_id = ${playerId} AND h2.player_id = ANY(${candidateIdArray})
         GROUP BY h2.player_id
       `)) as unknown as SharedNameRow[];
       const sharedNamesByCandidate = new Map(
@@ -243,8 +256,8 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
           SUM(pc.overlap_seconds)::bigint AS overlap_seconds
         FROM player_coplay pc
         WHERE (
-          (pc.player_a_id = ${playerId} AND pc.player_b_id IN (${candidateIdList}))
-          OR (pc.player_b_id = ${playerId} AND pc.player_a_id IN (${candidateIdList}))
+          (pc.player_a_id = ${playerId} AND pc.player_b_id = ANY(${candidateIdArray}))
+          OR (pc.player_b_id = ${playerId} AND pc.player_a_id = ANY(${candidateIdArray}))
         )
           AND pc.window_start >= ${fromDay}::date
         GROUP BY candidate_id
@@ -258,6 +271,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
         FROM moderation_actions
         WHERE player_id = ${playerId}
           AND action_type = 'ban'
+          AND reverted_at IS NULL
       `)) as unknown as Array<{ last_ban_at: Date | string | null }>;
       const lastBanAt = lastBanRow?.last_ban_at ? new Date(lastBanRow.last_ban_at) : null;
 
@@ -299,17 +313,6 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
           p.steam_id64::text AS steam_id64,
           p.created_at,
           EXISTS (
-            SELECT 1 FROM moderation_actions ma
-            WHERE ma.player_id = p.id AND ma.action_type = 'ban'
-              AND ma.reverted_at IS NULL
-          ) AS has_active_mod_ban,
-          EXISTS (
-            SELECT 1 FROM moderation_actions ma
-            WHERE ma.player_id = p.id AND ma.action_type = 'ban'
-              AND ma.reverted_at IS NULL
-              AND (ma.context ->> 'expires_at') IS NULL
-          ) AS has_permanent_mod_ban,
-          EXISTS (
             SELECT 1 FROM external_bans eb
             WHERE eb.steam_id64 = p.steam_id64::text AND eb.revoked_at IS NULL
               AND (eb.expires_at IS NULL OR eb.expires_at > now())
@@ -320,9 +323,10 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
               AND eb.expires_at IS NULL
           ) AS has_permanent_external_ban
         FROM players p
-        WHERE p.id IN (${candidateIdList})
+        WHERE p.id = ANY(${candidateIdArray})
       `)) as unknown as CandidateInfoRow[];
       const infoByCandidate = new Map(infoRows.map((row) => [row.candidate_id, row]));
+      const modBanByCandidate = await loadModerationBanStates(app.db, candidateIds);
 
       const candidates = matchRows
         .map((row) => {
@@ -340,6 +344,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
             lastBanAt != null && info != null && new Date(info.created_at) > lastBanAt;
           const coplayOverlapSeconds = coplayOverlapByCandidate.get(row.candidate_id) ?? 0;
           const coplayOverlap = coplayOverlapSeconds >= coplayOverlapThresholdSeconds;
+          const modBan = modBanByCandidate.get(row.candidate_id);
 
           const score = computeAltScore(
             {
@@ -375,10 +380,8 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
             },
             score,
             confidence,
-            has_active_ban: Boolean(info?.has_active_mod_ban || info?.has_active_external_ban),
-            has_permanent_ban: Boolean(
-              info?.has_permanent_mod_ban || info?.has_permanent_external_ban,
-            ),
+            has_active_ban: Boolean(modBan?.active || info?.has_active_external_ban),
+            has_permanent_ban: Boolean(modBan?.permanent || info?.has_permanent_external_ban),
             link: linkByCandidate.get(row.candidate_id) ?? null,
           };
         })

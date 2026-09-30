@@ -7,7 +7,7 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -280,5 +280,73 @@ describeIfDb('GET /api/v1/geo-anomalies feed', () => {
     const entry = body.items.find((item) => item.player_id === anomalyPlayerId);
     expect(entry).toBeDefined();
     expect(entry?.multi_country).toBe(true);
+  });
+
+  // Regression (#40, #225): the feed issued one IP-history SELECT per
+  // candidate (up to 500 sequential queries). It now loads every candidate's
+  // history in one windowed query, whatever the number of candidates.
+  it('loads every candidate history in a constant number of queries', async () => {
+    const cookie = await loginAsOwner(h);
+    const countQueries = async () => {
+      const selectSpy = vi.spyOn(h.app.db, 'select');
+      const executeSpy = vi.spyOn(h.app.db, 'execute');
+      try {
+        const res = await h.app.inject({
+          method: 'GET',
+          url: '/api/v1/geo-anomalies',
+          headers: { cookie },
+        });
+        return { res, queries: selectSpy.mock.calls.length + executeSpy.mock.calls.length };
+      } finally {
+        selectSpy.mockRestore();
+        executeSpy.mockRestore();
+      }
+    };
+    await countQueries(); // warm the session and permission caches
+    const before = await countQueries();
+
+    const now = Date.now();
+    const extraIds: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const id = await seedPlayer(`Гео пакет ${i}`, 913020 + i);
+      extraIds.push(id);
+      await h.db.insert(playerIpHistory).values([
+        {
+          playerId: id,
+          ip: `9.14.${i}.1`,
+          countryCode: 'PL',
+          countryName: 'Poland',
+          firstSeenAt: new Date(now - 3 * HOUR_MS),
+          lastSeenAt: new Date(now - 3 * HOUR_MS),
+        },
+        {
+          playerId: id,
+          ip: `9.14.${i}.2`,
+          countryCode: 'CZ',
+          countryName: 'Czechia',
+          firstSeenAt: new Date(now - HOUR_MS),
+          lastSeenAt: new Date(now - HOUR_MS),
+        },
+      ]);
+    }
+    const after = await countQueries();
+
+    expect(after.queries).toBe(before.queries);
+    expect(after.res.statusCode).toBe(200);
+    const body = after.res.json() as {
+      items: Array<{
+        player_id: string;
+        distinct_country_count: number;
+        has_recent_switch: boolean;
+        switches: Array<{ from_country_code: string; to_country_code: string }>;
+      }>;
+    };
+    for (const id of extraIds) {
+      const entry = body.items.find((item) => item.player_id === id);
+      expect(entry).toMatchObject({ distinct_country_count: 2, has_recent_switch: true });
+      expect(entry?.switches[0]).toMatchObject({ from_country_code: 'PL', to_country_code: 'CZ' });
+    }
+    const anomaly = body.items.find((item) => item.player_id === anomalyPlayerId);
+    expect(anomaly?.distinct_country_count).toBe(4);
   });
 });

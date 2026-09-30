@@ -13,6 +13,43 @@ import { streamBundle } from '../lib/log-export.js';
 const SOURCE_CODES = ['B', 'R', 'L', 'W', 'D', 'I', 'A'] as const;
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
+/** Stream entries read per XRANGE/XREVRANGE round trip while scanning for matches. */
+const LOG_SCAN_CHUNK = 500;
+
+/**
+ * Upper bound on raw stream entries one request scans. Filters are applied in
+ * process, so a narrow filter over a long run of non-matching entries would
+ * otherwise walk the whole stream; the response cursors let the caller resume.
+ */
+const LOG_SCAN_BUDGET = 20_000;
+
+type DecodedEntry = ReturnType<typeof decodeLogEntry> & { id: string };
+
+/** Decodes one raw stream entry, or returns null when it is malformed. */
+function decodeStreamEntry(id: string, fields: string[]): DecodedEntry | null {
+  const obj: Record<string, string> = {};
+  for (let i = 0; i < fields.length; i += 2) {
+    obj[fields[i] ?? ''] = fields[i + 1] ?? '';
+  }
+  try {
+    return { id, ...decodeLogEntry(id, obj) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Panel log routes.
+ *
+ * `GET /api/v1/logs` scans the panel log stream newest-first (or, with
+ * `after`, oldest-first from that id) and applies the src/lvl/srv/q filters
+ * while scanning, until `limit` matches are collected or {@link LOG_SCAN_BUDGET}
+ * raw entries were read. Entries are returned newest-first together with
+ * `newest_scanned_id` / `oldest_scanned_id`: the ids of the newest and oldest
+ * raw entries actually scanned (null when nothing was scanned). A live tail
+ * must advance its `after` cursor to `newest_scanned_id` even when `entries`
+ * is empty, otherwise a run of non-matching entries would be re-read forever.
+ */
 const logsRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/logs',
@@ -55,52 +92,51 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         : null;
       const minRank = q.lvl ? LEVEL_RANK[q.lvl] : 0;
 
-      let items: Array<[string, string[]]>;
-      if (q.after) {
-        items = (await app.redis.xrange(
-          PANEL_LOGS_STREAM,
-          `(${q.after}`,
-          '+',
-          'COUNT',
-          q.limit,
-        )) as Array<[string, string[]]>;
-        items.reverse();
-      } else if (q.before) {
-        items = (await app.redis.xrevrange(
-          PANEL_LOGS_STREAM,
-          `(${q.before}`,
-          '-',
-          'COUNT',
-          q.limit,
-        )) as Array<[string, string[]]>;
-      } else {
-        items = (await app.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', q.limit)) as Array<
-          [string, string[]]
-        >;
+      const matches = (e: DecodedEntry): boolean => {
+        if (codes && !codes.has(sourceCode(e.source))) return false;
+        if (LEVEL_RANK[e.level] < minRank) return false;
+        if (q.srv && e.serverId !== q.srv) return false;
+        if (q.q && !e.msg.toLowerCase().includes(q.q.toLowerCase())) return false;
+        return true;
+      };
+
+      const entries: DecodedEntry[] = [];
+      let newestScannedId: string | null = null;
+      let oldestScannedId: string | null = null;
+      let scanned = 0;
+      const forward = Boolean(q.after);
+      let cursor = q.after ? `(${q.after}` : q.before ? `(${q.before}` : '+';
+
+      scan: while (scanned < LOG_SCAN_BUDGET) {
+        const batch = (
+          forward
+            ? await app.redis.xrange(PANEL_LOGS_STREAM, cursor, '+', 'COUNT', LOG_SCAN_CHUNK)
+            : await app.redis.xrevrange(PANEL_LOGS_STREAM, cursor, '-', 'COUNT', LOG_SCAN_CHUNK)
+        ) as Array<[string, string[]]>;
+        for (const [id, fields] of batch) {
+          scanned += 1;
+          if (forward) {
+            oldestScannedId ??= id;
+            newestScannedId = id;
+          } else {
+            newestScannedId ??= id;
+            oldestScannedId = id;
+          }
+          const entry = decodeStreamEntry(id, fields);
+          if (entry && matches(entry)) entries.push(entry);
+          if (entries.length >= q.limit) break scan;
+        }
+        const last = batch.at(-1);
+        if (!last || batch.length < LOG_SCAN_CHUNK) break;
+        cursor = `(${last[0]}`;
       }
+      if (forward) entries.reverse();
 
-      const entries = items
-        .map(([id, fields]) => {
-          const obj: Record<string, string> = {};
-          for (let i = 0; i < fields.length; i += 2) {
-            obj[fields[i] ?? ''] = fields[i + 1] ?? '';
-          }
-          try {
-            return { id, ...decodeLogEntry(id, obj) };
-          } catch {
-            return null;
-          }
-        })
-        .filter((e): e is NonNullable<typeof e> => e !== null)
-        .filter((e) => {
-          if (codes && !codes.has(sourceCode(e.source))) return false;
-          if (LEVEL_RANK[e.level] < minRank) return false;
-          if (q.srv && e.serverId !== q.srv) return false;
-          if (q.q && !e.msg.toLowerCase().includes(q.q.toLowerCase())) return false;
-          return true;
-        });
-
-      return { entries };
+      return {
+        entries,
+        newest_scanned_id: newestScannedId,
+        oldest_scanned_id: oldestScannedId,
+      };
     },
   );
   app.get(

@@ -69,6 +69,37 @@ describe('GET /api/v1/auth/steam/login', () => {
     expect(flat).toMatch(/__Host-steam-nonce=[\w-]+/);
     expect(location).toMatch(/openid\.return_to=.*n%3D[\w-]+/);
   });
+
+  // #40, finding #234: the ban-appeal portal sends a banned player through a
+  // Steam login and needs them back on /appeal, not on /me.
+  async function storedNonce(res: { headers: Record<string, unknown> }) {
+    const cookieHeader = (res.headers['set-cookie'] ?? '') as string | string[];
+    const flat = Array.isArray(cookieHeader) ? cookieHeader.join('\n') : cookieHeader;
+    const nonce = /__Host-steam-nonce=([\w-]+)/.exec(flat)?.[1];
+    const raw = await h.redis.get(`steam-nonce:${nonce}`);
+    return JSON.parse(raw ?? '{}') as { returnTo?: string };
+  }
+
+  it('remembers an allow-listed return_to path with the nonce', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/steam/login?return_to=%2Fappeal',
+    });
+    expect(res.statusCode).toBe(302);
+    expect((await storedNonce(res)).returnTo).toBe('/appeal');
+  });
+
+  it.each(['https://evil.example/appeal', '//evil.example', '/settings'])(
+    'ignores a return_to that is not allow-listed (%s)',
+    async (returnTo) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/auth/steam/login?return_to=${encodeURIComponent(returnTo)}`,
+      });
+      expect(res.statusCode).toBe(302);
+      expect((await storedNonce(res)).returnTo).toBeUndefined();
+    },
+  );
 });
 
 describe('GET /api/v1/auth/steam/callback', () => {
@@ -262,6 +293,35 @@ describe('GET /api/v1/auth/steam/callback', () => {
       .where(eq(players.steamId64, 76561198000000200n));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.scope).toBe('self_service');
+  });
+
+  it('sends a self-service player back to the remembered return path', async () => {
+    await h.db.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
+    const NONCE = 'return-to-nonce';
+    await h.redis.set(
+      `steam-nonce:${NONCE}`,
+      JSON.stringify({ ts: Date.now(), ip: null, returnTo: '/appeal' }),
+      'EX',
+      300,
+    );
+    const u = new URLSearchParams({
+      n: NONCE,
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'id_res',
+      'openid.claimed_id': 'https://steamcommunity.com/openid/id/76561198000000202',
+      'openid.identity': 'https://steamcommunity.com/openid/id/76561198000000202',
+      'openid.return_to': `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+      'openid.response_nonce': '2026-04-25T12:00:00Zreturnto',
+      'openid.signed': 'signed,op_endpoint',
+      'openid.sig': 'sig',
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${u.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/appeal');
   });
 
   it('player whose role lacks panel access gets a self-service session, not a panel one', async () => {

@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { csvCell } from '../lib/csv.js';
+import { steamId64Equals } from '../lib/player-search.js';
 
 const NAME_MAX = 32;
 const TAG_MAX = 32;
@@ -1324,7 +1325,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         const nameMatch = normalizePlayerName(q);
         const exactMatch = q.toLowerCase();
         filters.push(
-          sql`(p.canonical_name_normalized LIKE ${`%${nameMatch}%`} OR p.steam_id64::text = ${exactMatch} OR p.eos_id = ${exactMatch})`,
+          sql`(p.canonical_name_normalized LIKE ${`%${nameMatch}%`} OR ${steamId64Equals(sql`p.steam_id64`, q.trim())} OR p.eos_id = ${exactMatch})`,
         );
       }
       const whereSql = and(...filters);

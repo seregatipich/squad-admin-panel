@@ -11,9 +11,10 @@ import {
   vehicleCatalog,
 } from '@squad/db/schema';
 import { and, asc, desc, eq, isNull, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { combatGuard } from '../lib/combat-guard.js';
 
 const CACHE_PREFIX = 'dossier:';
 const CACHE_TTL_SECONDS = 60;
@@ -36,27 +37,6 @@ function toNumber(value: string | null): number | null {
 function toIso(value: Date | string | null): string | null {
   if (value === null) return null;
   return (value instanceof Date ? value : new Date(value)).toISOString();
-}
-
-function combatGuard(
-  req: FastifyRequest,
-  reply: FastifyReply,
-  subjectPlayerId: string,
-): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  // Своё досье игрок открывает без `combat:view`: право закрывает чужие
-  // боевые цифры, а не собственные, и на этом стоит блок статистики на
-  // странице «Аккаунт». Сессию всё равно нужно иметь панельную — маршрут
-  // не помечен `selfService`, и self-service-сессия сюда не доходит.
-  if (req.user.playerId === subjectPlayerId) return null;
-  if (!req.user.permissions.combatView) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**
@@ -94,7 +74,7 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/dossier',
     {
       schema: { params: playerIdParams, querystring: dossierQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const { playerId } = req.params;

@@ -11,6 +11,7 @@ import {
   InlineBanner,
   PageContainer,
   PageHeader,
+  Pagination,
   SearchField,
   SkeletonTable,
   SortableTh,
@@ -32,6 +33,7 @@ import {
   buildPlayersListQuery,
   DEFAULT_SORT_STATE,
   nextSortState,
+  PLAYERS_PAGE_SIZE,
   type PlayerSortKey,
   type PlayerSortState,
 } from './helpers';
@@ -98,6 +100,7 @@ export default function PlayersPage() {
   const [sortOnline, setSortOnline] = useState<OnlineSort>('none');
   const [sortState, setSortState] = useState<PlayerSortState>(DEFAULT_SORT_STATE);
   const [onlyNew, setOnlyNew] = useState(false);
+  const [page, setPage] = useState(1);
   const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [onlineLoaded, setOnlineLoaded] = useState(false);
@@ -143,7 +146,8 @@ export default function PlayersPage() {
     }
   }, []);
 
-  const listQuery = buildPlayersListQuery(sortState, onlyNew);
+  const listQuery = buildPlayersListQuery(sortState, onlyNew, page);
+  const pageCount = data ? Math.max(1, Math.ceil(data.total / PLAYERS_PAGE_SIZE)) : 1;
 
   useEffect(() => {
     let cancelled = false;
@@ -223,6 +227,7 @@ export default function PlayersPage() {
 
   const onSort = useCallback((column: string) => {
     setSortState((s) => nextSortState(s, column as PlayerSortKey));
+    setPage(1);
   }, []);
 
   const filtersApplied = q.trim() !== '' || onlyOnline || onlyNew;
@@ -272,7 +277,10 @@ export default function PlayersPage() {
             <Checkbox
               label="новые (<7 дней)"
               checked={onlyNew}
-              onChange={(e) => setOnlyNew(e.target.checked)}
+              onChange={(e) => {
+                setOnlyNew(e.target.checked);
+                setPage(1);
+              }}
             />
           </>
         }
@@ -404,6 +412,22 @@ export default function PlayersPage() {
           </Table>
         )}
       </Card>
+
+      {pageCount > 1 ? (
+        <div className="flex justify-end">
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            onChange={setPage}
+            allowJump
+            labels={{
+              previous: 'Назад',
+              next: 'Вперёд',
+              page: (current, of) => `Стр. ${current} из ${of}`,
+            }}
+          />
+        </div>
+      ) : null}
     </PageContainer>
   );
 }

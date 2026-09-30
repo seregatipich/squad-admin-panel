@@ -517,6 +517,135 @@ describe('POST /api/v1/moderation-actions/:id/revert', () => {
     expect(writeVersion).not.toHaveBeenCalled();
     expect(h.bridge.files.get(bansCfgPath(serverId))?.toString('utf-8')).toBe(unrelatedContent);
   });
+
+  // Regression (#40, #206): any bridge read failure was treated as an empty
+  // Bans.cfg, so the ledger said "unbanned" (and EVT-1 fired) while the
+  // Banned: line stayed in the file and the player stayed banned in game.
+  it('answers 502 and leaves the ledger alone when Bans.cfg cannot be read', async () => {
+    const targetId = await seedPlayer(testSteamId(977125), 'BridgeDownTarget');
+    const line = `Banned:${String(testSteamId(977125))}:0 // ban\n`;
+    h.bridge.files.set(bansCfgPath(serverId), Buffer.from(line, 'utf-8'));
+    const [action] = await h.db
+      .insert(moderationActions)
+      .values({
+        playerId: targetId,
+        serverId,
+        actionType: 'ban',
+        authorPlayerId: actorId,
+        reason: 'aimbot',
+        context: { ban_length: '0' },
+      })
+      .returning({ id: moderationActions.id });
+    if (!action) throw new Error('failed to seed ban action');
+
+    const readSpy = vi
+      .spyOn(h.bridge, 'fileRead')
+      .mockRejectedValue(Object.assign(new Error('bridge timeout'), { code: 'transport' }));
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/moderation-actions/${action.id}/revert`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ reason: 'appeal accepted' }),
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({ error: 'bans_cfg_unavailable' });
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    expect(writeVersion).not.toHaveBeenCalled();
+    expect(h.bridge.files.get(bansCfgPath(serverId))?.toString('utf-8')).toBe(line);
+    const rows = await h.db
+      .select({
+        actionType: moderationActions.actionType,
+        revertedAt: moderationActions.revertedAt,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, targetId));
+    expect(rows).toEqual([{ actionType: 'ban', revertedAt: null }]);
+  });
+
+  it('answers 502 and leaves the ledger alone when the verify read fails', async () => {
+    const targetId = await seedPlayer(testSteamId(977126), 'VerifyDownTarget');
+    h.bridge.files.set(
+      bansCfgPath(serverId),
+      Buffer.from(`Banned:${String(testSteamId(977126))}:0 // ban\n`, 'utf-8'),
+    );
+    const [action] = await h.db
+      .insert(moderationActions)
+      .values({
+        playerId: targetId,
+        serverId,
+        actionType: 'ban',
+        authorPlayerId: actorId,
+        reason: 'aimbot',
+        context: { ban_length: '0' },
+      })
+      .returning({ id: moderationActions.id });
+    if (!action) throw new Error('failed to seed ban action');
+
+    const realRead = h.bridge.fileRead;
+    let reads = 0;
+    const readSpy = vi.spyOn(h.bridge, 'fileRead').mockImplementation(async (p) => {
+      reads += 1;
+      if (reads === 1) return realRead(p);
+      throw Object.assign(new Error('bridge timeout'), { code: 'transport' });
+    });
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/moderation-actions/${action.id}/revert`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ reason: 'appeal accepted' }),
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({ error: 'bans_cfg_unavailable' });
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    const rows = await h.db
+      .select({
+        actionType: moderationActions.actionType,
+        revertedAt: moderationActions.revertedAt,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, targetId));
+    expect(rows).toEqual([{ actionType: 'ban', revertedAt: null }]);
+  });
+
+  it('still unbans in the ledger when the server has no Bans.cfg at all', async () => {
+    const targetId = await seedPlayer(testSteamId(977127), 'NoFileTarget');
+    h.bridge.files.delete(bansCfgPath(serverId));
+    const [action] = await h.db
+      .insert(moderationActions)
+      .values({
+        playerId: targetId,
+        serverId,
+        actionType: 'ban',
+        authorPlayerId: actorId,
+        reason: 'aimbot',
+        context: { ban_length: '0' },
+      })
+      .returning({ id: moderationActions.id });
+    if (!action) throw new Error('failed to seed ban action');
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/moderation-actions/${action.id}/revert`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ reason: 'appeal accepted' }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { removed_lines: number }).removed_lines).toBe(0);
+    const [reverted] = await h.db
+      .select({ revertedAt: moderationActions.revertedAt })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, action.id));
+    expect(reverted?.revertedAt).not.toBeNull();
+  });
 });
 
 describe('GET /api/v1/players/:playerId/moderation-actions history filters', () => {

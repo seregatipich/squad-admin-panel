@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { steamId64Equals } from '../lib/player-search.js';
 
 const listQuery = z.object({
   q: z.string().min(1).max(64).optional(),
@@ -47,7 +48,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
           ${roleId ? sql`AND r.id = ${roleId}` : sql``}
           ${
             q
-              ? sql`AND (p.canonical_name_normalized LIKE ${`%${q}%`} OR p.steam_id64::text = ${q})`
+              ? sql`AND (p.canonical_name_normalized LIKE ${`%${q}%`} OR ${steamId64Equals(sql`p.steam_id64`, q)})`
               : sql``
           }
         ORDER BY p.last_seen_at DESC

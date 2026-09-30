@@ -70,6 +70,16 @@ describe('buildPlayersListQuery', () => {
     );
   });
 
+  it('buildPlayersListQuery sends no paging params for the first page', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1)).toBe('sort=last_seen&dir=desc');
+  });
+
+  it('buildPlayersListQuery appends limit and offset for later pages', () => {
+    expect(buildPlayersListQuery({ key: 'nickname', dir: 'asc' }, true, 3)).toBe(
+      'sort=nickname&dir=asc&filter=new&limit=200&offset=400',
+    );
+  });
+
   it('buildPlayersListQuery omits filter when the new-players toggle is off', () => {
     expect(buildPlayersListQuery({ key: 'nickname', dir: 'asc' }, false)).toBe(
       'sort=nickname&dir=asc',

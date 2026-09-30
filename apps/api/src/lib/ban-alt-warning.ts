@@ -2,6 +2,8 @@ import { findConfirmedAltLinks } from '@squad/db';
 import { playerSessions, players } from '@squad/db/schema';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { loadModerationBanStates } from './moderation-ban-state.js';
+import { uuidArrayParam } from './sql-params.js';
 
 export interface BanAltWarningItem {
   player_id: string;
@@ -91,30 +93,22 @@ export async function loadBanAltWarning(
   const onlineIds = new Set<string>();
 
   if (allIds.length > 0) {
-    const statusRows = (await app.db.execute(sql`
+    const externalRows = (await app.db.execute(sql`
       SELECT
         p.id AS player_id,
-        (
-          EXISTS (
-            SELECT 1 FROM moderation_actions ma
-            WHERE ma.player_id = p.id
-              AND ma.action_type = 'ban'
-              AND ma.reverted_at IS NULL
-          )
-          OR EXISTS (
-            SELECT 1 FROM external_bans eb
-            WHERE eb.steam_id64 = p.steam_id64::text
-              AND eb.revoked_at IS NULL
-              AND (eb.expires_at IS NULL OR eb.expires_at > now())
-          )
+        EXISTS (
+          SELECT 1 FROM external_bans eb
+          WHERE eb.steam_id64 = p.steam_id64::text
+            AND eb.revoked_at IS NULL
+            AND (eb.expires_at IS NULL OR eb.expires_at > now())
         ) AS has_active_ban
       FROM players p
-      WHERE p.id IN (${sql.join(
-        allIds.map((id) => sql`${id}`),
-        sql`, `,
-      )})
+      WHERE p.id = ANY(${uuidArrayParam(allIds)})
     `)) as unknown as BanStatusRow[];
-    for (const row of statusRows) statusById.set(row.player_id, row.has_active_ban);
+    const modBans = await loadModerationBanStates(app.db, allIds);
+    for (const row of externalRows) {
+      statusById.set(row.player_id, row.has_active_ban || modBans.has(row.player_id));
+    }
 
     const onlineRows = await app.db
       .select({ playerId: playerSessions.playerId })

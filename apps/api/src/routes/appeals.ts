@@ -304,7 +304,7 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
               updatedAt: new Date(),
             })
             .where(and(eq(banAppeals.id, existing.id), eq(banAppeals.status, 'approved')));
-          reply.code(409);
+          reply.code(outcome.error === 'bans_cfg_unavailable' ? 502 : 409);
           return { error: outcome.error };
         }
         revert = outcome.summary;
@@ -369,8 +369,9 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
    * An appeal whose SteamID64 never resolved to a player, or whose player
    * holds no active ban, is a no-op that still succeeds: the decision belongs
    * to the moderator and there is simply nothing left to lift. A
-   * `bans_cfg_conflict` on any server aborts the whole approval — the caller
-   * turns it into `409` and leaves the appeal open to retry.
+   * `bans_cfg_conflict` or `bans_cfg_unavailable` on any server aborts the
+   * whole approval — the caller turns it into `409` or `502` and leaves the
+   * appeal open to retry.
    */
   async function revertAppellantBans(
     appeal: AppealRow,
@@ -378,7 +379,7 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
     actorIp: string | null,
     reason: string,
   ): Promise<
-    | { ok: false; error: 'bans_cfg_conflict' }
+    | { ok: false; error: 'bans_cfg_conflict' | 'bans_cfg_unavailable' }
     | {
         ok: true;
         summary: {
