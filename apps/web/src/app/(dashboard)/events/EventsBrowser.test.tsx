@@ -269,55 +269,60 @@ describe('EventsBrowser — живая лента', () => {
     render(<EventsBrowser lockedServerId="srv-1" />);
     await screen.findByText('evt00001');
 
-    // First frame: starts the in-flight refresh (call === 2, held pending).
-    await act(async () => {
-      liveHandlers.get('server.events.appended')?.({
-        type: 'server.events.appended',
-        ts: '2026-09-25T10:00:01.000Z',
-        data: { server_id: 'srv-1', kinds: ['player.connected'] },
+    // The live refresh is throttled to one per LIVE_REFRESH_MS, so the test
+    // drives the throttle timers with a fake clock instead of real waits.
+    const LIVE_REFRESH_MS = 5000;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const advance = (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      const frame = (ts: string) =>
+        act(async () => {
+          liveHandlers.get('server.events.appended')?.({
+            type: 'server.events.appended',
+            ts,
+            data: { server_id: 'srv-1', kinds: ['player.connected'] },
+          });
+        });
+
+      // First frame: starts the in-flight refresh (call === 2, held pending).
+      await frame('2026-09-25T10:00:01.000Z');
+      await advance(1);
+      expect(call).toBe(2);
+
+      // Second frame while the refresh above is still in flight: this schedules
+      // its *own* timer (liveTimerRef.current was already reset to null right
+      // before refreshHead's call above started).
+      await frame('2026-09-25T10:00:01.500Z');
+
+      // Let that second timer fire *before* the first refresh resolves: it
+      // calls refreshHead reentrantly while `live.inFlight` is still true,
+      // which is what actually sets `live.again = true` (a plain, early
+      // return — it never touches liveTimerRef.current itself).
+      await advance(LIVE_REFRESH_MS + 1);
+      expect(call).toBe(2);
+
+      // The in-flight refresh (call #2) now resolves; its `finally` block sees
+      // `live.again` and schedules the buggy, never-reset retry timer.
+      await act(async () => {
+        resolveFirst?.();
+        await Promise.resolve();
       });
-    });
-    await waitFor(() => expect(call).toBe(2));
+      expect(screen.getByText('evt00002')).toBeInTheDocument();
+      // Let the "again" retry timer fire.
+      await advance(LIVE_REFRESH_MS + 1);
+      expect(call).toBe(3);
 
-    // Second frame while the refresh above is still in flight: this schedules
-    // its *own* timer (liveTimerRef.current was already reset to null right
-    // before refreshHead's call above started).
-    await act(async () => {
-      liveHandlers.get('server.events.appended')?.({
-        type: 'server.events.appended',
-        ts: '2026-09-25T10:00:01.500Z',
-        data: { server_id: 'srv-1', kinds: ['player.connected'] },
-      });
-    });
-
-    // Let that second timer fire *before* the first refresh resolves: it
-    // calls refreshHead reentrantly while `live.inFlight` is still true,
-    // which is what actually sets `live.again = true` (a plain, early
-    // return — it never touches liveTimerRef.current itself).
-    await new Promise((r) => setTimeout(r, 1100));
-    expect(call).toBe(2);
-
-    // The in-flight refresh (call #2) now resolves; its `finally` block sees
-    // `live.again` and schedules the buggy, never-reset retry timer.
-    await act(async () => {
-      resolveFirst?.();
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByText('evt00002')).toBeInTheDocument());
-    // Let the "again" retry timer fire.
-    await new Promise((r) => setTimeout(r, 1100));
-    await waitFor(() => expect(call).toBe(3));
-
-    // A further frame after the retry fired must still trigger a refresh —
-    // before the fix, liveTimerRef.current was left non-null forever here.
-    await act(async () => {
-      liveHandlers.get('server.events.appended')?.({
-        type: 'server.events.appended',
-        ts: '2026-09-25T10:00:03.000Z',
-        data: { server_id: 'srv-1', kinds: ['player.connected'] },
-      });
-    });
-    await waitFor(() => expect(call).toBeGreaterThan(3));
+      // A further frame after the retry fired must still trigger a refresh —
+      // before the fix, liveTimerRef.current was left non-null forever here.
+      await frame('2026-09-25T10:00:03.000Z');
+      await advance(LIVE_REFRESH_MS + 1);
+      expect(call).toBeGreaterThan(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
