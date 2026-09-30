@@ -279,6 +279,15 @@ export class RconCommandQueue {
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
       return;
     }
+    // Claim the request id before the command can reach the game server: the
+    // done marker is the authoritative at-most-once guard (the API only ever
+    // deletes the ephemeral result payload). A crash between execute and the
+    // result write then cannot replay a ban/kick/map change on XAUTOCLAIM
+    // redelivery; the producer has already timed out and reported that.
+    if (requestId && !(await this.claimRequest(requestId))) {
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
     let result: RconCommandResult;
     try {
       const command = buildOperatorCommand(request);
@@ -350,6 +359,22 @@ export class RconCommandQueue {
       'EX',
       DONE_MARKER_TTL_SECONDS,
     );
+  }
+
+  /**
+   * Atomically sets the done marker. Returns false when another delivery already
+   * holds it. A Redis failure propagates so the entry stays pending and nothing
+   * is executed without the marker.
+   */
+  private async claimRequest(requestId: string): Promise<boolean> {
+    const claimed = await this.opts.redis.set(
+      rconCommandDoneKey(requestId),
+      '1',
+      'EX',
+      DONE_MARKER_TTL_SECONDS,
+      'NX',
+    );
+    return claimed === 'OK';
   }
 
   private async doneExists(requestId: string): Promise<boolean> {

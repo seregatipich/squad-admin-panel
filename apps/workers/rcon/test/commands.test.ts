@@ -361,7 +361,11 @@ describe('RconCommandQueue', () => {
 
   it('acknowledges without a failure result when only the result write fails after execution', async () => {
     const redis = makeRedis([['1700-9', ['request', JSON.stringify(commandRequest())]]]);
-    redis.set.mockRejectedValue(new Error('redis write failed'));
+    redis.set.mockImplementation((key: string) =>
+      key === rconCommandResultKey('req-1')
+        ? Promise.reject(new Error('redis write failed'))
+        : Promise.resolve('OK'),
+    );
     const execute = vi.fn().mockResolvedValue('done');
     const queue = new RconCommandQueue({
       now: () => Date.parse('2026-07-07T12:00:05.000Z'),
@@ -375,7 +379,7 @@ describe('RconCommandQueue', () => {
     await expect(queue.processOnce()).resolves.toBe(1);
 
     expect(execute).toHaveBeenCalledOnce();
-    expect(redis.set).toHaveBeenCalledOnce();
+    expect(redis.set).toHaveBeenCalledTimes(2); // done-marker claim, then the failed result write
     expect(redis.xack).toHaveBeenCalledWith(
       rconCommandStream('srv-1'),
       RCON_COMMAND_GROUP,
@@ -413,7 +417,9 @@ describe('RconCommandQueue', () => {
 
     await expect(queue.processOnce()).resolves.toBe(1);
 
-    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    const stored = JSON.parse(
+      String(redis.set.mock.calls.find((call) => call[0] === rconCommandResultKey('req-1'))?.[1]),
+    );
     expect(stored).toMatchObject({
       ok: false,
       server_id: 'srv-1',
@@ -538,7 +544,9 @@ describe('RconCommandQueue', () => {
     await expect(queue.processOnce()).resolves.toBe(1);
 
     expect(execute).not.toHaveBeenCalled();
-    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    const stored = JSON.parse(
+      String(redis.set.mock.calls.find((call) => call[0] === rconCommandResultKey('req-1'))?.[1]),
+    );
     expect(stored.ok).toBe(false);
     expect(stored.error).toMatch(/unsupported/i);
     expect(redis.xack).toHaveBeenCalledWith(
@@ -758,5 +766,69 @@ describe('RconCommandQueue', () => {
     await expect(queue.processOnce()).resolves.toBe(1);
 
     expect(redis.set).toHaveBeenCalledWith(rconCommandDoneKey('req-1'), '1', 'EX', 24 * 3_600);
+  });
+  it('claims the done marker with SET NX before executing, so a crash after execute cannot cause a re-run (#969)', async () => {
+    const redis = makeRedis([['1700-24', ['request', JSON.stringify(commandRequest())]]]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+    });
+
+    await queue.processOnce();
+
+    const claimIndex = redis.set.mock.calls.findIndex(
+      (call) => call[0] === rconCommandDoneKey('req-1') && call.includes('NX'),
+    );
+    expect(claimIndex).toBeGreaterThanOrEqual(0);
+    expect(redis.set.mock.invocationCallOrder[claimIndex]).toBeLessThan(
+      execute.mock.invocationCallOrder[0] as number,
+    );
+  });
+
+  it('skips execution and acknowledges when another delivery already claimed the request id', async () => {
+    const redis = makeRedis([['1700-25', ['request', JSON.stringify(commandRequest())]]]);
+    redis.set.mockResolvedValue(null);
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-25',
+    );
+  });
+
+  it('leaves the entry pending without executing when the claim itself fails', async () => {
+    const redis = makeRedis([['1700-26', ['request', JSON.stringify(commandRequest())]]]);
+    redis.set.mockRejectedValue(new Error('redis down'));
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+    });
+
+    await expect(queue.processOnce()).rejects.toThrow('redis down');
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.xack).not.toHaveBeenCalled();
   });
 });
