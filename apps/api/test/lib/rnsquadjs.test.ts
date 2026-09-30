@@ -87,7 +87,6 @@ describe('buildSidecarEnv', () => {
       SERVER_ID,
       LOG_FILE: '/squad/Logs/SquadGame.log',
       PANEL_BRIDGE_MODE: 'shadow',
-      PANEL_BRIDGE_SOCKET: '/run/panelBridge/rcon.sock',
       REDIS_URL: 'redis://127.0.0.1:6379',
     });
   });
@@ -97,7 +96,6 @@ describe('buildSidecarEnv', () => {
     expect(Object.keys(env).sort()).toEqual([
       'LOG_FILE',
       'PANEL_BRIDGE_MODE',
-      'PANEL_BRIDGE_SOCKET',
       'REDIS_URL',
       'SERVER_ID',
     ]);

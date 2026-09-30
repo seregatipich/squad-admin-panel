@@ -305,7 +305,7 @@ describe('RCON status key refresh', () => {
   });
 });
 
-describe('production mode exposes no RCON socket (#1347)', () => {
+describe('production mode exposes no RCON channel (#75, audit 1045)', () => {
   beforeEach(() => {
     redis.xadd.mockResolvedValue('0-1');
     redis.set.mockResolvedValue('OK');
@@ -319,7 +319,7 @@ describe('production mode exposes no RCON socket (#1347)', () => {
     cleanupSocketDirs();
   });
 
-  it('never binds PANEL_BRIDGE_SOCKET, so no unauthenticated RCON channel exists', async () => {
+  it('never binds a unix socket, even when PANEL_BRIDGE_SOCKET is still set by an older api', async () => {
     process.env.PANEL_BRIDGE_MODE = 'production';
     const socketPath = uniqueSocketPath();
     process.env.PANEL_BRIDGE_SOCKET = socketPath;
@@ -327,6 +327,19 @@ describe('production mode exposes no RCON socket (#1347)', () => {
     const bridge = await startPanelBridge(makeContext(new EventEmitter(), vi.fn()));
 
     expect(existsSync(socketPath)).toBe(false);
+    await bridge.stop();
+  });
+
+  it('starts when the legacy socket directory does not exist', async () => {
+    process.env.PANEL_BRIDGE_MODE = 'production';
+    process.env.PANEL_BRIDGE_SOCKET = join(
+      mkdtempSync(join(tmpdir(), 'panelbridge-index-')),
+      'no-such-dir',
+      'rcon.sock',
+    );
+
+    const bridge = await startPanelBridge(makeContext(new EventEmitter(), vi.fn()));
+
     await bridge.stop();
   });
 });

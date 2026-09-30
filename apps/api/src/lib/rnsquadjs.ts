@@ -31,7 +31,6 @@ export interface SidecarEnv {
   SERVER_ID: string;
   LOG_FILE: string;
   PANEL_BRIDGE_MODE: string;
-  PANEL_BRIDGE_SOCKET: string;
   REDIS_URL: string;
 }
 
@@ -44,7 +43,6 @@ export function buildSidecarEnv(
     SERVER_ID: serverId,
     LOG_FILE: '/squad/Logs/SquadGame.log',
     PANEL_BRIDGE_MODE: mode,
-    PANEL_BRIDGE_SOCKET: '/run/panelBridge/rcon.sock',
     REDIS_URL: redisUrl ?? 'redis://127.0.0.1:6379',
   };
 }
