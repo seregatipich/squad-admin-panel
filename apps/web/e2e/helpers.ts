@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { BrowserContext } from '@playwright/test';
+import { resolveE2eDatabase } from './db-guard';
 
 export const TEST_PASSWORD = 'correct-horse-battery-staple';
 
@@ -10,7 +11,7 @@ export function uniqueEmail(prefix = 'pw'): string {
 
 const POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'squad-admin-panel-postgres-1';
 const POSTGRES_USER = process.env.E2E_POSTGRES_USER ?? 'admin';
-const POSTGRES_DB = process.env.E2E_POSTGRES_DB ?? 'admin';
+const POSTGRES_DB = resolveE2eDatabase(process.env.E2E_POSTGRES_DB);
 const REDIS_CONTAINER = process.env.E2E_REDIS_CONTAINER ?? 'squad-admin-panel-redis-1';
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'https://localhost';
 
@@ -19,7 +20,7 @@ const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'https://localhost';
  *
  * The statement is passed as an argument vector, never through a shell, so `$1`, `$$`
  * and backticks reach psql untouched. The container, user and database default to the
- * local stack and can be pointed at an isolated database with `E2E_POSTGRES_*`.
+ * local stack; `E2E_POSTGRES_DB` is required and must not be the shared `admin` database.
  */
 export function runSql(sql: string): string {
   return execFileSync(

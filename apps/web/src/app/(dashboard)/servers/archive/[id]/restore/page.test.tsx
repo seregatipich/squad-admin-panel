@@ -314,3 +314,106 @@ describe('#660 install socket closing without a done/error frame', () => {
     expect(banner).toHaveTextContent('раньше отчёта о завершении');
   });
 });
+
+// #664: the error stage used to be terminal, and rights were only discovered
+// halfway through the wizard.
+describe('#664 retry, open server and permission pre-check', () => {
+  const json = (body: unknown, status = 200) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status }));
+
+  function stubApi(opts: { permissions: string[]; configsStatuses?: number[] }) {
+    const configsStatuses = [...(opts.configsStatuses ?? [200])];
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const method = init?.method ?? 'GET';
+        calls.push(`${method} ${url}`);
+        if (url === '/api/v1/me') return json({ permissions: opts.permissions });
+        if (url === '/api/v1/servers/archive/abc') {
+          return json({ server: { id: 'abc', display_name: 'EU Main', slug: 'eu-main' } });
+        }
+        if (url === '/api/v1/servers/archive/abc/restore') {
+          return json(
+            { id: 'new-1', archive_id: 'abc', slug: 's', display_name: 'n', status: 'p' },
+            201,
+          );
+        }
+        if (url === '/api/v1/servers/new-1/install') return json({});
+        if (url === '/api/v1/servers/new-1/restore-configs') {
+          const status = configsStatuses.shift() ?? 200;
+          return json(
+            { ok: true, files_restored: 1, files_skipped: 0, files_missing: 0, errors: [] },
+            status,
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url} ${method}`));
+      }),
+    );
+    return calls;
+  }
+
+  it('disables the wizard and names the missing right', async () => {
+    stubApi({ permissions: ['server:install'] });
+    await renderPage();
+
+    await screen.findByLabelText(/^Идентификатор нового сервера/);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Создать новый сервер из бэкапа' })).toBeDisabled(),
+    );
+    expect(screen.getByText(/Не хватает: config:edit/)).toBeInTheDocument();
+  });
+
+  it('keeps the wizard enabled when both rights are present', async () => {
+    stubApi({ permissions: ['server:install', 'config:edit'] });
+    await renderPage();
+
+    await screen.findByLabelText(/^Идентификатор нового сервера/);
+    expect(screen.getByRole('button', { name: 'Создать новый сервер из бэкапа' })).toBeEnabled();
+    expect(screen.queryByText(/Недостаточно прав/)).toBeNull();
+  });
+
+  it('retries restore-configs from the error stage and offers to open the server', async () => {
+    vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+    const calls = stubApi({
+      permissions: ['server:install', 'config:edit'],
+      configsStatuses: [403, 200],
+    });
+    await renderPage();
+    const user = userEvent.setup();
+    await screen.findByLabelText(/^Идентификатор нового сервера/);
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: 'Создать новый сервер из бэкапа' }));
+    });
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    await act(async () => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({ done: true, final: 'done' }),
+      });
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Повторить шаг' }));
+    await screen.findByRole('button', { name: 'Запустить сервер' });
+    expect(calls.filter((c) => c === 'POST /api/v1/servers/new-1/restore-configs')).toHaveLength(2);
+    expect(calls.filter((c) => c === 'POST /api/v1/servers/new-1/install')).toHaveLength(1);
+  });
+
+  it('opens the created server from the error stage', async () => {
+    vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+    stubApi({ permissions: ['server:install', 'config:edit'] });
+    await renderPage();
+    const user = userEvent.setup();
+    await screen.findByLabelText(/^Идентификатор нового сервера/);
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: 'Создать новый сервер из бэкапа' }));
+    });
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    await act(async () => {
+      MockWebSocket.instances[0]?.onclose?.();
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Открыть сервер' }));
+    expect(routerPush).toHaveBeenCalledWith('/servers/new-1');
+  });
+});

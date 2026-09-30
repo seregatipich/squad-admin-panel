@@ -338,6 +338,15 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
 
       if (outcome.status !== 'ok') return replyGrantProblem(reply, outcome);
       invalidatePermissionCache(playerId);
+      req.auditSnapshots = {
+        targetId: playerId,
+        after: {
+          tier_id: req.body.tier_id,
+          price_bonuses: tier.price,
+          renews_every_days: tier.days,
+          balance: outcome.balance,
+        },
+      };
 
       reply.code(201);
       return {
@@ -382,6 +391,16 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
       }
       if (outcome.status !== 'ok') return replyGrantProblem(reply, outcome);
       invalidatePermissionCache(playerId);
+      req.auditSnapshots = {
+        targetId: playerId,
+        after: {
+          tier_id: req.body.tier_id,
+          price_bonuses: outcome.subscription.priceBonuses,
+          renews_every_days: outcome.subscription.renewsEveryDays,
+          subscription_id: outcome.subscription.id,
+          balance: outcome.balance,
+        },
+      };
 
       reply.code(201);
       return {
@@ -425,6 +444,11 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'subscription_not_found' };
       }
+      req.auditSnapshots = {
+        targetId: row.id,
+        before: { status: 'active', tier_id: row.tierId, player_id: row.playerId },
+        after: { status: row.status, cancelled_at: now.toISOString() },
+      };
       return { subscription: serialize(row) };
     },
   );
@@ -485,6 +509,16 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
       }
       if (outcome.status !== 'ok') return replyGrantProblem(reply, outcome);
       invalidatePermissionCache(req.params.playerId);
+      req.auditSnapshots = {
+        targetId: req.params.playerId,
+        after: {
+          tier_id: req.body.tier_id,
+          price_bonuses: outcome.subscription.priceBonuses,
+          renews_every_days: outcome.subscription.renewsEveryDays,
+          subscription_id: outcome.subscription.id,
+          balance: outcome.balance,
+        },
+      };
 
       reply.code(201);
       return {

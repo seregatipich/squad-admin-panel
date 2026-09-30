@@ -24,12 +24,22 @@ const EOS_RENAME = 'aa00000000000000000000000000e003';
 const EOS_BACKFILL = 'aa00000000000000000000000000e004';
 const EOS_CONFLICT = 'aa00000000000000000000000000e005';
 const EOS_IP = 'aa00000000000000000000000000e006';
-const ALL_EOS = [EOS_IDEMPOTENT, EOS_CONCURRENT, EOS_RENAME, EOS_BACKFILL, EOS_CONFLICT, EOS_IP];
+const EOS_ATOMIC = 'aa00000000000000000000000000e007';
+const ALL_EOS = [
+  EOS_ATOMIC,
+  EOS_IDEMPOTENT,
+  EOS_CONCURRENT,
+  EOS_RENAME,
+  EOS_BACKFILL,
+  EOS_CONFLICT,
+  EOS_IP,
+];
 
 const STEAM_BACKFILL = '76561199220000004';
 const STEAM_CONFLICT_1 = '76561199220000051';
 const STEAM_CONFLICT_2 = '76561199220000052';
 const STEAM_IP = '76561199220000006';
+const STEAM_ATOMIC = '76561199220000007';
 const STEAM_PRECEDENCE = '76561199220000053';
 
 function connectEvent(payload: Partial<PlayerConnectedPayload>): EventEnvelope {
@@ -184,6 +194,45 @@ describe('handlePlayerConnected (real database)', () => {
     expect(player?.steamId64).toBe(BigInt(STEAM_BACKFILL));
     expect(player?.steamEosConflict).toBe(false);
     expect(await auditsFor(player?.id ?? '', 'player.steam_linked')).toHaveLength(1);
+  });
+
+  it('rolls back the steam link when the audit insert fails (single transaction)', async () => {
+    await handlePlayerConnected(
+      db,
+      connectEvent({ eos_id: EOS_ATOMIC, steam_id64: null as unknown as string, name: 'Atomic' }),
+    );
+    const before = await playerByEos(EOS_ATOMIC);
+
+    const failingAuditDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop !== 'transaction') return Reflect.get(target, prop, receiver);
+        return (run: (tx: typeof db) => Promise<unknown>) =>
+          target.transaction((tx) =>
+            run(
+              new Proxy(tx, {
+                get(txTarget, txProp, txReceiver) {
+                  if (txProp !== 'insert') return Reflect.get(txTarget, txProp, txReceiver);
+                  return (table: unknown) => {
+                    if (table === auditLog) throw new Error('audit insert failed');
+                    return txTarget.insert(table as typeof playerNameHistory);
+                  };
+                },
+              }) as typeof db,
+            ),
+          );
+      },
+    });
+
+    await expect(
+      handlePlayerConnected(
+        failingAuditDb,
+        connectEvent({ eos_id: EOS_ATOMIC, steam_id64: STEAM_ATOMIC, name: 'Atomic' }),
+      ),
+    ).rejects.toThrow('audit insert failed');
+
+    const after = await playerByEos(EOS_ATOMIC);
+    expect(after?.steamId64).toBeNull();
+    expect(after?.lastSeenAt).toEqual(before?.lastSeenAt);
   });
 
   it('flags and persists a steam<->eos conflict, storing the latest steam', async () => {

@@ -276,6 +276,27 @@ describe('POST /api/v1/servers', () => {
     });
   });
 
+  it('lets exactly one of several concurrent creates with the same ports win (#337)', async () => {
+    const cookie = await login();
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/servers',
+          headers: { cookie },
+          payload: { ...createBody, slug: `port-race-${i}` },
+        }),
+      ),
+    );
+    const codes = responses.map((r) => r.statusCode).sort();
+    expect(codes).toEqual([201, 409, 409, 409, 409, 409]);
+    const rows = await h.db
+      .select({ id: serverSettings.serverId })
+      .from(serverSettings)
+      .where(eq(serverSettings.gamePort, createBody.game_port));
+    expect(rows).toHaveLength(1);
+  });
+
   it('creates a second server with distinct, non-colliding ports (control)', async () => {
     const cookie = await login();
     const first = await h.app.inject({

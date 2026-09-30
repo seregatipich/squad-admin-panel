@@ -85,13 +85,17 @@ function BonusLeaderboardBrowser() {
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as BonusLeaderboardBody;
+        const body = (await res.json()) as BonusLeaderboardBody;
+        if (!Array.isArray(body?.rows)) throw new Error('Некорректный ответ сервера');
+        return body;
       })
       .then((body) => {
         if (current()) setData(body);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (!current()) return;
+        setError((err as Error).message);
+        setData(null);
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -139,7 +143,7 @@ function BonusLeaderboardBrowser() {
       ) : null}
 
       <Card padding="none">
-        {!available && !loading ? (
+        {error ? null : !available && !loading ? (
           <EmptyState
             title="Экономика отключена — лидерборд бонусов недоступен."
             description="Включите экономику в настройках панели, чтобы бонусы начислялись и попадали в рейтинг."

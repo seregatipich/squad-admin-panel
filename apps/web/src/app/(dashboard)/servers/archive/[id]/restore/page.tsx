@@ -46,6 +46,12 @@ interface InstallProgressLine {
   message: string;
 }
 
+/** Шаг после создания сервера, который можно повторить из стадии ошибки. */
+type RetryStep = 'install' | 'restore-configs' | 'restart';
+
+/** Права, без которых мастер не дойдёт до конца: создание и установка, затем наложение конфигов. */
+const REQUIRED_PERMISSIONS = ['server:install', 'config:edit'] as const;
+
 type WizardStage =
   | 'form'
   | 'creating'
@@ -81,6 +87,8 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
   const [newServerId, setNewServerId] = useState<string | null>(null);
   const [lines, setLines] = useState<InstallProgressLine[]>([]);
   const [restoreSummary, setRestoreSummary] = useState<RestoreConfigsResponse | null>(null);
+  const [retryStep, setRetryStep] = useState<RetryStep | null>(null);
+  const [missingPermissions, setMissingPermissions] = useState<string[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Closes a still-open install-progress socket on unmount (route change,
@@ -114,6 +122,23 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
       cancelled = true;
     };
   }, [id]);
+
+  // Pre-check of the rights the wizard needs, so it is not started only to
+  // fail halfway (config:edit is a separate right from server:install). A
+  // failed /me read does not block the form: the API enforces rights anyway.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
+      .then((r) => (r.ok ? (r.json() as Promise<{ permissions: string[] }>) : null))
+      .then((me) => {
+        if (cancelled || !me) return;
+        setMissingPermissions(REQUIRED_PERMISSIONS.filter((key) => !me.permissions.includes(key)));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -149,6 +174,11 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
       setStage('form');
       return;
     }
+    if (restoreRes.status === 400) {
+      setError('Сервер не создан: проверьте идентификатор и отображаемое имя');
+      setStage('form');
+      return;
+    }
     if (!restoreRes.ok) {
       setError(`Не удалось создать сервер из архива (HTTP ${restoreRes.status})`);
       setStage('error');
@@ -156,9 +186,14 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     }
     const restoreBody = (await restoreRes.json()) as RestoreResponse;
     setNewServerId(restoreBody.id);
+    await installServer(restoreBody.id);
+  }
 
+  async function installServer(serverId: string) {
+    setError(null);
+    setRetryStep('install');
     setStage('installing');
-    const installRes = await fetch(`/api/v1/servers/${restoreBody.id}/install`, {
+    const installRes = await fetch(`/api/v1/servers/${serverId}/install`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
@@ -172,7 +207,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(
-      `${proto}://${window.location.host}/api/v1/servers/${restoreBody.id}/install/ws`,
+      `${proto}://${window.location.host}/api/v1/servers/${serverId}/install/ws`,
     );
     wsRef.current = ws;
     let done = false;
@@ -194,7 +229,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
           done = true;
           ws.close();
           if (frame.final === 'done') {
-            void overlayConfigs(restoreBody.id);
+            void overlayConfigs(serverId);
           } else {
             setError('Установка завершилась с ошибкой');
             setStage('error');
@@ -223,6 +258,8 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
   }
 
   async function overlayConfigs(targetId: string) {
+    setError(null);
+    setRetryStep('restore-configs');
     setStage('restoring-configs');
     try {
       const r = await fetch(`/api/v1/servers/${targetId}/restore-configs`, {
@@ -247,6 +284,8 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
 
   async function startServer() {
     if (!newServerId) return;
+    setError(null);
+    setRetryStep('restart');
     setStage('starting');
     // /restart, not /start: install() already starts the container, and
     // overlayConfigs() has since written the archived Server.cfg/Admins.cfg
@@ -264,6 +303,13 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     }
     setStage('done');
     router.push(`/servers/${newServerId}`);
+  }
+
+  function retryFailedStep() {
+    if (!newServerId || !retryStep) return;
+    if (retryStep === 'install') void installServer(newServerId);
+    else if (retryStep === 'restore-configs') void overlayConfigs(newServerId);
+    else void startServer();
   }
 
   if (!archive) {
@@ -293,6 +339,13 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
           subtitle={`Источник: ${archive.server.display_name} · ${archive.server.slug}`}
         />
         {error && <InlineBanner tone="crit" title="Восстановление не начато" description={error} />}
+        {missingPermissions.length > 0 && (
+          <InlineBanner
+            tone="warn"
+            title="Недостаточно прав для восстановления"
+            description={`Нужны права: ${REQUIRED_PERMISSIONS.join(', ')}. Не хватает: ${missingPermissions.join(', ')}.`}
+          />
+        )}
         <Card as="section">
           <form onSubmit={submit} className="space-y-4">
             <FieldRow label="Идентификатор нового сервера" required>
@@ -311,7 +364,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
               />
             </FieldRow>
             <div className="flex justify-end">
-              <Button type="submit" variant="primary">
+              <Button type="submit" variant="primary" disabled={missingPermissions.length > 0}>
                 Создать новый сервер из бэкапа
               </Button>
             </div>
@@ -374,6 +427,14 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
             </ul>
           }
         />
+      ) : null}
+      {stage === 'error' && newServerId ? (
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => router.push(`/servers/${newServerId}`)}>Открыть сервер</Button>
+          <Button variant="primary" onClick={retryFailedStep}>
+            Повторить шаг
+          </Button>
+        </div>
       ) : null}
       {stage === 'configs-restored' && newServerId ? (
         <div className="flex justify-end gap-2">

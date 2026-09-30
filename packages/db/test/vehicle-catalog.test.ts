@@ -11,6 +11,14 @@ const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMBAT_SQL = readFileSync(path.resolve(__dirname, '../sql/combat-events.sql'), 'utf-8');
 const CATALOG_SQL = readFileSync(path.resolve(__dirname, '../sql/vehicle-catalog.sql'), 'utf-8');
+const SEED_MIGRATION_SQL = readFileSync(
+  path.resolve(__dirname, '../drizzle/0032_geo_anomalies_and_vehicles.sql'),
+  'utf-8',
+);
+// The production seed is the vehicle_catalog INSERT inside migration 0032.
+const SEED_INSERT_SQL = SEED_MIGRATION_SQL.split('--> statement-breakpoint').find((statement) =>
+  statement.includes('INSERT INTO vehicle_catalog'),
+);
 
 const SCHEMA = 'vehicle_catalog_dbtest';
 const SERVER_ID = '000000e1-0000-4000-8000-0000000000e1';
@@ -46,13 +54,8 @@ beforeAll(async () => {
     ON CONFLICT (id) DO NOTHING
   `;
 
-  for (const asset of VEHICLE_CATALOG_SEED) {
-    await sql`
-      INSERT INTO vehicle_catalog (asset_id, name_en, name_ru, vehicle_class)
-      VALUES (${asset.assetId}, ${asset.nameEn}, ${asset.nameRu}, ${asset.vehicleClass})
-      ON CONFLICT (asset_id) DO NOTHING
-    `;
-  }
+  if (!SEED_INSERT_SQL) throw new Error('vehicle_catalog seed INSERT not found in migration 0032');
+  await sql.unsafe(SEED_INSERT_SQL);
 }, 60_000);
 
 afterAll(async () => {
@@ -71,11 +74,16 @@ describeIfDb('vehicle_catalog seed', () => {
     expect(row.vehicle_class).toBe('MBT');
   });
 
-  it('seeds every catalog entry from the shared constant', async () => {
-    const [{ count }] = await sql<
-      { count: string }[]
-    >`SELECT count(*)::int AS count FROM vehicle_catalog`;
-    expect(Number(count)).toBe(VEHICLE_CATALOG_SEED.length);
+  it('keeps VEHICLE_CATALOG_SEED identical to the rows seeded by migration 0032', async () => {
+    const rows = await sql<
+      { assetId: string; nameEn: string; nameRu: string; vehicleClass: string }[]
+    >`
+      SELECT asset_id AS "assetId", name_en AS "nameEn", name_ru AS "nameRu",
+             vehicle_class AS "vehicleClass"
+      FROM vehicle_catalog ORDER BY asset_id
+    `;
+    const expected = [...VEHICLE_CATALOG_SEED].sort((a, b) => (a.assetId < b.assetId ? -1 : 1));
+    expect(rows.map((row) => ({ ...row }))).toEqual(expected);
   });
 });
 
