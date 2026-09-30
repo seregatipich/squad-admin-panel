@@ -333,13 +333,16 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // necessarily current, so it's forwarded (for context) but never
           // treated as terminal. Only 'done' frames seen live, after
           // `backfill_complete`, end the connection.
-          const backfill = (await redis.xrange(
+          // Newest 500 entries (XREVRANGE, restored to chronological order) so
+          // a long history never resumes the live tail from an old run.
+          const newestFirst = (await redis.xrevrange(
             DEPOT_PROGRESS_STREAM,
-            '-',
             '+',
+            '-',
             'COUNT',
             '500',
           )) as Array<[string, string[]]>;
+          const backfill = newestFirst.reverse();
           for (const [id, kv] of backfill) {
             lastId = id;
             sendEntry(kv);

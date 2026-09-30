@@ -141,7 +141,6 @@ const setPriorityBody = z.object({ enabled: z.boolean() });
 
 const rosterExportQuery = z.object({ format: z.literal('csv').default('csv') });
 
-/** Escapes a CSV field per RFC 4180 when it contains a comma, quote, or newline. */
 interface RosterRow {
   player_id: string;
   member_role: string;

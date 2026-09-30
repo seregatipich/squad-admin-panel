@@ -71,7 +71,6 @@ function parseImportRow(raw: string): { steamId64: string; comment: string | nul
   return { steamId64, comment: comment.length > 0 ? comment : null };
 }
 
-/** Escape a CSV cell (quote when it contains a delimiter, quote, or newline). */
 const roleMembersRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 

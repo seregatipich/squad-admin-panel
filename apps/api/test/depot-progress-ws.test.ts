@@ -145,6 +145,33 @@ describe('GET /api/v1/depot/progress/ws', () => {
     expect(last).toEqual({ done: true, final: 'error', error: 'boom' });
   });
 
+  it('backfills the newest 500 entries and ignores an old done beyond that window', async () => {
+    await publishDepotProgressDone(redis, 'done');
+    for (let i = 0; i < 600; i++) {
+      await publishDepotProgressLine(redis, 'stdout', `line ${i}`);
+    }
+    await redis.set('depot:updating', new Date().toISOString(), 'EX', 3600);
+
+    const { ws, frames } = connect();
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    await waitFor(() =>
+      frames.some((f) => (f as { backfill_complete?: boolean }).backfill_complete === true),
+    );
+
+    const messages = frames
+      .map((f) => (f as { message?: string }).message)
+      .filter((m): m is string => typeof m === 'string');
+    expect(messages).toHaveLength(500);
+    expect(messages[0]).toBe('line 100');
+    expect(messages.at(-1)).toBe('line 599');
+    expect(frames.some((f) => (f as { done?: boolean }).done)).toBe(false);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    const closed = waitForClose(ws);
+    await publishDepotProgressDone(redis, 'done');
+    await closed;
+  });
+
   it('synthesizes an immediate done frame from depot:last_update when idle (ok)', async () => {
     await redis.set(
       'depot:last_update',
