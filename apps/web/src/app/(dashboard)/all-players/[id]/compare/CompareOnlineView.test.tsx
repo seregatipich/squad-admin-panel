@@ -38,7 +38,7 @@ describe('CompareOnlineView', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
-        if (url.startsWith('/api/v1/players?q=')) {
+        if (url.startsWith('/api/v1/players/search?q=')) {
           return Promise.resolve(json({ items: [{ id: PLAYER_C, canonical_name: 'PlayerC' }] }));
         }
         compareCalls += 1;
