@@ -566,7 +566,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(configVersions.filename, desc(configVersions.createdAt));
       const tipByFile = new Map<string, { id: string; sha: string | null }>();
       for (const t of tipRows) {
-        tipByFile.set(t.filename, { id: t.id, sha: hex(t.sha as unknown as Buffer) });
+        tipByFile.set(t.filename, { id: t.id, sha: hex(t.sha) });
       }
       const items = await Promise.all(
         DRIFT_SWEEP_FILES.map(async (name) => {
@@ -1022,7 +1022,7 @@ async function persistVersion(
         ok: true,
         unchanged: true,
         disk_repaired: !diskInSync,
-        previous_sha256: hex(prevRow.sha as unknown as Buffer),
+        previous_sha256: hex(prevRow.sha),
         sha256: hex(newSha),
         behavior: configFileClass(name),
       },
@@ -1049,7 +1049,7 @@ async function persistVersion(
       ok: true,
       unchanged: false,
       version_id: inserted[0]?.id,
-      previous_sha256: prevRow ? hex(prevRow.sha as unknown as Buffer) : null,
+      previous_sha256: prevRow ? hex(prevRow.sha) : null,
       sha256: hex(newSha),
       created_at: inserted[0]?.createdAt,
       behavior: configFileClass(name),

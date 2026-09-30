@@ -95,10 +95,7 @@ async function panelRconCredentials(
     where: eq(serverCredentials.serverId, serverId),
   });
   if (!creds?.rconPasswordEncrypted) return null;
-  const password = decryptString(
-    app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
-  );
+  const password = decryptString(app.encryptionKey, deserialize(creds.rconPasswordEncrypted));
   return { password, port: creds.rconPort };
 }
 
