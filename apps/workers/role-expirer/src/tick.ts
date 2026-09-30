@@ -58,7 +58,6 @@ export interface RoleExpiryTickDeps {
     enqueued: number;
     revokedSessionIds: Map<string, string[]>;
   }>;
-  invalidatePermissionCache(playerId: string): void;
   /** Best-effort, post-commit Redis fan-out for the sessions `clearExpiredAssignments` already deleted. */
   notifySessionsRevoked(playerId: string, sessionIds: string[]): Promise<void>;
   diag: Pick<Diag, 'emit'>;
@@ -107,7 +106,6 @@ export async function runRoleExpiryTick(deps: RoleExpiryTickDeps): Promise<RoleE
     }
 
     for (const assignment of cleared) {
-      deps.invalidatePermissionCache(assignment.playerId);
       // Best-effort and isolated per player: the DB-side clear, audit entry
       // and session delete already committed inside `clearExpiredAssignments`
       // — a failed Redis cache-clear or live-bus publish here must not be
@@ -162,7 +160,6 @@ export function createRoleExpiryDeps(
     findExpiredAssignments: (now) => findExpiredAssignments(db, now, batchSize),
     clearExpiredAssignments: (assignments, now, event) =>
       clearExpiredAssignments(db, assignments, now, event),
-    invalidatePermissionCache: () => undefined,
     notifySessionsRevoked: (playerId, sessionIds) =>
       notifySessionsRevoked(redis, playerId, sessionIds),
   };

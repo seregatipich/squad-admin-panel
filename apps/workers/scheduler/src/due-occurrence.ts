@@ -1,4 +1,4 @@
-import { expandCron5Occurrences, type RconOperatorCommandName } from '@squad/shared-types';
+import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
 
 /** Operator RCON command queued onto worker-rcon's command stream. */
 export interface SendRconCommandInput {
@@ -23,11 +23,13 @@ export interface CronScheduleFields {
  *
  * - One-off (`recurrence === null`): due once `oneOffAt <= now`, and only if it
  *   has never executed (`lastExecutedAt === null`).
- * - Recurring: due when {@link expandCron5Occurrences} finds at least one
- *   matching minute strictly after the last-known cursor (`lastExecutedAt`, or
+ * - Recurring: due when {@link findLastCron5Occurrence} finds a matching
+ *   minute strictly after the last-known cursor (`lastExecutedAt`, or
  *   `createdAt` if it has never executed) and at or before `now`. When several
  *   occurrences were missed between ticks only the most recent is returned —
- *   the tick fires once, advancing the cursor past every missed occurrence.
+ *   the tick fires once, advancing the cursor past every missed occurrence,
+ *   however far behind the cursor has fallen (a quarterly or annual cron stays
+ *   due after months of downtime).
  */
 export function resolveCronDueOccurrence(schedule: CronScheduleFields, now: Date): Date | null {
   if (schedule.recurrence === null) {
@@ -42,6 +44,5 @@ export function resolveCronDueOccurrence(schedule: CronScheduleFields, now: Date
   const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
   if (from.getTime() > now.getTime()) return null;
 
-  const occurrences = expandCron5Occurrences(schedule.recurrence, from, now);
-  return occurrences.at(-1) ?? null;
+  return findLastCron5Occurrence(schedule.recurrence, from, now);
 }
