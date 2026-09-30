@@ -2,9 +2,9 @@
 # verify.sh — fast local completion gate: typecheck + lint + DB-backed tests.
 #
 # Narrower than scripts/pre-push-checklist.sh (no build, no gitleaks — those
-# aren't part of "tests pass, lint is clean"): this exists so a bare `npm
+# aren't part of "tests pass, lint is clean"): this exists so a bare `pnpm
 # test` isn't run without a database. Without this script, a generic runner
-# invoking `npm test` in a fresh shell has no DATABASE_URL and every
+# invoking `pnpm test` in a fresh shell has no DATABASE_URL and every
 # DB-backed suite (apps/api, most workers) fails immediately — a false
 # negative, not a real regression; scripts/pre-push-checklist.sh and the `ci`
 # workflow remain the authoritative gates.
@@ -77,6 +77,9 @@ fi
 
 if [ -n "${DATABASE_URL:-}" ]; then
   export TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}"
+  # Refresh origin/dev so the affected set is measured from the real base;
+  # offline, the local ref is used as is (same as pre-push-checklist.sh).
+  git fetch --quiet origin dev 2>/dev/null || echo "   git fetch origin dev failed — using the local origin/dev ref" >&2
   run_step "tests (affected since origin/dev)" pnpm turbo run test --filter='...[origin/dev]'
 else
   printf '\n\033[31m✗ [verify] tests — no DATABASE_URL and could not auto-provision\033[0m\n'
