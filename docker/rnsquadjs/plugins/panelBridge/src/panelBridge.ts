@@ -9,7 +9,6 @@ interface UpstreamRconEmitter {
 
 interface UpstreamState {
   listener: EventEmitter;
-  execute: (command: string) => Promise<string>;
   logger?: { log: (...text: string[]) => void };
   id?: unknown;
   rcon?: { rconEmitter?: UpstreamRconEmitter };
@@ -48,9 +47,6 @@ export const panelBridge = (state: UpstreamState, _options: Record<string, unkno
     log(`[panelBridge] already running for ${serverId}; ignoring duplicate init`);
     return;
   }
-
-  const rconExec = (method: string, args: unknown[]): Promise<string> =>
-    state.execute([method, ...args.map((arg) => String(arg))].join(' '));
 
   // Status wiring (rnsquadjs:status, non-load-bearing per D4): the only reliable
   // RCON connection signal is the squad-rcon instance at state.rcon.rconEmitter,
@@ -91,7 +87,6 @@ export const panelBridge = (state: UpstreamState, _options: Record<string, unkno
   const bridgePromise = startPanelBridge({
     serverId,
     emitter: state.listener,
-    rconExec,
     onStatus,
     findPlayer,
   });
