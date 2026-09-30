@@ -1009,7 +1009,10 @@ interface DeployFixture {
 /** An app directory with the files the deploy hashes, and host tool shims. */
 function deployFixture(): DeployFixture {
   const { root, script } = copyScript('scripts/deploy-stand.sh');
-  writeFileSync(path.join(root, '.env.stand'), 'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\n');
+  writeFileSync(
+    path.join(root, '.env.stand'),
+    'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\nACME_EMAIL=ops@stand.example\nDUCKDNS_TOKEN=token-value\n',
+  );
   mkdirSync(path.join(root, 'docker'));
   writeFileSync(path.join(root, 'docker/compose.stand.yml'), 'services: {}\n');
   writeFileSync(path.join(root, 'docker/Caddyfile.stand'), '{$APP_DOMAIN} {}\n');
@@ -1098,6 +1101,26 @@ describe('the stand host release deploy', { concurrency: true }, () => {
       const result = await deploy(fixture);
       assert.equal(result.status, 1, content);
       assert.match(result.stderr, /APP_DOMAIN in .*\.env\.stand must be the stand's host name/);
+      assert.deepEqual(logLines(fixture.log), [], content);
+    }
+  });
+
+  it('refuses to start without a real ACME_EMAIL and a DUCKDNS_TOKEN in .env.stand', async () => {
+    const base = 'APP_DOMAIN=stand.example\n';
+    const cases: Array<[string, RegExp]> = [
+      [`${base}DUCKDNS_TOKEN=t\n`, /ACME_EMAIL in .*\.env\.stand must be set/],
+      [`${base}ACME_EMAIL=ops@stand.example\n`, /DUCKDNS_TOKEN in .*\.env\.stand must be set/],
+      [
+        `${base}ACME_EMAIL=admin@example.com\nDUCKDNS_TOKEN=t\n`,
+        /ACME_EMAIL .* must be a real address/,
+      ],
+    ];
+    for (const [content, message] of cases) {
+      const fixture = deployFixture();
+      writeFileSync(path.join(fixture.root, '.env.stand'), content);
+      const result = await deploy(fixture);
+      assert.equal(result.status, 1, content);
+      assert.match(result.stderr, message);
       assert.deepEqual(logLines(fixture.log), [], content);
     }
   });
