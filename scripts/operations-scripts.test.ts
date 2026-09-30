@@ -1174,7 +1174,10 @@ describe('the stand host release deploy', { concurrency: true }, () => {
   it('generates missing Redis secrets into .env.stand once and never rotates them', async () => {
     const fixture = deployFixture();
     const envFile = path.join(fixture.root, '.env.stand');
-    writeFileSync(envFile, 'SAFE_TEST_VALUE=1\nREDIS_SIDECAR_PASSWORD=\nAPP_DOMAIN=stand.example');
+    writeFileSync(
+      envFile,
+      'SAFE_TEST_VALUE=1\nREDIS_SIDECAR_PASSWORD=\nACME_EMAIL=ops@stand.example\nDUCKDNS_TOKEN=token-value\nAPP_DOMAIN=stand.example',
+    );
     const secrets = () =>
       Object.fromEntries(
         readFileSync(envFile, 'utf8')
@@ -2059,6 +2062,7 @@ describe('restore apply: staging, worker pause, transactional pg_restore, Redis 
         "      *'restic restore'*) kind=stage ;;",
         '      *pg_restore*) kind=pg_restore ;;',
         '      *redis-server*) kind=redis ;;',
+        '      */data/pre-restore\\ ]*) kind=redis_guard ;;',
         '      *) kind=other ;;',
         '    esac',
         '    argument="SCRIPT:$kind"',
@@ -2080,7 +2084,19 @@ describe('restore apply: staging, worker pause, transactional pg_restore, Redis 
         `    [[ -n "\${STAGE_NO_RDB:-}" ]] || printf "restored rdb" > "$OPS_DATA/backup-dump/restore/dump.rdb"`,
         '    ;;',
         `  *SCRIPT:pg_restore*) exit "\${PG_RESTORE_EXIT:-0}" ;;`,
-        '  *SCRIPT:redis*) exec sh -c "$body" ;;',
+        '  *SCRIPT:redis_guard*) [[ ! -e "$OPS_DATA/redis/pre-restore" ]] || exit 1 ;;',
+        // Stands in for the one-off container: its /data is the redis volume
+        // and /restore the staged dumps. The fixture path contains spaces, so
+        // the script sees both through space-free symlinks.
+        '  *SCRIPT:redis*)',
+        '    view=$(mktemp -d /tmp/ops-redis-view.XXXXXX)',
+        '    ln -s "$OPS_DATA/redis" "$view/data"',
+        '    ln -s "$OPS_DATA/backup-dump/restore" "$view/restore"',
+        '    status=0',
+        '    sh -c "$(printf "%s" "$body" | sed -e "s#/restore#$view/restore#g" -e "s#/data#$view/data#g")" || status=$?',
+        '    rm -rf "$view"',
+        '    exit "$status"',
+        '    ;;',
         'esac',
         'exit 0',
       ].join('\n'),
@@ -2164,7 +2180,7 @@ describe('restore apply: staging, worker pause, transactional pg_restore, Redis 
       'restored rdb',
     );
     assert.equal(existsSync(path.join(fixture.dataDir, 'redis/appendonlydir')), false);
-    assert.equal(existsSync(path.join(fixture.dataDir, 'redis.pre-restore')), false);
+    assert.equal(existsSync(path.join(fixture.dataDir, 'redis/pre-restore')), false);
     assert.equal(existsSync(path.join(fixture.dataDir, 'backup-dump/restore')), false);
     assert.ok(commands.includes('docker|compose|--profile|backup|up|-d|redis'));
   });
@@ -2208,7 +2224,7 @@ describe('restore apply: staging, worker pause, transactional pg_restore, Redis 
       readFileSync(path.join(fixture.dataDir, 'redis/appendonlydir/live.aof'), 'utf8'),
       'live aof',
     );
-    assert.equal(existsSync(path.join(fixture.dataDir, 'redis.pre-restore')), false);
+    assert.equal(existsSync(path.join(fixture.dataDir, 'redis/pre-restore')), false);
     const commands = logLines(fixture.log);
     const upRedis = commands.lastIndexOf('docker|compose|--profile|backup|up|-d|redis');
     assert.ok(upRedis > indexOf(commands, /SCRIPT:redis/), commands.join('\n'));
@@ -2226,13 +2242,40 @@ describe('restore apply: staging, worker pause, transactional pg_restore, Redis 
     assert.equal(readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'), 'live rdb');
   });
 
+  it('passes an ENV_FILE override to compose unless the bridge set COMPOSE_ENV_FILES', () => {
+    const fixture = restoreFixture();
+    writeFileSync(path.join(fixture.root, '.env.stand'), `DATA_DIR=${fixture.dataDir}\n`);
+    const composeCalls = (env: NodeJS.ProcessEnv): string[] => {
+      const result = run('/bin/bash', [fixture.script], {
+        cwd: fixture.root,
+        env: { ...fixture.env, ...env },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return logLines(fixture.log).filter((line) => line.startsWith('docker|compose'));
+    };
+
+    const override = composeCalls({ ENV_FILE: '.env.stand', COMPOSE_ENV_FILES: '' });
+    assert.ok(
+      override.length > 0 && override.every((line) => line.includes('|--env-file|.env.stand|')),
+    );
+    writeFileSync(fixture.log, '');
+    // --env-file would replace COMPOSE_ENV_FILES and drop the stand's .release.env.
+    const bridge = composeCalls({
+      ENV_FILE: '.env.stand',
+      COMPOSE_ENV_FILES: '.env.stand,.release.env',
+    });
+    assert.ok(bridge.length > 0 && bridge.every((line) => !line.includes('--env-file')));
+  });
+
   it('refuses to run over the moved-aside dataset of an interrupted restore', () => {
     const fixture = restoreFixture();
-    mkdirSync(path.join(fixture.dataDir, 'redis.pre-restore'));
+    mkdirSync(path.join(fixture.dataDir, 'redis/pre-restore'));
     const result = apply(fixture);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /interrupted restore/);
-    assert.deepEqual(logLines(fixture.log), []);
+    const commands = logLines(fixture.log);
+    assert.equal(indexOf(commands, /SCRIPT:stage/), -1, commands.join('\n'));
+    assert.equal(indexOf(commands, /\|stop\|/), -1, commands.join('\n'));
   });
 });
 
@@ -2292,7 +2335,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: fixture.env,
-      input: 'y\ny\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(path.join(fixture.root, 'data')), false);
@@ -2315,7 +2358,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: fixture.env,
-      input: 'y\ny\ny\ny\nn\ny\n',
+      input: 'y\ny\ny\ny\ny\nn\ny\n',
     });
     assert.equal(result.status, 0, result.stderr);
     // `read -p` only shows its prompt on a terminal, so the warning is logged.
@@ -2335,7 +2378,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: { ...fixture.env, FAIL_DOCKER_MATCH: 'down' },
-      input: 'y\ny\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /could not stop the compose stack/);
@@ -2352,7 +2395,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: fixture.env,
-      input: 'n\nn\nn\nn\nn\n',
+      input: 'n\nn\nn\nn\nn\nn\nn\n',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(
@@ -2366,7 +2409,7 @@ describe('uninstall safety and cleanup boundaries', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: { ...fixture.env, FAIL_SYSTEMCTL_MATCH: 'daemon-reload', FAIL_CODE: '48' },
-      input: 'y\ny\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 48);
     const commands = logLines(fixture.log);
