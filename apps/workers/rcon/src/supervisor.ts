@@ -894,6 +894,11 @@ class PerServerSupervisor {
                 { err: err.message, serverId: this.target.serverId },
                 'rcon chat archive insert failed',
               ),
+            onPublishError: (err) =>
+              this.opts.log.warn(
+                { err: err.message, serverId: this.target.serverId },
+                'rcon chat live publish failed',
+              ),
             onFlagError: (err) =>
               this.opts.log.warn(
                 { err: err.message, serverId: this.target.serverId },

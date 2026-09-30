@@ -150,8 +150,9 @@ function cacheKeys(chat: Pick<ChatInput, 'eosId' | 'steamId64'>): string[] {
 }
 
 /**
- * Resolves a chat sender to `players.id`: by EOS/Steam id first, then by
- * current canonical name, then by name history.
+ * Resolves a chat sender to `players.id`: by EOS/Steam id when the sender has
+ * one, otherwise by current canonical name, then by name history. A sender whose
+ * ids match no player is unknown, never matched by name.
  *
  * @param cache - Optional {@link PlayerIdCache}; an id-based hit is served from
  *   and stored in it, so a repeat sender costs no queries.
@@ -177,6 +178,10 @@ export async function resolvePlayerId(
       cache?.remember(chat, rows[0].id);
       return rows[0].id;
     }
+    // The sender carries platform ids that match nobody (the roster poll has not
+    // created the player yet). A display name is not an identity: matching it
+    // would file the line under whoever else wears the same normalized name.
+    return null;
   }
 
   const normalized = normalizePlayerName(chat.playerName);
@@ -223,7 +228,8 @@ export function buildChatFrame(
 /**
  * Fan one chat line out to the live bus and persist it.
  *
- * The frame is published whatever happens; the archive row is written only
+ * The frame is published whatever happens (a failed publish is reported and
+ * does not stop the archive write); the archive row is written only
  * when the sender resolves to a known player, because `chat_messages.player_id`
  * is required. A sender the panel has never seen (no roster poll yet, no name
  * history) therefore shows up live but is not archived.
@@ -238,6 +244,8 @@ export function buildChatFrame(
  * @param source - Which pipeline carried the line; stored on the archive row.
  * @param onArchiveError - Called when the archive insert fails; the live frame
  *   has already been published at that point and is still returned.
+ * @param onPublishError - Called when the live-bus publish fails; the line is
+ *   still archived, so a Redis outage never costs the durable record.
  * @param onFlagError - Called when the flag detector fails; the line is then
  *   archived unflagged rather than dropped, so moderation degrades visibly.
  * @param playerIds - Optional worker-local sender cache for identity lookups.
@@ -253,6 +261,7 @@ export async function handleChat(
     source = 'log',
     onArchiveError,
     onFlagError,
+    onPublishError,
     playerIds,
   }: {
     serverId: string;
@@ -260,13 +269,20 @@ export async function handleChat(
     source?: ChatSource;
     onArchiveError?: (err: Error) => void;
     onFlagError?: (err: Error) => void;
+    onPublishError?: (err: Error) => void;
     playerIds?: PlayerIdCache;
   },
   detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
   const playerId = await resolvePlayerId(db, chat, playerIds);
   const frame = buildChatFrame(playerId, serverId, chat, source);
-  if (redis) await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
+  if (redis) {
+    try {
+      await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
+    } catch (err) {
+      onPublishError?.(err as Error);
+    }
+  }
   if (playerId) {
     const matchedRuleId = detector
       ? await detector.detect(chat.message).catch((err: unknown) => {

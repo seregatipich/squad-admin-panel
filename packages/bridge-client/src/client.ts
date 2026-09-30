@@ -100,6 +100,8 @@ interface PendingCall {
   reject: (err: Error) => void;
   onStream?: (frame: BridgeStreamFrame) => void;
   timer?: NodeJS.Timeout;
+  /** Connection the request went out on; only its close may fail the call. */
+  sock: Socket;
 }
 
 export interface BridgeClientConnectedInfo {
@@ -431,7 +433,9 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
 
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
     return await new Promise<Result>((resolve, reject) => {
+      const sock = this.socket as Socket;
       const pending: PendingCall = {
+        sock,
         method,
         startedAt: Date.now(),
         resolve: (v) => resolve(v as Result),
@@ -447,7 +451,6 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         }, timeoutMs);
       }
       this.pending.set(id, pending);
-      const sock = this.socket as Socket;
       sock.write(encodeFrame(req), (err) => {
         if (err) {
           this.pending.delete(id);
@@ -459,7 +462,10 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   }
 
   private attachHandlers(sock: Socket) {
+    // A fresh connection never inherits the partial frame of a previous one.
+    this.frames.reset();
     sock.on('data', (chunk) => {
+      if (this.socket !== sock) return;
       let frames: Buffer[];
       try {
         frames = this.frames.push(chunk);
@@ -491,15 +497,17 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     });
     sock.on('close', () => {
       this.onLog('bridge socket closed');
-      for (const [, pending] of this.pending) {
+      for (const [id, pending] of this.pending) {
+        if (pending.sock !== sock) continue;
         if (pending.timer) clearTimeout(pending.timer);
         pending.reject(new BridgeError('transport', 'socket closed'));
+        this.pending.delete(id);
       }
-      this.pending.clear();
       const wasConnected = this.hasEmittedConnectedForCurrentSocket;
       this.hasEmittedConnectedForCurrentSocket = false;
       if (this.socket === sock) {
         this.socket = undefined;
+        this.frames.reset();
       }
       if (wasConnected && !this.closed) {
         this.safeEmit('disconnected', 'socket-closed');
@@ -532,7 +540,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         return;
       }
       const frame: BridgeStreamFrame = { ...parsed.data, data: parsed.data.data };
-      this.pending.get(frame.id)?.onStream?.(frame);
+      this.deliverStreamFrame(frame);
       return;
     }
     const parsed = responseSchema.safeParse(raw);
@@ -573,6 +581,25 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         message: err.message,
       });
       p.reject(new BridgeError(err.code, err.message, err.detail));
+    }
+  }
+
+  /**
+   * Hands a stream frame to its call's callback. A throwing callback must not
+   * escape the socket 'data' handler (it would crash the process), so the call
+   * fails with `internal` instead.
+   */
+  private deliverStreamFrame(frame: BridgeStreamFrame) {
+    const pending = this.pending.get(frame.id);
+    if (!pending?.onStream) return;
+    try {
+      pending.onStream(frame);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.onLog('bridge onStream callback threw', { method: pending.method, err: message });
+      this.pending.delete(frame.id);
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new BridgeError('internal', `stream callback failed: ${message}`));
     }
   }
 
