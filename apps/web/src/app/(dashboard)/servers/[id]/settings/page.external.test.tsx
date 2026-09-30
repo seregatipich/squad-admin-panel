@@ -246,6 +246,31 @@ describe('SettingsPage — источник логов внешнего серв
     expect(screen.getByRole('button', { name: 'Удалить источник' })).toBeInTheDocument();
   });
 
+  it('перевыпуск ключа и удаление источника требуют подтверждения', async () => {
+    const calls = stubFetch('external');
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Источник логов (SSH)');
+    fireEvent.change(screen.getByLabelText('Хост SSH'), { target: { value: '80.242.59.123' } });
+    fireEvent.change(screen.getByLabelText(/^Путь к SquadGame.log/), {
+      target: { value: '/opt/squad1/SquadGame/Saved/Logs/SquadGame.log' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать источник и ключ' }));
+    await screen.findByLabelText('Публичный ключ панели');
+    const puts = () =>
+      calls.filter((c) => c.init?.method === 'PUT' && c.url.endsWith('/log-source'));
+    expect(puts()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Перевыпустить ключ' }));
+    expect(puts()).toHaveLength(1);
+    fireEvent.click(await screen.findByRole('button', { name: 'Перевыпустить и сбросить доступ' }));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить источник' }));
+    expect(calls.some((c) => c.init?.method === 'DELETE')).toBe(false);
+  });
+
   it('у контейнерного сервера секция источника логов не запрашивается', async () => {
     const calls = stubFetch('container');
     await act(async () => {

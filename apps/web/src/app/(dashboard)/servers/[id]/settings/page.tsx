@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useState } from 'react';
 import { TagInput } from '@/components/TagInput';
 import {
+  AlertDialog,
   Badge,
   type BadgeTone,
   Button,
@@ -164,6 +165,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [logSourceErr, setLogSourceErr] = useState<string | null>(null);
   const [logSourceLoadFailed, setLogSourceLoadFailed] = useState(false);
   const [logSourceSaved, setLogSourceSaved] = useState(false);
+  const [logSourceConfirm, setLogSourceConfirm] = useState<'regenerate' | 'remove' | null>(null);
 
   // `resetDraft` is false for a reload triggered by an unrelated save (license
   // attach/detach) — those must not discard other fields' unsaved edits, only
@@ -798,13 +800,35 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               </div>
             ) : null}
           </GroupedList>
+          <AlertDialog
+            open={logSourceConfirm !== null}
+            onClose={() => setLogSourceConfirm(null)}
+            title={logSourceConfirm === 'remove' ? 'Удалить источник логов' : 'Перевыпустить ключ'}
+            body={
+              logSourceConfirm === 'remove'
+                ? 'Настройки SSH-источника и ключ панели будут удалены, сбор логов остановится.'
+                : 'Прежний ключ перестанет работать: доступ по уже добавленной строке в authorized_keys пропадёт, пока новый ключ не будет добавлен на хост.'
+            }
+            confirmLabel={
+              logSourceConfirm === 'remove' ? 'Удалить источник' : 'Перевыпустить и сбросить доступ'
+            }
+            cancelLabel="Отмена"
+            tone="destructive"
+            busy={logSourceBusy}
+            onConfirm={async () => {
+              const action = logSourceConfirm;
+              if (action === 'remove') await removeLogSource();
+              else await saveLogSource(true);
+              setLogSourceConfirm(null);
+            }}
+          />
           <div className="flex justify-end gap-2">
             {logSource?.configured ? (
               <>
-                <Button disabled={logSourceBusy} onClick={removeLogSource}>
+                <Button disabled={logSourceBusy} onClick={() => setLogSourceConfirm('remove')}>
                   Удалить источник
                 </Button>
-                <Button disabled={logSourceBusy} onClick={() => saveLogSource(true)}>
+                <Button disabled={logSourceBusy} onClick={() => setLogSourceConfirm('regenerate')}>
                   Перевыпустить ключ
                 </Button>
               </>
