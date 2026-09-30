@@ -174,6 +174,56 @@ describe('DashboardPage', () => {
     expect(capturedBody).toEqual({ server_ids: ['server-1', 'server-2'] });
   });
 
+  it('maps servers_running from depot/update to a Russian hint with the missing count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/ready') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow(
+      'Отметьте все запущенные серверы для остановки: не выбрано 2.',
+    );
+  });
+
+  it('falls back to the HTTP status for other depot/update failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/ready') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return { ok: false, status: 500, json: async () => ({ error: 'boom' }) } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow('HTTP 500');
+  });
+
   it('carries exactly one first-level heading', async () => {
     stubFetch({});
     await renderDashboard();

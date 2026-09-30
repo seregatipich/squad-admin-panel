@@ -495,3 +495,78 @@ describe('RosterPanel — подтверждение удаления', () => {
     expect(deleted).toEqual([]);
   });
 });
+
+describe('RosterPanel — добавление первого участника', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  async function addCandidate(postBody: Record<string, unknown>) {
+    const leader = member({ player_id: 'p-leader' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const json = (body: unknown, status = 200) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status }));
+        if (url === '/api/v1/me') {
+          return json({ player_id: 'p-leader', can_manage_clans: true });
+        }
+        if (url.startsWith('/api/v1/players/search')) {
+          return json({
+            items: [
+              {
+                id: 'p-new',
+                canonical_name: 'Новичок',
+                steam_id64: '76561198000000001',
+                eos_id: null,
+                clan_id: null,
+                clan_name: null,
+              },
+            ],
+          });
+        }
+        if (url === '/api/v1/clans/clan-1/members' && init?.method === 'POST') {
+          return json(postBody, 201);
+        }
+        if (url.startsWith('/api/v1/clans/clan-1/members')) {
+          return json({
+            clan_id: 'clan-1',
+            items: [leader],
+            total: 1,
+            page: 1,
+            limit: 25,
+            priority_count: 0,
+            max_priority_slots: 5,
+          });
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+    await user.click(await screen.findByRole('button', { name: 'Добавить участника' }));
+    await user.type(await screen.findByRole('searchbox', { name: 'Поиск игрока' }), 'Нович{Enter}');
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: 'Добавить' }));
+  }
+
+  it('показывает баннер, когда API сообщил role_overridden', async () => {
+    await addCandidate({ player_id: 'p-new', member_role: 'leader', role_overridden: true });
+
+    expect(await screen.findByText('Роль изменена автоматически')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Первый участник клана всегда становится главой — выбранная роль не применена.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('не показывает баннер, когда роль применена как запрошено', async () => {
+    await addCandidate({ player_id: 'p-new', member_role: 'member' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByText('Роль изменена автоматически')).not.toBeInTheDocument();
+  });
+});
