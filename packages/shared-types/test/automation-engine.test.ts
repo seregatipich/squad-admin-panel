@@ -191,6 +191,29 @@ describe('evaluate — time_of_day', () => {
     ).toHaveLength(0);
   });
 
+  it('ties the after-midnight part of an overnight window to its start weekday (#1178)', () => {
+    const friday2300To0200 = todRule({
+      startMinute: 1380,
+      endMinute: 120,
+      timezone: 'UTC',
+      weekdays: [5],
+    });
+    // Friday 2026-07-24 23:30 and Saturday 00:30 both belong to the Friday window.
+    expect(
+      evaluate(trigger({ now: new Date('2026-07-24T23:30:00Z') }), [friday2300To0200]),
+    ).toHaveLength(1);
+    expect(
+      evaluate(trigger({ now: new Date('2026-07-25T00:30:00Z') }), [friday2300To0200]),
+    ).toHaveLength(1);
+    // Friday 00:30 belongs to the Thursday window, Saturday 23:30 to Saturday's.
+    expect(
+      evaluate(trigger({ now: new Date('2026-07-24T00:30:00Z') }), [friday2300To0200]),
+    ).toHaveLength(0);
+    expect(
+      evaluate(trigger({ now: new Date('2026-07-25T23:30:00Z') }), [friday2300To0200]),
+    ).toHaveLength(0);
+  });
+
   it('honours the configured timezone', () => {
     expect(
       evaluate(trigger({ now: new Date('2026-07-24T23:00:00Z') }), [

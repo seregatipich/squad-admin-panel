@@ -43,7 +43,7 @@ export function sourceCode(s: LogSource): string {
   return SOURCE_TO_CODE[s];
 }
 export function sourceFromCode(c: string): LogSource {
-  const s = CODE_TO_SOURCE[c];
+  const s = Object.hasOwn(CODE_TO_SOURCE, c) ? CODE_TO_SOURCE[c] : undefined;
   if (!s) throw new Error(`unknown source code: ${c}`);
   return s;
 }
@@ -64,15 +64,19 @@ export function decodeLogEntry(streamId: string, fields: Record<string, string>)
   const ts = Number.parseInt(tsStr, 10);
   const sCode = fields.s ?? '';
   const lCode = fields.l ?? '';
-  const source = CODE_TO_SOURCE[sCode];
-  const level = CODE_TO_LEVEL[lCode];
+  const source = Object.hasOwn(CODE_TO_SOURCE, sCode) ? CODE_TO_SOURCE[sCode] : undefined;
+  const level = Object.hasOwn(CODE_TO_LEVEL, lCode) ? CODE_TO_LEVEL[lCode] : undefined;
   if (!source) throw new Error(`unknown source code: ${sCode}`);
   if (!level) throw new Error(`unknown level code: ${lCode}`);
   const out: LogEntry = { ts, source, level, msg: fields.m ?? '' };
   if (fields.i) out.serverId = fields.i;
   if (fields.c) {
     try {
-      out.ctx = JSON.parse(fields.c) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(fields.c);
+      out.ctx =
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : { _raw: fields.c };
     } catch {
       out.ctx = { _raw: fields.c };
     }

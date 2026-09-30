@@ -10,6 +10,17 @@
 ### Security
 - `serverCreateInput.multihome` и `serverSettingsUpdate.multihome` принимают только IP-литерал (`z.string().ip()`): bridge подставляет значение в командную строку сервера Squad (`RCONIP=`/`MULTIHOME=`), и строка с пробелами могла добавить параметры запуска (#52).
 
+## 2026-09-30 — Audit follow-up (#79)
+
+### Removed
+- `events.ts`: `CONSUMER_GROUP`, `XAUTOCLAIM_IDLE_MS`, `XAUTOCLAIM_TICK_MS` and `DLQ_DELIVER_THRESHOLD`. They described consumer groups and a dead-letter flow that no worker uses; each worker declares its own group and reclaim timings.
+
+### Fixed
+- `automation-engine.ts`: an overnight `time_of_day` window with `weekdays` now checks the weekday the window started on for its after-midnight part (#1178).
+- `automation-actions.ts`: kick/warn actions never target a player by name alone; without `steamId64`/`eosId` the run is recorded as `skipped` (`no_target`) (#1175). A non-`Error` rejection is recorded as its string form (#1173).
+- `cron5.ts`: a day-of-month or day-of-week field that starts with `*` (for example a `*` plus `/2` step) is ANDed with the other field, as in Vixie cron, instead of ORed (#1183).
+- `rcon-commands.ts`: `rconCommandRequestSchema.args` is bounded to 8 entries of at most 1024 characters (#1184).
+
 ## 2026-09-28 — Validation gaps from the #53 audit
 
 ### Fixed

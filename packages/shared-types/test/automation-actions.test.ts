@@ -140,7 +140,7 @@ describe('runMatch — real firing', () => {
     expect(runs[0]?.actionResult).toMatchObject({ reason: 'no_server' });
   });
 
-  it('resolves the RCON target by steamId64, then eosId, then name', async () => {
+  it('resolves the RCON target by steamId64, then eosId', async () => {
     const { deps, enqueued } = makeDeps();
     await runMatch(
       deps,
@@ -154,9 +154,9 @@ describe('runMatch — real firing', () => {
     expect(enqueued[0]?.args?.[0]).toBe('eos-xyz');
   });
 
-  it('falls back to the player name when steamId64 and eosId are absent', async () => {
-    const { deps, enqueued } = makeDeps();
-    await runMatch(
+  it('never targets a player by name alone (#1175)', async () => {
+    const { deps, enqueued, runs } = makeDeps();
+    const draft = await runMatch(
       deps,
       match({
         actionType: 'warn',
@@ -165,7 +165,9 @@ describe('runMatch — real firing', () => {
       }),
       { dryRun: false },
     );
-    expect(enqueued[0]?.args?.[0]).toBe('Carol');
+    expect(enqueued).toHaveLength(0);
+    expect(draft.status).toBe('skipped');
+    expect(runs[0]?.actionResult).toMatchObject({ reason: 'no_target' });
   });
 
   it('records skipped when the player has no resolvable identifier at all', async () => {
@@ -182,6 +184,16 @@ describe('runMatch — real firing', () => {
     expect(enqueued).toHaveLength(0);
     expect(draft.status).toBe('skipped');
     expect(runs[0]?.actionResult).toMatchObject({ reason: 'no_target' });
+  });
+
+  it('records failed with a string message when a non-Error is thrown (#1173)', async () => {
+    const { deps, runs } = makeDeps();
+    (deps.enqueueRcon as ReturnType<typeof vi.fn>).mockRejectedValueOnce('boom');
+    const draft = await runMatch(deps, match({ actionType: 'warn', action: { message: 'x' } }), {
+      dryRun: false,
+    });
+    expect(draft.status).toBe('failed');
+    expect(runs[0]?.actionResult).toMatchObject({ error: 'boom' });
   });
 
   it('records failed when the enqueue throws', async () => {

@@ -96,4 +96,17 @@ describe('rcon command contract', () => {
       }),
     ).toMatchObject({ ok: true, response: 'sent' });
   });
+
+  it('bounds the argument count and length of a queued request (#1184)', () => {
+    const base = { request_id: 'req-1', command: 'AdminBroadcast' };
+    expect(rconCommandRequestSchema.safeParse({ ...base, args: ['x'.repeat(1024)] }).success).toBe(
+      true,
+    );
+    expect(rconCommandRequestSchema.safeParse({ ...base, args: ['x'.repeat(1025)] }).success).toBe(
+      false,
+    );
+    expect(rconCommandRequestSchema.safeParse({ ...base, args: Array(9).fill('a') }).success).toBe(
+      false,
+    );
+  });
 });

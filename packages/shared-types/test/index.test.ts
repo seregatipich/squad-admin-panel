@@ -19,12 +19,6 @@ describe('shared-types index re-exports', () => {
       'dedup:players-projector:v1:evt-1',
     );
     expect(root.DEDUP_TTL_SECONDS).toBe(86_400);
-    expect(root.CONSUMER_GROUP.playersProjector).toBe('players-projector:v1');
-    expect(root.CONSUMER_GROUP.auditArchiver).toBe('audit-archiver:v1');
-    expect(root.CONSUMER_GROUP.stats).toBe('stats:v1');
-    expect(root.XAUTOCLAIM_IDLE_MS).toBe(120_000);
-    expect(root.XAUTOCLAIM_TICK_MS).toBe(30_000);
-    expect(root.DLQ_DELIVER_THRESHOLD).toBe(5);
   });
 
   it('re-exports plugin manifest schema and permission helpers', () => {
