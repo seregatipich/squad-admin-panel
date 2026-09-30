@@ -130,4 +130,28 @@ describe('MonitoringPage', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('figure', { name: 'CPU' })).toBeInTheDocument();
   });
+
+  it('устаревший ответ прежнего периода не перезаписывает график нового', async () => {
+    const pending: Array<(r: Response) => void> = [];
+    installFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    await renderPage();
+    await act(async () => {
+      screen.getByRole('tab', { name: '24 ч' }).click();
+    });
+    expect(pending).toHaveLength(2);
+
+    await act(async () => {
+      pending[1]?.(new Response(JSON.stringify({ points: [POINT, POINT] }), { status: 200 }));
+    });
+    await act(async () => {
+      pending[0]?.(new Response(JSON.stringify({ points: [POINT] }), { status: 200 }));
+    });
+
+    expect(screen.getByRole('figure', { name: 'CPU' })).toHaveAttribute('data-points', '2');
+  });
 });

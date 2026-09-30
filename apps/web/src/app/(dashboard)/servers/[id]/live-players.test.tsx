@@ -665,6 +665,76 @@ describe('LivePlayers — быстрые действия над игроком'
   );
 });
 
+describe('LivePlayers — устойчивость к ответам API', () => {
+  async function submitWarn(reply: Response) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) =>
+        Promise.resolve(init?.method === 'POST' ? reply : new Response(JSON.stringify(ROSTER))),
+      ),
+    );
+    render(<LivePlayers serverId="srv-1" modPermissions={['mod:warn']} />);
+    await screen.findByText('Leader');
+    fireEvent.click(screen.getByRole('button', { name: 'Предупредить: Leader' }));
+    fireEvent.change(await screen.findByLabelText(/Причина/), { target: { value: 'мат' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Предупредить' }));
+    });
+  }
+
+  it(
+    'shows a Russian message for a request-level 403 instead of the machine code',
+    async () => {
+      await submitWarn(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Недостаточно прав');
+      expect(alert).not.toHaveTextContent('forbidden');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reports a body without results as a readable error, not a TypeError',
+    async () => {
+      await submitWarn(new Response(JSON.stringify({ applied: 1 }), { status: 200 }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Некорректный ответ сервера');
+      expect(alert).not.toHaveTextContent('Cannot read');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'applies the newest roster when an older request resolves last',
+    async () => {
+      const replies: Array<(response: Response) => void> = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              replies.push(resolve);
+            }),
+        ),
+      );
+      render(<LivePlayers serverId="srv-1" />);
+      await waitFor(() => expect(replies).toHaveLength(1));
+      act(() => rosterEventHandler?.({ data: { server_id: 'srv-1' } }));
+      await waitFor(() => expect(replies).toHaveLength(2));
+
+      await act(async () => {
+        replies[1]?.(new Response(JSON.stringify(ROSTER)));
+      });
+      await act(async () => {
+        replies[0]?.(new Response(JSON.stringify({ ...ROSTER, players: [] })));
+      });
+
+      expect(await screen.findByText('Leader')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
 describe('LivePlayers — корона создателя отряда', () => {
   it(
     'shows the crown after the leader star only for a player who has one',
