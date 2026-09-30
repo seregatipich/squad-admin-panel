@@ -6,6 +6,12 @@
 
 - Отправитель проверяет сохранённый `template` (`isDiscordEmbedTemplate` из `@squad/shared-config`) и при повреждённой строке берёт шаблон по умолчанию, а не передаёт произвольный jsonb в рендер (#78, 1126). Тест: `test/sender.test.ts`.
 
+## 2026-09-30 — one Discord REST request wrapper (#92)
+
+### Changed
+
+- `roleCall`, `fetchGuildMemberRoles` and `patchChannelName` in `discord-rest.ts` now share a single `discordRequest` wrapper for the request timeout, network errors and 429 handling. A member lookup no longer sleeps through a `Retry-After` above 30 s: it reports `rate_limited` at once, like role changes.
+
 ## 2026-09-28
 
 ### Fixed

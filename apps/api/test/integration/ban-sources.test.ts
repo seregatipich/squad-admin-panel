@@ -405,6 +405,41 @@ describeIfDb('ban-sources update / disable / sync', () => {
     });
   });
 
+  it.each([
+    ['non-string list_path', { list_path: 5 }],
+    ['non-object fields', { fields: 'steam_id64' }],
+    ['non-string field path', { fields: { steam_id64: 7 } }],
+    ['multi-character csv delimiter', { csv: { delimiter: ';;' } }],
+    ['empty csv delimiter', { csv: { delimiter: '' } }],
+    ['non-boolean csv has_header', { csv: { has_header: 'yes' } }],
+    ['non-scalar csv column', { csv: { columns: { steam_id64: [1] } } }],
+  ])(
+    'rejects a malformed parser_config (%s) on create and update with 400',
+    async (_name, parserConfig) => {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/ban-sources',
+        headers: { cookie: managerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({
+          name: 'bad-config',
+          url: 'https://example.com/bans.json',
+          format: 'json_generic',
+          parser_config: parserConfig,
+        }),
+      });
+      expect(created.statusCode).toBe(400);
+
+      const { body } = await createSource(managerCookie, {});
+      const updated = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/ban-sources/${body.id as string}`,
+        headers: { cookie: managerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ parser_config: parserConfig }),
+      });
+      expect(updated.statusCode).toBe(400);
+    },
+  );
+
   it('returns 404 for update/sync of a missing source', async () => {
     const missing = '00000000-0000-0000-0000-000000000000';
     const put = await h.app.inject({

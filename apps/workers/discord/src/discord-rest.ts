@@ -82,24 +82,40 @@ function authHeaders(deps: DiscordRestDeps): Record<string, string> {
   return { authorization: `Bot ${deps.botToken}`, 'content-type': 'application/json' };
 }
 
+const ROLE_RATE_LIMIT: RateLimitPolicy = {
+  retry: true,
+  message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
+};
+
+type DiscordRequestResult = { ok: true; res: Response } | { ok: false; failure: DiscordFailure };
+
+interface RateLimitPolicy {
+  /** Whether a 429 is waited out and retried (up to `MAX_RATE_LIMIT_RETRIES`) or reported at once. */
+  retry: boolean;
+  /** Operator-facing Russian text of the `rate_limited` failure. */
+  message: string;
+}
+
 /**
- * Issues one role mutation, retrying only on 429 for the delay Discord asks
- * for. Never throws — callers get a typed failure instead, so one member's
- * problem never aborts a reconcile sweep.
+ * The single place every Discord REST call goes through: one bounded-time
+ * request, with transport errors and 429 handling turned into typed failures.
+ * A 429 is retried after Discord's advertised delay when `rateLimit.retry` is
+ * set; it becomes `rate_limited` once `MAX_RATE_LIMIT_RETRIES` is exhausted or
+ * the delay exceeds `MAX_RETRY_AFTER_MS`. Any other status, successful or not,
+ * is handed back in `res` for the caller to interpret. Never throws.
  */
-async function roleCall(
+async function discordRequest(
   deps: DiscordRestDeps,
-  method: 'PUT' | 'DELETE',
-  discordUserId: string,
-  discordRoleId: string,
-): Promise<RoleCallResult> {
-  const url = `${memberUrl(deps, discordUserId)}/roles/${discordRoleId}`;
+  url: string,
+  init: { method: string; body?: string },
+  rateLimit: RateLimitPolicy,
+): Promise<DiscordRequestResult> {
   let rateLimitRetries = 0;
   for (;;) {
     let res: Response;
     try {
       res = await deps.fetchImpl(url, {
-        method,
+        ...init,
         headers: authHeaders(deps),
         signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
       });
@@ -112,39 +128,52 @@ async function roleCall(
         },
       };
     }
+    if (res.status !== 429) return { ok: true, res };
 
-    if (res.status === 429) {
-      rateLimitRetries++;
-      const waitMs = await readRetryAfterMs(res);
-      if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES || waitMs > MAX_RETRY_AFTER_MS) {
-        return {
-          ok: false,
-          failure: {
-            reason: 'rate_limited',
-            message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
-          },
-        };
-      }
-      await deps.sleep(waitMs);
-      continue;
+    rateLimitRetries++;
+    const waitMs = rateLimit.retry ? await readRetryAfterMs(res) : 0;
+    if (
+      !rateLimit.retry ||
+      rateLimitRetries > MAX_RATE_LIMIT_RETRIES ||
+      waitMs > MAX_RETRY_AFTER_MS
+    ) {
+      return { ok: false, failure: { reason: 'rate_limited', message: rateLimit.message } };
     }
-
-    if (res.ok) return { ok: true };
-
-    // Every 403 on these routes is the same operator problem: the bot lacks
-    // Manage Roles, or sits below the target role in the guild hierarchy.
-    if (res.status === 403) {
-      deps.log.error(
-        { method, discordUserId, discordRoleId },
-        'discord rejected a role change (Missing Permissions)',
-      );
-      return { ok: false, failure: missingPermissionsFailure() };
-    }
-    return {
-      ok: false,
-      failure: { reason: 'http_error', message: `Discord вернул ${res.status}` },
-    };
+    await deps.sleep(waitMs);
   }
+}
+
+/**
+ * Issues one role mutation, retrying only on 429 for the delay Discord asks
+ * for. Never throws — callers get a typed failure instead, so one member's
+ * problem never aborts a reconcile sweep.
+ */
+async function roleCall(
+  deps: DiscordRestDeps,
+  method: 'PUT' | 'DELETE',
+  discordUserId: string,
+  discordRoleId: string,
+): Promise<RoleCallResult> {
+  const url = `${memberUrl(deps, discordUserId)}/roles/${discordRoleId}`;
+  const request = await discordRequest(deps, url, { method }, ROLE_RATE_LIMIT);
+  if (!request.ok) return request;
+  const { res } = request;
+
+  if (res.ok) return { ok: true };
+
+  // Every 403 on these routes is the same operator problem: the bot lacks
+  // Manage Roles, or sits below the target role in the guild hierarchy.
+  if (res.status === 403) {
+    deps.log.error(
+      { method, discordUserId, discordRoleId },
+      'discord rejected a role change (Missing Permissions)',
+    );
+    return { ok: false, failure: missingPermissionsFailure() };
+  }
+  return {
+    ok: false,
+    failure: { reason: 'http_error', message: `Discord вернул ${res.status}` },
+  };
 }
 
 export function addGuildMemberRole(
@@ -178,35 +207,19 @@ export async function patchChannelName(
   channelId: string,
   name: string,
 ): Promise<RoleCallResult> {
-  let res: Response;
-  try {
-    res = await deps.fetchImpl(`${DISCORD_API_BASE}/channels/${channelId}`, {
-      method: 'PATCH',
-      headers: authHeaders(deps),
-      body: JSON.stringify({ name }),
-      signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      failure: {
-        reason: 'network_error',
-        message: `Discord недоступен: ${(err as Error).message}`,
-      },
-    };
-  }
-
   // A 429 here means a multi-minute lockout; waiting it out would stall the
   // loop, so the rename is left for the next tick.
-  if (res.status === 429) {
-    return {
-      ok: false,
-      failure: {
-        reason: 'rate_limited',
-        message: 'Discord ограничивает переименование канала — попробуем на следующем тике.',
-      },
-    };
-  }
+  const request = await discordRequest(
+    deps,
+    `${DISCORD_API_BASE}/channels/${channelId}`,
+    { method: 'PATCH', body: JSON.stringify({ name }) },
+    {
+      retry: false,
+      message: 'Discord ограничивает переименование канала — попробуем на следующем тике.',
+    },
+  );
+  if (!request.ok) return request;
+  const { res } = request;
 
   if (res.ok) return { ok: true };
 
@@ -243,45 +256,21 @@ export type GuildMemberResult =
  * normal state (the player linked their account but never joined the server),
  * so it is reported as `notAMember` rather than as an error. A `429` is
  * retried after Discord's advertised delay, like `roleCall`, and reported as
- * `rate_limited` once `MAX_RATE_LIMIT_RETRIES` is exhausted.
+ * `rate_limited` once `MAX_RATE_LIMIT_RETRIES` is exhausted or the delay is
+ * longer than `MAX_RETRY_AFTER_MS`.
  */
 export async function fetchGuildMemberRoles(
   deps: DiscordRestDeps,
   discordUserId: string,
 ): Promise<GuildMemberResult> {
-  let res: Response;
-  let rateLimitRetries = 0;
-  for (;;) {
-    try {
-      res = await deps.fetchImpl(memberUrl(deps, discordUserId), {
-        method: 'GET',
-        headers: authHeaders(deps),
-        signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
-      });
-    } catch (err) {
-      return {
-        ok: false,
-        notAMember: false,
-        failure: {
-          reason: 'network_error',
-          message: `Discord недоступен: ${(err as Error).message}`,
-        },
-      };
-    }
-    if (res.status !== 429) break;
-    rateLimitRetries++;
-    if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
-      return {
-        ok: false,
-        notAMember: false,
-        failure: {
-          reason: 'rate_limited',
-          message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
-        },
-      };
-    }
-    await deps.sleep(await readRetryAfterMs(res));
-  }
+  const request = await discordRequest(
+    deps,
+    memberUrl(deps, discordUserId),
+    { method: 'GET' },
+    ROLE_RATE_LIMIT,
+  );
+  if (!request.ok) return { ...request, notAMember: false };
+  const { res } = request;
 
   if (res.status === 404) return { ok: false, notAMember: true };
   if (res.status === 403) {

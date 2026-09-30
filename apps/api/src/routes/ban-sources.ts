@@ -41,6 +41,51 @@ const discordUrl = z
   .max(2048)
   .refine((value) => new URL(value).protocol === 'https:', 'discord_url must use https');
 
+const FIELD_PATH_KEYS = [
+  'steam_id64',
+  'eos_id',
+  'nickname',
+  'reason',
+  'admin_name',
+  'issued_at',
+  'expires_at',
+] as const;
+
+/** Flags every recognised `parser_config.fields` entry whose dot-path is not a string. */
+function requireStringFieldPaths(fields: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  for (const key of FIELD_PATH_KEYS) {
+    if (fields[key] !== undefined && typeof fields[key] !== 'string') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: 'must be a dot-path string',
+      });
+    }
+  }
+}
+
+/**
+ * Shape of a source's `parser_config` as `worker-ban-sync` reads it
+ * (`readPathConfig` / `readCsvConfig` in the worker's adapters). Typed keys are
+ * checked here so a bad value is rejected when the source is saved rather than
+ * failing every sync; unknown keys pass through unchanged for compatibility
+ * with configs already stored.
+ */
+const parserConfig = z
+  .object({
+    list_path: z.string().optional(),
+    fields: z.object({}).catchall(z.unknown()).superRefine(requireStringFieldPaths).optional(),
+    csv: z
+      .object({
+        delimiter: z.string().length(1).optional(),
+        has_header: z.boolean().optional(),
+        columns: z.record(z.union([z.number(), z.string()])).optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
   url: sourceUrl,
@@ -51,7 +96,7 @@ const createBody = z.object({
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().default(true),
   poll_interval_minutes: z.number().int().min(15).max(10080).default(60),
-  parser_config: z.record(z.unknown()).optional(),
+  parser_config: parserConfig.optional(),
 });
 
 const updateBody = z.object({
@@ -64,7 +109,7 @@ const updateBody = z.object({
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().optional(),
   poll_interval_minutes: z.number().int().min(15).max(10080).optional(),
-  parser_config: z.record(z.unknown()).optional(),
+  parser_config: parserConfig.optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
