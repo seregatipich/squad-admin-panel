@@ -184,6 +184,23 @@ assert deny "bare push on master ahead of dev" -- check-command "git push"
 git_q reset --hard "$MASTER_SHA"
 git_q switch feature/x
 
+# Symbolic refspecs (HEAD, @) push to the current branch and must be resolved
+# before the protected-branch rules are matched (#48, finding 1194).
+git_q switch dev
+assert deny "force push HEAD while on dev" -- check-command "git push -f origin HEAD"
+assert deny "force push @ while on dev" -- check-command "git push --force origin @"
+assert deny "plus-refspec +HEAD while on dev" -- check-command "git push origin +HEAD"
+assert deny "plus-refspec +@ while on dev" -- check-command "git push origin +@"
+assert allow "plain push HEAD while on dev" -- check-command "git push origin HEAD"
+git_q switch master
+echo drift >>file && git add file && git_q commit -m "master drift"
+assert deny "push HEAD on master ahead of dev" -- check-command "git push origin HEAD"
+assert deny "push @ on master ahead of dev" -- check-command "git push origin @"
+git_q reset --hard "$MASTER_SHA"
+assert allow "push HEAD on master at dev-reachable sha" -- check-command "git push origin HEAD"
+git_q switch feature/x
+assert allow "force push HEAD on work branch" -- check-command "git push -f origin HEAD"
+
 # --- check-command: scoped to this repository --------------------------------
 git_q switch master
 assert allow "commit in a foreign repo via cd" -- check-command "cd $OTHER && git commit -m x"
@@ -213,6 +230,13 @@ assert_push deny "pre-push: stray sha to master" "refs/heads/stray $STRAY_SHA re
 assert_push allow "pre-push: dev sha to master" "refs/heads/dev $DEV_SHA refs/heads/master $MASTER_SHA"
 assert_push deny "pre-push: delete dev" "(delete) $ZERO refs/heads/dev $DEV_SHA"
 assert_push deny "pre-push: non-ff dev" "refs/heads/dev $MASTER_SHA refs/heads/dev $DEV_SHA"
+# A remote tip the local clone does not know can only be reached by rewriting
+# history (a fast-forward's old tip is always an ancestor, hence local), so
+# the guard must fail closed instead of skipping the check (#48, finding 1195).
+UNKNOWN_SHA="1234567890abcdef1234567890abcdef12345678"
+assert_push deny "pre-push: dev remote tip unknown locally" "refs/heads/dev $DEV_SHA refs/heads/dev $UNKNOWN_SHA"
+assert_push deny "pre-push: master remote tip unknown locally" "refs/heads/dev $DEV_SHA refs/heads/master $UNKNOWN_SHA"
+assert_push allow "pre-push: work branch remote tip unknown locally" "refs/heads/feature/x $(git rev-parse feature/x) refs/heads/feature/x $UNKNOWN_SHA"
 assert_push allow "pre-push: work branch" "refs/heads/feature/x $(git rev-parse feature/x) refs/heads/feature/x $ZERO"
 
 # --- doctor ------------------------------------------------------------------

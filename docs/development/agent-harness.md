@@ -20,11 +20,13 @@ Blocked by `check-command`:
 - `git merge <work-branch>` while on `master` (only `dev` may be merged there);
 - pushing a SHA to `master` that is **not reachable from `dev`** (`git merge-base --is-ancestor`) — the exact definition of "master only receives what went through dev";
 - creating work branches from `master`/`origin/master` (they must come from `dev`);
-- force-pushing or deleting `master`/`dev`, and `git push --all/--mirror`.
+- force-pushing or deleting `master`/`dev` — including through the symbolic refspecs `HEAD`, `@`, `+HEAD` and `+@`, which resolve to the checked-out branch — and `git push --all/--mirror`.
+
+`check-push` also denies a non-fast-forward update of `master`/`dev`, and fails closed when the remote tip is missing from the local clone: a fast-forward always builds on the old tip, so an unknown tip means the push would rewrite history (run `git fetch` first).
 
 Deliberately **not** blocked: `--no-verify`. The pre-push test gate is environment-dependent (DB/Redis/Linux-only bridge tests), and CI is the source of truth per `CLAUDE.md`; the agent-layer hooks and GitHub rulesets still check every command and every push regardless.
 
-Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `git branch --contains …`) are **not** blocked — only create/rename/checkout/push of a `main` ref is. Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 69 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
+Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `git branch --contains …`) are **not** blocked — only create/rename/checkout/push of a `main` ref is. Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 81 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
 
 ## Layer 1 — Claude Code
 

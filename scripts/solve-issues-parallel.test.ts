@@ -2,8 +2,9 @@
  * solve-issues-parallel.test.ts — test suite for scripts/solve-issues-parallel.ts.
  *
  * Covers the pure orchestration logic: CLI parsing, branch naming, prompt
- * building, and the concurrency pool. Network-facing code (gh, Claude API)
- * is exercised via `--dry-run` manually and stays out of unit scope.
+ * building, the concurrency pool, and how `solveIssue` classifies a session's
+ * event stream (against a stand-in client). The live gh and Claude API calls
+ * are exercised via `--dry-run` manually and stay out of unit scope.
  *
  * Run: `pnpm exec tsx --test scripts/solve-issues-parallel.test.ts`
  * (wired into the CI `node` job next to the other script test suites).
@@ -11,6 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import type Anthropic from '@anthropic-ai/sdk';
 import {
   branchNameFor,
   buildTaskPrompt,
@@ -23,8 +25,10 @@ import {
   partitionByAuthorTrust,
   resolveGithubToken,
   runPool,
+  type SessionContext,
   SOLVER_NETWORKING,
   slugify,
+  solveIssue,
   UsageError,
 } from './solve-issues-parallel.ts';
 
@@ -406,5 +410,103 @@ describe('runPool', () => {
   test('handles concurrency larger than the item count and empty input', async () => {
     assert.deepEqual(await runPool([1, 2], 10, async (n) => n + 1), [2, 3]);
     assert.deepEqual(await runPool([], 4, async () => 'never'), []);
+  });
+});
+
+describe('solveIssue session outcome', () => {
+  const issue: IssueInfo = { number: 7, title: 'Fix the thing', body: '', url: 'u' };
+
+  /** A stand-in client whose event stream yields `events`, then ends. */
+  function contextStreaming(events: readonly Record<string, unknown>[]): SessionContext {
+    const client = {
+      beta: {
+        sessions: {
+          create: async () => ({ id: 'sesn_test' }),
+          events: {
+            stream: async () =>
+              (async function* () {
+                yield* events;
+              })(),
+            send: async () => ({}),
+          },
+        },
+      },
+    } as unknown as Anthropic;
+    return {
+      client,
+      agentId: 'agent',
+      environmentId: 'env',
+      repoSlug: 'owner/repo',
+      githubToken: 'unused',
+      model: 'model',
+      timeoutMin: 1,
+      verbose: false,
+    };
+  }
+
+  const message = (text: string) => ({ type: 'agent.message', content: [{ type: 'text', text }] });
+  const idle = (stopReason: Record<string, unknown>) => ({
+    type: 'session.status_idle',
+    stop_reason: stopReason,
+  });
+  const sessionError = (retryStatus: string) => ({
+    type: 'session.error',
+    error: {
+      type: 'model_overloaded_error',
+      message: 'overloaded',
+      retry_status: { type: retryStatus },
+    },
+  });
+
+  test('an idle session that ended its turn is solved', async () => {
+    const result = await solveIssue(
+      contextStreaming([message('done'), idle({ type: 'end_turn' })]),
+      issue,
+    );
+    assert.equal(result.status, 'solved');
+    assert.equal(result.summary, 'done');
+  });
+
+  test('an idle session that exhausted its retries is a failure, not a success', async () => {
+    const result = await solveIssue(
+      contextStreaming([message('partial'), idle({ type: 'retries_exhausted' })]),
+      issue,
+    );
+    assert.equal(result.status, 'failed');
+    assert.match(result.summary, /retries_exhausted/);
+    assert.match(result.summary, /partial/);
+  });
+
+  test('an idle session waiting on a tool confirmation is a failure', async () => {
+    const result = await solveIssue(
+      contextStreaming([idle({ type: 'requires_action', event_ids: ['sevt_1'] })]),
+      issue,
+    );
+    assert.equal(result.status, 'failed');
+    assert.match(result.summary, /requires_action/);
+  });
+
+  test('keeps reading through an error the server is still retrying', async () => {
+    const result = await solveIssue(
+      contextStreaming([
+        sessionError('retrying'),
+        message('recovered'),
+        idle({ type: 'end_turn' }),
+      ]),
+      issue,
+    );
+    assert.equal(result.status, 'solved');
+    assert.equal(result.summary, 'recovered');
+  });
+
+  test('stops on an exhausted or terminal error', async () => {
+    for (const retryStatus of ['exhausted', 'terminal']) {
+      const result = await solveIssue(
+        contextStreaming([sessionError(retryStatus), idle({ type: 'end_turn' })]),
+        issue,
+      );
+      assert.equal(result.status, 'failed', retryStatus);
+      assert.match(result.summary, /session error/, retryStatus);
+    }
   });
 });

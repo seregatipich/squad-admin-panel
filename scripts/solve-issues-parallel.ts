@@ -514,7 +514,8 @@ export async function ensureEnvironment(client: Anthropic): Promise<string> {
   return env.id;
 }
 
-interface SessionContext {
+/** What {@link solveIssue} needs to run one session. */
+export interface SessionContext {
   client: Anthropic;
   agentId: string;
   environmentId: string;
@@ -530,8 +531,17 @@ interface SessionContext {
  * sends the task prompt, streams events until the session goes idle, and
  * returns the final agent message. Never throws — failures and timeouts are
  * folded into the returned {@link IssueResult}.
+ *
+ * Only an idle status with `stop_reason: end_turn` counts as `solved`; an idle
+ * session that exhausted its retries or waits on `requires_action` is
+ * `failed`. A `session.error` whose `retry_status` is `retrying` is transient
+ * and the stream keeps being read; `exhausted` and `terminal` errors fail.
+ *
+ * @param ctx - API client, agent/environment ids, repo, and run options.
+ * @param issue - The GitHub issue the session works on.
+ * @returns The issue's outcome with the last agent message as its summary.
  */
-async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueResult> {
+export async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueResult> {
   const tag = `[#${issue.number}]`;
   const mountPath = `/workspace/${ctx.repoSlug.split('/')[1]}`;
   let sessionId: string | undefined;
@@ -593,6 +603,14 @@ async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueR
             }
             break;
           case 'session.error':
+            // `retrying` is transient (overloaded, rate limited): the server
+            // retries on its own and the session carries on, so keep reading.
+            if (event.error.retry_status.type === 'retrying') {
+              if (ctx.verbose) {
+                console.log(`${tag} retrying after ${event.error.type}: ${event.error.message}`);
+              }
+              break;
+            }
             return {
               issue,
               status: 'failed',
@@ -607,7 +625,18 @@ async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueR
               sessionId,
             };
           case 'session.status_idle':
-            return { issue, status: 'solved', summary: lastMessage, sessionId };
+            // Only a naturally ended turn is a result. `retries_exhausted`
+            // gave up and `requires_action` waits on a confirmation nobody
+            // will send, so both are failures.
+            if (event.stop_reason.type === 'end_turn') {
+              return { issue, status: 'solved', summary: lastMessage, sessionId };
+            }
+            return {
+              issue,
+              status: 'failed',
+              summary: `session stopped (${event.stop_reason.type})${lastMessage ? `: ${lastMessage}` : ''}`,
+              sessionId,
+            };
           default:
             break;
         }
