@@ -71,8 +71,8 @@ The swap itself is a single `UPDATE`: `media_files_exactly_one_location_check` f
 | `DATABASE_URL` | — | required |
 | `REDIS_URL` | — | required (heartbeat + diag) |
 | `MEDIA_STORAGE_DIR` | `./media` | **Must be the same directory the API writes to.** Both compose files pin `api` and this worker to the shared `media_data` volume at `/var/lib/squad-panel/media`; their WORKDIRs differ, so the relative default would give them two separate directories. |
-| `MEDIA_PUBLISHER_INTERVAL_MS` | `60000` | tick interval |
-| `MEDIA_PUBLISHER_BATCH_SIZE` | `3` | publications per tick |
+| `MEDIA_PUBLISHER_INTERVAL_MS` | `60000` | tick interval; integer 1000-3600000, the worker exits on anything else |
+| `MEDIA_PUBLISHER_BATCH_SIZE` | `3` | publications per tick; integer 1-50, the worker exits on anything else |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | unset | all three required, or YouTube stays off |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | both required, or Telegram stays off |
 
