@@ -69,7 +69,11 @@ describe('runNotifyLoop stream lifecycle (integration)', () => {
     delivered.length = 0;
   });
 
-  function startLoop(group: string, discoverStreams: () => Promise<string[]>) {
+  function startLoop(
+    group: string,
+    discoverStreams: () => Promise<string[]>,
+    streamRefreshMs?: number,
+  ) {
     loop = runNotifyLoop({
       redis: redis as Redis,
       log: pino({ enabled: false }),
@@ -78,6 +82,7 @@ describe('runNotifyLoop stream lifecycle (integration)', () => {
       blockMs: 200,
       shouldStop: () => stopped,
       discoverStreams,
+      streamRefreshMs,
       db: {} as never,
       encryptionKey: Buffer.alloc(32),
       fetchImpl: vi.fn(),
@@ -93,7 +98,7 @@ describe('runNotifyLoop stream lifecycle (integration)', () => {
     const stream = `events:test:${randomUUID()}`;
     keys = [anchor, stream];
     let streamExists = false;
-    startLoop(group, async () => (streamExists ? [anchor, stream] : [anchor]));
+    startLoop(group, async () => (streamExists ? [anchor, stream] : [anchor]), 100);
     await sleep(400);
 
     const first = makeEnvelope();

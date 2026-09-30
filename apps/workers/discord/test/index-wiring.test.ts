@@ -42,7 +42,10 @@ vi.mock('pino', () => {
   return { default: vi.fn(() => logger) };
 });
 vi.mock('../src/crypto.js', () => ({ loadEncryptionKey: vi.fn(() => Buffer.alloc(32)) }));
-vi.mock('../src/consume.js', () => ({ runNotifyLoop: vi.fn() }));
+vi.mock('../src/consume.js', () => ({
+  DEFAULT_RECLAIM_MIN_IDLE_MS: 60_000,
+  runNotifyLoop: vi.fn(),
+}));
 vi.mock('../src/role-sync-consume.js', () => ({ runRoleSyncLoop: vi.fn() }));
 vi.mock('../src/status-channel-loop.js', () => ({
   DEFAULT_STATUS_CHANNEL_TICK_MS: 600_000,

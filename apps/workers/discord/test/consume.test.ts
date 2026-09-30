@@ -518,7 +518,7 @@ describe('runNotifyLoop — consumer-group resilience (#1292)', () => {
     expect(redis.xgroup).toHaveBeenCalledTimes(2);
   });
 
-  it('creates new consumer groups from the start of the stream', async () => {
+  it('starts groups found by the first discovery at the tail so a first deploy does not replay history', async () => {
     const redis = loopRedis();
 
     await runNotifyLoop({ ...loopOpts(redis, 1), discoverStreams: async () => ['events:global'] });
@@ -526,6 +526,26 @@ describe('runNotifyLoop — consumer-group resilience (#1292)', () => {
     expect(redis.xgroup).toHaveBeenCalledWith(
       'CREATE',
       'events:global',
+      NOTIFY_CONSUMER_GROUP,
+      '$',
+      'MKSTREAM',
+    );
+  });
+
+  it('creates groups for streams discovered later from the start of the stream (#1292)', async () => {
+    const redis = loopRedis();
+    let discoveries = 0;
+
+    await runNotifyLoop({
+      ...loopOpts(redis, 2),
+      discoverStreams: async () =>
+        ++discoveries === 1 ? ['events:global'] : ['events:global', 'events:server:new'],
+      streamRefreshMs: 0,
+    });
+
+    expect(redis.xgroup).toHaveBeenCalledWith(
+      'CREATE',
+      'events:server:new',
       NOTIFY_CONSUMER_GROUP,
       '0',
       'MKSTREAM',
