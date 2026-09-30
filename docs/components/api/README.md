@@ -30,7 +30,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 - `@fastify/cookie/helmet/multipart/rate-limit/websocket/swagger(-ui)`
 - Auth: Steam OpenID 2.0 implemented in `src/lib/steam-openid.ts` with `node:crypto` (no auth library)
 - Logs/metrics: `pino` 10, `@prometheus-io/client` 0.16
-- Redis: `ioredis` 5; HTTP egress: `undici` 8
+- Redis: `ioredis` 6; HTTP egress: `undici` 8
 - DB: `drizzle-orm` 0.45 via `@squad/db`
 
 ## Components that depend on it
