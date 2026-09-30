@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,14 +56,12 @@ const LAYERS_POOL = {
   ],
 };
 
-function mockFetch(canEdit: boolean, squadPermissions: string[]) {
+function mockFetch(canEdit: boolean) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
       if (url === '/api/v1/me') {
-        return Promise.resolve(
-          new Response(JSON.stringify({ squad_permissions: squadPermissions }), { status: 200 }),
-        );
+        return Promise.resolve(new Response('unexpected /me request', { status: 500 }));
       }
       if (url.endsWith('/rotation')) {
         return Promise.resolve(
@@ -88,7 +86,7 @@ function mockFetch(canEdit: boolean, squadPermissions: string[]) {
 }
 
 beforeEach(() => {
-  mockFetch(true, ['changemap']);
+  mockFetch(true);
 });
 
 afterEach(() => {
@@ -138,7 +136,7 @@ describe('RotationPage', () => {
   });
 
   it('hides mutating controls and shows a read-only note without the changemap permission', async () => {
-    mockFetch(false, []);
+    mockFetch(false);
     await renderPage();
     await screen.findByText('Yehorivka RAAS v11');
     expect(screen.queryByRole('button', { name: 'Добавить слой' })).not.toBeInTheDocument();
@@ -174,5 +172,24 @@ describe('RotationPage', () => {
     const putCall = calls.find((call) => call[1] && (call[1] as RequestInit).method === 'PUT');
     const body = JSON.parse((putCall?.[1] as RequestInit).body as string) as { layers: string[] };
     expect(body.layers).toEqual(['Custom_Layer_v9', 'Yehorivka RAAS v11']);
+  });
+
+  it('does not request /api/v1/me and takes edit rights from the rotation response', async () => {
+    await renderPage();
+    await screen.findByText('Yehorivka RAAS v11');
+    const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (call) => call[0],
+    );
+    expect(urls).not.toContain('/api/v1/me');
+  });
+
+  it('clears the dragging state when a drag is cancelled outside the list', async () => {
+    await renderPage();
+    await screen.findByText('Yehorivka RAAS v11');
+    const first = screen.getByTestId('rotation-list').querySelectorAll('li')[0] as HTMLElement;
+    fireEvent.dragStart(first);
+    expect(first.className).toContain('opacity-40');
+    fireEvent.dragEnd(first);
+    expect(first.className).not.toContain('opacity-40');
   });
 });
