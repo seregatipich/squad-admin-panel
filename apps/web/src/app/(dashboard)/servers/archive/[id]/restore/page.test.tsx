@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Suspense } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -76,5 +76,30 @@ describe('RestorePage', () => {
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Не удалось получить запись архива');
     expect(screen.queryByRole('button', { name: 'Создать новый сервер из бэкапа' })).toBeNull();
+  });
+
+  it('длинный slug архива обрезается до лимита схемы, а сбой сети показывается ошибкой', async () => {
+    const longSlug = 'a'.repeat(60);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return Promise.reject(new Error('network down'));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ server: { id: 'abc', display_name: 'EU Main', slug: longSlug } }),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+    await renderPage();
+
+    const slugInput = await screen.findByLabelText(/^Идентификатор нового сервера/);
+    expect((slugInput as HTMLInputElement).value).toHaveLength(64);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Создать новый сервер из бэкапа' }));
+    });
+    expect(await screen.findByText(/Сбой сети или ответа API: network down/)).toBeInTheDocument();
   });
 });

@@ -57,6 +57,9 @@ type WizardStage =
   | 'error';
 
 /** Заголовок страницы для каждого шага мастера, кроме формы. */
+/** Slug-limit of the server-create schema; the default `<slug>-restored` must fit it. */
+const MAX_SLUG_LENGTH = 64;
+
 const STAGE_TITLE: Record<Exclude<WizardStage, 'form'>, string> = {
   creating: 'Создаём сервер…',
   installing: 'Установка…',
@@ -91,7 +94,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
         const j = (await r.json()) as ArchiveDetail;
         if (cancelled) return;
         setArchive(j);
-        setSlug(`${j.server.slug}-restored`);
+        setSlug(`${j.server.slug}-restored`.slice(0, MAX_SLUG_LENGTH));
         setDisplayName(`${j.server.display_name} (restored)`);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -105,6 +108,15 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    try {
+      await restoreFromArchive();
+    } catch (err) {
+      setError(`Сбой сети или ответа API: ${(err as Error).message}`);
+      setStage('error');
+    }
+  }
+
+  async function restoreFromArchive() {
     setError(null);
     setStage('creating');
 
@@ -182,20 +194,25 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
 
   async function overlayConfigs(targetId: string) {
     setStage('restoring-configs');
-    const r = await fetch(`/api/v1/servers/${targetId}/restore-configs`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ from_archive_id: id }),
-    });
-    if (!r.ok) {
-      setError(`Не удалось наложить бэкап конфигов (HTTP ${r.status})`);
+    try {
+      const r = await fetch(`/api/v1/servers/${targetId}/restore-configs`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from_archive_id: id }),
+      });
+      if (!r.ok) {
+        setError(`Не удалось наложить бэкап конфигов (HTTP ${r.status})`);
+        setStage('error');
+        return;
+      }
+      const body = (await r.json()) as RestoreConfigsResponse;
+      setRestoreSummary(body);
+      setStage('configs-restored');
+    } catch (err) {
+      setError(`Не удалось наложить бэкап конфигов: ${(err as Error).message}`);
       setStage('error');
-      return;
     }
-    const body = (await r.json()) as RestoreConfigsResponse;
-    setRestoreSummary(body);
-    setStage('configs-restored');
   }
 
   async function startServer() {
@@ -249,7 +266,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
               <TextInput
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
-                pattern="^[a-z0-9-]+$"
+                pattern="^[a-z0-9][a-z0-9-]{0,63}$"
                 required
               />
             </FieldRow>

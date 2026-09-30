@@ -149,4 +149,41 @@ describe('NewServerPage — подключение существующего с
     expect(await screen.findByText(/идентификатор уже занят/)).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
   });
+
+  it('сетевой сбой при подключении показывает ошибку и снимает состояние загрузки', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    );
+    render(<NewServerPage />);
+    switchToExternal();
+    fireEvent.change(screen.getByLabelText(/^Название/), { target: { value: 'Net' } });
+    fireEvent.change(screen.getByLabelText(/^Адрес RCON/), { target: { value: 'h' } });
+    fireEvent.change(screen.getByLabelText(/^Пароль RCON/), { target: { value: 'p' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }));
+
+    expect(
+      await screen.findByText('Не удалось подключить сервер: network down'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Подключить' })).toBeEnabled();
+  });
+});
+
+describe('NewServerPage — сбой сети при установке', () => {
+  it('показывает ошибку и не оставляет кнопку в состоянии загрузки', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    );
+    render(<NewServerPage />);
+    fireEvent.change(screen.getByLabelText(/^Название/), { target: { value: 'Новый' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Установить' }));
+
+    expect(await screen.findByText('Не удалось создать сервер: network down')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Установить' })).toBeEnabled();
+  });
 });
