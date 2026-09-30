@@ -115,6 +115,8 @@ export function VotesBrowser() {
     // new page is in flight.
     setNextCursor(null);
     setItems([]);
+    // A stale in-flight loadMore no longer clears this itself.
+    setLoadingMore(false);
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',

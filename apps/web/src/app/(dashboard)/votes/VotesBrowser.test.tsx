@@ -140,4 +140,69 @@ describe('filter change discards a stale loadMore response (#750)', () => {
     expect(screen.getByText('Zed (fresh)')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
   });
+
+  it('allows loadMore again for the new filters after a filter change mid-loadMore', async () => {
+    const A = makeVote('vote-a', 'Alice');
+    const Z = makeVote('vote-z', 'Zed (fresh)');
+    const Y = makeVote('vote-y', 'Yan (page two)');
+    const followUpCursors: string[] = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/votes/count') || url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }),
+          );
+        }
+        if (url.startsWith('/api/v1/votes?')) {
+          const query = new URLSearchParams(url.split('?')[1]);
+          const cursor = query.get('cursor');
+          if (cursor === 'cursor-a') {
+            // Stale loadMore for the old filters: never resolves.
+            return new Promise<Response>(() => undefined);
+          }
+          if (cursor === 'cursor-z') {
+            followUpCursors.push(cursor);
+            return Promise.resolve(
+              new Response(JSON.stringify({ items: [Y], next_cursor: null, limit: 50 }), {
+                status: 200,
+              }),
+            );
+          }
+          if (query.get('voteType') === 'admin') {
+            return Promise.resolve(
+              new Response(JSON.stringify({ items: [Z], next_cursor: 'cursor-z', limit: 50 }), {
+                status: 200,
+              }),
+            );
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ items: [A], next_cursor: 'cursor-a', limit: 50 }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+
+    const { rerender } = render(<VotesBrowser />);
+    await screen.findByText('Alice');
+    fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    useSearchParamsMock.mockReturnValue(new URLSearchParams('type=admin'));
+    await act(async () => {
+      rerender(<VotesBrowser />);
+    });
+    await screen.findByText('Zed (fresh)');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+    expect(await screen.findByText('Yan (page two)')).toBeInTheDocument();
+    expect(followUpCursors).toEqual(['cursor-z']);
+  });
 });
