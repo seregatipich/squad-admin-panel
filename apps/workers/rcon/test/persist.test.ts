@@ -159,7 +159,6 @@ describe('upsertPlayers', () => {
     await upsertPlayers(
       db,
       [makePlayer({ name: 'Broken' }), makePlayer({ name: 'Healthy', steam_id64: null })],
-      null,
       onPlayerError,
     );
 

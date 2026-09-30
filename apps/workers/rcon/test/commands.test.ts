@@ -364,6 +364,7 @@ describe('RconCommandQueue', () => {
     redis.set.mockRejectedValue(new Error('redis write failed'));
     const execute = vi.fn().mockResolvedValue('done');
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
