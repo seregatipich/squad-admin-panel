@@ -589,6 +589,7 @@ export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<Sch
     .select({
       id: scheduledTasks.id,
       serverId: scheduledTasks.serverId,
+      serverName: servers.displayName,
       name: scheduledTasks.name,
       taskType: scheduledTasks.taskType,
       params: scheduledTasks.params,

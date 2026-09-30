@@ -18,6 +18,8 @@ export interface ScheduledTaskParams {
 export interface ScheduledTaskEntry {
   id: string;
   serverId: string;
+  /** `servers.display_name` of the target; substituted for `{server}` in broadcast texts. */
+  serverName: string;
   name: string;
   taskType: ScheduledTaskType;
   params: ScheduledTaskParams;
@@ -155,9 +157,12 @@ async function dispatchTask(
       const list = entry.params.messages ?? (entry.params.message ? [entry.params.message] : []);
       if (list.length === 0)
         throw new Error(`scheduled_task ${entry.id} (broadcast) is missing a message`);
-      const text = list[entry.rotationIndex % list.length];
-      if (text === undefined)
+      const template = list[entry.rotationIndex % list.length];
+      if (template === undefined)
         throw new Error(`scheduled_task ${entry.id} (broadcast) has no message at rotation cursor`);
+      // Texts are stored with the raw token so a broadcast fanned out to several
+      // servers names each target, not the server it was authored on (#640).
+      const text = template.replace(/\{server\}/g, () => entry.serverName);
       await deps.sendRconCommand({
         serverId: entry.serverId,
         command: 'AdminBroadcast',

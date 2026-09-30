@@ -276,7 +276,7 @@ describe('SchedulePage', () => {
       expect(screen.getByText('Discord')).toBeInTheDocument();
     });
 
-    it('posts the ordered rotation with {server} substituted for two picked templates', async () => {
+    it('posts the ordered rotation keeping the {server} token raw for two picked templates', async () => {
       const posts = mockBroadcastFetch();
       await renderPage();
       await screen.findByTestId('scheduled-tasks-list');
@@ -287,9 +287,9 @@ describe('SchedulePage', () => {
 
       const rotation = screen.getByTestId('broadcast-rotation');
       expect(
-        within(rotation).getByText(/Welcome to Alpha! Follow the rules\./),
+        within(rotation).getByText(/Welcome to \{server\}! Follow the rules\./),
       ).toBeInTheDocument();
-      expect(within(rotation).getByText(/Join Alpha Discord/)).toBeInTheDocument();
+      expect(within(rotation).getByText(/Join \{server\} Discord/)).toBeInTheDocument();
 
       fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
         target: { value: 'Rotation rules' },
@@ -309,8 +309,8 @@ describe('SchedulePage', () => {
       const post = posts.find((p) => p.body.task_type === 'broadcast');
       expect(post).toBeDefined();
       expect(post?.body.params.messages).toEqual([
-        'Welcome to Alpha! Follow the rules.',
-        'Join Alpha Discord',
+        'Welcome to {server}! Follow the rules.',
+        'Join {server} Discord',
       ]);
     });
 
