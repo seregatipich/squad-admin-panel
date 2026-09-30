@@ -8,6 +8,8 @@ import {
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
+  parseChatCount,
+  parseChatPage,
   prependLiveMessage,
   scopeLabel,
   sourceLabel,
@@ -196,5 +198,24 @@ describe('labels and formatting', () => {
     expect(scopeLabel('unknown')).toBe('unknown');
     expect(sourceLabel('panel')).toBe('Панель');
     expect(sourceLabel('rcon')).toBe('Игра (RCON)');
+  });
+});
+
+describe('response parsers (#438)', () => {
+  it('parseChatPage accepts a well-formed page and rejects other shapes', () => {
+    expect(parseChatPage({ items: [], next_cursor: null })).toEqual({
+      items: [],
+      next_cursor: null,
+    });
+    expect(parseChatPage({ items: [], next_cursor: 'c' })?.next_cursor).toBe('c');
+    expect(parseChatPage({ items: {}, next_cursor: null })).toBeNull();
+    expect(parseChatPage({ items: [], next_cursor: 4 })).toBeNull();
+    expect(parseChatPage(null)).toBeNull();
+  });
+
+  it('parseChatCount requires a numeric count', () => {
+    expect(parseChatCount({ count: 3 })).toBe(3);
+    expect(parseChatCount({ count: '3' })).toBeNull();
+    expect(parseChatCount('x')).toBeNull();
   });
 });

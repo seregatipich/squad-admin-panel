@@ -9,6 +9,11 @@ import {
   isCredit,
   matchesFilters,
   mergeBonusPage,
+  parseAdjustResponse,
+  parseBalance,
+  parseBonusPage,
+  parsePurchaseResponse,
+  parseShopTiers,
   prependTransaction,
   purchaseErrorText,
   sourceLabel,
@@ -204,5 +209,45 @@ describe('matchesFilters (#437)', () => {
     const applied = filters({ from: '2026-08-01', to: '2026-08-31' });
     expect(matchesFilters(tx(1, { created_at: '2026-07-15T00:00:00.000Z' }), applied)).toBe(false);
     expect(matchesFilters(tx(1, { created_at: '2026-08-15T00:00:00.000Z' }), applied)).toBe(true);
+  });
+});
+
+describe('response parsers (#438)', () => {
+  it('parseBonusPage accepts a well-formed page and rejects other shapes', () => {
+    expect(parseBonusPage({ items: [], next_cursor: null })).toEqual({
+      items: [],
+      next_cursor: null,
+    });
+    expect(parseBonusPage({ items: [], next_cursor: 5 })?.next_cursor).toBe(5);
+    expect(parseBonusPage({ items: 'x', next_cursor: null })).toBeNull();
+    expect(parseBonusPage({ items: [], next_cursor: 'a' })).toBeNull();
+    expect(parseBonusPage('<html>')).toBeNull();
+    expect(parseBonusPage(null)).toBeNull();
+  });
+
+  it('parseBalance requires a numeric balance', () => {
+    expect(parseBalance({ balance: 7 })).toBe(7);
+    expect(parseBalance({ balance: '7' })).toBeNull();
+    expect(parseBalance(undefined)).toBeNull();
+  });
+
+  it('parseShopTiers requires a tiers array', () => {
+    expect(parseShopTiers({ tiers: [] })).toEqual([]);
+    expect(parseShopTiers({ tiers: null })).toBeNull();
+    expect(parseShopTiers([])).toBeNull();
+  });
+
+  it('parseAdjustResponse requires balance and transaction', () => {
+    const tx = { id: 1 };
+    expect(parseAdjustResponse({ player_id: 'p', balance: 3, transaction: tx })?.balance).toBe(3);
+    expect(parseAdjustResponse({ player_id: 'p', balance: 3 })).toBeNull();
+    expect(parseAdjustResponse({ balance: 'x', transaction: tx })).toBeNull();
+  });
+
+  it('parsePurchaseResponse requires ok and a numeric balance', () => {
+    const ok = { ok: true, balance: 1, role_id: 'r', role_expires_at: 'd' };
+    expect(parsePurchaseResponse(ok)).toEqual(ok);
+    expect(parsePurchaseResponse({ ...ok, balance: null })).toBeNull();
+    expect(parsePurchaseResponse({ balance: 1 })).toBeNull();
   });
 });

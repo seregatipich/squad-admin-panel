@@ -31,11 +31,12 @@ import {
   CHAT_SOURCE_OPTIONS,
   type ChatFilters,
   type ChatMsg,
-  type ChatPage,
   EMPTY_CHAT_FILTERS,
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
+  parseChatCount,
+  parseChatPage,
   prependLiveMessage,
   scopeLabel,
   sourceLabel,
@@ -97,8 +98,9 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
           cache: 'no-store',
         });
         if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
-        const page = (await listRes.json()) as ChatPage;
+        const page = parseChatPage(await listRes.json());
         if (requestIdRef.current !== requestId) return;
+        if (!page) throw new Error('Неожиданный формат ответа сервера.');
         setMessages(mergeChatPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
@@ -127,8 +129,9 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
       cache: 'no-store',
     })
       .then((res) => (res.ok ? res.json() : null))
-      .then((body: { count: number } | null) => {
-        if (!cancelled && body) setMonthlyCount(body.count);
+      .then((body: unknown) => {
+        const count = parseChatCount(body);
+        if (!cancelled && count !== null) setMonthlyCount(count);
       })
       .catch(() => {});
     return () => {
@@ -146,8 +149,9 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const page = (await res.json()) as ChatPage;
+      const page = parseChatPage(await res.json());
       if (requestIdRef.current !== requestId) return;
+      if (!page) throw new Error('Неожиданный формат ответа сервера.');
       setMessages((prev) => mergeChatPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
