@@ -58,12 +58,16 @@ function serverResponseFixture(status: string, extra: Record<string, unknown> = 
 }
 
 /** Отдаёт сервер (по умолчанию остановленный) и пустые права; всё остальное — ошибка теста. */
-function stubServerFetch(status = 'stopped', extra: Record<string, unknown> = {}) {
+function stubServerFetch(
+  status = 'stopped',
+  extra: Record<string, unknown> = {},
+  permissions: string[] = [],
+) {
   const fetchMock = vi.fn(async (url: string) => {
     if (url === '/api/v1/me') {
       return {
         ok: true,
-        json: async () => ({ squad_permissions: [], permissions: [] }),
+        json: async () => ({ squad_permissions: [], permissions }),
       } as Response;
     }
     if (url === `/api/v1/servers/${SERVER_ID}`) {
@@ -394,7 +398,7 @@ describe('ServerDetailPage — поток журнала контейнера', 
   });
 
   it('очищает буфер строк при каждом (пере)подключении вместо повтора бэкфилла (#631)', async () => {
-    stubServerFetch('running');
+    stubServerFetch('running', {}, ['server:download_logs']);
     await act(async () => {
       render(
         <Suspense fallback={null}>
@@ -439,7 +443,7 @@ describe('ServerDetailPage — поток журнала контейнера', 
   });
 
   it('игнорирует события устаревшего сокета вместо дублирования строк и лишнего переподключения (#632)', async () => {
-    stubServerFetch('running');
+    stubServerFetch('running', {}, ['server:download_logs']);
     await act(async () => {
       render(
         <Suspense fallback={null}>
