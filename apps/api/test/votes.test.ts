@@ -1,7 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
 import { gameVoteBallots, gameVotes, players, roles, servers } from '@squad/db/schema';
+import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -298,6 +299,53 @@ describeIfDb('votes API (VOTE-2)', () => {
     const query = encodeURIComponent(`[TAG] ${uniqueNick.slice(0, 10)}`);
     const found = await listVotes(`?serverId=${server}&initiatorQuery=${query}`);
     expect(found.items.map((vote) => vote.id)).toEqual([wanted]);
+  });
+
+  it('keeps the initiator filter to a fixed parameter count however many players match (#376)', async () => {
+    const server = await seedServer(h.db, 'VoteBulkNickSrv');
+    const tag = `bulknick${uuidv7().slice(0, 8)}`;
+    const matching = 60;
+    await h.db.execute(sql`
+      INSERT INTO players (eos_id, canonical_name, canonical_name_normalized)
+      SELECT ${tag} || '-' || g, ${tag} || '-' || g, ${tag} || '-' || g
+      FROM generate_series(1, ${matching}::int) AS g
+    `);
+    // Every statement drizzle sends goes through the postgres-js client's unsafe().
+    const client = (h.db as unknown as { $client: { unsafe: (...args: unknown[]) => unknown } })
+      .$client;
+    const unsafeSpy = vi.spyOn(client, 'unsafe');
+    try {
+      const [initiator] = (await h.db.execute(
+        sql`SELECT id FROM players WHERE eos_id = ${`${tag}-1`}`,
+      )) as unknown as Array<{ id: string }>;
+      const wanted = await seedVote(h.db, {
+        serverId: server,
+        startedAt: new Date('2026-06-12T10:00:00.000Z'),
+        initiatorPlayerId: initiator?.id ?? null,
+      });
+      unsafeSpy.mockClear();
+
+      const found = await listVotes(`?serverId=${server}&initiatorQuery=${tag}`);
+      expect(found.items.map((vote) => vote.id)).toEqual([wanted]);
+      const count = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/votes/count?serverId=${server}&initiatorQuery=${tag}`,
+        headers: { cookie },
+      });
+      expect(count.statusCode).toBe(200);
+      expect((count.json() as { total: number }).total).toBe(1);
+
+      // The old filter bound one parameter per matching player; past 65 535
+      // matches Postgres rejected the statement and both routes answered 500.
+      const paramCounts = unsafeSpy.mock.calls.map(
+        (call) => (call[1] as unknown[] | undefined)?.length ?? 0,
+      );
+      expect(Math.max(...paramCounts)).toBeLessThan(matching);
+    } finally {
+      unsafeSpy.mockRestore();
+      await h.db.execute(sql`DELETE FROM game_votes WHERE server_id = ${server}::uuid`);
+      await h.db.execute(sql`DELETE FROM players WHERE eos_id LIKE ${`${tag}-%`}`);
+    }
   });
 
   it('sorts by started_at in both directions', async () => {

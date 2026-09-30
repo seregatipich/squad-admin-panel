@@ -69,6 +69,8 @@ const TIER_ERROR_MESSAGES: Record<string, string> = {
   vip_tier_name_taken: 'Тир с таким названием уже существует.',
   role_grants_panel_access: 'Тир нельзя привязать к системной роли или роли с доступом к панели.',
   vip_tier_has_active_assignments: 'Нельзя удалить тир: у него есть активные назначения.',
+  vip_tier_has_subscriptions:
+    'Нельзя удалить тир: на него оформлялись подписки. Отключите тир вместо удаления.',
   role_referenced_by_vip_tier: 'Роль привязана к VIP-тиру — сначала удалите тир.',
   role_in_use: 'Роль используется и не может быть удалена.',
 };

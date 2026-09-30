@@ -5,7 +5,7 @@ import {
   players,
   roles,
 } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -263,6 +263,41 @@ describeIfDb('GET /api/v1/suspects', () => {
 
     for (const id of seededIds) {
       expect(seen.has(id)).toBe(true);
+    }
+  });
+  it('keeps keyset pages exact when last_seen_at carries microseconds (#352)', async () => {
+    const seededIds: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const steamId64 = testSteamId(811060 + i);
+      const playerId = await seedPlayer(811060 + i, `SuspectMicro${i}`);
+      await setMark(playerId, 7, ownerCookie);
+      // Two pairs share one sub-millisecond timestamp, as rows written by one
+      // transaction's DEFAULT now() do.
+      const lastSeen = i < 2 ? '2026-01-01 00:00:00.123456+00' : '2026-01-01 00:00:00.123789+00';
+      await h.db.execute(
+        sql`UPDATE players SET last_seen_at = ${lastSeen}::timestamptz WHERE steam_id64 = ${steamId64.toString()}::bigint`,
+      );
+      seededIds.push(playerId);
+    }
+
+    for (const sort of ['last_seen_asc', 'last_seen_desc']) {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let guard = 0;
+      do {
+        const base = `/api/v1/suspects?q=SuspectMicro&sort=${sort}&limit=1`;
+        const url: string = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
+        const res = await h.app.inject({ method: 'GET', url, headers: { cookie: ownerCookie } });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { items: Array<{ id: string }>; next_cursor: string | null };
+        seen.push(...body.items.map((item) => item.id));
+        cursor = body.next_cursor;
+        guard += 1;
+      } while (cursor && guard < 10);
+
+      expect(seen, sort).toHaveLength(4);
+      expect(new Set(seen).size, sort).toBe(4);
+      expect([...seen].sort(), sort).toEqual([...seededIds].sort());
     }
   });
 });

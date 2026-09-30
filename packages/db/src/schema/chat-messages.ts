@@ -53,6 +53,9 @@ export const chatMessages = pgTable(
     ),
     // Keyset walks ORDER BY sent_at, id (chat-flag reindex, migration 0123).
     sentIdIdx: index('chat_messages_sent_id_idx').on(table.sentAt, table.id),
+    matchedRuleIdx: index('chat_messages_matched_rule_idx')
+      .on(table.matchedRuleId)
+      .where(sql`matched_rule_id IS NOT NULL`),
     sentAtBrinIdx: index('chat_messages_sent_at_brin_idx')
       .using('brin', table.sentAt)
       .with({ pages_per_range: 32 }),

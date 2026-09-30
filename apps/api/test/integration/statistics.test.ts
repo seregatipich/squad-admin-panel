@@ -1,5 +1,5 @@
 import { playerSessions, players, roles, serverDailyStats, servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -314,6 +314,50 @@ describeIfDb('GET /api/v1/statistics', () => {
     expect(valueAt(body.population.by_hour, SERVER_A, '04')).toBeCloseTo(0.3, 1);
     expect(valueAt(body.population.by_hour, SERVER_A, '05')).toBeCloseTo(0.3, 1);
     expect(valueAt(body.population.by_hour, SERVER_A, '12')).toBe(0);
+  });
+
+  it('clips long, stuck-open and pre-window sessions to the window hours (#354)', async () => {
+    const serverC = '019e0000-0000-7000-8000-0000000980c3';
+    await h.db
+      .insert(servers)
+      .values({ id: serverC, displayName: 'Stats Server C', slug: 'stats-server-c' });
+    await h.db.insert(playerSessions).values([
+      // Still open, started a month before the window: every window hour counts.
+      { playerId: playerA, serverId: serverC, connectedAt: new Date('2026-05-01T00:00:00Z') },
+      // Closed inside the window after a week: 00:00–02:30 of day one.
+      {
+        playerId: playerA,
+        serverId: serverC,
+        connectedAt: new Date('2026-05-25T00:00:00Z'),
+        disconnectedAt: new Date('2026-06-01T02:30:00Z'),
+      },
+      // Ended before the window: contributes nothing.
+      {
+        playerId: playerA,
+        serverId: serverC,
+        connectedAt: new Date('2026-05-10T00:00:00Z'),
+        disconnectedAt: new Date('2026-05-31T23:00:00Z'),
+      },
+    ]);
+
+    const res = await fetchStatistics(`?from=${FROM}&to=${TO}&servers=${serverC}`);
+    expect(res.statusCode).toBe(200);
+    const byHour = (res.json() as StatisticsBody).population.by_hour;
+    expect(valueAt(byHour, serverC, '00')).toBeCloseTo(4 / 3, 1);
+    expect(valueAt(byHour, serverC, '01')).toBeCloseTo(4 / 3, 1);
+    expect(valueAt(byHour, serverC, '02')).toBeCloseTo(3.5 / 3, 1);
+    expect(valueAt(byHour, serverC, '03')).toBeCloseTo(1, 1);
+    expect(valueAt(byHour, serverC, '23')).toBeCloseTo(1, 1);
+  });
+
+  it('indexes closed sessions by server and disconnect time (#354)', async () => {
+    const rows = (await h.db.execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE tablename = 'player_sessions' AND indexname = 'player_sessions_server_disconnected_idx'
+    `)) as unknown as Array<{ indexdef: string }>;
+    expect(rows[0]?.indexdef).toMatch(
+      /\(server_id, disconnected_at\) WHERE \(disconnected_at IS NOT NULL\)/,
+    );
   });
 
   it('scopes every block to the selected servers', async () => {

@@ -1,7 +1,7 @@
 import { adminsCfgSyncOutbox, panelMeta, players, roles, servers } from '@squad/db/schema';
 import { eq, inArray, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -513,5 +513,59 @@ describeIfDb('whitelist mutations fan out to every active server (WL-2)', () => 
     expect(second.statusCode).toBe(200);
     expect(second.json()).toEqual({ ok: true, changed: false });
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it('imports in batched queries, enqueues one sync per server and skips duplicates and long comments (#377)', async () => {
+    const importSteams = [165040, 165041, 165042].map((suffix) => testSteamId(suffix));
+    for (const steam of importSteams) await createPlayer(steam);
+    const unknownSteams = Array.from({ length: 25 }, (_, i) => testSteamId(165050 + i));
+    const [first, second, third] = importSteams.map(String);
+    const csv = [
+      `${first},first`,
+      `${second},second`,
+      `${third},${'x'.repeat(513)}`,
+      `${first},same SteamID again`,
+      ...unknownSteams.map(String),
+    ].join('\n');
+
+    const client = (h.db as unknown as { $client: { unsafe: (...args: unknown[]) => unknown } })
+      .$client;
+    const unsafeSpy = vi.spyOn(client, 'unsafe');
+    let res: Awaited<ReturnType<typeof h.app.inject>>;
+    try {
+      res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/whitelist/import',
+        headers: { cookie: ownerCookie },
+        payload: { csv },
+      });
+      // Player lookups no longer run once per line.
+      expect(unsafeSpy.mock.calls.length).toBeLessThan(unknownSteams.length);
+    } finally {
+      unsafeSpy.mockRestore();
+    }
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ imported: number; skipped: Array<{ line: number; reason: string }> }>();
+    expect(body.imported).toBe(2);
+    expect(body.skipped).toContainEqual(
+      expect.objectContaining({ line: 3, reason: 'comment_too_long' }),
+    );
+    expect(body.skipped).toContainEqual(
+      expect.objectContaining({ line: 4, reason: 'duplicate_steam_id64' }),
+    );
+    expect(body.skipped.filter((row) => row.reason === 'player_not_found')).toHaveLength(25);
+
+    // One Admins.cfg regeneration per active server for the whole import, not
+    // one per imported row.
+    const rows = await outboxRows();
+    expect(rows.map((row) => row.serverId).sort()).toEqual((await activeServerIds()).sort());
+    expect(new Set(rows.map((row) => row.reason))).toEqual(new Set(['whitelist.member.add']));
+
+    const [kept] = await h.db
+      .select({ roleComment: players.roleComment })
+      .from(players)
+      .where(eq(players.steamId64, importSteams[0] as bigint))
+      .limit(1);
+    expect(kept?.roleComment).toBe('first');
   });
 });

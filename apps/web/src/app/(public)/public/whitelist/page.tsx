@@ -15,20 +15,27 @@ import {
   TextInput,
 } from '@/components/ui';
 
-const STEAM_ID64_RE = /^\d{17}$/;
-
 type PortalState = 'loading' | 'open' | 'closed' | 'error';
 
 /**
- * Public, no-session whitelist/VIP application portal (WL-3, #67). Reads the
- * open/closed master switch from `/api/v1/public/whitelist/settings` and, when
- * open, lets any visitor submit one pending application per SteamID64 via
- * `POST /api/v1/public/whitelist/applications`. No login, no PII beyond the
- * submitted SteamID64 and contact string.
+ * Ссылка входа — обычный `<a>`: `/api/v1/auth/steam/login` начинает
+ * OpenID-обмен и требует полной навигации документа.
+ */
+const STEAM_LINK_CLASS =
+  'inline-flex h-8 items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
+
+/**
+ * Public whitelist/VIP application portal (WL-3, #67). Reads the open/closed
+ * master switch from `/api/v1/public/whitelist/settings` and, when open, lets a
+ * player signed in through Steam submit one pending application for their own
+ * SteamID64 via `POST /api/v1/public/whitelist/applications`. The SteamID64 is
+ * taken from the Steam session (`/api/v1/me`), never typed in, so nobody can
+ * apply — or block an application — in someone else's name (#375).
  */
 export default function PublicWhitelistPage() {
   const [state, setState] = useState<PortalState>('loading');
-  const [steamId64, setSteamId64] = useState('');
+  /** The signed-in player's SteamID64; `null` when there is no Steam session. */
+  const [steamId64, setSteamId64] = useState<string | null>(null);
   const [body, setBody] = useState('');
   const [contact, setContact] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -44,6 +51,11 @@ export default function PublicWhitelistPage() {
         return;
       }
       const data = (await res.json()) as { enabled: boolean };
+      if (data.enabled) {
+        const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        const me = meRes.ok ? ((await meRes.json()) as { steam_id64: string | null }) : null;
+        setSteamId64(me?.steam_id64 ?? null);
+      }
       setState(data.enabled ? 'open' : 'closed');
     } catch {
       setState('error');
@@ -57,10 +69,6 @@ export default function PublicWhitelistPage() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!STEAM_ID64_RE.test(steamId64.trim())) {
-      setError('Укажите корректный SteamID64 (17 цифр).');
-      return;
-    }
     if (!body.trim()) {
       setError('Опишите заявку.');
       return;
@@ -69,22 +77,26 @@ export default function PublicWhitelistPage() {
     try {
       const res = await fetch('/api/v1/public/whitelist/applications', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          steam_id64: steamId64.trim(),
           body: body.trim(),
           contact: contact.trim() || undefined,
         }),
       });
       if (res.status === 201) {
         setSubmitted(true);
-        setSteamId64('');
         setBody('');
         setContact('');
         return;
       }
       if (res.status === 404) {
         setState('closed');
+        return;
+      }
+      if (res.status === 401) {
+        setSteamId64(null);
+        setError('Сессия истекла — войдите через Steam ещё раз.');
         return;
       }
       if (res.status === 409) {
@@ -143,20 +155,31 @@ export default function PublicWhitelistPage() {
         />
       ) : null}
 
-      {state === 'open' && !submitted ? (
+      {state === 'open' && !submitted && steamId64 === null ? (
+        <Card padding="none">
+          <CardBody>
+            <div className="space-y-3">
+              {error ? <InlineBanner tone="crit" title={error} /> : null}
+              <p className="text-sm">
+                Заявку можно подать только от своего Steam-аккаунта: войдите через Steam, чтобы
+                подтвердить SteamID64. После входа вернитесь на эту страницу.
+              </p>
+              <a href="/api/v1/auth/steam/login" className={STEAM_LINK_CLASS}>
+                Войти через Steam
+              </a>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {state === 'open' && !submitted && steamId64 !== null ? (
         <Card padding="none">
           <CardBody>
             <form onSubmit={submit} className="space-y-4">
               {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-              <FieldRow label="SteamID64" required>
-                <TextInput
-                  inputMode="numeric"
-                  value={steamId64}
-                  onChange={(e) => setSteamId64(e.target.value)}
-                  placeholder="76561198000000000"
-                  className="font-mono"
-                />
+              <FieldRow label="SteamID64 (из входа через Steam)">
+                <TextInput value={steamId64} readOnly className="font-mono" />
               </FieldRow>
 
               <FieldRow label="Сообщение" required>

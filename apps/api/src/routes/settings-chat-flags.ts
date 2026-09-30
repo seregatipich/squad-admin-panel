@@ -10,18 +10,17 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
-import { reindexChatFlags } from '../lib/chat-flags.js';
+import {
+  clearChatFlagsForRule,
+  reindexChatFlags,
+  withChatFlagReindexLock,
+} from '../lib/chat-flags.js';
 
 const patternTypeSchema = z.enum(CHAT_FLAG_PATTERN_TYPES);
 const localeSchema = z.enum(CHAT_FLAG_LOCALES);
 const idParam = z.object({ id: z.string().uuid() });
 
 const REINDEX_DAYS_MAX = 365;
-
-/** Redis key that serialises reindex runs. */
-export const CHAT_REINDEX_LOCK_KEY = 'chat-flags:reindex:lock';
-/** Upper bound on one reindex; the lock expires even if the process dies mid-run. */
-const CHAT_REINDEX_LOCK_TTL_MS = 15 * 60_000;
 
 const listQuery = z.object({
   search: z.string().trim().max(256).optional(),
@@ -285,14 +284,24 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.locale !== undefined) updates.locale = req.body.locale;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
 
+      // Matches made by the old definition no longer hold once the rule is
+      // disabled or re-patterned; clear them with the rule change (#346).
+      const invalidatesMatches =
+        (updates.enabled === false && existing.enabled) ||
+        (updates.pattern !== undefined && updates.pattern !== existing.pattern) ||
+        (updates.patternType !== undefined && updates.patternType !== existing.patternType);
+
       let updated: typeof chatFlagRules.$inferSelect | undefined = existing;
       try {
-        const result = await app.db
-          .update(chatFlagRules)
-          .set(updates)
-          .where(eq(chatFlagRules.id, req.params.id))
-          .returning();
-        updated = result[0];
+        updated = await app.db.transaction(async (tx) => {
+          const result = await tx
+            .update(chatFlagRules)
+            .set(updates)
+            .where(eq(chatFlagRules.id, req.params.id))
+            .returning();
+          if (invalidatesMatches) await clearChatFlagsForRule(tx, req.params.id);
+          return result[0];
+        });
       } catch (err) {
         if (
           (err as { code?: string }).code === '23505' ||
@@ -334,7 +343,12 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'rule_not_found' };
       }
-      await app.db.delete(chatFlagRules).where(eq(chatFlagRules.id, req.params.id));
+      // The FK's ON DELETE SET NULL alone would leave is_flagged = true on
+      // every message the rule matched (#346).
+      await app.db.transaction(async (tx) => {
+        await clearChatFlagsForRule(tx, req.params.id);
+        await tx.delete(chatFlagRules).where(eq(chatFlagRules.id, req.params.id));
+      });
       await auditMutation(req, reply, {
         action: 'chat_flag_rule.delete',
         targetId: existing.id,
@@ -351,25 +365,14 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
-      // One run at a time: two concurrent reindexes would scan and rewrite the
-      // same rows twice and hold two pool connections for the duration (#36).
-      const acquired = await app.redis.set(
-        CHAT_REINDEX_LOCK_KEY,
-        req.id,
-        'PX',
-        CHAT_REINDEX_LOCK_TTL_MS,
-        'NX',
+      const run = await withChatFlagReindexLock(app.redis, () =>
+        reindexChatFlags(app.db, { days: req.body.days }),
       );
-      if (acquired !== 'OK') {
+      if (!run.acquired) {
         reply.code(409);
         return { error: 'reindex_in_progress' };
       }
-      let summary: Awaited<ReturnType<typeof reindexChatFlags>>;
-      try {
-        summary = await reindexChatFlags(app.db, { days: req.body.days });
-      } finally {
-        await app.redis.del(CHAT_REINDEX_LOCK_KEY);
-      }
+      const summary = run.result;
       await auditMutation(req, reply, {
         action: 'chat_flag_rule.reindex',
         targetId: `days:${summary.days}`,

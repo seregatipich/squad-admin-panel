@@ -417,17 +417,30 @@ async function computeStatistics(
                      )
                    )::bigint AS seconds
             FROM player_sessions ps
+            -- Hours are clipped to the window up front: an old or stuck-open
+            -- session yields at most the window's hours, not one row per hour
+            -- of its whole lifetime (#354).
             CROSS JOIN LATERAL generate_series(
-              FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${HOUR_SECONDS})::bigint,
-              FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, now())) / ${HOUR_SECONDS})::bigint
+              GREATEST(
+                FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${HOUR_SECONDS})::bigint,
+                FLOOR(EXTRACT(EPOCH FROM ${fromDay}::date::timestamptz) / ${HOUR_SECONDS})::bigint
+              ),
+              LEAST(
+                FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, now())) / ${HOUR_SECONDS})::bigint,
+                FLOOR(EXTRACT(EPOCH FROM (${toDay}::date + 1)::timestamptz) / ${HOUR_SECONDS})::bigint - 1
+              )
             ) AS gh(hour_number)
             WHERE ps.mode = 'online'
               AND ps.server_id = ANY(string_to_array(${serverIdCsv}::text, ',')::uuid[])
               AND ps.connected_at < (${toDay}::date + 1)::timestamptz
-              AND COALESCE(ps.disconnected_at, now()) > ${fromDay}::date::timestamptz
-              AND gh.hour_number BETWEEN
-                    FLOOR(EXTRACT(EPOCH FROM ${fromDay}::date::timestamptz) / ${HOUR_SECONDS})::bigint
-                AND FLOOR(EXTRACT(EPOCH FROM (${toDay}::date + 1)::timestamptz) / ${HOUR_SECONDS})::bigint - 1
+              -- Split rather than COALESCE(disconnected_at, now()) so closed
+              -- sessions come from player_sessions_server_disconnected_idx and
+              -- open ones from player_sessions_open_idx, instead of every
+              -- session a server ever had.
+              AND (
+                ps.disconnected_at > ${fromDay}::date::timestamptz
+                OR (ps.disconnected_at IS NULL AND now() > ${fromDay}::date::timestamptz)
+              )
           ) seg
           WHERE seg.seconds > 0
           GROUP BY seg.server_id, hour

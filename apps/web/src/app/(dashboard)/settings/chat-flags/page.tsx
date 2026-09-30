@@ -213,6 +213,9 @@ export default function ChatFlagsPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ days: reindexDays }),
       });
+      if (res.status === 409) {
+        throw new Error('Переиндексация уже выполняется — дождитесь её завершения.');
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const summary = (await res.json()) as ReindexSummary;
       setMsg({ kind: 'ok', text: summarizeReindex(summary) });
@@ -389,7 +392,7 @@ export default function ChatFlagsPage() {
         <Card padding="none">
           <CardHeader
             title="Переиндексация"
-            description="Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам. Операция идемпотентна — повторный запуск не меняет уже согласованные строки."
+            description="Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам. Удаление, отключение или смена паттерна правила сразу снимает его прежние пометки, а новое или изменённое правило применяется к истории только после переиндексации. Операция идемпотентна; одновременно выполняется только одна переиндексация."
           />
           <CardBody>
             <div className="flex flex-wrap items-end gap-3">

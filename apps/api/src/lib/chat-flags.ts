@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
 import type { DatabaseClient } from '@squad/db';
 import { chatFlagRules, chatMessages } from '@squad/db/schema';
 import {
@@ -7,6 +9,7 @@ import {
   isChatFlagPatternType,
 } from '@squad/shared-config';
 import { and, asc, eq, gte, type SQL, sql } from 'drizzle-orm';
+import type Redis from 'ioredis';
 
 const REINDEX_BATCH = 500;
 
@@ -36,6 +39,44 @@ export interface ReindexSummary {
   changed: number;
 }
 
+/**
+ * Redis key that serialises reindex runs across API replicas and double
+ * submits (#345). Held with a TTL so a crashed run cannot wedge the feature.
+ */
+export const CHAT_FLAG_REINDEX_LOCK_KEY = 'chat-flags:reindex:lock';
+const REINDEX_LOCK_TTL_SECONDS = 30 * 60;
+
+/** Deletes the lock only while it still carries this run's token. */
+const RELEASE_LOCK_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+/**
+ * Runs `task` while holding {@link CHAT_FLAG_REINDEX_LOCK_KEY}.
+ *
+ * @returns `{ acquired: false }` without running `task` when another run holds
+ *   the lock; otherwise `task`'s result. The lock is released on success and
+ *   on failure, but never one a later run re-acquired after this one's TTL.
+ */
+export async function withChatFlagReindexLock<T>(
+  redis: Pick<Redis, 'set' | 'eval'>,
+  task: () => Promise<T>,
+): Promise<{ acquired: false } | { acquired: true; result: T }> {
+  const token = randomUUID();
+  const acquired = await redis.set(
+    CHAT_FLAG_REINDEX_LOCK_KEY,
+    token,
+    'EX',
+    REINDEX_LOCK_TTL_SECONDS,
+    'NX',
+  );
+  if (acquired !== 'OK') return { acquired: false };
+  try {
+    return { acquired: true, result: await task() };
+  } finally {
+    await redis.eval(RELEASE_LOCK_SCRIPT, 1, CHAT_FLAG_REINDEX_LOCK_KEY, token);
+  }
+}
+
 interface ReindexRow {
   id: bigint;
   /** `sent_at::text` — exact to the microsecond, unlike a JS `Date`. */
@@ -59,9 +100,10 @@ interface ReindexRow {
  */
 export async function reindexChatFlags(
   db: DatabaseClient,
-  options: { days: number; now?: Date },
+  options: { days: number; now?: Date; batchSize?: number },
 ): Promise<ReindexSummary> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? REINDEX_BATCH;
   const cutoff = new Date(now.getTime() - options.days * 86_400_000);
   const rules = await loadCompiledFlagRules(db);
 
@@ -91,7 +133,7 @@ export async function reindexChatFlags(
       .from(chatMessages)
       .where(keyset)
       .orderBy(asc(chatMessages.sentAt), asc(chatMessages.id))
-      .limit(REINDEX_BATCH);
+      .limit(batchSize);
 
     if (batch.length === 0) break;
 
@@ -123,8 +165,24 @@ export async function reindexChatFlags(
     const last: ReindexRow | undefined = batch[batch.length - 1];
     if (!last) break;
     cursor = { sentAt: last.sentAt, id: last.id };
-    if (batch.length < REINDEX_BATCH) break;
+    if (batch.length < batchSize) break;
+    await setImmediate();
   }
 
   return { days: options.days, scanned, flagged, changed };
+}
+
+/**
+ * Clears the flag from every message a rule matched (#346). Called when the
+ * rule is deleted, disabled, or re-patterned: those matches no longer reflect
+ * the rule set. Newly matching history is only picked up by a reindex.
+ */
+export async function clearChatFlagsForRule(
+  db: Pick<DatabaseClient, 'update'>,
+  ruleId: string,
+): Promise<void> {
+  await db
+    .update(chatMessages)
+    .set({ isFlagged: false, matchedRuleId: null })
+    .where(eq(chatMessages.matchedRuleId, ruleId));
 }

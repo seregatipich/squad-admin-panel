@@ -123,7 +123,7 @@ function serializeVote(row: VoteListRow) {
 const votesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
+  function buildFilters(query: FilterInput): SQL[] {
     const clauses: SQL[] = [];
 
     const serverIds = asArray(query.serverId);
@@ -142,11 +142,10 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
       clauses.push(eq(gameVotes.initiatorPlayerId, query.initiatorPlayerId));
     } else if (query.initiatorQuery) {
       const byName = playerNameMatch(gameVotes.initiatorPlayerId, query.initiatorQuery);
-      if (!byName) return { clauses, empty: true };
-      clauses.push(byName);
+      clauses.push(byName ?? sql`false`);
     }
 
-    return { clauses, empty: false };
+    return clauses;
   }
 
   function listSelection() {
@@ -191,8 +190,7 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
 
       const { order, limit } = req.query;
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { items: [], next_cursor: null, limit };
+      const clauses = buildFilters(req.query);
 
       if (req.query.cursor) {
         const cursor = decodeCursor(req.query.cursor);
@@ -233,8 +231,7 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { total: 0 };
+      const clauses = buildFilters(req.query);
 
       const rows = await app.db
         .select({ total: sql<number>`count(*)::int` })

@@ -1,4 +1,4 @@
-import { players, roles, type VipTierRow, vipTiers } from '@squad/db/schema';
+import { players, roles, type VipTierRow, vipSubscriptions, vipTiers } from '@squad/db/schema';
 import { and, asc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -308,7 +308,32 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'vip_tier_has_active_assignments' };
       }
 
-      await app.db.delete(vipTiers).where(eq(vipTiers.id, req.params.id));
+      // vip_subscriptions.tier_id is ON DELETE RESTRICT: a tier anyone ever
+      // subscribed to (even a cancelled or expired subscription) is kept for
+      // that history and can only be deactivated (#365).
+      const [subscription] = await app.db
+        .select({ id: vipSubscriptions.id })
+        .from(vipSubscriptions)
+        .where(eq(vipSubscriptions.tierId, req.params.id))
+        .limit(1);
+      if (subscription) {
+        reply.code(409);
+        return { error: 'vip_tier_has_subscriptions' };
+      }
+
+      try {
+        await app.db.delete(vipTiers).where(eq(vipTiers.id, req.params.id));
+      } catch (err) {
+        // A subscription created between the check and the delete.
+        if (
+          (err as { code?: string }).code === '23503' ||
+          (err as { cause?: { code?: string } }).cause?.code === '23503'
+        ) {
+          reply.code(409);
+          return { error: 'vip_tier_has_subscriptions' };
+        }
+        throw err;
+      }
 
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
