@@ -9,5 +9,5 @@
     "configFile": "vitest.stryker.config.ts"
   },
   "tempDirName": ".stryker-tmp",
-  "thresholds": { "high": 90, "low": 75, "break": 0 }
+  "thresholds": { "high": 90, "low": 75, "break": 70 }
 }

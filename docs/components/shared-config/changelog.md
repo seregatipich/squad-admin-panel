@@ -1,5 +1,11 @@
 # `shared-config` — changelog
 
+## 2026-09-30
+
+### Changed
+
+- `stryker.config.json` (#79, finding 1164): `thresholds.break` is `70` instead of `0`, so the mutation job fails on a score regression. Measured score of the full run: 72.32%.
+
 ## 2026-09-27 — Аудит маршрутов API (#38)
 
 ### Added
