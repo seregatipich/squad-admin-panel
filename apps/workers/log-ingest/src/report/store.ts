@@ -135,8 +135,9 @@ async function findPendingDuplicate(
 }
 
 async function writeEvent(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   params: {
+    eventId?: string;
     serverId: string;
     reportId: string;
     occurredAt: Date;
@@ -156,7 +157,7 @@ async function writeEvent(
     source: 'ingame',
   });
   const envelope: EventEnvelope = {
-    event_id: uuidv7(),
+    event_id: params.eventId ?? uuidv7(),
     server_id: params.serverId,
     version: 1,
     type: 'player_report',
@@ -208,6 +209,24 @@ export async function handleReport(
     .from(playerReports)
     .where(eq(playerReports.id, deterministicId))
     .limit(1);
+  const appendedBefore = replayed[0]
+    ? []
+    : await db
+        .select({ reportId: events.correlationId })
+        .from(events)
+        .where(and(eq(events.eventId, deterministicId), eq(events.occurredAt, occurredAt)))
+        .limit(1);
+  if (appendedBefore[0]?.reportId) {
+    // An earlier pass appended this line to an existing pending report; the
+    // append's event carries the line's deterministic id as its event_id, so
+    // its presence proves the body is already in the row.
+    return {
+      reportId: appendedBefore[0].reportId,
+      deduped: true,
+      reporterPlayerId: null,
+      targetPlayerId: null,
+    };
+  }
   if (replayed[0]) {
     // The exact same log line was already turned into this report row
     // (or its append) in an earlier pass; treat this call as a no-op
@@ -237,17 +256,23 @@ export async function handleReport(
     // `duplicate.body` snapshot: two concurrent duplicate reports doing a
     // read-then-write string concatenation here could otherwise lose one
     // body to the other's overwrite (#63 finding 941).
-    await db
-      .update(playerReports)
-      .set({ body: sql`${playerReports.body} || ${`\n${report.body}`}` })
-      .where(eq(playerReports.id, duplicate.id));
-    const envelope = await writeEvent(db, {
-      serverId,
-      reportId: duplicate.id,
-      occurredAt,
-      reporterPlayerId,
-      targetPlayerId,
-      report,
+    // The append and its event (whose event_id is the line's deterministic
+    // id, the replay marker) commit together, so a crash cannot leave the
+    // body appended without the marker.
+    const envelope = await db.transaction(async (tx) => {
+      await tx
+        .update(playerReports)
+        .set({ body: sql`${playerReports.body} || ${`\n${report.body}`}` })
+        .where(eq(playerReports.id, duplicate.id));
+      return writeEvent(tx, {
+        eventId: deterministicId,
+        serverId,
+        reportId: duplicate.id,
+        occurredAt,
+        reporterPlayerId,
+        targetPlayerId,
+        report,
+      });
     });
     await publishEvent(redis, envelope);
     return { reportId: duplicate.id, deduped: true, reporterPlayerId, targetPlayerId };

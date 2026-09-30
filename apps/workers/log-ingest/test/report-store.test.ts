@@ -219,6 +219,30 @@ describe('handleReport', () => {
     expect(eventRows).toHaveLength(1);
   });
 
+  it('replaying a line that was appended to a duplicate row does not append it twice', async () => {
+    await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: makeReport({ body: 'first line' }),
+    });
+    const appended = makeReport({ body: 'second line', ts: new Date().toISOString(), tick: 777 });
+    const first = await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: appended,
+    });
+    const replay = await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: appended,
+    });
+
+    expect(replay.reportId).toBe(first.reportId);
+    expect(replay.deduped).toBe(true);
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].body).toBe('first line\nsecond line');
+    const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
+    expect(eventRows).toHaveLength(2);
+  });
+
   // Regression for #63 finding 941: the dedup append used to read the
   // duplicate row's body once in JS, then write `${read}\n${new}` — two
   // concurrent duplicate reports racing that read-then-write could lose one
