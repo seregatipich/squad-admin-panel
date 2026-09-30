@@ -67,6 +67,8 @@ If a migration shipped to production must be reverted, the path is:
 | 0135 | `0135_audit_log_chain_v2` | Issues #36, #49, #1064, #1066, #1067, #1251: the single definition of `audit_log_append()`: id drawn after the chain lock (the column default is dropped), TimeZone pinned to UTC, `hash_version` (default 1) and the v2 all-column length-prefixed hash form; BEFORE TRUNCATE triggers on `audit_log` and `config_versions`. Additive; the previous release's verifier reports v2 rows as broken, writes are unaffected. |
 | 0136 | `0136_index_cleanup_balancer_open_key` | Issue #78: drops seven indexes no query reads; partial unique index `balancer_proposals_open_key` (one open snapshot per `(server_id, mode)`). Rollback-safe: indexes only. |
 | 0137 | `0137_player_notes_author_set_null` | Issues #78, #1137: `player_notes.author_id` becomes nullable and its FK `ON DELETE SET NULL` (was `CASCADE`), so deleting an author keeps their notes. Rollback-safe: a constraint is relaxed, no data changes; the previous release's inner joins skip a note without an author. |
+
+| 0137 | `0137_combat_events_match_uuid_backfill` | Issue #50 (#1073): backfills `combat_events.match_uuid` for events stored before 0131, resolving the match like log-ingest (the match of the same server covering `occurred_at`). Touches only rows still NULL inside a known match, idempotent, rollback-safe (the previous release never names the column). |
 | 0020 | `0020_uuid_player_id` | Data-preserving identity migration: gives `players` a UUID primary key, keeps `steam_id64` as a nullable unique external identity, migrates all child FKs to UUID player IDs, and adds setup-wizard metadata. |
 
 ## Adding a migration
@@ -136,6 +138,18 @@ DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm verify:audit-chain
 ```
 
 Script: `scripts/verify-audit-chain.ts`. Exits non-zero on the first broken link with the offending row `id`.
+
+The chain alone cannot show that rows were cut off its tail or that it was regenerated as a whole by someone with write access to the table. Anchor its head outside the database (issue #50, #1064):
+
+```bash
+# After a verified run, record the printed `head: <id>:<row_hash>` line in an ops log
+# or password-manager note, not on the database host:
+AUDIT_CHAIN_PRINT_HEAD=1 pnpm verify:audit-chain
+# Later runs (and every restore) check that the anchored row still exists unchanged:
+AUDIT_CHAIN_ANCHOR=<id>:<row_hash> pnpm verify:audit-chain
+```
+
+`GET /api/v1/audit/verify-chain` returns the same `head` and accepts `anchor_id` + `anchor_hash`; a missing or changed anchored row is reported as `reason: "anchor"`. Refresh the recorded anchor after each verified run (for example weekly); rows appended since the anchor do not affect it.
 
 ## See also
 

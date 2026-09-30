@@ -26,7 +26,7 @@ Squad v10 does not respond to A2S queries. Visibility depends on the EOS session
 
 ## Audit log shows a gap or hash mismatch
 
-`pnpm verify:audit-chain` exits non-zero with the first broken row id. Treat as an incident:
+`pnpm verify:audit-chain` exits non-zero with the first broken row id (`anchor mismatch` when an externally recorded head row is missing or changed, i.e. the tail was cut or the chain regenerated). Treat as an incident:
 
 1. `SELECT * FROM audit_log WHERE id BETWEEN <broken-5> AND <broken+5>;`
 2. Check the DB host for unauthorised access (pg_dump timestamps, `SELECT usename, state FROM pg_stat_activity`).
