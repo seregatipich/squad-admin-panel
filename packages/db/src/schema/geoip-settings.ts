@@ -1,10 +1,5 @@
-import { boolean, customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
+import { boolean, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 
 export const GEOIP_SETTINGS_SINGLETON_ID = '00000000-0000-0000-0000-0000006e01ff';
 

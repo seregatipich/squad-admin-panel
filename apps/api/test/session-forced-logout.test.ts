@@ -285,11 +285,11 @@ async function createPanelRole(
 }
 
 /** A broadcast event a socket receives regardless of its subscriptions or role. */
-function heartbeatMarker(worker: string): LiveEvent {
+function broadcastMarker(marker: string): LiveEvent {
   return {
-    type: 'worker.heartbeat',
-    ts: new Date().toISOString(),
-    data: { worker, healthy: true },
+    type: 'bridge.connection',
+    ts: marker,
+    data: { state: 'up', down_for_s: 0 },
   };
 }
 
@@ -510,10 +510,10 @@ describe('server-side close of live sockets on revocation (#12)', () => {
         ts: new Date().toISOString(),
         data: { event_kind: 'role_expiring', player_id: player.playerId },
       } as unknown as LiveEvent);
-      h.app.liveBus.publish(heartbeatMarker('ws-token-narrowing-marker'));
+      h.app.liveBus.publish(broadcastMarker('ws-token-narrowing-marker'));
       await waitFor(() =>
         sock.frames.some(
-          (f) => f.type === 'worker.heartbeat' && f.data.worker === 'ws-token-narrowing-marker',
+          (f) => f.type === 'bridge.connection' && f.ts === 'ws-token-narrowing-marker',
         ),
       );
       expect(sock.frames.filter((f) => f.type === 'combat.event')).toHaveLength(0);

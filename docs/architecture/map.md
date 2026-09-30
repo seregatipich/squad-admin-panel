@@ -1916,7 +1916,7 @@ The envelope is a bare `{ type, ts, data }` discriminated union declared **twice
 | Domain | Types | Publishers |
 |---|---|---|
 | Server lifecycle (5) | `server.status`, `server.deleted`, `server.restored`, `server.map.changed`, `server.seeding` | `plugins/status-reconciler.ts:215,244,265,437,480`; `routes/servers.ts:439,549,780,926`; `server-archive.ts:286`; `server-map.ts:185,239,283`; `apps/workers/rcon/src/supervisor.ts:280` |
-| Infrastructure (4) | `rcon.status`, `rcon.roster`, `bridge.connection`, `worker.heartbeat` | supervisor `:186,212`; `plugins/bridge-heartbeat.ts`; **`worker.heartbeat` is declared and never published** |
+| Infrastructure (3) | `rcon.status`, `rcon.roster`, `bridge.connection` | supervisor `:186,212`; `plugins/bridge-heartbeat.ts` |
 | Player dossier / moderation (6) | `note.created`, `note.updated`, `note.deleted`, `mark.changed`, `mark_type.changed`, `externalban.matched` | `player-notes.ts:207`; `marks.ts:120`; `mark-types.ts:141,206,263`; `apps/workers/log-ingest/src/external-ban/store.ts:266` |
 | Issues (3) | `issue.created`, `issue.updated`, `issue.comment.created` | `routes/issues.ts:233,413,474` |
 | Reports (2) | `report.created`, `report.updated` | `reports.ts:407,520`; `report-actions.ts:696`; **plus a second, flat `report.created` shape** from `log-ingest/src/report/store.ts:245` |

@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   bigserial,
   check,
-  customType,
   index,
   inet,
   integer,
@@ -13,14 +12,9 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 import { playerApiTokens } from './player-api-tokens.js';
 import { players } from './players.js';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
 
 /**
  * Append-only, SHA-256 hash-chained audit trail.

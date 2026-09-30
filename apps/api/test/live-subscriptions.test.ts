@@ -38,11 +38,11 @@ function chat(id: string, serverId = SERVER_A): LiveEvent {
   };
 }
 
-function heartbeat(worker: string): LiveEvent {
+function broadcastMarker(marker: string): LiveEvent {
   return {
-    type: 'worker.heartbeat',
-    ts: new Date().toISOString(),
-    data: { worker, healthy: true },
+    type: 'bridge.connection',
+    ts: marker,
+    data: { state: 'up', down_for_s: 0 },
   };
 }
 
@@ -68,6 +68,7 @@ afterAll(async () => {
 
 interface Frame {
   type: string;
+  ts?: string;
   data?: Record<string, unknown>;
   events?: string[];
 }
@@ -93,10 +94,8 @@ async function send(
 
 /** Publishes a broadcast marker and waits for it, so every earlier frame has been delivered. */
 async function flush(sock: { frames: Frame[] }, marker: string): Promise<void> {
-  app.liveBus.publish(heartbeat(marker));
-  await waitFor(() =>
-    sock.frames.some((f) => f.type === 'worker.heartbeat' && f.data?.worker === marker),
-  );
+  app.liveBus.publish(broadcastMarker(marker));
+  await waitFor(() => sock.frames.some((f) => f.type === 'bridge.connection' && f.ts === marker));
 }
 
 async function close(ws: WebSocket): Promise<void> {

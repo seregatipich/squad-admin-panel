@@ -113,7 +113,7 @@ describe('live bus event subscriptions (browser)', () => {
     socket.open();
 
     socket.deliver({ type: 'subscribed', events: ['chat.message'] });
-    socket.deliver({ type: 'worker.heartbeat', ts: 'now', data: { worker: 'w', healthy: true } });
-    expect(received).toEqual(['worker.heartbeat']);
+    socket.deliver({ type: 'bridge.connection', ts: 'now', data: { state: 'up', down_for_s: 0 } });
+    expect(received).toEqual(['bridge.connection']);
   });
 });
