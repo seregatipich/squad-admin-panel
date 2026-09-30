@@ -65,6 +65,9 @@ docker compose down -v 2>/dev/null || true
 log "compose volumes removed"
 
 # ── step 3: wipe data directories ──────────────────────────────────────────
+# Destroys everything, depot included (the banner above says so); servers/
+# is recreated with the permissions install-host-bridge.sh gives it (0750)
+# so a fresh stack doesn't start against directories with the wrong mode.
 
 # Every directory here backs a bind-mounted volume, so each one is recreated
 # empty even when it did not exist yet: a missing bind source stops the stack.
@@ -76,6 +79,8 @@ for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot 
 done
 if [[ -d "${DATA_DIR}/servers" ]]; then
   rm -rf "${DATA_DIR:?}/servers/"*
+  mkdir -p "${DATA_DIR}/servers/configs" "${DATA_DIR}/servers/saved"
+  chmod 0750 "${DATA_DIR}/servers/configs" "${DATA_DIR}/servers/saved"
   log "wiped servers/ contents"
 fi
 
@@ -106,19 +111,27 @@ log "containers started"
 
 # ── wait for healthy ───────────────────────────────────────────────────────
 
+# Resolve the actual container id for a compose service by name, not by
+# guessing the project-prefixed container name (which only matches when the
+# repo directory happens to be named "squad-admin-panel").
+compose_container() { docker compose ps -q "$1" 2>/dev/null | head -n1; }
+
 printf '\n  Waiting for health checks (up to 3 min)...\n'
 DEADLINE=$(( $(date +%s) + 180 ))
 while [[ $(date +%s) -lt $DEADLINE ]]; do
-  API_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' squad-admin-panel-api-1 2>/dev/null || echo 'pending')
-  MIG_STATE=$(docker inspect -f '{{.State.Status}}' squad-admin-panel-migrator-1 2>/dev/null || echo 'running')
-  MIG_RC=$(docker inspect -f '{{.State.ExitCode}}' squad-admin-panel-migrator-1 2>/dev/null || echo '?')
+  api_cid=$(compose_container api)
+  mig_cid=$(compose_container migrator)
+  API_HEALTH=$([[ -n "$api_cid" ]] && docker inspect -f '{{.State.Health.Status}}' "$api_cid" 2>/dev/null || echo 'pending')
+  MIG_STATE=$([[ -n "$mig_cid" ]] && docker inspect -f '{{.State.Status}}' "$mig_cid" 2>/dev/null || echo 'running')
+  MIG_RC=$([[ -n "$mig_cid" ]] && docker inspect -f '{{.State.ExitCode}}' "$mig_cid" 2>/dev/null || echo '?')
   if [[ "$API_HEALTH" == "healthy" && "$MIG_STATE" == "exited" && "$MIG_RC" == "0" ]]; then
     break
   fi
   sleep 3
 done
 
-API_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' squad-admin-panel-api-1 2>/dev/null || echo '?')
+api_cid=$(compose_container api)
+API_HEALTH=$([[ -n "$api_cid" ]] && docker inspect -f '{{.State.Health.Status}}' "$api_cid" 2>/dev/null || echo '?')
 if [[ "$API_HEALTH" == "healthy" ]]; then
   APP_DOMAIN=$(grep '^APP_DOMAIN=' "${REPO}/.env" | cut -d= -f2)
   cat <<DONE

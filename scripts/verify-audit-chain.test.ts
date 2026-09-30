@@ -30,11 +30,13 @@ function databaseUrl(database: string): string {
   return url.toString();
 }
 
-function runCli(databaseUrl: string | undefined): CliResult {
+function runCli(databaseUrl: string | undefined, batchSize?: number): CliResult {
   const env = { ...process.env };
   if (databaseUrl === undefined) delete env.DATABASE_URL;
   else env.DATABASE_URL = databaseUrl;
   delete env.TEST_DATABASE_URL;
+  if (batchSize !== undefined) env.AUDIT_CHAIN_BATCH_SIZE = String(batchSize);
+  else delete env.AUDIT_CHAIN_BATCH_SIZE;
   const result = spawnSync(TSX, [SCRIPT], {
     cwd: REPOSITORY_ROOT,
     env,
@@ -100,6 +102,26 @@ async function insertTwoRows(sql: ReturnType<typeof postgres>): Promise<void> {
       ${sql.json({ requestId: 'second', nested: { safe: true } })}
     )
   `;
+}
+
+/** Inserts `n` sequential rows via the real trigger (real, trigger-computed hashes). */
+async function insertRows(sql: ReturnType<typeof postgres>, n: number): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    await sql`
+      INSERT INTO audit_log (
+        created_at, actor_kind, actor_system_label, action_type, target_type, target_id, context
+      )
+      VALUES (
+        ${new Date(Date.UTC(2026, 7, 13, 10, 0, i))},
+        ${'system'},
+        ${'audit-chain-test'},
+        ${'server.create'},
+        ${'server'},
+        ${`server-${i}`},
+        ${sql.json({ seq: i })}
+      )
+    `;
+  }
 }
 
 describe('verify-audit-chain CLI configuration boundary', () => {
@@ -287,6 +309,46 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
     } finally {
       await gate.end({ timeout: 5 });
       await slow.end({ timeout: 5 });
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  // #1216: verify-audit-chain used to SELECT the whole table into memory in
+  // one query. These force the keyset-pagination path with a tiny page size
+  // (AUDIT_CHAIN_BATCH_SIZE) instead of inserting thousands of rows.
+  it('verifies an intact chain that spans multiple pages', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 7);
+      const result = runCli(fixture.url, 3);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'ok: audit chain intact (7 rows)\n');
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  it('detects a break in a later page, with the checked count carried across pages', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 7);
+      await fixture.sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_upd`;
+      try {
+        // Row 5 falls in the second page of three (rows 4-6) at batch size 3.
+        await fixture.sql`
+          UPDATE audit_log
+          SET row_hash = decode(repeat('ff', 32), 'hex')
+          WHERE id = 5
+        `;
+      } finally {
+        await fixture.sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_upd`;
+      }
+      const result = runCli(fixture.url, 3);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /^Chain break at id=5: row_hash mismatch/m);
+      assert.match(result.stderr, /^ {2}verified 4 row\(s\) before the break$/m);
+    } finally {
       await fixture.sql.end({ timeout: 5 });
     }
   });

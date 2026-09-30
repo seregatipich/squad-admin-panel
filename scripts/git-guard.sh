@@ -287,12 +287,13 @@ analyze_merge() {
 }
 
 analyze_push() {
-  local remote="" refspecs="" force="" arg
+  local remote="" refspecs="" force="" no_verify="" arg
   while [ $# -gt 0 ]; do
     arg=$1
     case "$arg" in
     --all | --branches) deny "git push --all — push branches explicitly so the branch model can be enforced" ;;
     --mirror) deny "git push --mirror — mirrors rewrite protected branches" ;;
+    --no-verify) no_verify=1 ;;
     -f | --force | --force-with-lease | --force-with-lease=* | --force-if-includes) force=1 ;;
     -d | --delete)
       shift
@@ -323,11 +324,13 @@ analyze_push() {
     main) deny "pushing 'main' — this branch must never exist" ;;
     master)
       [ -n "$force" ] && deny "force-pushing master"
+      [ -n "$no_verify" ] && deny "pushing master with --no-verify — the branch-guard hook is the only local check on this branch"
       sha_reaches_dev "HEAD" ||
         deny "pushing master at a commit not reachable from dev — promote with: git push origin origin/dev:master"
       ;;
     dev)
       [ -n "$force" ] && deny "force-pushing dev"
+      [ -n "$no_verify" ] && deny "pushing dev with --no-verify — the branch-guard hook is the only local check on this branch"
       ;;
     esac
     return 0
@@ -364,12 +367,14 @@ analyze_push() {
     master)
       [ -z "$src" ] && deny "deleting remote master"
       [ -n "$spec_force" ] && deny "force-pushing master"
+      [ -n "$no_verify" ] && deny "pushing master with --no-verify — the branch-guard hook is the only local check on this branch"
       sha_reaches_dev "$src" ||
         deny "pushing '$src' to master — the commit is not reachable from dev; master only receives promotions from dev"
       ;;
     dev)
       [ -z "$src" ] && deny "deleting remote dev"
       [ -n "$spec_force" ] && deny "force-pushing dev"
+      [ -n "$no_verify" ] && deny "pushing dev with --no-verify — the branch-guard hook is the only local check on this branch"
       ;;
     esac
   done
@@ -398,6 +403,143 @@ continue_with_delete() {
   done
 }
 
+# Strip one layer of matching leading/trailing quotes from a token (heuristic
+# best-effort — the tokenizer above does plain word-splitting, not real shell
+# parsing, so a quoted value still carries its quote characters until this
+# runs).
+strip_quotes() {
+  local s=$1
+  case "$s" in
+  \"*\") s=${s#\"} ;;
+  esac
+  case "$s" in
+  *\") s=${s%\"} ;;
+  esac
+  case "$s" in
+  \'*\') s=${s#\'} ;;
+  esac
+  case "$s" in
+  *\') s=${s%\'} ;;
+  esac
+  printf '%s' "$s"
+}
+
+# Directory the guarded command last `cd`/`pushd`-ed into (mutated across
+# process_segment calls within one check_command run).
+CD_DIR=""
+PROJECT_COMMON=""
+
+# Analyze one shell segment (already split on &&/||/;/|). Recurses for
+# `bash -c '...'` / `sh -c '...'` wrappers so a nested command string is
+# still policed. Calls deny()/exit 2 directly — never inside a subshell, so
+# the exit always propagates out of check_command.
+process_segment() {
+  local segment=$1
+  set -- $segment
+
+  # Strip wrapper prefixes that would otherwise let a git invocation hide
+  # from the tokenizer: VAR=val assignments, `command`/`exec`, `time`,
+  # `nohup`, `env [-i] [VAR=val...] <cmd>`, `sudo [flags] <cmd>`.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    *=*) shift ;;
+    command | exec | time | nohup) shift ;;
+    env)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -*) shift ;;
+        *=*) shift ;;
+        *) break ;;
+        esac
+      done
+      ;;
+    sudo)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      ;;
+    *) break ;;
+    esac
+  done
+  [ $# -eq 0 ] && return 0
+
+  # `bash -c '<cmd>'` / `sh -c '<cmd>'`: unwrap and recursively analyze the
+  # inner command string as its own set of segments.
+  case "$1" in
+  bash | sh | /bin/bash | /bin/sh | /usr/bin/bash | /usr/bin/sh)
+    if [ "${2:-}" = "-c" ] && [ $# -ge 3 ]; then
+      # $3 alone only carries the first whitespace-delimited word of the
+      # quoted script (this tokenizer never re-parses quoting) — recover the
+      # whole inner command from the original segment text instead.
+      local inner sub rest
+      rest=${segment#*-c }
+      inner=$(strip_quotes "$rest")
+      while IFS= read -r sub; do
+        [ -n "$sub" ] && process_segment "$sub"
+      done < <(printf '%s\n' "$inner" | sed -E $'s/\\|\\||&&|;|\\|/\\\n/g')
+    fi
+    return 0
+    ;;
+  esac
+
+  # Track directory changes so later segments are checked against the repo
+  # they actually target. A dynamic target ($(...), $VAR) can't be resolved
+  # statically — treated as "not this repo". Quotes around a literal path
+  # are stripped so `cd "/path/to/repo"` still matches.
+  if [ "$1" = "cd" ] || [ "$1" = "pushd" ]; then
+    if [ $# -ge 2 ]; then
+      case "$2" in
+      *'$'* | *'`'*) CD_DIR="__unknown__" ;;
+      *) CD_DIR=$(strip_quotes "$2") ;;
+      esac
+    fi
+    return 0
+  fi
+
+  # Recognize `git` invoked by an absolute/relative path (e.g. /usr/bin/git),
+  # not just the bare command name.
+  case "$1" in
+  git | */git) ;;
+  *) return 0 ;;
+  esac
+  shift
+
+  # Consume git global flags; remember -C <dir> for repo-state checks.
+  GIT_DIR_ARG=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -C)
+      shift
+      [ $# -gt 0 ] && GIT_DIR_ARG=$(strip_quotes "$1")
+      shift
+      ;;
+    -c | --git-dir | --work-tree | --namespace)
+      shift
+      shift
+      ;;
+    --git-dir=* | --work-tree=* | -c*) shift ;;
+    -*) shift ;;
+    *) break ;;
+    esac
+  done
+  [ $# -eq 0 ] && return 0
+
+  [ -z "$GIT_DIR_ARG" ] && [ -n "$CD_DIR" ] && GIT_DIR_ARG=$CD_DIR
+  [ "$GIT_DIR_ARG" = "__unknown__" ] && return 0
+  if [ -n "$PROJECT_COMMON" ]; then
+    local target_common
+    target_common=$(g rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    [ "$target_common" = "$PROJECT_COMMON" ] || return 0
+  fi
+
+  analyze_git "$@"
+}
+
 check_command() {
   local cmd=$1
   # Fast path: nothing git-related in the command.
@@ -408,75 +550,16 @@ check_command() {
 
   # The guard only polices THIS repository (worktrees included). Commands
   # targeting other repos — scratch fixtures, clones under /tmp — are allowed.
-  local project_common
-  project_common=$(git -C "$(cd "$(dirname "$0")/.." && pwd)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  PROJECT_COMMON=$(git -C "$(cd "$(dirname "$0")/.." && pwd)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  CD_DIR=""
 
-  # Split compound commands into segments; analyze each git invocation.
-  local segment cd_dir=""
-  echo "$cmd" | sed -E $'s/\\|\\||&&|;|\\|/\\\n/g' | {
-    while IFS= read -r segment; do
-      # Tokenize (unquoted heuristic) and strip env-var prefixes.
-      set -- $segment
-      while [ $# -gt 0 ]; do
-        case "$1" in
-        *=*) shift ;;
-        command | exec) shift ;;
-        *) break ;;
-        esac
-      done
-      [ $# -eq 0 ] && continue
-
-      # Track directory changes so later segments are checked against the
-      # repo they actually target. A dynamic target ($(...), $VAR) can't be
-      # resolved statically — treated as "not this repo".
-      if [ "$1" = "cd" ] || [ "$1" = "pushd" ]; then
-        if [ $# -ge 2 ]; then
-          case "$2" in
-          *'$'* | *'`'*) cd_dir="__unknown__" ;;
-          *) cd_dir=$2 ;;
-          esac
-        fi
-        continue
-      fi
-
-      [ "$1" = "git" ] || continue
-      shift
-
-      # Consume git global flags; remember -C <dir> for repo-state checks.
-      GIT_DIR_ARG=""
-      while [ $# -gt 0 ]; do
-        case "$1" in
-        -C)
-          shift
-          [ $# -gt 0 ] && GIT_DIR_ARG=$1
-          shift
-          ;;
-        -c | --git-dir | --work-tree | --namespace)
-          shift
-          shift
-          ;;
-        --git-dir=* | --work-tree=* | -c*) shift ;;
-        -*) shift ;;
-        *) break ;;
-        esac
-      done
-      [ $# -eq 0 ] && continue
-
-      [ -z "$GIT_DIR_ARG" ] && [ -n "$cd_dir" ] && GIT_DIR_ARG=$cd_dir
-      [ "$GIT_DIR_ARG" = "__unknown__" ] && continue
-      if [ -n "$project_common" ]; then
-        local target_common
-        target_common=$(g rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-        [ "$target_common" = "$project_common" ] || continue
-      fi
-
-      analyze_git "$@"
-    done
-    exit 0
-  }
-  # The braced group runs in a subshell; propagate its deny exit code.
-  local rc=$?
-  [ $rc -ne 0 ] && exit $rc
+  # Split compound commands into segments; analyze each git invocation. The
+  # while loop runs in the current shell (process substitution, not a pipe),
+  # so a deny()/exit 2 inside process_segment terminates the whole script.
+  local segment
+  while IFS= read -r segment; do
+    process_segment "$segment"
+  done < <(echo "$cmd" | sed -E $'s/\\|\\||&&|;|\\|/\\\n/g')
   exit 0
 }
 

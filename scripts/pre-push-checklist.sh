@@ -129,15 +129,21 @@ provision_db() {
   # when the stack runs in Docker. A native Postgres on 127.0.0.1:5432 serves
   # equally well, so fall back to it rather than skipping the suites.
   if [ -z "${DATABASE_URL:-}" ] && command -v psql >/dev/null 2>&1; then
-    _pw="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n1)"
+    _pw="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
     if [ -n "$_pw" ] && PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
       _db="test_prepush_$$"
       echo "… provisioning an isolated test DB on the native Postgres ($_db)"
       if PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "CREATE DATABASE \"$_db\"" >/dev/null 2>&1; then
         export DATABASE_URL="postgres://admin:${_pw}@127.0.0.1:5432/${_db}"
         export TEST_DATABASE_URL="$DATABASE_URL"
-        pnpm --filter @squad/db migrate >/dev/null 2>&1 || true
         trap 'PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "DROP DATABASE IF EXISTS \"$_db\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+        if ! pnpm --filter @squad/db migrate >/dev/null 2>&1; then
+          # A swallowed migration failure used to leave the DB-backed suites
+          # running against an empty/partial schema and failing with
+          # confusing unrelated errors instead of a clear message here.
+          fail_step "native test-db migration" "pnpm --filter @squad/db migrate failed against ${_db} — run it by hand to see the error"
+          unset DATABASE_URL TEST_DATABASE_URL
+        fi
       fi
     fi
   fi

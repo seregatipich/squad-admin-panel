@@ -142,6 +142,29 @@ rm "$(git rev-parse --git-dir)/MERGE_HEAD"
 git_q switch feature/x
 assert allow "commit on work branch" -- check-command "git commit -m x"
 
+# --- check-command: wrapper-prefix bypasses (#1278) --------------------------
+git_q switch master
+assert deny "commit on master via env prefix" -- check-command "env git commit -m x"
+assert deny "commit on master via sudo prefix" -- check-command "sudo git commit -m x"
+assert deny "commit on master via env with -i and vars" -- check-command "env -i FOO=bar git commit -m x"
+assert deny "commit on master via bash -c" -- check-command "bash -c 'git commit -m x'"
+assert deny "commit on master via sh -c double-quoted" -- check-command "sh -c \"git commit -m x\""
+assert deny "commit on master via time prefix" -- check-command "time git commit -m x"
+assert deny "commit on master via nohup prefix" -- check-command "nohup git commit -m x"
+assert deny "commit on master via absolute git path" -- check-command "/usr/bin/git commit -m x"
+git_q switch feature/x
+
+# cd into the fixture repo with a quoted path must still be policed as this
+# repo, not silently treated as "unknown target".
+assert deny "cd with double-quoted path then push to main" -- check-command "cd \"$REPO\" && git -C \"$REPO\" push origin feature/x:main"
+
+# --no-verify must not bypass the master/dev push checks.
+assert deny "push master with --no-verify" -- check-command "git push --no-verify origin feature/x:master"
+assert deny "push dev with --no-verify" -- check-command "git push --no-verify origin dev"
+git_q switch master
+assert deny "push current branch master with --no-verify" -- check-command "git push --no-verify"
+git_q switch feature/x
+
 # --- check-command: branch creation source ----------------------------------
 assert deny "new branch from master" -- check-command "git switch -c feature/y master"
 assert deny "new branch from origin/master" -- check-command "git checkout -b feature/y origin/master"

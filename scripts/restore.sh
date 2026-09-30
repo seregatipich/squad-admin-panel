@@ -48,7 +48,10 @@ export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 # COMPOSE_ENV_FILES from its PANEL_COMPOSE_* configuration (the stand:
 # docker/compose.stand.yml with .env.stand,.release.env).
 ENV_FILE="${ENV_FILE:-.env}"
-COMPOSE=(docker compose --profile backup)
+# --env-file keeps docker compose reading the same file this script parses
+# DATA_DIR from — otherwise an ENV_FILE override would silently diverge from
+# whichever .env compose reads from the project directory by default.
+COMPOSE=(docker compose --env-file "$ENV_FILE" --profile backup)
 
 # ── colors / logging ────────────────────────────────────────────────────────
 
@@ -88,9 +91,16 @@ done
 command -v docker >/dev/null 2>&1 || die "docker is not installed / not on PATH"
 [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE (needed for RESTIC_* and POSTGRES_PASSWORD)"
 
-# Resolve DATA_DIR the same way docker compose does (from .env, default ./data),
-# for the host-side Redis data-dir manipulation.
-DATA_DIR="$(grep -E '^DATA_DIR=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
+# Resolve DATA_DIR the same way docker compose does (from .env, default
+# ./data), for the host-side Redis data-dir manipulation. docker compose
+# gives an already-exported shell variable priority over .env and strips
+# surrounding quotes from the .env value — match both so this script's view
+# of DATA_DIR can't diverge from the bind-mount compose actually uses.
+if [[ -z "${DATA_DIR:-}" ]]; then
+  DATA_DIR="$(grep -E '^DATA_DIR=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
+  DATA_DIR="${DATA_DIR%\"}"; DATA_DIR="${DATA_DIR#\"}"
+  DATA_DIR="${DATA_DIR%\'}"; DATA_DIR="${DATA_DIR#\'}"
+fi
 DATA_DIR="${DATA_DIR:-./data}"
 [[ "$DATA_DIR" = /* ]] || DATA_DIR="${REPO}/${DATA_DIR#./}"
 

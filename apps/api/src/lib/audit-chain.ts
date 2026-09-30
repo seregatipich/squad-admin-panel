@@ -63,6 +63,12 @@ export function expectedRowHashHex(prevHashHex: string | null, row: AuditChainRo
   return createHash('sha256').update(material).digest('hex');
 }
 
+/** {@link verifyAuditChain} plus the last verified row's hash, to resume a walk across batches. */
+export interface AuditChainBatchResult extends AuditChainResult {
+  /** `row_hash_hex` of the last row verified in this batch (carry into the next batch's `prevHashHex`), or the input `prevHashHex` when the batch was empty. */
+  lastHashHex: string | null;
+}
+
 /**
  * Incremental form of {@link verifyAuditChain}: feed rows in primary-key order
  * in any number of batches and read the verdict at the end, so a caller can

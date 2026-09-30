@@ -1599,6 +1599,35 @@ describe('the stand host rollback', { concurrency: true }, () => {
     assert.match(onto.stderr, /already the running release/);
     assert.deepEqual(logLines(same.log), []);
   });
+
+  it('warns instead of silently redeploying a release it just rolled back away from (#76)', async () => {
+    const fixture = rollbackFixture();
+    assert.equal((await deploy(fixture)).status, 0);
+    const second = releaseImages('2');
+    assert.equal((await deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA })).status, 0);
+
+    // Roll back NEXT_SHA -> RELEASE_SHA. deploy-stand.sh's unconditional
+    // release-file swap now leaves .release.prev.env holding NEXT_SHA (the
+    // release just left), so a follow-up rollback would read it straight
+    // back out with no signal that it was ever rolled away from.
+    const first = await deploy(
+      fixture,
+      { DOCKER_PRESENT: Object.values(second).join(',') },
+      fixture.rollback,
+    );
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(releaseFile(fixture, '.release.bad.env'), { RELEASE_SHA: NEXT_SHA });
+
+    // A second rollback (the documented, tested round trip) targets
+    // .release.prev.env, which now holds NEXT_SHA — exactly the release
+    // .release.bad.env just recorded. It must still succeed (this round
+    // trip is intended), but it must no longer be silent about redeploying
+    // a release this script itself rolled away from.
+    const second_rollback = await deploy(fixture, {}, fixture.rollback);
+    assert.equal(second_rollback.status, 0, second_rollback.stderr);
+    assert.match(second_rollback.stderr, /rolled back away from previously/);
+    assert.deepEqual(releaseFile(fixture).APP_VERSION, NEXT_SHA);
+  });
 });
 
 describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
@@ -1829,6 +1858,10 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'docker',
       [
         `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-45}"; fi`,
+        // rebuild.sh resolves each compose service's container id by name
+        // (docker compose ps -q <service>) rather than guessing a
+        // project-prefixed container name.
+        'if [[ "$1" == \'compose\' && "$2" == \'ps\' ]]; then printf \'fake-%s-id\\n\' "$4"; exit 0; fi',
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'Health.Status'* ]]; then printf 'healthy\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.Status'* ]]; then printf 'exited\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.ExitCode'* ]]; then printf '0\\n'; fi",
@@ -1897,7 +1930,9 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'APP_DOMAIN=panel.test\nSECRET=preserved\n',
     );
     assert.deepEqual(
-      logLines(fixture.log).filter((line) => line.startsWith('docker|compose|')),
+      logLines(fixture.log)
+        .filter((line) => line.startsWith('docker|compose|'))
+        .slice(0, 4),
       [
         'docker|compose|down|--remove-orphans',
         'docker|compose|down|-v',
@@ -1905,6 +1940,11 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
         'docker|compose|up|-d',
       ],
     );
+    // Health polling resolves each service's container id by name (docker
+    // compose ps -q <service>) instead of guessing a project-prefixed
+    // container name.
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|api'));
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|migrator'));
   });
 
   it('re-binds squad-depot to data/depot and recreates every bind-mounted data directory', () => {

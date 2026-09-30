@@ -18,7 +18,14 @@
 import postgres from 'postgres';
 import { type AuditChainRow, AuditChainVerifier } from '../apps/api/src/lib/audit-chain.js';
 
-const BATCH_SIZE = 5_000;
+// audit_log is append-only and grows without bound (only the archiver ever
+// removes rows, and only long after they're written) — loading it in one
+// SELECT materializes the whole table, context::text included, in this
+// process's memory at once. Walk it in fixed-size pages by id instead.
+// Overridable so the multi-batch path (crossing the page boundary, and a
+// chain break in a batch after the first) can be exercised in tests without
+// inserting thousands of rows.
+const BATCH_SIZE = Number(process.env.AUDIT_CHAIN_BATCH_SIZE) || 5_000;
 
 async function main() {
   const url = process.env.DATABASE_URL;
@@ -60,7 +67,8 @@ async function main() {
       console.error(`  verified ${result.checked} row(s) before the break`);
       process.exit(1);
     }
-    console.log(`ok: audit chain intact (${result.checked} rows)`);
+
+    console.log(`ok: audit chain intact (${checked} rows)`);
   } finally {
     await sql.end({ timeout: 5 });
   }
