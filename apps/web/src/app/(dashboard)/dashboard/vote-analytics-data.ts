@@ -27,6 +27,8 @@ export interface VoteAnalytics {
   }>;
   by_hour: Array<{ hour: number; count: number }>;
   serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
+  /** Trailing window the skipper threshold applies to; absent on older API builds. */
+  serial_skipper_window_days?: number;
 }
 
 export const VOTE_WINDOW_PRESETS = [

@@ -354,6 +354,11 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
             <figure className="space-y-2">
               <figcaption className="text-[13px] font-semibold text-ink">
                 Серийные скиперы
+                {data.serial_skipper_window_days ? (
+                  <span className="ml-1.5 font-normal text-ink-3">
+                    за последние {data.serial_skipper_window_days} дн.
+                  </span>
+                ) : null}
               </figcaption>
               {data.serial_skippers.length === 0 ? (
                 <p className="text-xs text-ink-3">Порог не достигнут никем.</p>
