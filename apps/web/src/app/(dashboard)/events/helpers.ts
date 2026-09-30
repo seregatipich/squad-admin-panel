@@ -1,3 +1,11 @@
+import {
+  COMMON_DATE_PRESETS,
+  type DateRange,
+  resolveDateRange as resolveDateRangeShared,
+} from '@/lib/date-range';
+
+export type { DateRange };
+
 export const PAGE_LIMIT = 50;
 
 export type OrderDir = 'asc' | 'desc';
@@ -55,15 +63,7 @@ export interface EventFilters {
   order: OrderDir;
 }
 
-export const DATE_PRESETS: Array<{ value: DatePreset; label: string }> = [
-  { value: 'today', label: 'Сегодня' },
-  { value: 'yesterday', label: 'Вчера' },
-  { value: 'week', label: 'Неделя' },
-  { value: 'month', label: 'Месяц' },
-  { value: '30days', label: '30 дней' },
-  { value: 'all', label: 'Всё время' },
-  { value: 'custom', label: 'Произвольно' },
-];
+export const DATE_PRESETS: Array<{ value: DatePreset; label: string }> = COMMON_DATE_PRESETS;
 
 export const KNOWN_EVENT_KINDS: Array<{ value: string; label: string }> = [
   { value: 'server.ready', label: 'Сервер готов' },
@@ -156,63 +156,8 @@ export function buildQueryString(filters: EventFilters): string {
   return params.toString();
 }
 
-function startOfDay(reference: Date): Date {
-  const day = new Date(reference);
-  day.setHours(0, 0, 0, 0);
-  return day;
-}
-
-function endOfDay(reference: Date): Date {
-  const day = new Date(reference);
-  day.setHours(23, 59, 59, 999);
-  return day;
-}
-
-function addDays(reference: Date, amount: number): Date {
-  const shifted = new Date(reference);
-  shifted.setDate(shifted.getDate() + amount);
-  return shifted;
-}
-
-function parseDateInput(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
-  const parsed = new Date(year, month - 1, day);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-export interface DateRange {
-  dateFrom?: Date;
-  dateTo?: Date;
-}
-
 export function resolveDateRange(filters: EventFilters, now: Date = new Date()): DateRange {
-  switch (filters.preset) {
-    case 'today':
-      return { dateFrom: startOfDay(now), dateTo: now };
-    case 'yesterday': {
-      const from = addDays(startOfDay(now), -1);
-      return { dateFrom: from, dateTo: endOfDay(from) };
-    }
-    case 'week':
-      return { dateFrom: addDays(startOfDay(now), -6), dateTo: now };
-    case 'month': {
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { dateFrom: from, dateTo: now };
-    }
-    case '30days':
-      return { dateFrom: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), dateTo: now };
-    case 'custom': {
-      const range: DateRange = {};
-      const from = parseDateInput(filters.from);
-      const to = parseDateInput(filters.to);
-      if (from) range.dateFrom = startOfDay(from);
-      if (to) range.dateTo = endOfDay(to);
-      return range;
-    }
-    default:
-      return {};
-  }
+  return resolveDateRangeShared(filters, now);
 }
 
 function appendFilterParams(
