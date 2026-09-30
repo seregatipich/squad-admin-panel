@@ -1,3 +1,5 @@
+import type { EconomySettingsResponse, VipTierResponse } from '@squad/shared-types';
+
 export const COEFFICIENT_MIN = 0;
 export const COEFFICIENT_MAX = 1000;
 export const SEED_THRESHOLD_MIN = 0;
@@ -8,28 +10,8 @@ export const VIP_EXPIRY_WINDOW_DAYS_MIN = 1;
 export const VIP_EXPIRY_WINDOW_DAYS_MAX = 90;
 export const VIP_EXPIRY_WINDOWS_MAX_COUNT = 10;
 
-interface PrivilegeCost {
-  days: number;
-  price: number;
-}
-
-type PrivilegeCostCatalog = Record<string, PrivilegeCost>;
-
-/** Wire shape of GET/PUT `/api/v1/settings/economy` (server `serialize()`). */
-export interface EconomySettings {
-  k_online: number;
-  k_boost: number;
-  k_seed: number;
-  seed_threshold: number;
-  economy_enabled: boolean;
-  privilege_costs: PrivilegeCostCatalog;
-  seed_reward_threshold_hours_per_month: number;
-  seed_reward_role_id: string | null;
-  vip_expiry_windows_days: number[];
-  vip_expiry_warn_in_game: boolean;
-  updated_at: string | null;
-  updated_by_player_id: string | null;
-}
+/** Wire shape of GET/PUT `/api/v1/settings/economy`, validated by `economySettingsResponse`. */
+export type EconomySettings = EconomySettingsResponse;
 
 export interface EconomyFormState {
   kOnline: string;
@@ -195,18 +177,7 @@ export const VIP_TIER_PRICE_BONUSES_MIN = 0;
 export const VIP_TIER_PRICE_BONUSES_MAX = 2_147_483_647;
 
 /** Wire shape of GET/POST/PUT `/api/v1/vip-tiers` (server `serialize()`). */
-export interface VipTier {
-  id: string;
-  name: string;
-  role_id: string;
-  description: string | null;
-  default_days: number | null;
-  price_bonuses: number | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
+export type VipTier = VipTierResponse;
 
 /** String-backed state of the tier create/edit form. */
 export interface VipTierFormState {

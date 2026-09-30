@@ -4,6 +4,7 @@ export * from './automation-actions.js';
 export * from './automation-engine.js';
 export * from './balancer.js';
 export * from './cron5.js';
+export * from './economy.js';
 export * from './events.js';
 export * from './external-bans.js';
 export * from './media.js';

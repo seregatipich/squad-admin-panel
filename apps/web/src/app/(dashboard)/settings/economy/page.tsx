@@ -1,5 +1,13 @@
 'use client';
 
+import {
+  type EconomyMeResponse,
+  economyMeResponse,
+  economySettingsResponse,
+  type RoleOptionResponse,
+  roleOptionListResponse,
+  vipTierListResponse,
+} from '@squad/shared-types';
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertDialog,
@@ -54,17 +62,7 @@ import {
   validateVipTierForm,
 } from './helpers';
 
-interface Me {
-  can_manage_economy: boolean;
-  permissions: string[];
-}
-
-interface RoleOption {
-  id: string;
-  name: string;
-  panel_access: boolean;
-  is_system_role: boolean;
-}
+type RoleOption = RoleOptionResponse;
 
 type FieldErrors = Partial<Record<keyof EconomyFormState, string>>;
 
@@ -90,7 +88,7 @@ function tierErrorText(code: unknown, status: number): string {
 
 export default function EconomySettingsPage() {
   const [settings, setSettings] = useState<EconomySettings | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
+  const [me, setMe] = useState<EconomyMeResponse | null>(null);
   const [form, setForm] = useState<EconomyFormState | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [globalErr, setGlobalErr] = useState<string | null>(null);
@@ -113,15 +111,21 @@ export default function EconomySettingsPage() {
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
       ]);
       if (settingsRes.ok) {
-        const loaded = (await settingsRes.json()) as EconomySettings;
-        setSettings(loaded);
-        setForm(settingsToForm(loaded));
-        setGlobalErr(null);
+        const parsed = economySettingsResponse.safeParse(await settingsRes.json());
+        if (parsed.success) {
+          setSettings(parsed.data);
+          setForm(settingsToForm(parsed.data));
+          setGlobalErr(null);
+        } else {
+          setGlobalErr('Сервер вернул настройки экономики в неожиданном формате.');
+        }
       } else {
         setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
       }
       if (meRes.ok) {
-        setMe((await meRes.json()) as Me);
+        const parsed = economyMeResponse.safeParse(await meRes.json());
+        if (parsed.success) setMe(parsed.data);
+        else setGlobalErr('Сервер вернул данные пользователя в неожиданном формате.');
       } else {
         setGlobalErr(`Не удалось загрузить данные пользователя: ${meRes.status}`);
       }
@@ -143,8 +147,16 @@ export default function EconomySettingsPage() {
       ]);
       // Both endpoints 403 without can_edit_roles — the section is hidden then,
       // so a failed load is not an error worth surfacing.
-      if (tiersRes.ok) setTiers(((await tiersRes.json()) as { rows: VipTier[] }).rows);
-      if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
+      if (tiersRes.ok) {
+        const parsed = vipTierListResponse.safeParse(await tiersRes.json());
+        if (parsed.success) setTiers(parsed.data.rows);
+        else setGlobalErr('Сервер вернул список VIP-тиров в неожиданном формате.');
+      }
+      if (rolesRes.ok) {
+        const parsed = roleOptionListResponse.safeParse(await rolesRes.json());
+        if (parsed.success) setRoleOptions(parsed.data);
+        else setGlobalErr('Сервер вернул список ролей в неожиданном формате.');
+      }
     } catch (err) {
       setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
     }
@@ -186,9 +198,13 @@ export default function EconomySettingsPage() {
         setGlobalErr(`Ошибка сохранения: ${err.error ?? res.status}`);
         return;
       }
-      const fresh = (await res.json()) as EconomySettings;
-      setSettings(fresh);
-      setForm(settingsToForm(fresh));
+      const fresh = economySettingsResponse.safeParse(await res.json());
+      if (!fresh.success) {
+        setGlobalErr('Сервер вернул настройки экономики в неожиданном формате.');
+        return;
+      }
+      setSettings(fresh.data);
+      setForm(settingsToForm(fresh.data));
       setNotice('Настройки экономики сохранены.');
     } catch (err) {
       setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
