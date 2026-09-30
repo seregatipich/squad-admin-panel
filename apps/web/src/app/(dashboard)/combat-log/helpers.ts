@@ -42,11 +42,15 @@ export function facetLabel(facet: CombatFacet): string {
 export interface FacetApiParams {
   type?: CombatEventType[];
   teamkillsOnly?: boolean;
+  excludeTeamkills?: boolean;
 }
 
 export function facetToApiParams(facet: CombatFacet): FacetApiParams {
   switch (facet) {
+    // Убийства — это смерти без тимкиллов (у них свой фасет); «Смерти» —
+    // все смерти, включая тимкиллы. Так два переключателя не дублируют друг друга.
     case 'kills':
+      return { type: ['death'], excludeTeamkills: true };
     case 'deaths':
       return { type: ['death'] };
     case 'wounds':
@@ -261,6 +265,8 @@ export interface ApiQueryOptions {
   cursor?: string | null;
   limit?: number;
   lockedServerId?: string;
+  /** Sorts the whole result set by damage on the server instead of by time. */
+  damageSort?: SortDir;
 }
 
 function appendFilterParams(
@@ -272,6 +278,7 @@ function appendFilterParams(
   const facetParams = facetToApiParams(filters.facet);
   for (const type of facetParams.type ?? []) params.append('type', type);
   if (facetParams.teamkillsOnly) params.set('teamkillsOnly', 'true');
+  if (facetParams.excludeTeamkills) params.set('excludeTeamkills', 'true');
 
   if (lockedServerId) {
     params.append('serverId', lockedServerId);
@@ -301,6 +308,10 @@ export function buildListApiQuery(filters: CombatFilters, options: ApiQueryOptio
   const params = new URLSearchParams();
   appendFilterParams(params, filters, options.lockedServerId, now);
   params.set('limit', String(options.limit ?? PAGE_LIMIT));
+  if (options.damageSort) {
+    params.set('sort', 'damage');
+    params.set('dir', options.damageSort);
+  }
   if (options.cursor) params.set('cursor', options.cursor);
   return params.toString();
 }
@@ -487,6 +498,7 @@ export function matchesLiveFilters(
     return false;
   }
   if (facetParams.teamkillsOnly && !row.isTeamkill) return false;
+  if (facetParams.excludeTeamkills && row.isTeamkill) return false;
 
   if (lockedServerId) {
     if (row.serverId !== lockedServerId) return false;
