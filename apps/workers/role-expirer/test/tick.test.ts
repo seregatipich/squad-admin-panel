@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runRoleExpiryTick } from '../src/tick.js';
 
 describe('runRoleExpiryTick', () => {
-  it('clears expired role assignments, writes audit, and enqueues Admins.cfg sync', async () => {
+  it('clears expired role assignments and notifies revoked sessions, and enqueues Admins.cfg sync', async () => {
     const now = new Date('2026-07-06T10:00:00.000Z');
     const expired = [
       {
@@ -15,10 +15,17 @@ describe('runRoleExpiryTick', () => {
     const deps = {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(expired),
-      clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: expired, enqueued: 2 }),
-      writeAuditEntry: vi.fn().mockResolvedValue(undefined),
+      // Audit entry and session delete are now committed by
+      // `clearExpiredAssignments` itself, inside its own transaction (#992);
+      // it reports what it revoked so the tick can do the Redis-only
+      // best-effort notify as a separate step.
+      clearExpiredAssignments: vi.fn().mockResolvedValue({
+        cleared: expired,
+        enqueued: 2,
+        revokedSessionIds: new Map([[expired[0].playerId, ['sess-1', 'sess-2']]]),
+      }),
       invalidatePermissionCache: vi.fn(),
-      revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
+      notifySessionsRevoked: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
@@ -32,21 +39,10 @@ describe('runRoleExpiryTick', () => {
       expect.objectContaining({ reason: 'player.role.expire', actor_player_id: null }),
     );
     expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(expired[0].playerId);
-    expect(deps.revokeAllForPlayer).toHaveBeenCalledWith(expired[0].playerId);
-    expect(deps.writeAuditEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actor: { kind: 'system', label: 'role-expirer' },
-        actionType: 'player.role.expire',
-        targetType: 'player',
-        targetId: expired[0].playerId,
-        before: {
-          role_id: expired[0].roleId,
-          role_expires_at: expired[0].roleExpiresAt.toISOString(),
-          role_comment: expired[0].roleComment,
-        },
-        after: { role_id: null, role_expires_at: null, role_comment: null },
-      }),
-    );
+    expect(deps.notifySessionsRevoked).toHaveBeenCalledWith(expired[0].playerId, [
+      'sess-1',
+      'sess-2',
+    ]);
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'role_expirer.run_ok', severity: 'info' }),
     );
@@ -66,10 +62,11 @@ describe('runRoleExpiryTick', () => {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(scanned),
       // The conditional UPDATE observes that a renewal already moved the expiry.
-      clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: [], enqueued: 0 }),
-      writeAuditEntry: vi.fn().mockResolvedValue(undefined),
+      clearExpiredAssignments: vi
+        .fn()
+        .mockResolvedValue({ cleared: [], enqueued: 0, revokedSessionIds: new Map() }),
       invalidatePermissionCache: vi.fn(),
-      revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
+      notifySessionsRevoked: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
@@ -79,8 +76,57 @@ describe('runRoleExpiryTick', () => {
       now,
       expect.objectContaining({ reason: 'player.role.expire' }),
     );
-    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
     expect(deps.invalidatePermissionCache).not.toHaveBeenCalled();
-    expect(deps.revokeAllForPlayer).not.toHaveBeenCalled();
+    expect(deps.notifySessionsRevoked).not.toHaveBeenCalled();
+  });
+
+  it('isolates a failing session notification per player instead of aborting the tick (#992)', async () => {
+    const now = new Date('2026-07-06T10:00:00.000Z');
+    const expired = [
+      {
+        playerId: '019e0000-0000-7000-8000-000000000103',
+        roleId: '019e0000-0000-7000-8000-000000000203',
+        roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
+        roleComment: null,
+      },
+      {
+        playerId: '019e0000-0000-7000-8000-000000000104',
+        roleId: '019e0000-0000-7000-8000-000000000204',
+        roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
+        roleComment: null,
+      },
+    ];
+    const deps = {
+      now,
+      findExpiredAssignments: vi.fn().mockResolvedValue(expired),
+      clearExpiredAssignments: vi.fn().mockResolvedValue({
+        cleared: expired,
+        enqueued: 1,
+        revokedSessionIds: new Map([
+          [expired[0].playerId, ['sess-1']],
+          [expired[1].playerId, ['sess-2']],
+        ]),
+      }),
+      invalidatePermissionCache: vi.fn(),
+      notifySessionsRevoked: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('redis down'))
+        .mockResolvedValue(undefined),
+      diag: { emit: vi.fn().mockResolvedValue(undefined) },
+    };
+
+    const result = await runRoleExpiryTick(deps);
+
+    // Both players were cleared regardless — the notify failure for the
+    // first must not stop the second's notify, or be reported as a role
+    // expiry failure.
+    expect(result).toEqual({ expired: 2, enqueued: 1 });
+    expect(deps.notifySessionsRevoked).toHaveBeenCalledTimes(2);
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'role_expirer.session_notify_failed' }),
+    );
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'role_expirer.run_ok' }),
+    );
   });
 });

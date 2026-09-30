@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   createYouTubePublisher,
@@ -25,6 +28,7 @@ function makeJob(overrides: Partial<MediaPublicationJob> = {}): MediaPublication
     description: 'Доказательство бана',
     originalFilename: 'clip.mp4',
     interrupted: false,
+    uploadSessionUrl: null,
     ...overrides,
   };
 }
@@ -359,5 +363,185 @@ describe('youtube publisher — request timeouts', () => {
 
     expect(requests).toHaveLength(3);
     expect(requests.every((r) => r.hasSignal)).toBe(true);
+  });
+});
+
+describe('createYouTubePublisher — default readMedia streams instead of buffering', () => {
+  it('uploads the file as a stream with the byte-length content-length and duplex: half', async () => {
+    const mediaDir = mkdtempSync(path.join(tmpdir(), 'youtube-publisher-test-'));
+    try {
+      const contents = Buffer.from('fake-video-bytes-for-streaming-test');
+      writeFileSync(path.join(mediaDir, 'clip.mp4'), contents);
+
+      let uploadInit: RequestInit | undefined;
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith('https://oauth2.googleapis.com/token')) {
+          return jsonResponse(200, { access_token: ACCESS_TOKEN });
+        }
+        if (url === RESUMABLE_URL) {
+          uploadInit = init;
+          // Drain the body the way undici would, to prove it is readable at all.
+          const body = init?.body;
+          if (body instanceof ReadableStream) {
+            const reader = body.getReader();
+            for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+              /* draining only */
+            }
+          }
+          return jsonResponse(200, { id: 'yt-video-1' });
+        }
+        return new Response(null, { status: 200, headers: { location: RESUMABLE_URL } });
+      }) as unknown as typeof fetch;
+
+      const publisher = createYouTubePublisher({
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+        refreshToken: REFRESH_TOKEN,
+        mediaBaseDir: mediaDir,
+        fetch: fetchImpl,
+        // No `readMedia` override: exercises the production default.
+      });
+      if (!publisher) throw new Error('expected a configured youtube publisher');
+
+      const outcome = await publisher(
+        makeJob({ storagePath: 'clip.mp4', sizeBytes: contents.byteLength }),
+      );
+
+      expect(outcome).toEqual({
+        ok: true,
+        externalId: 'yt-video-1',
+        externalUrl: 'https://www.youtube.com/watch?v=yt-video-1',
+      });
+      expect(uploadInit?.body).toBeInstanceOf(ReadableStream);
+      expect((uploadInit?.headers as Record<string, string>)?.['content-length']).toBe(
+        String(contents.byteLength),
+      );
+      expect((uploadInit as RequestInit & { duplex?: string })?.duplex).toBe('half');
+    } finally {
+      rmSync(mediaDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createYouTubePublisher — resumable session recovery (#956)', () => {
+  it('persists the upload session url when the byte upload fails, instead of losing it', async () => {
+    const { fetch: fetchImpl } = scriptedFetch({
+      upload: () => new Response(null, { status: 503 }),
+    });
+    const publisher = makePublisher(fetchImpl);
+
+    const outcome = await publisher(makeJob());
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      retryable: true,
+      error: 'youtube_upload_server_error_503',
+      uploadSessionUrl: RESUMABLE_URL,
+    });
+  });
+
+  it('checks the session status instead of re-uploading, and reports the video as already-published when Google already finalized it', async () => {
+    const requests: { url: string; method: string; headers: Record<string, string> }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({
+        url,
+        method: init?.method ?? 'GET',
+        headers: (init?.headers as Record<string, string>) ?? {},
+      });
+      if (url.startsWith('https://oauth2.googleapis.com/token')) {
+        return jsonResponse(200, { access_token: ACCESS_TOKEN });
+      }
+      // The persisted session url: a status check (Content-Range: bytes */N)
+      // reports the upload as already finalized.
+      return jsonResponse(200, { id: 'yt-video-already-uploaded' });
+    }) as unknown as typeof fetch;
+    const publisher = makePublisher(fetchImpl);
+
+    const outcome = await publisher(makeJob({ uploadSessionUrl: RESUMABLE_URL }));
+
+    expect(outcome).toEqual({
+      ok: true,
+      externalId: 'yt-video-already-uploaded',
+      externalUrl: 'https://www.youtube.com/watch?v=yt-video-already-uploaded',
+    });
+    // Never a fresh POST to open a new session, and never a byte upload —
+    // only the token refresh and the one status-check PUT.
+    expect(requests.map((r) => r.method)).toEqual(['POST', 'PUT']);
+    expect(requests[1]?.url).toBe(RESUMABLE_URL);
+    expect(requests[1]?.headers['content-range']).toBe(`bytes */${makeJob().sizeBytes}`);
+  });
+
+  it('resumes from the byte offset Google reports (308 + Range) instead of re-uploading from zero', async () => {
+    const already = 2;
+    let uploadedBody: unknown;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) {
+        return jsonResponse(200, { access_token: ACCESS_TOKEN });
+      }
+      if (init?.headers && (init.headers as Record<string, string>)['content-length'] === '0') {
+        // The status check.
+        return new Response(null, { status: 308, headers: { range: `bytes=0-${already - 1}` } });
+      }
+      uploadedBody = init?.body;
+      return jsonResponse(200, { id: 'yt-video-resumed' });
+    }) as unknown as typeof fetch;
+
+    const readCalls: { path: string; opts?: { start?: number } }[] = [];
+    const publisher = createYouTubePublisher({
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      refreshToken: REFRESH_TOKEN,
+      mediaBaseDir: '/srv/media',
+      fetch: fetchImpl,
+      readMedia: async (absolutePath, opts) => {
+        readCalls.push({ path: absolutePath, opts });
+        return new Uint8Array([3, 4]);
+      },
+    });
+    if (!publisher) throw new Error('expected a configured youtube publisher');
+
+    const outcome = await publisher(makeJob({ uploadSessionUrl: RESUMABLE_URL, sizeBytes: 4 }));
+
+    expect(outcome).toEqual({
+      ok: true,
+      externalId: 'yt-video-resumed',
+      externalUrl: 'https://www.youtube.com/watch?v=yt-video-resumed',
+    });
+    expect(readCalls).toEqual([{ path: '/srv/media/2026/07/clip.mp4', opts: { start: 2 } }]);
+    expect(uploadedBody).toEqual(new Uint8Array([3, 4]));
+  });
+
+  it('opens a brand new session when the persisted one has expired (404/410)', async () => {
+    const requests: { url: string; method: string }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? 'GET' });
+      if (url.startsWith('https://oauth2.googleapis.com/token')) {
+        return jsonResponse(200, { access_token: ACCESS_TOKEN });
+      }
+      if (url === 'https://old-session.example/upload') {
+        return new Response(null, { status: 404 });
+      }
+      if (url === RESUMABLE_URL) return jsonResponse(200, { id: 'yt-video-fresh' });
+      return new Response(null, { status: 200, headers: { location: RESUMABLE_URL } });
+    }) as unknown as typeof fetch;
+    const publisher = makePublisher(fetchImpl);
+
+    const outcome = await publisher(
+      makeJob({ uploadSessionUrl: 'https://old-session.example/upload' }),
+    );
+
+    expect(outcome).toEqual({
+      ok: true,
+      externalId: 'yt-video-fresh',
+      externalUrl: 'https://www.youtube.com/watch?v=yt-video-fresh',
+    });
+    // Status check on the dead session, then a fresh initiate, then the upload.
+    expect(requests.map((r) => r.method)).toEqual(['POST', 'PUT', 'POST', 'PUT']);
+    expect(requests[0]?.url).toBe('https://oauth2.googleapis.com/token');
+    expect(requests[1]?.url).toBe('https://old-session.example/upload');
   });
 });

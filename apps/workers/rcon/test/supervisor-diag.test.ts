@@ -87,10 +87,16 @@ describe('RconSupervisor diag emits', () => {
       log: makeLogger(),
       diag,
     });
+    // Each supervisor's own connect attempt fails and emits 'rcon.disconnected'
+    // independently of the reconcile-level events under test, so filter by kind.
+    const targetsChanged = () =>
+      diag.emit.mock.calls
+        .map((c) => c[0] as DiagEvent)
+        .filter((e) => e.kind === 'rcon.targets.changed');
 
     await supervisor.reconcile([targetA]);
-    expect(diag.emit).toHaveBeenCalledTimes(1);
-    const firstCall = diag.emit.mock.calls[0]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(1);
+    const firstCall = targetsChanged()[0] as DiagEvent;
     expect(firstCall.kind).toBe('rcon.targets.changed');
     expect(firstCall.component).toBe('worker-rcon');
     expect(firstCall.severity).toBe('info');
@@ -101,8 +107,8 @@ describe('RconSupervisor diag emits', () => {
     });
 
     await supervisor.reconcile([targetA, targetB]);
-    expect(diag.emit).toHaveBeenCalledTimes(2);
-    const secondCall = diag.emit.mock.calls[1]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(2);
+    const secondCall = targetsChanged()[1] as DiagEvent;
     expect(secondCall.payload).toMatchObject({
       added: ['srv-bbb'],
       removed: [],
@@ -110,8 +116,8 @@ describe('RconSupervisor diag emits', () => {
     });
 
     await supervisor.reconcile([targetB]);
-    expect(diag.emit).toHaveBeenCalledTimes(3);
-    const thirdCall = diag.emit.mock.calls[2]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(3);
+    const thirdCall = targetsChanged()[2] as DiagEvent;
     expect(thirdCall.payload).toMatchObject({
       added: [],
       removed: ['srv-aaa'],

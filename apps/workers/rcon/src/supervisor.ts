@@ -10,7 +10,7 @@ import {
   splitOpenSessionsAtSeedingTransition,
 } from '@squad/db';
 import type { Diag } from '@squad/diag';
-import type { RconRefreshScope } from '@squad/shared-config';
+import { type RconRefreshScope, seedPublicHost } from '@squad/shared-config';
 import {
   CONSUMER_GROUP,
   type EventEnvelope,
@@ -257,6 +257,15 @@ class PerServerSupervisor {
   private lastPublishedRoster: string | null = null;
   private backoffMs: number;
   private onDisconnect?: () => void;
+  /** The in-flight `connectLoop()` call; `stop()` awaits it so a replacement supervisor never races its teardown. */
+  private connectLoopPromise?: Promise<void>;
+  /**
+   * Resolved once, by `stop()`, and raced against both the connected-session
+   * wait and the reconnect backoff sleep so `stop()` interrupts either at once
+   * instead of leaving the loop pending for up to `maxBackoffMs` (#982).
+   */
+  private readonly stopSignal: Promise<void>;
+  private resolveStopSignal!: () => void;
   /** Serialises chat ingestion for this server; see {@link ingestBroadcast}. */
   private chatQueue: Promise<void> = Promise.resolve();
   private consecutivePollFails = 0;
@@ -304,12 +313,15 @@ class PerServerSupervisor {
     private readonly opts: SupervisorOptions,
   ) {
     this.backoffMs = opts.initialBackoffMs ?? 1000;
+    this.stopSignal = new Promise((resolve) => {
+      this.resolveStopSignal = resolve;
+    });
   }
 
   async start(): Promise<void> {
     await this.loadPriorSeedingState();
     await this.loadPriorCrowns();
-    this.connectLoop().catch((err) =>
+    this.connectLoopPromise = this.connectLoop().catch((err) =>
       this.opts.log.error(
         { err: (err as Error).message, serverId: this.target.serverId },
         'supervisor failed',
@@ -349,9 +361,18 @@ class PerServerSupervisor {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    // Wakes connectLoop at once, whether it holds a live session or sleeps in
+    // backoff, and waits for its own teardown (closing sessions, writing the
+    // 'disconnected' status). Otherwise a caller that reconciles by starting a
+    // fresh supervisor for the same server could see this one's late
+    // 'disconnected' write overwrite the new 'connected' one (#982).
+    this.resolveStopSignal();
+    await this.connectLoopPromise?.catch(() => undefined);
+    // No-ops on the ordinary path (the loop's finally already did this); the
+    // net for stop() before start() ever ran the loop.
     this.clearTimers();
     await this.stopCommandQueue();
-    await this.client?.close();
+    await this.client?.close().catch(() => undefined);
     this.client = undefined;
     // The connect loop's own teardown normally closes the sessions, but a poll
     // still in flight when stop() was called can reopen them right after it.
@@ -562,10 +583,16 @@ class PerServerSupervisor {
           }),
         ]);
         if (server && settings) {
+          // Never `this.target.host`: that is the RCON dial target (loopback
+          // for a local server), useless to a player's Steam client (#980).
+          // The link is omitted when no public host is configured.
+          const publicHost = seedPublicHost();
           eventPayload = {
             ...payload,
             server_name: server.displayName,
-            join_link: `steam://connect/${this.target.host}:${settings.gamePort}`,
+            ...(publicHost
+              ? { join_link: `steam://connect/${publicHost}:${settings.gamePort}` }
+              : {}),
           };
         }
       } catch (err) {
@@ -879,6 +906,21 @@ class PerServerSupervisor {
       );
   }
 
+  /** Sleeps `ms`, or returns once `stop()` fires; the timer never outlives the call. */
+  private async sleepOrStop(ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, ms);
+        }),
+        this.stopSignal,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       let lastDisconnectReason: string | undefined;
@@ -932,17 +974,10 @@ class PerServerSupervisor {
         // Fill the roster and server info right away instead of leaving the
         // panel empty until the first timer tick.
         this.requestRefresh(['roster', 'info']);
-        await Promise.race([
-          disconnected,
-          new Promise<void>((resolve) => {
-            const check = setInterval(() => {
-              if (this.stopped) {
-                clearInterval(check);
-                resolve();
-              }
-            }, 1000);
-          }),
-        ]);
+        // The stop signal replaces a per-connection 1s polling interval that
+        // was never cleared on an ordinary disconnect and leaked one timer per
+        // reconnect (#983).
+        await Promise.race([disconnected, this.stopSignal]);
       } catch (err) {
         const msg = (err as Error).message;
         this.opts.log.warn(
@@ -1005,7 +1040,7 @@ class PerServerSupervisor {
             backoffMs: this.backoffMs,
           },
         });
-        await new Promise((r) => setTimeout(r, this.backoffMs));
+        await this.sleepOrStop(this.backoffMs);
         this.backoffMs = Math.min(this.backoffMs * 2, this.opts.maxBackoffMs ?? 60_000);
       } else {
         await this.writeStatus('disconnected', { reason: 'supervisor-stopped' });
@@ -1236,21 +1271,37 @@ class PerServerSupervisor {
         const squads = parseListSquads(rawSquads);
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
         const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
-        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null, (player, err) =>
+        // A database failure must not count as an RCON failure: three of those
+        // in a row close a healthy client and its admin command queue (#981).
+        try {
+          await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null, (player, err) =>
+            this.opts.log.warn(
+              { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
+              'player upsert failed',
+            ),
+          );
+        } catch (err) {
           this.opts.log.warn(
-            { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
-            'player upsert failed',
-          ),
-        );
+            { err: (err as Error).message, serverId: this.target.serverId },
+            'player upsert failed (db); rcon connection unaffected',
+          );
+        }
         const pollAt = new Date();
-        await accruePlayerKitTime(
-          this.opts.db,
-          players,
-          this.lastKitAccrualAt,
-          pollAt,
-          this.target.serverId,
-          this.opts.pollIntervalMs ?? 30_000,
-        );
+        try {
+          await accruePlayerKitTime(
+            this.opts.db,
+            players,
+            this.lastKitAccrualAt,
+            pollAt,
+            this.target.serverId,
+            this.opts.pollIntervalMs ?? 30_000,
+          );
+        } catch (err) {
+          this.opts.log.warn(
+            { err: (err as Error).message, serverId: this.target.serverId },
+            'kit-time accrual failed (db); rcon connection unaffected',
+          );
+        }
         this.lastKitAccrualAt = pollAt;
         this.consecutivePollFails = 0;
         const polledAt = pollAt.toISOString();
@@ -1286,20 +1337,24 @@ class PerServerSupervisor {
           polled_at: polledAt,
           latency_ms: Date.now() - start,
         });
-        await this.writeStatus('connected', {
-          player_count: players.length,
-          last_poll_at: new Date().toISOString(),
-          tickrate_rt: info?.tickrate ?? undefined,
-          current_map: info?.map_name ?? undefined,
-          next_level: nextMap?.level ?? undefined,
-          next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
-          game_mode: info?.game_mode ?? undefined,
-          squad_count: squads.length,
-          // DISCORD-6 (#153): the Discord status channel renders
-          // {players}x{queue}, and this cache is its only source for the queue —
-          // ShowServerInfo already parses PublicQueue_I, it just was not stored.
-          public_queue: info?.public_queue ?? undefined,
-        });
+        // A poll still in flight when stop() ran must not write 'connected' or
+        // seeding events for a supervisor already torn down (#982).
+        if (this.client && !this.stopped) {
+          await this.writeStatus('connected', {
+            player_count: players.length,
+            last_poll_at: new Date().toISOString(),
+            tickrate_rt: info?.tickrate ?? undefined,
+            current_map: info?.map_name ?? undefined,
+            next_level: nextMap?.level ?? undefined,
+            next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
+            game_mode: info?.game_mode ?? undefined,
+            squad_count: squads.length,
+            // DISCORD-6 (#153): the Discord status channel renders
+            // {players}x{queue}, and this cache is its only source for the queue —
+            // ShowServerInfo already parses PublicQueue_I, it just was not stored.
+            public_queue: info?.public_queue ?? undefined,
+          });
+        }
 
         if (typeof info?.tickrate === 'number') {
           const configured = this.target.tickrate ?? 50;
@@ -1329,7 +1384,9 @@ class PerServerSupervisor {
           }
         }
 
-        await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
+        if (!this.stopped) {
+          await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
+        }
       } catch (err) {
         this.consecutivePollFails += 1;
         const reason = (err as Error).message;

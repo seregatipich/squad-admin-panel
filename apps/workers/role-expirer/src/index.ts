@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { requiredTickIntervalMs } from './env.js';
 import { createRoleExpiryReminderDeps, runRoleExpiryReminderTick } from './reminders.js';
 import { createSubscriptionRenewalDeps, runSubscriptionRenewalTick } from './renewal.js';
 import { createRoleExpiryDeps, runRoleExpiryTick } from './tick.js';
@@ -17,15 +18,49 @@ const log = pino({
   base: { service: 'worker-role-expirer' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.ROLE_EXPIRER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = requiredTickIntervalMs(
+  'ROLE_EXPIRER_INTERVAL_MS',
+  process.env.ROLE_EXPIRER_INTERVAL_MS,
+  60_000,
+);
 /** Daily VIPSUB-4 reminder pass — window crossings fire at most once, so once a day is enough. */
-const REMINDER_INTERVAL_MS = Number(process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS ?? 86_400_000);
+const REMINDER_INTERVAL_MS = requiredTickIntervalMs(
+  'ROLE_EXPIRY_REMINDER_INTERVAL_MS',
+  process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS,
+  86_400_000,
+);
 /**
  * VIPSUB-5 subscription renewal pass. Hourly: a renewal is due on a date, not
  * at a second, and each pass charges real bonus points — an hour keeps the
  * billing punctual without hammering the ledger.
  */
-const RENEWAL_INTERVAL_MS = Number(process.env.VIP_RENEWAL_INTERVAL_MS ?? 3_600_000);
+const RENEWAL_INTERVAL_MS = requiredTickIntervalMs(
+  'VIP_RENEWAL_INTERVAL_MS',
+  process.env.VIP_RENEWAL_INTERVAL_MS,
+  3_600_000,
+);
+
+/**
+ * Wraps a tick function so an overlapping call (the previous tick still
+ * running when the next `setInterval` fires — a slow query, a Postgres
+ * hiccup) skips instead of running concurrently. Two overlapping
+ * `renewalTick`s reading the same due subscription before either commits is
+ * exactly the double-charge scenario `chargeRenewalTx`'s `dueAt` check now
+ * also guards against at the database level (#984, #990) — this stops it
+ * from happening as routinely in the first place.
+ */
+export function guardAgainstOverlap(tick: () => Promise<void>): () => Promise<void> {
+  let inFlight = false;
+  return async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      await tick();
+    } finally {
+      inFlight = false;
+    }
+  };
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -55,23 +90,22 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
   const runtimeDeps = createRoleExpiryDeps(db, redis);
-
-  async function tick(): Promise<void> {
+  const tick = guardAgainstOverlap(async () => {
     const result = await runRoleExpiryTick({ ...runtimeDeps, diag });
     log.info(result, 'role-expirer tick');
-  }
+  });
 
   const reminderDeps = createRoleExpiryReminderDeps(db, redis);
-  async function reminderTick(): Promise<void> {
+  const reminderTick = guardAgainstOverlap(async () => {
     const result = await runRoleExpiryReminderTick({ ...reminderDeps, diag });
     log.info(result, 'role-expirer reminder tick');
-  }
+  });
 
   const renewalDeps = createSubscriptionRenewalDeps(db, redis);
-  async function renewalTick(): Promise<void> {
+  const renewalTick = guardAgainstOverlap(async () => {
     const result = await runSubscriptionRenewalTick({ ...renewalDeps, diag });
     log.info(result, 'role-expirer subscription renewal tick');
-  }
+  });
 
   let interval: NodeJS.Timeout | null = null;
   let reminderInterval: NodeJS.Timeout | null = null;

@@ -22,6 +22,7 @@ function makeJob(overrides: Partial<MediaPublicationJob> = {}): MediaPublication
     description: null,
     originalFilename: 'clip.mp4',
     interrupted: false,
+    uploadSessionUrl: null,
     ...overrides,
   };
 }

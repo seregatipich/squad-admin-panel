@@ -61,6 +61,14 @@ export const mediaPublications = pgTable(
     externalId: text('external_id'),
     externalUrl: text('external_url'),
     error: text('error'),
+    /**
+     * The resumable upload session URL a destination handed back mid-upload
+     * (currently only YouTube). Persisted so a retry after a transport failure
+     * can query the session's status instead of opening a new one and
+     * re-uploading the whole file, or duplicating an already-finalized upload.
+     * Cleared once the publication reaches a terminal state.
+     */
+    uploadSessionUrl: text('upload_session_url'),
     attempts: integer('attempts').notNull().default(0),
     nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true, mode: 'date' }),
     requestedByPlayerId: uuid('requested_by_player_id').references(() => players.id, {

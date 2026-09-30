@@ -25,6 +25,7 @@ function makeJob(overrides: Partial<MediaPublicationJob> = {}): MediaPublication
     description: null,
     originalFilename: 'clip.mp4',
     interrupted: false,
+    uploadSessionUrl: null,
     ...overrides,
   };
 }
@@ -272,6 +273,54 @@ describe('runMediaPublisherTick', () => {
       skipped: 0,
       released: 0,
     });
+  });
+});
+
+describe('runMediaPublisherTick — per-job isolation', () => {
+  it('does not abort the batch when a bookkeeping call throws for one job', async () => {
+    const bad = makeJob({ id: '018f0000-0000-7000-8000-000000000001' });
+    const good = makeJob({ id: '018f0000-0000-7000-8000-000000000002' });
+    const deps = makeDeps([bad, good], { telegram: async () => success });
+    deps.markPublished = vi.fn(async (id: string) => {
+      if (id === bad.id) throw new Error('connection terminated');
+    });
+
+    const result = await runMediaPublisherTick(deps);
+
+    expect(result).toMatchObject({ claimed: 2, published: 1 });
+    expect(deps.markPublished).toHaveBeenCalledTimes(2);
+    expect(deps.emitted.map((e) => e.kind)).toContain('media_publish.job_error');
+  });
+
+  it('passes a destination upload session through to markRetry', async () => {
+    const job = makeJob({ destination: 'youtube' });
+    const sessionUrl = 'https://upload.example/session';
+    const deps = makeDeps([job], {
+      youtube: async () => ({
+        ok: false,
+        retryable: true,
+        error: 'youtube_transport_error: reset',
+        uploadSessionUrl: sessionUrl,
+      }),
+    });
+
+    await runMediaPublisherTick(deps);
+
+    expect(deps.markRetry).toHaveBeenCalledWith(
+      job.id,
+      expect.objectContaining({ uploadSessionUrl: sessionUrl }),
+    );
+  });
+
+  it('leaves the persisted session alone when the outcome carries none', async () => {
+    const job = makeJob();
+    const deps = makeDeps([job], {
+      telegram: async () => ({ ok: false, retryable: true, error: 'telegram_server_error_502' }),
+    });
+
+    await runMediaPublisherTick(deps);
+
+    expect(deps.markRetry.mock.calls[0]?.[1]).not.toHaveProperty('uploadSessionUrl');
   });
 });
 

@@ -4,6 +4,14 @@ export const RCON_COMMAND_STREAM_PREFIX = 'rcon:commands:';
 export const RCON_COMMAND_GROUP = 'worker-rcon:commands:v1';
 export const RCON_COMMAND_RESULT_PREFIX = 'rcon:command-result:';
 /**
+ * Dedup marker kept apart from the result key: the API deletes
+ * `rcon:command-result:<id>` as soon as it reads it, so that key alone cannot
+ * tell a later `XAUTOCLAIM` redelivery (or a caller retry reusing the same
+ * `request_id`) that the command already ran. Written once alongside every
+ * result with a long TTL the API never touches (#1293).
+ */
+export const RCON_COMMAND_DONE_PREFIX = 'rcon:command-done:';
+/**
  * Optional stream-entry field (next to `request`) holding an ISO-8601 instant
  * after which worker-rcon must not execute the command: it acknowledges the
  * entry and stores an `expired` result instead (#36). A producer that stops
@@ -79,4 +87,8 @@ export function rconCommandStream(serverId: string): string {
 
 export function rconCommandResultKey(requestId: string): string {
   return `${RCON_COMMAND_RESULT_PREFIX}${requestId}`;
+}
+
+export function rconCommandDoneKey(requestId: string): string {
+  return `${RCON_COMMAND_DONE_PREFIX}${requestId}`;
 }

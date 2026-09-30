@@ -257,6 +257,8 @@ services:
       # On --network host, Squad's RCON listener is on the local loopback.
       # Credentials with rcon_host=NULL fall back to this value.
       RCON_HOST_DEFAULT: 127.0.0.1
+      # Host of the seeding notification's steam://connect join link.
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
       RCON_INFO_INTERVAL_MS: ${RCON_INFO_INTERVAL_MS:-5000}
     depends_on:

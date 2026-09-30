@@ -625,6 +625,81 @@ describe('RconSupervisor seeding transitions', () => {
       await closeServer(server);
     }
   }, 5000);
+
+  describe('join_link host (#980)', () => {
+    function makeDbWithServerContext(insertedEvents: Array<Record<string, unknown>>) {
+      const db = makeSeedingDb(insertedEvents) as Record<string, unknown>;
+      return {
+        ...db,
+        query: {
+          servers: { findFirst: vi.fn(async () => ({ displayName: 'Seed Server' })) },
+          serverSettings: { findFirst: vi.fn(async () => ({ gamePort: 7787 })) },
+        },
+      } as never;
+    }
+
+    async function runSeedingStarted(): Promise<Array<Record<string, unknown>>> {
+      const state = { playerCount: 80, mapName: 'Gorodok_RAAS_v1' };
+      const { server, port } = await makeSeedingRconServer(state);
+      const redis = makeRedis() as unknown as { xadd: ReturnType<typeof vi.fn> };
+      const insertedEvents: Array<Record<string, unknown>> = [];
+      const supervisor = new RconSupervisor({
+        db: makeDbWithServerContext(insertedEvents),
+        redis: redis as never,
+        log: makeLogger(),
+        pollIntervalMs: 30,
+      });
+      const liveTarget: Target = {
+        ...target,
+        serverId: 'srv-seed-join-link',
+        port,
+        queryPort: port + 1000,
+        seedLiveAt: 60,
+        seedHysteresis: 5,
+      };
+      try {
+        await supervisor.reconcile([liveTarget]);
+        state.playerCount = 40; // cross the threshold to trigger seeding_started
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline && insertedEvents.length === 0) {
+          await sleep(15);
+        }
+        return insertedEvents;
+      } finally {
+        await supervisor.stop();
+        await closeServer(server);
+      }
+    }
+
+    it('omits join_link when no public host is configured, instead of the RCON dial address', async () => {
+      const previous = process.env.PANEL_PUBLIC_URL;
+      delete process.env.PANEL_PUBLIC_URL;
+      try {
+        const events = await runSeedingStarted();
+        expect(events).toHaveLength(1);
+        const payload = events[0]?.payload as Record<string, unknown>;
+        expect(payload).not.toHaveProperty('join_link');
+      } finally {
+        if (previous === undefined) delete process.env.PANEL_PUBLIC_URL;
+        else process.env.PANEL_PUBLIC_URL = previous;
+      }
+    }, 5000);
+
+    it('builds join_link from the panel public host, never the loopback RCON dial target', async () => {
+      const previous = process.env.PANEL_PUBLIC_URL;
+      process.env.PANEL_PUBLIC_URL = 'https://panel.example.com';
+      try {
+        const events = await runSeedingStarted();
+        expect(events).toHaveLength(1);
+        const payload = events[0]?.payload as { join_link?: string };
+        expect(payload.join_link).toBe('steam://connect/panel.example.com:7787');
+        expect(payload.join_link).not.toContain('127.0.0.1');
+      } finally {
+        if (previous === undefined) delete process.env.PANEL_PUBLIC_URL;
+        else process.env.PANEL_PUBLIC_URL = previous;
+      }
+    }, 5000);
+  });
 });
 
 describe('RconSupervisor command queue', () => {
@@ -653,7 +728,8 @@ describe('RconSupervisor command queue', () => {
                   request_id: 'req-command',
                   command: 'AdminBroadcast',
                   args: ['Queue smoke'],
-                  enqueued_at: '2026-07-07T12:00:00.000Z',
+                  // Wall-clock: the queue drops commands older than its staleness window.
+                  enqueued_at: new Date().toISOString(),
                 }),
               ],
             ],
@@ -793,4 +869,132 @@ describe('RconSupervisor redial on changed connection parameters', () => {
       await closeServer(second.server);
     }
   });
+});
+
+describe('RconSupervisor stop() (#982, #983)', () => {
+  it('resolves promptly after a connected session instead of waiting on the old 1s polling interval', async () => {
+    const { server, port } = await makePollingRconServer();
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: makeLogger(),
+      pollIntervalMs: 60_000,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-stop-connected',
+      port,
+      queryPort: port + 1000,
+    };
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+      // Give the connection a moment to actually establish before stopping.
+      await sleep(200);
+
+      const start = Date.now();
+      await supervisor.stop();
+      const elapsed = Date.now() - start;
+
+      // The old code raced a real disconnect against a `setInterval(check, 1000)`
+      // poll of `this.stopped`, so a stop right after connecting could take
+      // most of a second. `stop()` now resolves its own signal directly.
+      expect(elapsed).toBeLessThan(500);
+    } finally {
+      await closeServer(server);
+    }
+  }, 5000);
+
+  it('resolves promptly even while a reconnect backoff is in progress, instead of waiting out the full backoff', async () => {
+    // No server listens on this port: the supervisor's first connect attempt
+    // fails and it settles into a (long) reconnect backoff.
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: makeLogger(),
+      initialBackoffMs: 60_000,
+      maxBackoffMs: 60_000,
+    });
+    const deadTarget: Target = {
+      ...target,
+      serverId: 'srv-stop-backoff',
+      port: 1, // nothing listens on port 1
+    };
+
+    await supervisor.reconcile([deadTarget]);
+    // Let the failed connect attempt run its course into the backoff sleep.
+    await sleep(200);
+
+    const start = Date.now();
+    await supervisor.stop();
+    const elapsed = Date.now() - start;
+
+    // Without the fix this hangs for the full 60s backoff (and the test's
+    // own timeout below would fail first).
+    expect(elapsed).toBeLessThan(2000);
+  }, 5000);
+});
+
+describe('RconSupervisor persistence failures do not tear down a healthy RCON session (#981)', () => {
+  it('keeps polling and stays connected across repeated database write failures', async () => {
+    const state = { playerCount: 1, mapName: 'Gorodok_RAAS_v1' };
+    const { server, port } = await makeSeedingRconServer(state);
+    const redis = makeRedis() as unknown as { set: ReturnType<typeof vi.fn> };
+    // Every persistence call throws — simulates Postgres being down or slow.
+    const throwingDb = {
+      select: () => {
+        throw new Error('connection terminated unexpectedly');
+      },
+      insert: () => {
+        throw new Error('connection terminated unexpectedly');
+      },
+      transaction: () => {
+        throw new Error('connection terminated unexpectedly');
+      },
+    } as never;
+    const supervisor = new RconSupervisor({
+      db: throwingDb,
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 30,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-db-down',
+      port,
+      queryPort: port + 1000,
+    };
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+
+      // Give it several poll cycles — three consecutive RCON-exec failures
+      // is what used to tear down a *healthy* client; DB failures must not
+      // count toward that at all.
+      const statusKey = 'rcon:status:srv-db-down';
+      const deadline = Date.now() + 2000;
+      let sawConnected = false;
+      let sawPollFailed = false;
+      while (Date.now() < deadline) {
+        await sleep(20);
+        for (const call of redis.set.mock.calls) {
+          const [key, value] = call;
+          if (key !== statusKey || typeof value !== 'string') continue;
+          const parsed = JSON.parse(value) as { state?: string; reason?: string };
+          if (parsed.state === 'connected') sawConnected = true;
+          // schedulePoll's own failure path — reserved for an actual RCON
+          // exec failure, and the one that tears the client down after
+          // three strikes.
+          if (parsed.reason === 'poll-failed') sawPollFailed = true;
+        }
+      }
+
+      expect(sawConnected).toBe(true);
+      // The DB-error path must never be classified as a poll (RCON) failure.
+      expect(sawPollFailed).toBe(false);
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 5000);
 });

@@ -1,11 +1,13 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import {
   adminsCfgSyncOutbox,
+  auditLog,
   createDatabaseClient,
   enqueueAdminsCfgSyncForAllServers,
   players,
   roles,
   servers,
+  sessions,
   vipSubscriptions,
   vipTiers,
 } from '@squad/db';
@@ -115,7 +117,7 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         enqueued_at: NOW.toISOString(),
         request_id: 'stale-expiry-test',
       });
-      expect(cleared).toEqual({ cleared: [], enqueued: 0 });
+      expect(cleared).toEqual({ cleared: [], enqueued: 0, revokedSessionIds: new Map() });
       const [stored] = await db
         .select({ roleId: players.roleId, expiresAt: players.roleExpiresAt })
         .from(players)
@@ -164,7 +166,11 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         request_id: requestId,
       });
 
-      expect(result).toEqual({ cleared: [assignment], enqueued: activeIds.length });
+      expect(result).toEqual({
+        cleared: [assignment],
+        enqueued: activeIds.length,
+        revokedSessionIds: new Map(),
+      });
       const rows = await db
         .select({ serverId: adminsCfgSyncOutbox.serverId })
         .from(adminsCfgSyncOutbox)
@@ -176,6 +182,58 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${requestId}`);
       await db.delete(players).where(eq(players.steamId64, steamId64));
       await db.delete(servers).where(eq(servers.id, serverId));
+    }
+  });
+
+  it('writes the audit entry and deletes sessions in the same transaction as the role clear (#992)', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const steamId64 = 76561198914650000n + BigInt(randomInt(1, 1_000_000));
+    const sessionId = `role-expirer-tx-session-${playerId}`;
+    try {
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Истёкшая роль с сессией',
+        canonicalNameNormalized: 'истёкшая роль с сессией',
+        roleId: NORMAL_ROLE_ID,
+        roleExpiresAt: EXPIRED_AT,
+      });
+      await db
+        .insert(sessions)
+        .values({ id: sessionId, playerId, expiresAt: new Date('2026-08-01T00:00:00.000Z') });
+
+      const [assignment] = await findExpiredAssignments(db, NOW, 1000).then((rows) =>
+        rows.filter((row) => row.playerId === playerId),
+      );
+      if (!assignment) throw new Error('expired assignment was not scanned');
+
+      const result = await clearExpiredAssignments(db, [assignment], NOW, {
+        reason: 'player.role.expire',
+        actor_player_id: null,
+        enqueued_at: NOW.toISOString(),
+        request_id: `role-expirer-audit-tx-${randomUUID()}`,
+      });
+
+      expect(result.cleared).toEqual([assignment]);
+      expect(result.revokedSessionIds.get(playerId)).toEqual([sessionId]);
+
+      const remainingSessions = await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.playerId, playerId));
+      expect(remainingSessions).toHaveLength(0);
+
+      const auditRows = await db
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.targetId, playerId), eq(auditLog.actionType, 'player.role.expire')));
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0]?.beforeSnapshot).toMatchObject({ role_id: NORMAL_ROLE_ID });
+      expect(auditRows[0]?.afterSnapshot).toMatchObject({ role_id: null });
+    } finally {
+      await db.delete(sessions).where(eq(sessions.playerId, playerId));
+      await db.delete(players).where(eq(players.steamId64, steamId64));
     }
   });
 
@@ -275,7 +333,7 @@ describeIfDb('findExpiredAssignments against a real database', () => {
       expect(scanned.has(playerIds.otherRole as string)).toBe(true);
       expect(scanned.has(playerIds.renewsMuchLater as string)).toBe(true);
 
-      const revokeAllForPlayer = vi.fn(async () => undefined);
+      const notifySessionsRevoked = vi.fn(async () => undefined);
       const realDeps = createRoleExpiryDeps(db, { del: vi.fn(), publish: vi.fn() } as never);
       await runRoleExpiryTick({
         ...realDeps,
@@ -284,7 +342,7 @@ describeIfDb('findExpiredAssignments against a real database', () => {
           (await realDeps.findExpiredAssignments(now)).filter(
             (row) => row.playerId === playerIds.renewing,
           ),
-        revokeAllForPlayer,
+        notifySessionsRevoked,
         diag: { emit: vi.fn(async () => undefined) },
       });
       const [renewing] = await db
@@ -292,7 +350,7 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         .from(players)
         .where(eq(players.steamId64, cases.renewing.steam));
       expect(renewing?.roleId).toBe(NORMAL_ROLE_ID);
-      expect(revokeAllForPlayer).not.toHaveBeenCalled();
+      expect(notifySessionsRevoked).not.toHaveBeenCalled();
     } finally {
       await db.delete(vipSubscriptions).where(eq(vipSubscriptions.tierId, tierId));
       await db.delete(players).where(inArray(players.steamId64, steams));

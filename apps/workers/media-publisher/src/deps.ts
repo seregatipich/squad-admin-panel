@@ -47,6 +47,7 @@ interface ClaimedRow {
   description: string | null;
   original_filename: string;
   interrupted: boolean;
+  upload_session_url: string | null;
 }
 
 export function createMediaPublisherDeps(
@@ -133,7 +134,8 @@ export function createMediaPublisherDeps(
           m.title,
           m.description,
           m.original_filename,
-          due.interrupted
+          due.interrupted,
+          p.upload_session_url
       `)) as unknown as ClaimedRow[];
 
       return rows.map((row) => ({
@@ -148,6 +150,7 @@ export function createMediaPublisherDeps(
         description: row.description,
         originalFilename: row.original_filename,
         interrupted: row.interrupted,
+        uploadSessionUrl: row.upload_session_url,
       }));
     },
 
@@ -160,6 +163,7 @@ export function createMediaPublisherDeps(
           externalUrl: result.externalUrl,
           error: null,
           nextAttemptAt: null,
+          uploadSessionUrl: null,
           updatedAt: now,
         })
         .where(eq(mediaPublications.id, id));
@@ -174,6 +178,9 @@ export function createMediaPublisherDeps(
           error: patch.error,
           nextAttemptAt: patch.nextAttemptAt,
           updatedAt: new Date(),
+          ...(patch.uploadSessionUrl !== undefined
+            ? { uploadSessionUrl: patch.uploadSessionUrl }
+            : {}),
         })
         .where(eq(mediaPublications.id, id));
     },
@@ -186,6 +193,7 @@ export function createMediaPublisherDeps(
           attempts,
           error,
           nextAttemptAt: null,
+          uploadSessionUrl: null,
           updatedAt: new Date(),
         })
         .where(eq(mediaPublications.id, id));

@@ -19,3 +19,20 @@ export function resolveRconHost(
   if (env.RCON_HOST_DEFAULT) return env.RCON_HOST_DEFAULT;
   return '127.0.0.1';
 }
+
+/**
+ * The host a *player* should dial to join, for `steam://connect/<host>:<port>`
+ * links in seeding notifications: the hostname of the panel's public URL.
+ * Never the RCON dial target above, which is `127.0.0.1` for a local server
+ * and meaningless to a player's Steam client (#980). Returns `null` when
+ * `PANEL_PUBLIC_URL` is unset or unparsable, so callers omit the link rather
+ * than fall back to a loopback address.
+ */
+export function seedPublicHost(env: { PANEL_PUBLIC_URL?: string } = process.env): string | null {
+  if (!env.PANEL_PUBLIC_URL) return null;
+  try {
+    return new URL(env.PANEL_PUBLIC_URL).hostname;
+  } catch {
+    return null;
+  }
+}

@@ -6,6 +6,7 @@ import {
   type RconCommandRequest,
   type RconCommandResult,
   type RconOperatorCommandName,
+  rconCommandDoneKey,
   rconCommandRequestSchema,
   rconCommandResultKey,
   rconCommandResultSchema,
@@ -28,6 +29,19 @@ const LAYER_NAME_MAX_CHARS = 128;
 const LAYER_NAME_PATTERN = /^[A-Za-z0-9 '_.-]{1,128}$/;
 const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
 const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
+/**
+ * How long a queued command may wait before the worker refuses to run it.
+ * Background producers (scheduler, clan-guard, log-ingest, role-expirer, ...)
+ * enqueue without a reply deadline and without checking `rcon:status`, so a
+ * disconnect or a stopped game server lets a backlog of broadcasts, layer
+ * changes, kicks and bans build up; without this, reconnecting replays all of
+ * it in one batch, possibly hours late (#1293, #968).
+ */
+const DEFAULT_MAX_COMMAND_AGE_MS = 45_000;
+/** How long the dedup marker (see `rconCommandDoneKey`) outlives a command. */
+const DONE_MARKER_TTL_SECONDS = 24 * 3_600;
+/** `error` of the result stored for a command dropped for its age. */
+const STALE_COMMAND_ERROR = 'stale';
 // Squad RCON ban-length syntax: a bare integer (days) or an integer with a
 // unit suffix (seconds/minutes/hours/days/weeks/months/years); '0' = permanent.
 const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
@@ -45,6 +59,10 @@ export interface RconCommandQueueOptions {
   resultTtlSeconds?: number;
   reclaimMinIdleMs?: number;
   reclaimIntervalMs?: number;
+  /** Age past which a queued command is dropped instead of executed. */
+  maxCommandAgeMs?: number;
+  /** Overridable clock (epoch ms) for tests; production uses the wall clock. */
+  now?: () => number;
 }
 
 export function buildOperatorCommand(input: unknown): string {
@@ -83,6 +101,8 @@ export class RconCommandQueue {
   private readonly resultTtlSeconds: number;
   private readonly reclaimMinIdleMs: number;
   private readonly reclaimIntervalMs: number;
+  private readonly maxCommandAgeMs: number;
+  private readonly now: () => number;
   private running = false;
   private loopPromise?: Promise<void>;
   private nextReclaimAt = 0;
@@ -96,6 +116,8 @@ export class RconCommandQueue {
     this.resultTtlSeconds = opts.resultTtlSeconds ?? RESULT_TTL_SECONDS;
     this.reclaimMinIdleMs = opts.reclaimMinIdleMs ?? DEFAULT_RECLAIM_MIN_IDLE_MS;
     this.reclaimIntervalMs = opts.reclaimIntervalMs ?? DEFAULT_RECLAIM_INTERVAL_MS;
+    this.maxCommandAgeMs = opts.maxCommandAgeMs ?? DEFAULT_MAX_COMMAND_AGE_MS;
+    this.now = opts.now ?? (() => Date.now());
   }
 
   async ensureGroup(): Promise<void> {
@@ -202,10 +224,34 @@ export class RconCommandQueue {
       return;
     }
 
-    const startedAt = Date.now();
+    const startedAt = this.now();
     const requestId = requestIdOf(request);
     const commandName = commandNameOf(request);
-    if (requestId && (await this.resultExists(requestId))) {
+    // Two dedup checks covering different windows: the result key is deleted by
+    // the API as soon as it reads it, so it only protects the seconds before a
+    // caller stops polling; the long-TTL done marker also catches an
+    // XAUTOCLAIM redelivery or a retry reusing the request id long afterwards.
+    if (requestId && ((await this.resultExists(requestId)) || (await this.doneExists(requestId)))) {
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
+    const ageMs = this.commandAgeMs(streamId, request);
+    if (ageMs > this.maxCommandAgeMs) {
+      this.opts.log.warn(
+        { streamId, requestId, command: commandName, serverId: this.opts.serverId, ageMs },
+        'dropping stale rcon command instead of executing it late',
+      );
+      if (requestId) {
+        await this.writeResult({
+          ok: false,
+          server_id: this.opts.serverId,
+          request_id: requestId,
+          ...(commandName ? { command: commandName } : {}),
+          error: STALE_COMMAND_ERROR,
+          completed_at: new Date(this.now()).toISOString(),
+          duration_ms: 0,
+        });
+      }
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
       return;
     }
@@ -225,7 +271,7 @@ export class RconCommandQueue {
           request_id: requestId,
           ...(commandName ? { command: commandName } : {}),
           error: RCON_COMMAND_EXPIRED_ERROR,
-          completed_at: new Date().toISOString(),
+          completed_at: new Date(this.now()).toISOString(),
           duration_ms: 0,
         });
       }
@@ -242,8 +288,8 @@ export class RconCommandQueue {
           request_id: requestId,
           ...(commandName ? { command: commandName } : {}),
           response,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
+          completed_at: new Date(this.now()).toISOString(),
+          duration_ms: this.now() - startedAt,
         });
       }
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
@@ -255,12 +301,25 @@ export class RconCommandQueue {
           request_id: requestId,
           ...(commandName ? { command: commandName } : {}),
           error: (err as Error).message,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
+          completed_at: new Date(this.now()).toISOString(),
+          duration_ms: this.now() - startedAt,
         });
       }
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
     }
+  }
+
+  /**
+   * Age of a queued command in milliseconds: from `enqueued_at` when the
+   * producer set it, else from the stream entry id's own millisecond
+   * timestamp (`<ms>-<seq>`), so an older producer is covered too.
+   */
+  private commandAgeMs(streamId: string, request: unknown): number {
+    const enqueuedAt = isRecord(request) ? request.enqueued_at : undefined;
+    const enqueuedAtMs = typeof enqueuedAt === 'string' ? Date.parse(enqueuedAt) : Number.NaN;
+    if (Number.isFinite(enqueuedAtMs)) return this.now() - enqueuedAtMs;
+    const idMs = Number(streamId.split('-')[0]);
+    return Number.isFinite(idMs) ? this.now() - idMs : 0;
   }
 
   private async writeResult(result: RconCommandResult): Promise<void> {
@@ -271,6 +330,22 @@ export class RconCommandQueue {
       'EX',
       this.resultTtlSeconds,
     );
+    // Written with every result (success, failure, expiry, stale drop); the API
+    // never deletes it.
+    await this.opts.redis.set(
+      rconCommandDoneKey(result.request_id),
+      '1',
+      'EX',
+      DONE_MARKER_TTL_SECONDS,
+    );
+  }
+
+  private async doneExists(requestId: string): Promise<boolean> {
+    try {
+      return (await this.opts.redis.get(rconCommandDoneKey(requestId))) !== null;
+    } catch {
+      return false;
+    }
   }
 
   private async resultExists(requestId: string): Promise<boolean> {

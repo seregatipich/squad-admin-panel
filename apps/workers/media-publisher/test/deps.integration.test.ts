@@ -57,6 +57,7 @@ async function insertPublication(opts: {
   status?: string;
   attempts?: number;
   nextAttemptAt?: Date | null;
+  uploadSessionUrl?: string | null;
 }): Promise<string> {
   const id = randomUUID();
   await requireDb()
@@ -68,6 +69,7 @@ async function insertPublication(opts: {
       status: opts.status ?? 'queued',
       attempts: opts.attempts ?? 0,
       nextAttemptAt: opts.nextAttemptAt === undefined ? PAST : opts.nextAttemptAt,
+      ...(opts.uploadSessionUrl !== undefined ? { uploadSessionUrl: opts.uploadSessionUrl } : {}),
     });
   return id;
 }
@@ -258,7 +260,11 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
     const pubId = await insertPublication({ mediaId });
     await requireDb()
       .update(mediaPublications)
-      .set({ status: 'uploading', updatedAt: new Date(NOW.getTime() - 60_000) })
+      .set({
+        status: 'uploading',
+        nextAttemptAt: FUTURE,
+        updatedAt: new Date(NOW.getTime() - 60_000),
+      })
       .where(eq(mediaPublications.id, pubId));
 
     const claimed = await makeDeps().claimDue(NOW, 10);
@@ -316,6 +322,75 @@ describeIfDb('createMediaPublisherDeps — status transitions', () => {
       error: 'telegram_file_too_large',
       nextAttemptAt: null,
     });
+  });
+
+  it('claimDue surfaces a persisted upload session so a retry can resume it', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/session.mp4' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=abc';
+    const pubId = await insertPublication({
+      mediaId,
+      destination: 'youtube',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.find((j) => j.id === pubId)?.uploadSessionUrl).toBe(sessionUrl);
+  });
+
+  it('markRetry persists a new upload session when the outcome provides one', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/s1.mp4' });
+    const pubId = await insertPublication({ mediaId, status: 'uploading' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=xyz';
+
+    await makeDeps().markRetry(pubId, {
+      attempts: 1,
+      error: 'youtube_transport_error',
+      nextAttemptAt: FUTURE,
+      uploadSessionUrl: sessionUrl,
+    });
+
+    expect(await readPublication(pubId)).toMatchObject({ uploadSessionUrl: sessionUrl });
+  });
+
+  it('markRetry leaves a persisted upload session untouched when the outcome omits it', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/s2.mp4' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=keep';
+    const pubId = await insertPublication({
+      mediaId,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    await makeDeps().markRetry(pubId, {
+      attempts: 1,
+      error: 'youtube_token_server_error_503',
+      nextAttemptAt: FUTURE,
+    });
+
+    expect(await readPublication(pubId)).toMatchObject({ uploadSessionUrl: sessionUrl });
+  });
+
+  it('markFailed and markPublished clear a persisted upload session', async () => {
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=dead';
+    const failedMedia = await insertStoredMedia({ storagePath: '2026/07/s3.mp4' });
+    const failedId = await insertPublication({
+      mediaId: failedMedia,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+    const publishedMedia = await insertStoredMedia({ storagePath: '2026/07/s4.mp4' });
+    const publishedId = await insertPublication({
+      mediaId: publishedMedia,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    await makeDeps().markFailed(failedId, 'youtube_upload_rejected_400', 8);
+    await makeDeps().markPublished(publishedId, { externalId: 'v', externalUrl: null }, NOW);
+
+    expect(await readPublication(failedId)).toMatchObject({ uploadSessionUrl: null });
+    expect(await readPublication(publishedId)).toMatchObject({ uploadSessionUrl: null });
   });
 
   it('deferUnconfigured requeues without consuming an attempt', async () => {
