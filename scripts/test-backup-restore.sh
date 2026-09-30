@@ -185,15 +185,17 @@ cp /restore/data/redis/dump.rdb /data/redis/dump.rdb' || fail "postgres restore 
 ok "pg_restore --single-transaction --clean --if-exists completed"
 
 step "Converting restored RDB to an AOF (redis runs --appendonly yes)"
-cp "$TMP/dump/redis/dump.rdb" "$TMP/redis-restore/dump.rdb"
+mkdir -p "$TMP/redis-stage"
+cp "$TMP/dump/redis/dump.rdb" "$TMP/redis-stage/dump.rdb"
 # The restored redis boots with --appendonly yes, which loads the AOF and would
 # ignore a bare dump.rdb. Boot a one-off server with AOF off to load the RDB,
 # then CONFIG SET appendonly yes so it rewrites the dataset into a fresh AOF.
 # The conversion script is taken verbatim from scripts/restore.sh, so this run
-# proves the exact bounded load/rewrite the restore ships.
+# proves the exact bounded load/rewrite the restore ships. As in restore.sh, the
+# redis volume is /data and the staged dump is mounted read-only at /restore.
 REDIS_CONVERT="$(awk '/-T redis sh -c .$/{grab=1; next} grab && /^.$/{exit} grab' scripts/restore.sh)"
 [[ "$REDIS_CONVERT" == *"redis-server --dir /data"* ]] || fail "could not extract the Redis conversion script from scripts/restore.sh"
-docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" \
+docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" -v "$TMP/redis-stage:/restore:ro" \
   -e REDIS_READY_ATTEMPTS=600 -e REDIS_REWRITE_ATTEMPTS=2000 "$RD_IMG" -c "$REDIS_CONVERT" \
   || fail "RDB->AOF conversion failed"
 ok "AOF rebuilt from restored RDB"

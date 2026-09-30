@@ -29,11 +29,14 @@
 #   - Postgres: pg_restore --single-transaction --exit-on-error --clean
 #     --if-exists into the running `postgres` service — a failure rolls the whole
 #     restore back instead of leaving a half-dropped schema.
-#   - Redis: the live dataset is moved aside, not deleted; the RDB is loaded via
+#   - Redis: everything happens inside a one-off container of the `redis`
+#     service, so it works for a bind mount (docker/compose.yml) and for a named
+#     volume (the stand's `redisdata`) alike. The live dataset is moved aside
+#     inside the volume (/data/pre-restore), not deleted; the RDB is loaded via
 #     a one-off redis-server, then converted to an AOF (the `redis` service runs
 #     with --appendonly yes, so it boots from the AOF and would ignore a bare
-#     dump.rdb). On any failure the previous dataset is put back and redis is
-#     started again. The load and the AOF rewrite are bounded
+#     dump.rdb). On any failure the container puts the previous dataset back and
+#     redis is started again. The load and the AOF rewrite are bounded
 #     (REDIS_READY_ATTEMPTS, REDIS_REWRITE_ATTEMPTS polls 0.3 s apart) and stop
 #     as soon as the one-off redis-server exits.
 
@@ -48,10 +51,16 @@ export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
 # COMPOSE_ENV_FILES from its PANEL_COMPOSE_* configuration (the stand:
 # docker/compose.stand.yml with .env.stand,.release.env).
 ENV_FILE="${ENV_FILE:-.env}"
-# --env-file keeps docker compose reading the same file this script parses
-# DATA_DIR from — otherwise an ENV_FILE override would silently diverge from
-# whichever .env compose reads from the project directory by default.
-COMPOSE=(docker compose --env-file "$ENV_FILE" --profile backup)
+# An ENV_FILE override without COMPOSE_ENV_FILES must reach compose too, or it
+# would read whichever .env sits in the project directory instead of the file
+# this script parses DATA_DIR from. When the bridge sets COMPOSE_ENV_FILES (the
+# stand: .env.stand,.release.env) it must stay in charge: --env-file replaces
+# it, which would drop .release.env and its image references.
+COMPOSE=(docker compose)
+if [[ -z "${COMPOSE_ENV_FILES:-}" && "$ENV_FILE" != ".env" ]]; then
+  COMPOSE+=(--env-file "$ENV_FILE")
+fi
+COMPOSE+=(--profile backup)
 
 # ── colors / logging ────────────────────────────────────────────────────────
 
@@ -92,7 +101,7 @@ command -v docker >/dev/null 2>&1 || die "docker is not installed / not on PATH"
 [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE (needed for RESTIC_* and POSTGRES_PASSWORD)"
 
 # Resolve DATA_DIR the same way docker compose does (from .env, default
-# ./data), for the host-side Redis data-dir manipulation. docker compose
+# ./data), for locating the dump staging directory. docker compose
 # gives an already-exported shell variable priority over .env and strips
 # surrounding quotes from the .env value — match both so this script's view
 # of DATA_DIR can't diverge from the bind-mount compose actually uses.
@@ -118,9 +127,10 @@ if [[ "$APPLY" -eq 0 ]]; then
     4. pg_restore --single-transaction --exit-on-error --clean --if-exists
        -h postgres -U admin -d admin admin.dump (drops and recreates every
        object and loads the dumped data, all or nothing).
-    5. Stop redis, move ${DATA_DIR}/redis aside, load the restored dump.rdb,
-       convert it to an AOF, and start redis again (the previous dataset is
-       put back if this step fails).
+    5. Stop redis, and in a one-off redis container move the live dataset aside
+       inside the redis volume, load the restored dump.rdb, convert it to an
+       AOF, and start redis again (the previous dataset is put back if this
+       step fails).
 
   This OVERWRITES the live database and Redis dataset. Take a fresh snapshot
   first if the current data still matters.
@@ -140,28 +150,17 @@ fi
 
 # Host view of the staging directory the backup container writes to /data/restore.
 STAGE_DIR="${DATA_DIR}/backup-dump/restore"
-REDIS_DIR="${DATA_DIR}/redis"
-REDIS_ASIDE="${DATA_DIR}/redis.pre-restore"
 
 stopped_workers=()
 redis_stopped=0
-redis_moved_aside=0
 
-# Runs on every exit, after success or failure: puts the previous Redis dataset
-# back if the new one never made it, starts redis and the stopped workers again,
-# and drops the staged dumps (they would otherwise ride along in the next
-# snapshot).
+# Runs on every exit, after success or failure: starts redis and the stopped
+# workers again and drops the staged dumps (they would otherwise ride along in
+# the next snapshot). The previous Redis dataset is put back by the one-off
+# container itself.
 finish() {
   local status=$?
   trap - EXIT
-  if [[ "$status" -ne 0 && "$redis_moved_aside" -eq 1 ]]; then
-    warn "Restore failed — putting the previous Redis dataset back"
-    rm -rf "${REDIS_DIR}/appendonlydir" "${REDIS_DIR}/dump.rdb"
-    for item in appendonlydir dump.rdb; do
-      if [[ -e "${REDIS_ASIDE}/${item}" ]]; then mv "${REDIS_ASIDE}/${item}" "${REDIS_DIR}/${item}"; fi
-    done
-    rmdir "$REDIS_ASIDE" 2>/dev/null || warn "left ${REDIS_ASIDE} in place — inspect it before the next restore"
-  fi
   if [[ "$redis_stopped" -eq 1 ]]; then
     "${COMPOSE[@]}" up -d redis >/dev/null || warn "could not start redis again — run: docker compose up -d redis"
   fi
@@ -176,9 +175,10 @@ trap finish EXIT
 
 warn "Restoring will OVERWRITE the live Postgres database and Redis dataset."
 
-# A leftover from a restore that died without its trap holds the only copy of
-# an earlier dataset; never overwrite it.
-[[ ! -e "$REDIS_ASIDE" ]] || die "${REDIS_ASIDE} exists (left by an interrupted restore) — inspect and remove it first"
+# A leftover from a restore that died without its rollback holds the only copy
+# of an earlier dataset; never overwrite it. Checked before anything is touched.
+"${COMPOSE[@]}" run --rm --no-deps -T redis sh -c '[ ! -e /data/pre-restore ]' \
+  || die "the redis volume holds /data/pre-restore (left by an interrupted restore) — inspect and remove it first"
 
 step "Ensuring postgres is up and healthy"
 "${COMPOSE[@]}" up -d postgres >/dev/null
@@ -233,62 +233,68 @@ log "Postgres restored (pg_restore --single-transaction --clean --if-exists)"
 step "Restoring Redis from the restored dump.rdb"
 redis_stopped=1
 "${COMPOSE[@]}" stop redis >/dev/null
-mkdir -p "$REDIS_ASIDE"
-redis_moved_aside=1
-for item in appendonlydir dump.rdb; do
-  if [[ -e "${REDIS_DIR}/${item}" ]]; then mv "${REDIS_DIR}/${item}" "${REDIS_ASIDE}/${item}"; fi
-done
-mkdir -p "$REDIS_DIR"
-cp "${STAGE_DIR}/dump.rdb" "${REDIS_DIR}/dump.rdb"
 
 # The redis service runs with --appendonly yes, so it loads its dataset from the
-# AOF, not from dump.rdb. Boot a one-off server with AOF off to load the RDB,
-# then CONFIG SET appendonly yes to rewrite the dataset into a fresh AOF. The
-# server takes the service's password, which redis-cli sends from REDISCLI_AUTH.
-# Both waits give up when the server exits or the attempt budget runs out, so a
-# corrupt RDB fails the restore instead of hanging it.
+# AOF, not from dump.rdb. The one-off container moves the live dataset aside,
+# boots a server with AOF off to load the RDB, then CONFIG SET appendonly yes to
+# rewrite the dataset into a fresh AOF. The server takes the service's password,
+# which redis-cli sends from REDISCLI_AUTH. Both waits give up when the server
+# exits or the attempt budget runs out, so a corrupt RDB fails the restore
+# instead of hanging it; every failure puts the moved-aside dataset back.
 "${COMPOSE[@]}" run --rm --no-deps \
+  -v "${STAGE_DIR}:/restore:ro" \
   -e REDIS_READY_ATTEMPTS="${REDIS_READY_ATTEMPTS:-600}" \
   -e REDIS_REWRITE_ATTEMPTS="${REDIS_REWRITE_ATTEMPTS:-2000}" \
   -T redis sh -c '
   set -e
-  rm -rf /data/appendonlydir /data/dump.rdb
-  cp /restore/dump.rdb /data/dump.rdb
+  mkdir /data/pre-restore
+  for item in appendonlydir dump.rdb; do
+    if [ -e "/data/$item" ]; then mv "/data/$item" "/data/pre-restore/$item"; fi
+  done
+  pid=""
+  rollback() {
+    echo "Redis restore failed, putting the previous dataset back" >&2
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+    rm -rf /data/appendonlydir /data/dump.rdb
+    for item in appendonlydir dump.rdb; do
+      if [ -e "/data/pre-restore/$item" ]; then mv "/data/pre-restore/$item" "/data/$item"; fi
+    done
+    rmdir /data/pre-restore || echo "left /data/pre-restore in place, inspect it before the next restore" >&2
+    exit 1
+  }
+  cp /restore/dump.rdb /data/dump.rdb || rollback
   redis-server --dir /data --dbfilename dump.rdb --appendonly no --save "" --requirepass "$REDISCLI_AUTH" &
   pid=$!
   attempts=0
   until redis-cli ping 2>/dev/null | grep -q PONG; do
-    kill -0 "$pid" 2>/dev/null || { echo "redis-server exited while loading dump.rdb" >&2; exit 1; }
+    kill -0 "$pid" 2>/dev/null || { echo "redis-server exited while loading dump.rdb" >&2; rollback; }
     attempts=$((attempts + 1))
     if [ "$attempts" -ge "$REDIS_READY_ATTEMPTS" ]; then
       echo "redis-server did not answer PING after $attempts attempts" >&2
-      kill "$pid" 2>/dev/null || true
-      exit 1
+      rollback
     fi
     sleep 0.3
   done
-  redis-cli config set appendonly yes >/dev/null
+  redis-cli config set appendonly yes >/dev/null || rollback
   sleep 1
   attempts=0
   until [ "$(redis-cli info persistence | tr -d "\r" | awk -F: "/^aof_rewrite_in_progress:/{print \$2}")" = "0" ]; do
-    kill -0 "$pid" 2>/dev/null || { echo "redis-server exited during the AOF rewrite" >&2; exit 1; }
+    kill -0 "$pid" 2>/dev/null || { echo "redis-server exited during the AOF rewrite" >&2; rollback; }
     attempts=$((attempts + 1))
     if [ "$attempts" -ge "$REDIS_REWRITE_ATTEMPTS" ]; then
       echo "AOF rewrite still running after $attempts attempts" >&2
-      kill "$pid" 2>/dev/null || true
-      exit 1
+      rollback
     fi
     sleep 0.3
   done
   status="$(redis-cli info persistence | tr -d "\r" | awk -F: "/^aof_last_bgrewrite_status:/{print \$2}")"
-  [ "$status" = "ok" ] || { echo "AOF rewrite failed: $status" >&2; exit 1; }
+  [ "$status" = "ok" ] || { echo "AOF rewrite failed: $status" >&2; rollback; }
   redis-cli shutdown nosave || true
   wait "$pid" 2>/dev/null || true
+  rm -rf /data/pre-restore
 '
 "${COMPOSE[@]}" up -d redis >/dev/null
 redis_stopped=0
-redis_moved_aside=0
-rm -rf "$REDIS_ASIDE"
 log "Redis restored (RDB loaded and converted to AOF)"
 
 echo
