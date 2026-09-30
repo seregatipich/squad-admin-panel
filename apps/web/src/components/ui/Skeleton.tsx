@@ -1,3 +1,7 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+
 /** Форма плашки — она повторяет очертания будущего содержимого. */
 export type SkeletonVariant = 'text' | 'row' | 'card' | 'block';
 
@@ -10,6 +14,26 @@ const SHAPE: Record<SkeletonVariant, string> = {
 };
 
 /**
+ * Невидимая строка для скринридера в постоянном `role="status"`.
+ *
+ * Регион рисуется пустым и получает текст уже после монтирования: NVDA и JAWS
+ * объявляют изменение существующего вежливого региона, а регион, появившийся в
+ * DOM сразу с текстом, нередко пропускают. Без `label` ничего не рисуется.
+ */
+function LoadingAnnouncement({ label }: { label?: string }) {
+  const [announced, setAnnounced] = useState('');
+  useEffect(() => setAnnounced(label ?? ''), [label]);
+
+  if (!label) return null;
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: <output> означает результат вычисления формы; здесь это объявление загрузки, а не результат
+    <span role="status" className="sr-only">
+      {announced}
+    </span>
+  );
+}
+
+/**
  * Заглушка загрузки в форме будущего содержимого.
  *
  * Сами плашки помечены `aria-hidden`: для скринридера мерцающий прямоугольник —
@@ -18,10 +42,10 @@ const SHAPE: Record<SkeletonVariant, string> = {
  * единственной строкой в `role="status"` (вежливое объявление, не перебивающее
  * то, что оператор читает сейчас). Без `label` компонент не объявляет ничего:
  * когда на экране десяток заглушек, объявлять их все — хуже, чем молчать,
- * поэтому `label` ставят один раз на область загрузки. Скринридеры (NVDA,
- * JAWS) нередко не объявляют регион, появившийся в DOM сразу с текстом, так что
- * объявление не гарантировано; надёжнее держать постоянный live-регион уровнем
- * выше и менять только его текст.
+ * поэтому `label` ставят один раз на область загрузки. Регион рисуется пустым
+ * и заполняется после монтирования (см. {@link LoadingAnnouncement}), чтобы
+ * NVDA и JAWS объявили изменение, а не пропустили появившийся вместе с текстом
+ * регион.
  *
  * @param variant Форма плашки.
  * @param count Сколько плашек подряд, по умолчанию одна.
@@ -47,12 +71,7 @@ export function Skeleton({
 
   return (
     <>
-      {label && (
-        // biome-ignore lint/a11y/useSemanticElements: <output> означает результат вычисления формы; здесь это объявление загрузки, а не результат
-        <span role="status" className="sr-only">
-          {label}
-        </span>
-      )}
+      <LoadingAnnouncement label={label} />
       <div className="flex flex-col gap-2">
         {Array.from({ length: Math.max(count, 0) }, (_, index) => (
           <div
@@ -90,12 +109,7 @@ export function SkeletonTable({
 }) {
   return (
     <>
-      {label && (
-        // biome-ignore lint/a11y/useSemanticElements: <output> означает результат вычисления формы; здесь это объявление загрузки, а не результат
-        <span role="status" className="sr-only">
-          {label}
-        </span>
-      )}
+      <LoadingAnnouncement label={label} />
       <div className="flex flex-col gap-2">
         {Array.from({ length: Math.max(rows, 0) }, (_, row) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: сетка заглушек статична и не переупорядочивается

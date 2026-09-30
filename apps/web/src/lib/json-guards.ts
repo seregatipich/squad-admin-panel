@@ -25,3 +25,16 @@ export function isNullableNumber(value: unknown): value is number | null {
 export function isArrayOf<T>(value: unknown, guard: (item: unknown) => item is T): value is T[] {
   return Array.isArray(value) && value.every(guard);
 }
+
+/**
+ * Checks the `GET /api/v1/setup/status` body the dashboard layout dereferences.
+ *
+ * @param body Decoded JSON response.
+ * @throws {TypeError} `setup_completed` is not a boolean.
+ */
+export function parseSetupStatus(body: unknown): { setup_completed: boolean } {
+  if (!isRecord(body) || typeof body.setup_completed !== 'boolean') {
+    throw new TypeError('setup_completed must be a boolean');
+  }
+  return { setup_completed: body.setup_completed };
+}

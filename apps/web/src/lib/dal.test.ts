@@ -32,7 +32,7 @@ vi.mock('react', async (importOriginal) => {
 
 import * as nextHeaders from 'next/headers';
 import * as apiModule from './api';
-import { getSession, requireSession, SESSION_COOKIE } from './dal';
+import { getSession, parseMe, requireSession, SESSION_COOKIE } from './dal';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -124,5 +124,35 @@ describe('requireSession', () => {
     );
 
     await expect(requireSession()).rejects.toMatchObject({ status: 502 });
+  });
+});
+
+describe('parseMe (#819)', () => {
+  const valid = {
+    player_id: 'b1e2c3d4-0000-0000-0000-000000000001',
+    canonical_name: 'TestUser',
+    permissions: ['servers.view'],
+  };
+
+  it('accepts a body with the fields the layout dereferences', () => {
+    expect(parseMe(valid)).toBe(valid);
+  });
+
+  it.each([
+    ['not an object', null],
+    ['no permissions', { ...valid, permissions: undefined }],
+    ['permissions not an array', { ...valid, permissions: 'servers.view' }],
+    ['a non-string permission', { ...valid, permissions: [1] }],
+    ['no player_id', { ...valid, player_id: undefined }],
+  ])('rejects %s', (_label, body) => {
+    expect(() => parseMe(body)).toThrow();
+  });
+
+  it('asks apiFetch to validate the session response', async () => {
+    await getSession();
+    expect(apiModule.apiFetch).toHaveBeenCalledWith(
+      '/api/v1/me',
+      expect.objectContaining({ parse: parseMe }),
+    );
   });
 });

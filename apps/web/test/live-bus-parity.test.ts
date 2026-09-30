@@ -28,4 +28,35 @@ describe('live-bus event unions', () => {
     expect(web.size).toBeGreaterThan(10);
     expect(Array.from(web).filter((type) => !api.has(type))).toEqual([]);
   });
+
+  /**
+   * Regression #1300/#829: the API `vote.ended` payload omitted `server_id`
+   * although log-ingest publishes it (`apps/workers/log-ingest/src/vote/store.ts`)
+   * and the web `VoteEndedData` requires it, so API-side code typed against the
+   * union could not read it.
+   */
+  it('declares the server_id that log-ingest publishes in the API vote.ended payload', () => {
+    const source = readFileSync(API_UNION, 'utf8');
+    const start = source.indexOf("type: 'vote.ended';");
+    const block = source.slice(start, source.indexOf("type: 'report.created';", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(block).toContain('server_id: string;');
+  });
+
+  /**
+   * Worker-published frames the API deliberately does not model: `banname.matched`
+   * is sent to the live-bus channel by log-ingest but has no consumer, and the
+   * Redis bridge drops it (`apps/api/test/live-bus-redis-frames.test.ts`);
+   * `bansync.*` is kept off the channel (`apps/workers/ban-sync/src/events.ts`).
+   * Modelling one of them means choosing its audience, so it must be a
+   * deliberate change that edits this list.
+   */
+  it('keeps worker-only frame types out of both unions', () => {
+    const workerOnly = ['banname.matched', 'bansync.completed', 'bansync.failed'];
+    const api = liveEventTypes(API_UNION);
+    const web = liveEventTypes(WEB_UNION);
+
+    expect(workerOnly.filter((type) => api.has(type) || web.has(type))).toEqual([]);
+  });
 });

@@ -149,4 +149,37 @@ describe('getLiveBus in a browser', () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     release();
   });
+
+  describe('frame validation (#830)', () => {
+    async function received(frames: unknown[]) {
+      const bus = await freshBus();
+      const events: unknown[] = [];
+      bus.subscribe((event) => events.push(event));
+      const socket = FakeWebSocket.instances[0];
+      for (const frame of frames) socket.onmessage?.({ data: JSON.stringify(frame) });
+      return events;
+    }
+
+    const ts = '2026-01-01T00:00:00.000Z';
+
+    it('delivers a well-formed frame to subscribers', async () => {
+      const frame = { type: 'server.deleted', ts, data: { server_id: 's1' } };
+      expect(await received([frame])).toEqual([frame]);
+    });
+
+    it.each([
+      ['no data', { type: 'bridge.connection', ts }],
+      ['null data', { type: 'bridge.connection', ts, data: null }],
+      ['array data', { type: 'bridge.connection', ts, data: [] }],
+      ['string data', { type: 'bridge.connection', ts, data: 'up' }],
+      ['non-string ts', { type: 'bridge.connection', ts: 1, data: { state: 'up' } }],
+    ])('drops a frame with %s instead of handing it to subscribers', async (_label, frame) => {
+      expect(await received([frame])).toEqual([]);
+    });
+
+    it('keeps delivering after a bridge.connection frame without data', async () => {
+      const good = { type: 'server.deleted', ts, data: { server_id: 's1' } };
+      expect(await received([{ type: 'bridge.connection', ts }, good])).toEqual([good]);
+    });
+  });
 });

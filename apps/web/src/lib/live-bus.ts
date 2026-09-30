@@ -1,3 +1,4 @@
+import { isRecord } from './json-guards';
 import { jitteredBackoffMs } from './ws-backoff';
 
 export type LiveEvent =
@@ -576,7 +577,7 @@ function makeLiveBus(): LiveBusHandle {
     };
 
     ws.onmessage = (ev) => {
-      let frame: { type?: string } | null = null;
+      let frame: Record<string, unknown> | null = null;
       try {
         frame = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
       } catch {
@@ -593,7 +594,15 @@ function makeLiveBus(): LiveBusHandle {
         }
         return;
       }
-      const event = frame as LiveEvent;
+      // The socket is a trust boundary: a frame without the `ts`/`data`
+      // envelope would hand subscribers a payload TypeScript treats as
+      // guaranteed. Per-type payloads are not checked here; the API validates
+      // the envelope and types every publisher (`apps/api/src/plugins/live-bus.ts`).
+      if (typeof frame.ts !== 'string' || !isRecord(frame.data)) {
+        debug('dropping malformed frame', frame.type);
+        return;
+      }
+      const event = frame as unknown as LiveEvent;
       for (const cb of eventSubs) {
         try {
           cb(event);
