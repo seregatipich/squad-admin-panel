@@ -58,7 +58,7 @@ A separate `setInterval` ticks every `ADMINS_CFG_DRIFT_INTERVAL_MS` (default 5 m
 
 - If the file's managed segment matches the DB hash → no-op, status stays `in_sync`.
 - **If they differ (someone edited the segment by hand) → the worker DOES NOT auto-overwrite. It publishes `state: 'drift'` with both hashes and a warn log `admins.cfg drift detected — awaiting force-sync`. The operator decides via the UI banner.** This matches spec §2.7.6: panel surfaces the divergence and asks the operator to "Force sync" or accept the change manually (P0 acceptance is "copy values into the UI").
-- If the bridge errors → status flips to `unreachable` and the server enters per-server backoff (5s → 10s → ... capped at 5 min).
+- If the bridge errors → status flips to `unreachable` and the server enters per-server backoff (5s → 10s → ... capped at 5 min). `unreachable_since` keeps the start of the outage across retries — the `syncing` status every attempt publishes first carries it forward (#871) — and is cleared only by a completed check (`in_sync`/`drift`).
 
 Active mutations (role.create/update/delete, player.role.assign/unassign, role.member.add/remove, force_sync) skip this passive branch after their committed outbox row is consumed — those are panel-initiated changes, not drift.
 
@@ -83,7 +83,7 @@ Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker on
 | `bridge.fileAtomicWrite` fails | Same as above — status `unreachable`, no `XACK`, audit `phase=file_atomic_write`. | Auto-retry via reclaim. |
 | Audit append throws | Logged at error level, but the sync itself is committed. | Operator investigates DB connectivity; sync proceeds. |
 | Server deleted (`servers.deleted_at` set) | Worker drops it from the active set on next refresh (every 30 s); no further reads. | n/a |
-| `XREADGROUP` returns `NOGROUP` / "no such key" (a per-server stream+group was destroyed by the API on soft-delete, SYNC-5) | The multiplexed read rejects for the WHOLE batch, so the worker cannot tell which stream vanished. It logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` immediately (dropping the vanished id and pruning its `backoffByServer` entry), and resumes on the next loop iteration — instead of the pre-SYNC-5 behaviour of sleeping 1 s and re-hitting the same error until the 30-s refresh. | Self-heals within one loop iteration. |
+| `XREADGROUP` returns `NOGROUP` / "no such key" (a per-server stream+group was destroyed by the API on soft-delete, SYNC-5, or Redis lost the group of a still-active server) | The multiplexed read rejects for the WHOLE batch, so the worker cannot tell which stream vanished. It logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` (dropping a vanished id and pruning its `backoffByServer` entry), re-creates the `config-sync` group of every server still active (idempotent, `BUSYGROUP` ignored), then pauses 1 s before the next read so a group that cannot be re-created never turns into a hot loop (#873). | Self-heals on the next read, about 1 s later. |
 | Worker crash / SIGTERM | Heartbeat key expires within 30 s. In-flight messages stay in the crashed consumer's PEL. The next worker process — even with a fresh `consumer-${pid}-${rand}` name — picks them up via the periodic `XAUTOCLAIM` pass once they exceed `RECLAIM_MIN_IDLE_MS` (default 60 s). | systemd restart. |
 
 ## Pending-message reclaim (XAUTOCLAIM)

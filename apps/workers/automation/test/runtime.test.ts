@@ -151,6 +151,120 @@ describe('processAutomationEnvelope — mapping & cooldown (mocked deps)', () =>
     expect(setImpl).toHaveBeenCalledTimes(2);
     expect(fired).toHaveLength(1);
   });
+
+  function globalTimeOfDayRule(
+    actionType: AutomationRuleInput['actionType'] = 'rcon_command',
+  ): AutomationRuleInput {
+    return {
+      id: randomUUID(),
+      serverId: null,
+      name: 'nightly everywhere',
+      conditionType: 'time_of_day',
+      condition: { startMinute: 0, endMinute: 1439, timezone: 'UTC' },
+      actionType,
+      action:
+        actionType === 'notify_admin'
+          ? { message: 'night', channels: [] }
+          : { command: 'AdminBroadcast', args: ['night'] },
+      enabled: true,
+    };
+  }
+
+  /** A Redis `SET NX` / `DEL` fake that honours key existence, like the real cooldown. */
+  function cooldownRedis() {
+    const keys = new Set<string>();
+    return {
+      keys,
+      redis: {
+        set: vi.fn(async (key: string) => {
+          if (keys.has(key)) return null;
+          keys.add(key);
+          return 'OK';
+        }),
+        del: vi.fn(async (key: string) => (keys.delete(key) ? 1 : 0)),
+      },
+    };
+  }
+
+  it('keeps a separate time_of_day cooldown per server for a global rule (#842)', async () => {
+    const rule = globalTimeOfDayRule();
+    const { redis } = cooldownRedis();
+    const { deps, fired } = makeDeps({ loadRules: async () => [rule], redis: redis as never });
+    const serverA = randomUUID();
+    const serverB = randomUUID();
+
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverA }));
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverB }));
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverA }));
+
+    expect(fired.map((m) => (m as { serverId: string }).serverId)).toEqual([serverA, serverB]);
+  });
+
+  it('never spends a server-bound time_of_day cooldown on a serverless events:global envelope (#842)', async () => {
+    const rule = globalTimeOfDayRule();
+    const { redis, keys } = cooldownRedis();
+    const { deps, fired } = makeDeps({ loadRules: async () => [rule], redis: redis as never });
+    const serverId = randomUUID();
+
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: null }));
+    expect(fired).toHaveLength(0);
+    expect(keys.size).toBe(0);
+
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverId }));
+    expect(fired).toHaveLength(1);
+  });
+
+  it('still fires a serverless notify_admin time_of_day rule once per window', async () => {
+    const rule = globalTimeOfDayRule('notify_admin');
+    const { redis } = cooldownRedis();
+    const { deps, fired } = makeDeps({ loadRules: async () => [rule], redis: redis as never });
+
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: null }));
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: null }));
+
+    expect(fired).toHaveLength(1);
+  });
+
+  it('releases the time_of_day cooldown when the firing fails so the next event retries (#842)', async () => {
+    const rule = globalTimeOfDayRule();
+    const { redis, keys } = cooldownRedis();
+    const runMatch = vi
+      .fn<AutomationRuntimeDeps['runMatch']>()
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockImplementation(async (match) => ({
+        ruleId: match.ruleId,
+        serverId: match.serverId,
+        matched: {},
+        actionResult: { error: 'rcon offline' },
+        dryRun: false,
+        status: 'failed',
+      }));
+    const { deps } = makeDeps({
+      loadRules: async () => [rule],
+      redis: redis as never,
+      runMatch,
+      log: { error: vi.fn() },
+    });
+    const serverId = randomUUID();
+
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverId }));
+    expect(keys.size).toBe(0);
+    await processAutomationEnvelope(deps, envelope({ type: 'server.ready', server_id: serverId }));
+    expect(keys.size).toBe(0);
+    expect(runMatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects when the rules cannot be loaded so the dispatcher leaves the entry pending (#841)', async () => {
+    const { deps } = makeDeps({
+      loadRules: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+
+    await expect(
+      processAutomationEnvelope(deps, envelope({ type: 'server.ready', payload: {} })),
+    ).rejects.toThrow('database unavailable');
+  });
 });
 
 describe('processAutomationEnvelope — player_count is edge-triggered (real Redis, #34)', () => {

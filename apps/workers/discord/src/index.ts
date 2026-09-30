@@ -39,10 +39,20 @@ const log = pino(
  * degraded-idle guard — this keeps the existing `contract.test.ts` (which
  * only sets `REDIS_URL`) green.
  */
+/**
+ * Every loop contains its own failures, so a rejected loop is a bug. Exit
+ * rather than keep a heartbeat that reports a worker which stopped doing its
+ * job; the container restart policy brings it back (#1292).
+ */
+function exitOnLoopCrash(loop: string, err: unknown): never {
+  log.fatal({ err: (err as Error).message, loop }, 'loop crashed; exiting');
+  process.exit(1);
+}
+
 async function main() {
   const redisUrl = process.env.REDIS_URL;
   const redis = redisUrl
-    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
+    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: true })
     : null;
   redis?.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis?.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
@@ -91,9 +101,7 @@ async function main() {
         counters.failed += result.failed;
         counters.rateLimited += result.rateLimited;
       },
-    }).catch((err) => {
-      log.error({ err: (err as Error).message }, 'notify loop crashed');
-    });
+    }).catch((err) => exitOnLoopCrash('notify', err));
 
     // DISCORD-5 (#152): the role-sync loop shares this worker's DB/Redis/key
     // rather than getting its own service — it needs the same bot credentials
@@ -112,9 +120,7 @@ async function main() {
       log,
       shouldStop: () => stopped,
       reconcileIntervalMs,
-    }).catch((err) => {
-      log.error({ err: (err as Error).message }, 'role-sync loop crashed');
-    });
+    }).catch((err) => exitOnLoopCrash('role-sync', err));
 
     // DISCORD-6 (#153): the status-channel tick and the one-off slash-command
     // registration ride in this same process for the same reason as the role
@@ -134,9 +140,7 @@ async function main() {
       shouldStop: () => stopped,
       tickIntervalMs: statusChannelTickMs,
       applicationId: process.env.DISCORD_APPLICATION_ID ?? null,
-    }).catch((err) => {
-      log.error({ err: (err as Error).message }, 'status-channel loop crashed');
-    });
+    }).catch((err) => exitOnLoopCrash('status-channel', err));
   } else {
     log.info(
       'worker-discord idle — DATABASE_URL/APP_ENCRYPTION_KEY unset, notify, role-sync and status-channel loops disabled',

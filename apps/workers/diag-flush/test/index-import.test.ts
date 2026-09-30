@@ -43,7 +43,7 @@ describe('diag-flush index', () => {
   it('parseEntry parses valid entry', () => {
     const fields = [
       'id',
-      'abc',
+      '019dbaa5-0000-7000-8000-0000000000ab',
       'ts',
       '2026-01-01T00:00:00Z',
       'component',
@@ -59,7 +59,7 @@ describe('diag-flush index', () => {
     ];
     const result = parseEntry(fields);
     expect(result).not.toBeNull();
-    expect(result?.id).toBe('abc');
+    expect(result?.id).toBe('019dbaa5-0000-7000-8000-0000000000ab');
     expect(result?.component).toBe('bridge');
     expect(result?.payload).toBe('{"x":1}');
   });

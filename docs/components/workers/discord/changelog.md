@@ -13,6 +13,9 @@
 - A stream discovered after the loop started gets its consumer group at `0`, not `$`, so the first events of a new server's `events:server:<id>` stream (including the XADD that created it) are delivered. Streams present on the first discovery still start at `$`.
 - `NOGROUP` from the multiplexed `XREADGROUP` clears the known-stream cache and re-creates the groups; a deleted and re-created stream no longer stops reading every stream until a restart.
 
+- #883: the notify loop discovers streams (`SCAN events:server:*`) and runs the `XAUTOCLAIM` sweep every 30 s instead of on every poll, and no longer writes a 24-hour dedup key for event types Discord never renders.
+- #1292: a failing `XGROUP CREATE` (e.g. `LOADING` after a Redis restart) no longer ends the notify or role-sync loop — it is retried, and a `NOGROUP` read error re-creates the group; if a loop still rejects, the worker exits 1 instead of heartbeating as healthy. The Redis client now waits for the ready check. New notify groups start at `0`, so events published before a stream was discovered are delivered.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed

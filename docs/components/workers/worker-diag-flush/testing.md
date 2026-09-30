@@ -5,6 +5,8 @@
 | Path | Tier | What it covers | What it does NOT cover |
 |---|---|---|---|
 | [`apps/workers/diag-flush/test/contract.test.ts`](../../../../apps/workers/diag-flush/test/contract.test.ts) | Unit (Tier 1) | `flushBatch()` parses XREAD entries, builds the INSERT shape, ACKs both valid and malformed entries, and short-circuits on empty input. | The main `XREADGROUP` loop, the consumer-group creation, the heartbeat publisher, the SIGTERM handler. |
+| [`apps/workers/diag-flush/test/poison-entries.test.ts`](../../../../apps/workers/diag-flush/test/poison-entries.test.ts) | Unit (Tier 1) | #872: `parseEntry` rejects non-UUID ids, bad `ts`, unknown severity and non-JSON payload; `flushBatch` isolates a row Postgres rejects (SQLSTATE 22/23) and acks the batch, but leaves it pending on a transient failure; `reclaimPendingEntries` walks the `XAUTOCLAIM` cursor and flushes what it claims. | The real Postgres error codes — see the integration file. |
+| [`apps/workers/diag-flush/test/flush-batch.integration.test.ts`](../../../../apps/workers/diag-flush/test/flush-batch.integration.test.ts) | Integration (Tier 2, needs `DATABASE_URL`) | A batch holding a row with no partition (`ts` in 2001) still stores its good rows and acks all three entries. | Redis — `xack` is a spy. |
 | [`apps/workers/diag-flush/test/diag-lifecycle.test.ts`](../../../../apps/workers/diag-flush/test/diag-lifecycle.test.ts) | Unit (Tier 1) | `emitStarted` / `emitStopped` produce the expected `diag.emit` payloads. | The full `main()` boot sequence — these helpers are exported for unit-testability. |
 | [`apps/workers/diag-flush/test/journald.test.ts`](../../../../apps/workers/diag-flush/test/journald.test.ts) | Unit (Tier 1) | `parseJournaldLine` (8 cases), `handleJournaldLine` (3 cases), and `startJournaldForwarder.drain()` (2 cases). The drain cases use a fake child (a `node:events.EventEmitter` with `stdout`/`stderr` sub-emitters and a stubbed `kill`) injected via `spawnFn`, plus a controllable slow `xadd` to assert `drain()` does NOT resolve while a handler is pending and DOES resolve once the handler finishes. | The `journalctl` subprocess itself — not spawned in unit tests. End-to-end coverage requires a live `panel-host-bridge` journal. |
 
@@ -14,7 +16,7 @@
 pnpm --filter @squad/worker-diag-flush test
 ```
 
-No infrastructure required — the suite mocks `sql.unsafe` and `redis.xack` with `vi.fn()`. Total runtime ~300 ms.
+The unit files need no infrastructure — they mock `sql.unsafe` and `redis.xack` with `vi.fn()`. `flush-batch.integration.test.ts` needs a migrated database in `DATABASE_URL` (see `scripts/new-test-db.sh`) and is skipped without one.
 
 ## Test cases
 

@@ -63,17 +63,17 @@ async function readPreviousStatus(redis: Redis, serverId: string): Promise<SyncS
 }
 
 async function publishStatus(redis: Redis, serverId: string, status: SyncStatus): Promise<void> {
-  // §2.7.7 — preserve `unreachable_since` across consecutive failed
-  // attempts so the UI can compute outage duration. Reset on any
-  // non-unreachable transition.
+  // §2.7.7 — keep `unreachable_since` for the whole outage so the UI can
+  // compute its duration. Every attempt first publishes `syncing`, so that
+  // intermediate state carries the outage start forward instead of ending it
+  // (#871); only a completed check (`in_sync`, `drift`, `unknown`) clears it.
   const next: SyncStatus = { ...status };
-  if (status.state === 'unreachable') {
+  if (status.state === 'unreachable' || status.state === 'syncing') {
     if (!next.unreachable_since) {
       const prev = await readPreviousStatus(redis, serverId);
       next.unreachable_since =
-        prev?.state === 'unreachable' && prev.unreachable_since
-          ? prev.unreachable_since
-          : new Date().toISOString();
+        prev?.unreachable_since ??
+        (status.state === 'unreachable' ? new Date().toISOString() : null);
     }
   } else {
     next.unreachable_since = null;

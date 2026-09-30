@@ -132,4 +132,36 @@ describe('syncSource', () => {
     expect(deps.decryptAuthHeader).toHaveBeenCalledWith(Buffer.from('blob'));
     expect(deps.fetchBanList).toHaveBeenCalledWith('https://example.com/bans.cfg', 'Bearer token');
   });
+
+  it('keeps a merged sync successful when publishing the completion event fails (#856)', async () => {
+    const deps = makeDeps({
+      persistAndPublish: vi.fn().mockRejectedValue(new Error('redis down')),
+      diag: { emit: vi.fn().mockRejectedValue(new Error('redis down')) },
+    });
+
+    const report = await syncSource(deps, makeSource({ consecutiveFailures: 2 }));
+
+    expect(report.ok).toBe(true);
+    expect(deps.updateSourceOk).toHaveBeenCalledOnce();
+    expect(deps.updateSourceError).not.toHaveBeenCalled();
+    expect(deps.raiseFailureAlert).not.toHaveBeenCalled();
+  });
+
+  it('never rejects when recording a failure fails too (#856)', async () => {
+    const deps = makeDeps({
+      fetchBanList: vi.fn().mockRejectedValue(new FetchSourceError('network', 'ECONNRESET')),
+      updateSourceError: vi.fn().mockRejectedValue(new Error('db down')),
+      persistAndPublish: vi.fn().mockRejectedValue(new Error('db down')),
+      diag: { emit: vi.fn().mockRejectedValue(new Error('redis down')) },
+      raiseFailureAlert: vi.fn().mockRejectedValue(new Error('db down')),
+    });
+
+    const report = await syncSource(
+      deps,
+      makeSource({ consecutiveFailures: ALERT_CONSECUTIVE_FAILURE_THRESHOLD - 1 }),
+    );
+
+    expect(report).toMatchObject({ ok: false, error: 'ECONNRESET' });
+    expect(deps.raiseFailureAlert).toHaveBeenCalledOnce();
+  });
 });

@@ -31,8 +31,16 @@ export interface AdminsCfgSyncEvent {
 export interface ClanPriorityExpiryTickDeps {
   now?: Date;
   findExpiredUnprocessedClans(now: Date): Promise<ExpiredClan[]>;
-  markProcessed(clanIds: string[], event: AdminsCfgSyncEvent): Promise<{ enqueued: number }>;
-  writeAuditEntry(entry: ClanPriorityExpiryAuditEntry): Promise<void>;
+  /**
+   * Marks the candidates processed, writes their audit rows and enqueues the
+   * sync in one transaction; returns the clans actually expired (see
+   * {@link expireClans}).
+   */
+  expireClans(
+    candidates: ExpiredClan[],
+    now: Date,
+    event: AdminsCfgSyncEvent,
+  ): Promise<{ expired: ExpiredClan[]; enqueued: number }>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -43,9 +51,10 @@ export interface ClanPriorityExpiryTickResult {
 
 /**
  * Detect clans whose `priority_expires_at` has crossed `now` and haven't
- * been processed yet, mark them processed, write one audit entry per clan,
- * and publish exactly one active admins-cfg sync so the config-sync worker
- * drops their members from the managed Admins.cfg segment.
+ * been processed yet, then — in one transaction — mark them processed, write
+ * one audit entry per clan, and enqueue exactly one active admins-cfg sync so
+ * the config-sync worker drops their members from the managed Admins.cfg
+ * segment. A clan extended between the select and the update is left alone.
  *
  * This never mutates `clan_members.has_priority` — the toggle state is
  * preserved so that extending `priority_expires_at` (via `PATCH
@@ -75,37 +84,17 @@ export async function runClanPriorityExpiryTick(
       enqueued_at: now.toISOString(),
       request_id: `clan-priority-expirer:${now.toISOString()}`,
     };
-    const { enqueued } = await deps.markProcessed(
-      expired.map((clan) => clan.clanId),
-      event,
-    );
-
-    for (const clan of expired) {
-      await deps.writeAuditEntry({
-        actor: { kind: 'system', label: 'clan-priority-expirer' },
-        actorIp: null,
-        actionType: 'clan.priority.expire',
-        targetType: 'clan',
-        targetId: clan.clanId,
-        before: {
-          priority_expires_at: clan.priorityExpiresAt.toISOString(),
-          priority_expiry_processed: false,
-        },
-        after: { priority_expiry_processed: true },
-        context: { clan_name: clan.clanName, expired_at: now.toISOString() },
-        statusCode: 200,
-      });
-    }
+    const { expired: processed, enqueued } = await deps.expireClans(expired, now, event);
 
     await deps.diag.emit({
       component: 'worker-clan-priority-expirer',
       kind: 'clan_priority_expirer.run_ok',
       severity: 'info',
-      message: `expired ${expired.length} clan priority window(s)`,
-      payload: { expiredClans: expired.length, enqueued },
+      message: `expired ${processed.length} clan priority window(s)`,
+      payload: { expiredClans: processed.length, enqueued },
     });
 
-    return { expiredClans: expired.length, enqueued };
+    return { expiredClans: processed.length, enqueued };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await deps.diag.emit({
@@ -124,8 +113,7 @@ export function createClanPriorityExpiryDeps(
 ): Omit<ClanPriorityExpiryTickDeps, 'now' | 'diag'> {
   return {
     findExpiredUnprocessedClans: (now) => findExpiredUnprocessedClans(db, now),
-    markProcessed: (clanIds, event) => markProcessed(db, clanIds, event),
-    writeAuditEntry: (entry) => writeClanPriorityExpiryAuditEntry(db, entry),
+    expireClans: (candidates, now, event) => expireClans(db, candidates, now, event),
   };
 }
 
@@ -182,25 +170,75 @@ export async function findExpiredUnprocessedClans(
   });
 }
 
-export async function markProcessed(
+/** The audit entry recorded for one expired clan. */
+export function buildClanPriorityExpiryAuditEntry(
+  clan: ExpiredClan,
+  now: Date,
+): ClanPriorityExpiryAuditEntry {
+  return {
+    actor: { kind: 'system', label: 'clan-priority-expirer' },
+    actorIp: null,
+    actionType: 'clan.priority.expire',
+    targetType: 'clan',
+    targetId: clan.clanId,
+    before: {
+      priority_expires_at: clan.priorityExpiresAt.toISOString(),
+      priority_expiry_processed: false,
+    },
+    after: { priority_expiry_processed: true },
+    context: { clan_name: clan.clanName, expired_at: now.toISOString() },
+    statusCode: 200,
+  };
+}
+
+/**
+ * Expires `candidates` in one transaction: sets `priority_expiry_processed`,
+ * writes one audit row per clan and enqueues the admins-cfg sync, so a
+ * failure part-way leaves every clan unprocessed for the next tick instead of
+ * processed without its audit row (#866).
+ *
+ * The update re-checks the selection conditions (not processed, expired, not
+ * deleted): a `PATCH /api/v1/clans/:id/expire` that extended a clan after it
+ * was selected reset its flag, and must not be overwritten (#865). Only the
+ * clans the update actually changed are audited and returned.
+ */
+export async function expireClans(
   db: DatabaseClient,
-  clanIds: string[],
+  candidates: ExpiredClan[],
+  now: Date,
   event: AdminsCfgSyncEvent,
-): Promise<{ enqueued: number }> {
-  if (clanIds.length === 0) return { enqueued: 0 };
+): Promise<{ expired: ExpiredClan[]; enqueued: number }> {
+  if (candidates.length === 0) return { expired: [], enqueued: 0 };
   return db.transaction(async (tx) => {
     const updated = await tx
       .update(clans)
       .set({ priorityExpiryProcessed: true })
-      .where(inArray(clans.id, clanIds))
+      .where(
+        and(
+          inArray(
+            clans.id,
+            candidates.map((clan) => clan.clanId),
+          ),
+          eq(clans.priorityExpiryProcessed, false),
+          lte(clans.priorityExpiresAt, now),
+          isNull(clans.deletedAt),
+        ),
+      )
       .returning({ id: clans.id });
-    if (updated.length === 0) return { enqueued: 0 };
-    return enqueueAdminsCfgSyncForAllServers(tx, event);
+    const updatedIds = new Set(updated.map((row) => row.id));
+    const expired = candidates.filter((clan) => updatedIds.has(clan.clanId));
+    if (expired.length === 0) return { expired, enqueued: 0 };
+
+    for (const clan of expired) {
+      await writeClanPriorityExpiryAuditEntry(tx, buildClanPriorityExpiryAuditEntry(clan, now));
+    }
+    const { enqueued } = await enqueueAdminsCfgSyncForAllServers(tx, event);
+    return { expired, enqueued };
   });
 }
 
 export async function writeClanPriorityExpiryAuditEntry(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   entry: ClanPriorityExpiryAuditEntry,
 ): Promise<void> {
   await db.insert(auditLog).values({

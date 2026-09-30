@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SyncReport } from '../src/sync-source.js';
 import { backoffDelayMs, type DueSource, isDue, runBanSyncTick } from '../src/tick.js';
 
 const NOW = new Date('2026-07-14T12:00:00.000Z');
@@ -68,6 +69,7 @@ describe('runBanSyncTick', () => {
       listEnabledSources: async () => [source()],
       syncOne,
       backoff,
+      inFlight: new Set(),
     });
     expect(result).toEqual({ synced: 1, failed: 0, skippedBackoff: 0 });
     expect(backoff.has('source-1')).toBe(false);
@@ -82,6 +84,7 @@ describe('runBanSyncTick', () => {
       ],
       syncOne,
       backoff: new Map(),
+      inFlight: new Set(),
     });
     expect(result).toEqual({ synced: 0, failed: 0, skippedBackoff: 0 });
     expect(syncOne).not.toHaveBeenCalled();
@@ -95,6 +98,7 @@ describe('runBanSyncTick', () => {
       listEnabledSources: async () => [source()],
       syncOne,
       backoff,
+      inFlight: new Set(),
     });
     expect(result).toEqual({ synced: 0, failed: 0, skippedBackoff: 1 });
     expect(syncOne).not.toHaveBeenCalled();
@@ -117,9 +121,65 @@ describe('runBanSyncTick', () => {
       listEnabledSources: async () => [source({ consecutiveFailures: 0 })],
       syncOne,
       backoff,
+      inFlight: new Set(),
     });
     expect(result).toEqual({ synced: 0, failed: 1, skippedBackoff: 0 });
     const entry = backoff.get('source-1');
     expect(entry?.nextAttemptAt).toBe(NOW.getTime() + backoffDelayMs(1));
+  });
+
+  it('never syncs a source twice at once when ticks overlap (#853)', async () => {
+    let release: () => void = () => undefined;
+    const syncOne = vi.fn(
+      () =>
+        new Promise<SyncReport>((resolve) => {
+          release = () =>
+            resolve({
+              ok: true,
+              added: 0,
+              updated: 0,
+              revoked: 0,
+              skipped: 0,
+              durationMs: 1,
+              bytes: 0,
+            });
+        }),
+    );
+    const deps = {
+      now: NOW,
+      listEnabledSources: async () => [source()],
+      syncOne,
+      backoff: new Map(),
+      inFlight: new Set<string>(),
+    };
+
+    const first = runBanSyncTick(deps);
+    await vi.waitFor(() => expect(syncOne).toHaveBeenCalledOnce());
+    const second = await runBanSyncTick(deps);
+    release();
+
+    expect(second).toEqual({ synced: 0, failed: 0, skippedBackoff: 0 });
+    expect(await first).toEqual({ synced: 1, failed: 0, skippedBackoff: 0 });
+    expect(syncOne).toHaveBeenCalledOnce();
+    expect(deps.inFlight.size).toBe(0);
+  });
+
+  it('stops between sources once shutdown is requested', async () => {
+    let stop = false;
+    const syncOne = vi.fn(async () => {
+      stop = true;
+      return { ok: true, added: 0, updated: 0, revoked: 0, skipped: 0, durationMs: 1, bytes: 0 };
+    });
+
+    await runBanSyncTick({
+      now: NOW,
+      listEnabledSources: async () => [source({ id: 'a' }), source({ id: 'b' })],
+      syncOne,
+      backoff: new Map(),
+      inFlight: new Set(),
+      shouldStop: () => stop,
+    });
+
+    expect(syncOne).toHaveBeenCalledOnce();
   });
 });

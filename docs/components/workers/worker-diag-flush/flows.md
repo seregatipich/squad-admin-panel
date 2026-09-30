@@ -25,7 +25,7 @@ Per loop iteration:
 3. Otherwise, for each `[streamKey, entries]` pair (only one because we read from a single stream):
    1. Call `flushBatch({ sql, redis, group: 'diag-flush', stream: 'diag:queue', entries })`.
    2. `flushBatch` walks `entries` and calls `parseEntry(fields)` on each. Valid rows go into `validRows`; the streamId is recorded in `ackIds` regardless.
-   3. If `validRows.length > 0`, build one parameterised INSERT (placeholders + 10 args per row, casts: `::timestamptz`, `::uuid`, `::bigint`, `::jsonb`) and `await sql.unsafe(text, args)`. The INSERT ends with `ON CONFLICT (id, ts) DO NOTHING`.
+   3. If `validRows.length > 0`, build one parameterised INSERT (placeholders + 10 args per row, casts: `::timestamptz`, `::uuid`, `::jsonb`) and `await sql.unsafe(text, args)`. The INSERT ends with `ON CONFLICT (id, ts) DO NOTHING`; a row rejected for its own data is isolated as described under "Error flow — Postgres rejects a row".
    4. `await redis.xack('diag:queue', 'diag-flush', ...ackIds)`.
 
 ```text
@@ -52,27 +52,36 @@ XACK diag:queue diag-flush <id1> <id2> ...
 
 If the entire batch fails to parse (every entry malformed), the INSERT step is skipped but every `streamId` is still `XACK`ed. This is intentional: malformed entries are unrecoverable and would otherwise pile up in `pending`, blocking the consumer.
 
-## Error flow — Postgres rejects the INSERT
+## Error flow — Postgres rejects a row
 
-1. `sql.unsafe` rejects (e.g. constraint violation on `severity` CHECK, or pg restart).
-2. The exception propagates out of `flushBatch`.
-3. The main-loop `catch` logs `error` with `flush iteration failed`.
-4. `await new Promise(r => setTimeout(r, 1000))` — back-off 1 s.
-5. Loop iteration resumes. The previous `XACK` did not fire, so `XREADGROUP` redelivers the same batch on next call (because we used `>` and never acknowledged).
-6. `ON CONFLICT (id, ts) DO NOTHING` makes the second insert idempotent if the first had partially landed; otherwise the whole batch retries.
+1. The multi-row INSERT rejects with SQLSTATE class 22 (data exception) or 23 (integrity violation) — e.g. a `ts` with no partition after a long outage, or a `server_id` whose server was deleted.
+2. `flushBatch` retries the rows one by one. A row rejected again for its own data is logged (`diag entry rejected by Postgres; ACKing without insert`) and dropped; the others are inserted (#872).
+3. Every entry of the batch is `XACK`ed.
 
-## Error flow — Redis `XACK` rejects
+## Error flow — Postgres or Redis unavailable
 
-Same retry semantics as the Postgres path. The INSERT may have committed but the `XACK` did not — the redelivery hits `ON CONFLICT` and is a no-op, then `XACK` is reissued.
+1. The INSERT (or a single-row retry, or the `XACK`) rejects with anything that is not a row rejection — connection refused, a restart, a timeout.
+2. The exception propagates out of `flushBatch`; the main-loop `catch` logs `flush iteration failed` and backs off 1 s. Nothing of the batch is acknowledged.
+3. The loop only reads new entries (`>`), so the batch is picked up by the reclaim sweep below; `ON CONFLICT (id, ts) DO NOTHING` makes a partial earlier insert harmless.
+
+## Background — pending-entry reclaim
+
+At startup and then every 30 s, `reclaimPendingEntries` runs `XAUTOCLAIM diag:queue diag-flush <consumer> 60000 …` until the cursor returns to `0-0` and flushes the claimed entries like a fresh batch. It picks up batches whose flush failed and entries read by a consumer that died (a restart changes the consumer name), including entries read by the last `XREADGROUP` before a shutdown.
 
 ## Error flow — malformed entry
 
-Field-list missing one or more of `id`, `ts`, `component`, `severity`, `kind`, `message`:
+An entry Postgres could never store:
+
+- a missing `id`, `ts`, `component`, `severity`, `kind` or `message`;
+- an `id`, `server_id` or `actor_player_id` that is not a UUID;
+- a `ts` that does not parse (a valid one is normalised to ISO-8601 UTC);
+- a `severity` outside `debug`/`info`/`warn`/`error`/`fatal`;
+- a `payload` that is not JSON.
 
 1. `parseEntry` returns `null`.
 2. `flushBatch` logs `warn` with `streamId` and the raw `fields`.
 3. The `streamId` is still added to `ackIds` so the entry leaves the pending list.
-4. The bad row is dropped permanently. There is no dead-letter queue; we accept the loss because the row was never well-formed in the first place. Operators can grep `docker logs worker-diag-flush | grep "malformed diag entry"` to inventory drops.
+4. The bad row is dropped permanently. There is no dead-letter queue; we accept the loss because the row was never well-formed in the first place. Operators can grep `docker logs worker-diag-flush | grep -E "malformed diag entry|rejected by Postgres"` to inventory drops.
 
 ## Background — journald forwarder
 

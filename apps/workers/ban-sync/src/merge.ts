@@ -1,6 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { externalBans } from '@squad/db/schema';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, inArray, isNull, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedBan } from './adapters/index.js';
 
@@ -142,12 +142,16 @@ export function planMerge(existing: ExistingBanRow[], incoming: ParsedBan[]): Me
 }
 
 /**
- * Rows per INSERT / ids per revoke UPDATE. Each inserted row binds 10
- * parameters and postgres.js rejects a statement with more than 65534, so a
- * single-statement import of a large public Bans.cfg (~6.5k+ new rows) would
- * fail every sync. 1000 keeps every statement far below that cap.
+ * Rows per INSERT / ids per revoke UPDATE / rows per batched update. Each
+ * inserted row binds 10 parameters and postgres.js rejects a statement with
+ * more than 65534, so a single-statement import of a large public Bans.cfg
+ * (~6.5k+ new rows) would fail every sync. 1000 keeps every statement far
+ * below that cap.
  */
 export const MERGE_BATCH_SIZE = 1000;
+
+/** Rows per batched `UPDATE ... FROM (VALUES ...)` (6 bind parameters each). */
+const UPDATE_BATCH_ROWS = 500;
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -158,47 +162,63 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 }
 
 /**
- * Applies a `MergePlan` to `external_bans` in one transaction: batched
- * inserts, per-row updates, and batched revokes — never a DELETE. Inserts and
- * revokes are split into `MERGE_BATCH_SIZE` statements so a plan of any size
- * stays under the driver's bound-parameter cap; the transaction keeps a
- * partially applied plan from ever becoming visible.
+ * Applies a `MergePlan` to `external_bans` — batched inserts, batched updates
+ * and batched revokes, never a DELETE — in one transaction (#854), so a
+ * failure or a shutdown mid-apply leaves the previous state intact instead of
+ * new bans without the revocations that belong with them. Statements are split
+ * into batches so a plan of any size stays under the driver's bound-parameter
+ * cap.
+ *
+ * Inserts skip rows that already exist (`ON CONFLICT DO NOTHING` on the
+ * `external_bans_dedup_key` index): a manual sync overlapping a scheduled one
+ * must not fail on a ban the other just inserted (#853). `added` counts the
+ * rows actually inserted.
  */
 export async function applyMergePlan(
   db: DatabaseClient,
   sourceId: string,
   plan: MergePlan,
 ): Promise<ApplyMergeResult> {
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    let added = 0;
     for (const batch of chunk(plan.toInsert, MERGE_BATCH_SIZE)) {
-      await tx.insert(externalBans).values(
-        batch.map((record) => ({
-          id: uuidv7(),
-          sourceId,
-          steamId64: record.steamId64,
-          eosId: record.eosId,
-          nickname: record.nickname,
-          reason: record.reason,
-          adminName: record.adminName,
-          issuedAt: record.issuedAt,
-          expiresAt: record.expiresAt,
-          raw: record.raw ?? {},
-        })),
-      );
+      const inserted = await tx
+        .insert(externalBans)
+        .values(
+          batch.map((record) => ({
+            id: uuidv7(),
+            sourceId,
+            steamId64: record.steamId64,
+            eosId: record.eosId,
+            nickname: record.nickname,
+            reason: record.reason,
+            adminName: record.adminName,
+            issuedAt: record.issuedAt,
+            expiresAt: record.expiresAt,
+            raw: record.raw ?? {},
+          })),
+        )
+        .onConflictDoNothing()
+        .returning({ id: externalBans.id });
+      added += inserted.length;
     }
 
-    for (const update of plan.toUpdate) {
-      await tx
-        .update(externalBans)
-        .set({
-          nickname: update.nickname,
-          reason: update.reason,
-          adminName: update.adminName,
-          expiresAt: update.expiresAt,
-          raw: update.raw ?? {},
-          revokedAt: update.revokedAt,
-        })
-        .where(eq(externalBans.id, update.id));
+    for (const batch of chunk(plan.toUpdate, UPDATE_BATCH_ROWS)) {
+      const rows = batch.map(
+        (update) =>
+          sql`(${update.id}::uuid, ${update.nickname}::text, ${update.reason}::text, ${update.adminName}::text, ${update.expiresAt}::timestamptz, ${JSON.stringify(update.raw ?? {})}::jsonb)`,
+      );
+      await tx.execute(sql`
+        UPDATE external_bans AS target
+        SET nickname = source.nickname,
+            reason = source.reason,
+            admin_name = source.admin_name,
+            expires_at = source.expires_at,
+            raw = source.raw,
+            revoked_at = NULL
+        FROM (VALUES ${sql.join(rows, sql`, `)})
+          AS source (id, nickname, reason, admin_name, expires_at, raw)
+        WHERE target.id = source.id`);
     }
 
     const revokedAt = new Date();
@@ -208,11 +228,11 @@ export async function applyMergePlan(
         .set({ revokedAt })
         .where(and(inArray(externalBans.id, ids), isNull(externalBans.revokedAt)));
     }
-  });
 
-  return {
-    added: plan.toInsert.length,
-    updated: plan.toUpdate.length,
-    revoked: plan.toRevokeIds.length,
-  };
+    return {
+      added,
+      updated: plan.toUpdate.length,
+      revoked: plan.toRevokeIds.length,
+    };
+  });
 }

@@ -13,6 +13,16 @@
 - A stream discovered after the loop started gets its consumer group at `0`, not `$`, so the first events of a new server's `events:server:<id>` stream (including the XADD that created it) are delivered. Streams present on the first discovery still start at `$`.
 - `NOGROUP` from the multiplexed `XREADGROUP` clears the known-stream cache and re-creates the groups; a deleted and re-created stream no longer stops reading every stream until a restart.
 
+## 2026-09-28
+
+### Fixed
+
+- #841: the dispatch loop no longer sets the dedup key before the side effect. It now reads the key, runs the plugins and the rule hook, and only then sets the key and acks; a failed rule hook (e.g. the database is down) leaves the entry pending, and a periodic `XAUTOCLAIM` sweep retries entries idle for more than 30 s.
+- #843: stream discovery (`SCAN events:server:*`) and the reclaim sweep run every 30 s instead of on every poll.
+- #844: a failing `XGROUP CREATE` no longer ends the loop — the stream is skipped and retried; a `NOGROUP` read error re-creates the groups; new groups start at `0`, so events published before a stream was discovered are delivered.
+- #1292: if the dispatch loop ever rejects, the worker exits 1 instead of heartbeating while consuming nothing.
+- #842: the `time_of_day` cooldown key is `automation:tod:<ruleId>:<serverId>`, so a global rule fires on every server; a serverless `events:global` envelope no longer spends the window of an RCON rule, and a failed firing releases it.
+
 ## 2026-07-24
 
 ### Added

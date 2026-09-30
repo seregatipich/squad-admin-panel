@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { adminsCfgSyncOutbox, clans, createDatabaseClient, servers } from '@squad/db';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { markProcessed } from '../src/tick.js';
+import { expireClans } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -42,12 +42,17 @@ describeIfDb('clan priority expiry transactional outbox', () => {
       await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt))
     ).map((row) => row.id);
 
-    const result = await markProcessed(db, [clanId], {
-      reason: 'clan.priority.expire',
-      actor_player_id: null,
-      enqueued_at: '2026-07-14T10:00:00.000Z',
-      request_id: requestId,
-    });
+    const result = await expireClans(
+      db,
+      [{ clanId, clanName: 'Outbox', priorityExpiresAt: new Date('2026-07-14T09:00:00.000Z') }],
+      new Date('2026-07-14T10:00:00.000Z'),
+      {
+        reason: 'clan.priority.expire',
+        actor_player_id: null,
+        enqueued_at: '2026-07-14T10:00:00.000Z',
+        request_id: requestId,
+      },
+    );
 
     expect(result.enqueued).toBe(activeIds.length);
     expect(

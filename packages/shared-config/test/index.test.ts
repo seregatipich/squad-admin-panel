@@ -25,4 +25,9 @@ describe('shared-config index re-exports', () => {
     expect(typeof root.PERMISSION_KEYS).toBeDefined();
     expect(typeof root.resolveRconHost).toBe('function');
   });
+
+  it('re-exports the outbound URL guards', () => {
+    expect(typeof root.checkOutboundUrl).toBe('function');
+    expect(typeof root.isPublicUnicastAddress).toBe('function');
+  });
 });

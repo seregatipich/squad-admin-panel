@@ -591,3 +591,40 @@ describeIfDb('can_manage_ban_sources is only effective with panel_access', () =>
     expect(ctx.canManageBanSources).toBe(false);
   });
 });
+
+describeIfDb('ban-sources URL guard (#855)', () => {
+  it.each([
+    'http://127.0.0.1:3000/api/v1/players',
+    'http://localhost:3000/',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.5/internal',
+    'http://[::1]/',
+    'file:///etc/passwd',
+    'ftp://bans.example.com/bans.cfg',
+  ])('refuses to create a source that points at %s', async (url) => {
+    const { statusCode, body } = await createSource(managerCookie, { url });
+    expect(statusCode).toBe(400);
+    expect(JSON.stringify(body)).toContain('url_not_allowed');
+  });
+
+  it('refuses to repoint an existing source at an internal address', async () => {
+    const created = await createSource(managerCookie);
+    expect(created.statusCode).toBe(201);
+    const id = created.body.id as string;
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data/' }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('url_not_allowed');
+
+    const [row] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, id));
+    expect(row?.url).toBe('https://collabans.example.com/bans.cfg');
+  });
+});
