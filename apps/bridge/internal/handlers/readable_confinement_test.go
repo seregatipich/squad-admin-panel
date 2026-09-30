@@ -59,13 +59,6 @@ func TestFileReadStream_RejectsSymlinkEscapingRoot(t *testing.T) {
 	assertNoSecret(t, resp, len(chunks))
 }
 
-func TestFileReadTail_RejectsSymlinkEscapingRoot(t *testing.T) {
-	_, link, _ := depotRootWithEscapingLink(t, "SquadGame-evil.log")
-	params, _ := json.Marshal(map[string]any{"path": link})
-	resp := (&Dispatcher{}).Handle(context.Background(), &rpc.Request{ID: "req-symlink-tail", Method: "file_read_tail", Params: params}, func(rpc.StreamFrame) {})
-	assertNoSecret(t, resp, 0)
-}
-
 func TestFileRead_RejectsSymlinkEscapingRoot(t *testing.T) {
 	_, link, _ := depotRootWithEscapingLink(t, "Server.cfg")
 	params, _ := json.Marshal(map[string]any{"path": link})

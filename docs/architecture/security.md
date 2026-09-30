@@ -24,11 +24,11 @@
 - **Browser → Caddy**: TLS terminates at Caddy.
 - **Caddy → web/api containers**: Docker bridge network, only ports 80/443 are published.
 - **Containers → bridge**: unix socket bind-mounted into containers that need it (api, worker-rcon, worker-log-ingest). Group membership (`panel`) is checked on every connection.
-- **Bridge → host**: bridge runs as root with `CAP_NET_ADMIN` (for `ufw`). All file paths are allowlisted under `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg`, `/var/lib/squad-panel/saved/{uuid}/**`, and `/var/lib/docker/volumes/squad-depot/**` (RO).
+- **Bridge → host**: bridge runs as root with `CAP_NET_ADMIN` (for `ufw`) plus `CAP_CHOWN`/`CAP_FOWNER` (sidecar socket directory ownership). All file paths are allowlisted under `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg`, `/var/lib/squad-panel/saved/{uuid}/**`, and `/var/lib/docker/volumes/squad-depot/**` (RO).
 
 ## systemd-analyze score
 
-`systemd-analyze security panel-host-bridge.service` target is **< 3.0**. Current score is **2.0 OK** with only `CAP_NET_ADMIN` remaining (needed for `ufw`). The unit at [`apps/bridge/deploy/panel-host-bridge.service`](../../apps/bridge/deploy/panel-host-bridge.service) sets `ProtectHome=yes`, which means the bridge cannot read `/root/`. Harmless docker-CLI warnings about `/root/.docker/config.json` are expected.
+`systemd-analyze security panel-host-bridge.service` target is **< 3.0**. Offline score of the unit file is **2.7 OK** with `CAP_NET_ADMIN` (needed for `ufw`) and `CAP_CHOWN`/`CAP_FOWNER` (needed to hand the rnsquadjs sidecar's `sock/` directory to uid 1001) in the bounding set. The unit at [`apps/bridge/deploy/panel-host-bridge.service`](../../apps/bridge/deploy/panel-host-bridge.service) sets `ProtectHome=yes`, which means the bridge cannot read `/root/`. Harmless docker-CLI warnings about `/root/.docker/config.json` are expected.
 
 ## Secrets
 

@@ -36,15 +36,10 @@ func TestInfoReturnsPopulated(t *testing.T) {
 	}
 }
 
-func TestMetricsReturnsSample(t *testing.T) {
-	_, prev, err := Metrics(nil, "/")
-	if err != nil {
-		t.Fatalf("first Metrics: %v", err)
-	}
-	cur, _, err := Metrics(prev, "/")
-	if err != nil {
-		t.Fatalf("second Metrics: %v", err)
-	}
+func TestMetricsCacheReturnsLiveSample(t *testing.T) {
+	cache := NewMetricsCache(nil, nil, 0)
+	cache.Sample("/")
+	cur := cache.Sample("/")
 	if cur.RAMTotalBytes <= 0 {
 		t.Error("ram total should be positive")
 	}
@@ -212,8 +207,7 @@ func TestMetricsCache_FirstCallReturnsZeroDeltas(t *testing.T) {
 		return &sample{
 			idle:      uint64(cnt) * 1000,
 			total:     uint64(cnt) * 10000,
-			netRx:     uint64(cnt) * 5000,
-			netTx:     uint64(cnt) * 7000,
+			net:       map[string]netCounters{"eth0": {rx: uint64(cnt) * 5000, tx: uint64(cnt) * 7000}},
 			sampledAt: clk.Now(),
 		}
 	}
@@ -231,8 +225,8 @@ func TestMetricsCache_FirstCallReturnsZeroDeltas(t *testing.T) {
 func TestMetricsCache_BelowThresholdSkipsDelta(t *testing.T) {
 	clk := &fakeClock{now: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}
 	calls := []*sample{
-		{idle: 1000, total: 10000, netRx: 5000, netTx: 7000, sampledAt: clk.Now()},
-		{idle: 2000, total: 20000, netRx: 15000, netTx: 21000, sampledAt: clk.Now().Add(50 * time.Millisecond)},
+		{idle: 1000, total: 10000, net: map[string]netCounters{"eth0": {rx: 5000, tx: 7000}}, sampledAt: clk.Now()},
+		{idle: 2000, total: 20000, net: map[string]netCounters{"eth0": {rx: 15000, tx: 21000}}, sampledAt: clk.Now().Add(50 * time.Millisecond)},
 	}
 	idx := 0
 	cap := func() *sample {
@@ -255,8 +249,8 @@ func TestMetricsCache_BelowThresholdSkipsDelta(t *testing.T) {
 func TestMetricsCache_AboveThresholdComputesDelta(t *testing.T) {
 	clk := &fakeClock{now: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}
 	calls := []*sample{
-		{idle: 1000, total: 10000, netRx: 5000, netTx: 7000, sampledAt: clk.Now()},
-		{idle: 2000, total: 20000, netRx: 15000, netTx: 21000, sampledAt: clk.Now().Add(250 * time.Millisecond)},
+		{idle: 1000, total: 10000, net: map[string]netCounters{"eth0": {rx: 5000, tx: 7000}}, sampledAt: clk.Now()},
+		{idle: 2000, total: 20000, net: map[string]netCounters{"eth0": {rx: 15000, tx: 21000}}, sampledAt: clk.Now().Add(250 * time.Millisecond)},
 	}
 	idx := 0
 	cap := func() *sample {
@@ -284,3 +278,71 @@ type fakeClock struct {
 }
 
 func (f *fakeClock) Now() time.Time { return f.now }
+
+// Regression for #45 (finding #410): when a container restarts its veth
+// disappears and the summed counters drop; a bare uint64 subtraction then
+// wrapped to ~1.8e19 B/s. Counters that went backwards (and an idle counter
+// that stepped back) must never produce garbage rates.
+func TestMetricsCache_DecreasingCountersNeverWrap(t *testing.T) {
+	clk := &fakeClock{now: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}
+	calls := []*sample{
+		{idle: 5000, total: 10000, net: map[string]netCounters{"eth0": {rx: 15000, tx: 21000}}, sampledAt: clk.Now()},
+		{idle: 4000, total: 20000, net: map[string]netCounters{"eth0": {rx: 5000, tx: 7000}}, sampledAt: clk.Now().Add(time.Second)},
+	}
+	idx := 0
+	cache := NewMetricsCache(func() *sample { s := calls[idx]; idx++; return s }, clk.Now, 200*time.Millisecond)
+	cache.Sample("/")
+	m := cache.Sample("/")
+	if m.NetRxBytesPerSec < 0 || m.NetRxBytesPerSec > 1e12 || m.NetTxBytesPerSec < 0 || m.NetTxBytesPerSec > 1e12 {
+		t.Fatalf("net rates wrapped: rx=%v tx=%v", m.NetRxBytesPerSec, m.NetTxBytesPerSec)
+	}
+	if m.CPUPercent < 0 || m.CPUPercent > 100 {
+		t.Fatalf("cpu_percent out of [0,100]: %v", m.CPUPercent)
+	}
+}
+
+func TestNetDelta_InterfaceChurnAndResetContributeNothing(t *testing.T) {
+	prev := map[string]netCounters{"eth0": {rx: 1000, tx: 2000}, "eth1": {rx: 500, tx: 500}}
+	cur := map[string]netCounters{"eth0": {rx: 1500, tx: 1000}, "eth2": {rx: 9999, tx: 9999}}
+	rx, tx := netDelta(prev, cur)
+	if rx != 500 || tx != 0 {
+		t.Fatalf("netDelta = (%d, %d), want (500, 0): only eth0 rx grew", rx, tx)
+	}
+}
+
+func TestParseNetDev_SkipsVirtualInterfaces(t *testing.T) {
+	const procNetDev = `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 9000 10 0 0 0 0 0 0 9000 10 0 0 0 0 0 0
+  eth0: 1000 10 0 0 0 0 0 0 2000 10 0 0 0 0 0 0
+docker0: 300 1 0 0 0 0 0 0 300 1 0 0 0 0 0 0
+br-1a2b3c: 400 1 0 0 0 0 0 0 400 1 0 0 0 0 0 0
+vethabc123: 500 1 0 0 0 0 0 0 500 1 0 0 0 0 0 0
+`
+	got := parseNetDev(strings.NewReader(procNetDev))
+	if len(got) != 1 {
+		t.Fatalf("parsed %v, want only eth0", got)
+	}
+	if got["eth0"] != (netCounters{rx: 1000, tx: 2000}) {
+		t.Fatalf("eth0 = %+v, want rx=1000 tx=2000", got["eth0"])
+	}
+}
+
+func TestCPUPercent_ClampedAndNoWrap(t *testing.T) {
+	cases := []struct {
+		name      string
+		prev, cur sample
+		want      float64
+	}{
+		{"idle stepped back", sample{idle: 5000, total: 10000}, sample{idle: 4000, total: 20000}, 100},
+		{"total unchanged", sample{idle: 1, total: 10}, sample{idle: 1, total: 10}, 0},
+		{"total went back", sample{idle: 1, total: 10}, sample{idle: 1, total: 5}, 0},
+		{"idle exceeds total delta", sample{idle: 0, total: 0}, sample{idle: 200, total: 100}, 0},
+		{"half busy", sample{idle: 0, total: 0}, sample{idle: 50, total: 100}, 50},
+	}
+	for _, c := range cases {
+		if got := cpuPercent(&c.prev, &c.cur); got != c.want {
+			t.Errorf("%s: cpuPercent = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

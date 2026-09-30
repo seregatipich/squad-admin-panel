@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -95,14 +96,17 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 		"--name", name,
 		"--restart", "unless-stopped",
 		"--network", "host",
-		"-v", spec.DepotVolume + ":/squad:ro",
-		"-v", spec.ConfigsHost + ":/squad/SquadGame/ServerConfig:rw",
-		"-v", spec.SavedHost + ":/squad/SquadGame/Saved:rw",
+	}
+	args = append(args, containerLogRotationArgs...)
+	args = append(args,
+		"-v", spec.DepotVolume+":/squad:ro",
+		"-v", spec.ConfigsHost+":/squad/SquadGame/ServerConfig:rw",
+		"-v", spec.SavedHost+":/squad/SquadGame/Saved:rw",
 		"--ulimit", fmt.Sprintf("nofile=%d:%d", spec.UlimitNofile, spec.UlimitNofile),
-		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.server_id="+spec.ServerID,
 		"--label", "panel.kind=squad-server",
 		spec.Image,
-	}
+	)
 	squadArgs := []string{
 		"RANDOM=ALWAYS",
 		fmt.Sprintf("Port=%d", spec.GamePort),
@@ -268,6 +272,18 @@ func (d *DockerRunner) socketRoot() string {
 	return validate.PanelSocketRoot
 }
 
+// containerLogRotationArgs caps the json-file logs of every container the
+// bridge starts with `docker run`, matching the compose services' x-logging
+// (10 MiB x 5 files). Without it the host's default unbounded json-file
+// driver lets a long-running game server fill the disk. Docker applies log
+// options at container creation, so existing containers keep their old
+// settings until they are recreated.
+var containerLogRotationArgs = []string{
+	"--log-driver", "json-file",
+	"--log-opt", "max-size=10m",
+	"--log-opt", "max-file=5",
+}
+
 func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, error) {
 	if err := validate.ServerUUID(spec.ServerID); err != nil {
 		return nil, err
@@ -290,6 +306,9 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		"--name", name,
 		"--label", "panel.server_id=" + spec.ServerID,
 		"--label", "panel.kind=rnsquadjs",
+		// Spares a stopped sidecar (and so its --pull never image) from
+		// SystemPrune's label!=panel.preserve=true filter.
+		"--label", "panel.preserve=true",
 		"--network", "host",
 		"--user", "1001:1001",
 		"--read-only",
@@ -298,6 +317,7 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		"-v", socketBind,
 		"-v", configBind,
 	}
+	args = append(args, containerLogRotationArgs...)
 	keys := make([]string, 0, len(spec.Env))
 	for k := range spec.Env {
 		keys = append(keys, k)
@@ -490,13 +510,18 @@ func (d *DockerRunner) Rm(ctx context.Context, name string) error {
 }
 
 type InspectResult struct {
-	Name       string            `json:"name"`
-	State      string            `json:"state"`
-	Running    bool              `json:"running"`
-	Pid        int               `json:"pid"`
-	StartedAt  string            `json:"started_at"`
-	FinishedAt string            `json:"finished_at"`
-	ExitCode   int               `json:"exit_code"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Running    bool   `json:"running"`
+	Pid        int    `json:"pid"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	ExitCode   int    `json:"exit_code"`
+	// OOMKilled is docker's State.OOMKilled: the kernel OOM killer ended
+	// the container's main process.
+	OOMKilled bool `json:"oom_killed"`
+	// Error is docker's State.Error (e.g. a failed start), omitted when empty.
+	Error      string            `json:"error,omitempty"`
 	Image      string            `json:"image"`
 	RestartCnt int               `json:"restart_count"`
 	Labels     map[string]string `json:"labels"`
@@ -527,6 +552,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 			Running    bool   `json:"Running"`
 			Pid        int    `json:"Pid"`
 			ExitCode   int    `json:"ExitCode"`
+			OOMKilled  bool   `json:"OOMKilled"`
+			Error      string `json:"Error"`
 			StartedAt  string `json:"StartedAt"`
 			FinishedAt string `json:"FinishedAt"`
 		} `json:"State"`
@@ -547,6 +574,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 		StartedAt:  raw.State.StartedAt,
 		FinishedAt: raw.State.FinishedAt,
 		ExitCode:   raw.State.ExitCode,
+		OOMKilled:  raw.State.OOMKilled,
+		Error:      raw.State.Error,
 		Image:      raw.Config.Image,
 		RestartCnt: raw.RestartCount,
 		Labels:     raw.Config.Labels,
@@ -664,6 +693,13 @@ func parseSize(s string) int64 {
 	return int64(n * float64(mul))
 }
 
+// LogsFollowMaxTail caps the backfill a log follow may request; the API
+// clamps ?lines= to the same bound.
+const LogsFollowMaxTail = 5000
+
+// LogsFollow streams `docker logs --follow` for a panel container. --tail is
+// always passed: tail<=0 means "no backfill" (never the whole history) and
+// values above LogsFollowMaxTail are clamped.
 func (d *DockerRunner) LogsFollow(
 	ctx context.Context,
 	name string,
@@ -673,11 +709,8 @@ func (d *DockerRunner) LogsFollow(
 	if err := validate.ContainerName(name); err != nil {
 		return 0, err
 	}
-	args := []string{"logs", "--follow", "--timestamps"}
-	if tail > 0 {
-		args = append(args, "--tail", fmt.Sprintf("%d", tail))
-	}
-	args = append(args, name)
+	tail = max(0, min(tail, LogsFollowMaxTail))
+	args := []string{"logs", "--follow", "--timestamps", "--tail", strconv.Itoa(tail), name}
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
 

@@ -42,9 +42,9 @@ Idempotent unary methods perform exactly **one** transparent retry when the firs
 
 | Auto-retries | Pass-through |
 |---|---|
-| `ping`, `hostInfo`, `hostMetrics`, `processInfo` | `fileWrite` (non-atomic) |
-| `fileRead`, `fileAtomicWrite` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
-| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `ping`, `hostInfo`, `hostMetrics` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
+| `fileRead`, `fileAtomicWrite` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | |
 | `containerInspect`, `containerStats` | streaming methods (`containerLogsFollow`, `depotUpdate`, `dockerPrune`) |
 
 Streaming methods are never retried — partial output would already have been delivered to the caller. State-changing container/host RPC's are not retried because we cannot safely tell whether the bridge processed the request before the socket dropped (e.g. `container_run` would risk creating a duplicate). Callers that need retry semantics for those should layer it themselves with appropriate idempotency guards.
@@ -117,56 +117,15 @@ Throws `BridgeError('forbidden')` if the path is outside the allowlist.
 
 ---
 
-#### `fileReadTail(p: FileReadTailParams): Promise<FileReadTailResult>`
+#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
 
-Reads up to `max_bytes` from the **end** of an allowlisted file. When the file is larger than `max_bytes` the read snaps forward to the next `\n` so the result never starts mid-line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
-
-```ts
-interface FileReadTailParams {
-  path: string;
-  max_bytes?: number; // default 65536, max 1 MiB
-}
-
-interface FileReadTailResult {
-  content: string;
-  offset: number;     // byte offset where `content` starts in the source file
-  size: number;       // total file size in bytes at read time
-  truncated: boolean; // true iff size > max_bytes (some prefix was skipped)
-}
-```
-
-| Param | Type | Required | Default | Notes |
-|---|---|---:|---|---|
-| `path` | `string` | yes | — | Same allowlist as `fileRead`. |
-| `max_bytes` | `number` | no | `65536` | Values `<= 0` or `> 1048576` snap to the default. |
-
-```ts
-const tail = await client.fileReadTail({
-  path: '/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log',
-  max_bytes: 65536,
-});
-// { content, offset: 12516352, size: 12582912, truncated: true }
-```
-
-Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('not_found')` if the file does not exist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
-
----
-
-#### `fileWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes a file with standard `os.WriteFile`. Not atomic — use `fileAtomicWrite` for config edits.
+Writes via a unique temp file plus rename (atomic on Linux ext4/XFS; concurrent writers of one path never interleave). Creates missing intermediate directories at `0755` without changing existing ones. Use this for all config and sentinel writes.
 
 | Param | Type | Required |
 |---|---|---|
 | `path` | `string` | yes |
 | `content` | `string` | yes |
 | `mode` | `number` | no (defaults to `0644`) |
-
----
-
-#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes via a temp-file rename (atomic on Linux ext4/XFS). Creates intermediate directories up to the allowed root. Use this for all config-editor saves.
 
 ---
 
@@ -180,17 +139,6 @@ Adds or removes a UFW firewall rule.
 | `port` | `number` | 1–65535 |
 | `proto` | `'tcp' \| 'udp'` | |
 | `comment` | `string` | optional |
-
----
-
-#### `processInfo(p: ProcessInfoParams): Promise<ProcessInfoResult>`
-
-Reads `/proc/{pid}/` data.
-
-```ts
-const info = await client.processInfo({ pid: 12345 });
-// { pid, exists, rss_bytes?, vsz_bytes?, cmdline?, state?, threads? }
-```
 
 ---
 
@@ -265,12 +213,12 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). Timeout: 30 s.
 
-Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute. The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
+Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute (rate-limited bridge-side: within 30 s of the last computation the cache answers, and concurrent forced calls share one computation). The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
 
 | Field | Type | Description |
 |---|---|---|
 | `configs_bytes` | `number` | Bytes used by `/var/lib/squad-panel/configs/` |
-| `saved_total_bytes` | `number` | Bytes used by `/var/lib/squad-panel/saved/` |
+| `saved_total_bytes` | `number` | Bytes used by the per-server directories under `/var/lib/squad-panel/saved/` (sum of `saved_per_server`) |
 | `saved_per_server` | `{ uuid: string; bytes: number }[]` | Per-server breakdown of `saved/` (one entry per uuid sub-directory) |
 | `depot_volume_bytes` | `number` | Size of the `squad-depot` named volume |
 | `docker_volumes` | `{ name: string; bytes: number }[]` | Other panel-owned Docker volumes |

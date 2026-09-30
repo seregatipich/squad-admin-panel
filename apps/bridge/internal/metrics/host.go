@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -76,36 +77,6 @@ func Info() (HostInfo, error) {
 	return h, nil
 }
 
-// Metrics returns a fresh HostMetrics sample. CPU and network rates are
-// computed as differentials over the supplied prior sample (if any).
-func Metrics(prev *sample, mountpoint string) (HostMetrics, *sample, error) {
-	cur := captureSample()
-	m := HostMetrics{SampledAt: time.Now().UTC()}
-
-	if prev != nil {
-		m.CPUPercent = cpuPercent(prev, cur)
-		dt := cur.sampledAt.Sub(prev.sampledAt).Seconds()
-		if dt > 0 {
-			m.NetRxBytesPerSec = float64(cur.netRx-prev.netRx) / dt
-			m.NetTxBytesPerSec = float64(cur.netTx-prev.netTx) / dt
-		}
-	}
-	if mem, err := readMemUsed(); err == nil {
-		m.RAMUsedBytes = mem.used
-		m.RAMTotalBytes = mem.total
-	}
-	if du, err := readDisk(mountpoint); err == nil {
-		m.DiskUsedBytes = du.used
-		m.DiskTotalBytes = du.total
-	}
-	if la1, la5, la15, err := readLoadAvg(); err == nil {
-		m.LoadAvg1m = la1
-		m.LoadAvg5m = la5
-		m.LoadAvg15m = la15
-	}
-	return m, cur, nil
-}
-
 // MetricsCache holds the last raw sample so consecutive host_metrics RPC
 // calls produce real CPU / network rate deltas. The previous implementation
 // captured two samples back-to-back inside one RPC call, which made dt
@@ -148,8 +119,9 @@ func (c *MetricsCache) Sample(mountpoint string) HostMetrics {
 			m.CPUPercent = cpuPercent(c.last, cur)
 			secs := dt.Seconds()
 			if secs > 0 {
-				m.NetRxBytesPerSec = float64(cur.netRx-c.last.netRx) / secs
-				m.NetTxBytesPerSec = float64(cur.netTx-c.last.netTx) / secs
+				rx, tx := netDelta(c.last.net, cur.net)
+				m.NetRxBytesPerSec = float64(rx) / secs
+				m.NetTxBytesPerSec = float64(tx) / secs
 			}
 		}
 	}
@@ -171,12 +143,18 @@ func (c *MetricsCache) Sample(mountpoint string) HostMetrics {
 	return m
 }
 
-// sample is the raw counters we cache between Metrics() calls.
+// sample is the raw counters we cache between host_metrics calls.
 type sample struct {
 	idle, total uint64
-	netRx       uint64
-	netTx       uint64
-	sampledAt   time.Time
+	// net holds cumulative counters per physical interface, keyed by name.
+	net       map[string]netCounters
+	sampledAt time.Time
+}
+
+// netCounters are one interface's cumulative byte counters from
+// /proc/net/dev.
+type netCounters struct {
+	rx, tx uint64
 }
 
 func captureSample() *sample {
@@ -184,19 +162,43 @@ func captureSample() *sample {
 	if idle, total, err := readCPU(); err == nil {
 		s.idle, s.total = idle, total
 	}
-	rx, tx := readNet()
-	s.netRx = rx
-	s.netTx = tx
+	s.net = readNet()
 	return s
 }
 
+// cpuPercent returns busy CPU time between two samples as 0–100. Counters
+// that stepped backwards (idle can on some kernels) yield a clamped value
+// instead of a uint64 wrap-around.
 func cpuPercent(prev, cur *sample) float64 {
-	idleDelta := cur.idle - prev.idle
-	totalDelta := cur.total - prev.total
-	if totalDelta == 0 {
+	if cur.total <= prev.total {
 		return 0
 	}
+	totalDelta := cur.total - prev.total
+	var idleDelta uint64
+	if cur.idle > prev.idle {
+		idleDelta = min(cur.idle-prev.idle, totalDelta)
+	}
 	return 100.0 * (1.0 - float64(idleDelta)/float64(totalDelta))
+}
+
+// netDelta sums the per-interface byte increases between two samples. An
+// interface missing from either sample (a container's veth came or went,
+// a NIC was renamed) or whose counter went backwards (reset) contributes
+// nothing, so the total can never wrap around.
+func netDelta(prev, cur map[string]netCounters) (rx, tx uint64) {
+	for name, c := range cur {
+		p, ok := prev[name]
+		if !ok {
+			continue
+		}
+		if c.rx >= p.rx {
+			rx += c.rx - p.rx
+		}
+		if c.tx >= p.tx {
+			tx += c.tx - p.tx
+		}
+	}
+	return rx, tx
 }
 
 func readOSRelease() (name, version string) {
@@ -326,31 +328,55 @@ func readCPU() (idle, total uint64, err error) {
 	return
 }
 
-func readNet() (rx, tx uint64) {
+func readNet() map[string]netCounters {
 	f, err := os.Open("/proc/net/dev")
 	if err != nil {
-		return
+		return nil
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
+	return parseNetDev(f)
+}
+
+// virtualIfacePrefixes are interfaces whose traffic is already counted on
+// the physical NIC (container veth pairs, docker bridges) or never leaves
+// the host (loopback). Counting them would report container traffic up to
+// three times.
+var virtualIfacePrefixes = []string{"lo", "veth", "docker", "br-"}
+
+// parseNetDev reads /proc/net/dev content and returns cumulative counters
+// for every non-virtual interface.
+func parseNetDev(r io.Reader) map[string]netCounters {
+	out := map[string]netCounters{}
+	scanner := bufio.NewScanner(r)
 	scanner.Scan() // header
 	scanner.Scan() // header
 	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) < 10 {
+		name, rest, ok := strings.Cut(scanner.Text(), ":")
+		if !ok {
 			continue
 		}
-		iface := strings.TrimSuffix(fields[0], ":")
-		if iface == "lo" {
+		name = strings.TrimSpace(name)
+		if isVirtualIface(name) {
 			continue
 		}
-		r, _ := strconv.ParseUint(fields[1], 10, 64)
-		t, _ := strconv.ParseUint(fields[9], 10, 64)
-		rx += r
-		tx += t
+		fields := strings.Fields(rest)
+		if len(fields) < 9 {
+			continue
+		}
+		rx, _ := strconv.ParseUint(fields[0], 10, 64)
+		tx, _ := strconv.ParseUint(fields[8], 10, 64)
+		out[name] = netCounters{rx: rx, tx: tx}
 	}
-	return
+	return out
+}
+
+func isVirtualIface(name string) bool {
+	for _, prefix := range virtualIfacePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type diskStats struct {

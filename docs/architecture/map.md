@@ -1443,7 +1443,7 @@ Two further defects, both verified:
 - **Nil-pointer panic on three branches.** `ResolvePeer` returns a nil `*Peer` on `SyscallConn` (`peer.go:38`), `Control` (`peer.go:47`), and `getsockopt` (`peer.go:50`) failure, but `main.go:158-161` dereferences `peer.UID`/`peer.User`/`peer.PID` on the error path. The two *expected* failures — group-lookup failure (`peer.go:61`) and `ErrUntrustedPeer` — both return a populated `*Peer`, which is why this has never fired in the routine reject path. `serveConn` does run in its own goroutine (`main.go:96-99`), but it has no `recover()`; the only recover in the bridge is in the dispatcher, downstream of this code. An unrecovered panic in that goroutine takes down the whole daemon.
 - **The function is untested.** `internal/auth/peer_test.go` contains only `TestErrUntrustedPeerSentinel`, `TestPeerGroupDefault`, `TestPeerStructZeroValue`. Neither membership path nor any nil branch is exercised over a real socket pair. The most security-relevant function in `apps/bridge` has no behavioural test.
 
-Finally: `Handle` applies **no per-method authorization**. Any peer that clears `ResolvePeer` can invoke all 30 methods, including `container_run`, `ufw_rule`, `file_write`, `backup_restore` and `host_agent_restart`. All business-level authorization lives in `apps/api`'s RBAC gate; the bridge is a binary trust decision.
+Finally: `Handle` applies **no per-method authorization**. Any peer that clears `ResolvePeer` can invoke all 27 methods, including `container_run`, `ufw_rule`, `file_atomic_write`, `backup_restore` and `host_agent_restart`. All business-level authorization lives in `apps/api`'s RBAC gate; the bridge is a binary trust decision.
 
 ```mermaid
 graph TD
@@ -1453,17 +1453,17 @@ graph TD
   D -->|creds.Gid == panel gid| E[InGroup]
   D -->|host passwd lookup of creds.Uid<br/>then GroupIds| E
   D -->|neither| F["forbidden frame, close"]
-  E --> G["Dispatcher.Handle<br/>30 methods, no per-method authz"]
+  E --> G["Dispatcher.Handle<br/>27 methods, no per-method authz"]
 ```
 
-### 7.4 The 30 RPC methods
+### 7.4 The 27 RPC methods
 
-Two hand-maintained definitions: `BRIDGE_METHODS` (`packages/shared-config/src/bridge-methods.ts:1-31`) and the flat `switch req.Method` in `apps/bridge/internal/handlers/handlers.go:128-189`. Both currently hold exactly 30 entries, in *different orders*. ★ marks the 6 streaming methods (`BRIDGE_STREAMING_METHODS`, `bridge-methods.ts:36-43`).
+Two hand-maintained definitions: `BRIDGE_METHODS` (`packages/shared-config/src/bridge-methods.ts:1-31`) and the flat `switch req.Method` in `apps/bridge/internal/handlers/handlers.go:128-189`. Both currently hold exactly 27 entries, in *different orders* (`process_info`, `file_read_tail` and `file_write` were removed in #45 as unused attack surface). ★ marks the 6 streaming methods (`BRIDGE_STREAMING_METHODS`, `bridge-methods.ts:36-43`).
 
 | Capability | Methods | Privileged action / gate |
 |---|---|---|
-| **Host info** (4) | `ping`, `host_info`, `host_metrics`, `process_info` | `/etc/os-release`, `/proc/{cpuinfo,stat,meminfo,net/dev}`, `statfs`, `docker --version`. No validation; `process_info` checks only `pid > 0`, so **any host PID is readable** |
-| **Files** (5) | `file_read`, `file_read_tail`, `file_read_stream`★, `file_write`, `file_atomic_write` | `validateReadablePath` / `validateWritablePath` (`handlers.go:818-842`); `fsx` re-validates; 10 MiB cap; tail clamped to 1 MiB, stream chunk to 8 MiB |
+| **Host info** (3) | `ping`, `host_info`, `host_metrics` | `/etc/os-release`, `/proc/{cpuinfo,stat,meminfo,net/dev}`, `statfs`, `docker --version`. No caller-supplied input |
+| **Files** (3) | `file_read`, `file_read_stream`★, `file_atomic_write` | `validateReadablePath` / `validateWritablePath`; `fsx` re-validates; 10 MiB cap; stream chunk clamped to 8 MiB |
 | **Directories** (2) | `directory_delete`, `list_panel_dirs` | `validateDeletableDir` (`handlers.go:471`) accepts *exactly* `<configs\|saved>/{uuid}`; `list_panel_dirs` takes no path |
 | **Logs** (2) | `squad_log_list`, `squad_log_retention_sweep` | list filters `SquadGame*.log`; sweep takes **no path param by design** — only `archive_server_ids[]`, each `validate.ServerUUID`, with `DisallowUnknownFields` |
 | **Containers** (9) | `list_squad_containers`, `container_run`, `container_run_rnsquadjs`, `container_start`, `container_stop`, `container_rm`, `container_inspect`, `container_stats`, `container_logs_follow`★ | `validate.ContainerName` (three regexes); `container_run` gates image, mounts, depot volume; `ps` output re-validated against `serverContainerRegex` |
@@ -1495,7 +1495,7 @@ allowedImages = map[string]struct{}{ ServerImage: {}, DepotInitImage: {} }
 
 Its directory setup is the most carefully hardened code in the repo — fd-anchored and TOCTOU-proof (`runner/docker.go:258-282`), `Mkdirat` + `Openat(O_NOFOLLOW|O_DIRECTORY)` + `Fchmod`/`Fchown`, with ELOOP/ENOTDIR mapped to `validate.ErrForbidden`.
 
-**And that makes the `fsx` gap conspicuous.** `validate.Path` (`validate/paths.go:21`) is purely lexical: absolute, `filepath.Clean`, no NUL byte, prefix-match against `readableRoots` (`/var/lib/squad-panel` plus `DepotHostPath()`) or `writableRoots` (panel root only — depot stays read-only so game binaries cannot be mutated). Traversal via `..` is defeated by `Clean` before the prefix test, and `PanelConfigFilePath` further narrows writes to a 19-entry `allowedCfgFiles` map plus a `.cfg` name regex. But there is **no symlink defence anywhere in `internal/fsx`** — no `O_NOFOLLOW`, no `EvalSymlinks`, no `Lstat`, and no symlink case in `fsx_test.go`. Anyone able to plant a symlink inside a server's `ServerConfig/` directory can steer a root-privileged `file_write` outside the root. Two packages away, `ensureSidecarDir` defends exactly this.
+**And that makes the `fsx` gap conspicuous.** `validate.Path` (`validate/paths.go:21`) is purely lexical: absolute, `filepath.Clean`, no NUL byte, prefix-match against `readableRoots` (`/var/lib/squad-panel` plus `DepotHostPath()`) or `writableRoots` (panel root only — depot stays read-only so game binaries cannot be mutated). Traversal via `..` is defeated by `Clean` before the prefix test, and `PanelConfigFilePath` further narrows writes to a 19-entry `allowedCfgFiles` map plus a `.cfg` name regex. But there is **no symlink defence anywhere in `internal/fsx`** — no `O_NOFOLLOW`, no `EvalSymlinks`, no `Lstat`, and no symlink case in `fsx_test.go`. Anyone able to plant a symlink inside a server's `ServerConfig/` directory can steer a root-privileged `file_atomic_write` outside the root. Two packages away, `ensureSidecarDir` defends exactly this.
 
 Two smaller notes on `container_run`: ports are formatted with `%d` from typed ints, so they are injection-inert despite being unvalidated; `extra_args` are appended to `squadArgs` *after* `spec.Image` (`runner/docker.go:118`), so they land in the container's command line, not among Docker flags — they cannot inject `-v` or `--privileged`.
 
@@ -1523,7 +1523,7 @@ Retries are an explicit idempotency gate:
 const maxAttempts = opts.retryOnTransport && !opts.onStream ? 2 : 1;
 ```
 
-(`client.ts:306`.) Only `code === 'transport'` retries, at most once, after destroying the dead socket. Note the asymmetry: `fileAtomicWrite` retries, plain `fileWrite` does not — atomicity is what makes retry safe. `host_agent_restart` is explicitly asserted not to retry.
+(`client.ts:306`.) Only `code === 'transport'` retries, at most once, after destroying the dead socket. `fileAtomicWrite` retries — atomicity is what makes retry safe. `host_agent_restart` is explicitly asserted not to retry.
 
 `BridgeErrorCode` is `forbidden | invalid_args | runtime_error | timeout | internal | transport`; the first five mirror `rpc/types.go:41-45`, and `transport` is synthesized client-side for connect/write/close/decode failures. **`BridgeError` is exported and richly typed, and `grep -rn "BridgeError"` across `apps/` and other packages returns zero hits** — no consumer branches on `.code`; callers use bare `try/catch` and generic HTTP 502s (`apps/api/src/routes/host-actions.ts:93-96`). Likewise, `zod` is declared as a production dependency of `packages/bridge-client` and never imported: responses are unchecked casts (`resolve: (v) => resolve(v as Result)`). Method-name drift therefore surfaces loudly as `invalid_args`, but *field* drift is silently `undefined` at the call site — handled only by convention, e.g. the comment on `ContainerInspectResult.oom_killed?` ("Older bridge builds omit the field entirely; consumers must default to `false`", `types.ts:204-210`).
 

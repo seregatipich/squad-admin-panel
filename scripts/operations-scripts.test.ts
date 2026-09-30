@@ -1996,15 +1996,14 @@ describe('verify-bridge framed Unix-socket smoke test', () => {
           'ping',
           'host_info',
           'host_metrics',
-          'process_info',
+          'list_panel_dirs',
           'file_read',
           'file_atomic_write',
           'container_inspect',
           'container_run',
         ],
       );
-      const processId = (fixture.requests[3]?.params as { pid?: number }).pid;
-      assert.equal(Number.isInteger(processId) && (processId ?? 0) > 0, true);
+      assert.equal(fixture.requests[3]?.params, null);
       assert.deepEqual(fixture.requests[4]?.params, { path: '/etc/shadow' });
       assert.deepEqual(fixture.requests[5]?.params, {
         path: '/opt/squad-servers/verify-bridge.tmp',

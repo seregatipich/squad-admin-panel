@@ -102,12 +102,12 @@ type Dispatcher struct {
 	// nowFn overrides the clock for retention tests.
 	nowFn func() time.Time
 	// duFn measures bytes used at a path. Tests stub it; production uses du -sb.
-	duFn func(path string) (int64, error)
+	duFn func(ctx context.Context, path string) (int64, error)
 	// statfsFn samples the filesystem at a path. Tests stub it; production uses syscall.Statfs.
 	statfsFn func(path string, st *syscall.Statfs_t) error
 	// dockerDfFn returns panel-owned volumes/images and the squad-depot byte total.
 	// Tests stub it; production shells out to `docker system df --format '{{json .}}' -v`.
-	dockerDfFn func() ([]dockerVol, []dockerImg, int64, error)
+	dockerDfFn func(ctx context.Context) ([]dockerVol, []dockerImg, int64, error)
 }
 
 func (d *Dispatcher) Handle(
@@ -134,12 +134,8 @@ func (d *Dispatcher) Handle(
 		return d.hostMetrics(req)
 	case "file_read":
 		return d.fileRead(req)
-	case "file_read_tail":
-		return d.fileReadTail(req)
 	case "file_read_stream":
 		return d.fileReadStream(ctx, req, onStream)
-	case "file_write":
-		return d.fileWrite(req)
 	case "file_atomic_write":
 		return d.fileAtomicWrite(req)
 	case "directory_delete":
@@ -152,8 +148,6 @@ func (d *Dispatcher) Handle(
 		return d.listSquadContainers(ctx, req)
 	case "ufw_rule":
 		return d.ufwRule(ctx, req)
-	case "process_info":
-		return d.processInfo(req)
 	case "container_run":
 		return d.containerRun(ctx, req)
 	case "container_run_rnsquadjs":
@@ -181,7 +175,7 @@ func (d *Dispatcher) Handle(
 	case "backup_restore":
 		return d.backupRestore(ctx, req, onStream)
 	case "panel_disk_usage":
-		return d.panelDiskUsage(req)
+		return d.panelDiskUsage(ctx, req)
 	case "squad_log_retention_sweep":
 		return d.squadLogRetentionSweep(req)
 	case "host_agent_restart":
@@ -278,60 +272,6 @@ func (d *Dispatcher) fileRead(req *rpc.Request) rpc.Response {
 }
 
 const (
-	fileReadTailDefaultMaxBytes int64 = 64 * 1024
-	fileReadTailMaxAllowedBytes int64 = 1 << 20
-)
-
-type fileReadTailParams struct {
-	Path     string `json:"path"`
-	MaxBytes int64  `json:"max_bytes"`
-}
-
-func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
-	var p fileReadTailParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	maxBytes := p.MaxBytes
-	if maxBytes <= 0 {
-		maxBytes = fileReadTailDefaultMaxBytes
-	} else if maxBytes > fileReadTailMaxAllowedBytes {
-		maxBytes = fileReadTailMaxAllowedBytes
-	}
-	f, st, err := openReadableFile(p.Path)
-	if err != nil {
-		return readableOpenErrorResponse(req.ID, err)
-	}
-	defer f.Close()
-	size := st.Size()
-	var off int64
-	if size > maxBytes {
-		off = size - maxBytes
-	}
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	buf := make([]byte, size-off)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	start := 0
-	if off > 0 {
-		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
-			start = i + 1
-		}
-	}
-	body, _ := json.Marshal(map[string]any{
-		"content":   string(buf[start:n]),
-		"offset":    off + int64(start),
-		"size":      size,
-		"truncated": off > 0,
-	})
-	return rpc.NewSuccessResponse(req.ID, body)
-}
-
-const (
 	// fileReadStreamDefaultChunkBytes is the read size used when the caller does
 	// not pin chunk_size. 1 MiB keeps every emitted frame far below rpc.MaxFrame
 	// (16 MiB) even after base64 expansion (~1.33 MiB), so an arbitrarily large
@@ -399,25 +339,6 @@ type fileWriteParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	Mode    uint32 `json:"mode,omitempty"`
-}
-
-func (d *Dispatcher) fileWrite(req *rpc.Request) rpc.Response {
-	var p fileWriteParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	if err := validateWritablePath(p.Path); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
-	}
-	mode := os.FileMode(0o644)
-	if p.Mode != 0 {
-		mode = os.FileMode(p.Mode)
-	}
-	if err := fsx.Write(p.Path, []byte(p.Content), mode); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
-	}
-	body, _ := json.Marshal(map[string]string{"status": "written"})
-	return rpc.NewSuccessResponse(req.ID, body)
 }
 
 func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
@@ -1375,65 +1296,6 @@ func humanReclaimed(s string) string {
 // parseHumanSize is defined later in this file (the feat-branch variant
 // returning (int64, error)). The reclaimed-space parser above wraps it.
 
-// --- process inspection ---
-
-type processInfoParams struct {
-	PID int `json:"pid"`
-}
-
-type processInfoResult struct {
-	PID      int    `json:"pid"`
-	Exists   bool   `json:"exists"`
-	RSSBytes int64  `json:"rss_bytes,omitempty"`
-	VSZBytes int64  `json:"vsz_bytes,omitempty"`
-	Cmdline  string `json:"cmdline,omitempty"`
-	State    string `json:"state,omitempty"`
-	Threads  int    `json:"threads,omitempty"`
-}
-
-func (d *Dispatcher) processInfo(req *rpc.Request) rpc.Response {
-	var p processInfoParams
-	if err := json.Unmarshal(req.Params, &p); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
-	}
-	if p.PID <= 0 {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "pid must be > 0")
-	}
-	res := processInfoResult{PID: p.PID}
-	if _, err := os.Stat(fmt.Sprintf("/proc/%d", p.PID)); os.IsNotExist(err) {
-		body, _ := json.Marshal(res)
-		return rpc.NewSuccessResponse(req.ID, body)
-	}
-	res.Exists = true
-	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", p.PID)); err == nil {
-		res.Cmdline = strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " ")
-	}
-	if status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", p.PID)); err == nil {
-		for _, line := range strings.Split(string(status), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
-				continue
-			}
-			switch fields[0] {
-			case "State:":
-				res.State = strings.Join(fields[1:], " ")
-			case "Threads:":
-				fmt.Sscanf(fields[1], "%d", &res.Threads)
-			case "VmRSS:":
-				var kb int64
-				fmt.Sscanf(fields[1], "%d", &kb)
-				res.RSSBytes = kb * 1024
-			case "VmSize:":
-				var kb int64
-				fmt.Sscanf(fields[1], "%d", &kb)
-				res.VSZBytes = kb * 1024
-			}
-		}
-	}
-	body, _ := json.Marshal(res)
-	return rpc.NewSuccessResponse(req.ID, body)
-}
-
 func isForbidden(err error) bool {
 	if err == nil {
 		return false
@@ -1477,9 +1339,15 @@ type panelDiskUsageResult struct {
 const (
 	defaultPanelRoot  = "/var/lib/squad-panel"
 	panelDiskCacheTTL = 5 * time.Minute
-	depotVolumeName   = "squad-depot"
-	pgDataVolumeName  = "squad-panel_pg-data"
-	redisVolumeName   = "squad-panel_redis-data"
+	// panelDiskForceMinInterval rate-limits force=true: a forced refresh
+	// within this window of the last computation is served from the cache.
+	panelDiskForceMinInterval = 30 * time.Second
+	// panelDiskComputeTimeout bounds one full du/docker pass so a hung
+	// du or docker daemon cannot pin the computation forever.
+	panelDiskComputeTimeout = 2 * time.Minute
+	depotVolumeName         = "squad-depot"
+	pgDataVolumeName        = "squad-panel_pg-data"
+	redisVolumeName         = "squad-panel_redis-data"
 )
 
 var panelOwnedImages = map[string]struct{}{
@@ -1496,27 +1364,41 @@ var panelOwnedVolumes = map[string]struct{}{
 	redisVolumeName:  {},
 }
 
+// panelDiskCall is one in-flight panel_disk_usage computation. done is
+// closed once res/err are final; callers that arrive meanwhile wait on it
+// instead of starting another full disk walk.
+type panelDiskCall struct {
+	done chan struct{}
+	res  *panelDiskUsageResult
+	err  error
+}
+
+// panelDiskCacheMu guards only the cache fields and the in-flight pointer;
+// it is never held while du/docker run, so cache hits never wait behind a
+// slow computation.
 var (
 	panelDiskCacheMu     sync.Mutex
 	panelDiskCacheVal    *panelDiskUsageResult
 	panelDiskCacheStored time.Time
+	panelDiskInflight    *panelDiskCall
 )
 
 func resetPanelDiskUsageCache() {
 	panelDiskCacheMu.Lock()
 	panelDiskCacheVal = nil
 	panelDiskCacheStored = time.Time{}
+	panelDiskInflight = nil
 	panelDiskCacheMu.Unlock()
 }
 
-func realDuBytes(path string) (int64, error) {
+func realDuBytes(ctx context.Context, path string) (int64, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	out, err := exec.Command("du", "-sb", path).Output()
+	out, err := exec.CommandContext(ctx, "du", "-sb", path).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -1575,13 +1457,18 @@ func parseHumanSize(s string) (int64, error) {
 // `docker system df --format ... -v` reports 0B because the data is not
 // owned by docker — we have to inspect the volume's `Options.device`
 // (or fall back to `Mountpoint`) and `du -sb` it ourselves.
-func volumeOnDiskBytes(name string) (int64, error) {
-	out, err := exec.Command(
+// A volume that does not exist yields (0, errNoSuchVolume).
+func volumeOnDiskBytes(ctx context.Context, name string) (int64, error) {
+	out, err := exec.CommandContext(ctx,
 		"docker", "volume", "inspect",
 		"--format", "{{index .Options \"device\"}}|{{.Mountpoint}}",
 		name,
 	).Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && isNoSuchVolume(exitErr.Stderr) {
+			return 0, errNoSuchVolume
+		}
 		return 0, fmt.Errorf("docker volume inspect %s: %w", name, err)
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
@@ -1596,26 +1483,32 @@ func volumeOnDiskBytes(name string) (int64, error) {
 	if path == "" {
 		return 0, nil
 	}
-	return realDuBytes(path)
+	return realDuBytes(ctx, path)
 }
 
-// dockerSystemDfReport mirrors the JSON produced by `docker system df
-// --format '{{json .}}' -v` — ONE top-level object whose `Images` and
-// `Volumes` arrays we filter against the panel-owned allowlists.
+var errNoSuchVolume = errors.New("no such volume")
+
+// isNoSuchVolume reports whether `docker volume inspect` stderr says the
+// volume is absent. Any other failure (daemon unreachable, permission) is
+// a real error and must not be mistaken for a missing volume.
+func isNoSuchVolume(stderr []byte) bool {
+	return strings.Contains(strings.ToLower(string(stderr)), "no such volume")
+}
+
+// dockerSystemDfReport mirrors the part of `docker system df --format
+// '{{json .}}' -v` we use: the `Images` array, filtered against the
+// panel-owned allowlist. Volume sizes come from volumeOnDiskBytes instead,
+// because df reports 0B for bind-mounted volumes.
 type dockerSystemDfReport struct {
 	Images []struct {
 		Repository string `json:"Repository"`
 		Tag        string `json:"Tag"`
 		Size       string `json:"Size"`
 	} `json:"Images"`
-	Volumes []struct {
-		Name string `json:"Name"`
-		Size string `json:"Size"`
-	} `json:"Volumes"`
 }
 
-func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
-	out, err := exec.Command("docker", "system", "df", "--format", "{{json .}}", "-v").Output()
+func realDockerDiskBreakdown(ctx context.Context) ([]dockerVol, []dockerImg, int64, error) {
+	out, err := exec.CommandContext(ctx, "docker", "system", "df", "--format", "{{json .}}", "-v").Output()
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("docker system df: %w", err)
 	}
@@ -1630,14 +1523,13 @@ func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
 	// docker-tracked size). Walk the panel-owned allowlist directly so
 	// the depot's host-side bytes always show up.
 	for name := range panelOwnedVolumes {
-		size, err := volumeOnDiskBytes(name)
+		size, err := volumeOnDiskBytes(ctx, name)
+		if errors.Is(err, errNoSuchVolume) {
+			// Not created on this host yet (e.g. redis-data before the
+			// first compose up) — skip it rather than fail the report.
+			continue
+		}
 		if err != nil {
-			// Volume does not exist on this host — that's OK, just
-			// emit 0 bytes for it (e.g. caddy_data on a host that
-			// hasn't started caddy yet).
-			if strings.Contains(err.Error(), "No such volume") || strings.Contains(err.Error(), "exit status 1") {
-				continue
-			}
 			return nil, nil, 0, err
 		}
 		volumes = append(volumes, dockerVol{Name: name, Bytes: size})
@@ -1660,7 +1552,13 @@ func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
 	return volumes, images, depotBytes, nil
 }
 
-func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
+// panelDiskUsage reports the panel's disk footprint. Results are cached for
+// panelDiskCacheTTL; force=true recomputes unless the cache is younger than
+// panelDiskForceMinInterval. At most one computation runs at a time:
+// callers arriving while one is in flight wait for its result (bounded by
+// their own ctx) instead of starting another walk, and cache hits never wait
+// behind it.
+func (d *Dispatcher) panelDiskUsage(ctx context.Context, req *rpc.Request) rpc.Response {
 	var params struct {
 		Force bool `json:"force,omitempty"`
 	}
@@ -1671,15 +1569,69 @@ func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
 	}
 
 	panelDiskCacheMu.Lock()
-	defer panelDiskCacheMu.Unlock()
-
-	if !params.Force && panelDiskCacheVal != nil && time.Since(panelDiskCacheStored) < panelDiskCacheTTL {
-		cached := *panelDiskCacheVal
-		cached.CacheAgeSeconds = int(time.Since(panelDiskCacheStored).Seconds())
-		body, _ := json.Marshal(&cached)
-		return rpc.NewSuccessResponse(req.ID, body)
+	if panelDiskCacheVal != nil {
+		age := time.Since(panelDiskCacheStored)
+		if age < panelDiskCacheTTL && (!params.Force || age < panelDiskForceMinInterval) {
+			cached := *panelDiskCacheVal
+			panelDiskCacheMu.Unlock()
+			cached.CacheAgeSeconds = int(age.Seconds())
+			body, _ := json.Marshal(&cached)
+			return rpc.NewSuccessResponse(req.ID, body)
+		}
 	}
+	call := panelDiskInflight
+	leader := call == nil
+	if leader {
+		call = &panelDiskCall{done: make(chan struct{})}
+		panelDiskInflight = call
+	}
+	panelDiskCacheMu.Unlock()
 
+	if leader {
+		d.runPanelDiskComputation(ctx, call)
+	} else {
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "panel_disk_usage cancelled: "+ctx.Err().Error())
+		}
+	}
+	if call.err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, call.err.Error())
+	}
+	body, _ := json.Marshal(call.res)
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// runPanelDiskComputation computes the report for call, stores a success in
+// the cache, and always releases waiters — also when the computation
+// panics, in which case the panic is re-raised for Handle's recover. The
+// probes run under panelDiskComputeTimeout, detached from the leader's
+// cancellation so a client that gives up does not throw away a walk other
+// callers are waiting on.
+func (d *Dispatcher) runPanelDiskComputation(ctx context.Context, call *panelDiskCall) {
+	call.err = errors.New("panel_disk_usage computation aborted")
+	defer func() {
+		panelDiskCacheMu.Lock()
+		if call.err == nil {
+			cached := *call.res
+			panelDiskCacheVal = &cached
+			panelDiskCacheStored = time.Now()
+		}
+		if panelDiskInflight == call {
+			panelDiskInflight = nil
+		}
+		panelDiskCacheMu.Unlock()
+		close(call.done)
+	}()
+	computeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), panelDiskComputeTimeout)
+	defer cancel()
+	call.res, call.err = d.computePanelDiskUsage(computeCtx)
+}
+
+// computePanelDiskUsage runs every probe (du, docker df/inspect, statfs)
+// under ctx and assembles the report. It touches no shared state.
+func (d *Dispatcher) computePanelDiskUsage(ctx context.Context) (*panelDiskUsageResult, error) {
 	root := d.panelRoot
 	if root == "" {
 		root = defaultPanelRoot
@@ -1697,36 +1649,36 @@ func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
 		dockerDf = realDockerDiskBreakdown
 	}
 
-	configsBytes, err := du(filepath.Join(root, "configs"))
+	configsBytes, err := du(ctx, filepath.Join(root, "configs"))
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du configs: %v", err))
+		return nil, fmt.Errorf("du configs: %w", err)
 	}
-	savedRoot := filepath.Join(root, "saved")
-	savedTotal, err := du(savedRoot)
+	auditBytes, err := du(ctx, filepath.Join(root, "audit-archive"))
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du saved: %v", err))
-	}
-	auditBytes, err := du(filepath.Join(root, "audit-archive"))
-	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du audit-archive: %v", err))
+		return nil, fmt.Errorf("du audit-archive: %w", err)
 	}
 
+	// The saved tree is walked once, per server; its total is the sum of
+	// those walks (loose files directly under saved/ are not counted).
+	savedRoot := filepath.Join(root, "saved")
 	savedDirs, err := readImmediateDirs(savedRoot)
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("read saved: %v", err))
+		return nil, fmt.Errorf("read saved: %w", err)
 	}
+	var savedTotal int64
 	savedPerServer := make([]savedEntry, 0, len(savedDirs))
 	for _, name := range savedDirs {
-		size, err := du(filepath.Join(savedRoot, name))
+		size, err := du(ctx, filepath.Join(savedRoot, name))
 		if err != nil {
-			return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du saved/%s: %v", name, err))
+			return nil, fmt.Errorf("du saved/%s: %w", name, err)
 		}
+		savedTotal += size
 		savedPerServer = append(savedPerServer, savedEntry{UUID: name, Bytes: size})
 	}
 
-	dockerVolumes, dockerImages, depotBytes, err := dockerDf()
+	dockerVolumes, dockerImages, depotBytes, err := dockerDf(ctx)
 	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+		return nil, err
 	}
 	if dockerVolumes == nil {
 		dockerVolumes = []dockerVol{}
@@ -1741,7 +1693,7 @@ func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
 	}
 	var st syscall.Statfs_t
 	if err := statfs(statfsTarget, &st); err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("statfs %s: %v", statfsTarget, err))
+		return nil, fmt.Errorf("statfs %s: %w", statfsTarget, err)
 	}
 	hostTotal := int64(st.Blocks) * int64(st.Bsize)
 	hostUsed := int64(st.Blocks-st.Bavail) * int64(st.Bsize)
@@ -1768,11 +1720,5 @@ func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
 		ComputedAt:        time.Now().UTC().Format(time.RFC3339),
 		CacheAgeSeconds:   0,
 	}
-
-	cached := res
-	panelDiskCacheVal = &cached
-	panelDiskCacheStored = time.Now()
-
-	body, _ := json.Marshal(&res)
-	return rpc.NewSuccessResponse(req.ID, body)
+	return &res, nil
 }

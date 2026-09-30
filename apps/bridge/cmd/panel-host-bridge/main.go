@@ -138,8 +138,17 @@ func watchdog(ctx context.Context) {
 	}
 }
 
+// serveConn authenticates one client connection via SO_PEERCRED and then
+// dispatches its requests until the client disconnects or ctx is cancelled.
+// A panic while serving one connection is recovered and logged so it cannot
+// take down the root daemon and every other in-flight operation with it.
 func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *handlers.Dispatcher) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("serveConn panic recovered", "panic", r)
+		}
+	}()
 
 	// On shutdown (SIGTERM → ctx.Done()) close the conn so the blocking
 	// ReadFrame returns net.ErrClosed and serveConn unwinds. Without this

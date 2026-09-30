@@ -19,6 +19,12 @@
 
 - `selectNextLayer` сортирует кандидатов по слою перед взвешенным выбором: выбор при одном seed больше не зависит от порядка кандидатов, и предпросмотр совпадает с тиком scheduler (#301).
 
+## 2026-09-28
+
+### Removed
+
+- `process_info`, `file_read_tail` and `file_write` from `BRIDGE_METHODS` (#45) — no production caller; `process_info` exposed any host process's command line. The allowlist now has 27 methods.
+
 ## 2026-07-27
 
 ### Added
