@@ -93,6 +93,20 @@ describe('runSampler', () => {
     stop();
     expect(redis.calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('skips a tick while the previous one is still running', async () => {
+    const redis = makeRedis();
+    const bridgeMetrics = vi.fn(() => new Promise<never>(() => {}));
+    const stop = runSampler({
+      bridge: { hostMetrics: bridgeMetrics } as never,
+      redis: redis as never,
+      log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} } as never,
+      intervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(505);
+    stop();
+    expect(bridgeMetrics).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getRunningServerIds', () => {
