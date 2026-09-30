@@ -5,6 +5,8 @@
 ### Changed
 - `automation.ts` / `automation-engine.ts` (#79, finding 1181): `parseAutomationCondition` and `parseAutomationAction` are generic over the type key and return the typed config (`AutomationConditionConfigs`, `AutomationActionConfigs`); `AutomationMatch` is a union discriminated by `actionType`, so `evaluate()` and `runMatch()` no longer cast. Runtime behavior is unchanged; callers passing a wide union type still compile.
 
+- `events.ts` (#79, finding 1179): `validatePayload` has an overload that returns the schema's inferred payload type as `data` for types in `PAYLOAD_SCHEMAS` (it was `unknown` regardless of `T`). `PAYLOAD_SCHEMAS` uses `satisfies`, so its entries keep their exact schema types. Consumers are intentionally not switched to it: their behavior on unknown or newer payload shapes is unchanged.
+
 ### Fixed
 - `automation-actions.ts` (#79, finding 1171): a `notify_admin` action whose sink reports `delivered: false` is recorded as `skipped` with `reason: 'not_delivered'` instead of `executed`. No schema change: `skipped` is already allowed by `automation_runs_status_chk`.
 

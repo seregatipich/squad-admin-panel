@@ -17,7 +17,7 @@ import { ... } from '@squad/shared-types/api';      // API DTO schemas only
 | Export | Type | Description |
 |---|---|---|
 | `EVENT_TYPES` | `readonly string[]` | 24-element tuple of all event type strings |
-| `PAYLOAD_SCHEMAS` | `Partial<Record<EventType, ZodTypeAny>>` | Zod schema per event type that has a typed payload |
+| `PAYLOAD_SCHEMAS` | `{ [type]: ZodSchema }` (`satisfies Partial<Record<EventType, ZodTypeAny>>`) | Zod schema per event type that has a typed payload; keeps each entry's exact schema type |
 | `STREAM_NAME.eventsServer(serverId)` | `string` | `events:server:{serverId}` |
 | `STREAM_NAME.eventsGlobal()` | `string` | `events:global` |
 | `STREAM_NAME.eventsDlq()` | `string` | `events:dlq` |
@@ -35,9 +35,9 @@ const envelope = eventEnvelope.parse(rawRedisPayload);
 
 Fields: `event_id` (UUID), `version` (positive int), `type` (EventType), `server_id` (UUID | null), `ts` (ISO datetime), `actor` (`{ kind, id }` | null), `correlation_id` (UUID | null), `payload` (unknown).
 
-### `validatePayload<T extends EventType>(type, payload): { ok: true; data } | { ok: false; errors }`
+### `validatePayload(type, payload): { ok: true; data } | { ok: false; errors }`
 
-Validates a payload against the registered schema for the given event type. Returns `ok: true` for unknown types (forward-compat).
+Validates a payload against the registered schema for the given event type. For a type in `PAYLOAD_SCHEMAS`, `data` is typed as that schema's inferred payload (e.g. `PlayerConnectedPayload`); for any other type it returns `ok: true` with `data: unknown` (forward-compat). Not called by the worker consumers: they still narrow `event.payload` with assertions, and wiring validation in would send events from a newer producer to the DLQ, so it stays opt-in.
 
 ```ts
 const result = validatePayload('player.connected', body);
