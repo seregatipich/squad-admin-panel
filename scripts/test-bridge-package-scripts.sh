@@ -41,14 +41,18 @@ for name in build typecheck test lint; do
   assert 1 "$name fails when go itself fails" "$([ $? -ne 0 ] && echo 1 || echo 0)"
 done
 
-# go absent from PATH: build and typecheck skip cleanly.
+# go absent from PATH: build and typecheck skip cleanly. PATH holds a directory
+# with only an `sh` symlink, because hosts that link go into /usr/bin or /bin
+# would still resolve it there. The scripts need nothing else (`command` and
+# `echo` are shell builtins).
 NOGO=$(mktemp -d)
+ln -s "$(command -v sh)" "$NOGO/sh"
 for name in build typecheck; do
-  (cd "$SRC/apps/bridge" && PATH="$NOGO:/usr/bin:/bin" sh -c "$(script "$name")" >/dev/null 2>&1)
+  (cd "$SRC/apps/bridge" && PATH="$NOGO" sh -c "$(script "$name")" >/dev/null 2>&1)
   got=$?
   assert 0 "$name skips with exit 0 when go is not on PATH" "$got"
 done
-rmdir "$NOGO"
+rm -rf "$NOGO"
 
 echo "bridge-package-scripts: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]
