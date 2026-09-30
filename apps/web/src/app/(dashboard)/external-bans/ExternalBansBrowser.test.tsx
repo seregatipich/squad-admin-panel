@@ -42,7 +42,7 @@ const ROW = {
 function stubFetch(rows: unknown[], total = rows.length, ok = true) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.startsWith('/api/v1/ban-sources')) {
+    if (url.startsWith('/api/v1/ban-sources/options')) {
       return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     }
     if (!ok) return Promise.resolve(new Response('', { status: 500 }));
@@ -125,10 +125,10 @@ describe('ExternalBansBrowser', () => {
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
 
-  it('ignores a malformed /api/v1/ban-sources response instead of crashing', async () => {
+  it('ignores a malformed /api/v1/ban-sources/options response instead of crashing', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/v1/ban-sources')) {
+      if (url.startsWith('/api/v1/ban-sources/options')) {
         return Promise.resolve(new Response(JSON.stringify({ not: 'an array' }), { status: 200 }));
       }
       return Promise.resolve(

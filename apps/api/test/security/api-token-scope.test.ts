@@ -326,6 +326,7 @@ const SCOPE_GATED_READS: Array<{ url: () => string; scope: string; allowed: numb
   { url: () => '/api/v1/automation-rules', scope: 'trigger:view', allowed: 200 },
   { url: () => '/api/v1/automation-runs', scope: 'trigger:view', allowed: 200 },
   { url: () => '/api/v1/ban-sources', scope: 'ban_source:view', allowed: 200 },
+  { url: () => '/api/v1/ban-sources/options', scope: 'ban_source:view', allowed: 200 },
   { url: () => `/api/v1/ban-sources/${randomUUID()}`, scope: 'ban_source:view', allowed: 404 },
   { url: () => '/api/v1/analytics/dashboard', scope: 'server:view', allowed: 200 },
 ];
