@@ -17,11 +17,11 @@
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.5",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.2",
     "vitest": "^3.2.7"
   }
