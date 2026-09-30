@@ -47,6 +47,13 @@ const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<Pe
 const PANEL_PERMS_GATED_BY_VIEW_IPS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'player:view_ips',
 ]);
+// Tuning alt detection (weights, thresholds, ignored IP ranges) can switch a
+// panel-wide security check off, so IP-history read access alone must not
+// grant it: it takes both `can_view_ips` and `can_edit_roles`. Kept out of the
+// two sets above so token narrowing of those flags is unchanged.
+const PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'player:manage_alt_detection',
+]);
 const PANEL_PERMS_GATED_BY_SQUAD_KICK: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'mod:kick',
   'mod:warn',
@@ -86,6 +93,7 @@ export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<Pe
   ...PANEL_PERMS_GATED_BY_EDIT,
   ...PANEL_PERMS_GATED_BY_INTEGRATIONS,
   ...PANEL_PERMS_GATED_BY_VIEW_IPS,
+  ...PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT,
   ...PANEL_PERMS_GATED_BY_SQUAD_KICK,
   ...PANEL_PERMS_GATED_BY_SQUAD_BAN,
   ...PANEL_PERMS_GATED_BY_INFRASTRUCTURE,
@@ -120,6 +128,12 @@ function keyPassesFlagGates(key: PermissionKey, flags: RoleFlagGates): boolean {
   if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !flags.canEditRoles) return false;
   if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !flags.canManageIntegrations) return false;
   if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !flags.canViewIps) return false;
+  if (
+    PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT.has(key) &&
+    !(flags.canViewIps && flags.canEditRoles)
+  ) {
+    return false;
+  }
   if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !flags.squadPermissions.has('kick')) {
     return false;
   }

@@ -26,8 +26,9 @@ const IGNORED_IP = {
   created_at: '2026-07-20T10:00:00.000Z',
 };
 
-function mockFetch(opts: { status?: number } = {}) {
+function mockFetch(opts: { status?: number; canEdit?: boolean } = {}) {
   const status = opts.status ?? 200;
+  const canEdit = opts.canEdit ?? true;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
@@ -47,9 +48,10 @@ function mockFetch(opts: { status?: number } = {}) {
     if (url.endsWith('/api/v1/settings/alt-detection')) {
       if (status !== 200) return Promise.resolve(new Response(null, { status }));
       return Promise.resolve(
-        new Response(JSON.stringify({ settings: SETTINGS, ignored_ips: [IGNORED_IP] }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ settings: SETTINGS, ignored_ips: [IGNORED_IP], can_edit: canEdit }),
+          { status: 200 },
+        ),
       );
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
@@ -139,6 +141,25 @@ describe('AltDetectionPage', () => {
       render(<AltDetectionPage />);
       expect(await screen.findByText('Недостаточно прав')).toBeInTheDocument();
       expect(screen.queryByLabelText('Вес: общий IP')).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Регрессия (#43, находка 334): изменения доступны только с правом
+  // player:manage_alt_detection; без него страница только показывает настройки.
+  it(
+    'shows the settings read-only when the API reports can_edit=false',
+    async () => {
+      const { fn } = mockFetch({ canEdit: false });
+      vi.stubGlobal('fetch', fn);
+      render(<AltDetectionPage />);
+      await screen.findByText('10.0.0.0/24');
+
+      expect(screen.getByText('Только просмотр')).toBeInTheDocument();
+      expect(screen.getByLabelText('Вес: общий IP')).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Удалить' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Добавить' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Сохранить' })).toBeNull();
     },
     TEST_TIMEOUT_MS,
   );

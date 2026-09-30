@@ -18,6 +18,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { BLAME_MAX_VERSIONS, type BlameVersion, computeBlame } from '../lib/blame.js';
+import { isFileNotFoundError } from '../lib/bridge-file-errors.js';
 import {
   assertRconCredentialsUnchanged,
   maskConfigSecrets,
@@ -815,24 +816,6 @@ function driftGuardError(
   if (name === 'License.cfg') return 'panel_managed_file';
   if (MANAGED_SEGMENT_FILES.includes(name)) return 'managed_file';
   return null;
-}
-
-/**
- * Tells a missing file apart from every other bridge `file_read` failure.
- * Matches both the fake harness bridge (`code: 'ENOENT'`) and the Go bridge's
- * not-found variants (same patterns the config-sync worker tolerates).
- *
- * @param err - The value thrown by `app.bridge.fileRead`.
- * @returns True only when the file does not exist.
- */
-export function isFileNotFoundError(err: unknown): boolean {
-  const e = err as { code?: string; message?: string };
-  return (
-    e.code === 'ENOENT' ||
-    e.code === 'not_found' ||
-    e.code === 'no_such_file' ||
-    /no such file|not_found|enoent/i.test(e.message ?? '')
-  );
 }
 
 async function readTipVersion(

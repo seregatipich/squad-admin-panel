@@ -40,22 +40,24 @@ const serverMetricsRoutes: FastifyPluginAsync = async (app) => {
       const sinceMs = new Date(since).getTime();
       const untilMs = new Date(until).getTime();
 
+      // Read the whole window: the sampler caps the stream with MAXLEN, so it
+      // stays bounded, and a COUNT here would keep only the oldest entries.
       const streamKey = `container:metrics:${row.id}`;
-      const raw = (await app.redis.xrange(
-        streamKey,
-        String(sinceMs),
-        String(untilMs),
-        'COUNT',
-        String(MAX_POINTS * 2),
-      )) as Array<[string, string[]]>;
+      const raw = (await app.redis.xrange(streamKey, String(sinceMs), String(untilMs))) as Array<
+        [string, string[]]
+      >;
+
+      const step = raw.length > MAX_POINTS ? Math.ceil(raw.length / MAX_POINTS) : 1;
+      const sampled = raw.filter((_, i) => i % step === 0);
+      // Always keep the newest entry so the chart ends at the current state.
+      const newest = raw.at(-1);
+      if (newest && sampled.at(-1) !== newest) {
+        if (sampled.length >= MAX_POINTS) sampled.pop();
+        sampled.push(newest);
+      }
 
       const points: Array<Record<string, unknown>> = [];
-      const step = raw.length > MAX_POINTS ? Math.ceil(raw.length / MAX_POINTS) : 1;
-
-      for (let i = 0; i < raw.length; i += step) {
-        const entry = raw[i];
-        if (!entry) continue;
-        const [, kv] = entry;
+      for (const [, kv] of sampled) {
         const vIdx = kv.indexOf('v');
         if (vIdx < 0) continue;
         const value = kv[vIdx + 1];

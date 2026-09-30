@@ -17,6 +17,7 @@ vi.mock('../src/lib/rnsquadjs.js', async (importOriginal) => ({
 import { writeSidecarConfig } from '../src/lib/rnsquadjs.js';
 import serverRnsquadjsRoutes, {
   CUTOVER_TICK_MS,
+  RNSQUADJS_CUTOVER_PENDING_KEY,
   sidecarStatusKey,
 } from '../src/routes/server-rnsquadjs.js';
 
@@ -29,6 +30,10 @@ interface RedisStub {
   sismember: Mock;
   /** Only the status route reads keys; the cutover route never calls it. */
   mget?: Mock;
+  /** Pending-cutover hash; defaulted by `buildApp` when a test omits them. */
+  hsetnx?: Mock;
+  hdel?: Mock;
+  hkeys?: Mock;
 }
 
 interface BridgeStub {
@@ -64,7 +69,13 @@ async function buildApp(opts: {
   app.decorate('db', {
     query: { servers: { findFirst: opts.findFirst } },
   } as unknown as DatabaseClient);
-  app.decorate('redis', opts.redis as unknown as Redis);
+  const redis = {
+    hsetnx: vi.fn().mockResolvedValue(1),
+    hdel: vi.fn().mockResolvedValue(1),
+    hkeys: vi.fn().mockResolvedValue([]),
+    ...opts.redis,
+  };
+  app.decorate('redis', redis as unknown as Redis);
   app.decorate('bridge', opts.bridge as unknown as BridgeClient);
   await app.register(serverRnsquadjsRoutes);
   await app.ready();
@@ -87,6 +98,8 @@ async function captureRoutes(): Promise<CapturedRoute[]> {
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  // The plugin's onReady hook resumes pending cutovers; give it an empty hash.
+  app.decorate('redis', { hkeys: vi.fn().mockResolvedValue([]) } as unknown as Redis);
   app.addHook('onRoute', (route) => {
     for (const method of Array.isArray(route.method) ? route.method : [route.method]) {
       captured.push({ url: route.url, method, config: route.config as Record<string, unknown> });
@@ -307,6 +320,140 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         vi.useRealTimers();
       }
       await app.close();
+    });
+  });
+
+  // Regression (#43 finding 302): the cutover was neither idempotent nor
+  // restart-safe — a repeated POST spawned a second detached task, and an API
+  // crash during the wait left the server without a production publisher.
+  describe('→ production idempotency and restart safety', () => {
+    it('does not spawn a second cutover task while one is already pending', async () => {
+      const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+      const hsetnx = vi.fn().mockResolvedValueOnce(1).mockResolvedValue(0);
+      const containerRunRnsquadjs = vi
+        .fn()
+        .mockResolvedValue({ container_id: 'rnsquadjs-prod', status: 'started' });
+      const { app } = await buildApp({
+        findFirst,
+        redis: {
+          sadd: vi.fn().mockResolvedValue(1),
+          srem: vi.fn(),
+          sismember: vi.fn().mockResolvedValue(1),
+          hsetnx,
+        },
+        bridge: { containerRm: vi.fn().mockResolvedValue({ status: 'ok' }), containerRunRnsquadjs },
+      });
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const first = await inject(app, 'production');
+        const second = await inject(app, 'production');
+        expect(first.statusCode).toBe(202);
+        expect(second.statusCode).toBe(202);
+        expect(second.json()).toEqual({
+          server_id: SERVER_ID,
+          mode: 'production',
+          status: 'switching',
+        });
+        await vi.advanceTimersByTimeAsync(CUTOVER_TICK_MS);
+        expect(containerRunRnsquadjs).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+      await app.close();
+    });
+
+    it('does not recreate the sidecar for a server that is already cut over', async () => {
+      const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+      const hdel = vi.fn().mockResolvedValue(1);
+      const containerRm = vi.fn();
+      const containerRunRnsquadjs = vi.fn();
+      const { app } = await buildApp({
+        findFirst,
+        redis: {
+          sadd: vi.fn().mockResolvedValue(0),
+          srem: vi.fn(),
+          sismember: vi.fn().mockResolvedValue(1),
+          hdel,
+        },
+        bridge: { containerRm, containerRunRnsquadjs },
+      });
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const res = await inject(app, 'production');
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ server_id: SERVER_ID, mode: 'production', status: 'active' });
+        expect(hdel).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_PENDING_KEY, SERVER_ID);
+        await vi.advanceTimersByTimeAsync(CUTOVER_TICK_MS);
+        expect(containerRm).not.toHaveBeenCalled();
+        expect(containerRunRnsquadjs).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+      await app.close();
+    });
+
+    it('clears the pending marker once the cutover task finishes', async () => {
+      const hdel = vi.fn().mockResolvedValue(1);
+      const { app } = await buildApp({
+        findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+        redis: {
+          sadd: vi.fn().mockResolvedValue(1),
+          srem: vi.fn(),
+          sismember: vi.fn().mockResolvedValue(1),
+          hdel,
+        },
+        bridge: {
+          containerRm: vi.fn().mockResolvedValue({ status: 'ok' }),
+          containerRunRnsquadjs: vi
+            .fn()
+            .mockResolvedValue({ container_id: 'x', status: 'started' }),
+        },
+      });
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        await inject(app, 'production');
+        expect(hdel).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(CUTOVER_TICK_MS);
+        expect(hdel).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_PENDING_KEY, SERVER_ID);
+      } finally {
+        vi.useRealTimers();
+      }
+      await app.close();
+    });
+
+    it('resumes a cutover left pending by a previous API process on startup', async () => {
+      const containerRunRnsquadjs = vi
+        .fn()
+        .mockResolvedValue({ container_id: 'rnsquadjs-prod', status: 'started' });
+      const hdel = vi.fn().mockResolvedValue(1);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const { app } = await buildApp({
+          findFirst: vi.fn(),
+          redis: {
+            sadd: vi.fn(),
+            srem: vi.fn(),
+            sismember: vi.fn().mockResolvedValue(1),
+            hkeys: vi.fn().mockResolvedValue([SERVER_ID]),
+            hdel,
+          },
+          bridge: {
+            containerRm: vi.fn().mockResolvedValue({ status: 'ok' }),
+            containerRunRnsquadjs,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(CUTOVER_TICK_MS);
+        expect(containerRunRnsquadjs).toHaveBeenCalledTimes(1);
+        const runArg = containerRunRnsquadjs.mock.calls[0]?.[0] as { env: Record<string, string> };
+        expect(runArg.env.PANEL_BRIDGE_MODE).toBe('production');
+        expect(hdel).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_PENDING_KEY, SERVER_ID);
+        await app.close();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

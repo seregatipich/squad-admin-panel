@@ -67,6 +67,12 @@ export const PERMISSIONS = [
   { key: 'player:view', category: 'players', label: 'Список игроков, ник, SteamID' },
   { key: 'player:view_ips', category: 'players', label: 'История IP' },
   {
+    key: 'player:manage_alt_detection',
+    category: 'players',
+    label: 'Настраивать детект мультиаккаунтов (веса, пороги, игнор-лист IP)',
+    dangerous: true,
+  },
+  {
     key: 'player:view_notes',
     category: 'players',
     label: 'Заметки про игрока',

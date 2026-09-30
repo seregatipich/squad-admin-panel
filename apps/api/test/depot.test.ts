@@ -428,4 +428,52 @@ describe('POST /api/v1/depot/update', () => {
     }
     expect(cleared).toBe(true);
   });
+
+  // Regression (#43 finding 321): a non-zero steamcmd exit code was reported as ok.
+  it('background task writes depot:last_update=failed on a non-zero steamcmd exit code', async () => {
+    h.bridge.depotUpdate = async () => ({ exit_code: 5 });
+
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+    });
+
+    const deadline = Date.now() + 2000;
+    let lastUpdate: string | null = null;
+    while (Date.now() < deadline) {
+      lastUpdate = await h.redis.get('depot:last_update');
+      if (lastUpdate) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!lastUpdate) throw new Error('depot:last_update never set');
+    const parsed = JSON.parse(lastUpdate);
+    expect(parsed.status).toBe('failed');
+    expect(parsed.error).toContain('exit code 5');
+  });
+
+  // Regression (#43 finding 322): the job deleted depot:updating even when
+  // another update owned it by then.
+  it('does not release a depot lock another update owns by the time it finishes', async () => {
+    h.bridge.depotUpdate = async () => {
+      await h.redis.set('depot:updating', 'other-holder');
+      return { exit_code: 0 };
+    };
+
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+    });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !(await h.redis.get('depot:last_update'))) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // The lock is released in `finally`, after depot:last_update is written.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await h.redis.get('depot:updating')).toBe('other-holder');
+  });
 });

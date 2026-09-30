@@ -6,13 +6,14 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { removeBanLines } from '../lib/bans-cfg.js';
+import { isFileNotFoundError } from '../lib/bridge-file-errors.js';
 import {
   enforceModerationAction,
   markBansReverted,
   type PlayerIdentity,
   publishModerationEvent,
 } from '../lib/moderation-enforce.js';
-import { isFileNotFoundError, type ReloadOutcome, writeVersion } from './server-configs.js';
+import { type ReloadOutcome, writeVersion } from './server-configs.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 50;

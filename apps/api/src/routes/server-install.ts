@@ -97,7 +97,7 @@ async function ensureDepot(app: FastifyInstance, sink: Sink): Promise<void> {
     step: 'depot',
     message: `populating ${DEPOT_VOLUME_NAME} via depot-init container`,
   });
-  await app.bridge.depotUpdate((frame) => {
+  const { exit_code: exitCode } = await app.bridge.depotUpdate((frame) => {
     const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
     sink({
       ts: new Date().toISOString(),
@@ -106,6 +106,8 @@ async function ensureDepot(app: FastifyInstance, sink: Sink): Promise<void> {
       stream: frame.stream === 'stderr' ? 'stderr' : 'stdout',
     });
   });
+  // The bridge reports a failed SteamCMD run as a normal reply.
+  if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 }
 
 async function seedConfigs(

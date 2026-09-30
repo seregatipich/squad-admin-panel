@@ -1,4 +1,11 @@
-import { events, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
+import {
+  events,
+  players,
+  roleSquadPermissions,
+  roles,
+  seedSchedule,
+  servers,
+} from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -329,6 +336,81 @@ describe('PATCH /api/v1/servers/:id/seed-schedule/:entryId', () => {
       payload: { enabled: false },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// Regression (#43 finding 327): PATCH left the worker's `last_executed_at`
+// cursor alone, so a rescheduled executed one-off never fired again and a
+// re-enabled cron entry replayed its latest missed occurrence at once.
+describe('PATCH /api/v1/servers/:id/seed-schedule/:entryId — scheduler cursor', () => {
+  const STALE_RUN = new Date('2026-01-01T06:00:00Z');
+
+  async function insertEntry(
+    serverId: string,
+    fields: { recurrence: string | null; enabled: boolean },
+  ): Promise<string> {
+    const id = uuidv7();
+    await h.db.insert(seedSchedule).values({
+      id,
+      serverId,
+      startsAt: new Date('2026-01-01T06:00:00Z'),
+      seedLayer: SEED_LAYER_A,
+      ...fields,
+      lastExecutedAt: STALE_RUN,
+    });
+    return id;
+  }
+
+  async function cursorOf(entryId: string): Promise<Date | null> {
+    const [row] = await h.db
+      .select({ lastExecutedAt: seedSchedule.lastExecutedAt })
+      .from(seedSchedule)
+      .where(eq(seedSchedule.id, entryId));
+    return row?.lastExecutedAt ?? null;
+  }
+
+  async function patch(cookie: string, serverId: string, entryId: string, payload: object) {
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/servers/${serverId}/seed-schedule/${entryId}`,
+      headers: { cookie },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it('clears the cursor of an executed one-off entry moved to a new start', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const entryId = await insertEntry(serverId, { recurrence: null, enabled: true });
+
+    await patch(cookie, serverId, entryId, {
+      starts_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    expect(await cursorOf(entryId)).toBeNull();
+  });
+
+  it('moves a recurring entry cursor to now when it is re-enabled', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const entryId = await insertEntry(serverId, { recurrence: '0 6 * * *', enabled: false });
+
+    await patch(cookie, serverId, entryId, { enabled: true });
+
+    const cursor = await cursorOf(entryId);
+    expect(cursor?.getTime()).toBeGreaterThan(Date.now() - 120_000);
+    expect(cursor?.getUTCSeconds()).toBe(0);
+  });
+
+  it('leaves the cursor alone when only the broadcast text changes', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const entryId = await insertEntry(serverId, { recurrence: '0 6 * * *', enabled: true });
+
+    await patch(cookie, serverId, entryId, { broadcast_text: 'Сид начинается' });
+
+    expect(await cursorOf(entryId)).toEqual(STALE_RUN);
   });
 });
 

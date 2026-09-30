@@ -736,6 +736,120 @@ describe('POST /api/v1/servers/:id/restart', () => {
   });
 });
 
+// Regression (#43 finding 335): restart swallowed a failed container_stop and
+// then called container_start, which is a no-op on a still-running container
+// and throws on a removed one.
+describe('POST /api/v1/servers/:id/restart — container state', () => {
+  async function createServer(cookie: string, slug: string): Promise<string> {
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug },
+    });
+    return resp.json<{ id: string }>().id;
+  }
+
+  it('recreates a missing container with container_run instead of failing', async () => {
+    const runs: string[] = [];
+    let startCalls = 0;
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: 'not_found',
+      running: false,
+      pid: 0,
+      started_at: '',
+      finished_at: '',
+      exit_code: 0,
+      image: '',
+      restart_count: 0,
+      labels: {},
+    });
+    h.bridge.containerRun = async ({ server_id }) => {
+      runs.push(server_id);
+      return { container_id: 'fake-container-id', status: 'started' };
+    };
+    h.bridge.containerStart = async () => {
+      startCalls++;
+      throw new Error('No such container');
+    };
+    const cookie = await login();
+    const id = await createServer(cookie, 'restart-missing-container');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'restarting' });
+    expect(runs).toEqual([id]);
+    expect(startCalls).toBe(0);
+  });
+
+  it('answers 502 container_stop_failed when the container is still running after a failed stop', async () => {
+    let startCalls = 0;
+    h.bridge.containerStop = async () => {
+      throw new Error('bridge call container_stop timed out');
+    };
+    h.bridge.containerStart = async () => {
+      startCalls++;
+      return { status: 'ok' };
+    };
+    const cookie = await login();
+    const id = await createServer(cookie, 'restart-stop-failed');
+    await h.db.update(servers).set({ status: 'running' }).where(eq(servers.id, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'container_stop_failed' });
+    expect(startCalls).toBe(0);
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('running');
+  });
+});
+
+// Regression (#43 finding 336): a taken slug on the container-server create
+// route fell through to a 500 carrying the driver's constraint message.
+describe('POST /api/v1/servers — slug already in use', () => {
+  it('answers 409 slug_in_use', async () => {
+    const cookie = await login();
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'slug-taken' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        ...createBody,
+        slug: 'slug-taken',
+        game_port: 7797,
+        query_port: 27175,
+        beacon_port: 15010,
+        rcon_port: 21124,
+      },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ error: 'slug_in_use' });
+    expect(second.body).not.toContain('duplicate key');
+  });
+});
+
 describe('DELETE /api/v1/servers/:id', () => {
   it('preserves config_versions history (soft-delete) and appends backup-marker rows', async () => {
     const cookie = await login();

@@ -33,6 +33,26 @@ export function isValidIpOrCidr(input: string): boolean {
   return (value & hostMask) === 0n;
 }
 
+/** Shortest prefix an ignore-list entry may have, per IP version. */
+const MIN_IGNORE_PREFIX = { 4: 8, 6: 32 } as const;
+
+/**
+ * Whether a valid address or CIDR block is narrow enough for the alt-detection
+ * ignore list: at least /8 for IPv4 and /32 for IPv6. A broader block (up to
+ * `0.0.0.0/0` or `::/0`) would silence shared-IP matching for large parts of
+ * the internet, or all of it. A bare address always qualifies.
+ *
+ * @param input - A string that already passed `isValidIpOrCidr`.
+ */
+export function isNarrowEnoughToIgnore(input: string): boolean {
+  const trimmed = input.trim();
+  const slashIdx = trimmed.indexOf('/');
+  if (slashIdx === -1) return true;
+  const version = net.isIP(trimmed.slice(0, slashIdx));
+  if (version !== 4 && version !== 6) return false;
+  return Number(trimmed.slice(slashIdx + 1)) >= MIN_IGNORE_PREFIX[version];
+}
+
 function ipToBigInt(address: string, version: number): bigint | null {
   return version === 4 ? ipv4ToBigInt(address) : ipv6ToBigInt(address);
 }

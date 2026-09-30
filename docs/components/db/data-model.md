@@ -585,14 +585,14 @@ One row per server; primary key mirrors `servers.id`. Stores Docker-level and Sq
 | `max_players` | `integer` | NO | `100` | |
 | `tickrate` | `integer` | NO | `50` | |
 | `multihome` | `inet` | YES | NULL | Bind to a specific NIC |
-| `extra_args` | `text` | NO | `''` | Appended to the Squad launch command |
+| `extra_args` | `text` | NO | `''` | Stored only: no `container_run` call passes it (#43) |
 | `launch_args_override` | `text` | YES | NULL | Completely replaces the default arg set when non-NULL |
-| `cpu_affinity` | `text` | YES | NULL | `taskset` mask |
-| `cpu_weight` | `integer` | YES | NULL | cgroup `CPUWeight` (100–10000) |
-| `niceness` | `integer` | YES | NULL | Process nice value (-20 to 19) |
-| `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB |
-| `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB |
-| `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000) |
+| `cpu_affinity` | `text` | YES | NULL | `taskset` mask. Stored only, not applied (#43) |
+| `cpu_weight` | `integer` | YES | NULL | cgroup `CPUWeight` (100–10000). Stored only, not applied (#43) |
+| `niceness` | `integer` | YES | NULL | Process nice value (-20 to 19). Stored only, not applied (#43) |
+| `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB. Stored only, not applied (#43) |
+| `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB. Stored only, not applied (#43) |
+| `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000). Stored only, not applied (#43) |
 | `chat_commands_enabled` | `boolean` | NO | `true` | AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands (`!stats`/`!rules`/`!report`); disable where an RNSquadJS sidecar runs its own `chatCommands` |
 | `rules_text` | `text` | YES | NULL | AUTO-4 (#75): text returned in-game for `!rules` (capped to the RCON single-message limit) |
 

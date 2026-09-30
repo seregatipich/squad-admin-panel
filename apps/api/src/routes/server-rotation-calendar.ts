@@ -13,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { validateLayerName } from '../lib/rotation-segment.js';
+import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 const entryParams = z.object({ id: z.string().uuid(), entryId: z.string().uuid() });
@@ -147,19 +148,41 @@ interface RotationWarning {
   starts_at?: string;
 }
 
-async function scheduleWarnings(
+/** Inputs every warning check needs, loaded once per request. */
+interface WarningContext {
+  seedRows: Array<typeof seedSchedule.$inferSelect>;
+  depotUpdating: boolean;
+}
+
+/**
+ * Loads the server's enabled seed-schedule rows and the depot-update flag.
+ * One call serves any number of `scheduleWarnings` evaluations, so a calendar
+ * read costs one query and one Redis GET regardless of how many entries it
+ * returns.
+ */
+async function loadWarningContext(
   app: Parameters<FastifyPluginAsync>[0],
   serverId: string,
-  scheduledAt: Date,
-): Promise<RotationWarning[]> {
+): Promise<WarningContext> {
+  const [seedRows, depotFlag] = await Promise.all([
+    app.db
+      .select()
+      .from(seedSchedule)
+      .where(and(eq(seedSchedule.serverId, serverId), eq(seedSchedule.enabled, true))),
+    app.redis.get('depot:updating'),
+  ]);
+  return { seedRows, depotUpdating: Boolean(depotFlag) };
+}
+
+/**
+ * Warnings for a layer change planned at `scheduledAt`: every seed start
+ * within an hour either side, plus a running depot update.
+ */
+function scheduleWarnings(context: WarningContext, scheduledAt: Date): RotationWarning[] {
   const warnings: RotationWarning[] = [];
-  const seedRows = await app.db
-    .select()
-    .from(seedSchedule)
-    .where(and(eq(seedSchedule.serverId, serverId), eq(seedSchedule.enabled, true)));
   const from = new Date(scheduledAt.getTime() - 60 * 60_000);
   const to = new Date(scheduledAt.getTime() + 60 * 60_000);
-  for (const seed of seedRows) {
+  for (const seed of context.seedRows) {
     let conflict = false;
     let occurrence = seed.startsAt;
     if (seed.recurrence && isValidCron5(seed.recurrence)) {
@@ -184,7 +207,7 @@ async function scheduleWarnings(
       });
     }
   }
-  if (await app.redis.get('depot:updating')) {
+  if (context.depotUpdating) {
     warnings.push({
       type: 'depot_update_window',
       message: 'Сейчас выполняется обновление депо; смена будет повторена планировщиком позже.',
@@ -218,7 +241,13 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         app.db
           .select()
           .from(rotationSchedule)
-          .where(eq(rotationSchedule.serverId, req.params.id))
+          .where(
+            and(
+              eq(rotationSchedule.serverId, req.params.id),
+              gte(rotationSchedule.scheduledAt, range.from),
+              lte(rotationSchedule.scheduledAt, range.to),
+            ),
+          )
           .orderBy(asc(rotationSchedule.scheduledAt)),
         app.db
           .select({
@@ -246,12 +275,13 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
           .where(eq(rotationProfiles.serverId, req.params.id))
           .orderBy(asc(rotationProfiles.weekday), asc(rotationProfiles.name)),
       ]);
-      const warningGroups = await Promise.all(
-        scheduleRows.map(
-          async (row) =>
-            [row.id, await scheduleWarnings(app, row.serverId, row.scheduledAt)] as const,
-        ),
-      );
+      // Executed entries are history: they need no warnings.
+      const pendingRows = scheduleRows.filter((row) => row.lastExecutedAt === null);
+      const warningContext =
+        pendingRows.length > 0 ? await loadWarningContext(app, req.params.id) : null;
+      const warningGroups = warningContext
+        ? pendingRows.map((row) => [row.id, scheduleWarnings(warningContext, row.scheduledAt)])
+        : [];
       return {
         entries: scheduleRows.map(serializeSchedule),
         history: historyRows.map((row) => ({
@@ -304,7 +334,10 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         })
         .returning();
       if (!row) throw new Error('rotation_schedule insert returned no row');
-      const warnings = await scheduleWarnings(app, req.params.id, row.scheduledAt);
+      const warnings = scheduleWarnings(
+        await loadWarningContext(app, req.params.id),
+        row.scheduledAt,
+      );
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,
@@ -359,13 +392,25 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.layer !== undefined) updates.layer = req.body.layer;
       if (req.body.mode !== undefined) updates.mode = req.body.mode;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
+      const cursor = rescheduledCursor({
+        scheduleChanged:
+          updates.scheduledAt !== undefined &&
+          updates.scheduledAt.getTime() !== existing.scheduledAt.getTime(),
+        reenabled: req.body.enabled === true && !existing.enabled,
+        recurring: false,
+        now: new Date(),
+      });
+      if (cursor !== undefined) updates.lastExecutedAt = cursor;
       const [row] = await app.db
         .update(rotationSchedule)
         .set(updates)
         .where(eq(rotationSchedule.id, existing.id))
         .returning();
       if (!row) throw new Error('rotation_schedule update returned no row');
-      const warnings = await scheduleWarnings(app, req.params.id, row.scheduledAt);
+      const warnings = scheduleWarnings(
+        await loadWarningContext(app, req.params.id),
+        row.scheduledAt,
+      );
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,

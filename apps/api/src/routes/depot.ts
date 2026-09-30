@@ -164,7 +164,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         );
       const unlistedLive = liveServers.filter((row) => !requestedIds.has(row.id));
       if (unlistedLive.length > 0) {
-        await app.redis.del('depot:updating');
+        await lock.release();
         reply.code(409);
         return { error: 'servers_running', server_ids: unlistedLive.map((r) => r.id) };
       }
@@ -261,7 +261,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // progress frame never made it to the stream.
           const steamCmdStreamWrites: Promise<void>[] = [];
           const steamCmdStreamWriteErrors: unknown[] = [];
-          await dedicated.depotUpdate((frame) => {
+          const { exit_code: exitCode } = await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
             steamCmdStreamWrites.push(
               publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
@@ -271,6 +271,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           });
           await Promise.all(steamCmdStreamWrites);
           if (steamCmdStreamWriteErrors.length > 0) throw steamCmdStreamWriteErrors[0];
+          // The bridge reports a failed SteamCMD run as a normal reply.
+          if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 
           // ── Phase 3: store build ID from manifest ──
           try {

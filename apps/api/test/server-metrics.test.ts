@@ -151,6 +151,45 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     expect(body.points[0].cpu_percent).toBe(10);
   });
 
+  // Regression (#43 finding 300): XRANGE with COUNT stopped at the oldest
+  // 2000 entries, so a wide window lost its newest points and never downsampled.
+  it('downsamples a wide window and keeps the newest point', async () => {
+    const id = uuidv7();
+    await h.db.insert(servers).values({
+      id,
+      displayName: 'Test',
+      slug: `t-${id}`,
+      status: 'running',
+      runtime: 'container',
+    });
+
+    const streamKey = `container:metrics:${id}`;
+    const base = new Date('2026-02-01T00:00:00Z').getTime();
+    const total = 2500;
+    const pipeline = h.redis.pipeline();
+    for (let i = 0; i < total; i++) {
+      pipeline.xadd(streamKey, `${base + i * 10_000}-0`, 'v', JSON.stringify({ seq: i }));
+    }
+    await pipeline.exec();
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/metrics`,
+      headers: { cookie },
+      query: {
+        since: new Date(base).toISOString(),
+        until: new Date(base + total * 10_000).toISOString(),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const points = res.json().points as Array<{ seq: number }>;
+    expect(points.length).toBeLessThanOrEqual(1000);
+    expect(points[0]?.seq).toBe(0);
+    expect(points.at(-1)?.seq).toBe(total - 1);
+  });
+
   it('returns 404 for deleted server', async () => {
     const id = uuidv7();
     await h.db.insert(servers).values({

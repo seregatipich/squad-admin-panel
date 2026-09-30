@@ -17,7 +17,7 @@ Current keys by category:
 |---|---|
 | servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update`, `server:download_logs` |
 | configs | `config:view`, `config:edit`, `config:rollback` |
-| players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags` |
+| players | `player:view`, `player:view_ips`, `player:manage_alt_detection`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags` |
 | moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`, `ban_source:view`, `banlist:read` |
 | admin_groups | `admin_group:view`, `admin_group:edit` |
 | whitelist | `whitelist:view`, `whitelist:edit` |
@@ -103,6 +103,10 @@ A route guard that checks only `panel_access` lets an API token through as soon 
 | `GET /api/v1/analytics/dashboard` | `server:view` |
 
 Session users with `panel_access` are unaffected: `derivePanelPermissions` grants them every catalogue key.
+
+### Alt-detection settings (#43)
+
+`GET /api/v1/settings/alt-detection` needs `player:view_ips` and reports `can_edit`. `PUT /api/v1/settings/alt-detection` and `POST`/`DELETE …/ignored-ips` need `player:manage_alt_detection`, which a role gets only with both `can_view_ips` and `can_edit_roles` (Owner always): weights, thresholds and ignored ranges can switch shared-IP matching off panel-wide, so IP-history read access alone must not change them. Ignore entries broader than `/8` (IPv4) or `/32` (IPv6) are rejected with 400.
 
 ### Config secrets (#10)
 

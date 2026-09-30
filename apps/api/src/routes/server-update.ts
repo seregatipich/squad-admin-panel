@@ -87,7 +87,7 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
           // progress frame never made it to the stream.
           const streamWrites: Promise<void>[] = [];
           const streamWriteErrors: unknown[] = [];
-          await dedicated.depotUpdate((frame) => {
+          const { exit_code: exitCode } = await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
             streamWrites.push(
               publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
@@ -97,6 +97,8 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
           });
           await Promise.all(streamWrites);
           if (streamWriteErrors.length > 0) throw streamWriteErrors[0];
+          // The bridge reports a failed SteamCMD run as a normal reply.
+          if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 
           await app.redis.set(
             'depot:last_update',

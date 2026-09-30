@@ -10,7 +10,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
-import { isValidIpOrCidr } from '../lib/ip-cidr.js';
+import { isNarrowEnoughToIgnore, isValidIpOrCidr } from '../lib/ip-cidr.js';
 
 const SINGLETON_ID = 1;
 const WEIGHT_MAX = 1000;
@@ -42,7 +42,10 @@ const putBody = z
   .refine((value) => Object.keys(value).length > 0, { message: 'empty_update' });
 
 const createIgnoredIpBody = z.object({
-  cidr: z.string().refine(isValidIpOrCidr, { message: 'invalid_cidr' }),
+  cidr: z
+    .string()
+    .refine(isValidIpOrCidr, { message: 'invalid_cidr' })
+    .refine(isNarrowEnoughToIgnore, { message: 'cidr_too_broad' }),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -156,17 +159,21 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/settings/alt-detection',
     { config: { permissions: ['player:view_ips'], audit: false } },
-    async () => ({
+    async (req) => ({
       settings: serializeSettings(await loadSettings()),
       ignored_ips: await loadIgnoredIps(),
+      can_edit: req.user?.permissions.permissions.has('player:manage_alt_detection') ?? false,
     }),
   );
 
   fast.put(
     '/api/v1/settings/alt-detection',
-    { schema: { body: putBody }, config: { permissions: ['player:view_ips'], audit: false } },
+    {
+      schema: { body: putBody },
+      config: { permissions: ['player:manage_alt_detection'], audit: false },
+    },
     async (req, reply) => {
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
       const actorId = req.user!.playerId;
       const before = serializeSettings(await loadSettings());
       const body = req.body;
@@ -218,10 +225,10 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips',
     {
       schema: { body: createIgnoredIpBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:manage_alt_detection'], audit: false },
     },
     async (req, reply) => {
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
       const actorId = req.user!.playerId;
       let inserted: typeof altIgnoredIps.$inferSelect | undefined;
       try {
@@ -265,7 +272,10 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/settings/alt-detection/ignored-ips/:id',
-    { schema: { params: idParam }, config: { permissions: ['player:view_ips'], audit: false } },
+    {
+      schema: { params: idParam },
+      config: { permissions: ['player:manage_alt_detection'], audit: false },
+    },
     async (req, reply) => {
       const existingRows = await app.db
         .select()

@@ -12,6 +12,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 const taskParams = z.object({ id: z.string().uuid(), taskId: z.string().uuid() });
@@ -476,6 +477,15 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
       }
       if (req.body.recurrence !== undefined) updateSet.recurrence = req.body.recurrence;
       if (req.body.enabled !== undefined) updateSet.enabled = req.body.enabled;
+      const cursor = rescheduledCursor({
+        scheduleChanged:
+          (nextScheduledAt === null ? null : new Date(nextScheduledAt).getTime()) !==
+            (existing.scheduledAt?.getTime() ?? null) || nextRecurrence !== existing.recurrence,
+        reenabled: req.body.enabled === true && !existing.enabled,
+        recurring: nextRecurrence !== null,
+        now: new Date(),
+      });
+      if (cursor !== undefined) updateSet.lastExecutedAt = cursor;
 
       const [row] = await app.db
         .update(scheduledTasks)
