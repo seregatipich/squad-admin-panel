@@ -13,6 +13,7 @@ import {
   exchangeCode,
   fetchDiscordUser,
 } from '../lib/discord-oauth.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { requestUser } from '../lib/request-user.js';
 import { HOST_COOKIE_ATTRIBUTES } from '../plugins/auth.js';
 
@@ -24,7 +25,6 @@ const AUDIT_RESOURCE = 'player_discord_link';
 const AUDIT_LINK = 'integration.discord.link';
 const AUDIT_UNLINK = 'integration.discord.unlink';
 
-const PG_UNIQUE_VIOLATION = '23505';
 const DISCORD_USER_ID_UNIQUE = 'player_discord_links_discord_user_id_unique';
 
 /**
@@ -32,18 +32,13 @@ const DISCORD_USER_ID_UNIQUE = 'player_discord_links_discord_user_id_unique';
  * reports (#95). The table has two unique constraints: the `player_id`
  * primary key (the caller already has a link — also what two concurrent
  * callbacks of one player race into) and `discord_user_id` (the Discord
- * account belongs to another player). Drizzle wraps the driver error, so the
- * SQLSTATE and constraint name can sit one level down.
+ * account belongs to another player).
  *
  * @returns the 409 error code, or null when `err` is not a unique violation.
  */
 function linkConflict(err: unknown): 'already_linked_self' | 'already_linked_other' | null {
-  type PgError = { code?: string; constraint_name?: string } | undefined;
-  const pgError = [err as PgError, (err as { cause?: PgError }).cause].find(
-    (candidate) => candidate?.code === PG_UNIQUE_VIOLATION,
-  );
-  if (!pgError) return null;
-  return pgError.constraint_name === DISCORD_USER_ID_UNIQUE
+  if (!isUniqueViolation(err)) return null;
+  return isUniqueViolation(err, DISCORD_USER_ID_UNIQUE)
     ? 'already_linked_other'
     : 'already_linked_self';
 }

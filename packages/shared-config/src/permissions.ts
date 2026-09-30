@@ -115,6 +115,11 @@ export const PERMISSIONS = [
     label: 'Видеть источники внешних банов',
   },
   {
+    key: 'message_template:manage',
+    category: 'moderation',
+    label: 'Управлять шаблонами сообщений',
+  },
+  {
     key: 'banlist:read',
     category: 'moderation',
     label: 'Читать публикуемый банлист (федерация)',

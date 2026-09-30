@@ -14,6 +14,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 
 const DEFAULT_LIMIT = 50;
@@ -77,18 +79,6 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
   function selfPlayerId(req: FastifyRequest): string {
     // biome-ignore lint/style/noNonNullAssertion: callers run selfGuard first
     return req.user!.playerId;
-  }
-
-  function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-    if (!req.user) {
-      reply.code(401);
-      return { error: 'unauthenticated' };
-    }
-    if (!req.user.permissions.panelAccess) {
-      reply.code(403);
-      return { error: 'forbidden' };
-    }
-    return null;
   }
 
   /**
@@ -593,13 +583,5 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
  * transaction that can collide: the ledger's idempotency key contains a fresh
  * uuidv7 reference id.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 export default vipSubscriptionRoutes;

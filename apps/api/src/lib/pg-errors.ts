@@ -39,8 +39,28 @@ export function hasPgErrorCode(err: unknown, code: string): boolean {
  * (SQLSTATE 23505), on the error itself or a few `cause` links down.
  *
  * @param err - Whatever a query rejected with.
- * @returns True for a unique violation anywhere in the first five links.
+ * @param constraint - When given, only a violation of this named constraint
+ *   matches, so callers can tell e.g. a slug conflict from a primary-key one.
+ * @returns True for a matching unique violation in the first five links.
  */
-export function isUniqueViolation(err: unknown): boolean {
-  return hasPgErrorCode(err, PG_UNIQUE_VIOLATION);
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+    if (typeof current === 'object') {
+      const pgError = current as {
+        code?: unknown;
+        constraint_name?: unknown;
+        constraint?: unknown;
+        cause?: unknown;
+      };
+      if (pgError.code === PG_UNIQUE_VIOLATION) {
+        if (constraint === undefined) return true;
+        if ((pgError.constraint_name ?? pgError.constraint) === constraint) return true;
+      }
+      current = pgError.cause;
+      continue;
+    }
+    return false;
+  }
+  return false;
 }

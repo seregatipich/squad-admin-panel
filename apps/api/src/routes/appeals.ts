@@ -456,6 +456,8 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
         extraContext: { appeal_id: appeal.id, appeal_number: Number(appeal.number) },
       });
       if (!result.ok) {
+        // A ban reverted concurrently (player card) needs no second unban.
+        if (result.error === 'already_reverted') continue;
         return { ok: false, error: result.error, partial: summary, conflictServerId: serverId };
       }
       summary.reverted_action_ids.push(...result.revertedActionIds);

@@ -72,7 +72,7 @@ export default function MessageTemplatesPage() {
   const [composed, setComposed] = useState('');
   const [pendingDelete, setPendingDelete] = useState<MessageTemplate | null>(null);
 
-  const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
+  const canEdit = useMemo(() => me?.permissions.includes('message_template:manage') ?? false, [me]);
   const sampleContext = useMemo(
     () => ({ player: samplePlayer, server: sampleServer }),
     [samplePlayer, sampleServer],

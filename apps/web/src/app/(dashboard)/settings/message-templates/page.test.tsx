@@ -18,7 +18,7 @@ const TEMPLATE = {
 };
 
 function mockFetch(opts: { permissions?: string[]; templates?: unknown[] } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+  const permissions = opts.permissions ?? ['message_template:manage'];
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -74,7 +74,7 @@ describe('MessageTemplatesPage', () => {
   );
 
   it(
-    'hides the editing controls without the role:edit permission',
+    'hides the editing controls without the message_template:manage permission',
     async () => {
       mockFetch({ permissions: [] });
       render(<MessageTemplatesPage />);

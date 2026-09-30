@@ -1,9 +1,10 @@
 import { detectGeoAnomalies, type GeoObservation } from '@squad/db';
 import { geoipSettings, playerIpHistory } from '@squad/db/schema';
 import { desc, eq, isNotNull, lte, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { uuidArrayParam } from '../lib/sql-params.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
@@ -12,23 +13,15 @@ const feedQuery = z.object({
 });
 
 const IP_HISTORY_CAP = 500;
-const FEED_CANDIDATE_CAP = 500;
+/**
+ * Most multi-country players the feed inspects per request, most recently
+ * seen first, so a cap hit drops the stalest players, never a fresh switch.
+ */
+export const FEED_CANDIDATE_CAP = 500;
 
 interface GeoConfig {
   switchWindowHours: number;
   multiCountryThreshold: number;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 interface IpRow {
@@ -167,6 +160,7 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         .where(isNotNull(playerIpHistory.countryCode))
         .groupBy(playerIpHistory.playerId)
         .having(sql`COUNT(DISTINCT ${playerIpHistory.countryCode}) > 1`)
+        .orderBy(desc(sql`MAX(${playerIpHistory.lastSeenAt})`), playerIpHistory.playerId)
         .limit(FEED_CANDIDATE_CAP);
 
       // One windowed query for every candidate's newest IP_HISTORY_CAP rows,
@@ -220,7 +214,13 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         return b.distinct_country_count - a.distinct_country_count;
       });
 
-      return { items: items.slice(0, req.query.limit), total: items.length };
+      // `total` counts anomalies among the inspected candidates; `truncated`
+      // says the candidate cap was hit, so older players may be missing.
+      return {
+        items: items.slice(0, req.query.limit),
+        total: items.length,
+        truncated: candidates.length === FEED_CANDIDATE_CAP,
+      };
     },
   );
 };

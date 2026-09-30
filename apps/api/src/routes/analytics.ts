@@ -1,9 +1,9 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
-import { requestUser } from '../lib/request-user.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -78,21 +78,6 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
     return { from: new Date(to.getTime() - MAX_WINDOW_DAYS * DAY_MS), to };
   }
   return { from, to };
-}
-
-/**
- * Answers 403 for a caller without `panel_access`. The dashboard also declares
- * `config.permissions: ['server:view']` so an API token reaches it only when
- * delegated that scope (audit #89). Authentication itself is enforced by the
- * fail-closed hook in `plugins/auth.ts`, which answers 401 before this handler
- * can run (#98).
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!requestUser(req).permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**

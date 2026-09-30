@@ -6,7 +6,7 @@ import {
   moderationActionPayload,
   STREAM_NAME,
 } from '@squad/shared-types';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';
 import { parseBanLengthToExpiry } from './banlist-publish.js';
@@ -171,16 +171,16 @@ export async function enforceModerationAction(
  * operator clicked through, to match the row set actually removed from
  * `Bans.cfg` by {@link removeBanLines}.
  *
- * `targetActionId` — the specific row the revert was invoked from — is
- * always included in the update, even if a concurrent request already
- * reverted it, so calling this twice for the same target action is
- * idempotent from the caller's perspective.
+ * Rows that are already reverted are left untouched, so a repeated or
+ * concurrent unban never overwrites who reverted a ban and when; the
+ * `reverted_at IS NULL` predicate is re-checked under the row lock, so of two
+ * concurrent calls only one claims a given row.
  *
- * @returns The ids of every row that was (re-)marked reverted.
+ * @returns The ids of the rows this call marked reverted.
  */
 export async function markBansReverted(
   app: FastifyInstance,
-  params: { playerId: string; serverId: string; actorPlayerId: string; targetActionId: string },
+  params: { playerId: string; serverId: string; actorPlayerId: string },
 ): Promise<string[]> {
   const rows = await app.db
     .update(moderationActions)
@@ -190,7 +190,7 @@ export async function markBansReverted(
         eq(moderationActions.playerId, params.playerId),
         eq(moderationActions.serverId, params.serverId),
         eq(moderationActions.actionType, 'ban'),
-        or(isNull(moderationActions.revertedAt), eq(moderationActions.id, params.targetActionId)),
+        isNull(moderationActions.revertedAt),
       ),
     )
     .returning({ id: moderationActions.id });

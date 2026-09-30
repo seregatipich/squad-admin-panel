@@ -8,6 +8,7 @@ import { raiseAltBanAlert } from '../lib/alt-ban-alert.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
 import { enforceModerationAction, type PlayerIdentity } from '../lib/moderation-enforce.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
 import { parseStoredRoster } from '../lib/roster.js';
@@ -86,18 +87,6 @@ const ACTION_ROW_SELECT = sql`
   ap.canonical_name AS author_name,
   ma.author_system_label
 `;
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function handlerGuard(
   req: FastifyRequest,

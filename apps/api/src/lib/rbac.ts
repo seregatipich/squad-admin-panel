@@ -78,6 +78,15 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
 const PANEL_PERMS_GATED_BY_TRIGGER_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'trigger:edit',
 ]);
+/**
+ * Message templates were edited under `role:edit` before they had their own
+ * key, so a role holds `message_template:manage` implicitly only while it may
+ * edit roles; any other role gets it through an explicit `role_permissions`
+ * grant, without receiving role management with it.
+ */
+const PANEL_PERMS_GATED_BY_EDIT_OR_GRANT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'message_template:manage',
+]);
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
@@ -129,6 +138,7 @@ export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<Pe
   ...PANEL_PERMS_GATED_BY_ASSIGN,
   ...PANEL_PERMS_GATED_BY_EDIT,
   ...PANEL_PERMS_GATED_BY_TRIGGER_EDIT,
+  ...PANEL_PERMS_GATED_BY_EDIT_OR_GRANT,
   ...PANEL_PERMS_GATED_BY_INTEGRATIONS,
   ...PANEL_PERMS_GATED_BY_VIEW_IPS,
   ...PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT,
@@ -165,6 +175,7 @@ function keyPassesFlagGates(key: PermissionKey, flags: RoleFlagGates): boolean {
   if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !flags.canAssignRoles) return false;
   if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !flags.canEditRoles) return false;
   if (PANEL_PERMS_GATED_BY_TRIGGER_EDIT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_EDIT_OR_GRANT.has(key) && !flags.canEditRoles) return false;
   if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !flags.canManageIntegrations) return false;
   if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !flags.canViewIps) return false;
   if (

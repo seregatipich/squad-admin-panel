@@ -1,67 +1,34 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { rm, stat } from 'node:fs/promises';
-import { type DatabaseClient, withMediaStoragePathLock } from '@squad/db';
+import { stat } from 'node:fs/promises';
+import type { DatabaseClient } from '@squad/db';
 import { type MediaFileRow, mediaFiles } from '@squad/db/schema';
 import {
   MEDIA_UPLOAD_MIME_TYPES,
   type MediaFileResponse,
-  type MediaUploadMetadata,
   type MediaUploadMimeType,
   mediaLinkInput,
   mediaUploadMetadata,
 } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { insertUploadedMedia, softDeleteMedia } from '../lib/media-files.js';
 import {
   MediaMagicByteMismatchError,
   MediaSizeLimitExceededError,
   resolveMediaPath,
   storeMediaUpload,
 } from '../lib/media-storage.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 
 function isUploadMimeType(value: string): value is MediaUploadMimeType {
   return (MEDIA_UPLOAD_MIME_TYPES as readonly string[]).includes(value);
-}
-
-async function insertMediaFileRow(
-  db: DatabaseClient,
-  params: {
-    id: string;
-    actorId: string;
-    kind: 'video' | 'image';
-    filename: string;
-    mimeType: MediaUploadMimeType;
-    stored: Awaited<ReturnType<typeof storeMediaUpload>>;
-    storagePath: string;
-    metadata: MediaUploadMetadata;
-  },
-): Promise<MediaFileRow> {
-  const inserted = await db
-    .insert(mediaFiles)
-    .values({
-      id: params.id,
-      uploaderPlayerId: params.actorId,
-      kind: params.kind,
-      originalFilename: params.filename,
-      mimeType: params.mimeType,
-      sizeBytes: params.stored.sizeBytes,
-      sha256: params.stored.sha256,
-      storagePath: params.storagePath,
-      externalUrl: null,
-      title: params.metadata.title ?? null,
-      description: params.metadata.description ?? null,
-    })
-    .returning();
-  const row = inserted[0];
-  if (!row) throw new Error('media_files insert returned no row');
-  return row;
 }
 
 /** Extracts a plain string value from a `req.file()` multipart field, if present. */
@@ -71,18 +38,6 @@ function multipartFieldValue(field: unknown): string | undefined {
     return String((value as { value: unknown }).value);
   }
   return undefined;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 export function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
@@ -208,59 +163,23 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
     const kind = mimeType.startsWith('video/') ? 'video' : 'image';
 
-    // Dedup by content hash: if an active row already stores identical bytes,
-    // reuse its storage_path and discard the file we just wrote so the same
-    // content is never stored twice on disk.
-    const existing = await app.db
-      .select({ storagePath: mediaFiles.storagePath })
-      .from(mediaFiles)
-      .where(and(eq(mediaFiles.sha256, stored.sha256), isNull(mediaFiles.deletedAt)))
-      .limit(1);
-    const candidateDedupPath = existing[0]?.storagePath;
-
-    // Re-validated and inserted under the same advisory lock
-    // worker-media-publisher's releaseIfEnabled takes for this exact
-    // storage_path: without it, that worker could null the path out and
-    // delete the file between our unlocked read above and this row actually
-    // referencing it (#63 finding 944).
-    const row = candidateDedupPath
-      ? await withMediaStoragePathLock(app.db, candidateDedupPath, async (tx) => {
-          const stillLive = await tx
-            .select({ id: mediaFiles.id })
-            .from(mediaFiles)
-            .where(
-              and(eq(mediaFiles.storagePath, candidateDedupPath), isNull(mediaFiles.deletedAt)),
-            )
-            .limit(1);
-          const storagePath = stillLive.length > 0 ? candidateDedupPath : stored.relativePath;
-          return insertMediaFileRow(tx, {
-            id,
-            actorId,
-            kind,
-            filename: filePart.filename,
-            mimeType,
-            stored,
-            storagePath,
-            metadata: metadataParse.data,
-          });
-        })
-      : await insertMediaFileRow(app.db, {
-          id,
-          actorId,
-          kind,
-          filename: filePart.filename,
-          mimeType,
-          stored,
-          storagePath: stored.relativePath,
-          metadata: metadataParse.data,
-        });
-
-    // The dedup path is only actually used once the lock confirms it is
-    // still live; discard our freshly written file only in that case, so a
-    // storage_path that was released concurrently keeps its own bytes.
-    if (candidateDedupPath && row.storagePath === candidateDedupPath) {
-      await rm(stored.absolutePath, { force: true });
-    }
+    // Dedup by content hash: identical bytes reuse the existing row's
+    // storage_path and the file just written is discarded.
+    const { row, deduped } = await insertUploadedMedia(
+      app.db,
+      app.config.MEDIA_STORAGE_DIR,
+      stored,
+      {
+        id,
+        uploaderPlayerId: actorId,
+        kind,
+        originalFilename: filePart.filename,
+        mimeType,
+        externalUrl: null,
+        title: metadataParse.data.title ?? null,
+        description: metadataParse.data.description ?? null,
+      },
+    );
 
     await writeAuditEntry(app.db, {
       actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
@@ -269,10 +188,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
       targetType: 'media_file',
       targetId: id,
       after: serializeMediaFile(row),
-      context: {
-        request_id: req.id,
-        deduped: Boolean(candidateDedupPath) && row.storagePath === candidateDedupPath,
-      },
+      context: { request_id: req.id, deduped },
       statusCode: 201,
     });
 
@@ -419,10 +335,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'forbidden', required: 'can_manage_media' };
       }
 
-      await app.db
-        .update(mediaFiles)
-        .set({ deletedAt: new Date() })
-        .where(eq(mediaFiles.id, row.id));
+      await softDeleteMedia(app.db, app.config.MEDIA_STORAGE_DIR, row);
 
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },

@@ -20,6 +20,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
+import { isCalendarDay } from '../lib/calendar-day.js';
 import { csvCell } from '../lib/csv.js';
 import { steamId64Equals } from '../lib/player-search.js';
 import { requestUser } from '../lib/request-user.js';
@@ -148,11 +149,6 @@ const setPriorityBody = z.object({ enabled: z.boolean() });
 
 const rosterExportQuery = z.object({ format: z.literal('csv').default('csv') });
 
-/** Escapes LIKE wildcards so a roster search matches them literally (#131). */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
 interface RosterRow {
   player_id: string;
   member_role: string;
@@ -242,11 +238,6 @@ const STATS_MIN_DAY = '2000-01-01';
 const STATS_MAX_DAY = '2999-12-31';
 
 /** True when `day` is a real `YYYY-MM-DD` calendar day (rejects e.g. `2024-13-45`). */
-function isCalendarDay(day: string): boolean {
-  const ms = Date.parse(`${day}T00:00:00.000Z`);
-  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === day;
-}
-
 const dayStringSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)

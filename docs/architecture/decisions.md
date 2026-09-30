@@ -245,7 +245,7 @@ Two new capped Redis Streams plus a pino multistream sink that fans every log li
 - **`panel:logs`** (`MAXLEN ~ 100000`, ≈ 10 MB) — every pino line from api + every worker + every bridge `onLog` event, encoded with single-letter field names (`s` source code, `l` level code, `i` server uuid optional, `m` message, `c` ctx json optional). The Redis stream-id millisecond prefix is the timestamp, so `ts` is never duplicated. Source codes `B/R/L/W/D/I/A`. Encoder/decoder in [`packages/shared-config/src/log-stream.ts`](../../packages/shared-config/src/log-stream.ts), pino multistream `Writable` in [`log-stream-sink.ts`](../../packages/shared-config/src/log-stream-sink.ts).
 - **`host:metrics`** (`MAXLEN ~ 5760` = 24 h × 4/min, ≈ 300 KB) — packed 8-int tuple per sample, written every 15 s by the new `worker-metrics-sampler`. Helpers in [`metrics-pack.ts`](../../packages/shared-config/src/metrics-pack.ts).
 
-GET endpoints on top: `/api/v1/logs` (filter + cursor pagination), `/api/v1/logs/export` (gzip-streamed sectioned bundle, gated by `host:metrics`), `/api/v1/host/metrics/history` (paired arrays). UI: `/logs` page with live-tail polling and an export button, click-to-expand `MetricHistoryModal` on the four dashboard cards.
+GET endpoints on top: `/api/v1/logs` (filter + cursor pagination), `/api/v1/logs/export` (gzip-streamed sectioned bundle, originally gated by `host:metrics`; since #70 it requires `host:view` + `host:metrics` + `audit:view` + `server:download_logs`, one key per section it contains), `/api/v1/host/metrics/history` (paired arrays). UI: `/logs` page with live-tail polling and an export button, click-to-expand `MetricHistoryModal` on the four dashboard cards.
 
 ### Rationale
 

@@ -8,13 +8,15 @@ import {
 } from '@squad/db/schema';
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
+import { escapeLike } from '../lib/sql-like.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -56,22 +58,6 @@ const patchBody = z
   .refine((body) => body.status !== undefined || body.resolution_note !== undefined, {
     message: 'empty_update',
   });
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function auditActor(req: FastifyRequest): AuditActor {
   return {

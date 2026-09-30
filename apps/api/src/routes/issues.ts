@@ -18,6 +18,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { ensureSystemIssueLabels } from '../lib/issue-labels.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { hasPgErrorCode, PG_UNIQUE_VIOLATION } from '../lib/pg-errors.js';
 import type { IssueCommentLiveView, IssueLiveView, IssuePlayerRef } from '../plugins/live-bus.js';
 
@@ -127,22 +128,6 @@ function currentUser(req: FastifyRequest, reply: FastifyReply) {
     return null;
   }
   return req.user;
-}
-
-/**
- * `panel_access` gate for the player-card endpoint, which returns its body
- * instead of sending it (mirrors `media-links.ts`).
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function playerRef(id: string | null, names: Map<string, string>): IssuePlayerRef | null {

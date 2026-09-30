@@ -14,6 +14,14 @@ const PONG_TIMEOUT_MS = 30_000;
 const DEFAULT_REVALIDATE_INTERVAL_MS = 30_000;
 const CHAT_BUFFER_PER_SERVER = 100;
 const COMBAT_BUFFER_PER_SERVER = 100;
+/**
+ * Client frames tolerated per {@link PING_INTERVAL_MS}. A well-behaved client
+ * sends one pong per ping; anything far above that is a flood and the socket
+ * is closed with {@link WS_CLOSE_POLICY_VIOLATION} rather than parsed.
+ */
+export const MAX_CLIENT_FRAMES_PER_INTERVAL = 20;
+/** RFC 6455 close code for a client that breaks the frame-rate policy. */
+export const WS_CLOSE_POLICY_VIOLATION = 1008;
 
 /** Most event types one subscribe/unsubscribe frame may name. */
 const MAX_SUBSCRIPTION_EVENTS = 64;
@@ -148,6 +156,7 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
     (socket, req) => {
       let lastPongAt = Date.now();
       let closed = false;
+      let clientFramesThisInterval = 0;
       const connectionPlayerId = req.user?.playerId ?? null;
       const connectionSessionId = req.session?.id ?? null;
       const connectionSessionToken = req.session ? req.cookies[SESSION_COOKIE] : undefined;
@@ -193,6 +202,7 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
 
       const pinger = setInterval(() => {
         if (closed) return;
+        clientFramesThisInterval = 0;
         if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
           closeSocket(4000, 'pong timeout');
           return;
@@ -340,7 +350,14 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         safeSend({ type: 'unsubscribed', events: [...subscribedEvents] });
       };
 
+      // Frame size is capped by the websocket plugin's `maxPayload`; the rate
+      // is capped here so a flood of small frames cannot pin the event loop.
       socket.on('message', (raw) => {
+        clientFramesThisInterval += 1;
+        if (clientFramesThisInterval > MAX_CLIENT_FRAMES_PER_INTERVAL) {
+          closeSocket(WS_CLOSE_POLICY_VIOLATION, 'too many frames');
+          return;
+        }
         let msg: { type?: unknown; events?: unknown };
         try {
           msg = JSON.parse(raw.toString()) as { type?: unknown; events?: unknown };

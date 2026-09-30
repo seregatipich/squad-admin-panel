@@ -1,10 +1,9 @@
 import { CHAT_SCOPES, CHAT_SOURCES, chatMessages, players } from '@squad/db/schema';
 import { and, desc, eq, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { playerNameMatch } from '../lib/player-name-search.js';
-import { requestUser } from '../lib/request-user.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;
@@ -51,10 +50,6 @@ function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
 function encodeCursor(sentAt: Date, id: bigint): string {
   return Buffer.from(`${sentAt.toISOString()}~${id.toString()}`).toString('base64url');
 }
@@ -74,21 +69,6 @@ function decodeCursor(raw: string): { sentAt: Date; id: bigint } | null {
   } catch {
     return null;
   }
-}
-
-/**
- * `panel_access` gate for the chat archive. The route also declares
- * `config.permissions: ['events:view']`, so an API token reaches it only when
- * delegated that scope (audit #114); this guard keeps a session whose role
- * lacks `panel_access` out even if it holds an explicit `events:view` row.
- * Authentication is enforced by the fail-closed hook in `plugins/auth.ts`.
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!requestUser(req).permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 const chatRoutes: FastifyPluginAsync = async (app) => {

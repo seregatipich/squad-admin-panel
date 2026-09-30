@@ -219,4 +219,13 @@ describe('GET /api/v1/logs', () => {
     expect(body.entries).toEqual([]);
     expect(body.newest_scanned_id).toBe(tipId);
   });
+
+  it('rejects an oversized src filter with 400 (#70)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/logs?src=${'B,'.repeat(100)}B`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });

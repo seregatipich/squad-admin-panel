@@ -1,9 +1,10 @@
 import { serverSettings, servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -23,18 +24,6 @@ interface SeedingRedisState {
   progress_pct?: number;
   started_at?: string | null;
   layer?: string | null;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**

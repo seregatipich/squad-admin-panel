@@ -23,7 +23,9 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
-import playerDossierRoutes from '../../src/routes/player-dossier.js';
+import playerDossierRoutes, {
+  DOSSIER_VEHICLE_ROWS_LIMIT,
+} from '../../src/routes/player-dossier.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -385,6 +387,41 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(body.vehicles).toEqual([]);
     expect(body.vehicle_kills).toEqual([]);
     expect(body.kits).toEqual([]);
+  });
+
+  it('caps vehicles and vehicle_kills at DOSSIER_VEHICLE_ROWS_LIMIT rows (#70)', async () => {
+    const [heavy] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(192010),
+        canonicalName: 'DossierVehicles',
+        canonicalNameNormalized: 'dossiervehicles',
+      })
+      .returning({ id: players.id });
+    if (!heavy) throw new Error('player insert failed');
+    const count = DOSSIER_VEHICLE_ROWS_LIMIT + 5;
+    await h.db.insert(playerVehicleStats).values(
+      Array.from({ length: count }, (_, i) => ({
+        playerId: heavy.id,
+        vehicleAssetId: `BP_Vehicle_${i}`,
+        kills: i,
+      })),
+    );
+    await h.db.insert(playerVehicleKills).values(
+      Array.from({ length: count }, (_, i) => ({
+        playerId: heavy.id,
+        victimVehicleAssetId: `BP_Victim_${i}`,
+        weapon: 'BP_AT4',
+        destroyedCount: i + 1,
+      })),
+    );
+
+    const res = await fetchDossier(heavy.id);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DossierBody;
+    expect(body.vehicles).toHaveLength(DOSSIER_VEHICLE_ROWS_LIMIT);
+    expect(body.vehicles[0]?.vehicle_asset_id).toBe(`BP_Vehicle_${count - 1}`);
+    expect(body.vehicle_kills).toHaveLength(DOSSIER_VEHICLE_ROWS_LIMIT);
   });
 
   it('serializes damage as null, not 0', async () => {

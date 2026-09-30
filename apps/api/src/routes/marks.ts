@@ -1,12 +1,14 @@
 import { markTypes, type PlayerMarkRow, playerMarks, players } from '@squad/db/schema';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { ensureMarkTypes } from '../lib/mark-types.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const COMMENT_MAX = 512;
 
@@ -22,31 +24,11 @@ const clearMarkBody = z
 const listQuery = z.object({ include_cleared: z.enum(['true', 'false']).optional() });
 const markTypesQuery = z.object({ include_inactive: z.enum(['true', 'false']).optional() });
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 /**
  * Detects Postgres `23505` (unique violation). Drizzle wraps driver errors in a
  * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
  * error itself — the chain has to be walked.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 function serializeMark(row: PlayerMarkRow) {
   return {
@@ -358,15 +340,24 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const before = serializeMark(mark);
+      // `cleared_at IS NULL` makes the clear a compare-and-set: of two
+      // concurrent requests that both passed the check above, only one
+      // updates the row, audits and publishes; the other gets the 409.
       const updated = await app.db
         .update(playerMarks)
         .set({ clearedBy: actorId, clearedAt: new Date(), clearReason })
-        .where(eq(playerMarks.id, markId))
+        .where(
+          and(
+            eq(playerMarks.id, markId),
+            eq(playerMarks.playerId, playerId),
+            isNull(playerMarks.clearedAt),
+          ),
+        )
         .returning();
       const row = updated[0];
       if (!row) {
-        reply.code(500);
-        return { error: 'update_failed' };
+        reply.code(409);
+        return { error: 'mark_already_cleared' };
       }
 
       await writeAuditEntry(app.db, {

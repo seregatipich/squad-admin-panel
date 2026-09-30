@@ -6,10 +6,14 @@ import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import {
   isMarkTypeIcon,
+  MARK_TYPE_CREATE_LOCK,
   MARK_TYPE_ICONS,
+  MARK_TYPE_SEED_ID_CEILING,
   MARK_TYPE_SEVERITY_MAX,
   MARK_TYPE_SEVERITY_MIN,
+  MARK_TYPE_SLUG_CONSTRAINT,
 } from '../lib/mark-types.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const LABEL_MAX = 64;
 const SLUG_MAX = 40;
@@ -66,14 +70,6 @@ function serialize(row: MarkTypeRow) {
  * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
  * error itself — the chain has to be walked.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 const markTypesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -105,9 +101,12 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
       let row: MarkTypeRow;
       try {
         row = await app.db.transaction(async (tx) => {
+          // Serialises concurrent creates: without it two transactions read
+          // the same MAX(id) and the loser fails on the primary key.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${MARK_TYPE_CREATE_LOCK}))`);
           const [bounds] = await tx
             .select({
-              nextId: sql<number>`COALESCE(MAX(${markTypes.id}), 0) + 1`,
+              nextId: sql<number>`GREATEST(COALESCE(MAX(${markTypes.id}), 0), ${MARK_TYPE_SEED_ID_CEILING}) + 1`,
               nextSort: sql<number>`COALESCE(MAX(${markTypes.sortOrder}), 0) + 1`,
             })
             .from(markTypes);
@@ -129,7 +128,7 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
           return first;
         });
       } catch (err) {
-        if (isUniqueViolation(err)) {
+        if (isUniqueViolation(err, MARK_TYPE_SLUG_CONSTRAINT)) {
           reply.code(409);
           return { error: 'slug_already_exists' };
         }

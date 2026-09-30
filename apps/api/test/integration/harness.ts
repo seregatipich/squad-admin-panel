@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
-import websocket from '@fastify/websocket';
 import { type BridgeClient, BridgeError } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
@@ -28,6 +27,7 @@ import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin, { genRequestId } from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
+import websocketPlugin from '../../src/plugins/websocket.js';
 import { registerRoutes } from '../../src/routes/index.js';
 import { createIsolatedSchema, ensureWorkerDatabase, hostRedisUrl } from './isolated-db.js';
 
@@ -365,7 +365,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   app.decorate('makeBridgeClient', () => bridge as unknown as BridgeClient);
 
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
-  await app.register(websocket);
+  await app.register(websocketPlugin, { allowedOrigin: 'https://panel.test' });
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
   await app.register(requestContextPlugin);
   await app.register(diagPlugin);

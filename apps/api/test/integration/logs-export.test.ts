@@ -126,4 +126,39 @@ describe('GET /api/v1/logs/export', () => {
     expect(text).toContain('===== BRIDGE =====');
     expect(text).toContain('===== HOST METRICS 24h (CSV) =====');
   });
+
+  it('rejects an API token scoped to host:metrics alone, since the bundle carries audit rows and game logs (#70)', async () => {
+    const mint = async (scopes: string[]) => {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/tokens',
+        headers: { cookie },
+        payload: { name: `export-${scopes.length}`, scopes },
+      });
+      expect(res.statusCode).toBe(201);
+      return (res.json() as { plaintext: string }).plaintext;
+    };
+    h.bridge.containerLogsFollow = vi.fn(async () => undefined) as never;
+
+    const metricsOnly = await mint(['host:metrics']);
+    const denied = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/logs/export',
+      headers: { authorization: `Bearer ${metricsOnly}` },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const everySection = await mint([
+      'host:view',
+      'host:metrics',
+      'audit:view',
+      'server:download_logs',
+    ]);
+    const allowed = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/logs/export',
+      headers: { authorization: `Bearer ${everySection}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+  });
 });

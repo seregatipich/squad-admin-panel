@@ -18,6 +18,11 @@ import { combatGuard } from '../lib/combat-guard.js';
 
 const CACHE_PREFIX = 'dossier:';
 const CACHE_TTL_SECONDS = 60;
+/**
+ * Most rows returned for each of `vehicles` and `vehicle_kills` (top by kills
+ * / destroyed count); bounds the response and its cached copy in Redis.
+ */
+export const DOSSIER_VEHICLE_ROWS_LIMIT = 100;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 
@@ -46,7 +51,7 @@ function toIso(value: Date | string | null): string | null {
  * - `skill` aggregates live over `match_players ⋈ matches`, **excluding seed
  *   matches** (`matches.is_seed`) — a warm-up round on an empty server is not
  *   game statistics (outcome rule and `winrate = wins/(wins+losses)` → `null`
- *   as in the player-matches / combat-summary routes; `damage_dealt` is a
+ *   as in the player-matches route; `damage_dealt` is a
  *   permanent `null`).
  * - `kd_trend` groups the very same matches by month, so the chart can never
  *   disagree with the summary above it.
@@ -58,7 +63,10 @@ function toIso(value: Date | string | null): string | null {
  *   weapon count) from `player_weapon_stats`.
  * - `vehicles` / `vehicle_kills` from `player_vehicle_stats` /
  *   `player_vehicle_kills`, LEFT-JOIN-enriched from `vehicle_catalog`
- *   (`unlocalized: true` + null names when the asset id is uncatalogued).
+ *   (`unlocalized: true` + null names when the asset id is uncatalogued),
+ *   each capped at {@link DOSSIER_VEHICLE_ROWS_LIMIT} rows.
+ *
+ * The eight section queries are independent and run concurrently.
  * - `kits` from `player_kit_time`, summed across servers for `serverId=all`.
  *
  * `serverId=<uuid>` filters only `kits` and `skill`/`kd_trend` — the
@@ -122,7 +130,7 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const winExpr = sql`${matches.winner} = 'team' || ${matchPlayers.team}`;
-      const [skillRow] = await app.db
+      const skillQuery = app.db
         .select({
           kills: sql<number>`COALESCE(SUM(${matchPlayers.kills}), 0)::int`,
           deaths: sql<number>`COALESCE(SUM(${matchPlayers.deaths}), 0)::int`,
@@ -161,7 +169,7 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
       // сидовые матчи, и график расходился бы с цифрами над ним. Месяцы без
       // матчей сюда не попадают сами — группировка их не создаёт.
       const trendMonth = sql`to_char(date_trunc('month', ${matches.startedAt}), 'YYYY-MM-DD')`;
-      const trendRows = await app.db
+      const trendQuery = app.db
         .select({
           month: sql<string>`${trendMonth}`,
           kills: sql<number>`COALESCE(SUM(${matchPlayers.kills}), 0)::int`,
@@ -173,13 +181,13 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .groupBy(trendMonth)
         .orderBy(asc(trendMonth));
 
-      const [onlineRow] = await app.db
+      const onlineQuery = app.db
         .select({ seconds: sql<string>`COALESCE(SUM(${playerStatPeriods.onlineSeconds}), 0)` })
         .from(playerStatPeriods)
         .where(and(...monthConditions));
 
       const weaponFilter = eq(playerWeaponStats.playerId, playerId);
-      const weaponRows = await app.db
+      const weaponQuery = app.db
         .select({
           weapon: playerWeaponStats.weapon,
           kills: playerWeaponStats.kills,
@@ -193,12 +201,12 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(desc(playerWeaponStats.kills), desc(playerWeaponStats.shotsEvents))
         .limit(weaponsLimit);
 
-      const [weaponCount] = await app.db
+      const weaponCountQuery = app.db
         .select({ total: sql<number>`COUNT(*)::int` })
         .from(playerWeaponStats)
         .where(weaponFilter);
 
-      const vehicleRows = await app.db
+      const vehicleQuery = app.db
         .select({
           vehicleAssetId: playerVehicleStats.vehicleAssetId,
           kills: playerVehicleStats.kills,
@@ -210,9 +218,10 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .from(playerVehicleStats)
         .leftJoin(vehicleCatalog, eq(vehicleCatalog.assetId, playerVehicleStats.vehicleAssetId))
         .where(eq(playerVehicleStats.playerId, playerId))
-        .orderBy(desc(playerVehicleStats.kills));
+        .orderBy(desc(playerVehicleStats.kills))
+        .limit(DOSSIER_VEHICLE_ROWS_LIMIT);
 
-      const vehicleKillRows = await app.db
+      const vehicleKillQuery = app.db
         .select({
           victimVehicleAssetId: playerVehicleKills.victimVehicleAssetId,
           weapon: playerVehicleKills.weapon,
@@ -227,12 +236,13 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
           eq(vehicleCatalog.assetId, playerVehicleKills.victimVehicleAssetId),
         )
         .where(eq(playerVehicleKills.playerId, playerId))
-        .orderBy(desc(playerVehicleKills.destroyedCount));
+        .orderBy(desc(playerVehicleKills.destroyedCount))
+        .limit(DOSSIER_VEHICLE_ROWS_LIMIT);
 
       const kitConditions: (SQL | undefined)[] = [eq(playerKitTime.playerId, playerId)];
       if (serverId !== 'all') kitConditions.push(eq(playerKitTime.serverId, serverId));
       const kitSeconds = sql`SUM(${playerKitTime.seconds})`;
-      const kitRows = await app.db
+      const kitQuery = app.db
         .select({
           kit: playerKitTime.kit,
           seconds: sql<string>`${kitSeconds}`,
@@ -242,6 +252,26 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .where(and(...kitConditions))
         .groupBy(playerKitTime.kit)
         .orderBy(desc(kitSeconds));
+
+      const [
+        [skillRow],
+        trendRows,
+        [onlineRow],
+        weaponRows,
+        [weaponCount],
+        vehicleRows,
+        vehicleKillRows,
+        kitRows,
+      ] = await Promise.all([
+        skillQuery,
+        trendQuery,
+        onlineQuery,
+        weaponQuery,
+        weaponCountQuery,
+        vehicleQuery,
+        vehicleKillQuery,
+        kitQuery,
+      ]);
 
       // A grand-total aggregate always yields one row; the fallback only
       // satisfies the type system.

@@ -10,8 +10,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
  * carry (see `narrowToTokenScopes`). Routes using this guard still declare
  * `config.permissions` so the global hook applies the token's scopes first.
  *
- * Shared by `/dossier`, `/combat-summary`, `/weapon-stats` and `/vehicle-stats`
- * so the same data cannot be read through a less guarded route (#40, #215).
+ * Shared by `/dossier` so the same data cannot be read through a less guarded route (#40, #215).
  *
  * @param req - The request; `req.user` is set by the auth plugin.
  * @param reply - The reply; its status code is set on denial.

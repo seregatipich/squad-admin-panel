@@ -5,7 +5,8 @@ import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
-import liveRoutes from '../src/routes/live.js';
+import websocketPlugin from '../src/plugins/websocket.js';
+import liveRoutes, { MAX_CLIENT_FRAMES_PER_INTERVAL } from '../src/routes/live.js';
 
 let app: ReturnType<typeof Fastify>;
 let port: number;
@@ -18,7 +19,7 @@ beforeAll(async () => {
   // diag plugin needs `xadd`; provide a no-op so emits are silent.
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('redis', { xadd: async () => '0-0' });
-  await app.register(await import('@fastify/websocket').then((m) => m.default));
+  await app.register(websocketPlugin, { allowedOrigin: 'https://panel.test' });
   await app.register(diagPlugin);
   await app.register(liveBusPlugin);
   await app.register(liveRoutes);
@@ -94,6 +95,25 @@ describe('/api/v1/ws/live', () => {
     });
     offProbe();
     expect(delivered).toBe(1);
+  });
+
+  it('closes the socket with 1009 when a client frame exceeds the payload cap (#70)', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    ws.on('error', () => undefined);
+    ws.send('x'.repeat(64 * 1024));
+    expect(await closed).toBe(1009);
+  });
+
+  it('closes the socket with 1008 when the client floods frames (#70)', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    for (let i = 0; i <= MAX_CLIENT_FRAMES_PER_INTERVAL; i++) {
+      ws.send(JSON.stringify({ type: 'pong' }));
+    }
+    expect(await closed).toBe(1008);
   });
 });
 

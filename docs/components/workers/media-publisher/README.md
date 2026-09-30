@@ -64,6 +64,8 @@ Three guards must all hold first, each protecting against losing evidence outrig
 2. every other publication of that media has already finished — otherwise a still-queued destination loses the file it was about to upload;
 3. no second `media_files` row shares the `storage_path` — uploads are deduplicated by sha256, so one file on disk can back several rows.
 
+Guard 3 and the swap run in one transaction holding `pg_advisory_xact_lock(hashtext('media_storage_path'), hashtext(storage_path))` — the same lock the API's upload dedup and `DELETE /api/v1/media/:id` take (`apps/api/src/lib/media-files.ts`) — so an upload cannot start sharing the file between the check and the release.
+
 The swap itself is a single `UPDATE`: `media_files_exactly_one_location_check` forbids a row holding both or neither location, so it cannot be split into two statements.
 
 ## Configuration

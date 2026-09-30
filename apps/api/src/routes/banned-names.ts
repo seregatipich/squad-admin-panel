@@ -9,10 +9,11 @@ import {
   validateBannedNamePattern,
 } from '@squad/shared-config';
 import { and, asc, desc, eq, ilike, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { requestUser } from '../lib/request-user.js';
 
 const matchTypeSchema = z.enum(BANNED_NAME_MATCH_TYPES);
@@ -88,26 +89,6 @@ function snapshot(row: typeof bannedNameRules.$inferSelect) {
     created_by: row.createdBy,
     hit_count: row.hitCount,
   };
-}
-
-/**
- * `panel_access` gate for every banned-name route (#7). Rules are a panel
- * surface, and `squadPermissions` is not gated on `panel_access` in
- * `rbac.ts`, so an in-game-only role (Squad `ban`, no panel) must not reach
- * them through a session minted before its panel access was withdrawn.
- * API tokens arrive here already narrowed by `narrowToTokenScopes`.
- */
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!requestUser(req).permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
-/** Escapes LIKE wildcards so `search` matches literally (#120). */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function hasBanPermission(req: FastifyRequest): boolean {

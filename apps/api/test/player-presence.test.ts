@@ -126,6 +126,15 @@ describeIfDb('player presence API (PRES-4)', () => {
     return res.json() as PresenceResponse;
   }
 
+  it('rejects an end that is not a calendar day with 400 (#70)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${uuidv7()}/presence?end=2026-02-30`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('rejects unauthenticated access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',

@@ -8,6 +8,7 @@ import {
   sourceCode,
 } from '@squad/shared-config';
 import type { FastifyPluginAsync } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { streamBundle } from '../lib/log-export.js';
 
@@ -15,6 +16,24 @@ import { streamBundle } from '../lib/log-export.js';
 // can never be silently dropped from `src=` filtering again.
 const SOURCE_CODES: ReadonlySet<string> = new Set(LOG_SOURCES.map(sourceCode));
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+/** Longest `src` filter: every source code once, comma-separated. */
+const SRC_FILTER_MAX = SOURCE_CODES.length * 2 - 1;
+
+/**
+ * Everything `streamBundle` puts in a support bundle, each gated by its own
+ * catalogue key elsewhere: panel logs (`host:view`, as `GET /api/v1/logs`),
+ * host metrics (`host:metrics`), the audit slice (`audit:view`) and game
+ * server stdout tails, which carry player IPs (`server:download_logs`).
+ * The route requires all four so no caller — in particular an API token
+ * scoped to `host:metrics` alone — reads more through the bundle than
+ * through the dedicated routes.
+ */
+export const LOG_EXPORT_PERMISSIONS = [
+  'host:view',
+  'host:metrics',
+  'audit:view',
+  'server:download_logs',
+] as const;
 
 /** Stream entries read per XRANGE/XREVRANGE round trip while scanning for matches. */
 const LOG_SCAN_CHUNK = 500;
@@ -54,13 +73,15 @@ function decodeStreamEntry(id: string, fields: string[]): DecodedEntry | null {
  * is empty, otherwise a run of non-matching entries would be re-read forever.
  */
 const logsRoutes: FastifyPluginAsync = async (app) => {
-  app.get(
+  const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  fast.get(
     '/api/v1/logs',
     {
       config: { permissions: ['host:view'], audit: false },
       schema: {
         querystring: z.object({
-          src: z.string().optional(),
+          src: z.string().max(SRC_FILTER_MAX).optional(),
           lvl: z.enum(LOG_LEVELS).optional(),
           srv: z.string().uuid().optional(),
           q: z.string().max(120).optional(),
@@ -136,9 +157,9 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
       };
     },
   );
-  app.get(
+  fast.get(
     '/api/v1/logs/export',
-    { config: { permissions: ['host:metrics'], audit: false } },
+    { config: { permissions: [...LOG_EXPORT_PERMISSIONS], audit: false } },
     async (_req, reply) => {
       const rows = await app.db
         .select({ id: serversTbl.id, display_name: serversTbl.displayName })

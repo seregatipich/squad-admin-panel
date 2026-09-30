@@ -1,8 +1,9 @@
 import { gameVoteBallots, gameVotes, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { playerNameMatch } from '../lib/player-name-search.js';
 
 const LIMIT_DEFAULT = 50;
@@ -38,18 +39,6 @@ type OrderDir = z.infer<typeof orderSchema>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 interface Cursor {

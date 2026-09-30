@@ -1,16 +1,16 @@
 import { rm } from 'node:fs/promises';
-import { mediaFiles, mediaLinks } from '@squad/db/schema';
+import { mediaLinks } from '@squad/db/schema';
 import {
   MEDIA_UPLOAD_MIME_TYPES,
   type MediaLinkEntityType,
   type MediaUploadMimeType,
   publicMediaUploadQuery,
 } from '@squad/shared-types';
-import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { writeAuditEntry } from '../lib/audit.js';
+import { insertUploadedMedia } from '../lib/media-files.js';
 import {
   MediaMagicByteMismatchError,
   MediaSizeLimitExceededError,
@@ -123,25 +123,13 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
 
       // Same content-hash dedup as the authenticated upload route: identical
       // bytes reuse the existing storage_path instead of being written twice.
-      const existing = await app.db
-        .select({ storagePath: mediaFiles.storagePath })
-        .from(mediaFiles)
-        .where(and(eq(mediaFiles.sha256, stored.sha256), isNull(mediaFiles.deletedAt)))
-        .limit(1);
-      const dedupPath = existing[0]?.storagePath;
-      const storagePath = dedupPath ?? stored.relativePath;
-      if (dedupPath) await rm(stored.absolutePath, { force: true });
-
-      await app.db.insert(mediaFiles).values({
+      const { deduped } = await insertUploadedMedia(app.db, app.config.MEDIA_STORAGE_DIR, stored, {
         id,
         uploaderPlayerId: null,
         uploadTokenId: token.id,
         kind: mimeType.startsWith('video/') ? 'video' : 'image',
         originalFilename: filePart.filename,
         mimeType,
-        sizeBytes: stored.sizeBytes,
-        sha256: stored.sha256,
-        storagePath,
         externalUrl: null,
         title: null,
         description: null,
@@ -172,7 +160,7 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
           target_entity_type: targetType,
           target_entity_id: token.targetEntityId,
         },
-        context: { request_id: req.id, token_id: token.id, deduped: Boolean(dedupPath) },
+        context: { request_id: req.id, token_id: token.id, deduped },
         statusCode: 201,
       });
 

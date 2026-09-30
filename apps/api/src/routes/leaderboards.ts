@@ -9,9 +9,11 @@ import {
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, asc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calendarDaySchema } from '../lib/calendar-day.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { steamId64Equals } from '../lib/player-search.js';
 import { containsPattern } from '../lib/sql-like.js';
 
@@ -48,12 +50,6 @@ const SEARCH_RATE_LIMIT_WINDOW_SECONDS = 60;
 const MAX_OFFSET = 1_000_000;
 const MAX_PAGE = Math.floor(MAX_OFFSET / MAX_LIMIT) + 1;
 
-/** `YYYY-MM-DD` that names a real calendar day (rejects `2024-13-45`, `2024-02-30`). */
-function isCalendarDate(value: string): boolean {
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
-}
-
 const leaderboardsQuery = z.object({
   metric: z.enum([
     'online',
@@ -68,11 +64,7 @@ const leaderboardsQuery = z.object({
     'boost',
   ]),
   period: z.enum(['day', 'week', 'month', 'season', 'alltime']).default('alltime'),
-  period_start: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .refine(isCalendarDate, 'period_start must be a real calendar date')
-    .optional(),
+  period_start: calendarDaySchema.optional(),
   server_id: z.union([z.literal('all'), z.string().uuid()]).default('all'),
   order: z.enum(['asc', 'desc']).default('desc'),
   search: z.string().trim().min(1).max(64).optional(),
@@ -81,18 +73,6 @@ const leaderboardsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(100),
   offset: z.coerce.number().int().min(0).max(MAX_OFFSET).default(0),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * Resolves `period_start` for every period whose window is derivable from the

@@ -7,9 +7,11 @@ import {
   servers,
 } from '@squad/db/schema';
 import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calendarDaySchema } from '../lib/calendar-day.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
@@ -20,19 +22,13 @@ const BONUS_FORMULA_LABEL = 'online + 2×boost';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const presenceQuery = z.object({
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 const DAILY_RANGE_DAYS = { '30': 30, '90': 90, '365': 365 } as const;
 const dailyPresenceQuery = z.object({
   range: z.enum(['30', '90', '365']).default('30'),
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 function resolveDailyWindow(
@@ -44,18 +40,6 @@ function resolveDailyWindow(
   const endMidnight = Date.parse(`${toDay}T00:00:00.000Z`);
   const fromDay = new Date(endMidnight - (rangeDays - 1) * DAY_MS).toISOString().slice(0, 10);
   return { rangeDays, fromDay, toDay };
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function resolveWindow(endDay: string | undefined): {

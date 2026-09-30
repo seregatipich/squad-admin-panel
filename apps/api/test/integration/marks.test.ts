@@ -376,6 +376,62 @@ describeIfDb('DELETE /api/v1/players/:id/marks/:markId', () => {
     expect(secondClear.json()).toEqual({ error: 'mark_already_cleared' });
   });
 
+  it('returns 409 and keeps the winner when a concurrent clear lands past the pre-check (#70)', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${eosPlayerId}/marks`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ mark_type_id: 2 }),
+    });
+    expect(created.statusCode).toBe(201);
+    const markId = (created.json() as { id: string }).id;
+
+    type UpdateBuilder = {
+      set: (v: unknown) => { where: (w: unknown) => { returning: () => Promise<unknown> } };
+    };
+    const db = h.app.db as unknown as { update: (table: unknown) => UpdateBuilder };
+    const realUpdate = db.update.bind(db);
+    let fired = false;
+    db.update = (table: unknown): UpdateBuilder => {
+      const builder = realUpdate(table);
+      if (fired || table !== playerMarks) return builder;
+      fired = true;
+      return {
+        set: (v: unknown) => ({
+          where: (w: unknown) => ({
+            returning: async () => {
+              await h.db
+                .update(playerMarks)
+                .set({
+                  clearedBy: h.seed.ownerPlayerId,
+                  clearedAt: new Date(),
+                  clearReason: 'winner',
+                })
+                .where(eq(playerMarks.id, markId));
+              return builder.set(v).where(w).returning();
+            },
+          }),
+        }),
+      };
+    };
+
+    let res: Awaited<ReturnType<typeof h.app.inject>>;
+    try {
+      res = await h.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/players/${eosPlayerId}/marks/${markId}`,
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ clear_reason: 'loser' }),
+      });
+    } finally {
+      db.update = realUpdate;
+    }
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mark_already_cleared' });
+    const [row] = await h.db.select().from(playerMarks).where(eq(playerMarks.id, markId));
+    expect(row?.clearReason).toBe('winner');
+  });
+
   it('returns 404 for an unknown mark id', async () => {
     const res = await h.app.inject({
       method: 'DELETE',

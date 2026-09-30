@@ -9,6 +9,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const SINGLETON_ID = 1;
 const COEFFICIENT_MAX = 1000;
@@ -77,18 +78,6 @@ interface EconomySettingsView {
   vip_expiry_warn_in_game: boolean;
   updated_at: string | null;
   updated_by_player_id: string | null;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function updateGuard(

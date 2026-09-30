@@ -1,6 +1,6 @@
 import { playerApiTokens } from '@squad/db/schema';
 import { PERMISSION_KEYS } from '@squad/shared-config';
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -9,6 +9,22 @@ import { mintApiToken, validateScopesSubset } from '../lib/api-tokens.js';
 const NAME_MIN = 1;
 const NAME_MAX = 100;
 const MAX_ACTIVE_TOKENS_PER_USER = 25;
+/**
+ * Revoked tokens are kept for the audit FK, so a create/revoke loop grows the
+ * table without bound; the list returns every active token but only the most
+ * recently revoked ones.
+ */
+export const REVOKED_TOKENS_LISTED = 50;
+
+/** The token list's columns, shared by its active and revoked halves. */
+const tokenListColumns = {
+  id: playerApiTokens.id,
+  name: playerApiTokens.name,
+  scopes: playerApiTokens.scopes,
+  lastUsedAt: playerApiTokens.lastUsedAt,
+  createdAt: playerApiTokens.createdAt,
+  revokedAt: playerApiTokens.revokedAt,
+};
 
 const meTokensRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -18,18 +34,28 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
-    const rows = await app.db
-      .select({
-        id: playerApiTokens.id,
-        name: playerApiTokens.name,
-        scopes: playerApiTokens.scopes,
-        lastUsedAt: playerApiTokens.lastUsedAt,
-        createdAt: playerApiTokens.createdAt,
-        revokedAt: playerApiTokens.revokedAt,
-      })
-      .from(playerApiTokens)
-      .where(eq(playerApiTokens.playerId, req.user.playerId))
-      .orderBy(asc(playerApiTokens.createdAt));
+    const [activeRows, revokedRows] = await Promise.all([
+      app.db
+        .select(tokenListColumns)
+        .from(playerApiTokens)
+        .where(
+          and(eq(playerApiTokens.playerId, req.user.playerId), isNull(playerApiTokens.revokedAt)),
+        ),
+      app.db
+        .select(tokenListColumns)
+        .from(playerApiTokens)
+        .where(
+          and(
+            eq(playerApiTokens.playerId, req.user.playerId),
+            isNotNull(playerApiTokens.revokedAt),
+          ),
+        )
+        .orderBy(desc(playerApiTokens.revokedAt))
+        .limit(REVOKED_TOKENS_LISTED),
+    ]);
+    const rows = [...activeRows, ...revokedRows].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    );
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -66,32 +92,39 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
           not_granted: validation.notGranted,
         };
       }
-      const activeCount = await app.db
-        .select({ id: playerApiTokens.id })
-        .from(playerApiTokens)
-        .where(
-          and(eq(playerApiTokens.playerId, req.user.playerId), isNull(playerApiTokens.revokedAt)),
+      const minted = mintApiToken();
+      const playerId = req.user.playerId;
+      // Count and insert under a per-player advisory lock, so parallel
+      // creates cannot each see 24 active tokens and all insert.
+      const inserted = await app.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext('player_api_tokens'), hashtext(${playerId}))`,
         );
-      if (activeCount.length >= MAX_ACTIVE_TOKENS_PER_USER) {
+        const [active] = await tx
+          .select({ total: count() })
+          .from(playerApiTokens)
+          .where(and(eq(playerApiTokens.playerId, playerId), isNull(playerApiTokens.revokedAt)));
+        if ((active?.total ?? 0) >= MAX_ACTIVE_TOKENS_PER_USER) return null;
+        return tx
+          .insert(playerApiTokens)
+          .values({
+            id: minted.id,
+            playerId,
+            name: req.body.name,
+            tokenHash: minted.tokenHash,
+            scopes: dedupedScopes,
+          })
+          .returning({
+            id: playerApiTokens.id,
+            name: playerApiTokens.name,
+            scopes: playerApiTokens.scopes,
+            createdAt: playerApiTokens.createdAt,
+          });
+      });
+      if (inserted === null) {
         reply.code(409);
         return { error: 'too_many_active_tokens', limit: MAX_ACTIVE_TOKENS_PER_USER };
       }
-      const minted = mintApiToken();
-      const inserted = await app.db
-        .insert(playerApiTokens)
-        .values({
-          id: minted.id,
-          playerId: req.user.playerId,
-          name: req.body.name,
-          tokenHash: minted.tokenHash,
-          scopes: dedupedScopes,
-        })
-        .returning({
-          id: playerApiTokens.id,
-          name: playerApiTokens.name,
-          scopes: playerApiTokens.scopes,
-          createdAt: playerApiTokens.createdAt,
-        });
       const row = inserted[0];
       if (!row) {
         reply.code(500);

@@ -18,8 +18,7 @@ import {
  *   mutate player data — the routes now declare `config.permissions`, which
  *   the global hook checks against the token-narrowed set;
  * - the mark mutations need `player:set_flags`, the reads `player:view`;
- * - combat numbers (`combat-summary`, `weapon-stats`, `vehicle-stats`) need
- *   `combat_view` exactly like the consolidated `/dossier`.
+ * - combat numbers (the consolidated `/dossier`) need `combat_view`.
  *
  * Probes address a random (missing) player, so a request that clears the
  * authorisation guard answers 200/404 — never 403 — and nothing is mutated.
@@ -78,13 +77,6 @@ const PLAYER_READS: Probe[] = [
 
 const COMBAT_READS: Probe[] = [
   { name: 'dossier', method: 'GET', url: (id) => `/api/v1/players/${id}/dossier` },
-  {
-    name: 'combat-summary',
-    method: 'GET',
-    url: (id) => `/api/v1/players/${id}/combat-summary`,
-  },
-  { name: 'weapon-stats', method: 'GET', url: (id) => `/api/v1/players/${id}/weapon-stats` },
-  { name: 'vehicle-stats', method: 'GET', url: (id) => `/api/v1/players/${id}/vehicle-stats` },
 ];
 
 const MARK_WRITES: Probe[] = [

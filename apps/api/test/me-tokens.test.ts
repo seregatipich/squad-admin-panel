@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { playerApiTokens } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { REVOKED_TOKENS_LISTED } from '../src/routes/me-tokens.js';
 import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
 import {
   assertAuditRow,
@@ -156,6 +158,60 @@ describe('POST /api/v1/me/tokens', () => {
     });
     expect(over.statusCode).toBe(409);
     expect(over.json()).toMatchObject({ error: 'too_many_active_tokens' });
+  });
+});
+
+describe('token limits under load (#70)', () => {
+  it('never exceeds 25 active tokens when creates race', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 30 }, (_, i) =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/me/tokens',
+          headers: { cookie },
+          payload: { name: `race-${i}`, scopes: [] },
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.statusCode === 201)).toHaveLength(25);
+    expect(results.filter((r) => r.statusCode === 409)).toHaveLength(5);
+    const active = await h.db
+      .select({ id: playerApiTokens.id })
+      .from(playerApiTokens)
+      .where(isNull(playerApiTokens.revokedAt));
+    expect(active).toHaveLength(25);
+  });
+
+  it('lists every active token but only the most recently revoked ones', async () => {
+    const ownerId = h.seed.ownerPlayerId;
+    if (!ownerId) throw new Error('seed owner missing');
+    const revokedAt = new Date();
+    await h.db.insert(playerApiTokens).values(
+      Array.from({ length: REVOKED_TOKENS_LISTED + 10 }, (_, i) => ({
+        id: randomUUID(),
+        playerId: ownerId,
+        name: `revoked-${i}`,
+        tokenHash: `hash-revoked-${i}-${randomUUID()}`,
+        scopes: [],
+        revokedAt,
+      })),
+    );
+    const create = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie },
+      payload: { name: 'still-active', scopes: [] },
+    });
+    expect(create.statusCode).toBe(201);
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/tokens',
+      headers: { cookie },
+    });
+    const body = list.json() as Array<{ name: string; revoked_at: string | null }>;
+    expect(body.filter((t) => t.revoked_at !== null)).toHaveLength(REVOKED_TOKENS_LISTED);
+    expect(body.some((t) => t.name === 'still-active' && t.revoked_at === null)).toBe(true);
   });
 });
 
