@@ -332,6 +332,36 @@ describe('POST /api/v1/host/backups/:id/restore', () => {
     await expectFailedAuditRowFromThisCase('backup.restore', 502);
   });
 
+  it('rejects a snapshot id that is not a restic id with 400 before reaching the bridge', async () => {
+    let called = false;
+    h.bridge.backupRestore = async () => {
+      called = true;
+      return { exit_code: 0 };
+    };
+    const cookie = await loginAsOwner(h);
+    for (const id of ['--target=x', 'A1B2C3D4', 'a1b2c3d']) {
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/host/backups/${encodeURIComponent(id)}/restore`,
+        headers: { cookie },
+        payload: { confirm: id },
+      });
+      expect(resp.statusCode, id).toBe(400);
+    }
+    expect(called).toBe(false);
+  });
+
+  it('rejects a non-string confirm with 400', async () => {
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/host/backups/${SNAPSHOT_ID}/restore`,
+      headers: { cookie },
+      payload: { confirm: 12345678 },
+    });
+    expect(resp.statusCode).toBe(400);
+  });
+
   it('returns 502 when the restore fails', async () => {
     h.bridge.backupRestore = async () => {
       throw new Error('restore.sh exit 1');

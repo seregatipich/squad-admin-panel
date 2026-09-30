@@ -1,14 +1,12 @@
 import { playerApiTokens } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { intersectScopes } from '../lib/api-tokens.js';
-import { ChatRingBuffer } from '../lib/chat-ring-buffer.js';
-import { CombatRingBuffer } from '../lib/combat-ring-buffer.js';
-import { loadUserPermissions, type PermissionContext } from '../lib/rbac.js';
+import { loadUserPermissions, narrowToTokenScopes, type PermissionContext } from '../lib/rbac.js';
+import { ServerRingBuffer } from '../lib/server-ring-buffer.js';
 import { resolveSession } from '../lib/sessions.js';
 import { sendUnlessStalled, serialiseOnce, WS_MAX_BUFFERED_BYTES } from '../lib/ws-send.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
-import { LIVE_EVENT_AUDIENCE } from '../plugins/live-bus.js';
+import { LIVE_EVENT_AUDIENCE, type LiveEvent } from '../plugins/live-bus.js';
 
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
@@ -16,6 +14,71 @@ const PONG_TIMEOUT_MS = 30_000;
 const DEFAULT_REVALIDATE_INTERVAL_MS = 30_000;
 const CHAT_BUFFER_PER_SERVER = 100;
 const COMBAT_BUFFER_PER_SERVER = 100;
+
+/** Most event types one subscribe/unsubscribe frame may name. */
+const MAX_SUBSCRIPTION_EVENTS = 64;
+/** Longest event type name accepted in a subscription frame. */
+const MAX_EVENT_TYPE_LENGTH = 64;
+
+/**
+ * How each modelled live event type reaches a socket. `broadcast` types go to
+ * every connection (subject to the per-event access filters below); `opt_in`
+ * types only to a socket that sent `{ type: 'subscribe', events: [...] }` for
+ * them — the high-volume streams (chat, combat, roster snapshots) and types no
+ * page consumes by default. Every union member must be listed, so a new event
+ * type forces a choice here. Types the union does not model (worker-published
+ * `banname.matched`, `bansync.*`, …) are always opt-in.
+ */
+const EVENT_DELIVERY: Record<LiveEvent['type'], 'broadcast' | 'opt_in'> = {
+  'alert.triggered': 'broadcast',
+  'appeal.created': 'broadcast',
+  'appeal.updated': 'broadcast',
+  'bridge.connection': 'broadcast',
+  'chat.message': 'opt_in',
+  'combat.event': 'opt_in',
+  'externalban.matched': 'opt_in',
+  'issue.comment.created': 'broadcast',
+  'issue.created': 'broadcast',
+  'issue.updated': 'broadcast',
+  'mark.changed': 'broadcast',
+  'mark_type.changed': 'broadcast',
+  'media.uploaded': 'broadcast',
+  'note.created': 'broadcast',
+  'rcon.roster': 'opt_in',
+  'rcon.status': 'broadcast',
+  'report.created': 'broadcast',
+  'report.updated': 'broadcast',
+  'server.deleted': 'broadcast',
+  'server.events.appended': 'broadcast',
+  'server.map.changed': 'broadcast',
+  'server.restored': 'broadcast',
+  'server.seeding': 'broadcast',
+  'server.status': 'broadcast',
+  'session.revoked': 'broadcast',
+  'vote.ended': 'broadcast',
+};
+
+function isBroadcast(type: string): boolean {
+  return (
+    (EVENT_DELIVERY as Record<string, 'broadcast' | 'opt_in' | undefined>)[type] === 'broadcast'
+  );
+}
+
+/**
+ * The event types named by a client subscription frame, or `null` when the
+ * frame is malformed (it is then ignored).
+ */
+function subscriptionEvents(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > MAX_SUBSCRIPTION_EVENTS) return null;
+  const events: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length === 0 || item.length > MAX_EVENT_TYPE_LENGTH) {
+      return null;
+    }
+    events.push(item);
+  }
+  return events;
+}
 
 /** Close code sent when the connection's session or API token is no longer valid. */
 export const WS_CLOSE_SESSION_REVOKED = 4001;
@@ -52,17 +115,27 @@ type Revalidation =
  *   the player's permissions reloaded. A vanished session/token closes with
  *   {@link WS_CLOSE_SESSION_REVOKED}, a lost `server:view` with
  *   {@link WS_CLOSE_FORBIDDEN}, and the `combatView` / `canAssignRoles`
- *   filters are refreshed from the fresh permissions.
+ *   filters are refreshed from the fresh permissions — narrowed to the token's
+ *   scopes for an API-token connection, exactly as the HTTP auth hook does.
+ *
+ * Delivery is per socket (#69): `broadcast` types in {@link EVENT_DELIVERY}
+ * reach every connection, `opt_in` types (and unmodelled worker types) only a
+ * socket that subscribed with `{ type: 'subscribe', events: [...] }` (undone
+ * by `{ type: 'unsubscribe', events: [...] }`; each is acknowledged with a
+ * `subscribed` / `unsubscribed` frame). Subscribing to `chat.message` or
+ * `combat.event` replays the buffered tail of every server — the combat tail
+ * only with `combatView` — so a page gets what it missed without every other
+ * connection paying for it.
  */
 const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
   const revalidateIntervalMs = opts.revalidateIntervalMs ?? DEFAULT_REVALIDATE_INTERVAL_MS;
   const maxBufferedBytes = opts.maxBufferedBytes ?? WS_MAX_BUFFERED_BYTES;
 
-  const chatBuffer = new ChatRingBuffer(CHAT_BUFFER_PER_SERVER);
+  const chatBuffer = new ServerRingBuffer('chat.message', CHAT_BUFFER_PER_SERVER);
   const stopChatBuffer = app.liveBus.subscribe((event) => chatBuffer.push(event));
   app.addHook('onClose', async () => stopChatBuffer());
 
-  const combatBuffer = new CombatRingBuffer(COMBAT_BUFFER_PER_SERVER);
+  const combatBuffer = new ServerRingBuffer('combat.event', COMBAT_BUFFER_PER_SERVER);
   const stopCombatBuffer = app.liveBus.subscribe((event) => combatBuffer.push(event));
   app.addHook('onClose', async () => stopCombatBuffer());
 
@@ -81,6 +154,7 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
       const connectionApiTokenId = req.apiTokenId ?? null;
       let canViewCombat = req.user?.permissions.combatView ?? false;
       let canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
+      const subscribedEvents = new Set<string>();
 
       app.diag
         .emit({
@@ -160,12 +234,16 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         } else {
           return { ok: false, code: WS_CLOSE_SESSION_REVOKED, reason: 'session revoked' };
         }
-        const permissions = await loadUserPermissions(app.db, connectionPlayerId);
-        const effective =
-          scopes === null
-            ? permissions.permissions
-            : intersectScopes(scopes, permissions.permissions);
-        if ((selfServiceScope && !permissions.panelAccess) || !effective.has('server:view')) {
+        const rolePermissions = await loadUserPermissions(app.db, connectionPlayerId);
+        // An API token never carries more than its scopes delegate: narrow the
+        // role flags (combatView, canAssignRoles, …) the same way the HTTP auth
+        // hook did at upgrade, or the first re-check would widen them.
+        const permissions =
+          scopes === null ? rolePermissions : narrowToTokenScopes(rolePermissions, scopes);
+        if (
+          (selfServiceScope && !permissions.panelAccess) ||
+          !permissions.permissions.has('server:view')
+        ) {
           return { ok: false, code: WS_CLOSE_FORBIDDEN, reason: 'forbidden' };
         }
         return { ok: true, permissions };
@@ -197,7 +275,7 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
           });
       }, revalidateIntervalMs);
 
-      const unsubscribe = app.liveBus.subscribe((event) => {
+      const stopForwarding = app.liveBus.subscribe((event) => {
         if (event.type === 'session.revoked') {
           if (event.data.player_id !== connectionPlayerId) return;
           safeSend(event);
@@ -240,28 +318,52 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         ) {
           return;
         }
+        if (!isBroadcast(event.type) && !subscribedEvents.has(event.type)) return;
         safeSend(event);
       });
 
-      for (const buffered of chatBuffer.tail()) safeSend(buffered);
-      if (canViewCombat) {
-        for (const buffered of combatBuffer.tail()) safeSend(buffered);
-      }
+      const subscribeEvents = (events: string[]): void => {
+        for (const type of events) {
+          if (subscribedEvents.has(type)) continue;
+          subscribedEvents.add(type);
+          if (type === 'chat.message') {
+            for (const buffered of chatBuffer.tail()) safeSend(buffered);
+          } else if (type === 'combat.event' && canViewCombat) {
+            for (const buffered of combatBuffer.tail()) safeSend(buffered);
+          }
+        }
+        safeSend({ type: 'subscribed', events: [...subscribedEvents] });
+      };
+
+      const unsubscribeEvents = (events: string[]): void => {
+        for (const type of events) subscribedEvents.delete(type);
+        safeSend({ type: 'unsubscribed', events: [...subscribedEvents] });
+      };
 
       socket.on('message', (raw) => {
+        let msg: { type?: unknown; events?: unknown };
         try {
-          const msg = JSON.parse(raw.toString()) as { type?: string };
-          if (msg.type === 'pong') lastPongAt = Date.now();
+          msg = JSON.parse(raw.toString()) as { type?: unknown; events?: unknown };
         } catch {
-          /* ignore malformed client frames */
+          return; // ignore malformed client frames
         }
+        if (msg === null || typeof msg !== 'object') return;
+        if (msg.type === 'pong') {
+          lastPongAt = Date.now();
+          return;
+        }
+        if (msg.type !== 'subscribe' && msg.type !== 'unsubscribe') return;
+        const events = subscriptionEvents(msg.events);
+        if (!events) return;
+        if (msg.type === 'subscribe') subscribeEvents(events);
+        else unsubscribeEvents(events);
       });
 
       socket.on('close', (code, reason) => {
         closed = true;
         clearInterval(pinger);
         clearInterval(revalidator);
-        unsubscribe();
+        stopForwarding();
         app.diag
           .emit({
             component: 'api',

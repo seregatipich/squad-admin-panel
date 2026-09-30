@@ -53,7 +53,7 @@ export function canRemoveLink(link: IssueLinkView, viewer: IssueLinkViewer | nul
 export function linkErrorMessage(status: number, error: string | undefined): string {
   if (status === 409) return 'Такая связь уже существует.';
   if (status === 422) return 'Объект не найден.';
-  if (status === 403) return 'Недостаточно прав: нужно can_manage_issues.';
+  if (status === 403) return 'Недостаточно прав: связи меняет автор тикета или can_manage_issues.';
   if (status === 404) return 'Тикет или связь не найдены.';
   return `Не удалось выполнить действие: ${error ?? status}`;
 }

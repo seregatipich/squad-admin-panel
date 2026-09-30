@@ -416,6 +416,20 @@ describeIfDb('POST /api/v1/players/:playerId/bonus-purchases (ECON-6)', () => {
     expect(missing.json()).toEqual({ error: 'tier_not_found' });
   });
 
+  it('deactivated tier → 409 tier_not_purchasable with no debit and no role grant', async () => {
+    const buyerId = await seedPlayer(830030, 'ShopInactiveBuyer');
+    await credit(buyerId, 200);
+
+    const res = await purchase(buyerId, inactiveTierId);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'tier_not_purchasable' });
+
+    const stored = await storedPlayer(buyerId);
+    expect(stored.balance).toBe(200);
+    expect(stored.roleId).toBeNull();
+    expect(await spendRows(buyerId)).toEqual([]);
+  });
+
   it('panel-access tier → 403 role_grants_panel_access', async () => {
     const buyerId = await seedPlayer(830018, 'ShopPanelBuyer');
     await credit(buyerId, 200);

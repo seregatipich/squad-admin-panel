@@ -125,7 +125,8 @@ const leaderboardsBonusesRoutes: FastifyPluginAsync = async (app) => {
             .from(playerBonusAccruals);
           total = countRow?.total ?? 0;
         }
-      } catch {
+      } catch (err) {
+        req.log.error({ err, period }, 'bonus leaderboard query failed');
         reply.code(500);
         return {
           error: { code: 'internal_error', message: 'Не удалось загрузить лидерборд бонусов.' },

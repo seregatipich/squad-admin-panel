@@ -169,14 +169,27 @@ const inert: object = new Proxy(() => undefined, {
   apply: () => inert,
 });
 
+/**
+ * A chainable, awaitable no-op standing in for `app.db`: route modules that
+ * seed rows while registering (issues.ts → `ensureSystemIssueLabels`) resolve
+ * every query chain to an empty result instead of needing a live database.
+ */
+function inertDb(): unknown {
+  return new Proxy(() => undefined, {
+    get: (_target, prop) =>
+      prop === 'then' ? (resolve: (value: unknown[]) => void) => resolve([]) : inertDb(),
+    apply: () => inertDb(),
+  });
+}
+
 async function collectRoutes(): Promise<RouteRecord[]> {
   const rows: RouteRecord[] = [];
   for (const file of registeredRouteFiles()) {
     const app: FastifyInstance = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
+    app.decorate('db', inertDb());
     for (const name of [
-      'db',
       'redis',
       'bridge',
       'liveBus',

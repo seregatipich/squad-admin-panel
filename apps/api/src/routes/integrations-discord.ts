@@ -15,13 +15,13 @@ import {
   renderDiscordTemplate,
 } from '@squad/shared-config';
 import { and, asc, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { BOT_TOKEN_MASK, isDiscordWebhookUrl, maskWebhookUrl } from '../lib/discord.js';
+import { hasPgErrorCode, PG_FOREIGN_KEY_VIOLATION } from '../lib/pg-errors.js';
 
 const INTEGRATION_PERMISSION = 'integration:manage' as const;
 
@@ -104,11 +104,24 @@ const TEST_SEND_SAMPLE_CONTEXT: Record<string, string> = {
 
 const TEST_SEND_TIMEOUT_MS = 5_000;
 
+/**
+ * The stored jsonb template, validated against the same schema the PUT route
+ * enforces. A row that no longer fits (hand-edited, or written by an older
+ * migration) falls back to the code default for its event type instead of
+ * reaching `renderDiscordTemplate` as an arbitrary object; `null` when there
+ * is no default either.
+ */
+function storedTemplate(row: DiscordMessageTemplateRow): DiscordEmbedTemplate | null {
+  const parsed = embedTemplateSchema.safeParse(row.template);
+  if (parsed.success) return parsed.data;
+  return defaultDiscordTemplate(row.eventType)?.template ?? null;
+}
+
 function templateView(row: DiscordMessageTemplateRow) {
   return {
     event_type: row.eventType,
     locale: row.locale,
-    template: row.template as DiscordEmbedTemplate,
+    template: storedTemplate(row),
     is_default: row.isDefault,
     updated_at: row.updatedAt.toISOString(),
   };
@@ -150,10 +163,7 @@ function integrationView(row: IntegrationRowLike | null) {
  */
 function decryptWebhookUrl(row: DiscordWebhookRow, key: Buffer): string | null {
   try {
-    return decryptString(
-      key,
-      deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
-    );
+    return decryptString(key, deserialize(row.webhookUrlEncrypted));
   } catch {
     return null;
   }
@@ -180,32 +190,23 @@ function webhookView(row: DiscordWebhookRow, key: Buffer) {
   };
 }
 
-function auditActor(req: FastifyRequest): AuditActor {
-  return req.user
-    ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
-    : { kind: 'system', label: 'http-anonymous' };
-}
-
-function auditContext(req: FastifyRequest): Record<string, unknown> {
-  return { requestId: req.id, method: req.method, url: req.url };
-}
-
-const isForbidden = (req: FastifyRequest, reply: FastifyReply): boolean => {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  return false;
-};
-
+/**
+ * Discord integration settings, webhooks, templates and status channels.
+ *
+ * Authentication is the global `plugins/auth.ts` hook (401 for any non-public
+ * route without a session) and authorization is `config.permissions`, so the
+ * handlers never re-check `req.user`. Every mutating route declares
+ * `config.audit` and fills `req.auditSnapshots`, so `plugins/audit.ts` records
+ * each attempt — including 401/403 refusals and 400/404 failures — with masked
+ * before/after snapshots (no cleartext bot token or webhook URL).
+ */
 const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   fast.get(
     '/api/v1/integrations/discord',
     { config: { permissions: [INTEGRATION_PERMISSION], audit: false } },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+    async () => {
       const rows = await app.db
         .select()
         .from(discordIntegration)
@@ -219,58 +220,53 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord',
     {
       schema: { body: putIntegrationBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.discord.update', resource: 'discord_integration' },
+      },
     },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
-      const existingRows = await app.db
-        .select()
-        .from(discordIntegration)
-        .where(eq(discordIntegration.id, DISCORD_INTEGRATION_SINGLETON_ID))
-        .limit(1);
-      const existing = existingRows[0] ?? null;
-      const before = integrationView(existing);
+    async (req) => {
+      const botToken = req.body.bot_token;
+      const encryptedToken =
+        typeof botToken === 'string' ? serialize(encrypt(app.encryptionKey, botToken)) : null;
 
-      const guildId =
-        req.body.guild_id !== undefined ? req.body.guild_id : (existing?.guildId ?? null);
-      const enabled =
-        req.body.enabled !== undefined ? req.body.enabled : (existing?.enabled ?? false);
-      let botTokenEncrypted: Buffer | null =
-        existing?.botTokenEncrypted != null ? Buffer.from(existing.botTokenEncrypted) : null;
-      if (req.body.bot_token === null) {
-        botTokenEncrypted = null;
-      } else if (typeof req.body.bot_token === 'string') {
-        botTokenEncrypted = serialize(encrypt(app.encryptionKey, req.body.bot_token));
-      }
+      // Read-modify-write of the singleton under a row lock: the idempotent
+      // insert makes the row exist (and waits for a concurrent creator), then
+      // FOR UPDATE serialises concurrent PUTs so neither 500s on the primary
+      // key nor overwrites the other's fields from a stale read.
+      const { created, existing, updated } = await app.db.transaction(async (tx) => {
+        const inserted = await tx
+          .insert(discordIntegration)
+          .values({ id: DISCORD_INTEGRATION_SINGLETON_ID })
+          .onConflictDoNothing()
+          .returning({ id: discordIntegration.id });
+        const [current] = await tx
+          .select()
+          .from(discordIntegration)
+          .where(eq(discordIntegration.id, DISCORD_INTEGRATION_SINGLETON_ID))
+          .for('update');
+        if (!current) throw new Error('discord_integration singleton missing after upsert');
 
-      const now = new Date();
-      if (existing) {
-        await app.db
+        const [row] = await tx
           .update(discordIntegration)
-          .set({ guildId, enabled, botTokenEncrypted, updatedAt: now })
-          .where(eq(discordIntegration.id, DISCORD_INTEGRATION_SINGLETON_ID));
-      } else {
-        await app.db.insert(discordIntegration).values({
-          id: DISCORD_INTEGRATION_SINGLETON_ID,
-          guildId,
-          enabled,
-          botTokenEncrypted,
-          updatedAt: now,
-        });
-      }
-
-      const after = integrationView({ guildId, enabled, botTokenEncrypted, updatedAt: now });
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.update',
-        targetType: 'discord_integration',
-        targetId: DISCORD_INTEGRATION_SINGLETON_ID,
-        before,
-        after,
-        context: auditContext(req),
-        statusCode: 200,
+          .set({
+            guildId: req.body.guild_id !== undefined ? req.body.guild_id : current.guildId,
+            enabled: req.body.enabled ?? current.enabled,
+            botTokenEncrypted: botToken === undefined ? current.botTokenEncrypted : encryptedToken,
+            updatedAt: new Date(),
+          })
+          .where(eq(discordIntegration.id, DISCORD_INTEGRATION_SINGLETON_ID))
+          .returning();
+        if (!row) throw new Error('discord_integration singleton update returned no row');
+        return { created: inserted.length > 0, existing: current, updated: row };
       });
+
+      const after = integrationView(updated);
+      req.auditSnapshots = {
+        before: integrationView(created ? null : existing),
+        after,
+        targetId: DISCORD_INTEGRATION_SINGLETON_ID,
+      };
       return after;
     },
   );
@@ -278,8 +274,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/integrations/discord/webhooks',
     { config: { permissions: [INTEGRATION_PERMISSION], audit: false } },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+    async () => {
       const rows = await app.db
         .select()
         .from(discordWebhooks)
@@ -292,45 +287,39 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks',
     {
       schema: { body: createWebhookBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.discord.webhook.create', resource: 'discord_webhook' },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
       const id = uuidv7();
+      req.auditSnapshots = { targetId: id };
       const encryptedUrl = serialize(encrypt(app.encryptionKey, req.body.webhook_url));
+      let created: DiscordWebhookRow | undefined;
       try {
-        await app.db.insert(discordWebhooks).values({
-          id,
-          eventType: req.body.event_type,
-          webhookUrlEncrypted: encryptedUrl,
-          channelLabel: req.body.channel_label ?? null,
-          enabled: req.body.enabled,
-          mentionEveryone: req.body.mention_everyone,
-          serverId: req.body.server_id ?? null,
-        });
+        [created] = await app.db
+          .insert(discordWebhooks)
+          .values({
+            id,
+            eventType: req.body.event_type,
+            webhookUrlEncrypted: encryptedUrl,
+            channelLabel: req.body.channel_label ?? null,
+            enabled: req.body.enabled,
+            mentionEveryone: req.body.mention_everyone,
+            serverId: req.body.server_id ?? null,
+          })
+          .returning();
       } catch (err) {
-        if (isForeignKeyViolation(err)) {
+        if (hasPgErrorCode(err, PG_FOREIGN_KEY_VIOLATION)) {
           reply.code(400);
           return { error: 'unknown_server_id' };
         }
         throw err;
       }
-      const [created] = await app.db
-        .select()
-        .from(discordWebhooks)
-        .where(eq(discordWebhooks.id, id))
-        .limit(1);
-      const after = created ? webhookView(created, app.encryptionKey) : null;
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.webhook.create',
-        targetType: 'discord_webhook',
-        targetId: id,
-        after,
-        context: auditContext(req),
-        statusCode: 201,
-      });
+      if (!created) throw new Error('discord_webhooks insert returned no row');
+      const after = webhookView(created, app.encryptionKey);
+      req.auditSnapshots = { after, targetId: id };
       reply.code(201);
       return after;
     },
@@ -340,10 +329,12 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id',
     {
       schema: { params: idParam, body: updateWebhookBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.discord.webhook.update', resource: 'discord_webhook' },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
       const [existing] = await app.db
         .select()
         .from(discordWebhooks)
@@ -354,6 +345,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'webhook_not_found' };
       }
       const before = webhookView(existing, app.encryptionKey);
+      req.auditSnapshots = { before };
 
       const updates: Partial<typeof discordWebhooks.$inferInsert> = { updatedAt: new Date() };
       if (req.body.event_type !== undefined) updates.eventType = req.body.event_type;
@@ -366,35 +358,26 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         updates.mentionEveryone = req.body.mention_everyone;
       if (req.body.server_id !== undefined) updates.serverId = req.body.server_id;
 
+      let updated: DiscordWebhookRow | undefined;
       try {
-        await app.db
+        [updated] = await app.db
           .update(discordWebhooks)
           .set(updates)
-          .where(eq(discordWebhooks.id, req.params.id));
+          .where(eq(discordWebhooks.id, req.params.id))
+          .returning();
       } catch (err) {
-        if (isForeignKeyViolation(err)) {
+        if (hasPgErrorCode(err, PG_FOREIGN_KEY_VIOLATION)) {
           reply.code(400);
           return { error: 'unknown_server_id' };
         }
         throw err;
       }
-      const [updated] = await app.db
-        .select()
-        .from(discordWebhooks)
-        .where(eq(discordWebhooks.id, req.params.id))
-        .limit(1);
-      const after = updated ? webhookView(updated, app.encryptionKey) : null;
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.webhook.update',
-        targetType: 'discord_webhook',
-        targetId: req.params.id,
-        before,
-        after,
-        context: auditContext(req),
-        statusCode: 200,
-      });
+      if (!updated) {
+        reply.code(404);
+        return { error: 'webhook_not_found' };
+      }
+      const after = webhookView(updated, app.encryptionKey);
+      req.auditSnapshots = { before, after };
       return after;
     },
   );
@@ -403,31 +386,21 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id',
     {
       schema: { params: idParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.discord.webhook.delete', resource: 'discord_webhook' },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
-      const [existing] = await app.db
-        .select()
-        .from(discordWebhooks)
+      const [deleted] = await app.db
+        .delete(discordWebhooks)
         .where(eq(discordWebhooks.id, req.params.id))
-        .limit(1);
-      if (!existing) {
+        .returning();
+      if (!deleted) {
         reply.code(404);
         return { error: 'webhook_not_found' };
       }
-      const before = webhookView(existing, app.encryptionKey);
-      await app.db.delete(discordWebhooks).where(eq(discordWebhooks.id, req.params.id));
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.webhook.delete',
-        targetType: 'discord_webhook',
-        targetId: req.params.id,
-        before,
-        context: auditContext(req),
-        statusCode: 200,
-      });
+      req.auditSnapshots = { before: webhookView(deleted, app.encryptionKey) };
       return { ok: true };
     },
   );
@@ -436,10 +409,12 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/webhooks/:id/test',
     {
       schema: { params: idParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.discord.webhook.test', resource: 'discord_webhook' },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
       const [webhook] = await app.db
         .select()
         .from(discordWebhooks)
@@ -456,7 +431,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(discordMessageTemplates.eventType, webhook.eventType))
         .limit(1);
       const template = templateRow
-        ? (templateRow.template as DiscordEmbedTemplate)
+        ? storedTemplate(templateRow)
         : defaultDiscordTemplate(webhook.eventType)?.template;
       if (!template) {
         reply.code(404);
@@ -487,6 +462,9 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         });
         discordStatus = res.status;
         outcome = res.ok ? 'ok' : 'discord_error';
+        // Only the status matters; release the body so undici frees the
+        // socket now instead of whenever the response is garbage-collected.
+        await res.body?.cancel().catch(() => undefined);
       } catch {
         // Network error, DNS failure, connection refused, or the AbortSignal
         // timeout firing — all surface identically to the operator as
@@ -494,16 +472,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         outcome = 'unreachable';
       }
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.webhook.test',
-        targetType: 'discord_webhook',
-        targetId: req.params.id,
-        after: { outcome, discord_status: discordStatus },
-        context: auditContext(req),
-        statusCode: outcome === 'ok' ? 200 : 502,
-      });
+      req.auditSnapshots = { after: { outcome, discord_status: discordStatus } };
 
       if (outcome === 'unreachable') {
         reply.code(502);
@@ -520,8 +489,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/integrations/discord/templates',
     { config: { permissions: [INTEGRATION_PERMISSION], audit: false } },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+    async () => {
       const rows = await app.db
         .select()
         .from(discordMessageTemplates)
@@ -537,7 +505,6 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
       config: { permissions: [INTEGRATION_PERMISSION], audit: false },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
       const [row] = await app.db
         .select()
         .from(discordMessageTemplates)
@@ -555,10 +522,16 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType',
     {
       schema: { params: eventTypeParam, body: putTemplateBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: {
+          action: 'integration.discord.template.update',
+          resource: 'discord_message_template',
+        },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+      req.auditSnapshots = { targetId: req.params.eventType };
       const [existing] = await app.db
         .select()
         .from(discordMessageTemplates)
@@ -569,33 +542,22 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'template_not_found' };
       }
       const before = templateView(existing);
-      const now = new Date();
-      await app.db
+      const [updated] = await app.db
         .update(discordMessageTemplates)
         .set({
           template: req.body.template,
           locale: req.body.locale ?? existing.locale,
           isDefault: false,
-          updatedAt: now,
+          updatedAt: new Date(),
         })
-        .where(eq(discordMessageTemplates.eventType, req.params.eventType));
-      const [updated] = await app.db
-        .select()
-        .from(discordMessageTemplates)
         .where(eq(discordMessageTemplates.eventType, req.params.eventType))
-        .limit(1);
-      const after = updated ? templateView(updated) : null;
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.template.update',
-        targetType: 'discord_message_template',
-        targetId: req.params.eventType,
-        before,
-        after,
-        context: auditContext(req),
-        statusCode: 200,
-      });
+        .returning();
+      if (!updated) {
+        reply.code(404);
+        return { error: 'template_not_found' };
+      }
+      const after = templateView(updated);
+      req.auditSnapshots = { before, after, targetId: req.params.eventType };
       return after;
     },
   );
@@ -604,10 +566,16 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType/reset',
     {
       schema: { params: eventTypeParam },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: {
+          action: 'integration.discord.template.reset',
+          resource: 'discord_message_template',
+        },
+      },
     },
     async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+      req.auditSnapshots = { targetId: req.params.eventType };
       const fallback = defaultDiscordTemplate(req.params.eventType);
       if (!fallback) {
         reply.code(404);
@@ -619,33 +587,18 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(discordMessageTemplates.eventType, req.params.eventType))
         .limit(1);
       const before = existing ? templateView(existing) : null;
-      const now = new Date();
-      await app.db
+      const [updated] = await app.db
         .update(discordMessageTemplates)
         .set({
           template: fallback.template,
           locale: fallback.locale,
           isDefault: true,
-          updatedAt: now,
+          updatedAt: new Date(),
         })
-        .where(eq(discordMessageTemplates.eventType, req.params.eventType));
-      const [updated] = await app.db
-        .select()
-        .from(discordMessageTemplates)
         .where(eq(discordMessageTemplates.eventType, req.params.eventType))
-        .limit(1);
+        .returning();
       const after = updated ? templateView(updated) : null;
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.discord.template.reset',
-        targetType: 'discord_message_template',
-        targetId: req.params.eventType,
-        before,
-        after,
-        context: auditContext(req),
-        statusCode: 200,
-      });
+      req.auditSnapshots = { before, after, targetId: req.params.eventType };
       return after;
     },
   );
@@ -654,10 +607,15 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/templates/:eventType/preview',
     {
       schema: { params: eventTypeParam, body: previewBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: {
+          action: 'integration.discord.template.preview',
+          resource: 'discord_message_template',
+        },
+      },
     },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+    async (req) => {
       const missing: string[] = [];
       const embed = renderDiscordTemplate(req.body.template, req.body.context, {
         onMissingPlaceholder: (placeholder) => {
@@ -710,7 +668,10 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
             .nullable(),
         }),
       },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'discord.status_channel.set', resource: 'server' },
+      },
     },
     async (req, reply) => {
       const [before] = await app.db
@@ -726,27 +687,13 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         .update(servers)
         .set({ statusChannelId: req.body.channel_id })
         .where(eq(servers.id, req.params.serverId));
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'discord.status_channel.set',
-        targetType: 'server',
-        targetId: req.params.serverId,
+      req.auditSnapshots = {
         before: { channel_id: before.statusChannelId },
         after: { channel_id: req.body.channel_id },
-        context: auditContext(req),
-        statusCode: 200,
-      });
+      };
       return { ok: true, channel_id: req.body.channel_id };
     },
   );
 };
-
-function isForeignKeyViolation(err: unknown): boolean {
-  return (
-    (err as { code?: string }).code === '23503' ||
-    (err as { cause?: { code?: string } }).cause?.code === '23503'
-  );
-}
 
 export default integrationsDiscordRoutes;

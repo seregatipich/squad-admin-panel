@@ -68,7 +68,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 Required headers:
 
-- `x-balancer-timestamp`: ISO timestamp used in the signature payload. Must be within 300 s of the panel's clock (either direction); a stale or future timestamp is rejected with 401 `invalid_signature`, so a captured request cannot be replayed later.
+- `x-balancer-timestamp`: ISO-8601 timestamp (or whole unix seconds) used in the signature payload. Must be within 300 s of the panel's clock (either direction); a stale or future timestamp is rejected with 401 `invalid_signature`, so a captured request cannot be replayed later.
 - `x-balancer-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-balancer-timestamp>.<canonical-json-body>` using `BALANCER_WEBHOOK_SECRET`.
 
 Body:
@@ -96,7 +96,7 @@ Body:
 }
 ```
 
-`mode` is `squad` or `player`; `state` is `on_target`, `no_change` or `should_move` and is the only thing the review UI derives its green/gray/red colouring from. `signals` and `proposal` are stored verbatim as `jsonb` and versioned by `schema_version`, so an exporter payload change needs no migration; unknown extra fields inside a proposal entry are preserved. `source_snapshot_id` is the idempotency key: redelivering the same id refreshes the stored row and returns `200 { ok: true, duplicate: true }`, while a new snapshot returns `202` and flips the previous still-`open` snapshot for the same `(server_id, mode)` pair to `superseded`. Unknown `server_id` → 404 `server_not_found`; bad signature → 401 `invalid_signature`.
+`mode` is `squad` or `player`; `state` is `on_target`, `no_change` or `should_move` and is the only thing the review UI derives its green/gray/red colouring from. `signals` and `proposal` are stored verbatim as `jsonb` and versioned by `schema_version`, so an exporter payload change needs no migration; unknown extra fields inside a proposal entry are preserved. `source_snapshot_id` is the idempotency key: redelivering the same id returns `200 { ok: true, duplicate: true }` and only refreshes `received_at` of a still-`open` row — the stored content is never rewritten, so a reviewed/dismissed snapshot keeps matching the operator's decision; a redelivery naming a different `server_id` or `mode` → 409 `snapshot_identity_mismatch`. A new snapshot returns `202` and flips the previous still-`open` snapshot for the same `(server_id, mode)` pair to `superseded`; deliveries for one pair are serialised with a transaction-scoped advisory lock, so at most one snapshot per pair is `open`. Unknown or soft-deleted `server_id` → 404 `server_not_found`; bad signature → 401 `invalid_signature`; timestamp outside the window → 401 `stale_timestamp`.
 
 Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any runtime chat vote. This panel owns the review surface, the threshold rules and the operator decision history. **The panel never executes a team change** — `RCON_OPERATOR_COMMANDS` contains no team-change verb and this slice adds none.
 
@@ -267,7 +267,7 @@ fallback — so a row carrying neither is rejected rather than mis-addressed.
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| WS | `/api/v1/ws/live` | Push channel for typed `LiveEvent` frames (`server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`). Server pings every 10 s; clients must reply `{"type":"pong"}` within 30 s or the socket is closed (code 4000). The server closes the socket itself when its session is revoked (code 4001) and re-checks the session/API token and `server:view` every 30 s (4001 / 4003). See [live-bus component](../live-bus/README.md) for wire formats and producer fan-out. | `server:view` |
+| WS | `/api/v1/ws/live` | Push channel for typed `LiveEvent` frames (`server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`). Server pings every 10 s; clients must reply `{"type":"pong"}` within 30 s or the socket is closed (code 4000). The server closes the socket itself when its session is revoked (code 4001) and re-checks the session/API token and `server:view` every 30 s (4001 / 4003). High-volume types (`chat.message`, `combat.event`, `rcon.roster`, …) are opt-in via a `{"type":"subscribe","events":[…]}` frame, which also replays the chat/combat tail. See [live-bus component](../live-bus/README.md) for wire formats and producer fan-out. | `server:view` |
 
 ## Players
 

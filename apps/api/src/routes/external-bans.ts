@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { enforceModerationAction } from '../lib/moderation-enforce.js';
+import { containsPattern } from '../lib/sql-like.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const localBanParams = z.object({
@@ -377,7 +378,7 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
 
       const conditions: SQL[] = [];
       if (q) {
-        const pattern = `%${q}%`;
+        const pattern = containsPattern(q);
         conditions.push(
           sql`(eb.nickname ILIKE ${pattern} OR eb.reason ILIKE ${pattern} OR eb.steam_id64 ILIKE ${pattern} OR eb.eos_id ILIKE ${pattern})`,
         );
@@ -391,7 +392,8 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
       const whereClause =
         conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
 
-      const rows = (await app.db.execute(sql`
+      // One identity per (steam_id64, eos_id) pair, joined to the panel player.
+      const registry = sql`
         WITH filtered AS (
           SELECT eb.id, eb.source_id, ebs.name AS source_name, ebs.trust_level, ebs.discord_url,
                  eb.steam_id64, eb.eos_id, eb.nickname, eb.reason, eb.admin_name,
@@ -424,7 +426,11 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
             ) AS bans
           FROM filtered
           GROUP BY identity_steam_key, identity_eos_key
-        ),
+        )
+      `;
+
+      const rows = (await app.db.execute(sql`
+        ${registry},
         page AS (
           SELECT g.*, count(*) OVER () AS total_count
           FROM grouped g
@@ -460,7 +466,16 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
         ORDER BY pg.last_imported_at DESC
       `)) as unknown as RegistryRow[];
 
-      const total = rows.length > 0 ? Number(rows[0]?.total_count ?? 0) : 0;
+      // count(*) OVER () only exists on returned rows; a page past the end has
+      // none, so the total then needs its own count.
+      let total = Number(rows[0]?.total_count ?? 0);
+      if (rows.length === 0 && offset > 0) {
+        const [counted] = (await app.db.execute(sql`
+          ${registry}
+          SELECT count(*)::int AS total FROM grouped
+        `)) as unknown as Array<{ total: number }>;
+        total = Number(counted?.total ?? 0);
+      }
 
       const items = rows.map((row) => {
         const bans = row.bans.map((ban) => {

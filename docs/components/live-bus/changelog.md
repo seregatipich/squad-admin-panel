@@ -6,6 +6,19 @@
 
 - `apps/api/src/routes/live.ts` отсекал без `combat:view` только тип `combat.event`, а кадры `combat.vehicle` от worker-log-ingest (атакующий, оружие, урон, техника) уходили всем с `server:view`. Теперь фильтр срабатывает на любой тип с префиксом `combat.`. Регрессионный тест: `apps/api/test/combat-live-replay.test.ts`.
 
+## 2026-09-28 — #69: подписки на события по сокету, сужение прав токена при перепроверке
+
+### Changed
+
+- `apps/api/src/routes/live.ts` — типы `chat.message`, `combat.event`, `rcon.roster`, `externalban.matched` и все не описанные в API события воркеров (`banname.matched`, `bansync.*`, `match.*`) приходят сокету только после кадра `{"type":"subscribe","events":[...]}` (отмена — `unsubscribe`; ответ — `subscribed`/`unsubscribed`). Хвост чата и боя больше не отправляется каждому подключению: он воспроизводится при подписке на `chat.message` / `combat.event`.
+- `ChatRingBuffer` и `CombatRingBuffer` заменены одним `ServerRingBuffer` (`apps/api/src/lib/server-ring-buffer.ts`); буфер удалённого сервера очищается по `server.deleted`.
+- Периодическая перепроверка сокета с API-токеном сужает права по scopes токена (`narrowToTokenScopes`), как и HTTP-хук: после первого тика токен больше не получает `combat.event` и уведомления о ролях по флагам роли владельца.
+- Web: `apps/web/src/lib/live-bus.ts` подписывает сокет на типы, которые слушают смонтированные `useLiveSubscription`, со счётчиком ссылок и повторной подпиской после переподключения.
+
+### Migration notes
+
+- Миграций БД нет. Сторонний клиент `/api/v1/ws/live`, которому нужны чат, бой или ростер, должен отправить `subscribe`.
+
 ## 2026-09-27 — #12: сервер сам закрывает `/api/v1/ws/live` при отзыве сессии или потере прав
 
 ### Changed

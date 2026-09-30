@@ -1,8 +1,21 @@
 import { HOST_METRICS_STREAM } from '@squad/shared-config';
 import type { FastifyPluginAsync } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
-const hostRoutes: FastifyPluginAsync = async (app) => {
+/**
+ * Query-string boolean: only `true`/`1` and `false`/`0` are accepted.
+ * `z.coerce.boolean()` would turn the string `'false'` into `true`.
+ */
+const queryBoolean = z
+  .enum(['true', 'false', '1', '0'])
+  .transform((v) => v === 'true' || v === '1');
+
+const hostMetricsSample = z.array(z.number());
+
+const hostRoutes: FastifyPluginAsync = async (base) => {
+  const app = base.withTypeProvider<ZodTypeProvider>();
+
   app.get(
     '/api/v1/host/info',
     {
@@ -25,12 +38,12 @@ const hostRoutes: FastifyPluginAsync = async (app) => {
       config: { permissions: ['host:view'], audit: false },
       schema: {
         querystring: z.object({
-          refresh: z.coerce.boolean().optional(),
+          refresh: queryBoolean.optional(),
         }),
       },
     },
     async (req) => {
-      const { refresh } = req.query as { refresh?: boolean };
+      const { refresh } = req.query;
       const usage = await app.bridge.panelDiskUsage(refresh ? { force: true } : undefined);
       const hasCapacity = usage.host_total_bytes > 0;
       const panelPct = hasCapacity ? (usage.total_panel_bytes / usage.host_total_bytes) * 100 : 0;
@@ -73,7 +86,7 @@ const hostRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req) => {
-      const { seconds } = req.query as { seconds: number };
+      const { seconds } = req.query;
       const minId = `${Date.now() - seconds * 1000}-0`;
       const items = (await app.redis.xrange(HOST_METRICS_STREAM, minId, '+')) as Array<
         [string, string[]]
@@ -85,12 +98,16 @@ const hostRoutes: FastifyPluginAsync = async (app) => {
         const obj: Record<string, string> = {};
         for (let i = 0; i < fields.length; i += 2) obj[fields[i] ?? ''] = fields[i + 1] ?? '';
         if (!obj.v) continue;
+        let decoded: unknown;
         try {
-          v.push(JSON.parse(obj.v) as number[]);
-          ts.push(idMs);
+          decoded = JSON.parse(obj.v);
         } catch {
-          // skip malformed sample
+          continue;
         }
+        const sample = hostMetricsSample.safeParse(decoded);
+        if (!sample.success) continue;
+        v.push(sample.data);
+        ts.push(idMs);
       }
       return { ts, v };
     },

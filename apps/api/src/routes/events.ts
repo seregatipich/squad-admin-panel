@@ -68,7 +68,7 @@ function decodeCursor(raw: string): Cursor | null {
     const occurredAt = new Date(decoded.slice(0, sep));
     const eventId = decoded.slice(sep + 1);
     if (Number.isNaN(occurredAt.getTime())) return null;
-    if (!/^[0-9a-f-]{36}$/i.test(eventId)) return null;
+    if (!z.string().uuid().safeParse(eventId).success) return null;
     return { occurredAt, eventId };
   } catch {
     return null;
@@ -334,19 +334,42 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Streams the export newest first in keyset pages of {@link EXPORT_BATCH}
    * rows, up to {@link EXPORT_MAX}, so the whole file (jsonb payloads
-   * included) is never held in memory at once.
+   * included) is never held in memory at once. The cursor carries the row's
+   * own `occurred_at` text rather than a JS Date, whose millisecond precision
+   * would skip or repeat rows that differ only in microseconds.
    */
   async function* csvLines(baseClauses: SQL[], includeIps: boolean): AsyncGenerator<string> {
     yield `${CSV_COLUMNS.join(',')}\r\n`;
 
-    let cursor: Cursor | null = null;
+    let cursor: { occurredAtText: string; eventId: string } | null = null;
     let remaining = EXPORT_MAX;
     while (remaining > 0) {
       const batchSize = Math.min(EXPORT_BATCH, remaining);
-      const clauses: SQL[] = cursor
-        ? [...baseClauses, keysetPredicate('desc', cursor)]
-        : baseClauses;
-      const rows = await fullSelection()
+      const clauses: SQL[] = [...baseClauses];
+      if (cursor) {
+        clauses.push(
+          sql`(${events.occurredAt} < ${cursor.occurredAtText}::timestamptz OR (${events.occurredAt} = ${cursor.occurredAtText}::timestamptz AND ${events.eventId} < ${cursor.eventId}::uuid))`,
+        );
+      }
+      const rows = await app.db
+        .select({
+          eventId: events.eventId,
+          serverId: events.serverId,
+          serverName: servers.displayName,
+          serverSlug: servers.slug,
+          occurredAt: events.occurredAt,
+          occurredAtText: sql<string>`${events.occurredAt}::text`,
+          kind: events.kind,
+          version: events.version,
+          actorKind: events.actorKind,
+          actorId: events.actorId,
+          actorNickname: players.canonicalName,
+          correlationId: events.correlationId,
+          payload: events.payload,
+        })
+        .from(events)
+        .leftJoin(servers, eq(servers.id, events.serverId))
+        .leftJoin(players, actorJoin)
         .where(clauses.length > 0 ? and(...clauses) : undefined)
         .orderBy(desc(events.occurredAt), desc(events.eventId))
         .limit(batchSize);
@@ -356,7 +379,7 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
 
       const tail = rows.at(-1);
       if (!tail || rows.length < batchSize) break;
-      cursor = { occurredAt: tail.occurredAt, eventId: tail.eventId };
+      cursor = { occurredAtText: tail.occurredAtText, eventId: tail.eventId };
       remaining -= rows.length;
     }
   }

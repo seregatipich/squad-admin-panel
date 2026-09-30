@@ -349,7 +349,14 @@ export type LiveBusState = 'connecting' | 'open' | 'closed';
 export type BridgeState = 'up' | 'down' | 'unknown';
 
 export interface LiveBusHandle {
-  subscribe(cb: (event: LiveEvent) => void): () => void;
+  /**
+   * Receive every event this socket is sent. Pass `eventType` to also declare
+   * interest in that type: the API pushes high-volume types (chat, combat,
+   * roster snapshots) only to sockets that subscribed to them, and replays the
+   * chat/combat tail on subscribe. The subscription is reference-counted and
+   * re-sent after every reconnect.
+   */
+  subscribe(cb: (event: LiveEvent) => void, eventType?: LiveEvent['type']): () => void;
   state(): LiveBusState;
   bridgeState(): BridgeState;
   onStateChange(cb: (state: LiveBusState) => void): () => void;
@@ -373,6 +380,8 @@ function makeLiveBus(): LiveBusHandle {
   const eventSubs = new Set<(event: LiveEvent) => void>();
   const stateSubs = new Set<(state: LiveBusState) => void>();
   const bridgeSubs = new Set<(state: BridgeState) => void>();
+  /** Declared interest per event type; the server is told on 0→1 and 1→0. */
+  const typeRefs = new Map<string, number>();
 
   let socket: WebSocket | null = null;
   let connState: LiveBusState = 'closed';
@@ -410,6 +419,31 @@ function makeLiveBus(): LiveBusHandle {
         debug('bridge-sub threw', err);
       }
     }
+  };
+
+  const sendFrame = (frame: { type: 'subscribe' | 'unsubscribe'; events: string[] }): void => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify(frame));
+    } catch (err) {
+      debug(`${frame.type} send failed`, err);
+    }
+  };
+
+  const addTypeRef = (eventType: string): void => {
+    const next = (typeRefs.get(eventType) ?? 0) + 1;
+    typeRefs.set(eventType, next);
+    if (next === 1) sendFrame({ type: 'subscribe', events: [eventType] });
+  };
+
+  const releaseTypeRef = (eventType: string): void => {
+    const next = (typeRefs.get(eventType) ?? 0) - 1;
+    if (next > 0) {
+      typeRefs.set(eventType, next);
+      return;
+    }
+    typeRefs.delete(eventType);
+    sendFrame({ type: 'unsubscribe', events: [eventType] });
   };
 
   const clearReconnect = (): void => {
@@ -480,6 +514,9 @@ function makeLiveBus(): LiveBusHandle {
 
     ws.onopen = () => {
       attempts = 0;
+      // A new connection starts with no subscriptions: re-declare every type
+      // a mounted consumer still listens to (the server replays tails then).
+      if (typeRefs.size > 0) sendFrame({ type: 'subscribe', events: [...typeRefs.keys()] });
       setState('open');
     };
 
@@ -491,6 +528,8 @@ function makeLiveBus(): LiveBusHandle {
         return;
       }
       if (!frame || typeof frame.type !== 'string') return;
+      // Subscription acknowledgements are protocol frames, not live events.
+      if (frame.type === 'subscribed' || frame.type === 'unsubscribed') return;
       if (frame.type === 'ping') {
         try {
           ws.send(JSON.stringify({ type: 'pong' }));
@@ -576,11 +615,13 @@ function makeLiveBus(): LiveBusHandle {
       return () => release();
     },
     forceReconnect,
-    subscribe(cb) {
+    subscribe(cb, eventType) {
       eventSubs.add(cb);
+      if (eventType) addTypeRef(eventType);
       retain();
       return () => {
         eventSubs.delete(cb);
+        if (eventType) releaseTypeRef(eventType);
         release();
       };
     },

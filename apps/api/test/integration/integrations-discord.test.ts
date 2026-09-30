@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { auditLog, discordIntegration, discordWebhooks, players, roles } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decryptString, deserialize, encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -298,6 +298,76 @@ describeIfDb('Discord integration — audit trail without cleartext secrets', ()
       expect(blob).not.toContain(WEBHOOK_TOKEN);
       expect(blob).not.toContain(BOT_TOKEN);
     }
+  });
+});
+
+/** Polls for an audit row of `action` that ended with `statusCode` (the hook writes after the response). */
+async function waitForAuditStatus(action: string, statusCode: number) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const [row] = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, action), eq(auditLog.statusCode, statusCode)))
+      .orderBy(desc(auditLog.createdAt))
+      .limit(1);
+    if (row) return row;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
+}
+
+describeIfDb('Discord integration — refused and failed mutations are audited too', () => {
+  it('records a 403 attempt to change the bot token by a user without integration:manage', async () => {
+    const cookie = await loginAsSteam(MODERATOR_STEAM);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/integrations/discord',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ bot_token: 'stolen-token-attempt' }),
+    });
+    expect(res.statusCode).toBe(403);
+    const row = await waitForAuditStatus('integration.discord.update', 403);
+    expect(row, 'expected an audit row for the refused PUT').not.toBeNull();
+    expect(JSON.stringify([row?.beforeSnapshot, row?.afterSnapshot, row?.context])).not.toContain(
+      'stolen-token-attempt',
+    );
+  });
+
+  it('records a 404 webhook update against an unknown id', async () => {
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/integrations/discord/webhooks/00000000-0000-0000-0000-000000000def',
+      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
+      payload: JSON.stringify({ enabled: false }),
+    });
+    expect(res.statusCode).toBe(404);
+    const row = await waitForAuditStatus('integration.discord.webhook.update', 404);
+    expect(row?.targetId).toBe('00000000-0000-0000-0000-000000000def');
+  });
+});
+
+describeIfDb('Discord integration — concurrent singleton writes', () => {
+  it('serialises concurrent first-time PUTs: no 500 and no lost field', async () => {
+    await h.db.delete(discordIntegration);
+    const cookie = await loginAsOwner(h);
+    const put = (body: Record<string, unknown>) =>
+      h.app.inject({
+        method: 'PUT',
+        url: '/api/v1/integrations/discord',
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify(body),
+      });
+    const results = await Promise.all([
+      put({ guild_id: '111111111111111111' }),
+      put({ enabled: true }),
+      put({ guild_id: '111111111111111111' }),
+      put({ enabled: true }),
+    ]);
+    for (const res of results) expect(res.statusCode, res.body).toBe(200);
+    const [row] = await h.db.select().from(discordIntegration);
+    expect(row?.guildId).toBe('111111111111111111');
+    expect(row?.enabled).toBe(true);
   });
 });
 

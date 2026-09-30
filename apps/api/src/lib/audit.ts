@@ -18,16 +18,22 @@ export interface AuditEntryInput {
   durationMs?: number;
 }
 
+/** A transaction handle from `DatabaseClient.transaction`. */
+export type AuditTransaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0];
+
 /**
- * Appends one row to the `audit_log` hash chain (the chain hash is filled in
- * by the DB trigger).
+ * Append one row to the `audit_log` hash chain.
  *
- * @param db - database handle, or a transaction so the entry commits or rolls
- *   back together with the change it records.
- * @param entry - the audit entry.
+ * Pass the mutating transaction (`tx`) rather than `app.db` whenever the audit
+ * row must be atomic with the change it records: a failed audit insert then
+ * rolls the change back instead of leaving it committed but unaudited.
+ *
+ * @param db - The database client or an open transaction.
+ * @param entry - Actor, action, target and snapshots to record.
+ * @throws Whatever the insert throws (e.g. a hash-chain trigger failure).
  */
 export async function writeAuditEntry(
-  db: Pick<DatabaseClient, 'insert'>,
+  db: DatabaseClient | AuditTransaction,
   entry: AuditEntryInput,
 ): Promise<void> {
   const actor = entry.actor;

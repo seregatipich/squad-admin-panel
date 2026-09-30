@@ -42,7 +42,7 @@ describe('createBalancerProposalSignature', () => {
     const expected = `sha256=${createHmac('sha256', SECRET)
       .update(`${TIMESTAMP}.${canonicalJson(PAYLOAD)}`)
       .digest('hex')}`;
-    expect(createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD, NOW)).toBe(expected);
+    expect(createBalancerProposalSignature(SECRET, TIMESTAMP, PAYLOAD)).toBe(expected);
   });
 });
 
@@ -137,5 +137,37 @@ describe('verifyBalancerProposalSignature', () => {
     expect(verifyBalancerProposalSignature(SECRET, 'not-a-date', signature, PAYLOAD, NOW)).toBe(
       false,
     );
+  });
+});
+
+describe('verifyBalancerProposalSignature timestamp formats', () => {
+  const now = new Date(Date.parse(TIMESTAMP));
+  const verifyAt = (timestamp: string) =>
+    verifyBalancerProposalSignature(
+      SECRET,
+      timestamp,
+      createBalancerProposalSignature(SECRET, timestamp, PAYLOAD),
+      PAYLOAD,
+      now,
+    );
+
+  it('accepts ISO and unix-second timestamps inside the ±5 minute window, edges included', () => {
+    expect(verifyAt(TIMESTAMP)).toBe(true);
+    expect(verifyAt(new Date(now.getTime() - 5 * 60_000).toISOString())).toBe(true);
+    expect(verifyAt(new Date(now.getTime() + 5 * 60_000).toISOString())).toBe(true);
+    expect(verifyAt(String(now.getTime() / 1000 - 60))).toBe(true);
+  });
+
+  it('rejects timestamps just outside the window in either direction', () => {
+    expect(verifyAt(new Date(now.getTime() - 5 * 60_000 - 1).toISOString())).toBe(false);
+    expect(verifyAt(new Date(now.getTime() + 5 * 60_000 + 1).toISOString())).toBe(false);
+    expect(verifyAt(String(now.getTime() / 1000 - 3600))).toBe(false);
+  });
+
+  it('rejects missing and unparsable timestamps', () => {
+    expect(verifyBalancerProposalSignature(SECRET, undefined, 'sha256=00', PAYLOAD, now)).toBe(
+      false,
+    );
+    expect(verifyAt('yesterday')).toBe(false);
   });
 });

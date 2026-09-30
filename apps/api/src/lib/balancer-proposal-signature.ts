@@ -13,6 +13,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * receiver's clock, so a captured request can only be replayed within that
  * window (where a redelivery is idempotent on `source_snapshot_id` anyway).
  */
+
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
@@ -45,7 +46,8 @@ export const BALANCER_SIGNATURE_TOLERANCE_SECONDS = 300;
  * `now`, a malformed hex string or a length mismatch.
  *
  * @param secret - `BALANCER_WEBHOOK_SECRET`.
- * @param timestamp - The `x-balancer-timestamp` header (an ISO-8601 instant).
+ * @param timestamp - The `x-balancer-timestamp` header: an ISO-8601 instant or
+ *   whole unix seconds.
  * @param signature - The `x-balancer-signature` header.
  * @param payload - The parsed request body.
  * @param now - The receiver's clock; injectable for tests.
@@ -61,8 +63,8 @@ export function verifyBalancerProposalSignature(
   toleranceSeconds: number = BALANCER_SIGNATURE_TOLERANCE_SECONDS,
 ): boolean {
   if (!timestamp || !signature) return false;
-  const signedAtMs = Date.parse(timestamp);
-  if (Number.isNaN(signedAtMs)) return false;
+  const signedAtMs = /^\d+$/.test(timestamp) ? Number(timestamp) * 1000 : Date.parse(timestamp);
+  if (!Number.isFinite(signedAtMs)) return false;
   if (Math.abs(now.getTime() - signedAtMs) > toleranceSeconds * 1000) return false;
   const expected = createBalancerProposalSignature(secret, timestamp, payload);
   const actualHex = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;

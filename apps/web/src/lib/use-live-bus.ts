@@ -7,9 +7,11 @@ export function useLiveSubscription<T extends LiveEvent['type']>(
 ): void {
   useEffect(() => {
     const bus = getLiveBus();
+    // Passing `type` declares interest, so opt-in types (chat, combat, …) are
+    // pushed to this tab only while a consumer is mounted.
     return bus.subscribe((event) => {
       if (event.type === type) handler(event as Extract<LiveEvent, { type: T }>);
-    });
+    }, type);
   }, [type, handler]);
 }
 
