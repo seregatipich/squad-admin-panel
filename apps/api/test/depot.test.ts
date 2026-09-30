@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { auditLog, players, roles } from '@squad/db/schema';
+import { auditLog, players, roles, servers } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -335,6 +335,74 @@ describe('POST /api/v1/depot/update', () => {
       expect(updatingCleared).toBe(true);
     } finally {
       xaddSpy.mockRestore();
+    }
+  });
+
+  it('refuses with 409 servers_running when a live container server is not in server_ids (#20 follow-up)', async () => {
+    const liveServerId = randomUUID();
+    await h.db.insert(servers).values({
+      id: liveServerId,
+      displayName: 'Live Server',
+      slug: `depot-live-${liveServerId}`,
+      runtime: 'container',
+      status: 'running',
+    });
+    let depotCalled = false;
+    h.bridge.depotUpdate = async () => {
+      depotCalled = true;
+      return { exit_code: 0 };
+    };
+
+    try {
+      const cookie = await loginAsOwner(h);
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/depot/update',
+        headers: { cookie },
+        // Default server_ids: [] — the live server above is not listed.
+        payload: {},
+      });
+      expect(resp.statusCode).toBe(409);
+      const body = resp.json();
+      expect(body.error).toBe('servers_running');
+      expect(body.server_ids).toEqual([liveServerId]);
+      expect(await h.redis.get('depot:updating')).toBeNull();
+      expect(depotCalled).toBe(false);
+    } finally {
+      await h.db.delete(servers).where(eq(servers.id, liveServerId));
+    }
+  });
+
+  it('proceeds when every live container server is listed in server_ids', async () => {
+    const liveServerId = randomUUID();
+    await h.db.insert(servers).values({
+      id: liveServerId,
+      displayName: 'Live Server 2',
+      slug: `depot-live-listed-${liveServerId}`,
+      runtime: 'container',
+      status: 'running',
+    });
+    let depotCalled = false;
+    h.bridge.depotUpdate = async () => {
+      depotCalled = true;
+      return { exit_code: 0 };
+    };
+    h.bridge.containerStop = async () => undefined;
+    h.bridge.containerStart = async () => undefined;
+
+    try {
+      const cookie = await loginAsOwner(h);
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/depot/update',
+        headers: { cookie },
+        payload: { server_ids: [liveServerId] },
+      });
+      expect(resp.statusCode).toBe(200);
+      expect(resp.json().status).toBe('started');
+      await vi.waitFor(() => expect(depotCalled).toBe(true));
+    } finally {
+      await h.db.delete(servers).where(eq(servers.id, liveServerId));
     }
   });
 

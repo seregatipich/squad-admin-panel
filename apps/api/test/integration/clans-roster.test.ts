@@ -265,6 +265,43 @@ describeIfDb('POST /api/v1/clans/:id/members', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // #14 follow-up: the first member of an empty clan is always forced to
+  // 'leader' regardless of the requested role. The response must flag this
+  // override so the UI can show a hint instead of silently reporting success
+  // for a role that was not honored.
+  it('flags role_overridden when the requested role is silently forced to leader for the first member', async () => {
+    clanSeq += 1;
+    const emptyClanId = uuidv7();
+    await h.db.insert(clans).values({ id: emptyClanId, name: `Пустой-клан-${clanSeq}`, tags: [] });
+    const target = await seedPlayer(`ПерваяЛидер${clanSeq}`);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/clans/${emptyClanId}/members`,
+      headers: jsonHeaders(managerCookie),
+      payload: JSON.stringify({ player_id: target, member_role: 'member' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ member_role: string; role_overridden: boolean }>();
+    expect(body.member_role).toBe('leader');
+    expect(body.role_overridden).toBe(true);
+  });
+
+  it('does not flag role_overridden when the requested role is honored (non-empty clan)', async () => {
+    const clan = await seedClan();
+    const target = await seedPlayer('НеПереопределён');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/clans/${clan.clanId}/members`,
+      headers: jsonHeaders(managerCookie),
+      payload: JSON.stringify({ player_id: target, member_role: 'member' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ member_role: string; role_overridden: boolean }>();
+    expect(body.member_role).toBe('member');
+    expect(body.role_overridden).toBe(false);
+  });
+
   it('returns 404 when adding an unknown player', async () => {
     const clan = await seedClan();
     const res = await h.app.inject({

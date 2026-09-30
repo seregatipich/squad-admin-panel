@@ -7,7 +7,21 @@
  * Импорт jest-dom регистрирует матчеры (`toBeInTheDocument` и др.) и заодно
  * подключает их типы ко всей программе `tsc`, поэтому файл лежит внутри `src/`.
  */
+import { configure } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+
+/**
+ * testing-library's `findBy*`/`waitFor` default to a ~1000ms polling window
+ * (`asyncUtilTimeout`), which is fine on an idle machine but flakes under
+ * real host contention: several suites here run in parallel worker threads,
+ * and a component whose `useEffect` fetch only resolves a macrotask or two
+ * late (GC pause, scheduler backlog) can miss the window even though nothing
+ * about the component is actually broken. Every call already uses
+ * `findBy*`/`waitFor` correctly (no bare fixed `setTimeout` waits) — the gap
+ * is purely this thin default margin — so raising it here, once, gives every
+ * test file headroom without touching the tests themselves.
+ */
+configure({ asyncUtilTimeout: 5000 });
 
 /**
  * Ни одна тестовая DOM-среда не ведёт `<dialog>` как браузер: jsdom 29 знает

@@ -22,6 +22,13 @@ import {
  * so multiple UI tabs can watch the same update.
  */
 
+/**
+ * Statuses in which a container server has (or is about to have) the shared
+ * depot volume mounted by a live process, mirroring server-update.ts's
+ * per-server guard (#20 follow-up).
+ */
+const LIVE_STATUSES = ['installing', 'starting', 'running', 'stopping'];
+
 const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGameServer.sh`;
 const DEPOT_MANIFEST = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/steamapps/appmanifest_403240.acf`;
 
@@ -101,6 +108,29 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       if (!acquired) {
         const since = await app.redis.get('depot:updating');
         return { status: 'already_in_progress', since: since ?? startedAt };
+      }
+
+      // The depot is one volume mounted into every Squad container (#20
+      // follow-up, same hazard as server-update.ts): a container server not
+      // listed in server_ids keeps its live process mounted on the volume
+      // while phase 2 below rewrites it. Refuse unless every other live
+      // container server is explicitly included in server_ids.
+      const requestedIds = new Set(serverIds);
+      const liveServers = await app.db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(
+          and(
+            eq(servers.runtime, 'container'),
+            isNull(servers.deletedAt),
+            inArray(servers.status, LIVE_STATUSES),
+          ),
+        );
+      const unlistedLive = liveServers.filter((row) => !requestedIds.has(row.id));
+      if (unlistedLive.length > 0) {
+        await app.redis.del('depot:updating');
+        reply.code(409);
+        return { error: 'servers_running', server_ids: unlistedLive.map((r) => r.id) };
       }
 
       // Background orchestration: stop servers → update depot → restart servers.

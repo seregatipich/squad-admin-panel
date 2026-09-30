@@ -287,6 +287,85 @@ describe('GET /api/v1/servers/:id/configs/:name/drift/diff (CFG-2 #64)', () => {
     expect(resp.statusCode).toBe(404);
     expect(resp.json<{ error: string }>().error).toBe('version_not_found');
   });
+
+  // #10 follow-up: both sides of the Rcon.cfg drift diff are masked to the
+  // same fixed placeholder, so an out-of-band password change used to
+  // produce two identical masked lines — a no-op diff that hid a real
+  // change from the operator.
+  it('marks a changed Rcon.cfg password distinctly instead of hiding it behind an identical mask', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const [creds] = await h.db
+      .select({ rconPasswordEncrypted: serverCredentials.rconPasswordEncrypted })
+      .from(serverCredentials)
+      .where(eq(serverCredentials.serverId, id));
+    if (!creds?.rconPasswordEncrypted) throw new Error('no rcon credentials seeded');
+    const panelPassword = decryptString(
+      h.app.encryptionKey,
+      deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    );
+    await putConfig(
+      cookie,
+      id,
+      'Rcon.cfg',
+      `Port=21116\r\nPassword=${panelPassword}\r\nIP=0.0.0.0\r\n`,
+    );
+    // Out-of-band edit on disk: a different password than the panel knows.
+    h.bridge.files.set(
+      diskPath(id, 'Rcon.cfg'),
+      Buffer.from(`Port=21116\r\nPassword=out-of-band-secret\r\nIP=0.0.0.0\r\n`, 'utf-8'),
+    );
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/drift/diff`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode, resp.body).toBe(200);
+    const body = resp.json<{ diff: string }>();
+    // Neither real password ever reaches the response.
+    expect(body.diff).not.toContain(panelPassword);
+    expect(body.diff).not.toContain('out-of-band-secret');
+    // The diff shows a visible change on the Password line instead of two
+    // identical masked lines.
+    expect(body.diff).toContain('(изменён)');
+  });
+
+  it('does not mark the Rcon.cfg password as changed when the disk password matches the panel', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const [creds] = await h.db
+      .select({ rconPasswordEncrypted: serverCredentials.rconPasswordEncrypted })
+      .from(serverCredentials)
+      .where(eq(serverCredentials.serverId, id));
+    if (!creds?.rconPasswordEncrypted) throw new Error('no rcon credentials seeded');
+    const panelPassword = decryptString(
+      h.app.encryptionKey,
+      deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    );
+    await putConfig(
+      cookie,
+      id,
+      'Rcon.cfg',
+      `Port=21116\r\nPassword=${panelPassword}\r\nIP=0.0.0.0\r\n`,
+    );
+    // Out-of-band edit changes an unrelated line only; password unchanged.
+    h.bridge.files.set(
+      diskPath(id, 'Rcon.cfg'),
+      Buffer.from(`Port=21116\r\nPassword=${panelPassword}\r\nIP=127.0.0.1\r\n`, 'utf-8'),
+    );
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Rcon.cfg/drift/diff`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode, resp.body).toBe(200);
+    const body = resp.json<{ diff: string }>();
+    expect(body.diff).not.toContain('(изменён)');
+    expect(body.diff).toContain('-IP=0.0.0.0');
+    expect(body.diff).toContain('+IP=127.0.0.1');
+  });
 });
 
 describe('POST /api/v1/servers/:id/configs/:name/drift/accept (CFG-2 #64)', () => {
