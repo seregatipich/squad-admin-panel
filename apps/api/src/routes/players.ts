@@ -16,6 +16,7 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { escapeLike, steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
 import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
@@ -403,6 +404,11 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         if (target.isSystemRole && target.name === 'Owner') {
           reply.code(403);
           return { error: 'owner_assignment_forbidden' };
+        }
+        const beyond = await roleGrantBeyondActor(app.db, target.id, req.user?.permissions);
+        if (beyond.length > 0) {
+          reply.code(403);
+          return roleCeilingError(beyond);
         }
         newRolePanelAccess = target.panelAccess;
       }

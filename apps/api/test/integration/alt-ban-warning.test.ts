@@ -2,6 +2,7 @@ import {
   alertEvents,
   alertRules,
   auditLog,
+  events,
   moderationActions,
   playerLinks,
   playerReports,
@@ -284,5 +285,116 @@ describeIfDb('ALT-7 report ban flow', () => {
     expect(
       auditRows.some((row) => (row.context as Record<string, unknown>).related_action_id),
     ).toBe(true);
+  });
+});
+
+describeIfDb('report ban through the shared MOD-2 pipeline (#41)', () => {
+  async function insertReport(): Promise<string> {
+    const [report] = await h.db
+      .insert(playerReports)
+      .values({
+        serverId,
+        reporterPlayerId: ownerId,
+        targetPlayerId: targetId,
+        body: 'report pipeline test',
+        source: 'ui',
+        status: 'pending',
+      })
+      .returning({ id: playerReports.id });
+    if (!report) throw new Error('failed to seed report');
+    return report.id;
+  }
+
+  it('records expires_at, source and the RCON request on a temporary report ban (#245)', async () => {
+    const reportId = await insertReport();
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/reports/${reportId}/actions`,
+      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        action_type: 'ban',
+        reason: 'temp ban',
+        ban_length: '1d',
+        also_player_ids: [altId],
+      }),
+    });
+    expect(response.statusCode).toBe(200);
+
+    const actions = await h.db
+      .select()
+      .from(moderationActions)
+      .where(eq(moderationActions.reportId, reportId));
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      const context = action.context as Record<string, unknown>;
+      expect(context).toMatchObject({
+        ban_length: '1d',
+        source: 'report',
+        rcon_request_id: 'alt-warning-test',
+        report_id: reportId,
+      });
+      expect(typeof context.expires_at).toBe('string');
+      expect(context.target).toBeTruthy();
+    }
+    const primary = actions.find((action) => action.playerId === targetId);
+    expect(primary?.context).toMatchObject({ also_player_ids: [altId] });
+  });
+
+  it('keeps the ledger, event and audit trail of targets banned before a later target fails (#244)', async () => {
+    vi.mocked(sendRconCommandViaWorker)
+      .mockReset()
+      .mockResolvedValueOnce(okOutcome())
+      .mockResolvedValueOnce({ attempted: false, reason: 'worker_not_connected' });
+    const reportId = await insertReport();
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/reports/${reportId}/actions`,
+      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        action_type: 'ban',
+        reason: 'partial',
+        ban_length: '0',
+        also_player_ids: [altId],
+      }),
+    });
+    expect(response.statusCode).toBe(502);
+    const body = response.json() as {
+      error: string;
+      player_id: string;
+      applied: Array<{ player_id: string; moderation_action_id: string }>;
+    };
+    expect(body.error).toBe('action_failed');
+    expect(body.player_id).toBe(altId);
+    expect(body.applied).toHaveLength(1);
+    expect(body.applied[0]?.player_id).toBe(targetId);
+
+    const actions = await h.db
+      .select()
+      .from(moderationActions)
+      .where(eq(moderationActions.reportId, reportId));
+    expect(actions.map((action) => action.playerId)).toEqual([targetId]);
+    expect(actions[0]?.id).toBe(body.applied[0]?.moderation_action_id);
+
+    const ledgerEvents = await h.db
+      .select()
+      .from(events)
+      .where(and(eq(events.serverId, serverId), eq(events.kind, 'moderation.ban')));
+    expect(ledgerEvents).toHaveLength(1);
+
+    const reportAudit = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, reportId)));
+    expect(reportAudit).toHaveLength(1);
+    expect(reportAudit[0]?.context).toMatchObject({
+      moderation_action_id: body.applied[0]?.moderation_action_id,
+    });
+    const failedAudit = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, altId)));
+    expect(failedAudit).toHaveLength(1);
+    expect(failedAudit[0]?.afterSnapshot).toMatchObject({ status: 'failed' });
   });
 });

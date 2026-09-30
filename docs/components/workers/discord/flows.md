@@ -13,10 +13,13 @@ after a successful send, and the `XACK` only after that.
 
 ## Role sync (DISCORD-5)
 
-**Reaction (≤60 s).** `PUT`/`DELETE /api/v1/players/:playerId/role` commits,
-then publishes `{ player_id, reason }` to `discord:role-sync`. The loop reads
-the request, resolves the Discord bot credentials, and re-derives that player's
-Discord roles.
+**Reaction (≤60 s).** `PUT`/`DELETE /api/v1/players/:playerId/role` and
+`POST`/`DELETE /api/v1/roles/:id/members[/:playerId]` commit, then publish
+`{ player_id, reason }` to `discord:role-sync`. The bulk role-member routes
+(`import`, `bulk-delete`, `move`) publish one `{ player_id: null }` request —
+a full reconcile — instead of one per player. The loop reads the request,
+resolves the Discord bot credentials, and re-derives that player's (or, for
+`null`, every linked player's) Discord roles.
 
 **Per-player derivation.** Look up the player's `player_discord_links` row — no
 row means no-op. Load every *enabled* `discord_role_mappings` row; the union of

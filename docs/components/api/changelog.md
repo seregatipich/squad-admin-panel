@@ -94,6 +94,22 @@
 - `GET /api/v1/players` принимает `limit` (1–500, по умолчанию 200) и `offset`, а `total` считает всех подходящих игроков, а не размер страницы. На странице «Все игроки» появилась постраничная навигация, и «всего» показывает настоящее число игроков.
 - Поиск игроков по нику: миграция `0120_player_name_trgm_indexes` добавляет GIN-индексы `pg_trgm` на `players.canonical_name_normalized` и `player_name_history.name_normalized`, поэтому `LIKE '%q%'` в списке, поиске и других маршрутах больше не читает таблицы целиком. Точное совпадение по SteamID64 в `/players`, `/players/search`, `/users`, лидербордах, участниках роли и составе клана сравнивает `steam_id64` как `bigint` и не приводит столбец к тексту. В `/players` и `/players/search` символы `%` и `_` в запросе ищутся буквально.
 
+## 2026-09-28 — Роли, репорты, банлист и восстановление из архива (#41)
+
+### Security
+
+- Потолок привилегий: `POST /api/v1/roles/:id/members`, `…/members/import`, `…/members/move` и `PUT /api/v1/players/:playerId/role` отвечают `403 role_exceeds_actor_permissions` (с `capabilities[]`), если назначаемая роль даёт флаг, Squad-право или ключ `role_permissions`, которого нет у самого актора; `POST /api/v1/roles` и `PUT /api/v1/roles/:id` так же отказывают, если правка впервые выдаёт роли такое право. Owner не ограничен.
+- CSV-экспорты `GET /api/v1/analytics/reports?format=csv` и `GET /api/v1/roles/:id/members/export` (а также общий `escapeCsvField` из `analytics.ts`) экранируют ячейки, начинающиеся с `=`, `+`, `-`, `@`, TAB или CR, префиксом `'` (CSV formula injection).
+
+### Fixed
+
+- `GET /api/v1/public/banlist?format=json`: ETag больше не зависит от `generated_at`, поэтому `If-None-Match` возвращает `304`; `If-None-Match` разбирается как список со слабым сравнением (`W/`); порядок записей детерминирован.
+- `POST /api/v1/reports/:id/actions` идёт через общий `enforceModerationAction` (`source: 'report'`): контекст бана содержит `expires_at`, `rcon_request_id`, `target`; при сбое на одной из целей уже применённые действия остаются в журнале и аудите и перечислены в `applied[]` ответа `502`.
+- `POST /api/v1/reports/bulk-resolve` блокирует открытые репорты и обновляет их вместе с аудитом (с `before`) в одной транзакции — репорт, закрытый другим обработчиком, не перезаписывается и не попадает в `resolved_ids`; уведомления репортёров отправляются параллельно.
+- Мутации `/api/v1/roles/:id/members*` публикуют синхронизацию ролей Discord (массовые — один полный reconcile); импорт назначает роль одним `UPDATE … FROM (VALUES …)`, массовые операции отзывают сессии одним запросом.
+- Аудит `role.create`/`role.update`/`role.delete` содержит снимки `before`/`after` (флаги и `squad_permissions`) и `target_id` созданной роли.
+- `POST /api/v1/servers/archive/:id/restore` возвращает `409 port_conflict`, если порты заняты активным контейнерным сервером, и `409 duplicate_ports` для совпадающих портов.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

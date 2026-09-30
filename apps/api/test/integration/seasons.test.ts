@@ -232,6 +232,25 @@ describeIfDb('POST /api/v1/seasons', () => {
     expect(body.id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('rejects an API token whose scopes do not delegate role editing (#268)', async () => {
+    const mint = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie: ownerCookie },
+      payload: { name: `seasons-scope-${Date.now()}`, scopes: ['server:view'] },
+    });
+    expect(mint.statusCode).toBe(201);
+    const { plaintext } = mint.json() as { plaintext: string };
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/seasons',
+      headers: { authorization: `Bearer ${plaintext}` },
+      payload: seasonPayload({ name: 'TokenMade' }),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('creates a season for the Owner (capability short-circuit)', async () => {
     const res = await createSeason(ownerCookie, seasonPayload({ name: 'OwnerMade' }));
     expect(res.statusCode).toBe(201);

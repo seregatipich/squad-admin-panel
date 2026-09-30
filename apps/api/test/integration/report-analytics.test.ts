@@ -362,6 +362,23 @@ describeIfDb('GET /api/v1/analytics/reports', () => {
     expect(res.body.split('\r\n')[0]).toBe('section,key,value');
   });
 
+  it('neutralizes spreadsheet formulas in player names in the CSV export (#247)', async () => {
+    const evilId = await seedPlayer(testSteamId(954031), '=HYPERLINK("http://evil","x")');
+    await seedReport({
+      serverId: serverAId,
+      reporterPlayerId: reporterAId,
+      targetPlayerId: evilId,
+      status: 'pending',
+      createdAt: new Date(),
+    });
+    const res = await fetchAnalytics('?format=csv', ownerCookie);
+    expect(res.statusCode).toBe(200);
+    const targetLine = res.body.split('\r\n').find((line) => line.startsWith('top_target,'));
+    expect(targetLine).toBe(`top_target,"'=HYPERLINK(""http://evil"",""x"")",30d=1 90d=1`);
+    await h.db.delete(playerReports).where(eq(playerReports.targetPlayerId, evilId));
+    await h.db.delete(players).where(eq(players.steamId64, testSteamId(954031)));
+  });
+
   it('narrows the summary to one server_id filter', async () => {
     const day = new Date('2026-06-12T00:00:00.000Z');
     await seedReport({

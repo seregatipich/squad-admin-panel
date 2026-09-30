@@ -8,6 +8,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { encrypt, serialize } from '../lib/crypto.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { restoreConfigsFromArchive } from '../lib/server-restore.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
@@ -256,6 +257,21 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       const queryPort = req.body.query_port ?? archiveSettings.queryPort;
       const beaconPort = req.body.beacon_port ?? archiveSettings.beaconPort;
       const rconPort = req.body.rcon_port ?? archiveSettings.rconPort;
+      const restoredPorts = [gamePort, queryPort, beaconPort, rconPort];
+      if (new Set(restoredPorts).size !== restoredPorts.length) {
+        reply.code(409);
+        return { error: 'duplicate_ports', message: 'All four server ports must be distinct.' };
+      }
+      // The archived server's ports may have been reused since it was deleted
+      // (archived rows are excluded from this very check), so re-check them
+      // exactly like POST /api/v1/servers does.
+      if (await hasContainerPortConflict(app.db, restoredPorts)) {
+        reply.code(409);
+        return {
+          error: 'port_conflict',
+          message: 'One or more ports are already in use by another server.',
+        };
+      }
 
       await app.db.transaction(async (tx) => {
         await tx.insert(servers).values({
