@@ -141,6 +141,12 @@ type Confirmation =
   | { kind: 'drift'; name: string; action: 'accept' | 'revert' }
   | { kind: 'reset'; name: string };
 
+/** Файл, который панель читает замаскированным и не принимает обратно: PUT и restore отвечают 400. */
+const PANEL_MANAGED_FILE = 'License.cfg';
+
+/** Предупреждение для действий, которые перечитывают открытый файл поверх правок в редакторе. */
+const UNSAVED_EDITS_WARNING = ' Несохранённые правки в редакторе будут потеряны.';
+
 /** Текст диалога подтверждения: что произойдёт и как называется само действие. */
 function confirmationText(c: Confirmation): {
   title: string;
@@ -408,6 +414,14 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     async (name: string) => {
       setErr(null);
       setMsg(null);
+      // История, blame и diff принадлежат прежнему файлу; повторная загрузка
+      // того же файла (после восстановления версии) их не трогает.
+      if (selectedRef.current !== name) {
+        setVersions([]);
+        setBlame(null);
+        setDiffFrom(null);
+        setDiffFromContent('');
+      }
       setSelected(name);
       setTab('editor');
       setEditing(false);
@@ -770,6 +784,12 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   );
 
   const dialog = confirmation ? confirmationText(confirmation) : null;
+  const confirmationDiscardsEdits =
+    dirty &&
+    confirmation !== null &&
+    (confirmation.kind === 'restore' ||
+      (confirmation.kind === 'reset' && confirmation.name === selected) ||
+      (confirmation.kind === 'drift' && confirmation.name === selected));
 
   return (
     <PageContainer>
@@ -1016,6 +1036,24 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                       />
                     </div>
                   ) : null}
+                  {selected === PANEL_MANAGED_FILE ? (
+                    <div className="border-b border-line p-3">
+                      <InlineBanner
+                        tone="info"
+                        title="Файл управляется панелью"
+                        description={
+                          <>
+                            Содержимое показано замаскированным и только для чтения — лицензия
+                            меняется на странице{' '}
+                            <Link href={`/servers/${id}/settings`} className="text-accent">
+                              «Настройки»
+                            </Link>
+                            .
+                          </>
+                        }
+                      />
+                    </div>
+                  ) : null}
                   {isManagedAdmins ? (
                     <div data-testid="managed-admins-banner" className="border-b border-line p-3">
                       <InlineBanner
@@ -1058,7 +1096,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                     onDiscard={discard}
                     editing={editing}
                     onStartEditing={() => setEditing(true)}
-                    locked={isManagedRotation}
+                    locked={isManagedRotation || selected === PANEL_MANAGED_FILE}
                     onMount={handleEditorMount}
                   />
                 </>
@@ -1075,6 +1113,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                   onCloseDiff={() => setDiffFrom(null)}
                   onRestore={(vid) => setConfirmation({ kind: 'restore', versionId: vid })}
                   restoring={restoring}
+                  canRestore={selected !== PANEL_MANAGED_FILE}
                 />
               ) : null}
 
@@ -1089,7 +1128,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
           open
           onClose={() => setConfirmation(null)}
           title={dialog.title}
-          body={dialog.body}
+          body={confirmationDiscardsEdits ? `${dialog.body}${UNSAVED_EDITS_WARNING}` : dialog.body}
           confirmLabel={dialog.confirmLabel}
           cancelLabel="Отмена"
           tone={dialog.tone}
@@ -1194,6 +1233,8 @@ function HistoryView(props: {
   onCloseDiff: () => void;
   onRestore: (vid: string) => void;
   restoring: string | null;
+  /** `false` прячет «Восстановить»: API отвечает 400 на restore этого файла. */
+  canRestore: boolean;
 }) {
   const locale = useIntlLocale();
   if (props.diffFrom) {
@@ -1267,14 +1308,16 @@ function HistoryView(props: {
                 <Button size="sm" variant="plain" onClick={() => props.onOpenDiff(v.id)}>
                   Сравнить
                 </Button>
-                <Button
-                  size="sm"
-                  loading={props.restoring === v.id}
-                  disabled={props.restoring !== null}
-                  onClick={() => props.onRestore(v.id)}
-                >
-                  Восстановить
-                </Button>
+                {props.canRestore ? (
+                  <Button
+                    size="sm"
+                    loading={props.restoring === v.id}
+                    disabled={props.restoring !== null}
+                    onClick={() => props.onRestore(v.id)}
+                  >
+                    Восстановить
+                  </Button>
+                ) : null}
               </span>
             </Td>
           </TableRow>
