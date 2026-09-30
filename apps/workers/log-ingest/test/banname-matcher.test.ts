@@ -140,10 +140,11 @@ describe('catastrophic-backtracking regex rules (#62)', () => {
   // `isSafeBannedNameRegex`) drops exponential shapes such as `^(a|a)*$` at
   // compile time, and the vm timeout (#62) is the backstop for patterns the
   // screen cannot see. `^a*a*a*a*a*a*a*a*b$` passes the screen but backtracks
-  // polynomially (n^8): natively ~300 ms for 25 characters, far past the
-  // 50 ms budget, and it grows rapidly with the nickname length.
+  // polynomially (n^8). 60 characters need billions of steps, so the match runs
+  // past the 50 ms budget on any machine (25 characters finished in time on a
+  // fast CI runner), and only the vm timeout ends it.
   const slowPattern = '^a*a*a*a*a*a*a*a*b$';
-  const evilNickname = `${'a'.repeat(25)}!`;
+  const evilNickname = `${'a'.repeat(60)}!`;
 
   it('drops exponential-backtracking rules at compile time', () => {
     const compiled = compileBannedNameRules([
