@@ -213,10 +213,6 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
     return caps[type];
   }
 
-  const currentServerName = useMemo(
-    () => serverList.find((s) => s.id === id)?.display_name ?? '',
-    [serverList, id],
-  );
   const otherServers = useMemo(() => serverList.filter((s) => s.id !== id), [serverList, id]);
   const allServersSelected =
     otherServers.length > 0 && selectedServerIds.length === otherServers.length;
@@ -504,13 +500,9 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
 
                   <div className="space-y-1">
                     <p className="text-xs text-ink-3">
-                      Шаблоны (подстановка {'{server}'} → «{currentServerName || '—'}»):
+                      Шаблоны ({'{server}'} подставляется при отправке для каждого сервера):
                     </p>
-                    <TemplatePicker
-                      templates={templates}
-                      context={{ server: currentServerName }}
-                      onSelect={addToRotation}
-                    />
+                    <TemplatePicker templates={templates} context={{}} onSelect={addToRotation} />
                   </div>
 
                   <div className="space-y-1">

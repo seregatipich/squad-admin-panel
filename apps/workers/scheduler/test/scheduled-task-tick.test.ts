@@ -11,6 +11,7 @@ function makeEntry(overrides: Partial<ScheduledTaskEntry> = {}): ScheduledTaskEn
   return {
     id: '019f46a1-0000-7000-8000-000000000001',
     serverId: '019f46a1-0000-7000-8000-000000000099',
+    serverName: 'Alpha',
     name: 'Nightly restart',
     taskType: 'restart',
     params: {},
@@ -355,6 +356,25 @@ describe('runScheduledTaskTick', () => {
     const d2 = await tickAt(2);
     expect(d2.sendRconCommand).toHaveBeenCalledWith(expect.objectContaining({ args: ['third'] }));
     expect(d2.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 0);
+  });
+
+  it('substitutes {server} with the name of the server the task runs on (#640)', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      serverName: 'Bravo',
+      params: { messages: ['Welcome to {server}! Rules: {server}'] },
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await runScheduledTaskTick(deps);
+
+    expect(deps.sendRconCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ['Welcome to Bravo! Rules: Bravo'] }),
+    );
   });
 
   it('dispatches a legacy single-message broadcast but never advances the rotation cursor', async () => {
