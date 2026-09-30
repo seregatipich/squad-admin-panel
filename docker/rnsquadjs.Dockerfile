@@ -58,10 +58,8 @@ COPY docker/rnsquadjs/upstream.patch /tmp/upstream.patch
 RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 RUN yarn build
 # rollup/typescript and the rest of devDependencies are only needed to
-# produce lib/; prune them so the runtime stage's `COPY --from=upstream
-# /src /app` (still the whole tree — see the runtime stage comment for why)
-# doesn't carry a build-only node_modules into the image that runs with
-# --network host.
+# produce lib/; prune them so the runtime stage's copy of node_modules doesn't
+# carry build tooling into the image that runs with --network host.
 RUN yarn install --production=true --frozen-lockfile --network-timeout 600000
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
@@ -75,15 +73,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-# The built tree already carries lib/ (rollup output incl. the bundled
-# panelBridge) and a now-production-only node_modules (incl. ioredis/uuid),
-# so the runtime needs nothing copied from a separate plugin stage. This
-# still copies the whole /src tree (source, .git, test fixtures) rather than
-# lib/ + node_modules/ + package.json alone: upstream is a third-party repo
-# whose full runtime file set (config defaults, non-lib assets read via
-# relative paths) isn't documented, so narrowing the copy without exercising
-# every upstream plugin risks silently breaking one.
-COPY --from=upstream /src /app
+# Only what upstream executes is copied (#75, audit 1039): lib/ (rollup output
+# incl. the bundled panelBridge and the map JSON that `yarn build` copies next
+# to it), the production-only node_modules (incl. ioredis/uuid) and
+# package.json (`"type": "module"` makes node load lib/*.js as ESM). Upstream
+# reads its settings from ../config.json relative to lib/ (src/utils.ts), which
+# the bridge bind-mounts at /app/config.json; every other path it touches comes
+# from that config. The source tree, the full .git history and build tooling
+# stay in the upstream stage. scripts/test-rnsquadjs-runtime-copy.sh guards the
+# copy list.
+COPY --from=upstream /src/lib /app/lib
+COPY --from=upstream /src/node_modules /app/node_modules
+COPY --from=upstream /src/package.json /app/package.json
 COPY --from=upstream /UPSTREAM_SHA /UPSTREAM_SHA
 COPY docker/rnsquadjs/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

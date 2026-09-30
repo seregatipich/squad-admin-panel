@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,7 +65,6 @@ const makeContext = (
 ): PanelBridgeContext => ({
   serverId: SERVER_ID,
   emitter,
-  rconExec: vi.fn(async () => 'ok'),
   onStatus: () => onUnsubscribe,
   findPlayer,
 });
@@ -268,7 +267,6 @@ describe('RCON status key refresh', () => {
     const bridge = await startPanelBridge({
       serverId: SERVER_ID,
       emitter: new EventEmitter(),
-      rconExec: vi.fn(async () => 'ok'),
       onStatus: (onChange) => {
         onChange('connected');
         return () => {};
@@ -299,7 +297,6 @@ describe('RCON status key refresh', () => {
     const bridge = await startPanelBridge({
       serverId: SERVER_ID,
       emitter: new EventEmitter(),
-      rconExec: vi.fn(async () => 'ok'),
       onStatus: () => undefined,
     });
     await vi.advanceTimersByTimeAsync(60_000);
@@ -308,7 +305,7 @@ describe('RCON status key refresh', () => {
   });
 });
 
-describe('production-mode listen failure', () => {
+describe('production mode exposes no RCON channel (#75, audit 1045)', () => {
   beforeEach(() => {
     redis.xadd.mockResolvedValue('0-1');
     redis.set.mockResolvedValue('OK');
@@ -322,22 +319,27 @@ describe('production-mode listen failure', () => {
     cleanupSocketDirs();
   });
 
-  it('unwires listeners, unsubscribes status, and quits redis when the rcon socket fails to bind', async () => {
+  it('never binds a unix socket, even when PANEL_BRIDGE_SOCKET is still set by an older api', async () => {
     process.env.PANEL_BRIDGE_MODE = 'production';
-    // A parent directory that does not exist makes RconUnixServer#listen reject.
+    const socketPath = uniqueSocketPath();
+    process.env.PANEL_BRIDGE_SOCKET = socketPath;
+
+    const bridge = await startPanelBridge(makeContext(new EventEmitter(), vi.fn()));
+
+    expect(existsSync(socketPath)).toBe(false);
+    await bridge.stop();
+  });
+
+  it('starts when the legacy socket directory does not exist', async () => {
+    process.env.PANEL_BRIDGE_MODE = 'production';
     process.env.PANEL_BRIDGE_SOCKET = join(
       mkdtempSync(join(tmpdir(), 'panelbridge-index-')),
       'no-such-dir',
       'rcon.sock',
     );
-    const emitter = new EventEmitter();
-    const statusUnsubscribe = vi.fn();
 
-    await expect(startPanelBridge(makeContext(emitter, statusUnsubscribe))).rejects.toThrow();
+    const bridge = await startPanelBridge(makeContext(new EventEmitter(), vi.fn()));
 
-    expect(emitter.listenerCount('PLAYER_CONNECTED')).toBe(0);
-    expect(emitter.listenerCount('CHAT_MESSAGE')).toBe(0);
-    expect(statusUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(redis.quit).toHaveBeenCalledTimes(1);
+    await bridge.stop();
   });
 });

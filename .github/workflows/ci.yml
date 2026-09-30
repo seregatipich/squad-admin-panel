@@ -74,6 +74,8 @@ jobs:
         run: bash scripts/test-ci-test-shard.sh
       - name: Run image-preserve-labels test suite
         run: bash scripts/test-image-preserve-labels.sh
+      - name: Run rnsquadjs-runtime-copy test suite
+        run: bash scripts/test-rnsquadjs-runtime-copy.sh
       - name: Run bridge-package-scripts test suite
         run: bash scripts/test-bridge-package-scripts.sh
       - name: Run compose-env-passthrough test suite

@@ -237,7 +237,6 @@ graph TB
   RCON -->|"Valve RCON TCP<br/>127.0.0.1:rcon_port"| SQ
   API -->|"unix: bridge.sock"| BRIDGE
   WB -->|"unix: bridge.sock"| BRIDGE
-  API -.->|"HTTP over unix<br/>/run/squad-panel/rnsquadjs/&lt;id&gt;/sock/rcon.sock"| RN
   BRIDGE --> DOCK
   DOCK --> SQ & RN & DEP
   BK --> PG & RD
@@ -273,7 +272,6 @@ graph LR
   B -->|"① HTTPS only, ports 80/443.<br/>Caddy path-splits /api/* → api.<br/>Every /api/v1 request passes the single<br/>global <b>onRequest</b> RBAC hook<br/>(apps/api/src/plugins/auth.ts)"| C
   A -->|"② unix socket bridge.sock, 0660 root:panel.<br/>SO_PEERCRED primary-GID check<br/>(apps/bridge/internal/auth/peer.go:35).<br/>30 whitelisted RPC methods,<br/>every path/image/volume arg allowlisted"| G
   G -->|"③ /run/docker.sock — bridge only.<br/>No container mounts it.<br/>container_run restricted to<br/>squad-server:latest + depot-init"| S
-  S -.->|"④ sidecar rcon.sock,<br/>bind-mounted back into api"| A
 ```
 
 Crossing ② is the design's centre of gravity. The socket is `SocketMode=0660 SocketUser=root SocketGroup=panel PassCredentials=yes` (`apps/bridge/deploy/panel-host-bridge.socket`), and `ResolvePeer` reads `SO_PEERCRED` and compares the **primary GID** against the `panel` group. That is why every bridge-attached compose service carries the same four-line comment and `user: "0:${PANEL_GID:-987}"` rather than `group_add`:
@@ -1313,7 +1311,6 @@ Mode is one env var, `PANEL_BRIDGE_MODE`, defaulting to **shadow**:
 | Status key | `rnsquadjs:status:<id>:shadow` | `rnsquadjs:status:<id>` |
 | Stream cap | `XADD MAXLEN ~ 10000` (`EVENT_STREAM_MAXLEN`) | same, matching log-ingest |
 | Types published | all 17 mapped | only 4 (`PRODUCTION_TYPES`) |
-| Unix-socket RCON server | not started | `/run/panelBridge/rcon.sock` |
 
 The shadow key still matches the `events:server:*` SCAN pattern, so `worker-automation` and `worker-discord` accept only keys matching `/^events:server:[^:]+$/` in `discoverEventStreams`; a shadow copy is never consumed as a live stream (#16).
 
