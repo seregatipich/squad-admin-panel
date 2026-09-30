@@ -1,6 +1,7 @@
 import { Writable } from 'node:stream';
 import {
   encodeLogEntry,
+  LOG_SOURCES,
   type LogLevel,
   type LogSource,
   PANEL_LOGS_MAXLEN,
@@ -33,15 +34,7 @@ function pinoLevelToLog(n: number): LogLevel {
 }
 
 function isLogSource(s: unknown): s is LogSource {
-  return (
-    s === 'bridge' ||
-    s === 'rcon' ||
-    s === 'log-ingest' ||
-    s === 'worker' ||
-    s === 'depot' ||
-    s === 'install' ||
-    s === 'api'
-  );
+  return (LOG_SOURCES as readonly unknown[]).includes(s);
 }
 
 const PINO_META_KEYS = new Set([

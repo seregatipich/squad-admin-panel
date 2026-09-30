@@ -566,4 +566,16 @@ describeIfDb('recomputeServerDailyStats write semantics', () => {
     expect(written).toBe(0);
     expect(await statsRows()).toEqual([]);
   });
+
+  it('never writes rows for a soft-deleted server', async () => {
+    await sql`UPDATE servers SET deleted_at = now() WHERE id = ${SERVER_2}`;
+    try {
+      await recomputeServerDailyStats(sql, { fromDay: FROM_DAY, toDay: TO_DAY, now: NOW });
+      const rows = await statsRows();
+      expect(rows.some((r) => r.server_id === SERVER_2)).toBe(false);
+      expect(rows.some((r) => r.server_id === SERVER_1)).toBe(true);
+    } finally {
+      await sql`UPDATE servers SET deleted_at = NULL WHERE id = ${SERVER_2}`;
+    }
+  });
 });

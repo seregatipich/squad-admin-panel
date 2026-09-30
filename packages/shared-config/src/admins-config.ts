@@ -179,7 +179,13 @@ export function buildManagedSegmentBody(inputs: SegmentInputs): ManagedSegmentBo
 /**
  * Locate the existing managed segment in a file's content. Returns the
  * full segment string (markers included) and its [start, end) byte offsets,
- * or null if no markers are present.
+ * or null if no begin marker is present.
+ *
+ * A begin marker with no matching end marker is a corrupt/orphaned segment
+ * (e.g. from a write interrupted mid-flight): the "segment" is taken to run
+ * to the end of the file so the next splice replaces it wholesale, rather
+ * than leaving the orphaned `Admin=`/`Group=` lines behind forever while a
+ * fresh segment is prepended in front of them.
  */
 export function findManagedSegment(content: string): {
   segment: string;
@@ -189,8 +195,7 @@ export function findManagedSegment(content: string): {
   const beginIdx = content.indexOf(BEGIN_MARKER);
   if (beginIdx < 0) return null;
   const endIdx = content.indexOf(END_MARKER, beginIdx);
-  if (endIdx < 0) return null;
-  const tail = endIdx + END_MARKER.length;
+  const tail = endIdx < 0 ? content.length : endIdx + END_MARKER.length;
   return { segment: content.slice(beginIdx, tail), start: beginIdx, end: tail };
 }
 

@@ -133,6 +133,16 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.required).toBe('can_manage_ban_sources');
   });
 
+  it('rejects a non-http(s) url or discord_url (400)', async () => {
+    const badUrl = await createSource(managerCookie, { url: 'javascript:alert(1)' });
+    expect(badUrl.statusCode).toBe(400);
+
+    const badDiscordUrl = await createSource(managerCookie, {
+      discord_url: 'javascript:alert(1)',
+    });
+    expect(badDiscordUrl.statusCode).toBe(400);
+  });
+
   it('allows a manager with can_manage_ban_sources to create (201)', async () => {
     const { statusCode, body } = await createSource(managerCookie);
     expect(statusCode).toBe(201);
