@@ -12,6 +12,15 @@ export interface HostMetricsSample {
 export const HOST_METRICS_STREAM = 'host:metrics';
 export const HOST_METRICS_MAXLEN = 5760;
 
+/** Approximate entry cap of each `container:metrics:<serverId>` stream (~24 h at one sample per 30 s). */
+export const CONTAINER_METRICS_MAXLEN = 2880;
+
+/**
+ * Idle lifetime of a `container:metrics:<serverId>` stream. Every sample renews
+ * it, so only streams of deleted or long-stopped servers expire.
+ */
+export const CONTAINER_METRICS_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 const clamp0 = (n: number): number => (n < 0 || Number.isNaN(n) ? 0 : n);
 const x100 = (n: number): number => Math.round(clamp0(n) * 100);
 const intB = (n: number): number => Math.round(clamp0(n));

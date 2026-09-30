@@ -7,7 +7,7 @@ import {
   players,
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
-import { desc, eq, or } from 'drizzle-orm';
+import { desc, eq, inArray, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { VoteIdentity, VoteRecordCommand } from '../parser/vote.js';
 
@@ -68,6 +68,80 @@ async function resolvePlayer(db: DatabaseClient, identity: VoteIdentity): Promis
   return resolveByName(db, identity.name);
 }
 
+/**
+ * Resolves many voters in three queries at most (by EOS/Steam id, by canonical
+ * name, by name history) instead of up to three per voter. Precedence matches
+ * {@link resolvePlayer}: an id match wins over a name match, and among several
+ * players sharing a name the most recently seen one wins.
+ *
+ * @returns player ids in the order of `identities`; `null` where unresolved.
+ */
+async function resolvePlayers(
+  db: DatabaseClient,
+  identities: VoteIdentity[],
+): Promise<Array<string | null>> {
+  const eosIds = [...new Set(identities.flatMap((i) => (i.eosId ? [i.eosId] : [])))];
+  const steamIds = [
+    ...new Set(identities.flatMap((i) => (i.steamId64 ? [BigInt(i.steamId64)] : []))),
+  ];
+  const idFilters = [
+    ...(eosIds.length > 0 ? [inArray(players.eosId, eosIds)] : []),
+    ...(steamIds.length > 0 ? [inArray(players.steamId64, steamIds)] : []),
+  ];
+  const byEos = new Map<string, string>();
+  const bySteam = new Map<string, string>();
+  if (idFilters.length > 0) {
+    const rows = await db
+      .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
+      .from(players)
+      .where(or(...idFilters));
+    for (const row of rows) {
+      if (row.eosId) byEos.set(row.eosId, row.id);
+      if (row.steamId64 !== null) bySteam.set(String(row.steamId64), row.id);
+    }
+  }
+
+  const resolved = identities.map((identity) => {
+    const byEosId = identity.eosId ? byEos.get(identity.eosId) : undefined;
+    const bySteamId = identity.steamId64 ? bySteam.get(identity.steamId64) : undefined;
+    return byEosId ?? bySteamId ?? null;
+  });
+
+  const normalizedNames = identities.map((identity) => normalizePlayerName(identity.name));
+  const unresolvedNames = [
+    ...new Set(normalizedNames.filter((name, i) => name && resolved[i] === null)),
+  ] as string[];
+  if (unresolvedNames.length === 0) return resolved;
+
+  const byName = new Map<string, string>();
+  const directRows = await db
+    .select({ id: players.id, name: players.canonicalNameNormalized })
+    .from(players)
+    .where(inArray(players.canonicalNameNormalized, unresolvedNames))
+    .orderBy(desc(players.lastSeenAt));
+  for (const row of directRows) {
+    if (row.name && !byName.has(row.name)) byName.set(row.name, row.id);
+  }
+
+  const missingNames = unresolvedNames.filter((name) => !byName.has(name));
+  if (missingNames.length > 0) {
+    const historyRows = await db
+      .select({ id: playerNameHistory.playerId, name: playerNameHistory.nameNormalized })
+      .from(playerNameHistory)
+      .where(inArray(playerNameHistory.nameNormalized, missingNames))
+      .orderBy(desc(playerNameHistory.lastSeenAt));
+    for (const row of historyRows) {
+      if (!byName.has(row.name)) byName.set(row.name, row.id);
+    }
+  }
+
+  return resolved.map((id, i) => {
+    if (id !== null) return id;
+    const name = normalizedNames[i];
+    return name ? (byName.get(name) ?? null) : null;
+  });
+}
+
 type VoteWriter = Pick<DatabaseClient, 'insert'>;
 
 async function writeVoteEvent(
@@ -117,8 +191,12 @@ export async function handleVote(
 
   const voteId = uuidv7();
   const ballotRows: Array<typeof gameVoteBallots.$inferInsert> = [];
-  for (const ballot of command.ballots) {
-    const playerId = await resolvePlayer(db, ballot.voter);
+  const voterIds = await resolvePlayers(
+    db,
+    command.ballots.map((ballot) => ballot.voter),
+  );
+  for (const [index, ballot] of command.ballots.entries()) {
+    const playerId = voterIds[index];
     if (!playerId) continue;
     ballotRows.push({
       voteId,
