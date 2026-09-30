@@ -30,7 +30,7 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
-import { describeLoadError } from '@/lib/load-error';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
@@ -74,7 +74,7 @@ const ROLE_ERROR_MESSAGES: Record<string, string> = {
 };
 
 function describeRoleError(code: string | undefined, status: number): string {
-  return (code && ROLE_ERROR_MESSAGES[code]) || describeLoadError(new Error(`HTTP ${status}`));
+  return (code && ROLE_ERROR_MESSAGES[code]) || describeHttpStatus(status);
 }
 
 export default function UsersPage() {

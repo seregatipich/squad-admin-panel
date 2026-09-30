@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -14,6 +14,7 @@ import {
   Select,
   TextInput,
 } from '@/components/ui';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 
 interface ApplicationSettings {
   enabled: boolean;
@@ -120,18 +121,28 @@ export function ApplicationsSection({
   const [termPick, setTermPick] = useState<Record<string, string>>({});
   const [notePick, setNotePick] = useState<Record<string, string>>({});
 
+  // Bumped by every list request: a slow answer for a previous tab is dropped.
+  const listGeneration = useRef(0);
+
   const loadList = useCallback(async (status: StatusFilter) => {
-    const res = await fetch(`/api/v1/whitelist/applications?status=${status}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { items: ApplicationItem[] };
-    setItems(body.items);
+    listGeneration.current += 1;
+    const generation = listGeneration.current;
+    try {
+      const res = await fetch(`/api/v1/whitelist/applications?status=${status}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as { items: ApplicationItem[] };
+      if (generation === listGeneration.current) setItems(body.items);
+    } catch (e) {
+      if (generation === listGeneration.current) {
+        setError(`Не удалось загрузить заявки: ${describeLoadError(e)}`);
+      }
+    }
   }, []);
 
-  const refresh = useCallback(async () => {
-    setError(null);
+  const loadSettings = useCallback(async () => {
     try {
       const [settingsRes, rolesRes] = await Promise.all([
         fetch('/api/v1/whitelist/applications/settings', {
@@ -140,24 +151,32 @@ export function ApplicationsSection({
         }),
         fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
       ]);
-      if (settingsRes.ok) {
-        const loaded = (await settingsRes.json()) as ApplicationSettings;
-        setSettings(loaded);
-        setEnabled(loaded.enabled);
-        setDefaultDays(loaded.default_days == null ? '' : String(loaded.default_days));
-      } else {
-        throw new Error(`HTTP ${settingsRes.status}`);
-      }
+      if (!settingsRes.ok) throw new Error(`HTTP ${settingsRes.status}`);
+      const loaded = (await settingsRes.json()) as ApplicationSettings;
+      setSettings(loaded);
+      setEnabled(loaded.enabled);
+      setDefaultDays(loaded.default_days == null ? '' : String(loaded.default_days));
       if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-      await loadList(statusFilter);
     } catch (e) {
-      setError(`Не удалось загрузить заявки: ${(e as Error).message}`);
+      setError(`Не удалось загрузить заявки: ${describeLoadError(e)}`);
     }
-  }, [loadList, statusFilter]);
+  }, []);
+
+  // Настройки портала и роли не зависят от вкладки статуса: их повторная загрузка
+  // затирала бы несохранённые правки формы.
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadList(statusFilter);
+  }, [loadList, statusFilter]);
+
+  function retry() {
+    setError(null);
+    void loadSettings();
+    void loadList(statusFilter);
+  }
 
   async function saveSettings() {
     if (!canEdit) return;
@@ -177,15 +196,14 @@ export function ApplicationsSection({
         body: JSON.stringify({ enabled, default_days: parsedDays }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setError(`Ошибка сохранения: ${e.error ?? res.status}`);
+        setError(`Ошибка сохранения: ${describeHttpStatus(res.status)}`);
         return;
       }
       const fresh = (await res.json()) as ApplicationSettings;
       setSettings(fresh);
       setNotice('Настройки портала сохранены.');
-    } catch (e) {
-      setError(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setError(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setSavingSettings(false);
     }
@@ -207,8 +225,9 @@ export function ApplicationsSection({
       const payload: Record<string, unknown> = { status };
       if (status === 'approved') {
         // The role select defaults to the requested role; mirror that displayed
-        // choice into the payload (an explicit blank pick sends nothing, letting
-        // the API fall back to the configured whitelist role).
+        // choice into the payload. A blank pick sends nothing, and the API then
+        // falls back to the applicant's requested role, or to the configured
+        // whitelist role when none was requested.
         const requestedRoleId = items.find((a) => a.id === id)?.requested_role_id ?? '';
         const roleId = rolePick[id] ?? requestedRoleId;
         if (canManageRoles && roleId) payload.role_id = roleId;
@@ -226,14 +245,14 @@ export function ApplicationsSection({
       });
       if (!res.ok) {
         const e = (await res.json().catch(() => ({}))) as { error?: string };
-        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) ?? e.error ?? res.status;
+        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) || describeHttpStatus(res.status);
         setError(`Не удалось обработать заявку: ${reason}`);
         return;
       }
       setNotice(status === 'approved' ? 'Заявка одобрена.' : 'Заявка отклонена.');
       await loadList(statusFilter);
-    } catch (e) {
-      setError(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setError(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setBusyId(null);
     }
@@ -266,7 +285,7 @@ export function ApplicationsSection({
             title="Не удалось выполнить запрос"
             description={error}
             action={
-              <Button size="sm" onClick={() => void refresh()}>
+              <Button size="sm" onClick={retry}>
                 Повторить
               </Button>
             }
