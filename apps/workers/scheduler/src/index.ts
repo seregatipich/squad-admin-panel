@@ -20,6 +20,7 @@ import {
   createScheduledTaskDeps,
   createSeasonFinalizeDeps,
   createSeedScheduleDeps,
+  pruneScheduledTaskRuns,
 } from './deps.js';
 import { runMapVoteTick } from './map-vote-tick.js';
 import {
@@ -38,6 +39,9 @@ const log = pino({
 });
 
 const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.SCHEDULER_INTERVAL_MS, 30_000);
+
+const RUN_PRUNE_INTERVAL_MS = 60 * 60_000;
+const RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -92,6 +96,16 @@ async function main() {
   const seasonFinalizeDeps = createSeasonFinalizeDeps(db, redis);
   const profileApplyHour = rotationProfileApplyHour();
 
+  let lastRunPruneAt = 0;
+
+  /** Drops `scheduled_task_runs` rows past their retention, at most hourly (#1016). */
+  async function pruneRunHistoryIfDue(): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - lastRunPruneAt < RUN_PRUNE_INTERVAL_MS) return;
+    lastRunPruneAt = nowMs;
+    await pruneScheduledTaskRuns(db, new Date(nowMs - RUN_RETENTION_MS));
+  }
+
   /**
    * Runs every scheduler tick concurrently. A tick that throws is logged under
    * its own name and does not hide the others' results or stall the heartbeat.
@@ -102,7 +116,11 @@ async function main() {
       rotationSchedule: () => runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
       rotationProfile: () =>
         runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
-      scheduledTask: () => runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
+      scheduledTask: async () => {
+        const result = await runScheduledTaskTick({ ...scheduledTaskDeps, diag });
+        await pruneRunHistoryIfDue();
+        return result;
+      },
       mapVote: () => runMapVoteTick({ ...mapVoteDeps, diag }),
       seasonFinalize: () => runSeasonFinalizeTick({ ...seasonFinalizeDeps, diag }),
     };

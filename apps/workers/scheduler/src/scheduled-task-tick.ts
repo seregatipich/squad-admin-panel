@@ -75,7 +75,24 @@ export interface ScheduledTaskTickDeps {
   recordRun(run: ScheduledTaskRunRecord): Promise<void>;
   writeAuditEntry(entry: ScheduledTaskAuditEntry): Promise<void>;
   diag: Pick<Diag, 'emit'>;
+  /**
+   * Retry bookkeeping for transiently failing occurrences, keyed by task id and
+   * occurrence. Supplied by the long-lived worker so a failing task backs off
+   * and is eventually given up on (#1016); when omitted every tick retries.
+   */
+  retries?: Map<string, TaskRetryState>;
 }
+
+/** Failed-dispatch count and earliest next attempt for one task occurrence. */
+export interface TaskRetryState {
+  attempts: number;
+  nextAttemptAt: number;
+}
+
+/** A transient failure is abandoned (cursor advanced) after this many attempts. */
+export const MAX_DISPATCH_ATTEMPTS = 5;
+const RETRY_BASE_DELAY_MS = 30_000;
+const RETRY_MAX_DELAY_MS = 10 * 60_000;
 
 export interface ScheduledTaskTickResult {
   executed: number;
@@ -201,6 +218,10 @@ export async function runScheduledTaskTick(
       const occurrence = resolveDueOccurrence(entry, now);
       if (!occurrence) continue;
 
+      const retryKey = `${entry.id}:${occurrence.getTime()}`;
+      const retryState = deps.retries?.get(retryKey);
+      if (retryState && retryState.nextAttemptAt > now.getTime()) continue;
+
       if (await deps.isDepotUpdating()) {
         skippedDepotUpdate++;
         await deps.recordRun({
@@ -233,7 +254,9 @@ export async function runScheduledTaskTick(
       } catch (err) {
         failed++;
         const message = err instanceof Error ? err.message : String(err);
-        const permanent = err instanceof PermanentTaskDispatchError;
+        const attempts = (retryState?.attempts ?? 0) + 1;
+        const exhausted = attempts >= MAX_DISPATCH_ATTEMPTS;
+        const permanent = err instanceof PermanentTaskDispatchError || exhausted;
         await deps.recordRun({
           taskId: entry.id,
           executedAt: now,
@@ -243,6 +266,7 @@ export async function runScheduledTaskTick(
             task_type: entry.taskType,
             error: message,
             permanent,
+            attempts,
           },
         });
         await deps.diag.emit({
@@ -257,75 +281,36 @@ export async function runScheduledTaskTick(
         // fails again on every 30s tick forever (#1016). A transient failure
         // leaves the cursor unset so the next tick retries it, as before.
         if (permanent) {
+          deps.retries?.delete(retryKey);
           await deps.setLastExecutedAt(entry.id, occurrence);
+        } else {
+          // Exponential backoff so a persistent transient failure does not
+          // write a failed run and an error diag on every tick (#1016).
+          deps.retries?.set(retryKey, {
+            attempts,
+            nextAttemptAt:
+              now.getTime() + Math.min(RETRY_BASE_DELAY_MS * 2 ** attempts, RETRY_MAX_DELAY_MS),
+          });
         }
         continue;
       }
 
-      await deps.setLastExecutedAt(entry.id, occurrence);
-
-      const detail: Record<string, unknown> = {
-        occurrence: occurrence.toISOString(),
-        task_type: entry.taskType,
-        command,
-      };
-
-      // MSG-4 (#187): advance the rotation cursor and echo the broadcast into
-      // chat. Both run only after the RCON dispatch succeeded; an echo failure
-      // is logged but never downgrades the already-executed run.
-      if (broadcast) {
-        detail.message = broadcast.text;
-        if (broadcast.listLength > 1) {
-          await deps.advanceRotationIndex(
-            entry.id,
-            (entry.rotationIndex + 1) % broadcast.listLength,
-          );
-        }
-        if (entry.createdBy !== null) {
-          try {
-            await deps.echoBroadcastToChat({
-              serverId: entry.serverId,
-              authorPlayerId: entry.createdBy,
-              message: broadcast.text,
-              sentAt: now,
-            });
-            detail.echo = 'sent';
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            detail.echo = 'failed';
-            detail.echo_error = message;
-            await deps.diag.emit({
-              component: 'worker-scheduler',
-              kind: 'scheduled_task.echo_failed',
-              severity: 'warn',
-              message: `scheduled_task ${entry.id} broadcast echo failed: ${message}`,
-              payload: { task_id: entry.id, server_id: entry.serverId, err: message },
-            });
-          }
-        } else {
-          detail.echo = 'skipped_no_author';
-        }
+      deps.retries?.delete(retryKey);
+      // The dispatch already happened, so a bookkeeping failure must not abort
+      // the tick: the remaining tasks still need to run (#1015).
+      try {
+        await recordSuccessfulDispatch(entry, occurrence, command, broadcast, now, deps);
+        executed++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await deps.diag.emit({
+          component: 'worker-scheduler',
+          kind: 'scheduled_task.bookkeeping_failed',
+          severity: 'error',
+          message: `scheduled_task ${entry.id} dispatched but bookkeeping failed: ${message}`,
+          payload: { task_id: entry.id, server_id: entry.serverId, err: message },
+        });
       }
-
-      await deps.recordRun({
-        taskId: entry.id,
-        executedAt: now,
-        status: 'executed',
-        detail,
-      });
-      await deps.writeAuditEntry({
-        actor: { kind: 'system', label: 'task-scheduler' },
-        actionType: 'server.scheduled_task.execute',
-        targetType: 'scheduled_task',
-        targetId: entry.id,
-        context: {
-          server_id: entry.serverId,
-          task_type: entry.taskType,
-          command,
-          occurrence: occurrence.toISOString(),
-        },
-      });
-      executed++;
     }
 
     await deps.diag.emit({
@@ -347,4 +332,78 @@ export async function runScheduledTaskTick(
     });
     throw err;
   }
+}
+
+/**
+ * Advances the cursor and records the audit trail after a successful dispatch.
+ * The cursor moves first so a later failure cannot re-dispatch the occurrence.
+ */
+async function recordSuccessfulDispatch(
+  entry: ScheduledTaskEntry,
+  occurrence: Date,
+  command: string,
+  broadcast: { text: string; listLength: number } | undefined,
+  now: Date,
+  deps: ScheduledTaskTickDeps,
+): Promise<void> {
+  await deps.setLastExecutedAt(entry.id, occurrence);
+
+  const detail: Record<string, unknown> = {
+    occurrence: occurrence.toISOString(),
+    task_type: entry.taskType,
+    command,
+  };
+
+  // MSG-4 (#187): advance the rotation cursor and echo the broadcast into
+  // chat. Both run only after the RCON dispatch succeeded; an echo failure
+  // is logged but never downgrades the already-executed run.
+  if (broadcast) {
+    detail.message = broadcast.text;
+    if (broadcast.listLength > 1) {
+      await deps.advanceRotationIndex(entry.id, (entry.rotationIndex + 1) % broadcast.listLength);
+    }
+    if (entry.createdBy !== null) {
+      try {
+        await deps.echoBroadcastToChat({
+          serverId: entry.serverId,
+          authorPlayerId: entry.createdBy,
+          message: broadcast.text,
+          sentAt: now,
+        });
+        detail.echo = 'sent';
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        detail.echo = 'failed';
+        detail.echo_error = message;
+        await deps.diag.emit({
+          component: 'worker-scheduler',
+          kind: 'scheduled_task.echo_failed',
+          severity: 'warn',
+          message: `scheduled_task ${entry.id} broadcast echo failed: ${message}`,
+          payload: { task_id: entry.id, server_id: entry.serverId, err: message },
+        });
+      }
+    } else {
+      detail.echo = 'skipped_no_author';
+    }
+  }
+
+  await deps.recordRun({
+    taskId: entry.id,
+    executedAt: now,
+    status: 'executed',
+    detail,
+  });
+  await deps.writeAuditEntry({
+    actor: { kind: 'system', label: 'task-scheduler' },
+    actionType: 'server.scheduled_task.execute',
+    targetType: 'scheduled_task',
+    targetId: entry.id,
+    context: {
+      server_id: entry.serverId,
+      task_type: entry.taskType,
+      command,
+      occurrence: occurrence.toISOString(),
+    },
+  });
 }

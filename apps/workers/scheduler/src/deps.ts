@@ -24,7 +24,7 @@ import {
   STREAM_NAME,
   seedCallSentPayload,
 } from '@squad/shared-types';
-import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import type { SendRconCommandInput } from './due-occurrence.js';
@@ -667,34 +667,50 @@ export async function recordScheduledTaskRun(
  * Restarts a server via the SRV-3 container-restart mechanism — the same
  * `containerStop` + `containerStart` on `squad-<serverId>` that
  * `POST /api/v1/servers/:id/restart` performs, driven here through the host
- * bridge the scheduler already holds. `containerStop` errors are swallowed
- * the same way the API route swallows them (Docker's `start` on an already-
- * running or already-stopped container is itself a no-op success), so this
- * mirrors that route's container-level behavior.
+ * bridge the scheduler already holds.
  *
- * It does NOT reproduce the rest of that route: it does not flip
- * `servers.status` to `'starting'` in the DB, publish to `liveBus` (the
- * scheduler worker has no websocket fan-out), or call `relaunchSidecar`
- * (API-only `apps/api/src/lib` logic worker packages do not import — see
- * `docs/development/conventions.md`). A scheduled restart is therefore
- * visible to the UI only once the status reconciler's next pass catches up,
- * and a sidecar stopped manually before the scheduled restart stays down.
+ * A failed `containerStop` is tolerated only when `containerInspect` confirms
+ * the container is no longer running; otherwise the stop error is rethrown,
+ * because Docker's `start` on a still-running container is a silent no-op and
+ * the run would be recorded as a successful restart that never happened
+ * (#1002). This matches the API route's stop-failure handling.
+ *
+ * It does NOT reproduce the rest of that route: it does not publish to
+ * `liveBus` (the scheduler worker has no websocket fan-out) or call
+ * `relaunchSidecar` (API-only `apps/api/src/lib` logic worker packages do not
+ * import — see `docs/development/conventions.md`), so a sidecar stopped
+ * manually before the scheduled restart stays down. The `servers.status`
+ * flip to `'starting'` is done by the caller, `createScheduledTaskDeps`.
+ *
+ * @throws The `containerStop` error when the container may still be running,
+ *   or the `containerStart` error.
  */
 export async function restartServerContainer(
-  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
+  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart' | 'containerInspect'>,
   serverId: string,
 ): Promise<void> {
   const name = `squad-${serverId}`;
-  await bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
+  try {
+    await bridge.containerStop({ name, timeout_sec: 60 });
+  } catch (stopError) {
+    const after = await bridge.containerInspect({ name }).catch(() => null);
+    if (after?.running !== false) throw stopError;
+  }
   await bridge.containerStart({ name });
+}
+
+/** Deletes `scheduled_task_runs` history older than `olderThan` (#1016). */
+export async function pruneScheduledTaskRuns(db: DatabaseClient, olderThan: Date): Promise<void> {
+  await db.delete(scheduledTaskRuns).where(lt(scheduledTaskRuns.executedAt, olderThan));
 }
 
 export function createScheduledTaskDeps(
   db: DatabaseClient,
   redis: Pick<Redis, 'get' | 'xadd'>,
-  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
+  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart' | 'containerInspect'>,
 ): Omit<ScheduledTaskTickDeps, 'now' | 'diag'> {
   return {
+    retries: new Map(),
     loadEnabledTasks: () => loadEnabledScheduledTasks(db),
     isDepotUpdating: () => isDepotUpdating(redis),
     sendRconCommand: (input) => sendRconCommand(redis, input),
@@ -718,6 +734,10 @@ export function createScheduledTaskDeps(
         );
       }
       await restartServerContainer(bridge, serverId);
+      await db
+        .update(servers)
+        .set({ status: 'starting', updatedAt: new Date() })
+        .where(eq(servers.id, serverId));
     },
     setLastExecutedAt: (taskId, executedAt) =>
       setScheduledTaskLastExecutedAt(db, taskId, executedAt),

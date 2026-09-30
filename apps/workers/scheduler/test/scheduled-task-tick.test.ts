@@ -528,3 +528,66 @@ describe('runScheduledTaskTick', () => {
     );
   });
 });
+
+describe('runScheduledTaskTick failure isolation and retry limits (#1015, #1016)', () => {
+  it('keeps processing later tasks when bookkeeping after a successful dispatch throws (#1015)', async () => {
+    const first = makeEntry({ id: 'task-a', taskType: 'set_next_layer', params: { layer: 'A' } });
+    const second = makeEntry({ id: 'task-b', taskType: 'set_next_layer', params: { layer: 'B' } });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([first, second]),
+      recordRun: vi.fn().mockRejectedValueOnce(new Error('db down')).mockResolvedValue(undefined),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(deps.sendRconCommand).toHaveBeenCalledTimes(2);
+    expect(deps.setLastExecutedAt).toHaveBeenCalledWith('task-b', second.scheduledAt);
+    expect(result.executed).toBe(1);
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'scheduled_task.bookkeeping_failed', severity: 'error' }),
+    );
+  });
+
+  it('backs off a transiently failing task instead of retrying on every tick (#1016)', async () => {
+    const entry = makeEntry({ taskType: 'set_next_layer', params: { layer: 'A' } });
+    const retries = new Map();
+    const sendRconCommand = vi.fn().mockRejectedValue(new Error('redis unavailable'));
+    const base = new Date('2026-07-11T10:00:05.000Z').getTime();
+    const tickAt = (offsetMs: number) =>
+      runScheduledTaskTick(
+        makeDeps({
+          now: new Date(base + offsetMs),
+          loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+          sendRconCommand,
+          retries,
+        }),
+      );
+
+    await tickAt(0);
+    await tickAt(30_000);
+    expect(sendRconCommand).toHaveBeenCalledTimes(1);
+    await tickAt(65_000);
+    expect(sendRconCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up on an occurrence after the attempt cap and advances the cursor (#1016)', async () => {
+    const entry = makeEntry({ taskType: 'set_next_layer', params: { layer: 'A' } });
+    const retries = new Map();
+    const base = new Date('2026-07-11T10:00:05.000Z').getTime();
+    let setLast = vi.fn();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      setLast = vi.fn().mockResolvedValue(undefined);
+      await runScheduledTaskTick(
+        makeDeps({
+          now: new Date(base + attempt * 3_600_000),
+          loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+          sendRconCommand: vi.fn().mockRejectedValue(new Error('boom')),
+          setLastExecutedAt: setLast,
+          retries,
+        }),
+      );
+    }
+    expect(setLast).toHaveBeenCalledWith(entry.id, entry.scheduledAt);
+  });
+});
