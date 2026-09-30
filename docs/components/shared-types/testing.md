@@ -42,8 +42,7 @@ Four `describe` blocks:
 
 ## What is not covered by unit tests in this package
 
-- `api.ts` schemas (`serverCreateInput`, `serverRow`, etc.) — validated by API route integration tests in `apps/api/test/`. Schema enforcement is proved through the real Fastify instance receiving invalid bodies.
-- `paginated` factory — exercised by all paginated API endpoint tests.
+- `api.ts` request schemas (`serverCreateInput`, etc.) — validated by API route integration tests in `apps/api/test/`. Schema enforcement is proved through the real Fastify instance receiving invalid bodies.
 - `matchStateChangedPayload`, `serverLifecyclePayload`, `playerDisconnectedPayload` — tested indirectly through `PAYLOAD_SCHEMAS` dispatch and producer code in worker tests.
 - Stream constants (`STREAM_NAME`, `DEDUP_KEY`, etc.) — used verbatim by workers; correctness is verified by E2E tests.
 

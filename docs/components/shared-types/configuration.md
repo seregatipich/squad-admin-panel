@@ -8,7 +8,7 @@
 |---|---|
 | `@squad/shared-types` | Full barrel — all schemas and types |
 | `@squad/shared-types/events` | `EventEnvelope`, `EVENT_TYPES`, payload schemas, stream/consumer group constants |
-| `@squad/shared-types/api` | `serverCreateInput`, `serverRow`, `playerRow`, `auditEntry`, `paginated`, host schemas |
+| `@squad/shared-types/api` | `serverCreateInput`, external-server and log-source inputs, layer schemas |
 
 Both sub-paths are browser-safe (no Node.js built-in imports).
 
