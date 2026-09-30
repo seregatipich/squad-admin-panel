@@ -16,9 +16,8 @@ import {
 import * as firstOwner from '../src/lib/first-owner.js';
 import { resetSetupState, testSteamId } from './helpers/snapshot-restore.js';
 import { makeFakeBridge, runMigrations } from './integration/harness.js';
-import { createIsolatedSchema } from './integration/isolated-db.js';
+import { createIsolatedSchema, hostRedisUrl } from './integration/isolated-db.js';
 
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/14';
 const EXISTING_STEAM_ID = testSteamId(299_001);
 const NEW_STEAM_ID = testSteamId(299_002);
 const KEEP_AVATAR_STEAM_ID = testSteamId(299_003);
@@ -29,7 +28,7 @@ async function buildApp(dbUrl: string) {
   const sql = postgres(dbUrl, { max: 2, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: isolated integration database
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   let identity: PlayerIdentity = {
     steamId64: EXISTING_STEAM_ID,
     canonicalName: 'Patrego',

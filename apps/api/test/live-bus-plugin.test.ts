@@ -2,16 +2,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
-
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 let app: FastifyInstance;
 let redis: Redis;
 let publisher: Redis;
 
 beforeEach(async () => {
-  redis = new Redis(TEST_REDIS_URL);
-  publisher = new Redis(TEST_REDIS_URL);
+  redis = new Redis(hostRedisUrl());
+  publisher = new Redis(hostRedisUrl());
   app = Fastify({ logger: false });
   app.decorate('redis', redis);
   await app.register(liveBusPlugin);

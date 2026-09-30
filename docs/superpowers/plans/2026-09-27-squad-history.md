@@ -22,7 +22,7 @@
   eval "$(bash scripts/new-test-db.sh squad_history)"
   export REDIS_URL=redis://127.0.0.1:56391/14 TEST_REDIS_URL=redis://127.0.0.1:56391/14
   ```
-  Both Redis variables are required. `apps/workers/_test-shared/load-env.ts` falls back to `redis://127.0.0.1:6379`, and the API harness (`apps/api/test/integration/isolated-db.ts`) falls back to `redis://127.0.0.1:6379/15`. Before running any test, check with `echo "$DATABASE_URL $TEST_DATABASE_URL $REDIS_URL $TEST_REDIS_URL"` that every value shows port 55441 or 56391.
+  Both Redis variables are required. `apps/workers/_test-shared/load-env.ts` falls back to `redis://127.0.0.1:6379`, while the API harness (`apps/api/test/integration/isolated-db.ts`) throws when `TEST_REDIS_URL` is unset. Before running any test, check with `echo "$DATABASE_URL $TEST_DATABASE_URL $REDIS_URL $TEST_REDIS_URL"` that every value shows port 55441 or 56391.
 - **Dependencies.** The worktree starts without `node_modules`. Run `nice -n 10 pnpm install --frozen-lockfile` once before Task 1. Otherwise `vitest`, `tsc` and `biome` are not found.
 - **Heavy commands.** Prefix every `pnpm`, `vitest`, `tsc`, `turbo` and `biome` invocation with `nice -n 10`.
 - **Test commands.** Run one file at a time with `nice -n 10 pnpm --filter <pkg> exec vitest run <file>`. Do not use `test:cov` or `pnpm turbo run test`, which build everything first.

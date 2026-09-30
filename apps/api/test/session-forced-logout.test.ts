@@ -29,8 +29,7 @@ import liveRoutes from '../src/routes/live.js';
 import roleMembersRoutes from '../src/routes/role-members.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
-
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 async function buildApp(opts: { dbUrl: string; revalidateIntervalMs?: number }) {
   const app = Fastify({ logger: false });
@@ -39,7 +38,7 @@ async function buildApp(opts: { dbUrl: string; revalidateIntervalMs?: number }) 
   const sql = postgres(opts.dbUrl, { max: 4, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);

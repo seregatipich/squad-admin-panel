@@ -6,15 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import diagPlugin from '../src/lib/diag.js';
 import dbHealthPlugin, { pgHealthTick } from '../src/plugins/db-health.js';
 import redisPlugin from '../src/plugins/redis.js';
-
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 interface BuiltApp {
   app: FastifyInstance;
   captured: DiagEvent[];
 }
 
-async function buildAppWithRedisPlugin(redisUrl = TEST_REDIS_URL): Promise<BuiltApp> {
+async function buildAppWithRedisPlugin(redisUrl = hostRedisUrl()): Promise<BuiltApp> {
   const app = Fastify({ logger: false });
   await app.register(redisPlugin, {
     config: { REDIS_URL: redisUrl } as Parameters<typeof redisPlugin>[1]['config'],

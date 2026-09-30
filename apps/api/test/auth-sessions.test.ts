@@ -14,8 +14,7 @@ import authPlugin, { SESSION_COOKIE } from '../src/plugins/auth.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import authRoutes from '../src/routes/auth.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
-
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 async function buildApp(opts: { dbUrl: string }) {
   const app = Fastify({ logger: false });
@@ -24,7 +23,7 @@ async function buildApp(opts: { dbUrl: string }) {
   const sql = postgres(opts.dbUrl, { max: 4, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);

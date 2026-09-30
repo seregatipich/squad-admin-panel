@@ -14,8 +14,8 @@ import {
 } from '../src/lib/sessions.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import { createIsolatedSchema, runMigrations } from './integration/harness.js';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
 let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
@@ -29,7 +29,7 @@ beforeAll(async () => {
   await runMigrations(schemaInfo.url);
   sql = postgres(schemaInfo.url, { max: 4, onnotice: () => undefined });
   db = drizzle(sql, { schema }) as unknown as DatabaseClient;
-  redis = new Redis(TEST_REDIS_URL);
+  redis = new Redis(hostRedisUrl());
   const rows = await db
     .select({ id: roles.id })
     .from(roles)

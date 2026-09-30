@@ -12,8 +12,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import steamRoutes from '../src/routes/auth-steam.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
-
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 async function buildApp(opts: { dbUrl: string; steamApiKey?: string }) {
   const app = Fastify({ logger: false });
@@ -22,7 +21,7 @@ async function buildApp(opts: { dbUrl: string; steamApiKey?: string }) {
   const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test type coercion
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);

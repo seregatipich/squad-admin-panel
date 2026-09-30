@@ -59,21 +59,32 @@ function defaultDbUrl(): string {
   return `postgres://admin:${resolveDbPassword()}@127.0.0.1:5432/admin`;
 }
 
-const DEFAULT_REDIS_URL = 'redis://127.0.0.1:6379/15';
-
 // Read per call so the per-worker setup hook can point each worker at its own
 // isolated database and Redis logical DB before tests run.
 export function hostDbUrl(): string {
   return process.env.TEST_DATABASE_URL ?? defaultDbUrl();
 }
+/**
+ * Redis URL the suite runs against. There is deliberately no default: the
+ * local stack Redis listens on 127.0.0.1:6379 and the harness flushes logical
+ * databases, so a silent fallback would wipe the developer's live data.
+ *
+ * @returns The value of `TEST_REDIS_URL`.
+ * @throws If `TEST_REDIS_URL` is unset or empty.
+ */
 export function hostRedisUrl(): string {
-  return process.env.TEST_REDIS_URL ?? DEFAULT_REDIS_URL;
+  const url = process.env.TEST_REDIS_URL;
+  if (!url) {
+    throw new Error(
+      'TEST_REDIS_URL не задан: укажите изолированный Redis (например, redis://127.0.0.1:<port>/15); значения по умолчанию нет, чтобы тесты не затёрли Redis локального стенда',
+    );
+  }
+  return url;
 }
 
 // Frozen at module load for the main-process globalSetup sweep; workers override
 // their own env after this runs, but any connection reaches the same cluster.
 export const testDbUrl = process.env.TEST_DATABASE_URL ?? defaultDbUrl();
-export const testRedisUrl = process.env.TEST_REDIS_URL ?? DEFAULT_REDIS_URL;
 
 export interface CreatedSchema {
   schema: string;

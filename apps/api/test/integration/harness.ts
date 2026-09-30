@@ -32,7 +32,7 @@ import { registerRoutes } from '../../src/routes/index.js';
 import { createIsolatedSchema, ensureWorkerDatabase, hostRedisUrl } from './isolated-db.js';
 
 export { createIsolatedSchema };
-export { runMigrations, testDbUrl, testRedisUrl } from './isolated-db.js';
+export { runMigrations, testDbUrl } from './isolated-db.js';
 
 const TEST_ENCRYPTION_KEY = Buffer.alloc(32, 0x42).toString('base64');
 const TEST_SESSION_SECRET = 'a'.repeat(48);
