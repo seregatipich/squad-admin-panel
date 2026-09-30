@@ -84,9 +84,24 @@ export function runSampler(opts: RunSamplerOpts): () => void {
   const intervalMs = opts.intervalMs ?? 15_000;
   let stopped = false;
   let tickCount = 0;
+  let tickInFlight = false;
 
+  /**
+   * One sampling pass. Ticks never overlap: with a slow bridge a pass can
+   * outlast the interval, and stacking passes would multiply concurrent RPCs to
+   * the privileged bridge and duplicate stream writes.
+   */
   async function tick(): Promise<void> {
-    if (stopped) return;
+    if (stopped || tickInFlight) return;
+    tickInFlight = true;
+    try {
+      await sampleOnce();
+    } finally {
+      tickInFlight = false;
+    }
+  }
+
+  async function sampleOnce(): Promise<void> {
     tickCount++;
     try {
       const m = await bridge.hostMetrics();

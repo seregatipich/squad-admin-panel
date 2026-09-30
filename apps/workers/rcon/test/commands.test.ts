@@ -53,6 +53,18 @@ function makeRedis(
 }
 
 describe('buildOperatorCommand', () => {
+  it.each(['AdminWarn', 'AdminKick'])('rejects a whitespace-bearing %s target', (command) => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command, args: ['Bob Smith', 'reason'] })),
+    ).toThrow(/must not contain whitespace/);
+  });
+
+  it('rejects a whitespace-bearing AdminBan target', () => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminBan', args: ['Bob Smith', '0', 'r'] })),
+    ).toThrow(/must not contain whitespace/);
+  });
+
   it('builds only the whitelisted operator commands', () => {
     expect(buildOperatorCommand(commandRequest())).toBe(
       'AdminBroadcast Server restart in 15 seconds',
@@ -345,6 +357,46 @@ describe('RconCommandQueue', () => {
       RCON_COMMAND_GROUP,
       '1700-0',
     );
+  });
+
+  it('acknowledges without a failure result when only the result write fails after execution', async () => {
+    const redis = makeRedis([['1700-9', ['request', JSON.stringify(commandRequest())]]]);
+    redis.set.mockRejectedValue(new Error('redis write failed'));
+    const execute = vi.fn().mockResolvedValue('done');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(redis.set).toHaveBeenCalledOnce();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-9',
+    );
+  });
+
+  it('reuses one consumer name per server across queue instances', async () => {
+    const consumers = new Set<string>();
+    for (let i = 0; i < 2; i++) {
+      const redis = makeRedis(null);
+      const queue = new RconCommandQueue({
+        redis,
+        log: makeLogger(),
+        serverId: 'srv-1',
+        execute: vi.fn(),
+        blockMs: 1,
+      });
+      await queue.processOnce();
+      consumers.add(redis.xreadgroup.mock.calls[0][2] as string);
+    }
+    expect(consumers.size).toBe(1);
   });
 
   it('stores a failed result and acknowledges when RCON execution throws', async () => {

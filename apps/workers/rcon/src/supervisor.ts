@@ -2,7 +2,6 @@ import { type ChatFlagDetector, handleChat, type PlayerIdCache } from '@squad/ch
 import {
   type DatabaseClient,
   events,
-  type GeoLookup,
   layers,
   notifySeedSubscribers,
   serverSettings,
@@ -37,7 +36,12 @@ import {
   upsertPlayers,
 } from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
-import { computeSeedingTick, isSeedLayer, type SeedingState } from './seeding.js';
+import {
+  computeSeedingTick,
+  isSeedLayer,
+  type SeedingState,
+  seedingStateSchema,
+} from './seeding.js';
 import { parseSquadCreatedBroadcast, type SquadCreatedBroadcast } from './squad-broadcast.js';
 import { applySquadEvent, type CrownBook, crownBookFromHash, crownOf } from './squad-crowns.js';
 import {
@@ -127,7 +131,6 @@ export interface SupervisorOptions {
   hintFollowUpMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
-  geoLookup?: GeoLookup | null;
   /**
    * Profanity/flag matcher applied to incoming chat (CHATLOG-5). Shared across
    * every supervisor so the rule cache is loaded once.
@@ -168,8 +171,12 @@ export class RconSupervisor {
         // external server, or a rotated Rcon.cfg). The running supervisor
         // holds the old dial parameters, so replace it rather than let it
         // retry a dead endpoint until the next worker restart.
-        await this.supervisors.get(id)?.stop();
+        // Unregister before awaiting: a reconcile that overlaps this one must
+        // not find the old supervisor still registered and replace it too,
+        // which would orphan whichever supervisor was created in between.
+        const stale = this.supervisors.get(id);
         this.supervisors.delete(id);
+        await stale?.stop();
         redialed.push(id);
       }
       if (!this.supervisors.has(id)) {
@@ -184,9 +191,10 @@ export class RconSupervisor {
     }
     for (const id of Array.from(this.supervisors.keys())) {
       if (!incoming.has(id)) {
-        await this.supervisors.get(id)?.stop();
+        const stale = this.supervisors.get(id);
         this.supervisors.delete(id);
         this.targets.delete(id);
+        await stale?.stop();
         removed.push(id);
       }
     }
@@ -335,10 +343,8 @@ class PerServerSupervisor {
     try {
       const raw = await this.opts.redis.get(`seeding:state:${this.target.serverId}`);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as SeedingState;
-      if (parsed && (parsed.state === 'seeding' || parsed.state === 'live')) {
-        this.seedingState = parsed;
-      }
+      const parsed = seedingStateSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) this.seedingState = parsed.data;
     } catch {
       // best-effort restore; a missing/invalid key just means we start fresh
     }
@@ -1274,7 +1280,7 @@ class PerServerSupervisor {
         // A database failure must not count as an RCON failure: three of those
         // in a row close a healthy client and its admin command queue (#981).
         try {
-          await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null, (player, err) =>
+          await upsertPlayers(this.opts.db, players, (player, err) =>
             this.opts.log.warn(
               { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
               'player upsert failed',

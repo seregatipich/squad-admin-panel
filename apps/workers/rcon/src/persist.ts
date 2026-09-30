@@ -2,13 +2,10 @@ import {
   auditLog,
   type ClosedReason,
   type DatabaseClient,
-  type GeoLookup,
   playerKitTime,
   playerNameHistory,
   playerSessions,
   players,
-  recordIpObservation,
-  resolveGeo,
   type SessionMode,
 } from '@squad/db';
 import { normalizePlayerName, normalizeRoleName } from '@squad/shared-config';
@@ -67,20 +64,17 @@ export type UpsertPlayerErrorHandler = (player: RconPlayer, error: Error) => voi
  *
  * @param db - Database client.
  * @param incoming - Players parsed from the current `ListPlayers` response.
- * @param geoLookup - Optional GeoIP reader for IP observations.
  * @param onPlayerError - Called for each player whose upsert failed.
  */
 export async function upsertPlayers(
   db: DatabaseClient,
   incoming: RconPlayer[],
-  geoLookup: GeoLookup | null = null,
   onPlayerError?: UpsertPlayerErrorHandler,
 ): Promise<void> {
   for (const p of incoming) {
     try {
-      // The transaction exposes the same query builder as the client; the
-      // cast lets it reach helpers (recordIpObservation) typed on the client.
-      await db.transaction((tx) => upsertPlayer(tx as unknown as DatabaseClient, p, geoLookup));
+      // The transaction exposes the same query builder as the client.
+      await db.transaction((tx) => upsertPlayer(tx as unknown as DatabaseClient, p));
     } catch (err) {
       onPlayerError?.(p, err as Error);
     }
@@ -117,11 +111,7 @@ async function lookupIdentity(
   return { row, steamHeldElsewhere: steamRow !== undefined && steamRow.id !== row.id };
 }
 
-async function upsertPlayer(
-  db: DatabaseClient,
-  p: RconPlayer,
-  geoLookup: GeoLookup | null,
-): Promise<void> {
+async function upsertPlayer(db: DatabaseClient, p: RconPlayer): Promise<void> {
   const normalised = normalizePlayerName(p.name);
   const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
 
@@ -151,9 +141,6 @@ async function upsertPlayer(
         eos_id: p.eos_id,
         canonical_name: p.name,
       });
-      if (p.ip) {
-        await recordIpObservation(db, { playerId, ip: p.ip, geo: resolveGeo(geoLookup, p.ip) });
-      }
       return;
     }
 
@@ -212,10 +199,6 @@ async function upsertPlayer(
         observationCount: sql`${playerNameHistory.observationCount} + 1`,
       },
     });
-
-  if (p.ip) {
-    await recordIpObservation(db, { playerId, ip: p.ip, geo: resolveGeo(geoLookup, p.ip) });
-  }
 }
 
 /**

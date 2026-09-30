@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Logger } from 'pino';
 import ssh2, { type ClientChannel, type Client as SshClient } from 'ssh2';
+import { createLineSplitter } from './line-splitter.js';
 
 // Same CommonJS caveat as the API route: take the default export and
 // destructure, so the built worker never depends on cjs-module-lexer.
@@ -62,7 +63,7 @@ export function tailCommand(logPath: string, lines: number): string {
 
 /**
  * Keeps an SSH `tail -F` session open against a remote `SquadGame.log`,
- * splitting stdout into lines exactly like the container tail does and
+ * splitting stdout into lines with the same splitter as the container tail and
  * reconnecting with exponential backoff whenever the session drops. Returns
  * a stop function; after it is called no further callbacks fire.
  */
@@ -103,7 +104,9 @@ export function tailSshLog(params: SshTailParams): () => void {
     const client = new Client();
     conn = client;
     let settled = false;
-    let buffer = '';
+    const splitLines = createLineSplitter(onLine, () =>
+      log.warn({ serverId }, 'ssh tail line exceeded limit, discarded'),
+    );
     let hostKeyRejected: string | null = null;
 
     const fail = (reason: string) => {
@@ -125,14 +128,7 @@ export function tailSshLog(params: SshTailParams): () => void {
         report('connected', null);
         stream.on('data', (chunk: Buffer) => {
           if (aborted) return;
-          buffer += chunk.toString('utf-8');
-          const parts = buffer.split('\n');
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.endsWith('\r') ? part.slice(0, -1) : part;
-            if (line.length === 0) continue;
-            onLine(line);
-          }
+          splitLines(chunk.toString('utf-8'));
         });
         stream.stderr.on('data', (chunk: Buffer) => {
           log.warn({ serverId, stderr: chunk.toString('utf-8').slice(0, 300) }, 'ssh tail stderr');

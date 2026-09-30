@@ -236,4 +236,48 @@ describe('createTelegramPublisher — secret hygiene', () => {
 
     expect(JSON.stringify(outcome)).not.toContain(BOT_TOKEN);
   });
+
+  it('sends an image over the 10 MiB photo limit as a document', async () => {
+    const calls: string[] = [];
+    const publisher = makePublisher(async (input) => {
+      calls.push(String(input));
+      return jsonResponse(200, { ok: true, result: { message_id: 6 } });
+    });
+
+    const outcome = await publisher(
+      makeJob({
+        mimeType: 'image/png',
+        storagePath: '2026/07/big.png',
+        sizeBytes: 11 * 1024 * 1024,
+      }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(calls[0]).toContain('/sendDocument');
+  });
+
+  it('does not retry an accepted upload whose response lacks a message id', async () => {
+    const publisher = makePublisher(async () => jsonResponse(200, { ok: true, result: {} }));
+
+    const outcome = await publisher(makeJob());
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      retryable: false,
+      error: 'telegram_missing_message_id',
+    });
+  });
+
+  it('bounds the request with an abort signal and retries a timeout', async () => {
+    let signal: AbortSignal | null | undefined;
+    const publisher = makePublisher(async (_input, init) => {
+      signal = init?.signal;
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+
+    const outcome = await publisher(makeJob());
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(outcome).toMatchObject({ ok: false, retryable: true });
+  });
 });

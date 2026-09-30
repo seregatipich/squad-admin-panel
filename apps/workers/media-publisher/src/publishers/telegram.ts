@@ -11,6 +11,16 @@ import type { MediaPublisher, PublishOutcome } from '../tick.js';
  */
 export const TELEGRAM_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
+/** Largest image `sendPhoto` accepts (10 MiB); bigger images are sent as documents. */
+export const TELEGRAM_MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Upper bound for one Bot API request. A stalled connection (api.telegram.org
+ * is commonly blocked by dropping packets) would otherwise hold the whole tick
+ * forever; a timeout surfaces as a retryable transport error.
+ */
+export const TELEGRAM_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface TelegramPublisherConfig {
   botToken?: string;
   chatId?: string;
@@ -71,8 +81,9 @@ export function createTelegramPublisher(config: TelegramPublisherConfig): MediaP
     }
 
     const isVideo = job.mimeType.startsWith('video/');
-    const method = isVideo ? 'sendVideo' : 'sendPhoto';
-    const field = isVideo ? 'video' : 'photo';
+    const sendAsDocument = !isVideo && job.sizeBytes > TELEGRAM_MAX_PHOTO_BYTES;
+    const method = isVideo ? 'sendVideo' : sendAsDocument ? 'sendDocument' : 'sendPhoto';
+    const field = isVideo ? 'video' : sendAsDocument ? 'document' : 'photo';
     const absolutePath = path.join(config.mediaBaseDir, job.storagePath);
 
     let response: Response;
@@ -85,6 +96,7 @@ export function createTelegramPublisher(config: TelegramPublisherConfig): MediaP
       response = await doFetch(`https://api.telegram.org/bot${botToken}/${method}`, {
         method: 'POST',
         body: form,
+        signal: AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       return {
@@ -125,7 +137,8 @@ export function createTelegramPublisher(config: TelegramPublisherConfig): MediaP
 
     const messageId = body.result?.message_id;
     if (typeof messageId !== 'number') {
-      return { ok: false, retryable: true, error: 'telegram_missing_message_id' };
+      // The upload was accepted; retrying would post it to the channel twice.
+      return { ok: false, retryable: false, error: 'telegram_missing_message_id' };
     }
 
     return {

@@ -111,8 +111,7 @@ const DEFAULT_BATCH_SIZE = 5;
 /** Exponential backoff for `attempts` consecutive failures, clamped to the ceiling. */
 export function computeBackoffMs(attempts: number): number {
   const exponent = Math.max(0, attempts - 1);
-  // Guard the shift itself: 2 ** 1024 is Infinity, and Infinity * base is NaN
-  // under some engines' fast paths. Clamp before multiplying.
+  // Clamp the exponent so a huge attempt count never computes an enormous power.
   if (exponent > 40) return MEDIA_PUBLISH_BACKOFF_MAX_MS;
   return Math.min(MEDIA_PUBLISH_BACKOFF_BASE_MS * 2 ** exponent, MEDIA_PUBLISH_BACKOFF_MAX_MS);
 }
