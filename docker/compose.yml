@@ -187,6 +187,9 @@ services:
       # Decrypts the SSH private key of external servers' log sources
       # (server_log_sources); without it only panel-hosted containers are tailed.
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      # Optional GeoLite2 City database resolving player connect IPs to a
+      # country/city; absent file = geo fields stay NULL.
+      GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
     # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
     # otherwise every RPC fails with `rejected untrusted peer`. The uid is the
@@ -195,6 +198,7 @@ services:
     user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
+      - ${GEOIP_DB_DIR:-/var/lib/squad-panel/geoip}:/geoip:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -6,6 +6,14 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
+### GeoIP: разрешение IP подключений в log-ingest (без миграции, #51)
+
+**Files:** `packages/db/src/geoip/mmdb.ts`, `apps/workers/log-ingest/src/{index,player-identity/store}.ts`, `docker/compose{,.stand}.yml`
+
+- `maxmind` объявлен зависимостью `@squad/db`, `createMmdbLookup` использует статический импорт (раньше динамический `import(name)` молча возвращал `null`).
+- `worker-log-ingest` открывает GeoLite2-City из `GEOIP_DB_PATH` при старте и передаёт `geo` в `recordIpObservation`; без файла поля остаются `NULL`, как и раньше. Каталог с базой монтируется read-only (`GEOIP_DB_DIR`, по умолчанию `/var/lib/squad-panel/geoip`).
+- Автоматическая загрузка по ключу из `geoip_settings` по-прежнему не подключена.
+
 ### Неиспользуемые индексы и один open-снимок балансировщика (migration 0136, #78)
 
 **Files:** `packages/db/drizzle/0136_index_cleanup_balancer_open_key.sql`, `packages/db/src/schema/{balancer-proposals,external-ban-sources,media-upload-tokens,reporter-stats,sessions,diagnostic-events}.ts`, `packages/db/test/index-cleanup.migration.test.ts`

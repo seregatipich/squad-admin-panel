@@ -1,24 +1,15 @@
 import { access } from 'node:fs/promises';
+import { type CityResponse, open, type Reader } from 'maxmind';
 import type { GeoFields, GeoLookup } from './resolver.js';
 import { mapMaxmindCity } from './resolver.js';
 
-interface MmdbReader {
-  get(ip: string): unknown;
-}
-
-interface MaxmindModule {
-  open(dbPath: string): Promise<MmdbReader>;
-}
-
-async function loadMaxmindModule(): Promise<MaxmindModule | null> {
-  const moduleName = 'maxmind';
-  try {
-    return (await import(moduleName)) as unknown as MaxmindModule;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * Opens a GeoLite2 City `.mmdb` file and wraps it as a {@link GeoLookup}.
+ *
+ * @param dbPath - Filesystem path of the database; `null`/`undefined` disables geo.
+ * @returns The lookup, or `null` when no path is given, the file is missing or
+ *   it is not a readable MaxMind database.
+ */
 export async function createMmdbLookup(
   dbPath: string | null | undefined,
 ): Promise<GeoLookup | null> {
@@ -28,19 +19,17 @@ export async function createMmdbLookup(
   } catch {
     return null;
   }
-  const maxmind = await loadMaxmindModule();
-  if (!maxmind) return null;
-  let reader: MmdbReader;
+  let reader: Reader<CityResponse>;
   try {
-    reader = await maxmind.open(dbPath);
+    reader = await open<CityResponse>(dbPath);
   } catch {
     return null;
   }
   return {
     lookup(ip: string): GeoFields | null {
       const response = reader.get(ip);
-      if (!response || typeof response !== 'object') return null;
-      return mapMaxmindCity(response as Parameters<typeof mapMaxmindCity>[0]);
+      if (!response) return null;
+      return mapMaxmindCity(response);
     },
   };
 }

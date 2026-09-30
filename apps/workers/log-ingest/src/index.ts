@@ -1,6 +1,12 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { ChatFlagDetector, handleChat, PlayerIdCache } from '@squad/chat-ingest';
-import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
+import {
+  createDatabaseClient,
+  createMmdbLookup,
+  serverLogSources,
+  serverSettings,
+  servers,
+} from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
   createGracefulShutdownController,
@@ -96,6 +102,17 @@ async function main() {
       return rows.map((r) => r.id);
     },
   });
+
+  // Optional GeoLite2 City database (bind-mounted by the operator, see
+  // docs/components/db/data-model.md#geoip_settings). Without it connect IPs
+  // are stored with NULL geo fields, as before.
+  const geoLookup = await createMmdbLookup(process.env.GEOIP_DB_PATH);
+  if (process.env.GEOIP_DB_PATH && !geoLookup) {
+    log.info(
+      { path: process.env.GEOIP_DB_PATH },
+      'GeoLite2 database not found or unreadable — geo lookup disabled',
+    );
+  }
 
   const seedThreshold =
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
@@ -262,7 +279,7 @@ async function main() {
           // it — otherwise a first-time connector is invisible to
           // alt/external-ban enforcement until the next RCON poll.
           alerts
-            .then(() => handlePlayerConnected(db, e))
+            .then(() => handlePlayerConnected(db, e, geoLookup))
             .catch((err) =>
               log.error({ err: (err as Error).message }, 'player identity handling failed'),
             )
