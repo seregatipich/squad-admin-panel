@@ -26,9 +26,9 @@ import {
 } from '@/components/ui';
 import { formatDateTimeRu } from '@/lib/format';
 import {
+  type AdjustResponse,
   BONUS_TYPE_OPTIONS,
   type BonusFilters,
-  type BonusPage,
   type BonusTransaction,
   buildBonusQuery,
   canAfford,
@@ -37,6 +37,12 @@ import {
   isCredit,
   matchesFilters,
   mergeBonusPage,
+  type PurchaseResponse,
+  parseAdjustResponse,
+  parseBalance,
+  parseBonusPage,
+  parsePurchaseResponse,
+  parseShopTiers,
   prependTransaction,
   purchaseErrorText,
   type ShopTier,
@@ -44,19 +50,6 @@ import {
   typeLabel,
   validateAdjust,
 } from './bonus-history';
-
-interface AdjustResponse {
-  player_id: string;
-  balance: number;
-  transaction: BonusTransaction;
-}
-
-interface PurchaseResponse {
-  ok: boolean;
-  balance: number;
-  role_id: string;
-  role_expires_at: string;
-}
 
 export function BonusSection({
   playerId,
@@ -92,7 +85,9 @@ export function BonusSection({
       credentials: 'include',
       cache: 'no-store',
     });
-    if (res.ok) setBalance(((await res.json()) as { balance: number }).balance);
+    if (!res.ok) return;
+    const parsed = parseBalance(await res.json());
+    if (parsed !== null) setBalance(parsed);
   }, [playerId]);
 
   useEffect(() => {
@@ -110,8 +105,9 @@ export function BonusSection({
           { credentials: 'include', cache: 'no-store' },
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const page = (await res.json()) as BonusPage;
+        const page = parseBonusPage(await res.json());
         if (requestIdRef.current !== requestId) return;
+        if (!page) throw new Error('Неожиданный формат ответа сервера.');
         setTransactions(mergeBonusPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
@@ -140,8 +136,9 @@ export function BonusSection({
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const page = (await res.json()) as BonusPage;
+      const page = parseBonusPage(await res.json());
       if (requestIdRef.current !== requestId) return;
+      if (!page) throw new Error('Неожиданный формат ответа сервера.');
       setTransactions((prev) => mergeBonusPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
@@ -396,7 +393,11 @@ function PurchaseModal({
   useEffect(() => {
     fetch('/api/v1/bonus-shop/tiers', { credentials: 'include', cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: { tiers: ShopTier[] }) => setTiers(body.tiers))
+      .then((body: unknown) => {
+        const parsed = parseShopTiers(body);
+        if (!parsed) throw new Error('Неожиданный формат ответа сервера.');
+        setTiers(parsed);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -423,7 +424,9 @@ function PurchaseModal({
         setError(purchaseErrorText(body?.error ?? `HTTP ${res.status}`));
         return;
       }
-      onPurchased((await res.json()) as PurchaseResponse);
+      const result = parsePurchaseResponse(await res.json());
+      if (!result) throw new Error('Неожиданный формат ответа сервера.');
+      onPurchased(result);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -548,7 +551,9 @@ function AdjustModal({
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onAdjusted((await res.json()) as AdjustResponse);
+      const result = parseAdjustResponse(await res.json());
+      if (!result) throw new Error('Неожиданный формат ответа сервера.');
+      onAdjusted(result);
     } catch (e) {
       setError((e as Error).message);
     } finally {
