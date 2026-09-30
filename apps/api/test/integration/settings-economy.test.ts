@@ -210,6 +210,29 @@ describeIfDb('PUT /api/v1/settings/economy', () => {
     expect(body.economy_enabled).toBe(true);
   });
 
+  it('caps the privilege_costs catalog so the dead config cannot bloat the row (#349)', async () => {
+    const catalog = (size: number) =>
+      Object.fromEntries(
+        Array.from({ length: size }, (_, i) => [`tier-${i}`, { days: 30, price: 100 }]),
+      );
+    const tooMany = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: managerCookie },
+      payload: { privilege_costs: catalog(51) },
+    });
+    expect(tooMany.statusCode).toBe(400);
+
+    const atCap = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: managerCookie },
+      payload: { privilege_costs: catalog(50) },
+    });
+    expect(atCap.statusCode).toBe(200);
+    expect(Object.keys(atCap.json().privilege_costs)).toHaveLength(50);
+  });
+
   it('persists seed reward settings for a role without panel access', async () => {
     const rewardRoleId = uuidv7();
     await h.db.insert(roles).values({
