@@ -11,6 +11,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
 
+import { useSearchParams } from 'next/navigation';
 import BonusLeaderboardPage from './page';
 
 const ROWS = [
@@ -125,5 +126,37 @@ describe('BonusLeaderboardPage', () => {
     await renderPage();
 
     expect(await screen.findByText('Пока никто не заработал бонусов.')).toBeInTheDocument();
+  });
+  it('drops the previous period rows when the next period fails to load', async () => {
+    const ok = { period: 'all', available: true, economy_enabled: true, total_rows: 2, rows: ROWS };
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(ok), { status: 200 }))
+        .mockResolvedValue(new Response('', { status: 500 })),
+    );
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<BonusLeaderboardPage />);
+    });
+    await screen.findByRole('link', { name: 'BonusRich' });
+
+    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('period=30d') as never);
+    await act(async () => {
+      view.rerender(<BonusLeaderboardPage />);
+    });
+
+    expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'BonusRich' })).not.toBeInTheDocument();
+    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as never);
+  });
+
+  it('reports a malformed body as an error instead of an empty leaderboard', async () => {
+    mockFetch({ error: 'boom' });
+    await renderPage();
+
+    expect(await screen.findByText('Не удалось загрузить лидерборд бонусов')).toBeInTheDocument();
+    expect(screen.queryByText('Пока никто не заработал бонусов.')).not.toBeInTheDocument();
   });
 });
