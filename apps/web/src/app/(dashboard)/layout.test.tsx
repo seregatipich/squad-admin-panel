@@ -34,6 +34,7 @@ vi.mock('@/components/CommandPalette', () => ({
 import { redirect } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
+import { parseSetupStatus } from '@/lib/json-guards';
 import DashboardLayout from './layout';
 
 const redirectMock = vi.mocked(redirect);
@@ -89,6 +90,15 @@ describe('DashboardLayout', () => {
     apiFetchMock.mockResolvedValue({ setup_completed: false });
     await expect(DashboardLayout({ children: null })).rejects.toThrow(/NEXT_REDIRECT/);
     expect(redirectMock).toHaveBeenCalledWith('/setup');
+  });
+
+  it('validates the setup-status body before reading it (#819)', async () => {
+    requireSessionMock.mockResolvedValue(session(['servers.view']));
+    await DashboardLayout({ children: null });
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/api/v1/setup/status',
+      expect.objectContaining({ parse: parseSetupStatus }),
+    );
   });
 
   // The `catch` still has a job: a setup-status outage must not lock the panel.

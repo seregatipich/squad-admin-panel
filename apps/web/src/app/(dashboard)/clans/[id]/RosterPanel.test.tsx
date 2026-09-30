@@ -370,7 +370,9 @@ describe('RosterPanel', () => {
   it('renders the empty roster state without crashing', () => {
     const html = renderToStaticMarkup(<RosterPanel clanId="clan-1" />);
     expect(html).toContain('Ростер');
-    expect(html).toContain('Загружаем ростер');
+    // #817: the loading announcement is filled in after mount, so the
+    // server-rendered markup carries the empty live region.
+    expect(html).toContain('<span role="status" class="sr-only"></span>');
   });
 });
 

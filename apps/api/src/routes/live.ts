@@ -36,8 +36,11 @@ const MAX_EVENT_TYPE_LENGTH = 64;
  * types only to a socket that sent `{ type: 'subscribe', events: [...] }` for
  * them — the high-volume streams (chat, combat, roster snapshots) and types no
  * page consumes by default. Every union member must be listed, so a new event
- * type forces a choice here. Types the union does not model (worker-published
- * `banname.matched`, `bansync.*`, …) are always opt-in.
+ * type forces a choice here. A type the union does not model is opt-in if it
+ * is published in-process; a frame of such a type arriving from another process
+ * over Redis (worker-published `banname.matched`) never reaches this route —
+ * `toLiveFrame` in `plugins/live-bus.ts` drops it. `bansync.*` is not published
+ * to the live bus at all.
  */
 const EVENT_DELIVERY: Record<LiveEvent['type'], 'broadcast' | 'opt_in'> = {
   'alert.triggered': 'broadcast',

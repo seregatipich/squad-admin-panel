@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Skeleton, SkeletonTable } from './Skeleton';
 
@@ -53,5 +54,36 @@ describe('SkeletonTable', () => {
   it('announces the loading state when a label is given', () => {
     render(<SkeletonTable rows={2} cols={2} label="Загружаем таблицу" />);
     expect(screen.getByRole('status')).toHaveTextContent('Загружаем таблицу');
+  });
+});
+
+describe('live region timing (#817)', () => {
+  /**
+   * NVDA and JAWS skip a polite region that enters the DOM already holding its
+   * text and announce only a change to a region that is already there, so the
+   * region must be rendered empty and filled afterwards.
+   */
+  it('renders the Skeleton status region empty and fills it after mount', () => {
+    const html = renderToString(<Skeleton variant="row" label="Загружаем игроков" />);
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain('Загружаем игроков');
+
+    render(<Skeleton variant="row" label="Загружаем игроков" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Загружаем игроков');
+  });
+
+  it('renders the SkeletonTable status region empty and fills it after mount', () => {
+    const html = renderToString(<SkeletonTable rows={1} cols={1} label="Загружаем таблицу" />);
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain('Загружаем таблицу');
+
+    render(<SkeletonTable rows={1} cols={1} label="Загружаем таблицу" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Загружаем таблицу');
+  });
+
+  it('updates the announcement when the label changes', () => {
+    const { rerender } = render(<Skeleton variant="row" label="Загружаем игроков" />);
+    rerender(<Skeleton variant="row" label="Загружаем серверы" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Загружаем серверы');
   });
 });

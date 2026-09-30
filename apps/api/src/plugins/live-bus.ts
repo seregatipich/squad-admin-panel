@@ -222,6 +222,7 @@ export type LiveEvent =
       ts: string;
       data: {
         vote_id: string;
+        server_id: string;
         vote_type: string;
         initiator_player_id: string | null;
         map_current: string | null;
