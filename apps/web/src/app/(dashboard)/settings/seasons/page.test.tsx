@@ -36,6 +36,18 @@ const FROZEN = {
   finalized: true,
 };
 
+// Closed but not yet finalized: `worker-scheduler`'s finalization tick only
+// picks up `status='active'` seasons, so a manually closed season can stay
+// `finalized: false` indefinitely (#721).
+const CLOSED_NOT_FINALIZED = {
+  id: 'season-closed',
+  name: 'Весна 2026',
+  starts_at: '2026-03-01T00:00:00.000Z',
+  ends_at: '2026-05-31T00:00:00.000Z',
+  status: 'closed' as const,
+  finalized: false,
+};
+
 interface StubOpts {
   items?: unknown[];
   listStatus?: number;
@@ -118,8 +130,23 @@ describe('seasons settings page', () => {
       await renderPage({ items: [FROZEN] });
 
       expect(await screen.findByText('Зима 2025')).toBeInTheDocument();
-      expect(screen.getByText('только просмотр')).toBeInTheDocument();
+      expect(screen.getByText('сезон закрыт')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'offers no edit control for a closed, not-yet-finalized season and cannot reopen it (#721)',
+    async () => {
+      const { calls } = await renderPage({ items: [CLOSED_NOT_FINALIZED] });
+
+      expect(await screen.findByText('Весна 2026')).toBeInTheDocument();
+      expect(screen.getByText('сезон закрыт')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+
+      // Nothing in the UI can send a PATCH that would reopen it.
+      expect(calls.filter((c) => c.init?.method === 'PATCH')).toHaveLength(0);
     },
     TEST_TIMEOUT_MS,
   );

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertDialog,
   Button,
@@ -77,6 +77,10 @@ export default function DiscordIntegrationPage() {
   const [enabled, setEnabled] = useState(false);
   const [botToken, setBotToken] = useState('');
   const [savingIntegration, setSavingIntegration] = useState(false);
+  // Guards the poll from clobbering an in-progress edit to Guild ID / enabled
+  // (finding #705): a ref (not state) so the always-running `load` closure
+  // below reads the latest value instead of the one from the first render.
+  const formDirtyRef = useRef(false);
 
   const [newEventType, setNewEventType] = useState<DiscordEventType>('ban_issued');
   const [newUrl, setNewUrl] = useState('');
@@ -111,8 +115,10 @@ export default function DiscordIntegrationPage() {
         const hooks = await readJson<WebhookRow[]>(hooksRes);
         if (cancelled) return;
         setIntegration(settings);
-        setGuildId(settings.guild_id ?? '');
-        setEnabled(settings.enabled);
+        if (!formDirtyRef.current) {
+          setGuildId(settings.guild_id ?? '');
+          setEnabled(settings.enabled);
+        }
         setWebhooks(hooks);
       } catch (e) {
         if (!cancelled) setBanner({ kind: 'err', text: (e as Error).message });
@@ -282,7 +288,10 @@ export default function DiscordIntegrationPage() {
                 <FieldRow label="Guild ID">
                   <TextInput
                     value={guildId}
-                    onChange={(e) => setGuildId(e.target.value)}
+                    onChange={(e) => {
+                      formDirtyRef.current = true;
+                      setGuildId(e.target.value);
+                    }}
                     inputMode="numeric"
                     placeholder="напр. 123456789012345678"
                   />
@@ -315,7 +324,10 @@ export default function DiscordIntegrationPage() {
                 <Checkbox
                   label="Интеграция включена"
                   checked={enabled}
-                  onChange={(e) => setEnabled(e.target.checked)}
+                  onChange={(e) => {
+                    formDirtyRef.current = true;
+                    setEnabled(e.target.checked);
+                  }}
                 />
               </CardBody>
               <CardFooter>

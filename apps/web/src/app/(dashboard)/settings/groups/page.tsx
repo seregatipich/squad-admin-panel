@@ -49,6 +49,9 @@ interface RoleRow {
   can_manage_clans: boolean;
   can_manage_economy: boolean;
   can_manage_infrastructure: boolean;
+  can_manage_issues: boolean;
+  can_manage_integrations: boolean;
+  can_handle_reports: boolean;
   squad_permissions: SquadPermissionKey[];
   assigned_users_count: number;
 }
@@ -66,7 +69,10 @@ type FlagKey =
   | 'can_manage_ban_sources'
   | 'can_manage_clans'
   | 'can_manage_economy'
-  | 'can_manage_infrastructure';
+  | 'can_manage_infrastructure'
+  | 'can_manage_issues'
+  | 'can_manage_integrations'
+  | 'can_handle_reports';
 
 const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: string }> = [
   {
@@ -86,6 +92,9 @@ const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: s
     description:
       'Установка, удаление, обновление и force-stop серверов, хост-демон, правка конфигов и Admins.cfg, выпуск API-токенов.',
   },
+  { key: 'can_manage_issues', label: 'Может управлять обращениями (issues)' },
+  { key: 'can_manage_integrations', label: 'Может управлять интеграциями' },
+  { key: 'can_handle_reports', label: 'Может обрабатывать жалобы' },
 ];
 
 function chunk<T>(arr: readonly T[], cols: number): T[][] {
@@ -146,6 +155,11 @@ export default function GroupsPage() {
         body.can_manage_economy = patch.can_manage_economy;
       if (patch.can_manage_infrastructure !== undefined)
         body.can_manage_infrastructure = patch.can_manage_infrastructure;
+      if (patch.can_manage_issues !== undefined) body.can_manage_issues = patch.can_manage_issues;
+      if (patch.can_manage_integrations !== undefined)
+        body.can_manage_integrations = patch.can_manage_integrations;
+      if (patch.can_handle_reports !== undefined)
+        body.can_handle_reports = patch.can_handle_reports;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
       const res = await fetch(`/api/v1/roles/${role.id}`, {
         method: 'PUT',
@@ -160,7 +174,26 @@ export default function GroupsPage() {
         return;
       }
       const fresh = (await res.json()) as RoleRow;
-      setRows((prev) => (prev ? prev.map((r) => (r.id === role.id ? fresh : r)) : prev));
+      setRows((prev) =>
+        prev
+          ? prev.map((r) => {
+              if (r.id !== role.id) return r;
+              // Only accept the server's value for a field sent in this
+              // request if nothing has changed it locally since the request
+              // was sent (i.e. it still equals what we asked the server to
+              // set). Otherwise a newer, still-unsent local edit (applied by
+              // `onLocal` while this request — or an even older, now-stale
+              // one — was in flight) would be silently discarded (#694).
+              const merged = { ...r };
+              for (const key of Object.keys(patch) as (keyof RoleRow)[]) {
+                if (JSON.stringify(r[key]) === JSON.stringify(patch[key])) {
+                  (merged as Record<string, unknown>)[key] = fresh[key];
+                }
+              }
+              return merged;
+            })
+          : prev,
+      );
     } catch (err) {
       setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
       await refresh();
@@ -184,6 +217,9 @@ export default function GroupsPage() {
       can_manage_clans: false,
       can_manage_economy: false,
       can_manage_infrastructure: false,
+      can_manage_issues: false,
+      can_manage_integrations: false,
+      can_handle_reports: false,
     };
     let attempt = 0;
     while (attempt < 5) {
@@ -415,6 +451,9 @@ function RoleCard({
       patch.can_manage_clans = false;
       patch.can_manage_economy = false;
       patch.can_manage_infrastructure = false;
+      patch.can_manage_issues = false;
+      patch.can_manage_integrations = false;
+      patch.can_handle_reports = false;
     }
     onLocal(patch);
     debounce(patch);

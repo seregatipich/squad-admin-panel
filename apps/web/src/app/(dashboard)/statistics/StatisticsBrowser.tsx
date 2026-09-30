@@ -75,6 +75,12 @@ export function StatisticsBrowser() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against out-of-order responses (#729): each `load()` call gets the
+  // next id, and a response is applied only if no newer call has started
+  // since — an overlapping older request (a fast preset click, a keystroke
+  // inside the custom date inputs, or a Retry click) can otherwise resolve
+  // after a newer one and overwrite fresher data, or clear `loading` early.
+  const requestIdRef = useRef(0);
 
   // `presetRange` reads the clock. Computing it during render makes the
   // server-rendered HTML and the first client render disagree (the CSV href
@@ -121,6 +127,7 @@ export function StatisticsBrowser() {
 
   const load = useCallback(async () => {
     if (!range) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -130,11 +137,14 @@ export function StatisticsBrowser() {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      setData((await res.json()) as StatisticsResponse);
+      const body = (await res.json()) as StatisticsResponse;
+      if (requestIdRef.current !== requestId) return;
+      setData(body);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [range, committed]);
 

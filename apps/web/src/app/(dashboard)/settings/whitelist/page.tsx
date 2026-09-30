@@ -81,26 +81,47 @@ export default function WhitelistSettingsPage() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [rolesForbidden, setRolesForbidden] = useState(false);
 
   const roleSelectId = useId();
   const csvId = useId();
 
   const refresh = useCallback(async () => {
-    const [settingsRes, rolesRes, meRes] = await Promise.all([
-      fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (settingsRes.ok) {
-      const loaded = (await settingsRes.json()) as WhitelistSettings;
-      setSettings(loaded);
-      setPicked(loaded.whitelist_role_id ?? '');
-      setErr(null);
-    } else {
-      setErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+    try {
+      const [settingsRes, rolesRes, meRes] = await Promise.all([
+        fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (settingsRes.ok) {
+        const loaded = (await settingsRes.json()) as WhitelistSettings;
+        setSettings(loaded);
+        setPicked(loaded.whitelist_role_id ?? '');
+        setErr(null);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+      }
+      if (rolesRes.ok) {
+        setRoleOptions((await rolesRes.json()) as RoleOption[]);
+        setRolesForbidden(false);
+      } else if (rolesRes.status === 403) {
+        // whitelist:edit and role:view are independent permissions
+        // (packages/shared-config/src/permissions.ts) — this is not a
+        // failure, just an empty role picker, so it must not clobber a
+        // settings-load error already set above.
+        setRoleOptions([]);
+        setRolesForbidden(true);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${rolesRes.status}`);
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${meRes.status}`);
+      }
+    } catch (e) {
+      setErr(`Ошибка сети: ${(e as Error).message}`);
     }
-    if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
   }, []);
 
   useEffect(() => {
@@ -238,11 +259,17 @@ export default function WhitelistSettingsPage() {
                   Выбрать роль whitelist может только пользователь с правом управления ролями.
                 </p>
               ) : null}
+              {canPickRole && rolesForbidden ? (
+                <p className="text-xs text-ink-3">
+                  Список ролей недоступен: нужно право «Просмотр ролей».
+                </p>
+              ) : null}
               {canPickRole ? (
                 <FieldRow label="Роль для whitelist" htmlFor={roleSelectId}>
                   <Select
                     id={roleSelectId}
                     value={picked}
+                    disabled={rolesForbidden}
                     onChange={(e) => setPicked(e.target.value)}
                   >
                     <option value="">— не выбрана —</option>
