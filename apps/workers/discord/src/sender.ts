@@ -140,6 +140,14 @@ async function postWebhook(
 
     if (res.ok) return { ok: true, rateLimited };
 
+    if (res.status >= 400 && res.status < 500) {
+      deps.log.error(
+        { status: res.status },
+        'discord webhook post rejected (permanent, not retried)',
+      );
+      return { ok: false, rateLimited };
+    }
+
     attempt++;
     if (attempt >= MAX_SEND_ATTEMPTS) {
       deps.log.error({ status: res.status }, 'discord webhook post failed (status, giving up)');

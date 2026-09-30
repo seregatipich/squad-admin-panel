@@ -216,6 +216,21 @@ describe('deliverEnvelope', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
+  it.each([400, 401, 404])(
+    'does not retry a permanent %i response and counts one failure',
+    async (status) => {
+      const row = webhookRow({ url: 'https://discord.com/api/webhooks/1/aaa' });
+      const db = makeFakeDb({ webhookRows: [row] });
+      const fetchImpl = vi.fn(async () => new Response(null, { status }));
+      const sleep = vi.fn(async () => undefined);
+      const result = await deliverEnvelope(makeDeps({ db, fetchImpl, sleep }), envelope());
+
+      expect(result).toEqual({ sent: 0, failed: 1, rateLimited: 0 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
+
   it('one webhook failing does not prevent delivery to a second webhook of the same event', async () => {
     const bad = webhookRow({ id: 'wh-bad', url: 'https://discord.com/api/webhooks/1/aaa' });
     const good = webhookRow({ id: 'wh-good', url: 'https://discord.com/api/webhooks/2/bbb' });

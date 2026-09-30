@@ -165,6 +165,25 @@ describe('parseStatusCache', () => {
   });
 });
 
+describe('cache shape validation', () => {
+  it('rejects a status cache whose fields have the wrong type', () => {
+    expect(parseStatusCache(JSON.stringify({ state: 'connected', current_map: 5 }))).toBeNull();
+    expect(parseStatusCache('[]')).toBeNull();
+  });
+
+  it('accepts the nulls worker-rcon writes for unknown counters', () => {
+    expect(
+      parseStatusCache(
+        JSON.stringify({ state: 'connected', player_count: null, public_queue: null }),
+      ),
+    ).toMatchObject({ player_count: null, public_queue: null });
+  });
+
+  it('rejects a roster cache whose players is not an array', () => {
+    expect(parseRosterCache(JSON.stringify({ players: 'nope' }))).toBeNull();
+  });
+});
+
 describe('renameStatusChannel', () => {
   it('PATCHes the channel and records the new name on first run', async () => {
     const fetchImpl = vi.fn(async () => okResponse());
@@ -312,6 +331,34 @@ describe('runStatusChannelTick', () => {
     expect(summary).toMatchObject({ considered: 1, renamed: 1 });
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ name: '🟢gorodok_100x7_👮1' });
+  });
+
+  it('keeps updating the remaining servers when Redis fails for one of them', async () => {
+    const otherServerId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+    const otherChannelId = '600000000000000002';
+    const fetchImpl = vi.fn(async () => okResponse());
+    const redis = fakeRedis();
+    redis.get.mockImplementation(async (key: string) => {
+      if (key.includes(SERVER_ID)) throw new Error('redis down');
+      return null;
+    });
+    const deps = makeDeps({
+      db: fakeDb({
+        servers: [
+          { id: SERVER_ID, statusChannelId: CHANNEL_ID },
+          { id: otherServerId, statusChannelId: otherChannelId },
+        ],
+        admins: [],
+        // biome-ignore lint/suspicious/noExplicitAny: fake builder
+      }) as any,
+      // biome-ignore lint/suspicious/noExplicitAny: fake exposes only get/set
+      redis: redis as any,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const summary = await runStatusChannelTick(deps);
+
+    expect(summary).toMatchObject({ considered: 2, renamed: 1, errors: 1 });
   });
 
   it('reports a server whose status cache has expired as offline instead of skipping it', async () => {

@@ -39,6 +39,29 @@ function makeRedis() {
       return next;
     }),
     expire: vi.fn(async () => 1),
+    /** Queues INCR + EXPIRE so both are sent as one transaction, like ioredis MULTI. */
+    multi: vi.fn(() => {
+      const queued: Array<() => Promise<number>> = [];
+      const chain = {
+        incr: (key: string) => {
+          queued.push(() => redis.incr(key));
+          return chain;
+        },
+        expire: (...args: unknown[]) => {
+          queued.push(async () => {
+            await (redis.expire as (...a: unknown[]) => Promise<number>)(...args);
+            return 1;
+          });
+          return chain;
+        },
+        exec: async () => {
+          const results: Array<[null, number]> = [];
+          for (const run of queued) results.push([null, await run()]);
+          return results;
+        },
+      };
+      return chain;
+    }),
     publish: vi.fn(async () => 1),
     xadd: vi.fn(async () => 'stream-id'),
     /** Test-only: simulates the 60s cooldown TTL elapsing without touching the escalation counter. */
@@ -499,7 +522,8 @@ describe('handleBannedNameEvent', () => {
       effectiveAction: 'alert',
     });
     expect(rconXaddCalls(redis)).toHaveLength(3);
-    expect(redis.expire).toHaveBeenCalledWith(`banname:kicks:${eosId}`, 600);
+    expect(redis.multi).toHaveBeenCalledTimes(4);
+    expect(redis.expire).toHaveBeenCalledWith(`banname:kicks:${eosId}`, 600, 'NX');
   });
 
   it('swallows an rcon xadd failure and still writes the ledger with kick_enqueued=false', async () => {

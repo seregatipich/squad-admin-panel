@@ -34,6 +34,7 @@ vi.mock('pino', () => {
 });
 
 import {
+  invalidateLeaderboardCache,
   resolveBackfillMonths,
   resolveTickIntervalMs,
   runLeaderboardAggregatorTick,
@@ -286,5 +287,42 @@ describe('interval and backfill configuration (DOSSIER-4)', () => {
         severity: 'error',
       }),
     );
+  });
+});
+
+describe('invalidateLeaderboardCache', () => {
+  it('unlinks each scanned batch as it arrives and counts every key', async () => {
+    const batches = [['leaderboard:a', 'leaderboard:b'], ['leaderboard:c']];
+    const unlink = vi.fn(async (...keys: string[]) => keys.length);
+    const redis = {
+      scanStream: vi.fn(() =>
+        (async function* () {
+          for (const batch of batches) yield batch;
+        })(),
+      ),
+      unlink,
+    };
+
+    // biome-ignore lint/suspicious/noExplicitAny: stub exposes only scanStream/unlink
+    const removed = await invalidateLeaderboardCache(redis as any);
+
+    expect(removed).toBe(3);
+    expect(unlink.mock.calls).toEqual([['leaderboard:a', 'leaderboard:b'], ['leaderboard:c']]);
+  });
+
+  it('does not unlink anything when no keys match', async () => {
+    const unlink = vi.fn();
+    const redis = {
+      scanStream: vi.fn(() =>
+        (async function* () {
+          yield [];
+        })(),
+      ),
+      unlink,
+    };
+
+    // biome-ignore lint/suspicious/noExplicitAny: stub exposes only scanStream/unlink
+    expect(await invalidateLeaderboardCache(redis as any)).toBe(0);
+    expect(unlink).not.toHaveBeenCalled();
   });
 });

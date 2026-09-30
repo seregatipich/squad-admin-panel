@@ -416,7 +416,7 @@ describeIfDb('GET /api/v1/leaderboards', () => {
   });
 
   it('always leaves the search rate-limit key with a TTL, even if an earlier EXPIRE was lost', async () => {
-    const rateKey = `leaderboard:search-rl:127.0.0.1:${h.seed.ownerPlayerId}`;
+    const rateKey = `ratelimit:leaderboard-search:127.0.0.1:${h.seed.ownerPlayerId}`;
     // A counter left without a TTL (EXPIRE failed or the process died between
     // INCR and EXPIRE) must not lock search forever.
     await h.redis.set(rateKey, '5');

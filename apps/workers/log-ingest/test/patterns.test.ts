@@ -163,6 +163,18 @@ describe('Squad fatal/log-exit/assertion detection', () => {
     expect(match?.ts).toBeNull();
   });
 
+  it('detects an Assertion failed line behind the standard log prefix', () => {
+    const line =
+      '[2026.04.23-11.41.10:500][123]LogOutputDevice: Error: Assertion failed: bIsValid [File:/SquadGame/Foo.cpp Line: 42]';
+    expect(detectSquadFatal(line)?.file).toBe('/SquadGame/Foo.cpp');
+  });
+
+  it('ignores an assertion string typed into player chat', () => {
+    const line =
+      '[2026.04.23-11.41.10:500][123]LogSquad: ChatMessage: Player : ChatAll : Assertion failed: x [File:/a.cpp Line: 1]';
+    expect(detectSquadFatal(line)).toBeNull();
+  });
+
   it('LogIngestor invokes onSquadFatal once per matching line for each pattern', () => {
     const onSquadFatal = vi.fn();
     const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000, onSquadFatal });

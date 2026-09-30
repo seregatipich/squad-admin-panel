@@ -58,7 +58,7 @@ export async function loadActiveExternalBans(db: DatabaseClient): Promise<Extern
         isNull(externalBans.revokedAt),
         or(isNull(externalBans.expiresAt), gt(externalBans.expiresAt, new Date())),
       ),
-    )) as unknown as ExternalBanRow[];
+    )) satisfies ExternalBanRow[];
 
   return rows.map((row) => ({
     externalBanId: row.externalBanId,
@@ -83,6 +83,7 @@ export class ExternalBanCache {
   private readonly byIdentity = new Map<string, ExternalBanMatch[]>();
   private loaded = false;
   private version: string | null = null;
+  private refreshing: Promise<void> | null = null;
 
   constructor(
     private readonly db: DatabaseClient,
@@ -104,10 +105,14 @@ export class ExternalBanCache {
   }
 
   async match(steamId64: string, eosId: string | null): Promise<ExternalBanMatch[]> {
-    const version = await this.redis.get(EXTERNAL_BAN_CACHE_VERSION_KEY).catch(() => null);
-    if (!this.loaded || version !== this.version) {
-      await this.refresh();
-      this.version = version;
+    const version = await this.redis.get(EXTERNAL_BAN_CACHE_VERSION_KEY).catch(() => undefined);
+    // An unreadable version keeps the loaded index rather than reloading on every connect.
+    if (!this.loaded || (version !== undefined && version !== this.version)) {
+      this.refreshing ??= this.refresh().finally(() => {
+        this.refreshing = null;
+      });
+      await this.refreshing;
+      this.version = version ?? null;
     }
 
     const now = Date.now();
