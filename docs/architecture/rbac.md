@@ -108,6 +108,19 @@ Session users with `panel_access` are unaffected: `derivePanelPermissions` grant
 
 `config:view` and `server:view` never grant a config secret. The `Password=` value of `Rcon.cfg` and the `LicenseKey=` value of `License.cfg` exist in plaintext only in the file on disk (and encrypted in `server_credentials`); every config response (`GET /configs/:name`, `versions/:vid`, `diff`, `blame`, `drift/diff`, `GET /servers/archive/:id/configs/:filename`) and every `config_versions` row the panel writes (editor writes, install seed, reset-default, deletion backup) carries `********` instead. Reads also mask rows written before the fix, since `config_versions` is append-only. See `apps/api/src/lib/config-secrets.ts`.
 
+`Password=` and `Port=` in `Rcon.cfg` are panel-managed (#42): a write through the config editor (PUT, restore, drift accept/revert, reset-default) whose resulting file disagrees with `server_credentials` is refused with `422 rcon_credentials_managed`, because the panel's RCON clients connect with the credentials row. A masked `Password=********` line is always filled with the `server_credentials` password (the file on disk only when no credentials row exists). Other lines stay editable.
+
+### Per-file config write permissions (#42)
+
+`config:edit` (and `config:rollback` for restore/revert) is not enough to write a config file whose content grants what another permission guards. The write routes (`PUT /configs/:name`, `restore/:vid`, `drift/accept`, `drift/revert`, `reset-default`) also require:
+
+| File | Extra permission | Why |
+| --- | --- | --- |
+| `Bans.cfg`, `RemoteBanListHosts.cfg` | `mod:ban_perm` (derived only for roles with the squad `ban` permission) | a line bans a player |
+| `Admins.cfg`, `RemoteAdminListHosts.cfg` | `user:manage_roles` (derived only for roles with `can_assign_roles`) | a line grants Squad admin rights |
+
+A caller without it gets `403 { error: 'forbidden', required_permission }` and the file is not touched.
+
 ## Audit-coverage CI gate
 
 `apps/api/test/audit-coverage.test.ts` builds the route table with `registerRoutes()` — the same list `server.ts` serves — and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a declarative `config.audit: { action, resource }`. The hook in `plugins/audit.ts` then writes an entry for every outcome, denied (`403`) and rejected (`404`/`409`/`422`) attempts included; a handler passes before/after snapshots through `req.auditSnapshots`. `audit: false` is accepted only for machine-integration endpoints and for a frozen legacy list of routes that still write their own entries on the success path; that list may only shrink. Until audit #102/#116 the guard registered a hand-picked set of route modules, so `ban-sources.ts` and `banned-names.ts` shipped with `audit: false` unnoticed.

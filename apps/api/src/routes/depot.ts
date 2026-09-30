@@ -15,6 +15,11 @@ import {
   publishDepotProgressLine,
 } from '../lib/depot-progress.js';
 import { sendUnlessStalled } from '../lib/ws-send.js';
+import {
+  createStreamLimiter,
+  streamCallerKey,
+  WS_CLOSE_TRY_AGAIN_LATER,
+} from '../lib/ws-stream-limit.js';
 
 /**
  * Manages the shared `squad-depot` Docker volume that holds Squad game
@@ -48,6 +53,10 @@ const depotUpdateBody = z
  * keep down.
  */
 const RESTARTABLE_STATUSES = new Set(['running', 'starting']);
+/** Depot progress sockets one caller may hold open at once (#1298). */
+export const DEPOT_STREAMS_PER_CALLER = 4;
+/** Depot progress sockets this API process holds open at once (#1298). */
+const DEPOT_STREAMS_TOTAL = 32;
 
 function parseBuildId(manifest: string): string | null {
   const m = /"buildid"\s+"(\d+)"/.exec(manifest);
@@ -55,6 +64,12 @@ function parseBuildId(manifest: string): string | null {
 }
 
 const depotRoutes: FastifyPluginAsync = async (app) => {
+  // Each progress socket owns a duplicate Redis connection for its blocking
+  // XREAD, so the socket count is capped (#1298).
+  const progressStreams = createStreamLimiter({
+    perCaller: DEPOT_STREAMS_PER_CALLER,
+    total: DEPOT_STREAMS_TOTAL,
+  });
   app.get('/api/v1/depot', { config: { permissions: ['server:view'], audit: false } }, async () => {
     let populated = false;
     let buildId: string | null = null;
@@ -320,7 +335,13 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       websocket: true,
       config: { permissions: ['server:view'], audit: false },
     },
-    (socket) => {
+    (socket, req) => {
+      const release = progressStreams.acquire(streamCallerKey(req));
+      if (!release) {
+        socket.send(JSON.stringify({ error: 'too_many_streams' }));
+        socket.close(WS_CLOSE_TRY_AGAIN_LATER, 'too_many_streams');
+        return;
+      }
       let closed = false;
       let lastId = '0';
       // A blocking XREAD occupies the connection it runs on until data
@@ -430,6 +451,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       })();
       socket.on('close', () => {
         closed = true;
+        release();
         // Forcibly tears down an in-flight blocking XREAD so a client that
         // disconnects mid-block doesn't leave the duplicate connection open
         // for up to another 5s waiting on data nobody will read.

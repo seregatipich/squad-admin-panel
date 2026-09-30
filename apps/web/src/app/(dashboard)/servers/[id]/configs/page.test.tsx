@@ -1103,3 +1103,42 @@ describe('ConfigsPage — blame', () => {
     expect(screen.queryByText('Показаны только последние версии файла')).not.toBeInTheDocument();
   });
 });
+
+describe('ConfigsPage — опрос сервера (#1335)', () => {
+  function setVisibility(state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(document, 'visibilityState');
+  });
+
+  it('не опрашивает список файлов по таймеру и молчит на скрытой вкладке', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const calls = installTwoFiles();
+    await renderPage();
+    await screen.findByText('MOTD.cfg');
+    const count = (suffix: string) => calls.filter((c) => c.url.endsWith(suffix)).length;
+    const listBefore = count('/configs');
+    const driftBefore = count('/configs/drift');
+
+    await act(async () => {
+      vi.advanceTimersByTime(8000 * 3);
+    });
+    expect(count('/configs')).toBe(listBefore);
+    expect(count('/configs/drift')).toBe(driftBefore + 3);
+
+    setVisibility('hidden');
+    await act(async () => {
+      vi.advanceTimersByTime(8000 * 3);
+    });
+    expect(count('/configs/drift')).toBe(driftBefore + 3);
+
+    setVisibility('visible');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(count('/configs')).toBe(listBefore + 1);
+  });
+});

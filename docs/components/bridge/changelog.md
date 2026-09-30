@@ -6,6 +6,13 @@
 
 - `file_read`, `file_read_stream` and `file_read_tail` answer a missing file or directory with the new `not_found` error code instead of `runtime_error`; the message is unchanged. Callers no longer have to match the OS "no such file or directory" text to tell an absent file from a failed read — `DELETE /api/v1/servers/:id` relies on it to abort when a config file exists but cannot be backed up.
 
+
+## 2026-09-28 — Лимит одновременных `container_logs_follow` (#42)
+
+### Changed
+
+- Не больше 64 одновременных `container_logs_follow` на процесс bridge; сверх лимита `runtime_error` `too many concurrent log follows (limit 64)` (#1298).
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed

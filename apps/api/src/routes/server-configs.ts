@@ -1,19 +1,25 @@
 import { createHash } from 'node:crypto';
-import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
+import {
+  type AdminsCfgSyncTransaction,
+  type DatabaseClient,
+  withAdminsCfgServerLock,
+} from '@squad/db';
 import { configVersions, players, serverCredentials, servers } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
   type AllowedConfigFile,
   configFileClass,
   PANEL_CONFIGS_ROOT,
+  type PermissionKey,
 } from '@squad/shared-config';
 import { createPatch } from 'diff';
-import { and, desc, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { BLAME_MAX_VERSIONS, type BlameVersion, computeBlame } from '../lib/blame.js';
 import {
+  assertRconCredentialsUnchanged,
   maskConfigSecrets,
   maskConfigSecretsForDiff,
   unmaskRconPassword,
@@ -23,6 +29,7 @@ import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
+import { DELETION_BACKUP_MARKER } from '../lib/server-delete.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 import { depotConfigDir, rewriteRconCfg, rewriteServerCfg } from './server-install.js';
 
@@ -34,13 +41,57 @@ const versionParams = z.object({
   vid: z.string().uuid(),
 });
 const diffQuery = z.object({ from: z.string().uuid(), to: z.string().uuid() });
+// #281: a user message must not pass for a deletion backup, which archive
+// restore selects by its message prefix.
+const userMessage = z
+  .string()
+  .max(500)
+  .refine((m) => !m.trim().toLowerCase().startsWith(DELETION_BACKUP_MARKER), {
+    message: 'reserved_message_prefix',
+  });
 const bodySchema = z.object({
   content: z.string().max(1024 * 1024),
-  message: z.string().max(500).optional(),
+  message: userMessage.optional(),
 });
-const restoreBody = z
-  .object({ message: z.string().max(500).optional() })
-  .default({ message: undefined });
+const restoreBody = z.object({ message: userMessage.optional() }).default({ message: undefined });
+
+/**
+ * Wall-clock budget for one diff or blame computation (#283). Myers diffing is
+ * synchronous and O((N+M)·D), so without a bound two large unrelated versions
+ * block the event loop for minutes.
+ */
+const DIFF_TIMEOUT_MS = 2_000;
+
+/**
+ * Files whose content grants what a separate permission guards (#1236): a
+ * `Bans.cfg` line or a remote ban list bans a player, and an `Admins.cfg` line
+ * or a remote admin list grants Squad admin rights. `config:edit` alone must
+ * not bypass `mod:ban_perm` (squad `ban`) or `user:manage_roles`
+ * (`can_assign_roles`).
+ */
+const FILE_WRITE_PERMISSION: Partial<Record<AllowedConfigFile, PermissionKey>> = {
+  'Bans.cfg': 'mod:ban_perm',
+  'RemoteBanListHosts.cfg': 'mod:ban_perm',
+  'Admins.cfg': 'user:manage_roles',
+  'RemoteAdminListHosts.cfg': 'user:manage_roles',
+};
+
+/**
+ * Checks the per-file permission a write to `name` needs on top of the
+ * route's own (#1236) and sets 403 on `reply` when the caller lacks it.
+ *
+ * @returns The 403 body to send, or null when the write may proceed.
+ */
+function fileWriteForbidden(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  name: AllowedConfigFile,
+): { error: 'forbidden'; required_permission: PermissionKey } | null {
+  const required = FILE_WRITE_PERMISSION[name];
+  if (!required || req.user?.permissions.permissions.has(required)) return null;
+  reply.code(403);
+  return { error: 'forbidden', required_permission: required };
+}
 
 function isAllowed(name: string): name is AllowedConfigFile {
   return (ALLOWED_CONFIG_FILES as readonly string[]).includes(name);
@@ -178,6 +229,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'panel_managed_file' };
       }
+      const forbidden = fileWriteForbidden(req, reply, req.params.name);
+      if (forbidden) return forbidden;
       return writeVersion(
         app,
         req.params.id,
@@ -216,7 +269,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           author_ip: configVersions.authorIp,
           message: configVersions.message,
           created_at: configVersions.createdAt,
-          size: configVersions.content,
+          size: sql<number>`octet_length(${configVersions.content})`,
         })
         .from(configVersions)
         .leftJoin(players, eq(players.id, configVersions.authorPlayerId))
@@ -237,7 +290,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         author_ip: r.author_ip,
         message: r.message,
         created_at: r.created_at,
-        size: Buffer.byteLength(r.size ?? '', 'utf-8'),
+        size: Number(r.size),
       }));
       return { items, total: items.length };
     },
@@ -291,16 +344,13 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'file_not_in_allowlist' };
       }
       const rows = await app.db
-        .select({
-          id: configVersions.id,
-          content: configVersions.content,
-          created_at: configVersions.createdAt,
-        })
+        .select({ id: configVersions.id, content: configVersions.content })
         .from(configVersions)
         .where(
           and(
             eq(configVersions.serverId, req.params.id),
             eq(configVersions.filename, req.params.name),
+            inArray(configVersions.id, [req.query.from, req.query.to]),
           ),
         );
       const fromRow = rows.find((r) => r.id === req.query.from);
@@ -315,7 +365,12 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         maskConfigSecrets(req.params.name, toRow.content),
         fromRow.id.slice(0, 8),
         toRow.id.slice(0, 8),
+        { timeout: DIFF_TIMEOUT_MS },
       );
+      if (patch === undefined) {
+        reply.code(422);
+        return { error: 'diff_too_large' };
+      }
       return { patch, from: fromRow.id, to: toRow.id };
     },
   );
@@ -382,7 +437,11 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         author_label: r.author_label,
         created_at: (r.created_at as Date).toISOString(),
       }));
-      const lines = computeBlame(vs);
+      const lines = computeBlame(vs, { timeoutMs: DIFF_TIMEOUT_MS });
+      if (!lines) {
+        reply.code(422);
+        return { error: 'diff_too_large' };
+      }
       const playerIds = Array.from(
         new Set(lines.map((l) => l.author_player_id).filter((v): v is string => !!v)),
       );
@@ -422,6 +481,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'panel_managed_file' };
       }
+      const forbidden = fileWriteForbidden(req, reply, req.params.name);
+      if (forbidden) return forbidden;
       const target = await app.db.query.configVersions.findFirst({
         where: and(
           eq(configVersions.id, req.params.vid),
@@ -442,7 +503,6 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         message,
         req.user?.playerId ?? null,
         req.ip ?? null,
-        { versionSha256: Buffer.from(target.sha256 as unknown as Buffer) },
       );
     },
   );
@@ -468,20 +528,20 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      // #1335: one tip row per file (DISTINCT ON over the server_file_time
+      // index), not the whole append-only history of the server.
       const tipRows = await app.db
-        .select({
+        .selectDistinctOn([configVersions.filename], {
           id: configVersions.id,
           filename: configVersions.filename,
           sha: configVersions.sha256,
         })
         .from(configVersions)
         .where(eq(configVersions.serverId, req.params.id))
-        .orderBy(desc(configVersions.createdAt));
+        .orderBy(configVersions.filename, desc(configVersions.createdAt));
       const tipByFile = new Map<string, { id: string; sha: string | null }>();
       for (const t of tipRows) {
-        if (!tipByFile.has(t.filename)) {
-          tipByFile.set(t.filename, { id: t.id, sha: hex(t.sha as unknown as Buffer) });
-        }
+        tipByFile.set(t.filename, { id: t.id, sha: hex(t.sha as unknown as Buffer) });
       }
       const items = await Promise.all(
         DRIFT_SWEEP_FILES.map(async (name) => {
@@ -553,10 +613,14 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         tip.content,
         disk,
       );
-      return {
-        name: req.params.name,
-        diff: createPatch(req.params.name, maskedTip, maskedDisk, 'panel', 'disk'),
-      };
+      const diff = createPatch(req.params.name, maskedTip, maskedDisk, 'panel', 'disk', {
+        timeout: DIFF_TIMEOUT_MS,
+      });
+      if (diff === undefined) {
+        reply.code(422);
+        return { error: 'diff_too_large' };
+      }
+      return { name: req.params.name, diff };
     },
   );
 
@@ -576,6 +640,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: guard };
       }
+      const forbidden = fileWriteForbidden(req, reply, req.params.name as AllowedConfigFile);
+      if (forbidden) return forbidden;
       let disk: string;
       try {
         disk = (
@@ -622,6 +688,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: guard };
       }
+      const forbidden = fileWriteForbidden(req, reply, req.params.name as AllowedConfigFile);
+      if (forbidden) return forbidden;
       const tip = await readTipVersion(app, req.params.id, req.params.name);
       if (!tip) {
         reply.code(404);
@@ -644,9 +712,9 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       }
       // force: the tip content matches the DB tip sha by construction, so the
       // dedup branch is taken — the force flag makes it repair the disk
-      // byte-for-byte without appending a duplicate history row. For a masked
-      // Rcon.cfg tip, versionSha256 makes the panel's password (not the
-      // drifted one on disk) fill the mask (#10).
+      // byte-for-byte without appending a duplicate history row. A masked
+      // Rcon.cfg tip is filled with the panel's password, not the drifted one
+      // on disk (#10, #280).
       return writeVersion(
         app,
         req.params.id,
@@ -655,7 +723,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.body?.message ?? `revert to panel version ${tip.id.slice(0, 8)}`,
         req.user?.playerId ?? null,
         req.ip ?? null,
-        { force: true, versionSha256: Buffer.from(tip.sha as unknown as Buffer) },
+        { force: true },
       );
     },
   );
@@ -676,6 +744,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: guard };
       }
+      const forbidden = fileWriteForbidden(req, reply, req.params.name as AllowedConfigFile);
+      if (forbidden) return forbidden;
       let content: string;
       try {
         content = (await app.bridge.fileRead({ path: `${depotConfigDir()}/${req.params.name}` }))
@@ -780,18 +850,57 @@ async function readTipVersion(
   return row ? { id: row.id, content: row.content, sha: row.sha as unknown as Buffer } : null;
 }
 
-import { inArray } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
-
 function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
   if (values.length === 0) throw new Error('empty values');
   return inArray(col, values as Parameters<typeof inArray>[1]);
 }
 
 /**
+ * Thrown by {@link writeVersion} when the server does not exist or is
+ * soft-deleted (#281): the bridge would recreate its config directory and the
+ * history row would land on an archived server.
+ */
+export class ConfigServerNotFoundError extends Error {
+  readonly statusCode = 404;
+
+  constructor() {
+    super('not_found');
+    this.name = 'ConfigServerNotFoundError';
+  }
+}
+
+/**
+ * Runs `work` in a transaction holding a per-(server, file) advisory lock, so
+ * two writes of one file cannot interleave their disk write and history
+ * insert (#282). The lock is released at commit or rollback.
+ */
+async function withConfigFileLock<T>(
+  db: DatabaseClient,
+  serverId: string,
+  name: AllowedConfigFile,
+  work: (tx: AdminsCfgSyncTransaction) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended('config-write:' || ${serverId} || ':' || ${name}, 0))`,
+    );
+    return work(tx);
+  });
+}
+
+/**
  * Writes a new config version: dedups against the current tip by sha256,
- * otherwise persists via `bridge.fileAtomicWrite`, inserts a `config_versions`
- * row, and best-effort pushes the change live via `AdminReloadServerConfig`.
+ * otherwise inserts a `config_versions` row and persists the bytes via
+ * `bridge.fileAtomicWrite`, then best-effort pushes the change live via
+ * `AdminReloadServerConfig`.
+ *
+ * The existence check, the tip read, the insert and the disk write run in one
+ * transaction under a per-(server, file) advisory lock — `Admins.cfg` uses the
+ * server-wide fence it shares with config-sync delivery — so concurrent
+ * writers of a file are serialized and the DB tip always describes the bytes
+ * on disk (#282). The insert precedes the disk write: a failed write rolls the
+ * row back instead of leaving history that never reached the disk. The reload
+ * runs after commit, outside the lock.
  *
  * When the content matches the DB tip no history row is inserted, but the file
  * on disk is still converged to the intended content: if it has drifted
@@ -801,18 +910,20 @@ function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
  * history) alongside `disk_repaired` and, when a write happened, the `reload`
  * outcome.
  *
- * `Rcon.cfg` (#10): a masked `Password=` line is replaced with the real
- * password before the disk write, the stored history row carries the masked
- * rendering, and its `sha256` is the digest of the bytes on disk. Throws
- * `RconPasswordUnavailableError` (422) when no real password is known.
- * `opts.versionSha256` marks a restore of a stored version (restore, drift
- * revert): the mask is then filled with the password that reproduces that
- * version, else the panel's `server_credentials` copy — never an out-of-band
- * password found on disk (see `unmaskRconPassword`).
+ * `Rcon.cfg` (#10, #280): a masked `Password=` line is replaced with the
+ * panel's password before the disk write, the stored history row carries the
+ * masked rendering, and its `sha256` is the digest of the bytes on disk. The
+ * resulting `Password=`/`Port=` must match `server_credentials`.
  *
  * Exported for reuse by the rotation editor (ROT-2, #145), which writes
  * `LayerRotation.cfg` through the same versioned-history pathway as the CFG-1
- * Monaco editor.
+ * Monaco editor, and by the unban flow, which rewrites `Bans.cfg`.
+ *
+ * @throws {ConfigServerNotFoundError} 404 when the server is unknown or deleted.
+ * @throws {RconPasswordUnavailableError} 422 when a masked `Rcon.cfg` has no
+ *   real password to fill in.
+ * @throws {RconCredentialsManagedError} 422 when an `Rcon.cfg` write would move
+ *   `Password=` or `Port=` away from `server_credentials`.
  */
 export async function writeVersion(
   app: FastifyInstance,
@@ -822,24 +933,38 @@ export async function writeVersion(
   message: string | null,
   authorPlayerId: string | null,
   authorIp: string | null,
-  opts?: { force?: boolean; versionSha256?: Buffer },
+  opts?: { force?: boolean },
 ) {
-  if (name === 'Admins.cfg') {
-    return withAdminsCfgServerLock(app.db, serverId, async (tx) =>
-      persistVersion(app, tx, serverId, name, content, message, authorPlayerId, authorIp, opts),
-    );
+  // #10: `content` may carry the masked RCON password (editor round-trip or a
+  // masked history row). The disk gets the real bytes and the sha describes
+  // them (drift and dedup compare disk digests); the history row keeps only
+  // the masked rendering. Resolved before the lock: it reads other rows.
+  let diskContent = content;
+  if (name === 'Rcon.cfg') {
+    diskContent = await unmaskRconPassword(app, serverId, content);
+    await assertRconCredentialsUnchanged(app, serverId, diskContent);
   }
-  return persistVersion(
-    app,
-    app.db,
-    serverId,
-    name,
-    content,
-    message,
-    authorPlayerId,
-    authorIp,
-    opts,
-  );
+  const persist = (tx: AdminsCfgSyncTransaction) =>
+    persistVersion(app, tx, serverId, name, diskContent, message, authorPlayerId, authorIp, opts);
+  const { response, wroteDisk } =
+    name === 'Admins.cfg'
+      ? await withAdminsCfgServerLock(app.db, serverId, persist)
+      : await withConfigFileLock(app.db, serverId, name, persist);
+  if (!wroteDisk) return response;
+
+  // Push the change live, but only for hot-reload files
+  // (Admins/Bans/RemoteAdmin/RemoteBan): those are the files Squad re-reads
+  // from disk when AdminReloadServerConfig fires. `rotation` files apply on
+  // the next match and `requires_restart` files need a container restart, so
+  // firing RCON for them is misleading — the UI surfaces `not_hot_reload` and
+  // (for requires_restart) offers a restart button instead (CFG-1, #63).
+  // Best-effort: skip gracefully if the server isn't running or has no RCON
+  // credentials yet, and surface the outcome so the UI can guide the operator.
+  const reload: ReloadOutcome =
+    configFileClass(name) === 'hot_reload'
+      ? await reloadServerConfig(app, serverId)
+      : { applied: false, reason: 'not_hot_reload' };
+  return { ...response, reload };
 }
 
 async function persistVersion(
@@ -847,20 +972,19 @@ async function persistVersion(
   db: Pick<DatabaseClient, 'select' | 'insert'>,
   serverId: string,
   name: AllowedConfigFile,
-  content: string,
+  diskContent: string,
   message: string | null,
   authorPlayerId: string | null,
   authorIp: string | null,
-  opts?: { force?: boolean; versionSha256?: Buffer },
+  opts?: { force?: boolean },
 ) {
-  // #10: `content` may carry the masked RCON password (editor round-trip or a
-  // masked history row). The disk gets the real bytes and the sha describes
-  // them (drift and dedup compare disk digests); the history row keeps only
-  // the masked rendering.
-  const diskContent =
-    name === 'Rcon.cfg'
-      ? await unmaskRconPassword(app, serverId, content, { versionSha256: opts?.versionSha256 })
-      : content;
+  const live = await db
+    .select({ id: servers.id })
+    .from(servers)
+    .where(and(eq(servers.id, serverId), isNull(servers.deletedAt)))
+    .limit(1);
+  if (live.length === 0) throw new ConfigServerNotFoundError();
+
   // read previous for parent_version_id linkage (best-effort)
   const prev = await db
     .select({ id: configVersions.id, sha: configVersions.sha256 })
@@ -886,28 +1010,22 @@ async function persistVersion(
     } catch {
       diskInSync = false;
     }
-    let reload: ReloadOutcome | undefined;
-    if (opts?.force || !diskInSync) {
+    const wroteDisk = Boolean(opts?.force) || !diskInSync;
+    if (wroteDisk) {
       await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content: diskContent });
-      // Same hot_reload gate as the versioned write path (CFG-1, #63): only
-      // files Squad re-reads from disk get the RCON reload; for the rest the
-      // outcome tells the UI a restart / next match is needed instead.
-      reload =
-        configFileClass(name) === 'hot_reload'
-          ? await reloadServerConfig(app, serverId)
-          : { applied: false, reason: 'not_hot_reload' };
     }
     return {
-      ok: true,
-      unchanged: true,
-      disk_repaired: !diskInSync,
-      previous_sha256: hex(prevRow.sha as unknown as Buffer),
-      sha256: hex(newSha),
-      behavior: configFileClass(name),
-      ...(reload ? { reload } : {}),
+      wroteDisk,
+      response: {
+        ok: true,
+        unchanged: true,
+        disk_repaired: !diskInSync,
+        previous_sha256: hex(prevRow.sha as unknown as Buffer),
+        sha256: hex(newSha),
+        behavior: configFileClass(name),
+      },
     };
   }
-  await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content: diskContent });
   const inserted = await db
     .insert(configVersions)
     .values({
@@ -922,28 +1040,18 @@ async function persistVersion(
       message,
     })
     .returning({ id: configVersions.id, createdAt: configVersions.createdAt });
-
-  // Push the change live, but only for hot-reload files
-  // (Admins/Bans/RemoteAdmin/RemoteBan): those are the files Squad re-reads
-  // from disk when AdminReloadServerConfig fires. `rotation` files apply on
-  // the next match and `requires_restart` files need a container restart, so
-  // firing RCON for them is misleading — the UI surfaces `not_hot_reload` and
-  // (for requires_restart) offers a restart button instead (CFG-1, #63).
-  // Best-effort: skip gracefully if the server isn't running or has no RCON
-  // credentials yet, and surface the outcome so the UI can guide the operator.
-  const reload: ReloadOutcome =
-    configFileClass(name) === 'hot_reload'
-      ? await reloadServerConfig(app, serverId)
-      : { applied: false, reason: 'not_hot_reload' };
+  await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content: diskContent });
   return {
-    ok: true,
-    unchanged: false,
-    version_id: inserted[0]?.id,
-    previous_sha256: prevRow ? hex(prevRow.sha as unknown as Buffer) : null,
-    sha256: hex(newSha),
-    created_at: inserted[0]?.createdAt,
-    behavior: configFileClass(name),
-    reload,
+    wroteDisk: true,
+    response: {
+      ok: true,
+      unchanged: false,
+      version_id: inserted[0]?.id,
+      previous_sha256: prevRow ? hex(prevRow.sha as unknown as Buffer) : null,
+      sha256: hex(newSha),
+      created_at: inserted[0]?.createdAt,
+      behavior: configFileClass(name),
+    },
   };
 }
 

@@ -205,6 +205,8 @@ One-shot sample. The status-reconciler uses this every 4 s.
 
 Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBridgeClient()`), not the shared `app.bridge`.
 
+At most 64 follows run at once per bridge process; past that the call fails with `runtime_error` `too many concurrent log follows (limit 64)` instead of spawning another root `docker logs --follow` (#1298).
+
 ### Depot
 
 #### `depot_update({ validate? })` → streams stdout/stderr, returns `{ exit_code }`

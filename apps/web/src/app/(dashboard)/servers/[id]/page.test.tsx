@@ -299,3 +299,54 @@ describe('ServerDetailPage — живой статус RCON', () => {
     expect(serverFetches(fetchMock)).toBe(before + 1);
   });
 });
+
+describe('ServerDetailPage — живой лог контейнера (#1239)', () => {
+  function stubWithPermissions(permissions: string[]) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/me') {
+          return {
+            ok: true,
+            json: async () => ({ squad_permissions: [], permissions }),
+          } as Response;
+        }
+        if (url === `/api/v1/servers/${SERVER_ID}`) {
+          return { ok: true, json: async () => serverResponseFixture('running') } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    const wsCtor = vi.fn(function FakeWebSocket(this: Record<string, unknown>) {
+      this.readyState = 0;
+      this.close = vi.fn();
+    });
+    vi.stubGlobal('WebSocket', wsCtor);
+    return wsCtor;
+  }
+
+  async function renderPage() {
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+    await act(async () => {});
+  }
+
+  it('не открывает поток лога без права server:download_logs', async () => {
+    const wsCtor = stubWithPermissions([]);
+    await renderPage();
+    expect(wsCtor).not.toHaveBeenCalled();
+  });
+
+  it('открывает поток лога с правом server:download_logs', async () => {
+    const wsCtor = stubWithPermissions(['server:download_logs']);
+    await renderPage();
+    expect(wsCtor).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/servers/${SERVER_ID}/logs/ws`),
+    );
+  });
+});

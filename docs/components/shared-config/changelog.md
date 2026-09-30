@@ -12,6 +12,13 @@
 
 - `trigger:view` больше не помечено `unimplemented`: им защищены `GET /api/v1/automation-rules` и `GET /api/v1/automation-runs`.
 
+
+## 2026-09-28
+
+### Fixed
+
+- `selectNextLayer` сортирует кандидатов по слою перед взвешенным выбором: выбор при одном seed больше не зависит от порядка кандидатов, и предпросмотр совпадает с тиком scheduler (#301).
+
 ## 2026-07-27
 
 ### Added

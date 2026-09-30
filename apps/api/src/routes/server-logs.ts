@@ -2,6 +2,16 @@ import { servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { sendUnlessStalled } from '../lib/ws-send.js';
+import {
+  createStreamLimiter,
+  streamCallerKey,
+  WS_CLOSE_TRY_AGAIN_LATER,
+} from '../lib/ws-stream-limit.js';
+
+/** Live log sockets one caller may hold open at once (#1298). */
+export const LOG_STREAMS_PER_CALLER = 4;
+/** Live log sockets this API process holds open at once (#1298). */
+const LOG_STREAMS_TOTAL = 32;
 
 /**
  * Live Squad-server log stream. Attaches to the server's Docker container
@@ -13,15 +23,28 @@ import { sendUnlessStalled } from '../lib/ws-send.js';
  *   {"error": string}          — terminal
  *   {"done": true}             — follow ended cleanly
  *
+ *   {"error": "too_many_streams"} — terminal, close code 1013 (#1298)
+ *
  * Query params:
  *   ?lines=<N>  — initial backfill (default 200, max 5000)
+ *
+ * The container's stdout is the same content as `SquadGame.log`, including
+ * player IPs (`AddClientConnection … RemoteAddr`), so the stream needs
+ * `server:download_logs` like the log-file routes, not just `server:view`
+ * (#1239). Every socket costs a root `docker logs --follow` process on the
+ * bridge, so sockets are capped per caller and per process (#1298).
  */
 const serverLogsRoutes: FastifyPluginAsync = async (app) => {
+  const logStreams = createStreamLimiter({
+    perCaller: LOG_STREAMS_PER_CALLER,
+    total: LOG_STREAMS_TOTAL,
+  });
+
   app.get(
     '/api/v1/servers/:id/logs/ws',
     {
       websocket: true,
-      config: { permissions: ['server:view'], audit: false },
+      config: { permissions: ['server:download_logs'], audit: false },
     },
     (socket, req) => {
       const params = (req.params ?? {}) as { id?: string };
@@ -29,6 +52,12 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
       if (!id || !/^[0-9a-f-]{36}$/.test(id)) {
         socket.send(JSON.stringify({ error: 'invalid_id' }));
         socket.close();
+        return;
+      }
+      const release = logStreams.acquire(streamCallerKey(req));
+      if (!release) {
+        socket.send(JSON.stringify({ error: 'too_many_streams' }));
+        socket.close(WS_CLOSE_TRY_AGAIN_LATER, 'too_many_streams');
         return;
       }
 
@@ -127,6 +156,7 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
 
       socket.on('close', (code, reason) => {
         closed = true;
+        release();
         clearInterval(heartbeatInterval);
         dedicatedBridge.close().catch(() => undefined);
         app.diag

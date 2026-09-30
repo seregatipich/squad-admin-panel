@@ -12,6 +12,8 @@ export interface InstallProgressBus {
   publish(serverId: string, line: ProgressLine): void;
   subscribe(serverId: string, cb: (line: ProgressLine) => void): () => void;
   snapshot(serverId: string): ProgressLine[];
+  /** Drops the buffered lines of `serverId`, e.g. when a new install starts. */
+  clear(serverId: string): void;
 }
 
 declare module 'fastify' {
@@ -41,6 +43,9 @@ export default fp(async (app) => {
     },
     snapshot(serverId) {
       return (buffers.get(serverId) ?? []).slice();
+    },
+    clear(serverId) {
+      buffers.delete(serverId);
     },
   };
 

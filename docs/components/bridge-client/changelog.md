@@ -1,5 +1,12 @@
 # `bridge-client` — changelog
 
+
+## 2026-09-28
+
+### Added
+
+- `BridgeClient.pause()` / `resume()` — останавливают и возобновляют чтение сокета bridge для backpressure потоковых вызовов (#291).
+
 ## 2026-07-07
 
 ### Added

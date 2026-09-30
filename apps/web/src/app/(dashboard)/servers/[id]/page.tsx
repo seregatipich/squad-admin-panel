@@ -233,9 +233,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const currentStatus = data?.server.status ?? null;
   const isExternal = data?.server.runtime === 'external';
   // У внешнего сервера нет контейнера, а значит и потока docker logs.
-  const logsEnabled =
+  const containerLogsExist =
     !isExternal &&
     (currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'stopping');
+  // В потоке те же строки, что в SquadGame.log, вместе с IP игроков, поэтому
+  // API пускает к нему только с server:download_logs (#1239).
+  const logsEnabled = containerLogsExist && canDownloadLogs;
 
   useEffect(() => {
     if (!logsEnabled) {
@@ -518,11 +521,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
                 : null
             }
             emptyText={
-              !logsEnabled
-                ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
-                : server.status === 'running' || server.status === 'starting'
-                  ? 'Подключение к логу контейнера…'
-                  : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
+              containerLogsExist && !canDownloadLogs
+                ? 'Лог контейнера доступен только с правом на логи сервера.'
+                : !logsEnabled
+                  ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
+                  : server.status === 'running' || server.status === 'starting'
+                    ? 'Подключение к логу контейнера…'
+                    : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
             }
           />
 

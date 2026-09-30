@@ -354,6 +354,28 @@ describeIfDb('server map-vote routes', () => {
     expect(second.json()).toEqual(body);
   });
 
+  it('#301: preview ignores a layer-less match for cooldowns, like the scheduler tick', async () => {
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    // The scheduler's loadRecentMatchesForMapVote drops a match whose layer is
+    // empty, so its map must not put LAYER_A on map cooldown in the preview.
+    await h.db.insert(matches).values({
+      serverId,
+      layer: '',
+      map: 'MV1 Test Map A',
+      gameMode: 'RAAS',
+      startedAt: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/map-vote/preview`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode, resp.body).toBe(200);
+    expect(resp.json()).toMatchObject({ excluded: [], would_pick: LAYER_A });
+  });
+
   it('GET picks returns recorded picks newest first', async () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const matchId = uuidv7();

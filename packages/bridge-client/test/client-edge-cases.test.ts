@@ -573,3 +573,32 @@ describe('socket "close" after a successful connect emits disconnected("socket-c
     await client.close();
   });
 });
+
+describe('pause / resume (stream backpressure)', () => {
+  it('stops delivering stream frames while paused and resumes on resume()', async () => {
+    let conn: Socket | undefined;
+    let requestId = '';
+    server.on('connection', (c) => {
+      conn = c;
+      c.once('data', (chunk) => {
+        requestId = readReq(chunk).id;
+      });
+    });
+    const client = new BridgeClient({ socketPath });
+    await client.connect();
+    const frames: unknown[] = [];
+    const done = client.fileReadStream({ path: '/x' }, (frame) => frames.push(frame.data));
+    await vi.waitFor(() => expect(requestId).not.toBe(''));
+
+    client.pause();
+    sendFrame(conn as Socket, { id: requestId, stream: 'stdout', data: 'while-paused' });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(frames).toEqual([]);
+
+    client.resume();
+    await vi.waitFor(() => expect(frames).toEqual(['while-paused']));
+    sendFrame(conn as Socket, { id: requestId, ok: true, result: { bytes_sent: 12 } });
+    await expect(done).resolves.toEqual({ bytes_sent: 12 });
+    await client.close();
+  });
+});

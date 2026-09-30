@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
-import serverLogsRoutes from '../src/routes/server-logs.js';
+import serverLogsRoutes, { LOG_STREAMS_PER_CALLER } from '../src/routes/server-logs.js';
 
 const testId = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 
@@ -142,3 +142,44 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+describe('/api/v1/servers/:id/logs/ws stream cap (#1298)', () => {
+  it('refuses a caller past its concurrent stream limit with close code 1013', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'Fake',
+      status: 'running',
+    });
+    const url = `ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws?lines=0`;
+    const open: WebSocket[] = [];
+    for (let i = 0; i < LOG_STREAMS_PER_CALLER; i++) {
+      const ws = new WebSocket(url);
+      await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+      open.push(ws);
+    }
+
+    const extra = new WebSocket(url);
+    const frames: Array<Record<string, unknown>> = [];
+    extra.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    const code = await new Promise<number>((resolve) => extra.on('close', (c) => resolve(c)));
+    expect(code).toBe(1013);
+    expect(frames).toContainEqual({ error: 'too_many_streams' });
+
+    // Closing one stream frees its slot.
+    const first = open.shift() as WebSocket;
+    first.close();
+    await new Promise<void>((resolve) => first.on('close', () => resolve()));
+    await new Promise((r) => setTimeout(r, 50));
+    const again = new WebSocket(url);
+    const againFrames: Array<Record<string, unknown>> = [];
+    again.on('message', (raw) => againFrames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => again.on('open', () => resolve()));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(again.readyState).toBe(WebSocket.OPEN);
+    expect(againFrames).not.toContainEqual({ error: 'too_many_streams' });
+    open.push(again);
+
+    for (const ws of open) ws.close();
+  });
+});

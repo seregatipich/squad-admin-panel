@@ -94,6 +94,31 @@ describe('server install WebSocket progress stream', () => {
     expect(last.final).toBe('done');
   });
 
+  it('#292: closes with {done:true} when the install already ended before the socket connected', async () => {
+    const finishedId = '019dbac8-ceb0-77ab-859b-bfa9a282ee2d';
+    app.installProgress.publish(finishedId, {
+      ts: '2026-04-23T00:00:00.000Z',
+      step: 'error',
+      message: 'server_settings_missing',
+      stream: 'stderr',
+    });
+
+    const received: unknown[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${finishedId}/install/ws`);
+    ws.on('message', (raw) => {
+      received.push(JSON.parse(raw.toString()));
+    });
+    const closed = await Promise.race([
+      new Promise<boolean>((resolve) => ws.on('close', () => resolve(true))),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+    ]);
+    ws.terminate();
+
+    expect(closed).toBe(true);
+    expect(received[0]).toMatchObject({ step: 'error', message: 'server_settings_missing' });
+    expect(received.at(-1)).toEqual({ done: true, final: 'error' });
+  });
+
   it('rejects malformed id with invalid_id and closes', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/not-a-uuid/install/ws`);
     const frames: unknown[] = [];

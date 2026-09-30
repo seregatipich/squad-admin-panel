@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { serverCredentials } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -87,19 +86,20 @@ async function diskRconPassword(app: FastifyInstance, serverId: string): Promise
   }
 }
 
-/** The panel's authoritative RCON password from `server_credentials`, or null. */
-async function credentialsRconPassword(
+/** The panel's authoritative RCON password and port from `server_credentials`, or null. */
+async function panelRconCredentials(
   app: FastifyInstance,
   serverId: string,
-): Promise<string | null> {
+): Promise<{ password: string; port: number } | null> {
   const creds = await app.db.query.serverCredentials.findFirst({
     where: eq(serverCredentials.serverId, serverId),
   });
   if (!creds?.rconPasswordEncrypted) return null;
-  return decryptString(
+  const password = decryptString(
     app.encryptionKey,
     deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
   );
+  return { password, port: creds.rconPort };
 }
 
 /**
@@ -173,58 +173,78 @@ export class RconPasswordUnavailableError extends Error {
 }
 
 /**
+ * Thrown when an `Rcon.cfg` write would move `Password=` or `Port=` away from
+ * `server_credentials` (#280). The panel's RCON clients (worker-rcon, config
+ * reload, graceful-stop broadcast) connect with the credentials row, so a file
+ * that disagrees with it locks the panel out of the server after a restart.
+ */
+export class RconCredentialsManagedError extends Error {
+  readonly statusCode = 422;
+
+  constructor() {
+    super('rcon_credentials_managed');
+    this.name = 'RconCredentialsManagedError';
+  }
+}
+
+/**
  * Turns `Rcon.cfg` content that may carry a masked password back into the
- * bytes to write on disk: every `Password=********` line gets a real password.
- * A password typed by the operator is kept as typed; content without a masked
+ * bytes to write on disk: every `Password=********` line gets the panel's
+ * password from `server_credentials`, or — for a server without a credentials
+ * row — the password in the current file on disk. Content without a masked
  * line is returned unchanged.
- *
- * Which password fills the mask depends on the write:
- * - Editor save (no `versionSha256`): the password in the current file on disk,
- *   so a round-trip changes nothing but the edited lines, falling back to the
- *   encrypted `server_credentials` copy when the file is missing or unreadable.
- * - Restore of a stored version (`versionSha256` set — restore and drift
- *   revert): the file on disk may carry an out-of-band password, so it must not
- *   win by default. The candidate (`server_credentials` first, then disk) whose
- *   filled content hashes to `versionSha256` reproduces the version exactly;
- *   when none does, the panel's `server_credentials` copy is used, and the disk
- *   only when no credentials row exists.
  *
  * @param app - Fastify instance (bridge, db, encryptionKey).
  * @param serverId - Server whose `Rcon.cfg` is being written.
  * @param content - Content from the editor or from a history row.
- * @param opts.versionSha256 - `sha256` of the history row being restored.
  * @returns The content to write to disk.
  * @throws {RconPasswordUnavailableError} When a masked line is present but
- *   neither the file on disk nor `server_credentials` holds a password —
+ *   neither `server_credentials` nor the file on disk holds a password —
  *   writing the mask itself would set a publicly known RCON password.
  */
 export async function unmaskRconPassword(
   app: FastifyInstance,
   serverId: string,
   content: string,
-  opts?: { versionSha256?: Buffer },
 ): Promise<string> {
   if (!hasMaskedRconPassword(content)) return content;
-  const fill = (password: string): string =>
-    content.replace(secretLineRe('Password'), (line: string, prefix: string, value: string) =>
-      value.trim() === CONFIG_SECRET_MASK ? `${prefix}${password}` : line,
-    );
+  const password =
+    (await panelRconCredentials(app, serverId))?.password ??
+    (await diskRconPassword(app, serverId));
+  if (password === null) throw new RconPasswordUnavailableError();
+  return content.replace(secretLineRe('Password'), (line: string, prefix: string, value: string) =>
+    value.trim() === CONFIG_SECRET_MASK ? `${prefix}${password}` : line,
+  );
+}
 
-  if (!opts?.versionSha256) {
-    const password =
-      (await diskRconPassword(app, serverId)) ?? (await credentialsRconPassword(app, serverId));
-    if (password === null) throw new RconPasswordUnavailableError();
-    return fill(password);
-  }
-
-  const candidates = [
-    await credentialsRconPassword(app, serverId),
-    await diskRconPassword(app, serverId),
-  ].filter((password): password is string => password !== null);
-  if (candidates.length === 0) throw new RconPasswordUnavailableError();
-  const { versionSha256 } = opts;
-  const exact = candidates
-    .map(fill)
-    .find((filled) => createHash('sha256').update(filled).digest().equals(versionSha256));
-  return exact ?? fill(candidates[0] as string);
+/**
+ * Refuses `Rcon.cfg` bytes whose `Password=` or `Port=` differ from
+ * `server_credentials` (#280): those two values are panel-managed, and a file
+ * that disagrees with the credentials row splits the RCON secret into two
+ * sources of truth. Every other line stays editable. A server without a
+ * credentials row has nothing to diverge from and is not checked.
+ *
+ * @param app - Fastify instance (db, encryptionKey).
+ * @param serverId - Server whose `Rcon.cfg` is being written.
+ * @param diskContent - The exact bytes about to be written (already unmasked).
+ * @throws {RconCredentialsManagedError} When a `Password=` or `Port=` line is
+ *   missing or differs from `server_credentials`.
+ */
+export async function assertRconCredentialsUnchanged(
+  app: FastifyInstance,
+  serverId: string,
+  diskContent: string,
+): Promise<void> {
+  const creds = await panelRconCredentials(app, serverId);
+  if (!creds) return;
+  const values = (key: string): string[] =>
+    Array.from(diskContent.matchAll(secretLineRe(key)), (match) => (match[2] ?? '').trim());
+  const passwords = values('Password');
+  const ports = values('Port');
+  const matches =
+    passwords.length > 0 &&
+    passwords.every((password) => password === creds.password) &&
+    ports.length > 0 &&
+    ports.every((port) => port === String(creds.port));
+  if (!matches) throw new RconCredentialsManagedError();
 }

@@ -2712,7 +2712,7 @@ sequenceDiagram
 
 The outbox insert rides inside the mutation transaction (`apps/api/src/lib/admins-cfg-sync.ts`); there is no API-side Redis publish. The config-sync worker's single-flight `relayAdminsCfgSyncOutbox` claims only committed rows with `FOR UPDATE SKIP LOCKED`, uses a bounded relay connection, and retries failures at-least-once with the same `_outbox_id`. The worker splices only the `//SQUAD-PANEL BEGIN…END` managed segment and writes solely on hash mismatch (`apps/workers/config-sync/src/syncer.ts`), then forces `AdminReloadServerConfig` because Squad does not passively re-read the file. Passive `drift_check` sweeps deliberately **detect but never auto-correct** — drift is surfaced as a UI banner with a Force-sync button rather than silently overwriting manual edits.
 
-`Bans.cfg` reaches a server only through the generic config editor (`PUT /api/v1/servers/:id/configs/Bans.cfg`, perm `config:edit`): it is in `ALLOWED_CONFIG_FILES` and `HOT_RELOAD_FILES`, so it is written by `file_atomic_write` and followed by a reload. **No code parses, generates, or reconciles its content.**
+`Bans.cfg` reaches a server only through the generic config editor (`PUT /api/v1/servers/:id/configs/Bans.cfg`, perm `config:edit` plus `mod:ban_perm` since #42): it is in `ALLOWED_CONFIG_FILES` and `HOT_RELOAD_FILES`, so it is written by `file_atomic_write` and followed by a reload. **No code parses, generates, or reconciles its content.**
 
 #### Expiry, unban, publication
 
