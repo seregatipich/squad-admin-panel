@@ -131,3 +131,110 @@ export const metricsPoint = z.object({
   tickrate: z.number().optional(),
 });
 export type MetricsPoint = z.infer<typeof metricsPoint>;
+
+/**
+ * Response schemas for the server settings page in `apps/web`. They describe
+ * only the fields the page reads and strip the rest, so the API can add fields
+ * without breaking the UI; a missing or mistyped field makes `safeParse` fail.
+ */
+
+/** The editable subset of `server_settings` returned by `GET /servers/:id` and `PUT /servers/:id/settings`. */
+export const serverSettingsView = z.object({
+  server_id: z.string(),
+  game_port: z.number(),
+  query_port: z.number(),
+  beacon_port: z.number(),
+  rcon_port: z.number(),
+  max_players: z.number(),
+  tickrate: z.number(),
+  multihome: z.string().nullable(),
+  seed_live_at: z.number(),
+  seed_hysteresis: z.number(),
+  chat_commands_enabled: z.boolean(),
+  rules_text: z.string().nullable(),
+  // Defaults to false so a response from a release that predates the column still parses.
+  archive_logs_to_backup: z.boolean().default(false),
+});
+export type ServerSettingsView = z.infer<typeof serverSettingsView>;
+
+/** License state in `GET /servers/:id`; the key itself never leaves the API. */
+export const serverLicenseState = z.object({
+  configured: z.boolean(),
+  license_id: z.string().nullable(),
+  updated_at: z.string().nullable(),
+  restart_required: z.boolean(),
+});
+export type ServerLicenseState = z.infer<typeof serverLicenseState>;
+
+/** `GET /servers/:id`. `settings` is null when the server has no settings row. */
+export const serverDetailResponse = z.object({
+  server: z.object({
+    status: z.string(),
+    display_name: z.string(),
+    tags: z.array(z.string()).nullish(),
+    runtime: z.string().nullish(),
+    license: serverLicenseState.nullish(),
+  }),
+  settings: serverSettingsView.nullable(),
+  connection: z
+    .object({ rcon_host: z.string().nullable(), rcon_port: z.number().nullable() })
+    .nullish(),
+  container: z
+    .object({ running: z.boolean().nullish(), started_at: z.string().nullish() })
+    .nullish(),
+});
+export type ServerDetailResponse = z.infer<typeof serverDetailResponse>;
+
+/** `GET`/`PUT /servers/:id/log-source` of an external server. */
+export const logSourceView = z.object({
+  configured: z.boolean(),
+  ssh_host: z.string().optional(),
+  ssh_port: z.number().optional(),
+  ssh_user: z.string().optional(),
+  log_path: z.string().optional(),
+  enabled: z.boolean().optional(),
+  public_key: z.string().optional(),
+  host_key_fingerprint: z.string().nullish(),
+  key_version: z.number().optional(),
+  status: z
+    .object({
+      state: z.enum(['connecting', 'connected', 'error']),
+      ts: z.string(),
+      lines: z.number().optional(),
+      last_line_at: z.string().nullish(),
+      error: z.string().nullish(),
+    })
+    .nullable(),
+});
+export type LogSourceView = z.infer<typeof logSourceView>;
+
+/** `PUT /servers/:id/external-connection`. */
+export const externalConnectionResponse = z.object({
+  rcon_host: z.string().nullable(),
+  rcon_port: z.number().nullable(),
+  query_port: z.number().nullable(),
+  game_port: z.number().nullable(),
+});
+export type ExternalConnectionResponse = z.infer<typeof externalConnectionResponse>;
+
+/** `PUT /servers/:id/seeding-settings`. */
+export const seedingSettingsResponse = z.object({
+  seed_live_at: z.number(),
+  seed_hysteresis: z.number(),
+});
+export type SeedingSettingsResponse = z.infer<typeof seedingSettingsResponse>;
+
+/** `GET /me`, the part the settings page needs to gate the seeding section. */
+export const meSquadPermissionsResponse = z.object({
+  squad_permissions: z.array(z.string()).optional(),
+});
+
+/** `GET /servers/:id/rnsquadjs`. */
+export const sidecarIntegrationResponse = z.object({
+  server_id: z.string(),
+  mode: z.enum(['production', 'shadow', 'legacy']),
+  cutover: z.boolean(),
+  status: z
+    .object({ state: z.enum(['connected', 'disconnected']), last_change: z.string() })
+    .nullable(),
+});
