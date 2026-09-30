@@ -155,6 +155,11 @@ export function ServerControls({ serverId }: { serverId: string }) {
             `Обновление меняет общий depot всех серверов хоста. Сначала остановите запущенные серверы: ${body.server_ids?.length ?? 0}.`,
           );
         }
+        if (body?.error === 'depot_update_in_progress') {
+          setUpdateRunning(true);
+          setUpdateModalOpen(true);
+          return;
+        }
         throw new Error(`HTTP ${r.status}`);
       }
       setUpdateRunning(true);

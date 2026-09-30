@@ -235,6 +235,27 @@ describe('ServerControls', () => {
     expect(latestProgressModalProps?.open ?? false).toBe(false);
   });
 
+  it('opens the progress modal on depot_update_in_progress instead of showing an error', async () => {
+    stubFetch('stopped', undefined, (url, init) =>
+      url === `/api/v1/servers/${SERVER_ID}/update` && init?.method === 'POST'
+        ? ({
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'depot_update_in_progress' }),
+          } as Response)
+        : undefined,
+    );
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Обновить игру' }));
+    });
+
+    await waitFor(() => expect(latestProgressModalProps?.open).toBe(true));
+    expect(screen.queryByText('HTTP 409')).not.toBeInTheDocument();
+    expect(await screen.findByText('Обновление... (открыть лог)')).toBeInTheDocument();
+  });
+
   it('deletes the server only after its exact name is typed back', async () => {
     const fetchMock = stubFetch('stopped', undefined, (url, init) =>
       url === `/api/v1/servers/${SERVER_ID}` && init?.method === 'DELETE'
