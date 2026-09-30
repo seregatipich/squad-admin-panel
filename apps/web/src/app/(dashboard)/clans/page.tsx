@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge,
-  type BadgeTone,
   Button,
   Card,
   Checkbox,
@@ -31,14 +30,9 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
-import type {
-  ClanSortField,
-  MeResponse,
-  BadgeTone as PriorityTone,
-  ServerOption,
-  SortOrder,
-} from './helpers';
+import type { ClanSortField, MeResponse, ServerOption, SortOrder } from './helpers';
 import { paginate, priorityBadge, sortClans } from './helpers';
+import { PRIORITY_TONE } from './priority-tone';
 
 interface Clan {
   id: string;
@@ -60,17 +54,6 @@ interface ClansResponse {
 }
 
 const PAGE_SIZE = 25;
-
-/**
- * Домашний словарь сроков приоритета (`helpers.ts`) говорит о клане, а не о
- * панели, поэтому его тон переводится в тон дизайн-системы здесь, а не в
- * помощнике: помощник ничего не знает про оформление и не должен знать.
- */
-const PRIORITY_TONE: Record<PriorityTone, BadgeTone> = {
-  neutral: 'neutral',
-  danger: 'crit',
-  warning: 'warn',
-};
 
 /** Подписи направления сортировки — часть доступного имени заголовка колонки. */
 const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по убыванию' } as const;
