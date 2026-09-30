@@ -47,7 +47,12 @@ describe('tailContainerLogs', () => {
     const bridge = makeBridge(async (cb) => {
       cb({ stream: 'stdout', data: 'crlf line\r\nplain\n' });
     });
-    tailContainerLogs({ bridge, name: 'squad-srv-crlf', log: makeLogger(), onLine });
+    tailContainerLogs({
+      openBridge: () => bridge as never,
+      name: 'squad-srv-crlf',
+      log: makeLogger(),
+      onLine,
+    });
 
     await new Promise((r) => setTimeout(r, 20));
     expect(onLine.mock.calls.map((call) => call[0])).toEqual(['crlf line', 'plain']);
