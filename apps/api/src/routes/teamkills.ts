@@ -131,6 +131,13 @@ function serverFilter(serverId: string | undefined) {
   return serverId ? sql`AND ce.server_id = ${serverId}::uuid` : sql``;
 }
 
+/**
+ * Top teamkillers with victim and moderation counters. Only the offenders
+ * ranking aggregates combat_events; ranking and LIMIT run first, then the
+ * per-player counters are fetched by LATERAL lookups on the indexed
+ * (victim_player_id) / (player_id, created_at) paths instead of aggregating
+ * every player and the whole moderation_actions history on each request.
+ */
 async function loadSummaryRows(app: Parameters<FastifyPluginAsync>[0], query: SummaryQuery) {
   const rows = await app.db.execute<TeamkillStatsRow>(sql`
     WITH offenders AS (
@@ -146,53 +153,59 @@ async function loadSummaryRows(app: Parameters<FastifyPluginAsync>[0], query: Su
         ${serverFilter(query.serverId)}
       GROUP BY ce.attacker_player_id
     ),
-    victims AS (
+    top_offenders AS (
       SELECT
-        ce.victim_player_id AS player_id,
-        COUNT(*)::int AS victim_of_tk_total
-      FROM combat_events ce
-      WHERE ce.is_teamkill
-        AND ce.victim_player_id IS NOT NULL
-        ${serverFilter(query.serverId)}
-      GROUP BY ce.victim_player_id
-    ),
-    moderation AS (
-      SELECT
-        ma.player_id,
-        COUNT(*)::int AS moderation_total,
-        MAX(ma.created_at) AS last_moderation_at
-      FROM moderation_actions ma
-      WHERE ma.reverted_at IS NULL
-      GROUP BY ma.player_id
-    ),
-    latest_moderation AS (
-      SELECT DISTINCT ON (ma.player_id)
-        ma.player_id,
-        ma.action_type AS last_moderation_type
-      FROM moderation_actions ma
-      WHERE ma.reverted_at IS NULL
-      ORDER BY ma.player_id, ma.created_at DESC, ma.id DESC
+        o.player_id,
+        p.canonical_name AS current_name,
+        p.steam_id64,
+        p.eos_id,
+        o.tk_total,
+        o.tk_7d,
+        o.tk_30d,
+        o.last_tk_at
+      FROM offenders o
+      INNER JOIN players p ON p.id = o.player_id
+      ORDER BY ${sortSql(query.sort)} ${orderSql(query.order)}, o.last_tk_at DESC, o.player_id ASC
+      LIMIT ${query.limit}
     )
     SELECT
       o.player_id,
-      p.canonical_name AS current_name,
-      p.steam_id64,
-      p.eos_id,
+      o.current_name,
+      o.steam_id64,
+      o.eos_id,
       o.tk_total,
       o.tk_7d,
       o.tk_30d,
-      COALESCE(v.victim_of_tk_total, 0)::int AS victim_of_tk_total,
+      COALESCE(victim.victim_of_tk_total, 0)::int AS victim_of_tk_total,
       o.last_tk_at,
-      COALESCE(m.moderation_total, 0)::int AS moderation_total,
-      m.last_moderation_at,
-      lm.last_moderation_type
-    FROM offenders o
-    INNER JOIN players p ON p.id = o.player_id
-    LEFT JOIN victims v ON v.player_id = o.player_id
-    LEFT JOIN moderation m ON m.player_id = o.player_id
-    LEFT JOIN latest_moderation lm ON lm.player_id = o.player_id
+      COALESCE(moderation.moderation_total, 0)::int AS moderation_total,
+      moderation.last_moderation_at,
+      latest_moderation.last_moderation_type
+    FROM top_offenders o
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS victim_of_tk_total
+      FROM combat_events ce
+      WHERE ce.is_teamkill
+        AND ce.victim_player_id = o.player_id
+        ${serverFilter(query.serverId)}
+    ) victim ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int AS moderation_total,
+        MAX(ma.created_at) AS last_moderation_at
+      FROM moderation_actions ma
+      WHERE ma.player_id = o.player_id
+        AND ma.reverted_at IS NULL
+    ) moderation ON true
+    LEFT JOIN LATERAL (
+      SELECT ma.action_type AS last_moderation_type
+      FROM moderation_actions ma
+      WHERE ma.player_id = o.player_id
+        AND ma.reverted_at IS NULL
+      ORDER BY ma.created_at DESC, ma.id DESC
+      LIMIT 1
+    ) latest_moderation ON true
     ORDER BY ${sortSql(query.sort)} ${orderSql(query.order)}, o.last_tk_at DESC, o.player_id ASC
-    LIMIT ${query.limit}
   `);
   return rows.map(normalizeStats);
 }
