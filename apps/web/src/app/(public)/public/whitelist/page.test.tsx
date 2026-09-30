@@ -116,14 +116,7 @@ describe('PublicWhitelistPage', () => {
     async () => {
       vi.stubGlobal('fetch', mockFetch({ enabled: true, postStatus: 403 }));
       render(<PublicWhitelistPage />);
-
-      fireEvent.change(await screen.findByPlaceholderText('76561198000000000'), {
-        target: { value: '76561198000000001' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/расскажите о себе/i), {
-        target: { value: 'чужой id' },
-      });
-      fireEvent.click(screen.getByRole('button', { name: /отправить заявку/i }));
+      await fillAndSubmit('чужой id');
 
       await waitFor(() =>
         expect(screen.getByText(/не совпадает с аккаунтом Steam/i)).toBeInTheDocument(),
@@ -148,14 +141,7 @@ describe('PublicWhitelistPage', () => {
     async () => {
       vi.stubGlobal('fetch', mockFetch({ enabled: true, postStatus: 429 }));
       render(<PublicWhitelistPage />);
-
-      fireEvent.change(await screen.findByPlaceholderText('76561198000000000'), {
-        target: { value: '76561198000000001' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/расскажите о себе/i), {
-        target: { value: 'частые заявки' },
-      });
-      fireEvent.click(screen.getByRole('button', { name: /отправить заявку/i }));
+      await fillAndSubmit('частые заявки');
 
       await waitFor(() => expect(screen.getByText(/слишком много заявок/i)).toBeInTheDocument());
     },
