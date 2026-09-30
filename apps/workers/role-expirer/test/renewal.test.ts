@@ -82,19 +82,16 @@ describe('runSubscriptionRenewalTick', () => {
     expect(deps.expireSubscription).not.toHaveBeenCalled();
   });
 
-  it('audits a successful renewal and enqueues one Admins.cfg sync for the run', async () => {
+  it('hands the tier to the charge, which audits the renewal in its own transaction (#991, #992)', async () => {
     const deps = makeDeps({ dueSubscriptions: [due(), due({ id: 'sub-2' })] });
 
     const result = await runSubscriptionRenewalTick(deps);
 
     expect(result).toMatchObject({ renewed: 2, enqueued: 2 });
-    expect(deps.writeAuditEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionType: 'player.subscription.renew',
-        targetType: 'player',
-        targetId: PLAYER_ID,
-      }),
+    expect(deps.chargeRenewal).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: PLAYER_ID, tierId: expect.any(String) }),
     );
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
   });
 
   it('expires the subscription and notifies the player when the balance is short', async () => {
@@ -176,8 +173,10 @@ describe('runSubscriptionRenewalTick', () => {
   });
 
   it('does not abort the batch when writeAuditEntry throws for one subscription (#991)', async () => {
+    const charge = vi.fn().mockResolvedValue({ status: 'insufficient_balance', balance: 0 });
     const deps = makeDeps({
       dueSubscriptions: [due(), due({ id: 'sub-2', playerId: 'player-2' })],
+      charge,
     });
     deps.writeAuditEntry = vi
       .fn()
@@ -186,10 +185,8 @@ describe('runSubscriptionRenewalTick', () => {
 
     const result = await runSubscriptionRenewalTick(deps);
 
-    // The first subscription's charge succeeded (money moved) even though
-    // its audit write then threw — the old code would have let that
-    // exception escape and abort the second subscription entirely.
-    expect(result).toMatchObject({ renewed: 2 });
+    // The first subscription's expiry audit threw; the second is still processed.
+    expect(result).toMatchObject({ expired: 2 });
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'role_expirer.renewal_failed' }),
     );

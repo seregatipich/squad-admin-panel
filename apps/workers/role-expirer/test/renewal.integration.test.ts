@@ -293,6 +293,7 @@ describeIfDb('chargeRenewal concurrency (#990)', () => {
       const input = {
         subscriptionId: raceSubId,
         playerId: racePlayerId,
+        tierId,
         roleId: vipRoleId,
         price: TIER_PRICE,
         days: TIER_DAYS,
@@ -333,4 +334,124 @@ describeIfDb('chargeRenewal concurrency (#990)', () => {
       await db.delete(players).where(eq(players.id, racePlayerId));
     }
   }, 30_000);
+});
+
+describeIfDb('renewal audit shares the charge transaction (#991, #992)', () => {
+  async function seedRenewable(steam: bigint) {
+    if (!db) throw new Error('DATABASE_URL is required for this test');
+    const playerId = randomUUID();
+    const subscriptionId = randomUUID();
+    const dueAt = new Date(Date.now() - 60_000);
+    await db.delete(players).where(eq(players.steamId64, steam));
+    await db.insert(players).values({
+      id: playerId,
+      steamId64: steam,
+      canonicalName: 'RenewalAudit',
+      canonicalNameNormalized: 'renewalaudit',
+      bonusBalance: 1000,
+      roleId: vipRoleId,
+      roleExpiresAt: new Date(Date.now() + DAY_MS),
+    });
+    await db.insert(vipSubscriptions).values({
+      id: subscriptionId,
+      playerId,
+      tierId,
+      status: 'active',
+      renewsEveryDays: TIER_DAYS,
+      priceBonuses: TIER_PRICE,
+      nextRenewalAt: dueAt,
+    });
+    const input = {
+      subscriptionId,
+      playerId,
+      tierId,
+      roleId: vipRoleId,
+      price: TIER_PRICE,
+      days: TIER_DAYS,
+      dueAt,
+      nextRenewalAt: new Date(dueAt.getTime() + TIER_DAYS * DAY_MS),
+      now: new Date(),
+      syncEvent: {
+        reason: 'player.role.assign' as const,
+        actor_player_id: null,
+        enqueued_at: new Date().toISOString(),
+        request_id: `audit-${subscriptionId}`,
+      },
+    };
+    return { playerId, subscriptionId, input };
+  }
+
+  async function cleanup(steam: bigint, subscriptionId: string, playerId: string) {
+    if (!db) return;
+    await db.delete(vipSubscriptions).where(eq(vipSubscriptions.id, subscriptionId));
+    await db.delete(bonusTransactions).where(eq(bonusTransactions.playerId, playerId));
+    await db.delete(players).where(eq(players.steamId64, steam));
+  }
+
+  it('writes the renew audit row as part of the charge', async () => {
+    if (!db) throw new Error('DATABASE_URL is required for this test');
+    const steam = 76561197999985803n;
+    const { playerId, subscriptionId, input } = await seedRenewable(steam);
+    try {
+      const result = await chargeRenewal(db, input);
+      expect(result.status).toBe('ok');
+
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.targetId, playerId),
+            eq(auditLog.actionType, 'player.subscription.renew'),
+          ),
+        );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.context).toMatchObject({ subscription_id: subscriptionId, tier_id: tierId });
+      expect(rows[0]?.afterSnapshot).toMatchObject({ bonus_balance: 1000 - TIER_PRICE });
+    } finally {
+      await cleanup(steam, subscriptionId, playerId);
+    }
+  });
+
+  it('rolls the charge back when the audit row cannot be written', async () => {
+    if (!db) throw new Error('DATABASE_URL is required for this test');
+    const steam = 76561197999985804n;
+    const { playerId, subscriptionId, input } = await seedRenewable(steam);
+    const realDb = db;
+    const failingAuditDb = new Proxy(realDb, {
+      get(target, property, receiver) {
+        if (property !== 'transaction') return Reflect.get(target, property, receiver);
+        return (callback: (tx: unknown) => Promise<unknown>) =>
+          target.transaction((tx) =>
+            callback(
+              new Proxy(tx, {
+                get(txTarget, txProperty) {
+                  if (txProperty !== 'insert') return Reflect.get(txTarget, txProperty, txTarget);
+                  return (table: unknown) => {
+                    if (table === auditLog) throw new Error('audit_log write failed');
+                    return txTarget.insert(table as typeof auditLog);
+                  };
+                },
+              }),
+            ),
+          );
+      },
+    });
+    try {
+      await expect(chargeRenewal(failingAuditDb, input)).rejects.toThrow('audit_log write failed');
+
+      const [player] = await realDb
+        .select({ balance: players.bonusBalance })
+        .from(players)
+        .where(eq(players.id, playerId));
+      expect(player?.balance).toBe(1000);
+      const [subscription] = await realDb
+        .select({ nextRenewalAt: vipSubscriptions.nextRenewalAt })
+        .from(vipSubscriptions)
+        .where(eq(vipSubscriptions.id, subscriptionId));
+      expect(subscription?.nextRenewalAt.getTime()).toBe(input.dueAt.getTime());
+    } finally {
+      await cleanup(steam, subscriptionId, playerId);
+    }
+  });
 });

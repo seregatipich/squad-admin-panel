@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-30
+
+- [#64](https://github.com/seregatipich/squad-admin-panel/issues/64): the `player.subscription.renew` audit row is now appended inside the charge transaction (`chargeRenewal`, which takes the new `tierId` input) instead of after it, so a crash between commit and audit can no longer leave a charged period without its audit entry, and an audit failure rolls the charge back. Tests: `test/renewal.integration.test.ts` (`renewal audit shares the charge transaction`).
+
 ## 2026-09-27
 
 - Subscription renewal re-checks the tier's current role inside the charge transaction: when the tier now maps to a panel-access or system role, nothing is charged or granted and the subscription ends with reason `role_grants_panel_access` (#31).

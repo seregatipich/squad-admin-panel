@@ -235,6 +235,8 @@ services:
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
       - ${GEOIP_DB_DIR:-/var/lib/squad-panel/geoip}:/geoip:ro
+      # GeoLite2 database downloaded once GeoIP is enabled in the panel.
+      - geoip_data:/var/lib/panel-geoip
     depends_on:
       postgres:
         condition: service_healthy
@@ -716,6 +718,7 @@ services:
     logging: *default-logging
 
 volumes:
+  geoip_data:
   media_data:
   pgdata:
   redisdata:

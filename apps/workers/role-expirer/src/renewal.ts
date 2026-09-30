@@ -50,6 +50,8 @@ export type RenewalFailureReason =
 export interface ChargeRenewalInput {
   subscriptionId: string;
   playerId: string;
+  /** The tier the subscription belongs to; recorded in the renewal's audit row. */
+  tierId: string;
   roleId: string;
   price: number;
   days: number;
@@ -98,7 +100,7 @@ export interface SubscriptionExpiredAlertPayload {
 }
 
 export interface SubscriptionAuditEntry extends SystemAuditEntry {
-  actionType: 'player.subscription.renew' | 'player.subscription.expire';
+  actionType: 'player.subscription.expire';
 }
 
 export interface SubscriptionRenewalDeps {
@@ -107,6 +109,7 @@ export interface SubscriptionRenewalDeps {
   chargeRenewal(input: ChargeRenewalInput): Promise<ChargeRenewalResult>;
   /** Resolves `false` when the subscription was no longer active, so nothing changed. */
   expireSubscription(subscriptionId: string, now: Date): Promise<boolean>;
+  /** Audits an expiry; a renewal's audit row is written inside `chargeRenewal`'s transaction. */
   writeAuditEntry(entry: SubscriptionAuditEntry): Promise<void>;
   notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   diag: Pick<Diag, 'emit'>;
@@ -130,7 +133,9 @@ export interface SubscriptionRenewalResult {
  * run out first, which the existing `runRoleExpiryTick` handles on schedule.
  *
  * One failing subscription never aborts the batch. Every successful renewal
- * writes its Admins.cfg outbox rows in the same transaction as the charge.
+ * writes its Admins.cfg outbox rows and its `player.subscription.renew` audit
+ * row in the same transaction as the charge, so a crash can never leave a
+ * charged period without its audit entry.
  */
 export async function runSubscriptionRenewalTick(
   deps: SubscriptionRenewalDeps,
@@ -157,6 +162,7 @@ export async function runSubscriptionRenewalTick(
         const result = await deps.chargeRenewal({
           subscriptionId: subscription.id,
           playerId: subscription.playerId,
+          tierId: subscription.tierId,
           roleId: subscription.roleId,
           price: subscription.priceBonuses,
           days: subscription.renewsEveryDays,
@@ -174,31 +180,6 @@ export async function runSubscriptionRenewalTick(
         if (result.status === 'ok') {
           renewed += 1;
           enqueued += result.enqueued;
-          await deps.writeAuditEntry({
-            actor: { kind: 'system', label: 'role-expirer' },
-            actorIp: null,
-            actionType: 'player.subscription.renew',
-            targetType: 'player',
-            targetId: subscription.playerId,
-            before: {
-              next_renewal_at: subscription.nextRenewalAt.toISOString(),
-            },
-            after: {
-              next_renewal_at: nextRenewalAfter(
-                subscription.nextRenewalAt,
-                subscription.renewsEveryDays,
-              ).toISOString(),
-              role_expires_at: result.roleExpiresAt.toISOString(),
-              bonus_balance: result.balance,
-            },
-            context: {
-              subscription_id: subscription.id,
-              tier_id: subscription.tierId,
-              price_bonuses: subscription.priceBonuses,
-              renewed_at: now.toISOString(),
-            },
-            statusCode: 200,
-          });
           continue;
         }
 
@@ -311,7 +292,8 @@ export async function findDueSubscriptions(
 }
 
 /**
- * Charges one period and moves the billing date, atomically. Re-checks that the
+ * Charges one period, moves the billing date and appends the renewal's audit
+ * row, atomically. Re-checks that the
  * subscription is still `active` and still due inside the transaction, so a
  * cancellation racing the tick cannot be billed.
  *
@@ -375,6 +357,27 @@ async function chargeRenewalTx(
       throw new SubscriptionVanishedError(input.subscriptionId);
     }
     const { enqueued } = await enqueueAdminsCfgSyncForAllServers(tx, input.syncEvent);
+
+    await writeSystemAuditEntry(tx, {
+      actor: { kind: 'system', label: 'role-expirer' },
+      actorIp: null,
+      actionType: 'player.subscription.renew',
+      targetType: 'player',
+      targetId: input.playerId,
+      before: { next_renewal_at: input.dueAt.toISOString() },
+      after: {
+        next_renewal_at: input.nextRenewalAt.toISOString(),
+        role_expires_at: applied.roleExpiresAt.toISOString(),
+        bonus_balance: applied.balance,
+      },
+      context: {
+        subscription_id: input.subscriptionId,
+        tier_id: input.tierId,
+        price_bonuses: input.price,
+        renewed_at: input.now.toISOString(),
+      },
+      statusCode: 200,
+    });
 
     return {
       status: 'ok' as const,

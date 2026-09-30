@@ -31,6 +31,7 @@ import { dropCutoverServers } from './cutover.js';
 import { persistEventEnvelope } from './event-store.js';
 import { ExternalBanCache } from './external-ban/cache.js';
 import { handleExternalBanConnect } from './external-ban/store.js';
+import { GeoIpProvider } from './geoip/provider.js';
 import { TailManager, type TailWanted } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
@@ -44,6 +45,9 @@ import { tailSshLog } from './ssh-tail.js';
 import { tailContainerLogs } from './tail.js';
 import { handleVipExpiryWarnConnect } from './vip-expiry/warn.js';
 import { handleVote } from './vote/store.js';
+
+/** How often the GeoIP refresh is re-evaluated; the database itself is only re-downloaded weekly. */
+const GEOIP_REFRESH_CHECK_MS = 60 * 60 * 1000;
 
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
@@ -87,6 +91,22 @@ async function main() {
   } else {
     log.warn('APP_ENCRYPTION_KEY is not set — SSH log sources of external servers are disabled');
   }
+  // GeoIP (#64 finding 1341): country/city for recorded connect IPs. The
+  // database is downloaded here, the one worker that has the encryption key
+  // and records the IPs, into a volume-backed directory; nothing happens until
+  // an operator enables GeoIP and stores MaxMind credentials in the panel.
+  const geoIp = new GeoIpProvider({
+    db,
+    encryptionKey,
+    dataDir: process.env.GEOIP_DATA_DIR ?? '/var/lib/panel-geoip',
+    onError: (message, meta) => log.warn(meta, message),
+  });
+  const refreshGeoIp = () =>
+    geoIp.refreshIfDue().then((refreshed) => {
+      if (refreshed) log.info('geoip database refreshed');
+    });
+  void refreshGeoIp();
+  const geoIpRefreshTimer = setInterval(() => void refreshGeoIp(), GEOIP_REFRESH_CHECK_MS);
   const stopLogRetentionSweep = scheduleLogRetentionSweep({
     bridge,
     diag,
@@ -279,7 +299,7 @@ async function main() {
           // it — otherwise a first-time connector is invisible to
           // alt/external-ban enforcement until the next RCON poll.
           alerts
-            .then(() => handlePlayerConnected(db, e, geoLookup))
+            .then(async () => handlePlayerConnected(db, e, (await geoIp.getLookup()) ?? geoLookup))
             .catch((err) =>
               log.error({ err: (err as Error).message }, 'player identity handling failed'),
             )
@@ -519,6 +539,7 @@ async function main() {
       log.info({ sig }, 'shutdown');
       stopHeartbeat();
       stopLogRetentionSweep();
+      clearInterval(geoIpRefreshTimer);
       if (interval) clearInterval(interval);
       manager.stopAll();
       await redis.quit().catch(() => undefined);
