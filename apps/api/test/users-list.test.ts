@@ -3,6 +3,7 @@ import { players, roles } from '@squad/db/schema';
 import { and, sql as drizzleSql, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
@@ -273,5 +274,62 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     // Before the fix, "_" matched any character, so "clanXtag" would also
     // match a "clan_tag" query — it must not.
     expect(body.some((u) => u.steam_id64 === String(otherSteam))).toBe(false);
+  });
+
+  // #357: the list used to return every role-holder in one response.
+  it('pages through role-holders with limit and a keyset cursor header', async () => {
+    const cookie = await loginAsOwner(h);
+    const pagedRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: pagedRoleId,
+      name: `PagedRole_${pagedRoleId}`,
+      color: '#3366AA',
+      panelAccess: false,
+    });
+    const seen = [710021, 710022, 710023, 710024, 710025].map((suffix, index) => ({
+      steamId64: testSteamId(suffix),
+      canonicalName: `Paged${suffix}`,
+      canonicalNameNormalized: `paged${suffix}`,
+      roleId: pagedRoleId,
+      lastSeenAt: new Date(Date.UTC(2026, 0, 1 + index)),
+    }));
+    await h.db.insert(players).values(seen);
+    const newestFirst = [...seen].reverse().map((row) => String(row.steamId64));
+
+    const fetchPage = async (query: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/users?role_id=${pagedRoleId}&${query}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return {
+        ids: (res.json() as Array<{ steam_id64: string }>).map((u) => u.steam_id64),
+        next: res.headers['x-next-cursor'] as string | undefined,
+      };
+    };
+
+    const first = await fetchPage('limit=2');
+    expect(first.ids).toEqual(newestFirst.slice(0, 2));
+    expect(first.next).toBeTruthy();
+
+    const second = await fetchPage(`limit=2&cursor=${encodeURIComponent(first.next ?? '')}`);
+    expect(second.ids).toEqual(newestFirst.slice(2, 4));
+    expect(second.next).toBeTruthy();
+
+    const third = await fetchPage(`limit=2&cursor=${encodeURIComponent(second.next ?? '')}`);
+    expect(third.ids).toEqual(newestFirst.slice(4));
+    expect(third.next).toBeUndefined();
+  });
+
+  it('rejects a malformed cursor with 400 invalid_cursor', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/users?cursor=not-a-cursor',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
   });
 });

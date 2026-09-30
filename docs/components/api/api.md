@@ -132,7 +132,7 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by, discord_linked}`. `assigned_at`/`assigned_by` are NULL in this iteration. `discord_linked` (DISCORD-4) is a boolean derived from a LEFT JOIN on `player_discord_links` — the raw `discord_user_id` is never part of this list. | `user:view` |
+| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC, id DESC`. Keyset-paginated: `limit` (default 200, max 500) and `cursor`; when more rows exist the response carries the next cursor in the `X-Next-Cursor` header (the body stays a bare array); a malformed `cursor` answers `400 invalid_cursor`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by, discord_linked}`. `assigned_at`/`assigned_by` are NULL in this iteration. `discord_linked` (DISCORD-4) is a boolean derived from a LEFT JOIN on `player_discord_links` — the raw `discord_user_id` is never part of this list. | `user:view` |
 
 ## Servers
 

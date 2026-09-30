@@ -140,6 +140,37 @@ describeIfDb('GET /api/v1/settings/clan-guard', () => {
 });
 
 describeIfDb('PATCH /api/v1/settings/clan-guard', () => {
+  it('never delegates can_manage_clans to an API token, even for an Owner (#351)', async () => {
+    const mint = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie: ownerCookie },
+      payload: { name: `clan-guard-scope-${Date.now()}`, scopes: ['server:view'] },
+    });
+    expect(mint.statusCode).toBe(201);
+    const { plaintext } = mint.json() as { plaintext: string };
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/settings/clan-guard',
+      headers: { authorization: `Bearer ${plaintext}` },
+      payload: { enabled: false },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden', required: 'can_manage_clans' });
+  });
+
+  it('names the missing flag in the 403 body', async () => {
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/settings/clan-guard',
+      headers: { cookie: viewerCookie },
+      payload: { enabled: false },
+    });
+    expect(res.json()).toEqual({ error: 'forbidden', required: 'can_manage_clans' });
+  });
+
   it('rejects a panel viewer without can_manage_clans with 403', async () => {
     const res = await h.app.inject({
       method: 'PATCH',

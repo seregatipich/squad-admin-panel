@@ -74,6 +74,7 @@ interface VoteAnalyticsPayload {
   }>;
   by_hour: Array<{ hour: number; count: number }>;
   serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
+  serial_skipper_window_days: number;
 }
 
 function toCsv(payload: VoteAnalyticsPayload): string {
@@ -121,6 +122,12 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       const fromIso = from.toISOString();
       const toIso = to.toISOString();
       const limit = req.query.limit;
+
+      // Same rule as the player card: the threshold applies to the trailing
+      // SERIAL_SKIPPER_WINDOW_DAYS ending at `to`, clamped to a shorter selected window.
+      const skipperWindowStartIso = new Date(
+        Math.max(from.getTime(), to.getTime() - SERIAL_SKIPPER_WINDOW_DAYS * DAY_MS),
+      ).toISOString();
 
       const voteFilter = sql`v.started_at >= ${fromIso}::timestamptz
         AND v.started_at < ${toIso}::timestamptz
@@ -216,11 +223,13 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         FROM game_votes v
         JOIN players p ON p.id = v.initiator_player_id
         WHERE ${voteFilter}
+          AND v.started_at >= ${skipperWindowStartIso}::timestamptz
           AND v.vote_type = 'map_skip'
           AND v.initiator_player_id IS NOT NULL
         GROUP BY v.initiator_player_id, p.canonical_name
         HAVING count(*) >= ${SERIAL_SKIPPER_THRESHOLD}
         ORDER BY skip_count DESC, nickname ASC
+        LIMIT ${RANK_LIMIT_MAX}
       `),
       ]);
 
@@ -279,6 +288,7 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
           nickname: row.nickname,
           skip_count: Number(row.skip_count),
         })),
+        serial_skipper_window_days: SERIAL_SKIPPER_WINDOW_DAYS,
       };
 
       if (req.query.format === 'csv') {

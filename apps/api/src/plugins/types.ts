@@ -4,11 +4,19 @@ import type { SessionScope } from '@squad/db/schema';
 import type { PermissionKey } from '@squad/shared-config';
 import type Redis from 'ioredis';
 import type { AppConfig } from '../config.js';
-import type { PermissionContext } from '../lib/rbac.js';
+import type { PermissionContext, RoleFlagName } from '../lib/rbac.js';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
     permissions?: readonly PermissionKey[];
+    /**
+     * Role capabilities (e.g. `canManageClans`, `panelAccess`) the caller must
+     * all hold, for routes gated on a role flag that has no `permissions` key.
+     * Enforced by the global hook in `plugins/auth.ts` right after
+     * `permissions`; a miss answers 403 `{ error: 'forbidden', required }`
+     * where `required` is the snake_case flag name.
+     */
+    roleFlags?: readonly RoleFlagName[];
     /**
      * Audit policy of the route (TZ §17.12, enforced by
      * `test/audit-coverage.test.ts` for every mutating route):

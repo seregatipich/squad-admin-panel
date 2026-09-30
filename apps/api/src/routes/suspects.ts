@@ -24,6 +24,7 @@ import {
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { encodeLastSeenCursor, parseLastSeenCursor } from '../lib/last-seen-cursor.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { containsPattern } from '../lib/sql-like.js';
 
@@ -100,36 +101,6 @@ function parseMarkTypeIds(raw: string | undefined): number[] | null | 'invalid' 
     ids.push(n);
   }
   return ids.length > 0 ? [...new Set(ids)] : null;
-}
-
-/**
- * Keyset cursor `<last_seen_at µs since epoch>_<player id>`.
- *
- * Microseconds, not `Date.getTime()` milliseconds: `last_seen_at` is a
- * microsecond `timestamptz` (often `DEFAULT now()`), and a millisecond key made
- * ascending pages repeat the cursor row and descending pages skip rows sharing
- * its millisecond (#352).
- */
-function encodeCursor(row: { lastSeenMicros: string; id: string }): string {
-  return `${row.lastSeenMicros}_${row.id}`;
-}
-
-/** Year 9999 in µs since the epoch: a bound no real `last_seen_at` reaches, far inside Postgres' `timestamptz` range. */
-const MAX_CURSOR_MICROS = 253_402_300_799_999_999n;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function parseCursor(raw: string): { lastSeenMicros: string; id: string } | null {
-  const sep = raw.indexOf('_');
-  if (sep === -1) return null;
-  const lastSeenMicros = raw.slice(0, sep);
-  const id = raw.slice(sep + 1);
-  if (!/^-?\d{1,19}$/.test(lastSeenMicros) || !UUID_RE.test(id)) return null;
-  // A value past the bound overflows bigint or `timestamptz` in Postgres and
-  // would answer 500 instead of 400 (#353).
-  const micros = BigInt(lastSeenMicros);
-  if (micros > MAX_CURSOR_MICROS || micros < -MAX_CURSOR_MICROS) return null;
-  return { lastSeenMicros, id };
 }
 
 /** `players.last_seen_at` as integer microseconds; `extract` returns exact numeric on PG 14+. */
@@ -214,7 +185,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
       if (req.query.no_active_ban === 'true') clauses.push(not(activeBanExists()));
 
       if (req.query.cursor) {
-        const parsed = parseCursor(req.query.cursor);
+        const parsed = parseLastSeenCursor(req.query.cursor);
         if (!parsed) {
           reply.code(400);
           return { error: 'invalid_cursor' };
@@ -250,7 +221,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
       const hasMore = rows.length > limit;
       const page = hasMore ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
-      const nextCursor = hasMore && last ? encodeCursor(last) : null;
+      const nextCursor = hasMore && last ? encodeLastSeenCursor(last) : null;
 
       const pageIds = page.map((r) => r.id);
       const marksByPlayer = new Map<string, MarkMini[]>();

@@ -6,7 +6,6 @@ import {
   renderRnsquadjsConfig,
   sidecarConfigPath,
   sidecarContainerName,
-  sidecarSocketPath,
   writeSidecarConfig,
 } from '../../src/lib/rnsquadjs.js';
 
@@ -71,14 +70,6 @@ describe('sidecarConfigPath', () => {
   it('returns the per-server config.json path under the sidecar root', () => {
     expect(sidecarConfigPath(SERVER_ID)).toBe(
       `/run/squad-panel/rnsquadjs/${SERVER_ID}/config.json`,
-    );
-  });
-});
-
-describe('sidecarSocketPath', () => {
-  it('returns the per-server rcon.sock path under the sidecar root', () => {
-    expect(sidecarSocketPath(SERVER_ID)).toBe(
-      `/run/squad-panel/rnsquadjs/${SERVER_ID}/sock/rcon.sock`,
     );
   });
 });
