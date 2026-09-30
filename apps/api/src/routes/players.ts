@@ -16,7 +16,6 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
-import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
 import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 import { escapeLike } from '../lib/sql-like.js';
@@ -432,15 +431,6 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       if (hierarchyRefusal) {
         reply.code(403);
         return hierarchyRefusal;
-      }
-      // Runs after the hierarchy check so a self-assignment is reported as
-      // `cannot_change_own_role`; the ceiling here also covers explicit grants.
-      if (newRoleId !== null) {
-        const beyond = await roleGrantBeyondActor(app.db, newRoleId, req.user?.permissions);
-        if (beyond.length > 0) {
-          reply.code(403);
-          return roleCeilingError(beyond);
-        }
       }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;

@@ -12,6 +12,7 @@
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64. AES-256-GCM key for `server_credentials.*_encrypted`. | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. | yes |
 | `BALANCER_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default team-balancer proposal endpoint. Shared with the SquadJS balancer exporter. Ingestion only — the panel never executes a team change. | yes |
+| `EXTERNAL_HOST_PRIVATE_ALLOWLIST` | no | blank | all | Private LAN networks an external server's RCON host may be in: blank = all, `none` = none, else comma-separated addresses/CIDRs. Violations return `400 rcon_host_private_not_allowed`. A malformed value stops startup. | no |
 | `STEAM_API_KEY` | no | — | all | Steam Web API key for persona/avatar enrichment. Without it, persona falls back to `Player <last 4 of steam_id64>`. Get from https://steamcommunity.com/dev/apikey | yes |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | all | Sliding session lifetime in seconds. | no |
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | all | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |

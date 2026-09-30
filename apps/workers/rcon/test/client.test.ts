@@ -1,5 +1,6 @@
 import { type AddressInfo, createServer, type Server, type Socket } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { parsePrivateHostAllowlist } from '@squad/shared-types';
 import { describe, expect, it, vi } from 'vitest';
 import { RconClient } from '../src/client.js';
 import {
@@ -359,6 +360,53 @@ describe('RconClient restricted-address guard (#30, finding #333)', () => {
     } finally {
       await closeServer(server);
     }
+  });
+});
+
+describe('RconClient private-network allowlist (#30, finding #333)', () => {
+  it('refuses a private literal outside the allowlist', async () => {
+    const client = new RconClient(
+      makeOpts({
+        host: '10.255.255.1',
+        port: 21_114,
+        refuseRestrictedAddresses: true,
+        privateHostAllowlist: [],
+      }),
+    );
+    await expect(client.connect()).rejects.toThrow(/private address/);
+  });
+
+  it('does not refuse a private literal inside the allowlist', async () => {
+    const client = new RconClient(
+      makeOpts({
+        host: '10.255.255.1',
+        port: 21_114,
+        connectTimeoutMs: 50,
+        refuseRestrictedAddresses: true,
+        privateHostAllowlist: parsePrivateHostAllowlist('10.255.0.0/16'),
+      }),
+    );
+    const error = await client.connect().then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(error?.message ?? '').not.toMatch(/private address/);
+  });
+
+  it('keeps a private literal reachable when no allowlist is configured', async () => {
+    const client = new RconClient(
+      makeOpts({
+        host: '10.255.255.1',
+        port: 21_114,
+        connectTimeoutMs: 50,
+        refuseRestrictedAddresses: true,
+      }),
+    );
+    const error = await client.connect().then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(error?.message ?? '').not.toMatch(/private address/);
   });
 });
 

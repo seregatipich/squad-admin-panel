@@ -123,6 +123,7 @@ services:
       # disabled (503), which is the safe default for a deployment with no
       # SquadJS exporter wired up.
       BALANCER_WEBHOOK_SECRET: ${BALANCER_WEBHOOK_SECRET:-}
+      EXTERNAL_HOST_PRIVATE_ALLOWLIST: ${EXTERNAL_HOST_PRIVATE_ALLOWLIST:-}
       # VIDEO-1/VIDEO-4: uploaded media lives here, on a persistent volume shared
       # with worker-media-publisher. Both containers have different WORKDIRs, so
       # the relative default (./media) would resolve to two different, ephemeral
@@ -256,6 +257,7 @@ services:
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
       RCON_INFO_INTERVAL_MS: ${RCON_INFO_INTERVAL_MS:-5000}
+      EXTERNAL_HOST_PRIVATE_ALLOWLIST: ${EXTERNAL_HOST_PRIVATE_ALLOWLIST:-}
     depends_on:
       postgres:
         condition: service_healthy

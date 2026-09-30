@@ -12,8 +12,9 @@
  * single-label names (Docker service names such as `redis`); and numeric
  * spellings other than a canonical dotted quad (`127.1`, `2130706433`,
  * `0x7f.0.0.1`), which resolvers would silently turn into loopback. Private
- * LAN ranges stay allowed: a Squad server on the operator's LAN is a normal
- * deployment.
+ * LAN ranges stay allowed by default — a Squad server on the operator's LAN is
+ * a normal deployment — and can be narrowed to an explicit allowlist with
+ * {@link parsePrivateHostAllowlist} / {@link isPrivateHostAllowed}.
  *
  * Pure string logic with no Node imports, because `apps/web` bundles this
  * package too.
@@ -139,4 +140,101 @@ export function isRestrictedNetworkHost(host: string): boolean {
     return true;
   }
   return labels.length < 2;
+}
+
+/** A private-network allowlist entry: an address and how many leading bits must match. */
+export interface HostCidr {
+  /** The address as a 128-bit integer; IPv4 is mapped into `::ffff:0:0/96`. */
+  address: bigint;
+  /** Prefix length in 128-bit space (an IPv4 `/24` is stored as 120). */
+  prefix: number;
+}
+
+const IPV4_MAPPED_PREFIX = 0xffffn << 32n;
+
+/** Converts an IPv4/IPv6 literal (brackets allowed) to a 128-bit integer, or null when it is not a literal. */
+function literalToBigInt(host: string): bigint | null {
+  let text = host.trim().toLowerCase();
+  if (text.startsWith('[') && text.endsWith(']')) text = text.slice(1, -1);
+  if (text.includes(':')) {
+    const groups = parseIpv6(text);
+    return groups === null ? null : groups.reduce((acc, group) => (acc << 16n) | BigInt(group), 0n);
+  }
+  const octets = parseCanonicalIpv4(text);
+  if (octets === null) return null;
+  return IPV4_MAPPED_PREFIX | octets.reduce((acc, octet) => (acc << 8n) | BigInt(octet), 0n);
+}
+
+function isInCidr(address: bigint, cidr: HostCidr): boolean {
+  const shift = BigInt(128 - cidr.prefix);
+  return address >> shift === cidr.address >> shift;
+}
+
+const PRIVATE_NETWORKS: readonly HostCidr[] = [
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '100.64.0.0/10',
+  'fc00::/7',
+].map(parseCidr);
+
+/**
+ * Whether `host` is an IP literal inside a private LAN range: RFC 1918
+ * (`10/8`, `172.16/12`, `192.168/16`), carrier-grade NAT (`100.64/10`) or IPv6
+ * unique-local (`fc00::/7`), including their IPv4-mapped spellings. A hostname
+ * is never private here — the caller must check what it resolves to.
+ *
+ * @param host - IP literal, with or without brackets.
+ */
+export function isPrivateNetworkAddress(host: string): boolean {
+  const address = literalToBigInt(host);
+  return address !== null && PRIVATE_NETWORKS.some((cidr) => isInCidr(address, cidr));
+}
+
+/** Parses `a.b.c.d`, `a.b.c.d/n`, `ipv6` or `ipv6/n`; throws on anything else. */
+function parseCidr(entry: string): HostCidr {
+  const [literal = '', length, ...extra] = entry.trim().split('/');
+  const address = literalToBigInt(literal);
+  const isV6 = literal.includes(':');
+  const maxLength = isV6 ? 128 : 32;
+  if (
+    address === null ||
+    extra.length > 0 ||
+    (length !== undefined && !/^[0-9]{1,3}$/.test(length))
+  ) {
+    throw new Error(`invalid private-host allowlist entry "${entry}"`);
+  }
+  const bits = length === undefined ? maxLength : Number(length);
+  if (bits > maxLength) throw new Error(`invalid private-host allowlist entry "${entry}"`);
+  return { address, prefix: isV6 ? bits : bits + 96 };
+}
+
+/**
+ * Parses the `EXTERNAL_HOST_PRIVATE_ALLOWLIST` setting: a comma-separated list
+ * of IPv4/IPv6 addresses or CIDR ranges of private LAN networks an external
+ * server may live in.
+ *
+ * @param raw - The raw setting. Unset or blank means "no restriction" (the
+ *   historic behaviour); `none` means "no private address at all".
+ * @returns `null` when unrestricted, otherwise the allowed ranges (empty for `none`).
+ * @throws Error when an entry is not an address or CIDR.
+ */
+export function parsePrivateHostAllowlist(raw: string | undefined): HostCidr[] | null {
+  const text = raw?.trim() ?? '';
+  if (text === '') return null;
+  if (text.toLowerCase() === 'none') return [];
+  return text.split(',').map(parseCidr);
+}
+
+/**
+ * Applies the private-network allowlist to one host.
+ *
+ * @param host - Hostname or IP literal (or an address a hostname resolved to).
+ * @param allowlist - From {@link parsePrivateHostAllowlist}; `null` allows everything.
+ * @returns `false` only for a private address outside the allowlist.
+ */
+export function isPrivateHostAllowed(host: string, allowlist: readonly HostCidr[] | null): boolean {
+  if (allowlist === null || !isPrivateNetworkAddress(host)) return true;
+  const address = literalToBigInt(host);
+  return address !== null && allowlist.some((cidr) => isInCidr(address, cidr));
 }

@@ -1,5 +1,15 @@
 # `api` — changelog
 
+## 2026-09-30 — Список разрешённых частных сетей для RCON внешнего сервера (#30, #333)
+
+### Added
+
+- `EXTERNAL_HOST_PRIVATE_ALLOWLIST` (пусто — прежнее поведение, `none` или список адресов/CIDR). `POST /api/v1/servers/external` и `PUT /api/v1/servers/:id/external-connection` отвечают `400 rcon_host_private_not_allowed` (сообщение на русском), если `rcon_host` — частный адрес вне списка. Неверное значение останавливает API при старте.
+
+### Changed
+
+- `PUT /api/v1/players/:id/role` и `POST /api/v1/roles/:id/members` не вызывают отдельную проверку потолка прав после проверки иерархии: она строже и уже покрывает те же права, ответы не меняются.
+
 ## 2026-09-30 — Запоздавший снимок балансировщика не вытесняет более новый (#78)
 
 - `POST /api/v1/integrations/balancer/proposals`: снимок с `generated_at` раньше текущего `open` сохраняется сразу как `superseded`, а не вытесняет более новый. Инвариант «один open на `(server_id, mode)`» подкреплён уникальным индексом в БД.

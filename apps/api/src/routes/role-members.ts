@@ -222,12 +222,6 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403);
         return hierarchyRefusal;
       }
-      // After the hierarchy check so a self-assignment reads `cannot_change_own_role`.
-      const beyond = await roleGrantBeyondActor(app.db, role.id, req.user?.permissions);
-      if (beyond.length > 0) {
-        reply.code(403);
-        return roleCeilingError(beyond);
-      }
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
