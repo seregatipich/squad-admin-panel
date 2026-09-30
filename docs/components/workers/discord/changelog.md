@@ -1,5 +1,11 @@
 # Changelog — worker-discord
 
+## 2026-09-28
+
+### Fixed
+
+- Шаблон с плейсхолдером-именем свойства прототипа (`{constructor}`, `{__proto__}`) больше не роняет отправку, а поле без значения (например, `{steam_id64}` у игрока только с EOS) и слишком длинный текст больше не дают HTTP 400 от Discord: это исправлено в `renderDiscordTemplate` из `@squad/shared-config` (#52).
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed

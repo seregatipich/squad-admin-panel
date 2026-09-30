@@ -55,6 +55,15 @@ describe('validateBannedNamePattern', () => {
     if (!result.ok) expect(result.error.length).toBeGreaterThan(0);
   });
 
+  it('rejects catastrophic-backtracking regex patterns (#52 finding 1155)', () => {
+    for (const evil of ['(a+)+$', '(a|aa)+$']) {
+      expect(validateBannedNamePattern(evil, 'regex'), evil).toEqual({
+        ok: false,
+        error: 'pattern_unsafe_regex',
+      });
+    }
+  });
+
   it('accepts a non-regex pattern of allowed length', () => {
     expect(validateBannedNamePattern('BadName', 'exact')).toEqual({ ok: true });
   });
@@ -133,6 +142,12 @@ describe('matchBannedName', () => {
   it('matches regex case-insensitively (parity with the log-ingest worker matcher)', () => {
     expect(matchBannedName('BadWord', 'regex', 'thisisabadwordhere')).toBe(true);
     expect(matchBannedName('^admin', 'regex', 'ADMIN_Bob')).toBe(true);
+  });
+
+  it('never evaluates a catastrophic-backtracking regex (#52 finding 1155)', () => {
+    // A rule stored before validation tightened must not run: it would match
+    // here, and on a longer non-matching nick it would block the event loop.
+    expect(matchBannedName('(a+)+$', 'regex', 'aaa')).toBe(false);
   });
 
   it('returns false for an invalid regex instead of throwing', () => {

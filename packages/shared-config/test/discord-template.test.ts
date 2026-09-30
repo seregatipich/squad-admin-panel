@@ -1,12 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DISCORD_TEMPLATES,
+  DISCORD_EMBED_LIMITS,
+  DISCORD_EMPTY_FIELD_VALUE,
   DISCORD_TEMPLATE_EVENT_TYPES,
   type DiscordEmbedTemplate,
   defaultDiscordTemplate,
   escapeDiscordMarkdown,
   renderDiscordTemplate,
 } from '../src/discord-template.js';
+
+function embedLength(embed: DiscordEmbedTemplate): number {
+  return (
+    embed.title.length +
+    embed.description.length +
+    embed.fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0)
+  );
+}
 
 const banTemplate: DiscordEmbedTemplate = {
   title: 'Player banned',
@@ -83,7 +93,7 @@ describe('renderDiscordTemplate', () => {
       { onMissingPlaceholder },
     );
     expect(rendered.description).toBe('Solo was banned on ``.');
-    expect(rendered.fields[1]?.value).toBe('');
+    expect(rendered.fields[1]?.value).toBe(DISCORD_EMPTY_FIELD_VALUE);
     expect(rendered.url).toBeNull();
     const reported = onMissingPlaceholder.mock.calls.map((c) => c[0]);
     expect(reported).toContain('server_name');
@@ -97,6 +107,94 @@ describe('renderDiscordTemplate', () => {
     const rendered = renderDiscordTemplate(banTemplate, {});
     expect(rendered.title).toBe('Player banned');
     expect(rendered.url).toBeNull();
+  });
+
+  it('treats prototype property names as missing placeholders instead of throwing (#52 finding 1160)', () => {
+    const onMissingPlaceholder = vi.fn();
+    const template: DiscordEmbedTemplate = {
+      title: 'x {constructor} {__proto__}',
+      url: '{toString}',
+      description: '{valueOf}{hasOwnProperty}',
+      color: 0,
+      fields: [{ name: '{isPrototypeOf}', value: '{propertyIsEnumerable}', inline: false }],
+    };
+    const rendered = renderDiscordTemplate(template, {}, { onMissingPlaceholder });
+    expect(rendered.title).toBe('x  ');
+    expect(rendered.url).toBeNull();
+    expect(rendered.description).toBe('');
+    expect(rendered.fields).toEqual([
+      { name: DISCORD_EMPTY_FIELD_VALUE, value: DISCORD_EMPTY_FIELD_VALUE, inline: false },
+    ]);
+    expect(onMissingPlaceholder).toHaveBeenCalledWith('constructor');
+    expect(onMissingPlaceholder).toHaveBeenCalledWith('toString');
+  });
+
+  it('fills a field left blank by a missing value so Discord accepts the embed (#52 finding 1161)', () => {
+    // An EOS-only player has no steam_id64: the default "Steam ID" field would
+    // otherwise be sent with an empty value and rejected with HTTP 400.
+    const rendered = renderDiscordTemplate(
+      {
+        title: 'Player banned',
+        url: null,
+        description: '',
+        color: 0,
+        fields: [
+          { name: 'Steam ID', value: '{steam_id64}', inline: true },
+          { name: '{missing}', value: '   ', inline: true },
+        ],
+      },
+      { player_name: 'Solo' },
+    );
+    expect(rendered.fields).toEqual([
+      { name: 'Steam ID', value: DISCORD_EMPTY_FIELD_VALUE, inline: true },
+      { name: DISCORD_EMPTY_FIELD_VALUE, value: DISCORD_EMPTY_FIELD_VALUE, inline: true },
+    ]);
+  });
+
+  it('truncates every text part to Discord limits after escaping (#52 finding 1161)', () => {
+    // Every '*' doubles to '\\*' when escaped, so a template that passed the API
+    // length checks can still overflow once the value is substituted.
+    const long = '*'.repeat(5000);
+    const rendered = renderDiscordTemplate(
+      {
+        title: '{reason}',
+        url: null,
+        description: '{reason}',
+        color: 0,
+        fields: [{ name: '{reason}', value: '{reason}', inline: false }],
+      },
+      { reason: long },
+    );
+    expect(rendered.title).toHaveLength(DISCORD_EMBED_LIMITS.title);
+    expect(rendered.title.endsWith('…')).toBe(true);
+    expect(rendered.fields[0]?.name).toHaveLength(DISCORD_EMBED_LIMITS.fieldName);
+    expect(rendered.fields[0]?.value).toHaveLength(DISCORD_EMBED_LIMITS.fieldValue);
+    expect(rendered.description.length).toBeLessThanOrEqual(DISCORD_EMBED_LIMITS.description);
+    expect(embedLength(rendered)).toBeLessThanOrEqual(DISCORD_EMBED_LIMITS.total);
+  });
+
+  it('keeps the whole embed within the 6000-character total (#52 finding 1161)', () => {
+    const rendered = renderDiscordTemplate(
+      {
+        title: '{reason}',
+        url: null,
+        description: '{reason}',
+        color: 0,
+        fields: Array.from({ length: 25 }, (_, i) => ({
+          name: `Field ${i} {reason}`,
+          value: '{reason}',
+          inline: false,
+        })),
+      },
+      { reason: 'x'.repeat(2000) },
+    );
+    expect(embedLength(rendered)).toBeLessThanOrEqual(DISCORD_EMBED_LIMITS.total);
+    expect(rendered.title).toHaveLength(DISCORD_EMBED_LIMITS.title);
+    expect(rendered.fields.length).toBeGreaterThan(0);
+    for (const field of rendered.fields) {
+      expect(field.name.length).toBeGreaterThan(0);
+      expect(field.value.length).toBeGreaterThan(0);
+    }
   });
 
   it('matches the delivered-embed snapshot', () => {

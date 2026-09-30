@@ -199,6 +199,22 @@ beforeAll(async () => {
       connectedAt: new Date('2026-06-01T04:00:00Z'),
       disconnectedAt: new Date('2026-06-01T06:00:00Z'),
     },
+    // Connected during a seeding window: counts as online.
+    {
+      playerId: playerA,
+      serverId: SERVER_A,
+      connectedAt: new Date('2026-06-01T08:00:00Z'),
+      disconnectedAt: new Date('2026-06-01T09:00:00Z'),
+      mode: 'seed',
+    },
+    // Waiting in the queue: not on the server, never online.
+    {
+      playerId: playerA,
+      serverId: SERVER_A,
+      connectedAt: new Date('2026-06-01T10:00:00Z'),
+      disconnectedAt: new Date('2026-06-01T11:00:00Z'),
+      mode: 'queue',
+    },
   ]);
 }, 60_000);
 
@@ -358,6 +374,13 @@ describeIfDb('GET /api/v1/statistics', () => {
     expect(rows[0]?.indexdef).toMatch(
       /\(server_id, disconnected_at\) WHERE \(disconnected_at IS NOT NULL\)/,
     );
+  });
+
+  it('counts seed sessions as online but keeps queue sessions out of the hour buckets (#52)', async () => {
+    const res = await fetchStatistics(`?from=${FROM}&to=${TO}&servers=${SERVER_A}`);
+    const body = res.json() as StatisticsBody;
+    expect(valueAt(body.population.by_hour, SERVER_A, '08')).toBeCloseTo(0.3, 1);
+    expect(valueAt(body.population.by_hour, SERVER_A, '10')).toBe(0);
   });
 
   it('scopes every block to the selected servers', async () => {

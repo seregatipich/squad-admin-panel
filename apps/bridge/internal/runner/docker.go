@@ -84,6 +84,9 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	if spec.Multihome == "" {
 		spec.Multihome = "0.0.0.0"
 	}
+	if err := validate.Multihome(spec.Multihome); err != nil {
+		return "", err
+	}
 	if spec.MaxPlayers <= 0 {
 		spec.MaxPlayers = 100
 	}

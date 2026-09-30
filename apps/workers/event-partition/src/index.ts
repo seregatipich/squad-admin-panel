@@ -210,6 +210,59 @@ export async function ensureDefaultBackedMonthlyPartitions(
   }
 }
 
+/**
+ * How long a `processed_events` idempotency claim is kept: the `events`
+ * retention window. Past it the event itself has been dropped with its
+ * partition, so the claim guards nothing — and within it a replayed envelope
+ * is still rejected by the `events (event_id, occurred_at)` key as well.
+ */
+export const PROCESSED_EVENTS_RETENTION_MONTHS = EVENTS_RETENTION_MONTHS;
+
+/**
+ * Deletes `processed_events` claims older than
+ * {@link PROCESSED_EVENTS_RETENTION_MONTHS} (UTC month boundary, matching the
+ * `events` partition cutoff). Served by `processed_events_processed_at_idx`.
+ */
+export async function pruneProcessedEvents(sql: postgres.Sql): Promise<void> {
+  const now = new Date();
+  const cutoff = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - PROCESSED_EVENTS_RETENTION_MONTHS, 1),
+  );
+  const deleted = await sql`DELETE FROM processed_events WHERE processed_at < ${cutoff}`;
+  if (deleted.count > 0) log.info({ count: deleted.count }, 'pruned processed_events');
+}
+
+/** Age past which a `scheduled_task_runs` history row is deleted. */
+export const SCHEDULED_TASK_RUNS_RETENTION_DAYS = 90;
+/**
+ * Most history rows kept per scheduled task. A task whose dispatch keeps
+ * failing is retried every scheduler tick (30 s) and logs a run each time, so
+ * the age limit alone would still let one task pile up ~260 000 rows.
+ */
+export const SCHEDULED_TASK_RUNS_MAX_PER_TASK = 1000;
+
+/**
+ * Bounds the append-only `scheduled_task_runs` history: drops rows older than
+ * {@link SCHEDULED_TASK_RUNS_RETENTION_DAYS}, then all but the newest
+ * {@link SCHEDULED_TASK_RUNS_MAX_PER_TASK} rows of each task.
+ */
+export async function pruneScheduledTaskRuns(sql: postgres.Sql): Promise<void> {
+  const cutoff = new Date(Date.now() - SCHEDULED_TASK_RUNS_RETENTION_DAYS * 86_400_000);
+  const expired = await sql`DELETE FROM scheduled_task_runs WHERE executed_at < ${cutoff}`;
+  const overflow = await sql`
+    DELETE FROM scheduled_task_runs r
+    USING (
+      SELECT id,
+             row_number() OVER (PARTITION BY task_id ORDER BY executed_at DESC, id DESC) AS rank
+      FROM scheduled_task_runs
+    ) ranked
+    WHERE r.id = ranked.id
+      AND ranked.rank > ${SCHEDULED_TASK_RUNS_MAX_PER_TASK}
+  `;
+  const count = (expired.count ?? 0) + (overflow.count ?? 0);
+  if (count > 0) log.info({ count }, 'pruned scheduled_task_runs');
+}
+
 export interface PartitionTickDeps {
   sql: postgres.Sql;
   diag: Diag;
@@ -226,6 +279,8 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
     ...DEFAULT_BACKED_MONTHLY_TABLES.map((table) =>
       ensureDefaultBackedMonthlyPartitions(sql, table),
     ),
+    pruneProcessedEvents(sql),
+    pruneScheduledTaskRuns(sql),
   ]);
   for (const r of results) {
     if (r.status === 'rejected') {

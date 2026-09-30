@@ -210,6 +210,22 @@ describe('POST /api/v1/servers', () => {
     expect([400, 422]).toContain(resp.statusCode);
   });
 
+  it('rejects a multihome that is not an IP literal with 400/422 and creates nothing (#52)', async () => {
+    const cookie = await login();
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'multihome-flag-test', multihome: '0.0.0.0 -SomeFlag' },
+    });
+    expect([400, 422]).toContain(resp.statusCode);
+    const rows = await h.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(eq(servers.slug, 'multihome-flag-test'));
+    expect(rows).toHaveLength(0);
+  });
+
   it('rejects creating a server whose port collides with an existing server with 409 port_conflict', async () => {
     const cookie = await login();
     const first = await h.app.inject({

@@ -76,6 +76,7 @@ interface ApplicationRow {
   grantedRoleName: string | null;
   grantedUntil: Date | null;
   source: string;
+  verified: boolean;
   createdAt: Date;
   decidedAt: Date | null;
 }
@@ -98,6 +99,7 @@ function serializeApplication(row: ApplicationRow) {
     granted_role_name: row.grantedRoleName,
     granted_until: row.grantedUntil ? row.grantedUntil.toISOString() : null,
     source: row.source,
+    verified: row.verified,
     created_at: row.createdAt.toISOString(),
     decided_at: row.decidedAt ? row.decidedAt.toISOString() : null,
   };
@@ -169,6 +171,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         grantedRoleName: grantedRole.name,
         grantedUntil: whitelistApplications.grantedUntil,
         source: whitelistApplications.source,
+        verified: whitelistApplications.verified,
         createdAt: whitelistApplications.createdAt,
         decidedAt: whitelistApplications.decidedAt,
       })
@@ -246,6 +249,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             body: req.body.body,
             source: 'public',
             status: 'pending',
+            verified: true,
           })
           .returning({ id: whitelistApplications.id });
         // biome-ignore lint/style/noNonNullAssertion: insert...returning yields the row

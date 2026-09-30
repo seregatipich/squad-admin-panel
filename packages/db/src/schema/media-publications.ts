@@ -25,9 +25,13 @@ export type MediaPublicationStatus = (typeof MEDIA_PUBLICATION_STATUSES)[number]
  * The row is the queue: `worker-media-publisher` claims every row whose
  * `status = 'queued'` and `next_attempt_at <= now()` with a conditional
  * `UPDATE ... SET status = 'uploading' ... RETURNING`, so two workers can never
- * pick up the same publication. Failure handling deliberately distinguishes
- * three outcomes, because conflating them is what makes an upload queue lose
- * work:
+ * pick up the same publication. The claim is a lease: while a row is
+ * `'uploading'`, `next_attempt_at` holds the lease expiry, and a row still
+ * `'uploading'` past it (its worker died mid-upload) is claimed again with one
+ * more attempt and `error = 'upload_interrupted'` — once that exhausts the
+ * retry budget it goes to `'failed'`. Failure handling deliberately
+ * distinguishes three outcomes, because conflating them is what makes an
+ * upload queue lose work:
  *
  * - a transient error bumps `attempts`, sets an exponential `next_attempt_at`
  *   and returns the row to `'queued'`;

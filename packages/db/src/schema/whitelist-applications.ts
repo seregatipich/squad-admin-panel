@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   index,
   pgTable,
@@ -18,9 +19,13 @@ import { roles } from './roles.js';
  * (`source='panel'`), and reviewed via the panel approval workflow. Approving a
  * `pending` row grants the resolved role to the matching `players` row —
  * optionally time-bounded via `players.role_expires_at` (mirrored here in
- * `grantedUntil`), which the existing `worker-role-expirer` later clears. The
- * partial unique index blocks a second `pending` application for the same
- * SteamID64 while one is already open.
+ * `grantedUntil`), which the existing `worker-role-expirer` later clears.
+ *
+ * `verified` is true when the application was submitted from a Steam login for
+ * that same SteamID64 (ownership proven); an anonymous submission names an
+ * arbitrary SteamID and stays unverified. The partial unique indexes allow one
+ * `pending` application per SteamID64 per verification state, so a stranger's
+ * anonymous application can never block the owner's verified one (#52).
  */
 export const whitelistApplications = pgTable(
   'whitelist_applications',
@@ -39,6 +44,7 @@ export const whitelistApplications = pgTable(
     grantedRoleId: uuid('granted_role_id').references(() => roles.id, { onDelete: 'set null' }),
     grantedUntil: timestamp('granted_until', { withTimezone: true, mode: 'date' }),
     source: text('source').notNull().default('public'),
+    verified: boolean('verified').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'date' }),
   },
@@ -48,9 +54,16 @@ export const whitelistApplications = pgTable(
       table.createdAt,
     ),
     steamIdIdx: index('whitelist_applications_steam_id64_idx').on(table.steamId64),
-    pendingSteamUnique: uniqueIndex('whitelist_applications_pending_steam_unique_idx')
+    pendingVerifiedSteamUnique: uniqueIndex(
+      'whitelist_applications_pending_verified_steam_unique_idx',
+    )
       .on(table.steamId64)
-      .where(sql`status = 'pending'`),
+      .where(sql`status = 'pending' AND verified`),
+    pendingUnverifiedSteamUnique: uniqueIndex(
+      'whitelist_applications_pending_unverified_steam_unique_idx',
+    )
+      .on(table.steamId64)
+      .where(sql`status = 'pending' AND NOT verified`),
     statusCheck: check(
       'whitelist_applications_status_enum',
       sql`status IN ('pending','approved','rejected')`,

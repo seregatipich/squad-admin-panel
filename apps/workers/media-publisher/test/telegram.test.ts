@@ -21,6 +21,7 @@ function makeJob(overrides: Partial<MediaPublicationJob> = {}): MediaPublication
     title: 'Нарушение на Yehorivka',
     description: null,
     originalFilename: 'clip.mp4',
+    interrupted: false,
     ...overrides,
   };
 }

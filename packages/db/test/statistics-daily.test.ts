@@ -12,6 +12,8 @@ const ADMIN_P = '000009d4-0000-4000-8000-000000000000';
 const SERVER_1 = '00000991-0000-4000-8000-000000000000';
 const SERVER_2 = '00000992-0000-4000-8000-000000000000';
 const ADMIN_ROLE = '000009e5-0000-4000-8000-000000000000';
+const VIP_P = '000009f6-0000-4000-8000-000000000000';
+const VIP_ROLE = '000009f7-0000-4000-8000-000000000000';
 
 /** Every fixture day is fully in the past relative to NOW, so the day span is a full 86 400 s. */
 const NOW = new Date('2026-07-10T12:00:00.000Z');
@@ -95,12 +97,23 @@ beforeAll(async () => {
     VALUES (${ADMIN_ROLE}, 'canseeadminchat')
     ON CONFLICT DO NOTHING
   `;
+  await sql`
+    INSERT INTO roles (id, name, panel_access)
+    VALUES (${VIP_ROLE}, 'StatsDailyVipRole', false)
+    ON CONFLICT (id) DO NOTHING
+  `;
+  await sql`
+    INSERT INTO role_squad_permissions (role_id, squad_permission_key)
+    VALUES (${VIP_ROLE}, 'reserve')
+    ON CONFLICT DO NOTHING
+  `;
 
   for (const [id, name, roleId] of [
     [PLAYER_A, 'StatsAlpha', null],
     [PLAYER_B, 'StatsBravo', null],
     [PLAYER_C, 'StatsCharlie', null],
     [ADMIN_P, 'StatsAdmin', ADMIN_ROLE],
+    [VIP_P, 'StatsVip', VIP_ROLE],
   ] as Array<[string, string, string | null]>) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized, role_id, first_seen_at)
@@ -129,9 +142,9 @@ afterAll(async () => {
   await sql`DELETE FROM moderation_actions WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM matches WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM servers WHERE id = ANY(${[SERVER_1, SERVER_2]})`;
-  await sql`DELETE FROM players WHERE id = ANY(${[PLAYER_A, PLAYER_B, PLAYER_C, ADMIN_P]})`;
-  await sql`DELETE FROM role_squad_permissions WHERE role_id = ${ADMIN_ROLE}`;
-  await sql`DELETE FROM roles WHERE id = ${ADMIN_ROLE}`;
+  await sql`DELETE FROM players WHERE id = ANY(${[PLAYER_A, PLAYER_B, PLAYER_C, ADMIN_P, VIP_P]})`;
+  await sql`DELETE FROM role_squad_permissions WHERE role_id = ANY(${[ADMIN_ROLE, VIP_ROLE]})`;
+  await sql`DELETE FROM roles WHERE id = ANY(${[ADMIN_ROLE, VIP_ROLE]})`;
   await sql.end({ timeout: 5 });
 });
 
@@ -145,7 +158,7 @@ beforeEach(async () => {
   await sql`DELETE FROM matches WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`
     UPDATE players SET first_seen_at = '2020-01-01T00:00:00Z'::timestamptz
-    WHERE id = ANY(${[PLAYER_A, PLAYER_B, PLAYER_C, ADMIN_P]})
+    WHERE id = ANY(${[PLAYER_A, PLAYER_B, PLAYER_C, ADMIN_P, VIP_P]})
   `;
 });
 
@@ -279,6 +292,31 @@ describeIfDb('recomputeServerDailyStats population', () => {
     expect(Number(row.online_seconds)).toBe(0);
     expect(row.peak_online).toBe(0);
     expect(row.avg_queue).toBe(1);
+  });
+
+  it('counts connected seed and boost sessions as online (#52 finding 1148)', async () => {
+    await seedSession({
+      playerId: PLAYER_A,
+      serverId: SERVER_1,
+      connectedAt: '2026-07-04T00:00:00.000Z',
+      disconnectedAt: '2026-07-05T00:00:00.000Z',
+      mode: 'seed',
+    });
+    await seedSession({
+      playerId: PLAYER_B,
+      serverId: SERVER_1,
+      connectedAt: '2026-07-04T00:00:00.000Z',
+      disconnectedAt: '2026-07-05T00:00:00.000Z',
+      mode: 'boost',
+    });
+
+    await recomputeServerDailyStats(sql, { fromDay: FROM_DAY, toDay: TO_DAY, now: NOW });
+
+    const row = await rowFor(SERVER_1, '2026-07-04');
+    expect(Number(row.online_seconds)).toBe(2 * 86_400);
+    expect(row.avg_online).toBe(2);
+    expect(row.peak_online).toBe(2);
+    expect(row.avg_queue).toBe(0);
   });
 
   it('scopes population to the day still in progress by the elapsed span', async () => {
@@ -456,6 +494,22 @@ describeIfDb('recomputeServerDailyStats community and moderation', () => {
     expect(row.peak_online).toBe(2);
     expect(row.peak_admins).toBe(1);
     expect(row.avg_admins).toBe(1);
+  });
+
+  it('does not count a reserve-only (VIP / QueuePriority) role as an admin (#52 finding 1147)', async () => {
+    await seedSession({
+      playerId: VIP_P,
+      serverId: SERVER_1,
+      connectedAt: '2026-07-04T00:00:00.000Z',
+      disconnectedAt: '2026-07-05T00:00:00.000Z',
+    });
+
+    await recomputeServerDailyStats(sql, { fromDay: FROM_DAY, toDay: TO_DAY, now: NOW });
+
+    const row = await rowFor(SERVER_1, '2026-07-04');
+    expect(row.peak_online).toBe(1);
+    expect(row.peak_admins).toBe(0);
+    expect(row.avg_admins).toBe(0);
   });
 });
 

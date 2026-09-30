@@ -35,6 +35,17 @@ export interface RecomputeServerDailyStatsInput {
  *   each session start, −1 at each end, running sum), not a sampled estimate;
  *   ends are ordered before starts at an identical instant so a reconnect at
  *   the same timestamp is not double-counted.
+ * - **Online means connected.** Every session mode except `queue` —
+ *   `online`, `boost` and `seed` — is a player occupying a slot on the server,
+ *   so all three feed the online seconds, averages and peaks. Seeding is not
+ *   excluded: `splitOpenSessionsAtSeedingTransition` moves connected players
+ *   into `seed` for the duration of a seeding window, and dropping them would
+ *   report an empty server while it is being seeded. Only `queue` is kept apart
+ *   (as `avg_queue`).
+ * - **Admins are players whose role grants a real admin Squad permission.**
+ *   `reserve` alone (a priority slot, e.g. the `QueuePriority` system role or a
+ *   VIP tier) does not make a player an admin. The role is the player's current
+ *   `players.role_id`, not the role held at session time.
  * - **Averages are time-weighted over the elapsed part of the day**, i.e.
  *   `seconds / (min(day_end, now) − day_start)`, so the day in progress is not
  *   diluted by hours that have not happened yet.
@@ -99,6 +110,7 @@ export async function recomputeServerDailyStats(
             FROM players p
             JOIN role_squad_permissions rsp ON rsp.role_id = p.role_id
             WHERE p.id = ps.player_id
+              AND rsp.squad_permission_key <> 'reserve'
           ) AS is_admin,
           GREATEST(
             EXTRACT(EPOCH FROM ps.connected_at),
@@ -123,19 +135,19 @@ export async function recomputeServerDailyStats(
         SELECT
           server_id,
           day_number,
-          COALESCE(SUM(FLOOR(seg_end - seg_start)) FILTER (WHERE mode = 'online'), 0)::bigint AS online_seconds,
+          COALESCE(SUM(FLOOR(seg_end - seg_start)) FILTER (WHERE mode <> 'queue'), 0)::bigint AS online_seconds,
           COALESCE(SUM(FLOOR(seg_end - seg_start)) FILTER (WHERE mode = 'queue'), 0)::bigint AS queue_seconds,
-          COALESCE(SUM(FLOOR(seg_end - seg_start)) FILTER (WHERE mode = 'online' AND is_admin), 0)::bigint AS admin_seconds
+          COALESCE(SUM(FLOOR(seg_end - seg_start)) FILTER (WHERE mode <> 'queue' AND is_admin), 0)::bigint AS admin_seconds
         FROM seg
         WHERE seg_end > seg_start
         GROUP BY server_id, day_number
       ),
       sweep AS (
         SELECT server_id, day_number, seg_start AS at, 1 AS delta, is_admin
-        FROM seg WHERE mode = 'online' AND seg_end > seg_start
+        FROM seg WHERE mode <> 'queue' AND seg_end > seg_start
         UNION ALL
         SELECT server_id, day_number, seg_end AS at, -1 AS delta, is_admin
-        FROM seg WHERE mode = 'online' AND seg_end > seg_start
+        FROM seg WHERE mode <> 'queue' AND seg_end > seg_start
       ),
       running AS (
         SELECT

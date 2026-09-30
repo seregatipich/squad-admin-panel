@@ -180,6 +180,18 @@
 
 - Миграция `0119_api_route_audit_indexes`: частичный индекс `chat_messages (matched_rule_id)`, `player_sessions (server_id, disconnected_at)` для закрытых сессий, trigram-индексы на `players.canonical_name_normalized` и `player_name_history.name_normalized`, перенос `next_renewal_at` активных подписок.
 
+## 2026-09-28 — Подтверждённые заявки whitelist, статистика и ReDoS (#52)
+
+### Security
+
+- `POST /api/v1/public/whitelist/applications`: заявка, отправленная после входа через Steam (в том числе с сессией `self_service`), подаётся на SteamID64 из сессии и помечается `verified: true`; чужой SteamID64 — `403 steam_id_mismatch`, анонимная заявка без `steam_id64` — `400 steam_id_required`. Анонимная заявка на чужой SteamID больше не блокирует подтверждённую заявку владельца. В ответах заявок появилось поле `verified`.
+- Правила запрещённых ников с катастрофическим backtracking отклоняются `422 invalid_pattern` (`detail`: `nested_quantifier` и др.).
+- `multihome` при создании сервера и в настройках принимает только IP-адрес.
+
+### Changed
+
+- `GET /api/v1/statistics`: почасовое распределение онлайна учитывает все подключённые сессии (`online`, `boost`, `seed`), как и дневная сводка.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

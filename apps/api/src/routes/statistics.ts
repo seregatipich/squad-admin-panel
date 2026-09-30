@@ -392,7 +392,8 @@ async function computeStatistics(
 
   // Hour-of-day has no daily-row representation, so it is computed live over the
   // window's sessions — a single pass bounded by the window, not AN-1's per-tick
-  // correlated subquery.
+  // correlated subquery. Like `recomputeServerDailyStats`, every connected mode
+  // (online, boost, seed) counts as online; only queue time is left out.
   const hourRows =
     serverIds.length === 0
       ? []
@@ -430,7 +431,7 @@ async function computeStatistics(
                 FLOOR(EXTRACT(EPOCH FROM (${toDay}::date + 1)::timestamptz) / ${HOUR_SECONDS})::bigint - 1
               )
             ) AS gh(hour_number)
-            WHERE ps.mode = 'online'
+            WHERE ps.mode <> 'queue'
               AND ps.server_id = ANY(string_to_array(${serverIdCsv}::text, ',')::uuid[])
               AND ps.connected_at < (${toDay}::date + 1)::timestamptz
               -- Split rather than COALESCE(disconnected_at, now()) so closed

@@ -290,6 +290,8 @@ Monthly-partitioned table for Squad event envelopes produced by `worker-rcon` an
 
 Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group.
 
+Retention: `worker-event-partition` deletes rows whose `processed_at` falls before the `events` retention cutoff (24 months, UTC month boundary), served by `processed_events_processed_at_idx` (migration 0119, which also dropped the never-queried `processed_events_group_idx`).
+
 **Columns**
 
 | Column | Type | Nullable | Default | Notes |
@@ -419,6 +421,7 @@ Deduplicated log of observed `(player_id, name_normalized)` pairs. Normalization
 |---|---|---|
 | `player_name_history_player_name_key` | `(player_id, name_normalized)` | UNIQUE |
 | `player_name_history_name_normalized_idx` | `name_normalized` | plain |
+| `player_name_history_name_normalized_trgm_idx` | `name_normalized gin_trgm_ops` | GIN (migration 0119) — serves `LIKE '%…%'` nickname search |
 | `player_name_history_last_seen_at_idx` | `last_seen_at` | plain |
 
 ---
@@ -467,6 +470,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 |---|---|---|
 | `players_eos_id_unique_idx` | `eos_id` | `eos_id IS NOT NULL` |
 | `players_canonical_name_normalized_idx` | `canonical_name_normalized` | — |
+| `players_canonical_name_normalized_trgm_idx` | GIN `canonical_name_normalized gin_trgm_ops` (migration 0119) — serves `LIKE '%…%'` nickname search | — |
 | `players_last_seen_at_idx` | `last_seen_at` | — |
 | `players_role_id_idx` | `role_id` | `role_id IS NOT NULL` |
 | `players_steam_checked_at_idx` | `steam_checked_at NULLS FIRST` | `steam_id64 IS NOT NULL` |
@@ -771,7 +775,7 @@ see [api/api.md](../api/api.md#players)).
 ---
 ## `whitelist_applications`
 
-WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pending** application per SteamID64 via the public portal; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
+WL-3 (#67) public whitelist/VIP application queue. Anyone may submit an application via the public portal; one signed in with Steam files a `verified` application for their own SteamID64, and each SteamID64 has at most one **pending** application per verification state (#52), so an anonymous application for someone else's SteamID never blocks the owner; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
 
 **Columns**
 
@@ -789,6 +793,7 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 | `granted_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL; role granted on approval |
 | `granted_until` | `timestamptz` | YES | `null` | Mirrors `players.role_expires_at`; `null` = permanent |
 | `source` | `text` | NO | `'public'` | CHECK IN (`public`,`panel`) |
+| `verified` | `boolean` | NO | `false` | Submitted from a Steam login for this same SteamID64 (migration 0120) |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `decided_at` | `timestamptz` | YES | `null` | Set when approved/rejected |
 
@@ -796,7 +801,8 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 
 - `whitelist_applications_status_created_idx` on `(status, created_at)`
 - `whitelist_applications_steam_id64_idx` on `(steam_id64)`
-- `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
+- `whitelist_applications_pending_verified_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending' AND verified`
+- `whitelist_applications_pending_unverified_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending' AND NOT verified` — together: one open application per SteamID64 per verification state (migration 0120 replaced the single `whitelist_applications_pending_steam_unique_idx`)
 
 ---
 ## `ban_appeals`

@@ -36,6 +36,12 @@
 - Re-run `scripts/install-host-bridge.sh` on the host to install the new unit (capability change); a binary-only redeploy leaves `container_run_rnsquadjs` failing with `EPERM`.
 - Images built before this change have no `panel.preserve` label, so the release that is live when this ships stays exposed to `docker_prune` until it is rebuilt or superseded; avoid running "clean up Docker" before the next release is deployed.
 
+## 2026-09-28 — `container_run` проверяет multihome (#52)
+
+### Security
+
+- `validate.Multihome`: адрес привязки должен разбираться `net.ParseIP`. Он подставляется в командную строку сервера Squad (`RCONIP=%s`, `MULTIHOME=%s`), и значение с пробелами могло добавить параметры запуска. `DockerRunner.Run` отклоняет такое значение с `ErrInvalidArgs`, не вызывая docker.
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed

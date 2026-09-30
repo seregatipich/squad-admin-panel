@@ -4,6 +4,28 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-28
+
+### Индексы поиска и хранения, подтверждённые заявки whitelist (migrations 0119, 0120, #52)
+
+**Files:** `packages/db/drizzle/0119_search_and_retention_indexes.sql`, `packages/db/drizzle/0120_whitelist_application_verified.sql`, `packages/db/src/schema/{players,player-name-history,player-reports,events,whitelist-applications}.ts`, `packages/db/test/search-and-retention-indexes.migration.test.ts`
+
+- 0119: триграммные GIN-индексы `players_canonical_name_normalized_trgm_idx` и `player_name_history_name_normalized_trgm_idx` для поиска ников `LIKE '%…%'` (B-tree такой поиск не обслуживает); `player_reports_reporter_created_idx (reporter_player_id, created_at)` и `player_reports_handler_player_idx`; `processed_events_processed_at_idx` под удаление по сроку хранения вместо неиспользуемого `processed_events_group_idx`.
+- 0120: `whitelist_applications.verified boolean NOT NULL DEFAULT false`; уникальность «одна ожидающая заявка на SteamID64» теперь отдельно для подтверждённых и неподтверждённых заявок, так что анонимная заявка на чужой SteamID больше не блокирует владельца.
+- Обе миграции совместимы с предыдущим релизом: меняются только индексы и добавляется столбец со значением по умолчанию.
+
+### `recomputeServerDailyStats`: онлайн и администраторы (#52)
+
+- Онлайн — это все подключённые сессии (`online`, `boost`, `seed`); раньше игроки в режиме сидинга и boost выпадали из `avg_online`, `peak_online`, `online_seconds`. Очередь (`queue`) по-прежнему считается отдельно.
+- Роль только с `reserve` (VIP, `QueuePriority`) больше не делает игрока администратором в `avg_admins`, `peak_admins`.
+- Уже посчитанные дни не пересчитываются: воркер переписывает только окно «вчера + сегодня».
+
+### `seed-demo` только для локальной базы (#52)
+
+- Скрипт отказывается работать при `NODE_ENV=production` и с хостом `DATABASE_URL`, отличным от `localhost`, `127.0.0.1`, `::1`, `postgres` (разрешить удалённую тестовую базу: `SEED_DEMO_ALLOW_REMOTE=1`). Он исключён из сборки (`tsconfig.build.json`) и не попадает в `dist/` и образ API. Демо-SteamID лежат ниже диапазона реальных аккаунтов; существующее название организации не затирается.
+
+---
+
 ## 2026-09-27
 
 ### Audit fixes from #36 (migrations 0119–0123)

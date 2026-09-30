@@ -25,6 +25,17 @@
 
 - `process_info`, `file_read_tail` and `file_write` from `BRIDGE_METHODS` (#45) — no production caller; `process_info` exposed any host process's command line. The allowlist now has 27 methods.
 
+## 2026-09-28 (#52)
+
+### Security
+
+- Новый `regex-safety.ts`: `detectDangerousRegex(pattern)` отклоняет вложенные квантификаторы переменной длины (`(a+)+`, `(.*a){20}`, `(a{1,100}){1,100}`), повторяемую альтернацию с пересекающимися ветвями (`(a|aa)+`, `(\w|\d)+`; допускается только альтернация литералов без общих префиксов вроде `(bad|worse)+`) и повторы больше 100. Коды ошибок: `nested_quantifier`, `alternation_under_quantifier`, `repeat_too_large`.
+- `validateBannedNamePattern` теперь проверяет regex-правила ников этим сканером (раньше — только компиляцию), `validateChatFlagPattern` использует общий сканер. `matchBannedName` и `compileChatFlagRule` не исполняют опасный шаблон, сохранённый до проверки.
+
+### Fixed
+
+- `renderDiscordTemplate`: значения берутся только из собственных строковых свойств контекста — `{constructor}`, `{__proto__}` и т. п. считаются отсутствующими и больше не роняют рендер. Пустые имя или значение поля заменяются на `—` (`DISCORD_EMPTY_FIELD_VALUE`), текст обрезается до лимитов Discord (`DISCORD_EMBED_LIMITS`, суммарно 6000 символов), чтобы Discord не отвечал 400.
+
 ## 2026-07-27
 
 ### Added

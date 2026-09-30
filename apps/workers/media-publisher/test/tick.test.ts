@@ -24,6 +24,7 @@ function makeJob(overrides: Partial<MediaPublicationJob> = {}): MediaPublication
     title: 'Клип',
     description: null,
     originalFilename: 'clip.mp4',
+    interrupted: false,
     ...overrides,
   };
 }
@@ -161,6 +162,23 @@ describe('runMediaPublisherTick', () => {
       MEDIA_PUBLISH_MAX_ATTEMPTS,
     );
     expect(deps.markRetry).not.toHaveBeenCalled();
+  });
+
+  it('fails a job reclaimed after interrupted uploads exhausted its budget, without publishing again (#52 finding 1129)', async () => {
+    const job = makeJob({ attempts: MEDIA_PUBLISH_MAX_ATTEMPTS, interrupted: true });
+    const telegram = vi.fn(async () => success);
+    const deps = makeDeps([job], { telegram });
+
+    const result = await runMediaPublisherTick(deps);
+
+    expect(telegram).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ failed: 1, published: 0 });
+    expect(deps.markFailed).toHaveBeenCalledWith(
+      job.id,
+      'upload_interrupted',
+      MEDIA_PUBLISH_MAX_ATTEMPTS,
+    );
+    expect(deps.emitted.map((e) => e.kind)).toContain('media_publish.failed');
   });
 
   it('fails a non-retryable error immediately without consuming further attempts', async () => {

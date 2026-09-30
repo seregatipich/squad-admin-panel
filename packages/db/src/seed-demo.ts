@@ -6,31 +6,67 @@
  * Idempotent: safe to rerun (upserts by steam_id64 / slug, mints a fresh
  * session token each time).
  *
- * NEVER point this at a production DATABASE_URL — it inserts fabricated
- * players and a bypass session. Local dev only.
+ * Local dev only, and enforced: the script refuses to run under
+ * `NODE_ENV=production` or against a database host other than localhost,
+ * 127.0.0.1, ::1 or the compose service `postgres` (set
+ * `SEED_DEMO_ALLOW_REMOTE=1` for a disposable remote dev database). It is also
+ * excluded from the package build (`tsconfig.build.json`), so it never reaches
+ * `dist/` or the API image — run it from source with tsx.
  *
  * Usage: DATABASE_URL=postgres://... pnpm --filter @squad/db seed:demo
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 
-const url = process.env.DATABASE_URL;
-if (!url) {
-  console.error('DATABASE_URL is required');
-  process.exit(1);
-}
+/** Database hosts the seeder accepts without `SEED_DEMO_ALLOW_REMOTE=1`. */
+const LOCAL_DATABASE_HOSTS: ReadonlySet<string> = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  'postgres',
+]);
 
-const ADMIN_STEAM_ID = 76561198000000001n;
+/**
+ * The demo Owner's SteamID. It sits below 76561197960265728, the first
+ * individual Steam64 ID, so no real Steam account can ever sign in as it.
+ */
+export const DEMO_ADMIN_STEAM_ID = 76561190000000001n;
 const DEMO_PLAYERS: Array<{ steamId: bigint; name: string }> = [
-  { steamId: 76561198000000002n, name: 'PineappleOnPizza' },
-  { steamId: 76561198000000003n, name: 'GrumpyMedic' },
-  { steamId: 76561198000000004n, name: 'SlowLoris_RU' },
-  { steamId: 76561198000000005n, name: 'НочнойДозор' },
-  { steamId: 76561198000000006n, name: 'xX_Sniper_Xx' },
+  { steamId: 76561190000000002n, name: 'PineappleOnPizza' },
+  { steamId: 76561190000000003n, name: 'GrumpyMedic' },
+  { steamId: 76561190000000004n, name: 'SlowLoris_RU' },
+  { steamId: 76561190000000005n, name: 'НочнойДозор' },
+  { steamId: 76561190000000006n, name: 'xX_Sniper_Xx' },
 ];
 
-async function main() {
-  const sql = postgres(url as string, { max: 1 });
+/**
+ * Decides whether the seeder may run against the environment it was given.
+ *
+ * @param env The process environment (`DATABASE_URL`, `NODE_ENV`, `SEED_DEMO_ALLOW_REMOTE`).
+ * @returns `null` when seeding is allowed, otherwise the reason it is refused.
+ */
+export function seedDemoRefusal(env: NodeJS.ProcessEnv): string | null {
+  const url = env.DATABASE_URL;
+  if (!url) return 'DATABASE_URL is required';
+  if (env.NODE_ENV === 'production') {
+    return 'NODE_ENV=production: demo data and an Owner bypass session never belong in production';
+  }
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return 'DATABASE_URL is not a valid URL';
+  }
+  if (!LOCAL_DATABASE_HOSTS.has(host) && env.SEED_DEMO_ALLOW_REMOTE !== '1') {
+    return `database host "${host}" is not local; set SEED_DEMO_ALLOW_REMOTE=1 if it is a disposable dev database`;
+  }
+  return null;
+}
+
+async function main(url: string) {
+  const sql = postgres(url, { max: 1 });
 
   const ownerRole = await sql`
     SELECT id FROM roles WHERE name = 'Owner' AND is_system_role = true LIMIT 1
@@ -47,7 +83,7 @@ async function main() {
       role_id, role_expires_at, role_comment
     )
     VALUES (
-      ${ADMIN_STEAM_ID.toString()}, 'Local Test Admin', 'local test admin',
+      ${DEMO_ADMIN_STEAM_ID.toString()}, 'Local Test Admin', 'local test admin',
       ${ownerRoleId}, NULL, NULL
     )
     ON CONFLICT (steam_id64) DO UPDATE SET
@@ -61,7 +97,10 @@ async function main() {
 
   await sql`
     UPDATE panel_meta
-    SET first_owner_claimed = true, setup_completed = true, organization_name = 'Local Dev Squad'
+    SET first_owner_claimed = true,
+        setup_completed = true,
+        organization_name = CASE WHEN organization_name = '' THEN 'Local Dev Squad'
+                                 ELSE organization_name END
     WHERE id = 1
   `;
 
@@ -91,7 +130,7 @@ async function main() {
 
   console.log('');
   console.log('✓ Demo data seeded.');
-  console.log(`  Admin: Local Test Admin (Owner role), steam_id64=${ADMIN_STEAM_ID}`);
+  console.log(`  Admin: Local Test Admin (Owner role), steam_id64=${DEMO_ADMIN_STEAM_ID}`);
   console.log(`  + ${DEMO_PLAYERS.length} example players, 1 pending demo server.`);
   console.log('');
   console.log('To log in without Steam, add a cookie manually in your browser');
@@ -107,7 +146,23 @@ async function main() {
   await sql.end();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isMainEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntrypoint()) {
+  const refusal = seedDemoRefusal(process.env);
+  if (refusal) {
+    console.error(`seed-demo: refusing to seed demo data — ${refusal}`);
+    process.exit(1);
+  }
+  main(process.env.DATABASE_URL as string).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

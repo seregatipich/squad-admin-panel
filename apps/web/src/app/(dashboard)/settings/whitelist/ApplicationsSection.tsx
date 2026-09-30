@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Badge,
   Button,
   Card,
   CardBody,
@@ -35,6 +36,8 @@ interface ApplicationItem {
   granted_role_name: string | null;
   granted_until: string | null;
   source: string;
+  /** True when submitted from a Steam login for this SteamID64 (ownership proven). */
+  verified: boolean;
   created_at: string;
   decided_at: string | null;
 }
@@ -332,7 +335,18 @@ export function ApplicationsSection({
             {items.map((app) => (
               <li key={app.id} className="space-y-2 rounded-card border border-line bg-raised p-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="font-mono text-[13px]">{app.steam_id64}</span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-[13px]">{app.steam_id64}</span>
+                    {app.verified ? (
+                      <Badge tone="good" size="sm">
+                        SteamID подтверждён входом через Steam
+                      </Badge>
+                    ) : (
+                      <Badge tone="warn" size="sm">
+                        SteamID не подтверждён
+                      </Badge>
+                    )}
+                  </span>
                   <span className="text-xs text-ink-3">{formatDate(app.created_at)}</span>
                 </div>
                 <div className="text-xs text-ink-3">

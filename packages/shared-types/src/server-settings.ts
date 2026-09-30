@@ -8,7 +8,8 @@ export const serverSettingsUpdate = z
     rcon_port: z.number().int().min(1024).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),
     tickrate: z.number().int().min(10).max(60).optional(),
-    multihome: z.string().nullable().optional(),
+    // A bare IP literal only: the bridge puts it on the Squad command line (#52).
+    multihome: z.string().ip().nullable().optional(),
     extra_args: z.string().optional(),
     cpu_affinity: z.string().nullable().optional(),
     cpu_weight: z.number().int().min(1).max(10_000).nullable().optional(),

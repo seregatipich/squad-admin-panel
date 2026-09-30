@@ -100,7 +100,13 @@ export default function PublicWhitelistPage() {
         return;
       }
       if (res.status === 409) {
-        setError('Заявка с этим SteamID64 уже на рассмотрении.');
+        setError(
+          'Заявка с этим SteamID64 уже на рассмотрении. Если вы её не подавали, войдите через Steam и отправьте заявку снова.',
+        );
+        return;
+      }
+      if (res.status === 403) {
+        setError('SteamID64 не совпадает с аккаунтом Steam, под которым вы вошли.');
         return;
       }
       if (res.status === 400) {
@@ -200,6 +206,15 @@ export default function PublicWhitelistPage() {
                   placeholder="Discord, Steam-профиль…"
                 />
               </FieldRow>
+
+              <p className="text-xs text-ink-3">
+                После входа через Steam заявка будет подтверждённой: подать её от вашего имени никто
+                не сможет. Войдя, вернитесь на эту страницу.{' '}
+                {/* A plain <a>: the login is a full-page redirect to Steam, not a client route. */}
+                <a href="/api/v1/auth/steam/login" className="text-accent-ink underline">
+                  Войти через Steam
+                </a>
+              </p>
 
               <Button type="submit" variant="primary" loading={submitting}>
                 Отправить заявку

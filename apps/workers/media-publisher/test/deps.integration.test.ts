@@ -11,6 +11,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMediaPublisherDeps, type MediaPublisherDepsOptions } from '../src/deps.js';
+import { MEDIA_PUBLISH_LEASE_MS } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -135,6 +136,7 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
       storagePath: '2026/07/a.mp4',
       mimeType: 'video/mp4',
       originalFilename: 'clip.mp4',
+      interrupted: false,
     });
     expect((await readPublication(pubId)).status).toBe('uploading');
   });
@@ -176,6 +178,50 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
     const claimed = await makeDeps().claimDue(NOW, 10);
 
     expect(claimed.map((j) => j.id)).not.toContain(pubId);
+  });
+
+  it('stamps a lease on a claimed publication (#52 finding 1129)', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/lease.mp4' });
+    const pubId = await insertPublication({ mediaId });
+
+    await makeDeps().claimDue(NOW, 10);
+
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+    expect(row.nextAttemptAt?.getTime()).toBe(NOW.getTime() + MEDIA_PUBLISH_LEASE_MS);
+  });
+
+  it('does not reclaim an uploading publication whose lease is still running', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/in-flight.mp4' });
+    const pubId = await insertPublication({ mediaId, status: 'uploading', nextAttemptAt: FUTURE });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).not.toContain(pubId);
+  });
+
+  it('reclaims a publication stranded in uploading once its lease expired, burning an attempt (#52 finding 1129)', async () => {
+    // The worker died mid-upload (OOM, SIGKILL, deploy): nothing ever moved the
+    // row out of 'uploading', and the (media_id, destination) unique index
+    // blocks queueing it again.
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/stranded.mp4' });
+    const pubId = await insertPublication({
+      mediaId,
+      status: 'uploading',
+      attempts: 2,
+      nextAttemptAt: PAST,
+    });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    const mine = claimed.filter((j) => j.id === pubId);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ attempts: 3, interrupted: true });
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+    expect(row.attempts).toBe(3);
+    expect(row.error).toBe('upload_interrupted');
+    expect(row.nextAttemptAt?.getTime()).toBe(NOW.getTime() + MEDIA_PUBLISH_LEASE_MS);
   });
 
   it('never hands the same publication to two concurrent claims', async () => {

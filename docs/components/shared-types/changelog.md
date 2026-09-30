@@ -5,6 +5,11 @@
 ### Security
 - `api.ts` (#34): `externalRconHost` refuses hosts that land on the panel host itself (loopback, unspecified, link-local, IPv4-mapped/compatible IPv6, `localhost`, `*.docker.internal`, `*.containers.internal`, single-label names, non-canonical numeric IPv4 such as `127.1`), and `rconPasswordString` refuses CR, LF and NUL. Both replace the bare `rconHostString` / `z.string()` fields in `externalServerCreateInput` and `externalServerConnectionUpdate`; `rconHostString` itself (used by `ssh_host`) is unchanged.
 
+## 2026-09-28
+
+### Security
+- `serverCreateInput.multihome` и `serverSettingsUpdate.multihome` принимают только IP-литерал (`z.string().ip()`): bridge подставляет значение в командную строку сервера Squad (`RCONIP=`/`MULTIHOME=`), и строка с пробелами могла добавить параметры запуска (#52).
+
 ## 2026-07-27
 
 ### Added
