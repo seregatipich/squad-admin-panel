@@ -1,6 +1,5 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -10,13 +9,16 @@ import {
   CardHeader,
   EmptyState,
   InlineBanner,
-  Select,
   Skeleton,
   StatTile,
-  Toolbar,
 } from '@/components/ui';
 import {
-  buildVotesQuery,
+  type AnalyticsServerOption,
+  AnalyticsToolbar,
+  AXIS_HOURS,
+  useAnalyticsWindow,
+} from './analytics-window';
+import {
   formatPassRate,
   formatTrendDay,
   formatVoteHour,
@@ -25,94 +27,14 @@ import {
   trendScale,
   VOTE_WINDOW_PRESETS,
   type VoteAnalytics,
-  voteWindowRange,
 } from './vote-analytics-data';
 
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
-
-const AXIS_HOURS = [0, 6, 12, 18];
-
-/*
- * Ссылка на выгрузку остаётся обычным `<a download>`, а не `ButtonLink`:
- * `next/link` перехватывает клик и уводит в клиентскую навигацию, из-за чего
- * файл не скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
- */
-const DOWNLOAD_LINK_CLASS =
-  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
-
-export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
-  const [serverId, setServerId] = useState<string>('');
-  const [windowDays, setWindowDays] = useState<number>(VOTE_WINDOW_PRESETS[1].days);
-  const [data, setData] = useState<VoteAnalytics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const serverSelectId = useId();
-  const windowSelectId = useId();
-
-  // See AnalyticsPanel: `voteWindowRange()` is recomputed on every `load()`
-  // call rather than cached per `windowDays`, so a server switch or a
-  // "Повторить" click never replays a stale `to`; `range` (for the CSV
-  // href) is only committed after a successful load.
-  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
-  // Guards against two in-flight requests racing (fast server/period
-  // switches): only the response matching the most recently issued request
-  // is applied, and `loading` only clears once that request settles.
-  const loadTokenRef = useRef(0);
-
-  const load = useCallback(async () => {
-    const freshRange = voteWindowRange(windowDays);
-    const requestId = ++loadTokenRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const query = buildVotesQuery({
-        serverId: serverId || null,
-        from: freshRange.from,
-        to: freshRange.to,
-      });
-      const res = await fetch(`/api/v1/analytics/votes${query}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      const body = (await res.json()) as VoteAnalytics;
-      if (loadTokenRef.current !== requestId) return;
-      setData(body);
-      setRange(freshRange);
-    } catch (e) {
-      if (loadTokenRef.current !== requestId) return;
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (loadTokenRef.current === requestId) setLoading(false);
-    }
-  }, [serverId, windowDays]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const csvHref = `/api/v1/analytics/votes${buildVotesQuery({
-    serverId: serverId || null,
-    from: range?.from,
-    to: range?.to,
-    format: 'csv',
-  })}`;
-
-  const exportJson = useCallback(() => {
-    if (!data) return;
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'vote-analytics.json';
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }, [data]);
+export function VoteAnalyticsPanel({ servers }: { servers: AnalyticsServerOption[] }) {
+  const state = useAnalyticsWindow<VoteAnalytics>(
+    '/api/v1/analytics/votes',
+    VOTE_WINDOW_PRESETS[1].days,
+  );
+  const { data, error, load } = state;
 
   const trendMax = data ? trendScale(data.trend) : 1;
   const hourMax = data ? hourScale(data.by_hour) : 1;
@@ -122,58 +44,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     <Card as="section" padding="none">
       <CardHeader title="Голосования" />
       <CardBody padding="sm" className="border-b border-line">
-        <Toolbar
-          filters={
-            <>
-              <label className="sr-only" htmlFor={serverSelectId}>
-                Сервер
-              </label>
-              <div className="w-44">
-                <Select
-                  id={serverSelectId}
-                  size="sm"
-                  value={serverId}
-                  onChange={(e) => setServerId(e.target.value)}
-                >
-                  <option value="">Все серверы</option>
-                  {servers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.display_name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <label className="sr-only" htmlFor={windowSelectId}>
-                Период
-              </label>
-              <div className="w-28">
-                <Select
-                  id={windowSelectId}
-                  size="sm"
-                  value={windowDays}
-                  onChange={(e) => setWindowDays(Number(e.target.value))}
-                >
-                  {VOTE_WINDOW_PRESETS.map((preset) => (
-                    <option key={preset.days} value={preset.days}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </>
-          }
-          summary={loading ? 'Обновляем…' : undefined}
-          actions={
-            <>
-              <a href={csvHref} download className={DOWNLOAD_LINK_CLASS}>
-                CSV
-              </a>
-              <Button size="sm" onClick={exportJson} disabled={!data}>
-                JSON
-              </Button>
-            </>
-          }
-        />
+        <AnalyticsToolbar servers={servers} window={state} jsonFileName="vote-analytics.json" />
       </CardBody>
 
       {error ? (

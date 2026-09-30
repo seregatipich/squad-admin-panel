@@ -127,6 +127,94 @@ describeIfDb('GET /api/v1/clans', () => {
     expect(body.items.some((c) => c.id === deletedId)).toBe(false);
   });
 
+  describe('server-side q/sort/order/page/limit', () => {
+    const PAGED_PREFIX = 'Пагинация-';
+    const pagedIds: string[] = [];
+
+    beforeAll(async () => {
+      // Three clans with distinct member counts (0, 1, 2) and one searchable tag.
+      for (const [index, suffix] of ['Бета', 'Альфа', 'Гамма'].entries()) {
+        const id = uuidv7();
+        pagedIds.push(id);
+        await h.db.insert(clans).values({
+          id,
+          name: `${PAGED_PREFIX}${suffix}`,
+          tags: index === 2 ? ['ZZQ'] : [],
+        });
+        if (index > 0) {
+          const extra = await h.db
+            .insert(players)
+            .values(
+              Array.from({ length: index }, (_, n) => ({
+                steamId64: testSteamId(871000 + index * 10 + n),
+                canonicalName: `Пагин-${index}-${n}`,
+                canonicalNameNormalized: `пагин-${index}-${n}`,
+              })),
+            )
+            .returning({ id: players.id });
+          await h.db.insert(clanMembers).values(
+            extra.map((p, n) => ({
+              clanId: id,
+              playerId: p.id,
+              memberRole: n === 0 ? 'leader' : 'member',
+            })),
+          );
+        }
+      }
+    });
+
+    async function list(query: string) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans?${query}`,
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(200);
+      return res.json() as {
+        items: Array<{ name: string; member_count: number }>;
+        total: number;
+      };
+    }
+
+    it('filters by name substring and reports the matching total', async () => {
+      const body = await list(`q=${encodeURIComponent('пагинация-а')}`);
+      expect(body.items.map((c) => c.name)).toEqual([`${PAGED_PREFIX}Альфа`]);
+      expect(body.total).toBe(1);
+    });
+
+    it('filters by tag', async () => {
+      const body = await list('q=zzq');
+      expect(body.items.map((c) => c.name)).toEqual([`${PAGED_PREFIX}Гамма`]);
+    });
+
+    it('sorts by member count descending and paginates with the full total', async () => {
+      const first = await list(
+        `q=${encodeURIComponent(PAGED_PREFIX)}&sort=members&order=desc&page=1&limit=2`,
+      );
+      expect(first.total).toBe(3);
+      expect(first.items.map((c) => c.member_count)).toEqual([2, 1]);
+      const second = await list(
+        `q=${encodeURIComponent(PAGED_PREFIX)}&sort=members&order=desc&page=2&limit=2`,
+      );
+      expect(second.total).toBe(3);
+      expect(second.items.map((c) => c.member_count)).toEqual([0]);
+    });
+
+    it('treats LIKE wildcards in q literally', async () => {
+      const body = await list(`q=${encodeURIComponent('%')}`);
+      expect(body.items).toEqual([]);
+    });
+
+    it('rejects an out-of-range limit with 400', async () => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/clans?limit=100000',
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
   it('rejects an authenticated user without panel access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
@@ -171,6 +259,28 @@ describeIfDb('GET /api/v1/clans/:id', () => {
     expect(leader?.canonical_name).toBe('Owner');
     const member = body.members.find((m) => m.member_role === 'member');
     expect(member?.player_id).toBe(memberPlayerId);
+  });
+
+  it('omits the roster but keeps priority_count for ?include=none', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}?include=none`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { id: string; priority_count: number; members?: unknown };
+    expect(body.id).toBe(clanId);
+    expect(body.priority_count).toBe(1);
+    expect(body).not.toHaveProperty('members');
+  });
+
+  it('rejects an unknown include value with 400', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}?include=everything`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('returns 404 for an unknown clan id', async () => {

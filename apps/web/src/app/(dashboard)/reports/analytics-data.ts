@@ -2,6 +2,14 @@
  * Types and pure helpers for the REPORT-5 (#115) reports analytics panel.
  * Mirrors apps/web/src/app/(dashboard)/dashboard/vote-analytics-data.ts.
  */
+import {
+  ANALYTICS_WINDOW_PRESETS,
+  analyticsWindowRange,
+  buildAnalyticsWindowQuery,
+  formatTrendDay,
+  maxOrOne,
+} from '@/lib/analytics-window';
+
 export interface ReportAnalytics {
   server_id: string | null;
   from: string;
@@ -47,43 +55,10 @@ export interface ReportAnalytics {
   }>;
 }
 
-export const REPORTS_WINDOW_PRESETS = [
-  { days: 7, label: '7 дней' },
-  { days: 30, label: '30 дней' },
-  { days: 90, label: '90 дней' },
-] as const;
-
-export function reportsWindowRange(
-  days: number,
-  now: Date = new Date(),
-): { from: string; to: string } {
-  const to = now;
-  const from = new Date(to.getTime() - days * 86_400_000);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
-
-export function buildReportsAnalyticsQuery(params: {
-  serverId?: string | null;
-  from?: string;
-  to?: string;
-  format?: 'json' | 'csv';
-}): string {
-  const query = new URLSearchParams();
-  if (params.serverId) query.set('server_id', params.serverId);
-  if (params.from) query.set('from', params.from);
-  if (params.to) query.set('to', params.to);
-  if (params.format) query.set('format', params.format);
-  const suffix = query.toString();
-  return suffix ? `?${suffix}` : '';
-}
-
-export function formatTrendDay(day: string): string {
-  const parsed = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return day;
-  // See the identical helper in dashboard/vote-analytics-data.ts (#547):
-  // `day` is a UTC calendar date, so it must be formatted in UTC too.
-  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
-}
+export const REPORTS_WINDOW_PRESETS = ANALYTICS_WINDOW_PRESETS;
+export const reportsWindowRange = analyticsWindowRange;
+export const buildReportsAnalyticsQuery = buildAnalyticsWindowQuery;
+export { formatTrendDay };
 
 /** Formats a duration in seconds as Russian "2 ч 15 м" / "45 с" / "3 м". Null/negative renders "—". */
 export function formatDurationRu(seconds: number | null): string {
@@ -106,5 +81,5 @@ export function formatAccuracy(accuracy: number): string {
 }
 
 export function trendScale(trend: Array<{ count: number }>): number {
-  return trend.reduce((max, entry) => Math.max(max, entry.count), 0) || 1;
+  return maxOrOne(trend.map((entry) => entry.count));
 }

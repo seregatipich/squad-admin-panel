@@ -34,7 +34,8 @@ function json(body: unknown): Promise<Response> {
 function mockFetch() {
   return vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
-    if (url === '/api/v1/clans/00000000-0000-0000-0000-0000000000c1') return json(CLAN);
+    if (url === '/api/v1/clans/00000000-0000-0000-0000-0000000000c1?include=none')
+      return json(CLAN);
     if (url === '/api/v1/clans/00000000-0000-0000-0000-0000000000c1/online')
       return json({ clan_id: '00000000-0000-0000-0000-0000000000c1', servers: [] });
     if (url.startsWith('/api/v1/clans/00000000-0000-0000-0000-0000000000c1/matches')) {
@@ -85,6 +86,26 @@ describe('ClanDetailPage', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it('loads the header without the roster and fetches /me once for the page and roster (#522)', async () => {
+    const fetchSpy = mockFetch();
+    vi.stubGlobal('fetch', fetchSpy);
+    const params = Promise.resolve({ id: '00000000-0000-0000-0000-0000000000c1' });
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ClanDetailPage params={params} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByDisplayValue('Альфа')).toBeInTheDocument();
+    const urls = fetchSpy.mock.calls.map(([input]) =>
+      typeof input === 'string' ? input : String(input),
+    );
+    expect(urls).toContain('/api/v1/clans/00000000-0000-0000-0000-0000000000c1?include=none');
+    expect(urls.filter((url) => url === '/api/v1/me')).toHaveLength(1);
+  });
 
   it('rejects a non-UUID clan id instead of interpolating it into API paths (#514)', async () => {
     const fetchSpy = mockFetch();
@@ -176,7 +197,7 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
     const staleLoadMore = deferred<Response>();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url === `/api/v1/clans/${CLAN.id}`) return json(CLAN);
+      if (url === `/api/v1/clans/${CLAN.id}?include=none`) return json(CLAN);
       if (url === `/api/v1/clans/${CLAN.id}/online`) return json({ clan_id: CLAN.id, servers: [] });
       if (url === '/api/v1/servers') return json({ items: [] });
       if (url === '/api/v1/me') return json({ can_manage_clans: true });
@@ -235,7 +256,7 @@ describe('ClanDetailPage — match server filter (#523)', () => {
   it('offers every known server even when loaded matches come from one server', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url === `/api/v1/clans/${CLAN.id}`) return json(CLAN);
+      if (url === `/api/v1/clans/${CLAN.id}?include=none`) return json(CLAN);
       if (url === `/api/v1/clans/${CLAN.id}/online`) return json({ clan_id: CLAN.id, servers: [] });
       if (url === '/api/v1/servers') {
         return json({

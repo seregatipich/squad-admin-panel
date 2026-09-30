@@ -327,6 +327,62 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(new Set(seen).size).toBe(4000);
   });
 
+  it.each(['desc', 'asc'] as const)(
+    'sorts globally by damage %s across cursor pages with a (damage,id) keyset (#532)',
+    async (dir) => {
+      const seen: Array<{ id: number; damage: number }> = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      do {
+        const qs = `?serverId=${serverA}&type=damage&sort=damage&dir=${dir}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+        const body: ListResponse = await list(qs);
+        for (const row of body.rows) seen.push({ id: row.id, damage: Number(row.damage) });
+        cursor = body.nextCursor;
+        pages += 1;
+        expect(pages).toBeLessThan(50);
+      } while (cursor);
+
+      expect(seen).toHaveLength(1000);
+      expect(new Set(seen.map((row) => row.id)).size).toBe(1000);
+      const factor = dir === 'desc' ? -1 : 1;
+      for (let i = 1; i < seen.length; i += 1) {
+        const prev = seen[i - 1] as { id: number; damage: number };
+        const cur = seen[i] as { id: number; damage: number };
+        const byDamage = (cur.damage - prev.damage) * factor;
+        expect(byDamage).toBeGreaterThanOrEqual(0);
+        if (byDamage === 0) expect((cur.id - prev.id) * factor).toBeGreaterThan(0);
+      }
+      expect(seen[0]?.damage).toBe(dir === 'desc' ? 97 : 1);
+    },
+  );
+
+  it('rejects a time cursor on a damage-sorted request and an unknown sort', async () => {
+    const first = await list(`?serverId=${serverA}&limit=10`);
+    const timeCursor = encodeURIComponent(first.nextCursor ?? '');
+    const mismatched = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/combat-events?serverId=${serverA}&sort=damage&cursor=${timeCursor}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(mismatched.statusCode).toBe(400);
+    const unknown = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/combat-events?sort=weapon',
+      headers: { cookie: ownerCookie },
+    });
+    expect(unknown.statusCode).toBe(400);
+  });
+
+  it('excludes teamkills with excludeTeamkills=true and counts them exactly (#537)', async () => {
+    const all = await list(`?serverId=${serverA}&type=death&limit=1`);
+    const enemyKills = await list(
+      `?serverId=${serverA}&type=death&excludeTeamkills=true&limit=200`,
+    );
+    expect(all.approxTotal).toBe(1000);
+    expect(enemyKills.approxTotal).toBe(960);
+    expect(enemyKills.rows.every((row) => row.isTeamkill === false)).toBe(true);
+  });
+
   it('counts approxTotal on the first page only, not on cursor pages (#144)', async () => {
     const first = await list(`?serverId=${serverA}&type=death&limit=10`);
     expect(first.approxTotal).toBe(1000);

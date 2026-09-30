@@ -123,6 +123,37 @@ describe('CombatLog — live feed ignores non-matching events under a narrow fac
   });
 });
 
+describe('CombatLog — damage sort is applied by the API (#532)', () => {
+  it('requests sort=damage and re-queries with the flipped direction when the header is clicked', async () => {
+    currentSearchParams = new URLSearchParams({ facet: 'damage' });
+    const fetchSpy = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/combat-events')) {
+        const body: CombatListResponse = {
+          rows: [{ ...historyRow(1), eventType: 'damage', damage: '50' }],
+          nextCursor: null,
+          approxTotal: 1,
+        };
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<CombatLog />);
+
+    const header = (await screen.findAllByRole('button', { name: /Урон/ }))[0] as HTMLElement;
+    const listUrls = () =>
+      fetchSpy.mock.calls
+        .map(([input]) => String(input))
+        .filter((url) => url.startsWith('/api/v1/combat-events?'));
+    expect(listUrls()[0]).toContain('sort=damage&dir=desc');
+
+    fireEvent.click(header);
+    await screen.findAllByRole('button', { name: /Урон/ });
+    await vi.waitFor(() => expect(listUrls().at(-1)).toContain('sort=damage&dir=asc'));
+  });
+});
+
 describe('CombatLog — PlayerAutocomplete blur only commits on an actual change (#530)', () => {
   it('does not clear a deep-linked attackerPlayerId when the "Кто" field is blurred without typing', async () => {
     currentSearchParams = new URLSearchParams({

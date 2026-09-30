@@ -67,6 +67,18 @@ describe('ClansPage', () => {
     expect(screen.getByText('Бессрочно')).toBeInTheDocument();
   });
 
+  it('asks the API for the search, sort and page instead of filtering in the browser (#524)', async () => {
+    const fetchSpy = mockFetch(false);
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<ClansPage />);
+    await screen.findByText('Альфа');
+
+    const clanUrls = fetchSpy.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.startsWith('/api/v1/clans'));
+    expect(clanUrls).toEqual(['/api/v1/clans?sort=name&order=asc&page=1&limit=25']);
+  });
+
   it('hides the create button without can_manage_clans', async () => {
     vi.stubGlobal('fetch', mockFetch(false));
     render(<ClansPage />);

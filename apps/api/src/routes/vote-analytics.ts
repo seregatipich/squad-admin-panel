@@ -1,3 +1,4 @@
+import type { VoteAnalytics } from '@squad/shared-types';
 import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -45,39 +46,7 @@ function passRate(passed: number, total: number): number {
   return Math.round((passed / total) * 1000) / 10;
 }
 
-interface VoteAnalyticsPayload {
-  server_id: string | null;
-  from: string;
-  to: string;
-  summary: {
-    total_votes: number;
-    passed: number;
-    failed: number;
-    cancelled: number;
-    pass_rate: number;
-  };
-  pass_rate_by_server: Array<{
-    server_id: string;
-    server_name: string | null;
-    total: number;
-    passed: number;
-    pass_rate: number;
-  }>;
-  pass_rate_by_map: Array<{ map: string; total: number; passed: number; pass_rate: number }>;
-  trend: Array<{ day: string; count: number }>;
-  top_initiators: Array<{
-    player_id: string;
-    nickname: string | null;
-    initiated: number;
-    passed: number;
-    success_ratio: number;
-  }>;
-  by_hour: Array<{ hour: number; count: number }>;
-  serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
-  serial_skipper_window_days: number;
-}
-
-function toCsv(payload: VoteAnalyticsPayload): string {
+function toCsv(payload: VoteAnalytics): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
     lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
@@ -240,7 +209,7 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       const hourMap = new Map<number, number>();
       for (const row of hourRows) hourMap.set(Number(row.hour), Number(row.count));
 
-      const payload: VoteAnalyticsPayload = {
+      const payload: VoteAnalytics = {
         server_id: serverId,
         from: fromIso,
         to: toIso,

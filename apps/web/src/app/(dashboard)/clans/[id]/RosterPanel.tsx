@@ -198,8 +198,26 @@ export function deriveCapabilities(
  * нативным `confirm()`: диалог называет игрока по имени, ставит подтверждающую
  * кнопку справа и возвращает фокус на строку, из которой был вызван.
  */
-export default function RosterPanel({ clanId }: { clanId: string }) {
-  const [me, setMe] = useState<MeResponse | null>(null);
+export default function RosterPanel({
+  clanId,
+  canManageClans,
+}: {
+  clanId: string;
+  /**
+   * The viewer's global `can_manage_clans` flag when the parent already knows
+   * it (`null` while the parent is still loading it). When omitted the panel
+   * fetches `/api/v1/me` itself.
+   */
+  canManageClans?: boolean | null;
+}) {
+  const [fetchedMe, setMe] = useState<MeResponse | null>(null);
+  const me = useMemo<MeResponse | null>(
+    () =>
+      typeof canManageClans === 'boolean'
+        ? { player_id: '', can_manage_clans: canManageClans }
+        : fetchedMe,
+    [canManageClans, fetchedMe],
+  );
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -280,8 +298,8 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   }, [clanId, q, sort, order, page]);
 
   useEffect(() => {
-    void loadMe();
-  }, [loadMe]);
+    if (canManageClans === undefined) void loadMe();
+  }, [loadMe, canManageClans]);
 
   useEffect(() => {
     void loadRoster();

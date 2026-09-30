@@ -471,6 +471,16 @@ describe('RosterPanel (rendered)', () => {
     expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
   });
 
+  it('uses the canManageClans prop instead of fetching /me (#522)', async () => {
+    const fetchMock = mockFetch({ priorityOk: true });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<RosterPanel clanId="clan-1" canManageClans={true} />);
+
+    expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls).not.toContain('/api/v1/me');
+  });
+
   it('renders a CSV export link pointing at the roster export endpoint', async () => {
     vi.stubGlobal('fetch', mockFetch({ priorityOk: true }));
     render(<RosterPanel clanId="clan-1" />);

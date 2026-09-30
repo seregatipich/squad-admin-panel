@@ -1,41 +1,14 @@
-export interface VoteAnalytics {
-  server_id: string | null;
-  from: string;
-  to: string;
-  summary: {
-    total_votes: number;
-    passed: number;
-    failed: number;
-    cancelled: number;
-    pass_rate: number;
-  };
-  pass_rate_by_server: Array<{
-    server_id: string;
-    server_name: string | null;
-    total: number;
-    passed: number;
-    pass_rate: number;
-  }>;
-  pass_rate_by_map: Array<{ map: string; total: number; passed: number; pass_rate: number }>;
-  trend: Array<{ day: string; count: number }>;
-  top_initiators: Array<{
-    player_id: string;
-    nickname: string | null;
-    initiated: number;
-    passed: number;
-    success_ratio: number;
-  }>;
-  by_hour: Array<{ hour: number; count: number }>;
-  serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
-  /** Trailing window the skipper threshold applies to; absent on older API builds. */
-  serial_skipper_window_days?: number;
-}
+import {
+  ANALYTICS_WINDOW_PRESETS,
+  analyticsWindowRange,
+  buildAnalyticsWindowQuery,
+  formatTrendDay,
+  maxOrOne,
+} from '@/lib/analytics-window';
 
-export const VOTE_WINDOW_PRESETS = [
-  { days: 7, label: '7 дней' },
-  { days: 30, label: '30 дней' },
-  { days: 90, label: '90 дней' },
-] as const;
+export type { VoteAnalytics } from '@squad/shared-types';
+
+export const VOTE_WINDOW_PRESETS = ANALYTICS_WINDOW_PRESETS;
 
 export function formatVoteHour(hour: number): string {
   return `${String(hour).padStart(2, '0')}:00`;
@@ -62,42 +35,14 @@ export function passRateTone(rate: number): 'good' | 'warn' | 'crit' {
 }
 
 export function trendScale(trend: Array<{ count: number }>): number {
-  return trend.reduce((max, entry) => Math.max(max, entry.count), 0) || 1;
+  return maxOrOne(trend.map((entry) => entry.count));
 }
 
 export function hourScale(byHour: Array<{ count: number }>): number {
-  return byHour.reduce((max, entry) => Math.max(max, entry.count), 0) || 1;
+  return maxOrOne(byHour.map((entry) => entry.count));
 }
 
-export function formatTrendDay(day: string): string {
-  const parsed = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return day;
-  // `day` is already a UTC calendar date (`to_char(... AT TIME ZONE 'UTC')`
-  // on the API side); without `timeZone: 'UTC'` here the browser's local
-  // zone shifts it — a negative UTC offset renders the day before.
-  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
-}
+export { formatTrendDay };
 
-export function buildVotesQuery(params: {
-  serverId?: string | null;
-  from?: string;
-  to?: string;
-  format?: 'json' | 'csv';
-}): string {
-  const query = new URLSearchParams();
-  if (params.serverId) query.set('server_id', params.serverId);
-  if (params.from) query.set('from', params.from);
-  if (params.to) query.set('to', params.to);
-  if (params.format) query.set('format', params.format);
-  const suffix = query.toString();
-  return suffix ? `?${suffix}` : '';
-}
-
-export function voteWindowRange(
-  days: number,
-  now: Date = new Date(),
-): { from: string; to: string } {
-  const to = now;
-  const from = new Date(to.getTime() - days * 86_400_000);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
+export const buildVotesQuery = buildAnalyticsWindowQuery;
+export const voteWindowRange = analyticsWindowRange;

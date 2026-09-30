@@ -177,7 +177,8 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     [],
   );
   const [allServers, setAllServers] = useState<ServerOption[]>([]);
-  const [canManageClans, setCanManageClans] = useState(false);
+  // null until /me answers; RosterPanel waits for it instead of fetching /me itself.
+  const [canManageClans, setCanManageClans] = useState<boolean | null>(null);
   // The filter lists every known server (not only those seen on the loaded
   // history pages, finding #523); servers found in matches but no longer
   // listed are appended so their matches stay filterable.
@@ -199,7 +200,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       return;
     }
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}`, {
+      const res = await fetch(`/api/v1/clans/${clanId}?include=none`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -287,11 +288,15 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     void (async () => {
       try {
         const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          setCanManageClans(false);
+          return;
+        }
         const body = (await res.json()) as MeResponse;
         setCanManageClans(body.can_manage_clans);
       } catch {
         /* leave the settings panel hidden on failure */
+        setCanManageClans(false);
       }
     })();
   }, []);
@@ -475,7 +480,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         <TagProtectionCard
           clanId={clanId}
           initialProtected={clan.is_tag_protected}
-          canToggle={canManageClans}
+          canToggle={canManageClans === true}
         />
       ) : null}
 
@@ -488,7 +493,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         />
       ) : null}
 
-      <RosterPanel clanId={clanId} />
+      <RosterPanel clanId={clanId} canManageClans={canManageClans} />
 
       <section className="space-y-3">
         <h2 className="text-[17px] font-semibold text-ink">История матчей</h2>

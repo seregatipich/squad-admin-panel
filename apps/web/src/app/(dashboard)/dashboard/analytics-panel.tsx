@@ -1,5 +1,4 @@
 'use client';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -7,13 +6,10 @@ import {
   CardGrid,
   CardHeader,
   InlineBanner,
-  Select,
   Skeleton,
   StatTile,
-  Toolbar,
 } from '@/components/ui';
 import {
-  buildAnalyticsQuery,
   type DashboardAnalytics,
   formatDurationRu,
   formatHour,
@@ -21,13 +17,13 @@ import {
   outcomeSegments,
   peakScale,
   WINDOW_PRESETS,
-  windowRange,
 } from './analytics-data';
-
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
+import {
+  type AnalyticsServerOption,
+  AnalyticsToolbar,
+  AXIS_HOURS,
+  useAnalyticsWindow,
+} from './analytics-window';
 
 /*
  * Категориальные цвета: они существуют только чтобы соседние доли диаграммы
@@ -48,97 +44,12 @@ const RANKED_FILL = {
   layers: 'bg-purple-500/80',
 } as const;
 
-const AXIS_HOURS = [0, 6, 12, 18];
-
-/*
- * Ссылка на выгрузку остаётся обычным `<a download>`, а не `ButtonLink`:
- * `next/link` перехватывает клик и уводит в клиентскую навигацию, из-за чего
- * файл не скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
- */
-const DOWNLOAD_LINK_CLASS =
-  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
-
-export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
-  const [serverId, setServerId] = useState<string>('');
-  const [windowDays, setWindowDays] = useState<number>(WINDOW_PRESETS[0].days);
-  const [data, setData] = useState<DashboardAnalytics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const serverSelectId = useId();
-  const windowSelectId = useId();
-
-  // `windowRange()` reads the current clock, so it is recomputed on every
-  // `load()` call -- on mount, on a server/period change, and on "Повторить"
-  // -- rather than once per `windowDays` change. Otherwise a dashboard left
-  // open for a while, a server switch, or a retry would all replay the
-  // stale `to` captured when the period was last picked, and the CSV link
-  // would carry that same stale timestamp. `range` is only committed to
-  // state (for the CSV href) after a successful load, from inside `load`
-  // itself -- deferred past the first client render so the server-rendered
-  // HTML and the initial client render agree.
-  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
-
-  /**
-   * Номер последнего запущенного запроса. Оператор может быстро переключить
-   * сервер или период, пока предыдущий, более тяжёлый запрос ещё летит; без
-   * этого счётчика ответ, пришедший позже, может перезаписать состояние более
-   * свежим запросом уже выставленное — см. ANALYTICS-538.
-   */
-  const requestRef = useRef(0);
-
-  const load = useCallback(async () => {
-    const freshRange = windowRange(windowDays);
-    const requestId = ++requestRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const query = buildAnalyticsQuery({
-        serverId: serverId || null,
-        from: freshRange.from,
-        to: freshRange.to,
-      });
-      const res = await fetch(`/api/v1/analytics/dashboard${query}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      const body = (await res.json()) as DashboardAnalytics;
-      if (requestRef.current !== requestId) return;
-      setData(body);
-      setRange(freshRange);
-    } catch (e) {
-      if (requestRef.current !== requestId) return;
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (requestRef.current === requestId) setLoading(false);
-    }
-  }, [serverId, windowDays]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const csvHref = `/api/v1/analytics/dashboard${buildAnalyticsQuery({
-    serverId: serverId || null,
-    from: range?.from,
-    to: range?.to,
-    format: 'csv',
-  })}`;
-
-  const exportJson = useCallback(() => {
-    if (!data) return;
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'analytics-dashboard.json';
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    // The download can start asynchronously in some browsers; revoking in
-    // the same tick as click() risks an empty or cancelled download there.
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }, [data]);
+export function AnalyticsPanel({ servers }: { servers: AnalyticsServerOption[] }) {
+  const state = useAnalyticsWindow<DashboardAnalytics>(
+    '/api/v1/analytics/dashboard',
+    WINDOW_PRESETS[0].days,
+  );
+  const { data, error, load } = state;
 
   const scale = data ? peakScale(data.peak_by_hour) : 1;
   const segments = data ? outcomeSegments(data.match_outcomes) : [];
@@ -157,57 +68,10 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     <Card as="section" padding="none">
       <CardHeader title="Аналитика" />
       <CardBody padding="sm" className="border-b border-line">
-        <Toolbar
-          filters={
-            <>
-              <label className="sr-only" htmlFor={serverSelectId}>
-                Сервер
-              </label>
-              <div className="w-44">
-                <Select
-                  id={serverSelectId}
-                  size="sm"
-                  value={serverId}
-                  onChange={(e) => setServerId(e.target.value)}
-                >
-                  <option value="">Все серверы</option>
-                  {servers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.display_name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <label className="sr-only" htmlFor={windowSelectId}>
-                Период
-              </label>
-              <div className="w-28">
-                <Select
-                  id={windowSelectId}
-                  size="sm"
-                  value={windowDays}
-                  onChange={(e) => setWindowDays(Number(e.target.value))}
-                >
-                  {WINDOW_PRESETS.map((preset) => (
-                    <option key={preset.days} value={preset.days}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </>
-          }
-          summary={loading ? 'Обновляем…' : undefined}
-          actions={
-            <>
-              <a href={csvHref} download className={DOWNLOAD_LINK_CLASS}>
-                CSV
-              </a>
-              <Button size="sm" onClick={exportJson} disabled={!data}>
-                JSON
-              </Button>
-            </>
-          }
+        <AnalyticsToolbar
+          servers={servers}
+          window={state}
+          jsonFileName="analytics-dashboard.json"
         />
       </CardBody>
 

@@ -12,3 +12,4 @@ export * from './plugins.js';
 export * from './rcon-commands.js';
 export * from './squad-crowns.js';
 export * from './url.js';
+export * from './vote-analytics.js';
