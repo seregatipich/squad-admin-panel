@@ -119,3 +119,26 @@ func TestServeConn_ClientDisconnectCancelsStreamingRPC(t *testing.T) {
 		t.Fatal("serveConn did not return after the client disconnected")
 	}
 }
+
+// Regression for #45 (finding #383): when ResolvePeer fails before it can read
+// SO_PEERCRED (for example the shutdown closer already closed the fd), the
+// rejection path must not dereference a nil peer. A panic there has no
+// recover and takes down the whole root daemon with every in-flight install.
+func TestServeConn_PeerResolutionFailureDoesNotPanic(t *testing.T) {
+	disp := &handlers.Dispatcher{Docker: runner.NewDocker(&blockingStreamRunner{})}
+	server, _ := connectedPair(t)
+	if err := server.Close(); err != nil {
+		t.Fatalf("close server end: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConn(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), server, disp)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveConn did not return after peer resolution failed")
+	}
+}

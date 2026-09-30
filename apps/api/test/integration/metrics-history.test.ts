@@ -83,6 +83,22 @@ describe('GET /api/v1/host/metrics/history', () => {
     expect(body.v).toEqual([]);
   });
 
+  it('skips samples whose v is valid JSON but not a number array', async () => {
+    await h.redis.xadd(HOST_METRICS_STREAM, '*', 'v', JSON.stringify({ cpu: 1 }));
+    await h.redis.xadd(HOST_METRICS_STREAM, '*', 'v', JSON.stringify(['a', 'b']));
+    await h.redis.xadd(HOST_METRICS_STREAM, '*', 'v', 'not json');
+    await h.redis.xadd(HOST_METRICS_STREAM, '*', 'v', JSON.stringify(packHostMetrics(sample)));
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ts: number[]; v: number[][] };
+    expect(body.v).toEqual([packHostMetrics(sample)]);
+    expect(body.ts).toHaveLength(1);
+  });
+
   it('defaults to a 24h window when seconds is omitted', async () => {
     const v = packHostMetrics(sample);
     await h.redis.xadd(HOST_METRICS_STREAM, '*', 'v', JSON.stringify(v));

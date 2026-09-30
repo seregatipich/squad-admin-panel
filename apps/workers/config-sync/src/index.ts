@@ -14,6 +14,7 @@ import {
   acknowledgeAndDeleteAdminsCfgEntry,
   handleAdminsCfgSyncEntry,
 } from './delivery.js';
+import { positiveIntEnv } from './env.js';
 import { syncServerAdminsCfg } from './syncer.js';
 
 const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
@@ -28,24 +29,26 @@ const requiredEnv = (name: string): string => {
 };
 
 const SERVERS_REFRESH_MS = 30_000;
-const DRIFT_INTERVAL_MS = Number(process.env.ADMINS_CFG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+const DRIFT_INTERVAL_MS = positiveIntEnv('ADMINS_CFG_DRIFT_INTERVAL_MS', 5 * 60_000);
 // CFG-2 (#64): generic per-file drift sweep over the non-managed config files
 // (separate cadence from the Admins.cfg managed-segment sweep above).
-const CONFIG_DRIFT_INTERVAL_MS = Number(process.env.CONFIG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+const CONFIG_DRIFT_INTERVAL_MS = positiveIntEnv('CONFIG_DRIFT_INTERVAL_MS', 5 * 60_000);
 const STREAM_BLOCK_MS = 5_000;
 // Pending-message claim cadence + minimum-idle window. A message that has
 // been delivered to *some* consumer but not XACK'd within `RECLAIM_MIN_IDLE_MS`
 // (e.g. because that consumer crashed, was renamed across restarts, or
 // hit `state=unreachable`) is reclaimed by this consumer via XAUTOCLAIM
 // and replayed. This is the bottom of the spec §2.7.7 retry stack.
-const RECLAIM_INTERVAL_MS = Number(process.env.ADMINS_CFG_RECLAIM_INTERVAL_MS ?? 30_000);
-const RECLAIM_MIN_IDLE_MS = Number(process.env.ADMINS_CFG_RECLAIM_MIN_IDLE_MS ?? 60_000);
+const RECLAIM_INTERVAL_MS = positiveIntEnv('ADMINS_CFG_RECLAIM_INTERVAL_MS', 30_000);
+const RECLAIM_MIN_IDLE_MS = positiveIntEnv('ADMINS_CFG_RECLAIM_MIN_IDLE_MS', 60_000);
 // Cadence for draining the durable Postgres outbox onto the Redis streams
 // (SYNC-1, #34). API and worker producers only write Postgres; this post-commit
 // relay is the sole publisher for Admins.cfg streams.
-const RELAY_INTERVAL_MS = Number(process.env.ADMINS_CFG_RELAY_INTERVAL_MS ?? 1_000);
-const RELAY_XADD_TIMEOUT_MS = Number(process.env.ADMINS_CFG_RELAY_XADD_TIMEOUT_MS ?? 5_000);
-const CONSUMER_NAME = `consumer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+const RELAY_INTERVAL_MS = positiveIntEnv('ADMINS_CFG_RELAY_INTERVAL_MS', 1_000);
+const RELAY_XADD_TIMEOUT_MS = positiveIntEnv('ADMINS_CFG_RELAY_XADD_TIMEOUT_MS', 5_000);
+// Stable across restarts (one worker instance): a fresh name per start would
+// leave a dead consumer entry behind in every stream's group after each deploy.
+const CONSUMER_NAME = 'config-sync';
 
 async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
   try {
@@ -198,12 +201,15 @@ async function main() {
       )) as Array<[string, Array<[string, string[]]>]> | null;
     } catch (err) {
       const msg = (err as Error).message;
-      // A destroyed per-server stream/group (its server was soft-deleted,
-      // SYNC-5) makes the multiplexed XREADGROUP reject NOGROUP for the WHOLE
-      // batch, stalling sync for every server until the next 30 s refresh.
-      // Recover immediately: re-query the server list so the vanished id is
-      // dropped (and its group is not re-created), prune its per-server
-      // backoff, and let the next loop iteration read the surviving streams.
+      // A missing per-server stream/group makes the multiplexed XREADGROUP
+      // reject NOGROUP for the WHOLE batch, stalling sync for every server.
+      // Two causes: the server was soft-deleted (SYNC-5), or Redis lost the
+      // group of a server that is still active (data loss, a manual XGROUP
+      // DESTROY). Re-query the server list so a vanished id is dropped (and
+      // its group is not re-created), prune its backoff, then re-create the
+      // group of every server still active — `refreshServerList` alone only
+      // creates groups for new ids (#873). The pause keeps a group that
+      // cannot be re-created from turning this into a hot loop.
       if (/NOGROUP|no such key/i.test(msg)) {
         log.info({ err: msg }, 'xreadgroup NOGROUP — refreshing server list');
         await refreshServerList().catch((refreshErr) =>
@@ -215,6 +221,15 @@ async function main() {
         for (const id of backoffByServer.keys()) {
           if (!activeServerIds.has(id)) backoffByServer.delete(id);
         }
+        for (const id of activeServerIds) {
+          await ensureGroup(redis, id).catch((groupErr) =>
+            log.warn(
+              { serverId: id, err: (groupErr as Error).message },
+              'consumer group re-create after NOGROUP failed',
+            ),
+          );
+        }
+        await new Promise((r) => setTimeout(r, 1000));
         return;
       }
       log.warn({ err: msg }, 'xreadgroup failed');
@@ -236,19 +251,38 @@ async function main() {
     }
   }
 
+  // Sweeps can outlast their interval (bridge and RCON waits). Skipping a tick
+  // while the previous pass runs keeps two passes from replaying the same work.
+  function skipWhileRunning(sweep: () => Promise<void>): () => Promise<void> {
+    let running = false;
+    return async () => {
+      if (running) return;
+      running = true;
+      try {
+        await sweep();
+      } finally {
+        running = false;
+      }
+    };
+  }
+
   async function reclaimPendingMessages(): Promise<void> {
     // For every active server, take over any messages that have been
     // pending in the consumer group for more than RECLAIM_MIN_IDLE_MS
     // and replay them. This handles three scenarios:
     //   (a) a previous consumer crashed mid-handle
-    //   (b) a previous consumer restarted (new CONSUMER_NAME) and
-    //       orphaned its pending list
+    //   (b) a previous consumer restarted and left its pending list
+    //       unacked
     //   (c) the unreachable-and-not-acked branch in
     //       processStreamEvents: if the bridge stays unreachable longer
     //       than the drift sweep but new mutations keep arriving, the
     //       earlier messages must still get replayed once the bridge
     //       comes back.
     for (const serverId of activeServerIds) {
+      // Honour the server's failure backoff, like the read path and drift sweep:
+      // replaying an unreachable server's messages every pass only adds bridge
+      // load and `sync_failed` audit rows.
+      if (shouldSkip(serverId)) continue;
       const stream = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`;
       try {
         // ioredis types for XAUTOCLAIM are loose; cast to a tuple of
@@ -354,6 +388,10 @@ async function main() {
     }
   }
 
+  const guardedReclaim = skipWhileRunning(reclaimPendingMessages);
+  const guardedDriftSweep = skipWhileRunning(driftSweep);
+  const guardedConfigDriftSweep = skipWhileRunning(configDriftSweep);
+
   let stopped = false;
   let refreshTimer: NodeJS.Timeout | null = null;
   let driftTimer: NodeJS.Timeout | null = null;
@@ -412,15 +450,17 @@ async function main() {
     );
   }, SERVERS_REFRESH_MS);
   driftTimer = setInterval(() => {
-    driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
+    guardedDriftSweep().catch((err) =>
+      log.error({ err: (err as Error).message }, 'drift sweep failed'),
+    );
   }, DRIFT_INTERVAL_MS);
   configDriftTimer = setInterval(() => {
-    configDriftSweep().catch((err) =>
+    guardedConfigDriftSweep().catch((err) =>
       log.error({ err: (err as Error).message }, 'config drift sweep failed'),
     );
   }, CONFIG_DRIFT_INTERVAL_MS);
   reclaimTimer = setInterval(() => {
-    reclaimPendingMessages().catch((err) =>
+    guardedReclaim().catch((err) =>
       log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
     );
   }, RECLAIM_INTERVAL_MS);

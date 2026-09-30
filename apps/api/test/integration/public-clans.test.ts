@@ -34,6 +34,7 @@ beforeAll(async () => {
       eosId: 'eos-private-value',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
 
   await h.db.insert(servers).values({
     id: SERVER_ID,
@@ -69,13 +70,24 @@ beforeAll(async () => {
     endedAt: new Date('2026-07-10T11:00:00Z'),
     durationSeconds: 3600,
   });
-  await h.db.insert(matchPlayers).values({
-    matchId: MATCH_ID,
-    playerId: member.id,
-    joinedAt: new Date('2026-07-10T10:00:00Z'),
-    leftAt: new Date('2026-07-10T11:00:00Z'),
-    playSeconds: 3600,
-  });
+  // Both clan members played the same match: it must still count once.
+  await h.db.insert(matchPlayers).values([
+    {
+      matchId: MATCH_ID,
+      playerId: member.id,
+      joinedAt: new Date('2026-07-10T10:00:00Z'),
+      leftAt: new Date('2026-07-10T11:00:00Z'),
+      playSeconds: 3600,
+    },
+    {
+      matchId: MATCH_ID,
+      // biome-ignore lint/style/noNonNullAssertion: the harness seeds the owner above
+      playerId: h.seed.ownerPlayerId!,
+      joinedAt: new Date('2026-07-10T10:00:00Z'),
+      leftAt: new Date('2026-07-10T11:00:00Z'),
+      playSeconds: 3600,
+    },
+  ]);
   await h.db.insert(playerStatPeriods).values({
     playerId: member.id,
     periodType: 'day',
@@ -130,6 +142,10 @@ describeIfDb('GET /api/v1/public/clans/:id', () => {
     });
     expect(body).not.toHaveProperty('members[0].player_id');
     expect(body).not.toHaveProperty('stats.boost_seconds');
+    for (const entry of body.roster as Array<Record<string, unknown>>) {
+      expect(Object.keys(entry).sort()).toEqual(['nickname', 'role']);
+    }
+    expect(body.stats).toMatchObject({ roster_size: 2, matches_total: 1 });
   });
 
   it('returns 404 for a private clan, without revealing it anonymously', async () => {

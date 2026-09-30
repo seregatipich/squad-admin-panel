@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildVotesQuery,
   formatPassRate,
@@ -60,6 +60,17 @@ describe('formatTrendDay', () => {
 
   it('passes through an unparsable value', () => {
     expect(formatTrendDay('not-a-date')).toBe('not-a-date');
+  });
+
+  it('formats in UTC, so a negative-offset local timezone cannot shift the day back (#547)', () => {
+    // `process.env.TZ` does not reliably affect Intl inside a vitest worker
+    // thread, so this asserts the implementation detail directly: the `day`
+    // string is a UTC calendar date and must be rendered with `timeZone:
+    // 'UTC'`, not the host's local zone.
+    const spy = vi.spyOn(Date.prototype, 'toLocaleDateString');
+    formatTrendDay('2026-09-20');
+    expect(spy).toHaveBeenCalledWith('ru-RU', expect.objectContaining({ timeZone: 'UTC' }));
+    spy.mockRestore();
   });
 });
 

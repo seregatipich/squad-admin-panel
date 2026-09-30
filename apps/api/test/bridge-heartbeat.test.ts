@@ -54,7 +54,7 @@ async function buildApp() {
   captured = cap;
   bridge = { ping: vi.fn(async () => ({ version: 'test', hostname: 'h' })) };
   const f = Fastify({ loggerInstance: logger });
-  f.decorate('bridge', bridge);
+  f.decorate('bridge', bridge as never);
   await f.register(bridgeHeartbeatPlugin);
   await f.ready();
   return f;
@@ -132,7 +132,7 @@ describe('bridge heartbeat plugin', () => {
     const first = app.bridgeHeartbeat.tickOnce();
     await app.bridgeHeartbeat.tickOnce();
     expect(bridge.ping).toHaveBeenCalledTimes(1);
-    resolveSlow?.();
+    (resolveSlow as (() => void) | null)?.();
     await first;
   });
 });

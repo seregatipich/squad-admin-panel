@@ -116,6 +116,19 @@ describe('BannedNameRuleModal', () => {
     expect(screen.getByRole('button', { name: /добавить/i })).toBeDisabled();
   });
 
+  it('refuses a catastrophically backtracking regex with a Russian explanation', () => {
+    render(
+      <BannedNameRuleModal
+        open
+        initial={{ pattern: '(a+)+$', match_type: 'regex' }}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /добавить/i })).toBeDisabled();
+    expect(screen.getByText(/может зависнуть/i)).toBeTruthy();
+  });
+
   it('closes on Escape — the window is a native <dialog>, not a hand-rolled overlay', () => {
     const onClose = vi.fn();
     const { container } = render(

@@ -88,11 +88,17 @@ describe('loadConfig', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('COOKIE_SECURE defaults to true', async () => {
-    Object.assign(process.env, VALID_ENV);
+  it('does not expose the removed COOKIE_SECURE / GLITCHTIP_DSN settings (#66)', async () => {
+    // Cookies are always `Secure` (`__Host-` prefix); `COOKIE_SECURE=false` used to parse as
+    // `true` via z.coerce.boolean() and was never read, so the setting is gone entirely.
+    Object.assign(process.env, VALID_ENV, {
+      COOKIE_SECURE: 'false',
+      GLITCHTIP_DSN: 'https://x@y/1',
+    });
     const loadConfig = await freshLoadConfig();
-    const cfg = loadConfig();
-    expect(cfg.COOKIE_SECURE).toBe(true);
+    const cfg = loadConfig() as Record<string, unknown>;
+    expect(cfg).not.toHaveProperty('COOKIE_SECURE');
+    expect(cfg).not.toHaveProperty('GLITCHTIP_DSN');
   });
 
   it('SESSION_TTL_SECONDS defaults to 86400', async () => {
@@ -168,5 +174,46 @@ describe('loadConfig', () => {
     const loadConfig = await freshLoadConfig();
 
     expect(loadConfig().PANEL_PUBLIC_URL).toBe('http://localhost:3000');
+  });
+
+  describe('host maintenance intervals (#85)', () => {
+    it('defaults the orphan sweep to 5 min and the docker prune to 24 h', async () => {
+      Object.assign(process.env, VALID_ENV);
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(5 * 60_000);
+      expect(cfg.HOST_DOCKER_PRUNE_INTERVAL_MS).toBe(24 * 60 * 60_000);
+    });
+
+    it('treats a blank value as unset', async () => {
+      Object.assign(process.env, VALID_ENV, {
+        HOST_ORPHAN_SWEEP_INTERVAL_MS: '',
+        HOST_DOCKER_PRUNE_INTERVAL_MS: ' ',
+      });
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(5 * 60_000);
+      expect(cfg.HOST_DOCKER_PRUNE_INTERVAL_MS).toBe(24 * 60 * 60_000);
+    });
+
+    it('accepts an explicit interval of at least one minute', async () => {
+      Object.assign(process.env, VALID_ENV, { HOST_ORPHAN_SWEEP_INTERVAL_MS: '120000' });
+      const cfg = (await freshLoadConfig())();
+      expect(cfg.HOST_ORPHAN_SWEEP_INTERVAL_MS).toBe(120_000);
+    });
+
+    it.each([
+      ['HOST_ORPHAN_SWEEP_INTERVAL_MS', '5m'],
+      ['HOST_ORPHAN_SWEEP_INTERVAL_MS', '0'],
+      ['HOST_DOCKER_PRUNE_INTERVAL_MS', '1000'],
+      ['HOST_DOCKER_PRUNE_INTERVAL_MS', 'NaN'],
+    ])('rejects %s=%s instead of spinning the timer every millisecond', async (key, value) => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      Object.assign(process.env, VALID_ENV, { [key]: value });
+      const loadConfig = await freshLoadConfig();
+      expect(() => loadConfig()).toThrow('process.exit called');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
   });
 });

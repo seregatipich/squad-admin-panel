@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -7,7 +7,7 @@ import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import liveRoutes from '../src/routes/live.js';
 
-let app: ReturnType<typeof Fastify>;
+let app: FastifyInstance;
 let port: number;
 
 const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
@@ -62,16 +62,23 @@ afterAll(async () => {
   await app.close();
 });
 
-async function connect(combatView?: boolean): Promise<{ ws: WebSocket; received: LiveEvent[] }> {
+type CombatFrame = Extract<LiveEvent, { type: 'combat.event' }>;
+
+async function connect(combatView?: boolean): Promise<{ ws: WebSocket; received: CombatFrame[] }> {
   const headers =
     combatView === undefined ? undefined : { [COMBAT_VIEW_HEADER]: String(combatView) };
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, { headers });
-  const received: LiveEvent[] = [];
+  const received: CombatFrame[] = [];
+  let subscribed = false;
   ws.on('message', (raw) => {
-    const frame = JSON.parse(raw.toString()) as LiveEvent;
+    const frame = JSON.parse(raw.toString()) as LiveEvent | { type: 'subscribed' };
+    if (frame.type === 'subscribed') subscribed = true;
     if (frame.type === 'combat.event') received.push(frame);
   });
   await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+  // combat.event is opt-in (#69): the client subscribes, and the tail is replayed then.
+  ws.send(JSON.stringify({ type: 'subscribe', events: ['combat.event'] }));
+  await waitFor(() => subscribed);
   return { ws, received };
 }
 
@@ -92,6 +99,21 @@ async function settle(ms = 200): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Connects a socket and records the type of every frame it receives. */
+async function connectRecordingTypes(
+  combatView: boolean,
+): Promise<{ ws: WebSocket; types: string[] }> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, {
+    headers: { [COMBAT_VIEW_HEADER]: String(combatView) },
+  });
+  const types: string[] = [];
+  ws.on('message', (raw) => {
+    types.push((JSON.parse(raw.toString()) as { type: string }).type);
+  });
+  await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+  return { ws, types };
+}
+
 describe('/api/v1/ws/live combat replay buffer', () => {
   it('forwards live combat.event events to a socket with combat:view', async () => {
     const { ws, received } = await connect(true);
@@ -101,7 +123,7 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     await close(ws);
   });
 
-  it('replays the buffered combat tail to a socket that connects after events were sent', async () => {
+  it('replays the buffered combat tail to a socket that subscribes after events were sent', async () => {
     app.liveBus.publish(combat('2026-07-09T11:01:00.000Z'));
     app.liveBus.publish(combat('2026-07-09T11:01:01.000Z'));
 
@@ -144,5 +166,41 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     await settle();
     expect(received).toHaveLength(0);
     await close(ws);
+  });
+
+  it('withholds combat.vehicle frames from a socket without combat:view (#37)', async () => {
+    const vehicle: LiveEvent = {
+      type: 'combat.vehicle',
+      ts: '2026-07-09T11:04:00.000Z',
+      data: {
+        server_id: SERVER_ID,
+        match_id: null,
+        kind: 'vehicle_destroyed',
+        attacker_player_id: 'attacker-1',
+        victim_vehicle: 'BP_BTR80',
+        attacker_vehicle: null,
+        weapon: 'BP_RPG7',
+        damage: 1500,
+        occurred_at: '2026-07-09T11:04:00.000Z',
+      },
+    };
+    const denied = await connectRecordingTypes(false);
+    const allowed = await connectRecordingTypes(true);
+    // `combat.vehicle` is an opt-in frame (routes/live.ts, #40): both sockets ask for it,
+    // and only the combat:view one may get it.
+    const subscribe = JSON.stringify({ type: 'subscribe', events: ['combat.vehicle'] });
+    denied.ws.send(subscribe);
+    allowed.ws.send(subscribe);
+    await waitFor(
+      () => allowed.types.includes('subscribed') && denied.types.includes('subscribed'),
+    );
+
+    app.liveBus.publish(vehicle);
+    await waitFor(() => allowed.types.includes('combat.vehicle'));
+    await settle();
+
+    expect(denied.types).not.toContain('combat.vehicle');
+    await close(denied.ws);
+    await close(allowed.ws);
   });
 });

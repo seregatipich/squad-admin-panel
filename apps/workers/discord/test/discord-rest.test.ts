@@ -5,6 +5,7 @@ import {
   DISCORD_API_BASE,
   type DiscordRestDeps,
   fetchGuildMemberRoles,
+  patchChannelName,
   removeGuildMemberRole,
 } from '../src/discord-rest.js';
 
@@ -181,5 +182,84 @@ describe('fetchGuildMemberRoles', () => {
     });
     await fetchGuildMemberRoles(deps, USER_ID);
     expect(auth).toBe(`Bot ${BOT_TOKEN}`);
+  });
+
+  it('retries a rate-limited member lookup after the advertised Retry-After delay (#884)', async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const deps = makeDeps(
+      async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response(null, { status: 429, headers: { 'retry-after': '1.5' } });
+        }
+        return new Response(JSON.stringify({ roles: [ROLE_ID] }), { status: 200 });
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+
+    expect(await fetchGuildMemberRoles(deps, USER_ID)).toEqual({ ok: true, roles: [ROLE_ID] });
+    expect(waits).toEqual([1500]);
+    expect(calls).toBe(2);
+  });
+
+  it('reports rate_limited, not an HTTP error, once the member lookup keeps answering 429 (#884)', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '0' } }),
+    );
+    const res = await fetchGuildMemberRoles(makeDeps(fetchImpl), USER_ID);
+
+    expect(res).toEqual({
+      ok: false,
+      notAMember: false,
+      failure: {
+        reason: 'rate_limited',
+        message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+});
+
+describe('request bounds', () => {
+  it('sends every request with an abort signal', async () => {
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const deps = makeDeps(async (_input, init) => {
+      signals.push(init?.signal);
+      return new Response(JSON.stringify({ roles: [] }), { status: 200 });
+    });
+
+    await addGuildMemberRole(deps, USER_ID, ROLE_ID);
+    await fetchGuildMemberRoles(deps, USER_ID);
+    await patchChannelName(deps, '600000000000000001', 'name');
+
+    expect(signals).toHaveLength(3);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not wait out a Retry-After above the cap', async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '600' } }),
+    );
+    const result = await addGuildMemberRole(makeDeps(fetchImpl, sleep), USER_ID, ROLE_ID);
+
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'rate_limited' } });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a channel-rename 429 as rate_limited without retrying', async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '1' } }),
+    );
+    const result = await patchChannelName(makeDeps(fetchImpl, sleep), '600000000000000001', 'name');
+
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'rate_limited' } });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

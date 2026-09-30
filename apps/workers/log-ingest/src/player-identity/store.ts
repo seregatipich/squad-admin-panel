@@ -7,7 +7,7 @@ import {
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { EventEnvelope, PlayerConnectedPayload } from '@squad/shared-types';
-import { eq, or, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 
 /** System label attributed to audit rows written by this worker. */
@@ -34,7 +34,7 @@ export type PlayerConnectedOutcome =
     };
 
 async function writeSystemAudit(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   action: string,
   targetId: string,
   context: Record<string, unknown>,
@@ -57,33 +57,43 @@ async function writeSystemAudit(
  * rather than duplicated; the eos match still takes precedence for a row that
  * carries both.
  */
+const IDENTITY_ROW_COLUMNS = {
+  id: players.id,
+  steamId64: players.steamId64,
+  canonicalName: players.canonicalName,
+  eosId: players.eosId,
+  steamEosConflict: players.steamEosConflict,
+} as const;
+
 async function lookupIdentity(
   db: DatabaseClient,
   eosId: string | null,
   steamId64: bigint | null,
 ): Promise<IdentityRow | null> {
-  const clause =
-    eosId && steamId64 !== null
-      ? or(eq(players.eosId, eosId), eq(players.steamId64, steamId64))
-      : eosId
-        ? eq(players.eosId, eosId)
-        : steamId64 !== null
-          ? eq(players.steamId64, steamId64)
-          : null;
-  if (!clause) return null;
-
-  const rows = await db
-    .select({
-      id: players.id,
-      steamId64: players.steamId64,
-      canonicalName: players.canonicalName,
-      eosId: players.eosId,
-      steamEosConflict: players.steamEosConflict,
-    })
-    .from(players)
-    .where(clause)
-    .limit(1);
-  return rows[0] ?? null;
+  // Queried as two deterministic lookups, not a single `or(...)` with an
+  // unordered `.limit(1)`: with both an eos_id and a steam_id64 present, a
+  // combined OR query can match two distinct rows (one carrying only the
+  // eos_id, another only the steam_id64) and which one comes back is
+  // undefined — silently violating the documented eos-first precedence and
+  // risking a unique-constraint throw in applyToExisting instead of the
+  // eos_steam_conflict audit path (#63 finding 932).
+  if (eosId) {
+    const byEos = await db
+      .select(IDENTITY_ROW_COLUMNS)
+      .from(players)
+      .where(eq(players.eosId, eosId))
+      .limit(1);
+    if (byEos[0]) return byEos[0];
+  }
+  if (steamId64 !== null) {
+    const bySteam = await db
+      .select(IDENTITY_ROW_COLUMNS)
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    if (bySteam[0]) return bySteam[0];
+  }
+  return null;
 }
 
 async function applyToExisting(
@@ -101,11 +111,27 @@ async function applyToExisting(
 
   let steamLinked = false;
   let conflict = false;
-  if (steamId64 !== null) {
-    if (row.steamId64 === null) {
+  if (steamId64 !== null && row.steamId64 !== steamId64) {
+    // The steam_id64 to (back)fill might already belong to a *different*
+    // row than the one lookupIdentity resolved by eos_id — e.g. an earlier
+    // RCON poll created a steam-only row before this player's eos-only row
+    // ever linked a steam id. Setting it here regardless would violate
+    // players_steam_id64_unique_idx; treat it the same as a same-row
+    // conflict instead of crashing before the audit runs (#63 finding 932).
+    const ownedByOther = (
+      await db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.steamId64, steamId64))
+        .limit(1)
+    )[0]?.id;
+    if (ownedByOther && ownedByOther !== row.id) {
+      if (!row.steamEosConflict) updates.steamEosConflict = true;
+      conflict = true;
+    } else if (row.steamId64 === null) {
       updates.steamId64 = steamId64;
       steamLinked = true;
-    } else if (row.steamId64 !== steamId64) {
+    } else {
       // A known eos_id arriving with a different steam_id64: flag the identity,
       // store the last observed steam, and raise an audit-alert (§1.1.2).
       updates.steamId64 = steamId64;
@@ -120,36 +146,40 @@ async function applyToExisting(
     updates.canonicalNameNormalized = normalizePlayerName(payload.name);
   }
 
-  await db.update(players).set(updates).where(eq(players.id, row.id));
+  // Player update, name history and audit rows commit together so an audit
+  // failure cannot leave a steam link or conflict flag without its audit row.
+  await db.transaction(async (tx) => {
+    await tx.update(players).set(updates).where(eq(players.id, row.id));
 
-  if (nameChanged) {
-    const normalized = normalizePlayerName(payload.name);
-    await db
-      .insert(playerNameHistory)
-      .values({ playerId: row.id, name: payload.name, nameNormalized: normalized })
-      .onConflictDoUpdate({
-        target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
-        set: {
-          lastSeenAt: now,
-          observationCount: sql`${playerNameHistory.observationCount} + 1`,
-        },
+    if (nameChanged) {
+      const normalized = normalizePlayerName(payload.name);
+      await tx
+        .insert(playerNameHistory)
+        .values({ playerId: row.id, name: payload.name, nameNormalized: normalized })
+        .onConflictDoUpdate({
+          target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
+          set: {
+            lastSeenAt: now,
+            observationCount: sql`${playerNameHistory.observationCount} + 1`,
+          },
+        });
+    }
+
+    if (steamLinked) {
+      await writeSystemAudit(tx, 'player.steam_linked', row.id, {
+        steam_id64: payload.steam_id64,
+        eos_id: payload.eos_id,
       });
-  }
+    }
 
-  if (steamLinked) {
-    await writeSystemAudit(db, 'player.steam_linked', row.id, {
-      steam_id64: payload.steam_id64,
-      eos_id: payload.eos_id,
-    });
-  }
-
-  if (conflict) {
-    await writeSystemAudit(db, 'player.eos_steam_conflict', row.id, {
-      eos_id: payload.eos_id,
-      stored_steam_id64: row.steamId64?.toString() ?? null,
-      observed_steam_id64: payload.steam_id64,
-    });
-  }
+    if (conflict) {
+      await writeSystemAudit(tx, 'player.eos_steam_conflict', row.id, {
+        eos_id: payload.eos_id,
+        stored_steam_id64: row.steamId64?.toString() ?? null,
+        observed_steam_id64: payload.steam_id64,
+      });
+    }
+  });
 
   if (payload.ip) {
     await recordIpObservation(db, { playerId: row.id, ip: payload.ip });
@@ -183,19 +213,34 @@ export async function handlePlayerConnected(
 
   const playerId = uuidv7();
   const normalized = normalizePlayerName(payload.name);
-  const inserted = await db
-    .insert(players)
-    .values({
-      id: playerId,
-      steamId64,
-      eosId: payload.eos_id,
-      canonicalName: payload.name,
-      canonicalNameNormalized: normalized,
-    })
-    .onConflictDoNothing()
-    .returning({ id: players.id });
+  const created = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(players)
+      .values({
+        id: playerId,
+        steamId64,
+        eosId: payload.eos_id,
+        canonicalName: payload.name,
+        canonicalNameNormalized: normalized,
+      })
+      .onConflictDoNothing()
+      .returning({ id: players.id });
+    if (inserted.length === 0) return false;
 
-  if (inserted.length === 0) {
+    await tx
+      .insert(playerNameHistory)
+      .values({ playerId, name: payload.name, nameNormalized: normalized })
+      .onConflictDoNothing();
+
+    await writeSystemAudit(tx, 'player.created', playerId, {
+      steam_id64: payload.steam_id64,
+      eos_id: payload.eos_id,
+      canonical_name: payload.name,
+    });
+    return true;
+  });
+
+  if (!created) {
     // A concurrent connect created the row first; fold onto it instead of
     // duplicating. If it still cannot be found the conflict was on a
     // constraint we do not own, so there is nothing safe to do.
@@ -203,17 +248,6 @@ export async function handlePlayerConnected(
     if (!raced) return { outcome: 'ignored' };
     return applyToExisting(db, raced, payload, steamId64);
   }
-
-  await db
-    .insert(playerNameHistory)
-    .values({ playerId, name: payload.name, nameNormalized: normalized })
-    .onConflictDoNothing();
-
-  await writeSystemAudit(db, 'player.created', playerId, {
-    steam_id64: payload.steam_id64,
-    eos_id: payload.eos_id,
-    canonical_name: payload.name,
-  });
 
   if (payload.ip) {
     await recordIpObservation(db, { playerId, ip: payload.ip });

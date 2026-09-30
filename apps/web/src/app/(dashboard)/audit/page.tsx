@@ -1,5 +1,6 @@
 'use client';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -25,8 +26,17 @@ import { useIntlLocale } from '@/i18n/LocaleProvider';
 interface AuditEntry {
   id: string;
   created_at: string;
-  actor_user_id: string | null;
-  actor_kind: string;
+  /**
+   * `GET /api/v1/audit` never returns `actor_user_id`/`actor_kind: 'user'` —
+   * the `audit_log_actor_kind` check constraint only allows `'steam'` or
+   * `'system'` (packages/db/src/schema/audit-log.ts). Keying the "Кто" column
+   * off the wrong shape made every row read as `steam`/`system` verbatim and
+   * the actor search always miss (#484).
+   */
+  actor_kind: 'steam' | 'system';
+  actor_player_id: string | null;
+  actor_token_id: string | null;
+  actor_system_label: string | null;
   action_type: string;
   target_type: string | null;
   target_id: string | null;
@@ -75,9 +85,16 @@ export default function AuditPage() {
     }
   }
 
+  // Один запрос в полёте одновременно: тик опроса, догнавший ещё не
+  // завершённый предыдущий, пропускается вместо того, чтобы удвоить нагрузку
+  // на append-only таблицу (#488).
+  const inFlightRef = useRef(false);
+
   // Вынесено из эффекта, чтобы «Повторить» на полосе ошибки звало ровно тот же
   // запрос, что и опрос по таймеру, а не его копию.
   const load = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const r = await fetch('/api/v1/audit?page=1&page_size=200', {
         credentials: 'include',
@@ -91,13 +108,26 @@ export default function AuditPage() {
       setErr((e as Error).message);
     } finally {
       setLoaded(true);
+      inFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      // A hidden tab's journal isn't visible anyway, so skip the tick
+      // entirely; the effect below catches up once it becomes visible again.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load();
+    }, POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [load]);
 
   const rows = useMemo(() => {
@@ -108,7 +138,8 @@ export default function AuditPage() {
         r.action_type.toLowerCase().includes(needle) ||
         (r.target_type ?? '').toLowerCase().includes(needle) ||
         (r.target_id ?? '').toLowerCase().includes(needle) ||
-        (r.actor_user_id ?? '').toLowerCase().includes(needle),
+        (r.actor_player_id ?? '').toLowerCase().includes(needle) ||
+        (r.actor_system_label ?? '').toLowerCase().includes(needle),
     );
   }, [items, q]);
 
@@ -224,9 +255,20 @@ export default function AuditPage() {
                         <DateTime value={r.created_at} locale={locale} />
                       </Td>
                       <Td className="font-mono text-xs">
-                        {r.actor_kind === 'user'
-                          ? (r.actor_user_id?.slice(0, 8) ?? '—')
-                          : r.actor_kind}
+                        {r.actor_kind === 'steam' ? (
+                          r.actor_player_id ? (
+                            <Link
+                              href={`/all-players/${r.actor_player_id}`}
+                              className="text-accent no-underline hover:brightness-110"
+                            >
+                              {r.actor_player_id.slice(0, 8)}
+                            </Link>
+                          ) : (
+                            '—'
+                          )
+                        ) : (
+                          (r.actor_system_label ?? r.actor_kind)
+                        )}
                       </Td>
                       {/* Раскрытие подробностей — кнопка внутри ячейки, а не
                           `onClick` на строке: иначе до записи не добраться с

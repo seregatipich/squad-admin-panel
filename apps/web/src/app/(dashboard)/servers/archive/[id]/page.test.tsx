@@ -128,4 +128,27 @@ describe('ArchiveDetailPage', () => {
     });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('ошибка открытия файла не выдаётся за ошибку загрузки записи архива', async () => {
+    mockDetailFetch();
+    const base = fetch as unknown as (url: string) => Promise<Response>;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url.startsWith('/api/v1/servers/archive/abc/configs/')
+          ? Promise.resolve(new Response('boom', { status: 500 }))
+          : base(url),
+      ),
+    );
+    await renderPage();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Server.cfg' }));
+    });
+
+    expect(
+      await screen.findByText('Не удалось открыть файл Server.cfg: HTTP 500'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Не удалось получить запись архива')).not.toBeInTheDocument();
+  });
 });

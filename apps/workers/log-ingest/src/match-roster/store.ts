@@ -1,9 +1,20 @@
 import { type DatabaseClient, matches, matchPlayers, playerSessions, players } from '@squad/db';
-import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { MatchCommand } from '../parser/match.js';
 import { applyMatchCombatStats, loadMatchCombatStats } from './combat.js';
 
 export const DEFAULT_JOIN_GRACE_SECONDS = 60;
+
+/**
+ * How far before `matchStart` a session may have connected and still count
+ * toward the match roster. Squad matches run roughly an hour; no real
+ * session spans a full day of continuous connection. Without this floor,
+ * `loadSessions`'s `connectedAt < matchEnd` has no lower bound, so on the
+ * RANGE(connected_at)-partitioned `player_sessions` table Postgres cannot
+ * prune partitions and every match close scans the server's full session
+ * history (#63 finding 923).
+ */
+export const MATCH_ROSTER_SESSION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /** The one Redis call match assembly makes; an ioredis client satisfies it. */
 export interface RosterSnapshotReader {
@@ -247,6 +258,10 @@ async function loadSessions(
     .where(
       and(
         eq(playerSessions.serverId, serverId),
+        gte(
+          playerSessions.connectedAt,
+          new Date(matchStart.getTime() - MATCH_ROSTER_SESSION_LOOKBACK_MS),
+        ),
         lt(playerSessions.connectedAt, matchEnd),
         or(isNull(playerSessions.disconnectedAt), gt(playerSessions.disconnectedAt, matchStart)),
       ),
@@ -312,30 +327,6 @@ export async function computeMatchRoster(
     matchEnd: params.matchEnd,
     sessions,
     teamSquadByPlayer,
-  });
-}
-
-export async function computeOpenMatchRoster(
-  db: DatabaseClient,
-  redis: RosterSnapshotReader,
-  params: { matchId: string; now: Date },
-): Promise<MatchRosterEntry[]> {
-  const rows = await db
-    .select({
-      serverId: matches.serverId,
-      startedAt: matches.startedAt,
-      endedAt: matches.endedAt,
-    })
-    .from(matches)
-    .where(eq(matches.id, params.matchId))
-    .limit(1);
-  const match = rows[0];
-  if (!match) return [];
-  const matchEnd = match.endedAt ?? params.now;
-  return computeMatchRoster(db, redis, {
-    serverId: match.serverId,
-    matchStart: match.startedAt,
-    matchEnd,
   });
 }
 

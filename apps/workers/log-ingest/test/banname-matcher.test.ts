@@ -3,6 +3,7 @@ import {
   type BannedNameRuleRow,
   compileBannedNameRules,
   matchBannedNickname,
+  REGEX_MATCH_TIMEOUT_MS,
 } from '../src/banname/matcher.js';
 
 function rule(overrides: Partial<BannedNameRuleRow> & { id: string }): BannedNameRuleRow {
@@ -77,6 +78,18 @@ describe('compileBannedNameRules + matchBannedNickname', () => {
     expect(matchBannedNickname('cheater', compiled)).toMatchObject({ ruleId: 'first' });
   });
 
+  // Audit #115 — a rule stored before the API refused unsafe regexes must not
+  // be able to stall ingestion on a crafted nickname.
+  it('drops a catastrophically backtracking regex rule', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'redos', pattern: '(a+)+$', matchType: 'regex' }),
+    ]);
+    expect(compiled.regex).toHaveLength(0);
+    const started = Date.now();
+    expect(matchBannedNickname(`${'a'.repeat(24)}!`, compiled)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('drops an invalid regex pattern silently instead of throwing', () => {
     expect(() =>
       compileBannedNameRules([rule({ id: 'r1', pattern: '(unterminated', matchType: 'regex' })]),
@@ -85,6 +98,14 @@ describe('compileBannedNameRules + matchBannedNickname', () => {
       rule({ id: 'r1', pattern: '(unterminated', matchType: 'regex' }),
     ]);
     expect(matchBannedNickname('(unterminated', compiled)).toBeNull();
+  });
+
+  it('drops a catastrophic-backtracking regex rule instead of running it (#52)', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'redos', pattern: '(a|aa)+$', matchType: 'regex' }),
+    ]);
+    expect(compiled.regex).toHaveLength(0);
+    expect(matchBannedNickname('aaaa', compiled)).toBeNull();
   });
 
   it('drops an empty or over-length pattern', () => {
@@ -111,5 +132,57 @@ describe('compileBannedNameRules + matchBannedNickname', () => {
       reason: 'toxicity',
       action: 'alert',
     });
+  });
+});
+
+describe('catastrophic-backtracking regex rules (#62)', () => {
+  // Two layers guard the event loop: the static screen (audit #115,
+  // `isSafeBannedNameRegex`) drops exponential shapes such as `^(a|a)*$` at
+  // compile time, and the vm timeout (#62) is the backstop for patterns the
+  // screen cannot see. `^a*a*a*a*a*a*a*a*b$` passes the screen but backtracks
+  // polynomially (n^8): natively ~300 ms for 25 characters, far past the
+  // 50 ms budget, and it grows rapidly with the nickname length.
+  const slowPattern = '^a*a*a*a*a*a*a*a*b$';
+  const evilNickname = `${'a'.repeat(25)}!`;
+
+  it('drops exponential-backtracking rules at compile time', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'evil', pattern: '^(a|a)*$', matchType: 'regex' }),
+    ]);
+
+    expect(compiled.regex).toHaveLength(0);
+  });
+
+  it('gives up on a runaway regex rule within the match timeout instead of blocking the event loop', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'evil', pattern: slowPattern, matchType: 'regex' }),
+    ]);
+
+    const started = Date.now();
+    const result = matchBannedNickname(evilNickname, compiled);
+    const elapsedMs = Date.now() - started;
+
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(REGEX_MATCH_TIMEOUT_MS * 10);
+  });
+
+  it('still evaluates the rules after a runaway regex rule', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'evil', pattern: slowPattern, matchType: 'regex' }),
+      rule({ id: 'bang', pattern: '!$', matchType: 'regex' }),
+    ]);
+
+    expect(matchBannedNickname(evilNickname, compiled)).toMatchObject({ ruleId: 'bang' });
+  });
+
+  it('reports the rule that timed out so an operator can fix it', () => {
+    const compiled = compileBannedNameRules([
+      rule({ id: 'evil', pattern: slowPattern, matchType: 'regex' }),
+    ]);
+    const timedOut: string[] = [];
+
+    matchBannedNickname(evilNickname, compiled, { onRegexTimeout: (id) => timedOut.push(id) });
+
+    expect(timedOut).toEqual(['evil']);
   });
 });

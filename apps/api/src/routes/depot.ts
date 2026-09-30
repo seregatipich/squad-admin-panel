@@ -8,11 +8,18 @@ import {
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { acquireDepotLock, DEPOT_LOCK_KEY, depotLockStartedAt } from '../lib/depot-lock.js';
 import {
   DEPOT_PROGRESS_STREAM,
   publishDepotProgressDone,
   publishDepotProgressLine,
 } from '../lib/depot-progress.js';
+import { sendUnlessStalled } from '../lib/ws-send.js';
+import {
+  createStreamLimiter,
+  streamCallerKey,
+  WS_CLOSE_TRY_AGAIN_LATER,
+} from '../lib/ws-stream-limit.js';
 
 /**
  * Manages the shared `squad-depot` Docker volume that holds Squad game
@@ -21,6 +28,13 @@ import {
  * steamcmd container. Progress streams through a Redis pub/sub channel
  * so multiple UI tabs can watch the same update.
  */
+
+/**
+ * Statuses in which a container server has (or is about to have) the shared
+ * depot volume mounted by a live process, mirroring server-update.ts's
+ * per-server guard (#20 follow-up).
+ */
+const LIVE_STATUSES = ['installing', 'starting', 'running', 'stopping'];
 
 const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGameServer.sh`;
 const DEPOT_MANIFEST = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/steamapps/appmanifest_403240.acf`;
@@ -32,12 +46,30 @@ const depotUpdateBody = z
   .strict()
   .default({});
 
+/**
+ * Server statuses whose container is up (or coming up) and must be stopped
+ * for the update and started again after it. Any other requested server is
+ * left untouched: restarting it would bring up a server the operator chose to
+ * keep down.
+ */
+const RESTARTABLE_STATUSES = new Set(['running', 'starting']);
+/** Depot progress sockets one caller may hold open at once (#1298). */
+export const DEPOT_STREAMS_PER_CALLER = 4;
+/** Depot progress sockets this API process holds open at once (#1298). */
+const DEPOT_STREAMS_TOTAL = 32;
+
 function parseBuildId(manifest: string): string | null {
   const m = /"buildid"\s+"(\d+)"/.exec(manifest);
   return m?.[1] ?? null;
 }
 
 const depotRoutes: FastifyPluginAsync = async (app) => {
+  // Each progress socket owns a duplicate Redis connection for its blocking
+  // XREAD, so the socket count is capped (#1298).
+  const progressStreams = createStreamLimiter({
+    perCaller: DEPOT_STREAMS_PER_CALLER,
+    total: DEPOT_STREAMS_TOTAL,
+  });
   app.get('/api/v1/depot', { config: { permissions: ['server:view'], audit: false } }, async () => {
     let populated = false;
     let buildId: string | null = null;
@@ -82,6 +114,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       const { server_ids: serverIds } = parsed.data;
 
       // Validate that all requested server IDs exist and are not deleted.
+      const serversToStop: string[] = [];
+      const serversSkipped: string[] = [];
       if (serverIds.length > 0) {
         const found = await app.db
           .select({ id: servers.id, status: servers.status })
@@ -94,13 +128,45 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'servers_not_found', missing };
         }
+        const statusById = new Map(found.map((row) => [row.id, row.status]));
+        for (const id of serverIds) {
+          if (RESTARTABLE_STATUSES.has(statusById.get(id) ?? '')) serversToStop.push(id);
+          else serversSkipped.push(id);
+        }
       }
 
-      const startedAt = new Date().toISOString();
-      const acquired = await app.redis.set('depot:updating', startedAt, 'EX', 3600, 'NX');
-      if (!acquired) {
-        const since = await app.redis.get('depot:updating');
-        return { status: 'already_in_progress', since: since ?? startedAt };
+      const lock = await acquireDepotLock(app.redis, {
+        onRenewError: (error) => app.log.error({ err: error }, 'failed to renew depot update lock'),
+      });
+      if (!lock) {
+        const holder = await app.redis.get(DEPOT_LOCK_KEY);
+        return {
+          status: 'already_in_progress',
+          since: holder ? depotLockStartedAt(holder) : new Date().toISOString(),
+        };
+      }
+
+      // The depot is one volume mounted into every Squad container (#20
+      // follow-up, same hazard as server-update.ts): a container server not
+      // listed in server_ids keeps its live process mounted on the volume
+      // while phase 2 below rewrites it. Refuse unless every other live
+      // container server is explicitly included in server_ids.
+      const requestedIds = new Set(serverIds);
+      const liveServers = await app.db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(
+          and(
+            eq(servers.runtime, 'container'),
+            isNull(servers.deletedAt),
+            inArray(servers.status, LIVE_STATUSES),
+          ),
+        );
+      const unlistedLive = liveServers.filter((row) => !requestedIds.has(row.id));
+      if (unlistedLive.length > 0) {
+        await lock.release();
+        reply.code(409);
+        return { error: 'servers_running', server_ids: unlistedLive.map((r) => r.id) };
       }
 
       // Background orchestration: stop servers → update depot → restart servers.
@@ -108,7 +174,32 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         const dedicated = app.makeBridgeClient();
         const stoppedIds: string[] = [];
 
-        /** Restart each stopped server via containerStart, falling back to containerRun. */
+        /**
+         * Logs a per-server failure and mirrors it onto depot:progress as a
+         * stderr line (#143), so the operator watching the update sees which
+         * server was left running or down. Publishing is best-effort.
+         */
+        async function reportServerFailure(sid: string, action: string, error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          app.log.error({ err: error, server_id: sid }, `depot update: ${action} failed`);
+          await publishDepotProgressLine(
+            app.redis,
+            'stderr',
+            `Failed to ${action} server squad-${sid}: ${message}`,
+          ).catch((publishError: unknown) => {
+            app.log.error(
+              { err: publishError, server_id: sid },
+              'failed to publish depot failure line',
+            );
+          });
+        }
+
+        /**
+         * Restart each stopped server via containerStart, falling back to
+         * containerRun. A server is marked `starting` only once one of them
+         * actually launched it; otherwise it stays `stopped` and the failure
+         * is reported (#143).
+         */
         async function restartServers(ids: string[]) {
           for (const sid of ids) {
             try {
@@ -126,34 +217,34 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
               });
               try {
                 await app.bridge.containerStart({ name: `squad-${sid}` });
-              } catch {
+              } catch (startError) {
                 // containerStart failed — container might have been removed; try containerRun.
                 const settings = await app.db.query.serverSettings.findFirst({
                   where: eq(serverSettings.serverId, sid),
                 });
-                if (settings) {
-                  await app.bridge.containerRun({
-                    server_id: sid,
-                    image: SERVER_IMAGE,
-                    game_port: settings.gamePort,
-                    query_port: settings.queryPort,
-                    beacon_port: settings.beaconPort,
-                    rcon_port: settings.rconPort,
-                    max_players: settings.maxPlayers,
-                    tickrate: settings.tickrate,
-                    multihome: settings.multihome,
-                    configs_host: `${PANEL_CONFIGS_ROOT}/${sid}/ServerConfig`,
-                    saved_host: `${PANEL_SAVED_ROOT}/${sid}`,
-                    depot_volume: DEPOT_VOLUME_NAME,
-                  });
-                }
+                if (!settings) throw startError;
+                await app.bridge.containerRun({
+                  server_id: sid,
+                  image: SERVER_IMAGE,
+                  game_port: settings.gamePort,
+                  query_port: settings.queryPort,
+                  beacon_port: settings.beaconPort,
+                  rcon_port: settings.rconPort,
+                  max_players: settings.maxPlayers,
+                  tickrate: settings.tickrate,
+                  multihome: settings.multihome,
+                  configs_host: `${PANEL_CONFIGS_ROOT}/${sid}/ServerConfig`,
+                  saved_host: `${PANEL_SAVED_ROOT}/${sid}`,
+                  depot_volume: DEPOT_VOLUME_NAME,
+                });
               }
               await app.db
                 .update(servers)
                 .set({ status: 'starting', updatedAt: new Date() })
                 .where(eq(servers.id, sid));
-            } catch {
-              // Best-effort restart; don't abort the loop for one failure.
+            } catch (error) {
+              // One failed restart must not abort the loop for the others.
+              await reportServerFailure(sid, 'restart', error);
             }
           }
         }
@@ -163,8 +254,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         try {
           await dedicated.connect();
 
-          // ── Phase 1: stop requested servers ──
-          for (const sid of serverIds) {
+          // ── Phase 1: stop the requested servers that are running ──
+          for (const sid of serversToStop) {
             try {
               // Best-effort: a dropped progress line must not skip the actual
               // stop below, so its failure is logged, not thrown.
@@ -184,8 +275,10 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
                 .set({ status: 'stopped', updatedAt: new Date() })
                 .where(eq(servers.id, sid));
               stoppedIds.push(sid);
-            } catch {
-              // Best-effort; continue with remaining servers.
+            } catch (error) {
+              // Continue with the remaining servers; this one keeps running
+              // through the update, which the operator must see.
+              await reportServerFailure(sid, 'stop', error);
             }
           }
 
@@ -195,7 +288,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // progress frame never made it to the stream.
           const steamCmdStreamWrites: Promise<void>[] = [];
           const steamCmdStreamWriteErrors: unknown[] = [];
-          await dedicated.depotUpdate((frame) => {
+          const { exit_code: exitCode } = await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
             steamCmdStreamWrites.push(
               publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
@@ -205,6 +298,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           });
           await Promise.all(steamCmdStreamWrites);
           if (steamCmdStreamWriteErrors.length > 0) throw steamCmdStreamWriteErrors[0];
+          // The bridge reports a failed SteamCMD run as a normal reply.
+          if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 
           // ── Phase 3: store build ID from manifest ──
           try {
@@ -243,7 +338,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
               app.log.error({ err: error }, 'failed to publish depot update completion event');
             },
           );
-          await app.redis.del('depot:updating').catch((error: unknown) => {
+          await lock.release().catch((error: unknown) => {
             app.log.error({ err: error }, 'failed to release depot update lock');
           });
           await dedicated.close().catch((error: unknown) => {
@@ -256,8 +351,9 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         status: 'started',
-        started_at: startedAt,
-        servers_to_stop: serverIds,
+        started_at: lock.startedAt,
+        servers_to_stop: serversToStop,
+        servers_skipped: serversSkipped,
       };
     },
   );
@@ -268,7 +364,13 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       websocket: true,
       config: { permissions: ['server:view'], audit: false },
     },
-    (socket) => {
+    (socket, req) => {
+      const release = progressStreams.acquire(streamCallerKey(req));
+      if (!release) {
+        socket.send(JSON.stringify({ error: 'too_many_streams' }));
+        socket.close(WS_CLOSE_TRY_AGAIN_LATER, 'too_many_streams');
+        return;
+      }
       let closed = false;
       let lastId = '0';
       // A blocking XREAD occupies the connection it runs on until data
@@ -276,7 +378,9 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       // singleton would queue every other route's Redis command behind it
       // for up to 5s at a time. Each connection gets its own duplicate,
       // matching the pattern in plugins/live-bus.ts.
-      const redis = app.redis.duplicate();
+      // XREAD BLOCK 5000 outlives the shared client's command timeout, so
+      // this connection waits for replies without one.
+      const redis = app.redis.duplicate({ commandTimeout: undefined });
       redis.on('error', () => {
         // connection lost; the read loop's catch block ends the socket.
       });
@@ -292,10 +396,15 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         const stream = kv[kv.indexOf('stream') + 1] ?? 'stdout';
         const text = kv[idx + 1] ?? '';
         if (stream === 'event') {
-          socket.send(text);
+          sendUnlessStalled(socket, text);
           return true;
         }
-        socket.send(JSON.stringify({ ts: new Date().toISOString(), stream, message: text }));
+        // A watcher that stops reading is dropped rather than buffering the
+        // SteamCMD output in the API process (#1297).
+        sendUnlessStalled(
+          socket,
+          JSON.stringify({ ts: new Date().toISOString(), stream, message: text }),
+        );
         return false;
       }
 
@@ -306,13 +415,16 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // necessarily current, so it's forwarded (for context) but never
           // treated as terminal. Only 'done' frames seen live, after
           // `backfill_complete`, end the connection.
-          const backfill = (await redis.xrange(
+          // Newest 500 entries (XREVRANGE, restored to chronological order) so
+          // a long history never resumes the live tail from an old run.
+          const newestFirst = (await redis.xrevrange(
             DEPOT_PROGRESS_STREAM,
-            '-',
             '+',
+            '-',
             'COUNT',
             '500',
           )) as Array<[string, string[]]>;
+          const backfill = newestFirst.reverse();
           for (const [id, kv] of backfill) {
             lastId = id;
             sendEntry(kv);
@@ -324,7 +436,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // all) between their POST and this WS connecting — synthesize a
           // terminal frame from the last known result instead of blocking
           // on a live event that will never arrive.
-          const updating = await redis.get('depot:updating');
+          const updating = await redis.get(DEPOT_LOCK_KEY);
           if (!updating) {
             const lastUpdateRaw = await redis.get('depot:last_update');
             if (lastUpdateRaw) {
@@ -371,6 +483,7 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       })();
       socket.on('close', () => {
         closed = true;
+        release();
         // Forcibly tears down an in-flight blocking XREAD so a client that
         // disconnects mid-block doesn't leave the duplicate connection open
         // for up to another 5s waiting on data nobody will read.

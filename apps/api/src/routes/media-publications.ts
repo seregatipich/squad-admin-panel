@@ -8,12 +8,14 @@ import {
   mediaPublishInput,
   mediaPublishingSettingsInput,
 } from '@squad/shared-types';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile } from './media.js';
 
 const mediaIdParams = z.object({ id: z.string().uuid() });
@@ -22,23 +24,11 @@ const publicationParams = z.object({
   destination: mediaPublicationDestination,
 });
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 /**
  * Mutation gate for everything in this module. `can_manage_media` is a boolean
- * role flag, and `GET /api/v1/me` deliberately does not expose it — the UI
- * hides these controls by observing a 403, so this must answer with the stable
- * `required` code the front end keys off.
+ * role flag that `GET /api/v1/me` does not expose; the read routes report it
+ * to the caller as `can_manage_media` instead (#440), and a mutation refused
+ * here answers with the stable `required` code.
  */
 function manageMediaGuard(
   req: FastifyRequest,
@@ -53,7 +43,7 @@ function manageMediaGuard(
   return null;
 }
 
-function serializeMediaPublication(
+export function serializeMediaPublication(
   row: typeof mediaPublications.$inferSelect,
 ): MediaPublicationResponse {
   return {
@@ -93,7 +83,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/:id/publications',
-    { schema: { params: mediaIdParams, body: mediaPublishInput }, config: { audit: false } },
+    { schema: { params: mediaIdParams, body: mediaPublishInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -188,13 +178,19 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         .from(mediaPublications)
         .where(eq(mediaPublications.mediaId, media.id))
         .orderBy(asc(mediaPublications.destination));
-      return { items: rows.map(serializeMediaPublication) };
+      // Readable by every panel user, but only a `can_manage_media` holder
+      // may queue or cancel: the flag lets the UI offer «Опубликовать» only
+      // to them instead of failing on submit (#440).
+      return {
+        items: rows.map(serializeMediaPublication),
+        can_manage_media: req.user?.permissions.canManageMedia ?? false,
+      };
     },
   );
 
   fast.delete(
     '/api/v1/media/:id/publications/:destination',
-    { schema: { params: publicationParams }, config: { audit: false } },
+    { schema: { params: publicationParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -210,17 +206,28 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'media_not_found' };
       }
 
+      const target = and(
+        eq(mediaPublications.mediaId, media.id),
+        eq(mediaPublications.destination, req.params.destination),
+      );
+      // A row the media-publisher worker already claimed is left alone: the
+      // upload is in flight and cannot be recalled, and deleting the row would
+      // lose its outcome and let a new POST queue a duplicate public post.
       const removed = await app.db
         .delete(mediaPublications)
-        .where(
-          and(
-            eq(mediaPublications.mediaId, media.id),
-            eq(mediaPublications.destination, req.params.destination),
-          ),
-        )
+        .where(and(target, ne(mediaPublications.status, 'uploading')))
         .returning();
       const row = removed[0];
       if (!row) {
+        const [existing] = await app.db
+          .select({ status: mediaPublications.status })
+          .from(mediaPublications)
+          .where(target)
+          .limit(1);
+        if (existing) {
+          reply.code(409);
+          return { error: 'publication_in_progress' };
+        }
         reply.code(404);
         return { error: 'publication_not_found' };
       }
@@ -262,7 +269,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/integrations/media-publishing',
-    { schema: { body: mediaPublishingSettingsInput }, config: { audit: false } },
+    { schema: { body: mediaPublishingSettingsInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -314,13 +321,5 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
  * a flat `err.code === '23505'` check silently misses it and turns a benign
  * duplicate into a 500.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current && depth < 5; depth++) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 export default mediaPublicationsRoutes;

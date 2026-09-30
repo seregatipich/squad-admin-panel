@@ -3,6 +3,8 @@ import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { createSession } from '../src/lib/sessions.js';
+import type { LiveEvent } from '../src/plugins/live-bus.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -263,6 +265,36 @@ describeIfDb('role-members bulk toolkit', () => {
     expect(text).toContain(`${PLAYER_B};Bravo;`);
   });
 
+  it('export: neutralizes spreadsheet formulas in player-controlled cells (#257)', async () => {
+    await seedPlayer({
+      steamId64: PLAYER_A,
+      name: '=HYPERLINK("http://evil","x")',
+      roleId: viewerRoleId,
+      comment: '+cmd|calc',
+    });
+    await seedPlayer({
+      steamId64: PLAYER_B,
+      name: '@SUM(A1)',
+      roleId: viewerRoleId,
+      comment: '-1',
+    });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/roles/${viewerRoleId}/members/export`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain(`${PLAYER_A};"'=HYPERLINK(""http://evil"",""x"")";"'+cmd|calc"`);
+    expect(res.body).toContain(`${PLAYER_B};"'@SUM(A1)";-1`);
+    for (const line of res.body.split(/\r?\n/)) {
+      for (const cell of line.split(';')) {
+        expect(cell.replace(/^"/, '')).not.toMatch(/^[=+@\t\r]/);
+      }
+    }
+  });
+
   it('bulk-delete: removes exactly the selected members, leaving the rest', async () => {
     const idA = await seedPlayer({ steamId64: PLAYER_A, name: 'Alpha', roleId: viewerRoleId });
     const idB = await seedPlayer({ steamId64: PLAYER_B, name: 'Bravo', roleId: viewerRoleId });
@@ -372,5 +404,91 @@ describeIfDb('role-members bulk toolkit', () => {
     };
     const a = body.items.find((i) => i.steam_id64 === PLAYER_A.toString());
     expect(a?.role_comment).toBe('hi');
+  });
+
+  describe('audit #71', () => {
+    function bigCsv(rows: number): string {
+      const comment = 'к'.repeat(110); // 220 bytes of UTF-8 per row
+      return Array.from(
+        { length: rows },
+        (_, i) => `${(76561190000000000n + BigInt(i)).toString()};${comment}`,
+      ).join('\n');
+    }
+
+    it('answers an over-long CSV above 1 MiB with the structured too_many_rows error (#264)', async () => {
+      const cookie = await loginAsOwner(h);
+      const csv = bigCsv(5001);
+      expect(Buffer.byteLength(JSON.stringify({ csv }))).toBeGreaterThan(1_048_576);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/roles/${viewerRoleId}/members/import`,
+        headers: { cookie },
+        payload: { csv },
+      });
+      expect(res.statusCode).toBe(413);
+      expect(res.json()).toEqual({ error: 'too_many_rows', max_rows: 5000 });
+    });
+
+    it('accepts a 5000-row CSV above 1 MiB for validation instead of rejecting the body (#264)', async () => {
+      const cookie = await loginAsOwner(h);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/roles/${viewerRoleId}/members/import`,
+        headers: { cookie },
+        payload: { csv: bigCsv(5000) },
+      });
+      expect(res.statusCode).toBe(422);
+      const body = res.json() as { errors?: Array<{ reason: string }> };
+      expect(body.errors?.[0]?.reason).toBe('player_not_found');
+    });
+
+    it('CSV import into a role without panel_access publishes session.revoked (#1299)', async () => {
+      const playerId = await seedPlayer({ steamId64: PLAYER_C, name: 'Charlie' });
+      const { token } = await createSession(h.db, h.redis, {
+        playerId,
+        ip: null,
+        userAgent: 'role-members-import-revoke',
+        ttlMs: 21_600_000,
+      });
+      expect(token).toBeTruthy();
+      const received: LiveEvent[] = [];
+      const unsubscribe = h.app.liveBus.subscribe((event) => received.push(event));
+      try {
+        const res = await h.app.inject({
+          method: 'POST',
+          url: `/api/v1/roles/${targetRoleId}/members/import`,
+          headers: { cookie: await loginAsOwner(h) },
+          payload: { csv: `${PLAYER_C}` },
+        });
+        expect(res.statusCode).toBe(201);
+      } finally {
+        unsubscribe();
+      }
+      const revoked = received.filter(
+        (event) => event.type === 'session.revoked' && event.data.player_id === playerId,
+      );
+      expect(revoked).toHaveLength(1);
+    });
+
+    it('member search treats LIKE metacharacters literally and matches SteamIDs exactly (#263)', async () => {
+      await seedPlayer({ steamId64: PLAYER_A, name: 'Alpha', roleId: viewerRoleId });
+      await seedPlayer({ steamId64: PLAYER_B, name: 'Br_vo', roleId: viewerRoleId });
+      const cookie = await loginAsOwner(h);
+      const search = async (q: string) => {
+        const res = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/roles/${viewerRoleId}/members?q=${encodeURIComponent(q)}`,
+          headers: { cookie },
+        });
+        expect(res.statusCode).toBe(200);
+        return (res.json() as { items: Array<{ steam_id64: string | null }> }).items.map(
+          (i) => i.steam_id64,
+        );
+      };
+      expect(await search('_')).toEqual([PLAYER_B.toString()]);
+      expect(await search('%')).toEqual([]);
+      expect(await search('lph')).toEqual([PLAYER_A.toString()]);
+      expect(await search(PLAYER_A.toString())).toEqual([PLAYER_A.toString()]);
+    });
   });
 });

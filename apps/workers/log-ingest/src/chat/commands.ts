@@ -19,7 +19,7 @@
  * `chatCommands` (see the RNSquadJS migration design), avoiding double replies.
  */
 
-import { resolvePlayerId } from '@squad/chat-ingest';
+import { type PlayerIdCache, resolvePlayerId } from '@squad/chat-ingest';
 import {
   type ChatCommandName,
   type ChatCommandResponseSource,
@@ -57,6 +57,25 @@ function toWarnMessage(text: string): string {
 /** Minimal redis surface: enqueue an RCON command onto worker-rcon's stream. */
 export interface RconEnqueue {
   xadd(key: string, ...args: (string | number)[]): Promise<unknown>;
+}
+
+/**
+ * Redis surface for chat-triggered handlers: the RCON enqueue plus the
+ * `SET NX EX` used to claim a per-player cooldown.
+ */
+export interface ChatRedis extends RconEnqueue {
+  set(key: string, value: string, mode: 'EX', seconds: number, flag: 'NX'): Promise<unknown>;
+}
+
+/** How long one player waits before the same chat command is answered again. */
+export const CHAT_COMMAND_COOLDOWN_SECONDS = 10;
+
+/**
+ * Stable per-player identity of a chat line for cooldown keys: EOS id first,
+ * then SteamID, then the display name when the line carries no ids.
+ */
+export function chatSenderIdentity(chat: ParsedChat): string {
+  return chat.eosId ?? chat.steamId64 ?? `name:${chat.playerName}`;
 }
 
 export interface ChatCommandOutcome {
@@ -133,19 +152,34 @@ async function statsMessage(
 
 /**
  * Handles one chat line as a potential AUTO-4 command. Returns `null` when the
- * line is not a recognized command or when chat commands are disabled for the
- * server (no invocation is recorded and no RCON reply is sent in that case);
- * otherwise records the invocation and returns its outcome.
+ * line is not a recognized command, when chat commands are disabled for the
+ * server, or when the same player already used this command on this server
+ * within `CHAT_COMMAND_COOLDOWN_SECONDS` (no invocation is recorded and no
+ * RCON reply is sent in those cases); otherwise records the invocation and
+ * returns its outcome.
+ *
+ * `playerIds` is the worker's sender cache shared with chat archiving, so a
+ * command line does not repeat the identity lookups `handleChat` just ran.
+ *
+ * The cooldown (`chat-command:cooldown:<server>:<player>:<command>`, claimed
+ * with `SET NX EX` before any database work) keeps a player repeating a
+ * command from flooding worker-rcon's capped stream and the invocation table.
  */
 export async function handleChatCommand(
   db: DatabaseClient,
-  redis: RconEnqueue | null,
-  { serverId, chat }: { serverId: string; chat: ParsedChat },
+  redis: ChatRedis | null,
+  { serverId, chat, playerIds }: { serverId: string; chat: ParsedChat; playerIds?: PlayerIdCache },
 ): Promise<ChatCommandOutcome | null> {
   const match = COMMAND_PATTERN.exec(chat.message);
   if (!match?.groups?.name) return null;
   const command = match.groups.name.toLowerCase() as ChatCommandName;
   const args = (match.groups.args ?? '').trim();
+
+  if (redis) {
+    const cooldownKey = `chat-command:cooldown:${serverId}:${chatSenderIdentity(chat)}:${command}`;
+    const claimed = await redis.set(cooldownKey, '1', 'EX', CHAT_COMMAND_COOLDOWN_SECONDS, 'NX');
+    if (!claimed) return null;
+  }
 
   const settings = await db
     .select({
@@ -158,7 +192,7 @@ export async function handleChatCommand(
   if (settings[0]?.enabled === false) return null;
   const rulesText = settings[0]?.rulesText ?? null;
 
-  const playerId = await resolvePlayerId(db, chat);
+  const playerId = await resolvePlayerId(db, chat, playerIds);
 
   let message: string;
   switch (command) {

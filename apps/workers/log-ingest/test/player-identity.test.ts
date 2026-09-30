@@ -95,9 +95,11 @@ function makeDb(
     select: vi.fn().mockReturnValue(selectChain),
     update: vi.fn().mockReturnValue(updateChain),
     insert: vi.fn().mockReturnValue(insertChain),
+    transaction: vi.fn(),
     _inserted: insertedValues,
     _updated: updatedValues,
   };
+  db.transaction.mockImplementation((run: (tx: typeof db) => unknown) => run(db));
   return db as unknown as Parameters<typeof handlePlayerConnected>[0] & {
     _inserted: InsertedRow[];
     _updated: UpdatedRow[];

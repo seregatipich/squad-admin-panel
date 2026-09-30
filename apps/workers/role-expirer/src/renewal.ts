@@ -6,19 +6,21 @@ import {
 } from '@squad/db';
 import {
   alertEvents,
-  auditLog,
   players,
   ROLE_EXPIRY_ALERT_RULE_ID,
+  roles,
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, lte } from 'drizzle-orm';
 import type Redis from 'ioredis';
+import {
+  publishAlertFrame,
+  type SystemAuditEntry,
+  writeSystemAuditEntry,
+} from './system-events.js';
 import type { AdminsCfgSyncEvent } from './tick.js';
-
-/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
-const LIVE_BUS_CHANNEL = 'live-bus';
 
 /** An active subscription whose `next_renewal_at` has come due. */
 export interface DueSubscription {
@@ -41,7 +43,9 @@ export type RenewalFailureReason =
   | 'insufficient_balance'
   | 'role_conflict'
   | 'role_permanent'
-  | 'player_not_found';
+  | 'player_not_found'
+  /** The tier now maps to a panel-access or system role, which a renewal must never grant. */
+  | 'role_grants_panel_access';
 
 export interface ChargeRenewalInput {
   subscriptionId: string;
@@ -49,6 +53,15 @@ export interface ChargeRenewalInput {
   roleId: string;
   price: number;
   days: number;
+  /**
+   * The `next_renewal_at` read when this subscription was scanned as due.
+   * The charge's UPDATE re-checks the row still carries exactly this value
+   * (not only `status = 'active'`) so two overlapping renewal passes that
+   * both scanned the same due row cannot both charge it: whichever commits
+   * first advances `next_renewal_at`, and the second's UPDATE then matches
+   * no row and rolls back as `not_active` instead of double-charging (#990).
+   */
+  dueAt: Date;
   /** The billing date to store once the charge succeeds. */
   nextRenewalAt: Date;
   now: Date;
@@ -61,6 +74,7 @@ export type ChargeRenewalResult =
   | { status: 'role_conflict' }
   | { status: 'role_permanent' }
   | { status: 'player_not_found' }
+  | { status: 'role_grants_panel_access' }
   /** Cancelled between the scan and the charge — nothing was billed. */
   | { status: 'not_active' };
 
@@ -83,26 +97,19 @@ export interface SubscriptionExpiredAlertPayload {
   balance: number | null;
 }
 
-export interface SubscriptionAuditEntry {
-  actor: { kind: 'system'; label: 'role-expirer' };
-  actorIp: null;
+export interface SubscriptionAuditEntry extends SystemAuditEntry {
   actionType: 'player.subscription.renew' | 'player.subscription.expire';
-  targetType: 'player';
-  targetId: string;
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-  context: Record<string, unknown>;
-  statusCode: 200;
 }
 
 export interface SubscriptionRenewalDeps {
   now?: Date;
   findDueSubscriptions(now: Date): Promise<DueSubscription[]>;
   chargeRenewal(input: ChargeRenewalInput): Promise<ChargeRenewalResult>;
-  expireSubscription(subscriptionId: string, now: Date): Promise<void>;
+  /** Resolves `false` when the subscription was no longer active, so nothing changed. */
+  expireSubscription(subscriptionId: string, now: Date): Promise<boolean>;
   writeAuditEntry(entry: SubscriptionAuditEntry): Promise<void>;
-  notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   invalidatePermissionCache(playerId: string): void;
+  notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -143,84 +150,105 @@ export async function runSubscriptionRenewalTick(
     };
 
     for (const subscription of due) {
-      const result = await deps.chargeRenewal({
-        subscriptionId: subscription.id,
-        playerId: subscription.playerId,
-        roleId: subscription.roleId,
-        price: subscription.priceBonuses,
-        days: subscription.renewsEveryDays,
-        nextRenewalAt: nextRenewalAfter(subscription.nextRenewalAt, subscription.renewsEveryDays),
-        now,
-        syncEvent,
-      });
+      // Every subscription is isolated: a throwing writeAuditEntry,
+      // expireSubscription or notifySubscriptionExpired for one row used to
+      // escape to the outer catch and abort the rest of the batch, despite
+      // both this docstring and the README claiming otherwise (#991).
+      try {
+        const result = await deps.chargeRenewal({
+          subscriptionId: subscription.id,
+          playerId: subscription.playerId,
+          roleId: subscription.roleId,
+          price: subscription.priceBonuses,
+          days: subscription.renewsEveryDays,
+          dueAt: subscription.nextRenewalAt,
+          nextRenewalAt: nextRenewalAfter(subscription.nextRenewalAt, subscription.renewsEveryDays),
+          now,
+          syncEvent,
+        });
 
-      // Cancelled while the batch was in flight: nothing was billed and the
-      // row is no longer ours to touch.
-      if (result.status === 'not_active') continue;
+        // Cancelled while the batch was in flight (or already renewed by an
+        // overlapping pass, see `dueAt`): nothing was billed and the row is
+        // no longer ours to touch.
+        if (result.status === 'not_active') continue;
 
-      if (result.status === 'ok') {
-        renewed += 1;
-        enqueued += result.enqueued;
+        if (result.status === 'ok') {
+          renewed += 1;
+          enqueued += result.enqueued;
+          // The charge already committed: drop the cached permissions before
+          // the audit write, so a failing audit row cannot leave them stale.
+          deps.invalidatePermissionCache(subscription.playerId);
+          await deps.writeAuditEntry({
+            actor: { kind: 'system', label: 'role-expirer' },
+            actorIp: null,
+            actionType: 'player.subscription.renew',
+            targetType: 'player',
+            targetId: subscription.playerId,
+            before: {
+              next_renewal_at: subscription.nextRenewalAt.toISOString(),
+            },
+            after: {
+              next_renewal_at: nextRenewalAfter(
+                subscription.nextRenewalAt,
+                subscription.renewsEveryDays,
+              ).toISOString(),
+              role_expires_at: result.roleExpiresAt.toISOString(),
+              bonus_balance: result.balance,
+            },
+            context: {
+              subscription_id: subscription.id,
+              tier_id: subscription.tierId,
+              price_bonuses: subscription.priceBonuses,
+              renewed_at: now.toISOString(),
+            },
+            statusCode: 200,
+          });
+          continue;
+        }
+
+        const reason: RenewalFailureReason = result.status;
+        // Cancelled after the charge attempt: the row did not change, so there is
+        // no transition to audit and nobody to notify.
+        if (!(await deps.expireSubscription(subscription.id, now))) continue;
+        expired += 1;
         await deps.writeAuditEntry({
           actor: { kind: 'system', label: 'role-expirer' },
           actorIp: null,
-          actionType: 'player.subscription.renew',
+          actionType: 'player.subscription.expire',
           targetType: 'player',
           targetId: subscription.playerId,
-          before: {
-            next_renewal_at: subscription.nextRenewalAt.toISOString(),
-          },
-          after: {
-            next_renewal_at: nextRenewalAfter(
-              subscription.nextRenewalAt,
-              subscription.renewsEveryDays,
-            ).toISOString(),
-            role_expires_at: result.roleExpiresAt.toISOString(),
-            bonus_balance: result.balance,
-          },
+          before: { status: 'active' },
+          after: { status: 'expired' },
           context: {
             subscription_id: subscription.id,
             tier_id: subscription.tierId,
+            reason,
             price_bonuses: subscription.priceBonuses,
-            renewed_at: now.toISOString(),
+            expired_at: now.toISOString(),
           },
           statusCode: 200,
         });
-        deps.invalidatePermissionCache(subscription.playerId);
-        continue;
-      }
-
-      expired += 1;
-      const reason: RenewalFailureReason = result.status;
-      await deps.expireSubscription(subscription.id, now);
-      await deps.writeAuditEntry({
-        actor: { kind: 'system', label: 'role-expirer' },
-        actorIp: null,
-        actionType: 'player.subscription.expire',
-        targetType: 'player',
-        targetId: subscription.playerId,
-        before: { status: 'active' },
-        after: { status: 'expired' },
-        context: {
+        await deps.notifySubscriptionExpired({
+          event_kind: 'subscription_expired',
+          player_id: subscription.playerId,
+          player_name: subscription.playerName,
           subscription_id: subscription.id,
           tier_id: subscription.tierId,
+          tier_name: subscription.tierName,
           reason,
           price_bonuses: subscription.priceBonuses,
-          expired_at: now.toISOString(),
-        },
-        statusCode: 200,
-      });
-      await deps.notifySubscriptionExpired({
-        event_kind: 'subscription_expired',
-        player_id: subscription.playerId,
-        player_name: subscription.playerName,
-        subscription_id: subscription.id,
-        tier_id: subscription.tierId,
-        tier_name: subscription.tierName,
-        reason,
-        price_bonuses: subscription.priceBonuses,
-        balance: result.status === 'insufficient_balance' ? result.balance : null,
-      });
+          balance: result.status === 'insufficient_balance' ? result.balance : null,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await deps.diag.emit({
+          component: 'worker-role-expirer',
+          kind: 'role_expirer.renewal_failed',
+          severity: 'error',
+          message: `renewal of subscription ${subscription.id} failed: ${message}`,
+          payload: { subscription_id: subscription.id, player_id: subscription.playerId },
+        });
+      }
     }
 
     await deps.diag.emit({
@@ -255,9 +283,9 @@ export function createSubscriptionRenewalDeps(
     findDueSubscriptions: (now) => findDueSubscriptions(db, now, batchSize),
     chargeRenewal: (input) => chargeRenewal(db, input),
     expireSubscription: (subscriptionId, now) => expireSubscription(db, subscriptionId, now),
-    writeAuditEntry: (entry) => writeSubscriptionAuditEntry(db, entry),
-    notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
     invalidatePermissionCache: () => undefined,
+    notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
   };
 }
 
@@ -291,6 +319,12 @@ export async function findDueSubscriptions(
  * Charges one period and moves the billing date, atomically. Re-checks that the
  * subscription is still `active` and still due inside the transaction, so a
  * cancellation racing the tick cannot be billed.
+ *
+ * Also re-applies the purchase-time escalation guard (`resolveTier` in
+ * `apps/api/src/routes/vip-subscriptions.ts`): the role is read from the tier
+ * at renewal time, and a tier re-pointed at a panel-access or system role
+ * after the player subscribed must end the subscription rather than grant
+ * that role (#31). `applyVipGrant` itself performs no such check.
  */
 export async function chargeRenewal(
   db: DatabaseClient,
@@ -309,6 +343,15 @@ async function chargeRenewalTx(
   input: ChargeRenewalInput,
 ): Promise<ChargeRenewalResult> {
   return db.transaction(async (tx) => {
+    const [role] = await tx
+      .select({ panelAccess: roles.panelAccess, isSystemRole: roles.isSystemRole })
+      .from(roles)
+      .where(eq(roles.id, input.roleId))
+      .limit(1);
+    if (!role || role.panelAccess || role.isSystemRole) {
+      return { status: 'role_grants_panel_access' as const };
+    }
+
     const applied = await applyVipGrant(tx, {
       playerId: input.playerId,
       tier: { roleId: input.roleId, days: input.days, price: input.price },
@@ -323,11 +366,17 @@ async function chargeRenewalTx(
       .update(vipSubscriptions)
       .set({ nextRenewalAt: input.nextRenewalAt })
       .where(
-        and(eq(vipSubscriptions.id, input.subscriptionId), eq(vipSubscriptions.status, 'active')),
+        and(
+          eq(vipSubscriptions.id, input.subscriptionId),
+          eq(vipSubscriptions.status, 'active'),
+          // Still due exactly as scanned — see the `dueAt` doc comment.
+          eq(vipSubscriptions.nextRenewalAt, input.dueAt),
+        ),
       )
       .returning({ id: vipSubscriptions.id });
     if (!updated[0]) {
-      // Cancelled between the scan and the charge — undo the whole period.
+      // Cancelled between the scan and the charge, or already renewed by an
+      // overlapping pass — undo the whole period.
       throw new SubscriptionVanishedError(input.subscriptionId);
     }
     const { enqueued } = await enqueueAdminsCfgSyncForAllServers(tx, input.syncEvent);
@@ -353,32 +402,13 @@ export async function expireSubscription(
   db: DatabaseClient,
   subscriptionId: string,
   now: Date,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const updated = await db
     .update(vipSubscriptions)
     .set({ status: 'expired', cancelledAt: now })
-    .where(and(eq(vipSubscriptions.id, subscriptionId), eq(vipSubscriptions.status, 'active')));
-}
-
-export async function writeSubscriptionAuditEntry(
-  db: DatabaseClient,
-  entry: SubscriptionAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: entry.actorIp,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: entry.before,
-    afterSnapshot: entry.after,
-    context: entry.context,
-    statusCode: entry.statusCode,
-    rowHash: Buffer.from([]),
-  });
+    .where(and(eq(vipSubscriptions.id, subscriptionId), eq(vipSubscriptions.status, 'active')))
+    .returning({ id: vipSubscriptions.id });
+  return updated.length > 0;
 }
 
 /**
@@ -396,8 +426,5 @@ export async function notifySubscriptionExpired(
   await db
     .insert(alertEvents)
     .values({ ruleId: ROLE_EXPIRY_ALERT_RULE_ID, severity: 'warning', payload });
-  await redis.publish(
-    LIVE_BUS_CHANNEL,
-    JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-  );
+  await publishAlertFrame(redis, payload);
 }

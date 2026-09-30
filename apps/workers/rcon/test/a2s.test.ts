@@ -1,9 +1,11 @@
+import dgram from 'node:dgram';
 import { describe, expect, it } from 'vitest';
 import {
   type A2SInfoResult,
   buildA2SChallengeRequest,
   buildA2SInfoRequest,
   parseA2SInfoResponse,
+  queryA2S,
 } from '../src/a2s.js';
 
 // ---------------------------------------------------------------------------
@@ -11,11 +13,11 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Writes a null-terminated ASCII string into `buf` at `offset`.
+ * Writes a null-terminated UTF-8 string into `buf` at `offset`.
  * Returns the offset after the null byte.
  */
 function writeCString(buf: Buffer, offset: number, value: string): number {
-  const bytes = Buffer.from(value, 'ascii');
+  const bytes = Buffer.from(value, 'utf8');
   bytes.copy(buf, offset);
   buf[offset + bytes.byteLength] = 0x00;
   return offset + bytes.byteLength + 1;
@@ -231,5 +233,37 @@ describe('parseA2SInfoResponse', () => {
     // For a packet that's too short to hold all required fields, null is expected.
     const result = parseA2SInfoResponse(truncated);
     expect(result).toBeNull();
+  });
+
+  it('decodes multi-byte server names as UTF-8', () => {
+    const result = parseA2SInfoResponse(
+      buildValidA2SResponse('Сервер RN', 'Narva', 'squad', 'Squad', 3, 100, 0, 0),
+    );
+    expect(result?.serverName).toBe('Сервер RN');
+  });
+});
+
+describe('queryA2S', () => {
+  it('ignores a reply that does not come from the queried host and port', async () => {
+    const server = dgram.createSocket('udp4');
+    const spoofer = dgram.createSocket('udp4');
+    await new Promise<void>((resolve) => server.bind(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+
+    server.on('message', (_msg, rinfo) => {
+      const spoofed = buildValidA2SResponse('SPOOFED', 'Map', 'squad', 'Squad', 1, 2, 0, 0);
+      spoofer.send(spoofed, rinfo.port, rinfo.address, () => {
+        const genuine = buildValidA2SResponse('GENUINE', 'Map', 'squad', 'Squad', 1, 2, 0, 0);
+        server.send(genuine, rinfo.port, rinfo.address);
+      });
+    });
+
+    try {
+      const result = await queryA2S('127.0.0.1', port, 1000);
+      expect(result?.serverName).toBe('GENUINE');
+    } finally {
+      server.close();
+      spoofer.close();
+    }
   });
 });

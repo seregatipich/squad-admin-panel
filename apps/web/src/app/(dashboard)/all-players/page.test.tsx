@@ -93,8 +93,22 @@ function mockFetch(opts: MockOptions = {}): {
     }
     if (url.startsWith('/api/v1/players')) {
       listUrls.push(url);
+      const source = opts.players ?? PLAYERS_RESPONSE;
+      // Mirrors GET /api/v1/players' own `q` search (nickname, SteamID64, EOS
+      // ID) so tests exercise the real contract: the page must send `q` and
+      // rely on the server to filter, not re-filter only the loaded page
+      // itself (#485).
+      const q = new URL(url, 'http://test').searchParams.get('q')?.toLowerCase().trim();
+      const items = q
+        ? source.items.filter(
+            (p) =>
+              p.canonical_name.toLowerCase().includes(q) ||
+              (p.steam_id64 ?? '') === q ||
+              (p.eos_id ?? '').toLowerCase() === q,
+          )
+        : source.items;
       return Promise.resolve(
-        new Response(JSON.stringify(opts.players ?? PLAYERS_RESPONSE), {
+        new Response(JSON.stringify({ items, total: q ? items.length : source.total }), {
           status: opts.listStatus ?? 200,
         }),
       );
@@ -201,6 +215,37 @@ describe('PlayersPage', () => {
     });
   });
 
+  // Regression (#40, #236): the list stopped at 200 players with no way to
+  // reach the rest, and «всего» showed the page size.
+  it('shows the server total and pages through players beyond the first 200', async () => {
+    const listUrls = await renderPage({ players: { ...PLAYERS_RESPONSE, total: 450 } });
+    expect(screen.getByText('всего: 450')).toBeInTheDocument();
+    expect(screen.getByText('Стр. 1 из 3')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    await waitFor(() => {
+      expect(listUrls).toContain('/api/v1/players?sort=last_seen&dir=desc&limit=200&offset=200');
+    });
+    expect(screen.getByText('Стр. 2 из 3')).toBeInTheDocument();
+  });
+
+  it('returns to the first page when the sort changes', async () => {
+    const listUrls = await renderPage({ players: { ...PLAYERS_RESPONSE, total: 450 } });
+    await userEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    await waitFor(() => {
+      expect(listUrls).toContain('/api/v1/players?sort=last_seen&dir=desc&limit=200&offset=200');
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^Ник/ }));
+    await waitFor(() => {
+      expect(listUrls.at(-1)).toBe('/api/v1/players?sort=nickname&dir=asc');
+    });
+  });
+
+  it('hides the pager when every player fits on one page', async () => {
+    await renderPage();
+    expect(screen.queryByRole('button', { name: 'Вперёд' })).not.toBeInTheDocument();
+  });
+
   it('ticking the new-players checkbox refetches with filter=new', async () => {
     const listUrls = await renderPage();
     await userEvent.click(screen.getByRole('checkbox', { name: 'новые (<7 дней)' }));
@@ -209,11 +254,11 @@ describe('PlayersPage', () => {
     });
   });
 
-  it('renders formatted playtime for zero, sub-hour and multi-hour totals', async () => {
+  it('renders formatted playtime for zero, sub-hour and multi-hour totals with Russian units (#492)', async () => {
     await renderPage();
-    expect(screen.getByText('6m')).toBeInTheDocument();
-    expect(screen.getByText('0m')).toBeInTheDocument();
-    expect(screen.getByText('2h 2m')).toBeInTheDocument();
+    expect(screen.getByText('6м')).toBeInTheDocument();
+    expect(screen.getByText('0м')).toBeInTheDocument();
+    expect(screen.getByText('2ч 2м')).toBeInTheDocument();
   });
 
   it('renders a dash for a player without a SteamID64', async () => {
@@ -248,7 +293,7 @@ describe('PlayersPage', () => {
     expect(await screen.findByText('Нет совпадений.')).toBeInTheDocument();
   });
 
-  it('filters client-side by SteamID64 and by EOS ID', async () => {
+  it('searches server-side by SteamID64 and by EOS ID (via the q param, #485)', async () => {
     await renderPage();
     const box = screen.getByPlaceholderText('Поиск по нику, SteamID или EOS ID…');
     await userEvent.type(box, '76561197999270003');
@@ -263,6 +308,28 @@ describe('PlayersPage', () => {
       expect(screen.queryByText('Bravozz')).not.toBeInTheDocument();
     });
     expect(screen.getByText('Alphazz')).toBeInTheDocument();
+  });
+
+  it('sends the search text as q, so search runs server-side rather than only over the loaded page (#485)', async () => {
+    const listUrls = await renderPage();
+    await userEvent.type(
+      screen.getByPlaceholderText('Поиск по нику, SteamID или EOS ID…'),
+      'Alpha',
+    );
+    await waitFor(() =>
+      expect(
+        listUrls.some((url) => new URL(url, 'http://test').searchParams.get('q') === 'Alpha'),
+      ).toBe(true),
+    );
+  });
+
+  it('counts "онлайн сейчас" from the full online-status set, not just the loaded page (#485)', async () => {
+    // A page limited to two rows, neither of which is the third, online player.
+    await renderPage({
+      players: { items: PLAYERS_RESPONSE.items.slice(0, 2), total: 2 },
+      onlinePlayerIds: ['player-1', 'player-3'],
+    });
+    expect(await screen.findByText(/онлайн сейчас: 2/)).toBeInTheDocument();
   });
 
   it('marks an online player and hides the offline ones behind только онлайн', async () => {
@@ -316,5 +383,36 @@ describe('PlayersPage', () => {
     await renderPage({ sidecarsOk: false });
     expect(screen.getByText('Alphazz')).toBeInTheDocument();
     expect(screen.queryByText('сейчас на сервере')).not.toBeInTheDocument();
+  });
+
+  it('does not re-poll the mark summary on the 8s player-list tick (#489)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { fetch: fetchMock } = mockFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      render(<PlayersPage />);
+      await vi.waitFor(() => expect(screen.getByText('Alphazz')).toBeInTheDocument());
+
+      const summaryCallsAfterMount = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/marks/active-summary'),
+      ).length;
+      expect(summaryCallsAfterMount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.advanceTimersByTimeAsync(8000);
+
+      const summaryCallsAfterPolling = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/marks/active-summary'),
+      ).length;
+      expect(summaryCallsAfterPolling).toBe(1);
+
+      const listCallsAfterPolling = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/players?'),
+      ).length;
+      expect(listCallsAfterPolling).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

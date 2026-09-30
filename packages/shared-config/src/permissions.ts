@@ -57,10 +57,21 @@ export const PERMISSIONS = [
     label: 'Просмотр и скачивание файлов логов сервера',
   },
   { key: 'config:view', category: 'configs', label: 'Читать .cfg файлы' },
-  { key: 'config:edit', category: 'configs', label: 'Редактировать через Monaco' },
-  { key: 'config:rollback', category: 'configs', label: 'Откат к предыдущей версии' },
+  { key: 'config:edit', category: 'configs', label: 'Редактировать через Monaco', dangerous: true },
+  {
+    key: 'config:rollback',
+    category: 'configs',
+    label: 'Откат к предыдущей версии',
+    dangerous: true,
+  },
   { key: 'player:view', category: 'players', label: 'Список игроков, ник, SteamID' },
   { key: 'player:view_ips', category: 'players', label: 'История IP' },
+  {
+    key: 'player:manage_alt_detection',
+    category: 'players',
+    label: 'Настраивать детект мультиаккаунтов (веса, пороги, игнор-лист IP)',
+    dangerous: true,
+  },
   {
     key: 'player:view_notes',
     category: 'players',
@@ -76,8 +87,7 @@ export const PERMISSIONS = [
   {
     key: 'player:set_flags',
     category: 'players',
-    label: 'Custom теги (toxic, helpful)',
-    unimplemented: true,
+    label: 'Ставить и снимать метки игроков',
   },
   {
     key: 'mod:kick',
@@ -100,6 +110,16 @@ export const PERMISSIONS = [
   },
   { key: 'mod:unban', category: 'moderation', label: 'Unban' },
   {
+    key: 'ban_source:view',
+    category: 'moderation',
+    label: 'Видеть источники внешних банов',
+  },
+  {
+    key: 'message_template:manage',
+    category: 'moderation',
+    label: 'Управлять шаблонами сообщений',
+  },
+  {
     key: 'banlist:read',
     category: 'moderation',
     label: 'Читать публикуемый банлист (федерация)',
@@ -113,6 +133,7 @@ export const PERMISSIONS = [
     key: 'admin_group:edit',
     category: 'admin_groups',
     label: 'Редактировать Admins.cfg',
+    dangerous: true,
   },
   { key: 'whitelist:view', category: 'whitelist', label: 'Видеть whitelist' },
   {
@@ -146,7 +167,12 @@ export const PERMISSIONS = [
     dangerous: true,
     unimplemented: true,
   },
-  { key: 'api_token:create', category: 'api_tokens', label: 'Создавать API tokens' },
+  {
+    key: 'api_token:create',
+    category: 'api_tokens',
+    label: 'Создавать API tokens',
+    dangerous: true,
+  },
   { key: 'api_token:revoke', category: 'api_tokens', label: 'Ревокать tokens' },
   { key: 'discord:link', category: 'discord', label: 'Привязать Discord', unimplemented: true },
   {
@@ -155,12 +181,12 @@ export const PERMISSIONS = [
     label: 'Управлять интеграциями (Discord)',
     dangerous: true,
   },
-  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила', unimplemented: true },
+  { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила' },
   {
     key: 'trigger:edit',
     category: 'triggers',
     label: 'Редактировать авто-правила',
-    unimplemented: true,
+    dangerous: true,
   },
   {
     key: 'scheduler:view',

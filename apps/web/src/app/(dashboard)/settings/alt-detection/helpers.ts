@@ -12,6 +12,12 @@ function isIpv4Address(address: string): boolean {
   return IPV4_PATTERN.test(address);
 }
 
+/** Converts an IPv4 address into the two trailing hextets of its IPv6-mapped form (RFC 4291 §2.5.5). */
+function ipv4ToTrailingHextets(address: string): number[] {
+  const [a, b, c, d] = address.split('.').map(Number);
+  return [((a ?? 0) << 8) | (b ?? 0), ((c ?? 0) << 8) | (d ?? 0)];
+}
+
 /** Expands an IPv6 address (with optional `::` compression) into 8 hextets, or null if malformed. */
 function expandIpv6Groups(address: string): number[] | null {
   const [firstPart, secondPart, ...rest] = address.split('::');
@@ -20,6 +26,14 @@ function expandIpv6Groups(address: string): number[] | null {
   const parseHextets = (segment: string): number[] | null => {
     if (segment === '') return [];
     const pieces = segment.split(':');
+    // An embedded IPv4 literal (e.g. `::ffff:192.0.2.1`) only ever appears as
+    // the final piece and expands to two trailing hextets.
+    const last = pieces[pieces.length - 1];
+    if (pieces.length > 0 && last !== undefined && isIpv4Address(last)) {
+      const head = pieces.slice(0, -1);
+      if (head.some((g) => !/^[0-9a-fA-F]{1,4}$/.test(g))) return null;
+      return [...head.map((g) => Number.parseInt(g, 16)), ...ipv4ToTrailingHextets(last)];
+    }
     if (pieces.some((g) => !/^[0-9a-fA-F]{1,4}$/.test(g))) return null;
     return pieces.map((g) => Number.parseInt(g, 16));
   };
@@ -74,20 +88,17 @@ export function isValidIpOrCidr(input: string): boolean {
   return (value & hostMask) === 0n;
 }
 
-/** Trims and lowercases a CIDR/IP string for consistent display and comparison. */
-export function formatCidr(input: string): string {
-  return input.trim().toLowerCase();
-}
-
 /** The alt-detection scoring-settings form, keyed like the API's snake_case body. */
 export interface AltDetectionSettingsForm {
   weight_shared_ip: number;
   weight_shared_name: number;
   weight_young_account: number;
   weight_steamid_proximity: number;
+  weight_coplay_overlap: number;
   steamid_delta_threshold: number;
   medium_threshold: number;
   high_threshold: number;
+  coplay_overlap_threshold_seconds: number;
 }
 
 /** Every field of {@link AltDetectionSettingsForm}, in form order. */
@@ -96,9 +107,11 @@ const ALT_DETECTION_SETTINGS_FORM_KEYS = [
   'weight_shared_name',
   'weight_young_account',
   'weight_steamid_proximity',
+  'weight_coplay_overlap',
   'steamid_delta_threshold',
   'medium_threshold',
   'high_threshold',
+  'coplay_overlap_threshold_seconds',
 ] as const satisfies readonly (keyof AltDetectionSettingsForm)[];
 
 /**

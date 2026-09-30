@@ -40,7 +40,7 @@ const RUN = {
 };
 
 function mockFetch(opts: { permissions?: string[]; rules?: unknown[]; runs?: unknown[] } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+  const permissions = opts.permissions ?? ['trigger:edit'];
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -89,6 +89,52 @@ describe('AutomationPage', () => {
   );
 
   it(
+    'replaces the skeleton with the error banner when a request rejects',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => Promise.reject(new Error('network down'))),
+      );
+      render(<AutomationPage />);
+
+      expect(await screen.findByText('Не удалось загрузить автоматизацию')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Загрузка правил автоматизации')).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows the API validation message instead of the bare status text on create failure',
+    async () => {
+      const { fn } = mockFetch();
+      const base = fn.getMockImplementation() as (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      fn.mockImplementation((input, init) =>
+        init?.method === 'POST'
+          ? Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  error: 'Bad Request',
+                  message: 'body/condition/threshold too big',
+                }),
+                { status: 400 },
+              ),
+            )
+          : base(input, init),
+      );
+      render(<AutomationPage />);
+
+      fireEvent.change(await screen.findByLabelText('Имя'), { target: { value: 'Новое' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Добавить правило' }));
+
+      expect(await screen.findByText(/body\/condition\/threshold too big/)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows empty states for both lists',
     async () => {
       mockFetch({ rules: [], runs: [] });
@@ -101,7 +147,7 @@ describe('AutomationPage', () => {
   );
 
   it(
-    'hides management controls without the role:edit permission',
+    'hides management controls without the trigger:edit permission',
     async () => {
       mockFetch({ permissions: [] });
       render(<AutomationPage />);
@@ -109,6 +155,17 @@ describe('AutomationPage', () => {
       expect(await screen.findByText('Только просмотр')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Тест' })).not.toBeInTheDocument();
       expect(screen.getByRole('switch', { name: 'Включить правило Кик за спам' })).toBeDisabled();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides management controls for a role editor without trigger:edit (#111)',
+    async () => {
+      mockFetch({ permissions: ['role:edit'] });
+      render(<AutomationPage />);
+
+      expect(await screen.findByText('Только просмотр')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

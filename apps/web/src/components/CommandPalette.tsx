@@ -228,16 +228,19 @@ export function CommandPalette({
                 </p>
                 {section.results.map((result) => {
                   rowIndex += 1;
-                  const active = rowIndex === selectedIndex;
+                  // Snapshot the running counter: the hover closure must see
+                  // this row's index, not the counter's final value.
+                  const index = rowIndex;
+                  const active = index === selectedIndex;
                   return (
                     <button
                       key={`${result.kind}-${result.kind === 'page' ? result.href : result.id}`}
-                      id={`${listId}-option-${rowIndex}`}
+                      id={`${listId}-option-${index}`}
                       type="button"
                       role="option"
                       aria-selected={active}
                       onClick={() => select(result)}
-                      onMouseEnter={() => setSelectedIndex(rowIndex)}
+                      onMouseEnter={() => setSelectedIndex(index)}
                       className={`block w-full px-4 py-2 text-left text-[13px] transition-colors ${
                         active ? 'bg-accent-dim text-ink' : 'text-ink-2 hover:bg-raised'
                       }`}

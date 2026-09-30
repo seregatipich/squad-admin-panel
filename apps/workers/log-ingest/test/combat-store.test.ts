@@ -8,7 +8,7 @@ import {
   playerWeaponStats,
   servers,
 } from '@squad/db';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleCombat, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
@@ -59,6 +59,11 @@ const DEATH_LINE = `[2026.07.05-12.00.02:000][102]LogSquadTrace: [DedicatedServe
 const DAMAGE_LINE = `[2026.07.05-12.00.00:000][100]LogSquad: Player:VictimBob ActualDamage=54.321000 from AttackerAlice (Online IDs: EOS: ${ALICE_EOS} steam: ${ALICE_STEAM} | Controller ID: BP_PlayerController_C_2147481000) caused by BP_Projectile_762x54_C`;
 const REVIVE_LINE = `[2026.07.05-12.00.03:000][103]LogSquad: MedicCarol (Online IDs: EOS: ${CAROL_EOS} steam: ${CAROL_STEAM}) has revived RevivedDave (Online IDs: EOS: ${DAVE_EOS} steam: ${DAVE_STEAM}).`;
 const SUICIDE_LINE = `[2026.07.05-12.10.00:000][300]LogSquadTrace: [DedicatedServer]ASQSoldier::Die(): Player:AttackerAlice KillingDamage=-100.000000 from AttackerAlice (Online IDs: EOS: ${ALICE_EOS} steam: ${ALICE_STEAM}) caused by BP_Grenade_C`;
+// Same physical player as VictimBob (Bob's own EOS/steam in the attacker's
+// "Online IDs" segment, i.e. self-damage), but the attacker text is a
+// controller-style name that never equals the victim's display name — the
+// name-comparison isSuicide check misses this (#63 finding 922).
+const SELF_DAMAGE_NAME_MISMATCH_LINE = `[2026.07.05-12.11.00:000][301]LogSquadTrace: [DedicatedServer]ASQSoldier::Die(): Player:VictimBob KillingDamage=-100.000000 from BP_PlayerController_C_2147481777 (Online IDs: EOS: ${BOB_EOS}) caused by BP_Grenade_C`;
 const ENV_LINE = `[2026.07.05-12.11.00:000][301]LogSquad: Player:VictimBob ActualDamage=15.000000 from nullptr caused by BP_FallDamage_C`;
 const EOS_ONLY_KILL = `[2026.07.05-12.05.00:000][200]LogSquadTrace: [DedicatedServer]ASQSoldier::Die(): Player:VictimBob KillingDamage=-100.000000 from Newcomer (Online IDs: EOS: ${NEWCOMER_EOS}) caused by BP_M4_C`;
 const WOUND_LINE = `[2026.07.05-12.00.01:000][101]LogSquadTrace: [DedicatedServer]ASQSoldier::Wound(): Player:VictimBob KillingDamage=-50.000000 from AttackerAlice (Online IDs: EOS: ${ALICE_EOS} steam: ${ALICE_STEAM}) caused by BP_AK74_C`;
@@ -251,6 +256,21 @@ describe('handleCombat player resolution edge cases', () => {
     expect(payload.is_teamkill).toBe(false);
   });
 
+  it('never counts self-damage as a teamkill when the attacker text differs from the victim name (#63 finding 922)', async () => {
+    const result = await handleCombat(
+      db,
+      makeRedis(ROSTER_SAME_TEAM),
+      command(SELF_DAMAGE_NAME_MISMATCH_LINE),
+    );
+    expect(result.attackerPlayerId).toBe(BOB_ID);
+    expect(result.victimPlayerId).toBe(BOB_ID);
+    expect(result.isTeamkill).toBe(false);
+    const rows = await eventsOfKind('combat_death');
+    const payload = rows[0].payload as Record<string, unknown>;
+    expect(payload.is_suicide).toBe(true);
+    expect(payload.is_teamkill).toBe(false);
+  });
+
   it('records environmental damage with a null attacker', async () => {
     const result = await handleCombat(db, makeRedis(), command(ENV_LINE));
     expect(result.attackerPlayerId).toBeNull();
@@ -274,6 +294,11 @@ describe('handleCombat match association and dedup', () => {
     const rows = await eventsOfKind('combat_death');
     expect(rows[0].correlationId).toBe(matchId);
     expect((rows[0].payload as Record<string, unknown>).match_id).toBe(matchId);
+    // Issue #50 (#1073): the typed combat_events row carries the match too.
+    const typed = (await db.execute(
+      sql`SELECT match_uuid::text AS match_uuid FROM combat_events WHERE server_id = ${SERVER_ID}`,
+    )) as unknown as Array<{ match_uuid: string | null }>;
+    expect(typed.map((r) => r.match_uuid)).toEqual([matchId]);
   });
 
   it('leaves match_id null when no match brackets the event', async () => {

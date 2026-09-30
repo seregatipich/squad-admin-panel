@@ -16,6 +16,14 @@ interface Props {
 
 type Status = 'connecting' | 'running' | 'done' | 'error';
 
+/**
+ * Client-side cap on buffered progress lines. The backend replays up to 500
+ * lines of backfill and then streams SteamCMD output for the whole run; the
+ * console only needs the tail, and an unbounded buffer grew memory and the
+ * per-frame copy/render cost for as long as the update lasted.
+ */
+const MAX_PROGRESS_LINES = 2000;
+
 const STATUS_TEXT: Record<Status, string> = {
   connecting: 'Подключение…',
   running: 'Обновление…',
@@ -77,11 +85,16 @@ export function UpdateProgressModal({ open, onOpenChange, wsUrl, title, onDone }
           const final: 'done' | 'error' = frame.final === 'done' ? 'done' : 'error';
           setStatus(final);
           setConnectionError(null);
-          onDone?.(final, frame.error);
+          onDone?.(final, typeof frame.error === 'string' ? frame.error : undefined);
           ws.close();
           return;
         }
-        setLines((prev) => [...prev, frame as LogEntry]);
+        // LogConsole builds its keys from `message`, so a frame without one would crash the render.
+        if (typeof frame.message !== 'string') return;
+        setLines((prev) => {
+          const next = [...prev, frame as LogEntry];
+          return next.length > MAX_PROGRESS_LINES ? next.slice(-MAX_PROGRESS_LINES) : next;
+        });
       } catch {
         // ignore malformed frame
       }

@@ -11,7 +11,13 @@ import {
   StatTile,
   StatusDot,
 } from '@/components/ui';
-import { CHART_AXIS, CHART_FRAME, CHART_GRID } from '@/lib/chart-tokens';
+import {
+  CHART_AXIS,
+  CHART_FRAME,
+  CHART_GRID,
+  CHART_HOVER,
+  CHART_HOVER_OPACITY,
+} from '@/lib/chart-tokens';
 import { fmtDuration, MODE_HEX } from './presence';
 import {
   buildDailyBars,
@@ -37,19 +43,31 @@ const RANGE_ITEMS = DAILY_RANGES.map((preset) => ({
   label: DAILY_RANGE_LABELS[preset],
 }));
 
+/**
+ * «Онлайн по дням» chart with the «Наиграно» tile.
+ *
+ * Every request goes through the effect, whose cleanup aborts it when the
+ * range changes or the section unmounts; «Повторить» only bumps a counter
+ * that re-runs the effect, so a retried request can never answer after — and
+ * overwrite — the range selected since (#451). The tile shows a skeleton while
+ * loading and a dash on error, never a made-up zero (#454).
+ */
 export function PresenceChart({ playerId }: { playerId: string }) {
   const [range, setRange] = useState<DailyRange>(30);
   const [data, setData] = useState<DailyPresenceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/presence/daily?range=${range}`, {
+    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/presence/daily?range=${range}`, {
       credentials: 'include',
       cache: 'no-store',
+      signal: controller.signal,
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((body: DailyPresenceResponse) => {
@@ -63,10 +81,12 @@ export function PresenceChart({ playerId }: { playerId: string }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId, range]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   const bars = useMemo(() => (data ? buildDailyBars(data.series, data.from, data.to) : []), [data]);
 
@@ -86,7 +106,13 @@ export function PresenceChart({ playerId }: { playerId: string }) {
         />
       </div>
 
-      <PlaytimeCard totalSeconds={data?.total_time_played_seconds ?? 0} />
+      {data ? (
+        <PlaytimeCard totalSeconds={data.total_time_played_seconds} />
+      ) : error ? (
+        <StatTile label="Наиграно" value="—" hint="Нет данных" />
+      ) : (
+        <Skeleton variant="card" label="Загрузка наигранного времени" />
+      )}
 
       {error ? (
         <InlineBanner
@@ -94,7 +120,7 @@ export function PresenceChart({ playerId }: { playerId: string }) {
           title="Не удалось загрузить онлайн по дням"
           description={error}
           action={
-            <Button size="sm" onClick={() => load()}>
+            <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
               Повторить
             </Button>
           }
@@ -221,8 +247,8 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
             y={PAD.top}
             width={slot}
             height={INNER_H}
-            fill="#ffffff"
-            opacity={0.04}
+            fill={CHART_HOVER}
+            opacity={CHART_HOVER_OPACITY}
             pointerEvents="none"
           />
         ) : null}

@@ -22,7 +22,8 @@ Unit tests for the log line parser, event extractor, and Squad-fatal detector.
 |---|---|
 | Parses `Display`-verbosity `LogGameMode` line | `category`, `verbosity`, `message` extracted correctly |
 | Parses no-verbosity `LogGameState` line | `verbosity` is null |
-| Filters audio-export noise | `isBenignNoise` returns true for known noise patterns |
+| Filters audio-export noise | `isBenignNoise` returns true for known noise patterns on parsed lines |
+| Noise markers in player text (#930) | a nickname or chat message containing a noise marker still yields `player.connected` / `onChat` |
 
 **`LogIngestor` event extraction:**
 

@@ -47,7 +47,6 @@ export interface SeedRewardSyncEvent {
 export interface SeedRewardTickDeps {
   now?: Date;
   reconcileAssignments(now: Date): Promise<SeedRewardReconcileResult>;
-  invalidatePermissionCache(playerId: string): void;
   revokeAllForPlayer(playerId: string): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
@@ -61,8 +60,9 @@ export interface SeedRewardTickResult {
 
 /**
  * Reconcile rolling 30-day seed totals with the configured reward role.
- * Role changes use the ROLE-2 side effects: system audit rows, permission
- * cache invalidation, panel-session revocation, and Admins.cfg sync.
+ * Role changes use the ROLE-2 side effects: system audit rows, panel-session
+ * revocation, and Admins.cfg sync. The API's in-process permission cache is not
+ * signalled; it serves stale rights for at most its 30 s TTL.
  */
 export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedRewardTickResult> {
   const now = deps.now ?? new Date();
@@ -80,7 +80,6 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
     }
 
     for (const change of reconciliation.changes) {
-      deps.invalidatePermissionCache(change.playerId);
       await deps.revokeAllForPlayer(change.playerId);
     }
 
@@ -124,7 +123,6 @@ export function createSeedRewardDeps(
 ): Omit<SeedRewardTickDeps, 'now' | 'diag'> {
   return {
     reconcileAssignments: (now) => reconcileSeedRewardAssignments(db, now),
-    invalidatePermissionCache: () => undefined,
     revokeAllForPlayer: (playerId) => revokeAllSessionsForPlayer(db, redis, playerId),
   };
 }
@@ -191,7 +189,7 @@ export async function reconcileSeedRewardAssignments(
         currentRoleId: players.roleId,
         roleExpiresAt: players.roleExpiresAt,
         roleComment: players.roleComment,
-        seedSeconds: sql<number>`COALESCE(SUM(${playerDailyPresence.seedSeconds}), 0)::bigint`,
+        seedSeconds: sql<string>`COALESCE(SUM(${playerDailyPresence.seedSeconds}), 0)::bigint`,
       })
       .from(players)
       .leftJoin(
@@ -205,6 +203,7 @@ export async function reconcileSeedRewardAssignments(
       .groupBy(players.id);
 
     const changes: SeedRewardChange[] = [];
+    const auditRows: (typeof auditLog.$inferInsert)[] = [];
     for (const state of states) {
       const seedSeconds = Number(state.seedSeconds);
       const qualifies = seedSeconds >= thresholdSeconds;
@@ -232,7 +231,7 @@ export async function reconcileSeedRewardAssignments(
         .returning({ id: players.id });
       if (!updated) continue;
 
-      await tx.insert(auditLog).values({
+      auditRows.push({
         actorKind: 'system',
         actorPlayerId: null,
         actorTokenId: null,
@@ -266,6 +265,11 @@ export async function reconcileSeedRewardAssignments(
       });
     }
 
+    // One insert after every UPDATE: the audit_log trigger holds a global
+    // advisory lock until commit, so writing rows one by one inside the loop
+    // would block every other audit writer for the whole pass.
+    if (auditRows.length > 0) await tx.insert(auditLog).values(auditRows);
+
     const { enqueued } =
       changes.length === 0
         ? { enqueued: 0 }
@@ -292,12 +296,13 @@ export async function revokeAllSessionsForPlayer(
   redis: Pick<Redis, 'del' | 'publish'>,
   playerId: string,
 ): Promise<void> {
+  // One statement, so a session created concurrently is either deleted and
+  // returned here (its Redis key is cleared) or survives untouched in the DB.
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
+    .delete(sessions)
+    .where(eq(sessions.playerId, playerId))
+    .returning({ id: sessions.id });
   if (rows.length === 0) return;
-  await db.delete(sessions).where(eq(sessions.playerId, playerId));
   await redis.del(...rows.map((row) => `session:${row.id}`));
   const ts = new Date().toISOString();
   for (const row of rows) {

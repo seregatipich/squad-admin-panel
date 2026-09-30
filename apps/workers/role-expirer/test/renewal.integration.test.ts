@@ -14,7 +14,11 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createSubscriptionRenewalDeps, runSubscriptionRenewalTick } from '../src/renewal.js';
+import {
+  chargeRenewal,
+  createSubscriptionRenewalDeps,
+  runSubscriptionRenewalTick,
+} from '../src/renewal.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -255,4 +259,78 @@ describeIfDb('runSubscriptionRenewalTick against a real database', () => {
       );
     expect(spendsAfterSecondPass).toHaveLength(1);
   }, 60_000);
+});
+
+describeIfDb('chargeRenewal concurrency (#990)', () => {
+  it('charges a subscription exactly once when two renewal passes race the same due row', async () => {
+    if (!db) throw new Error('DATABASE_URL is required for this test');
+    const racePlayerId = randomUUID();
+    const raceSubId = randomUUID();
+    const raceSteam = 76561197999985802n;
+    const dueAt = new Date(Date.now() - 60_000);
+    const startingBalance = 1000;
+
+    await db.insert(players).values({
+      id: racePlayerId,
+      steamId64: raceSteam,
+      canonicalName: 'RenewalRace',
+      canonicalNameNormalized: 'renewalrace',
+      bonusBalance: startingBalance,
+      roleId: vipRoleId,
+      roleExpiresAt: new Date(Date.now() + DAY_MS),
+    });
+    await db.insert(vipSubscriptions).values({
+      id: raceSubId,
+      playerId: racePlayerId,
+      tierId,
+      status: 'active',
+      renewsEveryDays: TIER_DAYS,
+      priceBonuses: TIER_PRICE,
+      nextRenewalAt: dueAt,
+    });
+
+    try {
+      const input = {
+        subscriptionId: raceSubId,
+        playerId: racePlayerId,
+        roleId: vipRoleId,
+        price: TIER_PRICE,
+        days: TIER_DAYS,
+        dueAt,
+        nextRenewalAt: new Date(dueAt.getTime() + TIER_DAYS * DAY_MS),
+        now: new Date(),
+        syncEvent: {
+          reason: 'player.role.assign' as const,
+          actor_player_id: null,
+          enqueued_at: new Date().toISOString(),
+          request_id: `race-${raceSubId}`,
+        },
+      };
+
+      // Two "passes" reading the same due row and racing to charge it — the
+      // scenario in #990 (two worker instances during a deploy, or an
+      // unguarded overlapping tick).
+      const [a, b] = await Promise.all([chargeRenewal(db, input), chargeRenewal(db, input)]);
+
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual(['not_active', 'ok']);
+
+      const [player] = await db
+        .select({ balance: players.bonusBalance })
+        .from(players)
+        .where(eq(players.id, racePlayerId));
+      // Charged exactly once, not twice.
+      expect(player?.balance).toBe(startingBalance - TIER_PRICE);
+
+      const [subscription] = await db
+        .select({ nextRenewalAt: vipSubscriptions.nextRenewalAt })
+        .from(vipSubscriptions)
+        .where(eq(vipSubscriptions.id, raceSubId));
+      expect(subscription?.nextRenewalAt?.getTime()).toBe(input.nextRenewalAt.getTime());
+    } finally {
+      await db.delete(vipSubscriptions).where(eq(vipSubscriptions.id, raceSubId));
+      await db.delete(bonusTransactions).where(eq(bonusTransactions.playerId, racePlayerId));
+      await db.delete(players).where(eq(players.id, racePlayerId));
+    }
+  }, 30_000);
 });

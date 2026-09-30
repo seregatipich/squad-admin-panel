@@ -10,6 +10,9 @@ const LICENSE_FILE = 'License.cfg';
 /** Written on detach (the bridge has no single-file delete). */
 export const LICENSE_PLACEHOLDER = '// Server license key\n';
 
+/** Any control or line-separator character — a line break would add lines to License.cfg. */
+const CONTROL_CHARACTER = /[\p{Cc}\u2028\u2029]/u;
+
 /** Substituted for the real key everywhere except the file on disk. */
 export const LICENSE_KEY_MASK = '********';
 
@@ -28,7 +31,9 @@ export const LICENSE_KEY_MASK = '********';
  * @param serverId - Target server uuid; its credentials row is re-read here.
  * @param authorPlayerId - Actor for the history row, or null for system.
  * @param authorIp - Actor IP for the history row, or null.
- * @throws When the bridge write fails; the DB license update has already been
+ * @throws When the stored id or key contains a control character (the PATCH
+ *   schema rejects those, so only a row written around it can trip this), or
+ *   when the bridge write fails; the DB license update has already been
  *   committed by the caller, so a retry re-renders from the stored state.
  */
 export async function syncLicenseCfg(
@@ -46,9 +51,14 @@ export async function syncLicenseCfg(
   if (creds?.licenseKeyEncrypted) {
     const licenseKey = decryptString(
       app.encryptionKey,
-      deserialize(Buffer.from(creds.licenseKeyEncrypted as unknown as Buffer)),
+      deserialize(Buffer.from(creds.licenseKeyEncrypted)),
     );
     const licenseId = creds.licenseId ?? '';
+    if (CONTROL_CHARACTER.test(licenseId) || CONTROL_CHARACTER.test(licenseKey)) {
+      throw new Error(
+        'license id/key contains a control character; refusing to render License.cfg',
+      );
+    }
     content = `LicenseId=${licenseId}\nLicenseKey=${licenseKey}\n`;
     masked = `LicenseId=${licenseId}\nLicenseKey=${LICENSE_KEY_MASK}\n`;
   } else {
@@ -69,7 +79,7 @@ export async function syncLicenseCfg(
     .limit(1);
   const prevRow = prev[0];
   const maskedSha = createHash('sha256').update(masked).digest();
-  if (prevRow && Buffer.from(prevRow.sha as unknown as Buffer).equals(maskedSha)) {
+  if (prevRow && Buffer.from(prevRow.sha).equals(maskedSha)) {
     return; // unchanged (e.g. repeated id-only save) — don't pollute history
   }
   await app.db.insert(configVersions).values({

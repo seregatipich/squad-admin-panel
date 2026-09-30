@@ -5,6 +5,9 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
+import { playerNameMatch } from '../lib/player-name-search.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 100;
@@ -18,7 +21,7 @@ const boolFlag = z.enum(['true', 'false']);
 const filterShape = {
   type: z.union([typeEnum, z.array(typeEnum)]).optional(),
   serverId: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
-  matchId: z.coerce.bigint().optional(),
+  matchId: z.string().uuid().optional(),
   attackerPlayerId: z.string().uuid().optional(),
   victimPlayerId: z.string().uuid().optional(),
   playerId: z.string().uuid().optional(),
@@ -45,10 +48,6 @@ type ListQuery = z.infer<typeof listQuery>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function encodeCursor(occurredAt: Date, id: bigint): string {
@@ -102,15 +101,6 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
   const attacker = alias(players, 'attacker');
   const victim = alias(players, 'victim');
 
-  async function resolveNameIds(name: string): Promise<string[]> {
-    const pattern = `%${escapeLike(name.toLowerCase())}%`;
-    const rows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    return rows.map((row) => row.id);
-  }
-
   async function buildFilters(query: FilterQuery): Promise<{ clauses: SQL[]; empty: boolean }> {
     const clauses: SQL[] = [];
 
@@ -120,7 +110,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
     const serverIds = asArray(query.serverId);
     if (serverIds.length > 0) clauses.push(inArray(combatEvents.serverId, serverIds));
 
-    if (query.matchId !== undefined) clauses.push(eq(combatEvents.matchId, query.matchId));
+    if (query.matchId !== undefined) clauses.push(eq(combatEvents.matchUuid, query.matchId));
     if (query.attackerPlayerId)
       clauses.push(eq(combatEvents.attackerPlayerId, query.attackerPlayerId));
     if (query.victimPlayerId) clauses.push(eq(combatEvents.victimPlayerId, query.victimPlayerId));
@@ -134,15 +124,15 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (query.attackerName) {
-      const ids = await resolveNameIds(query.attackerName);
-      if (ids.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(combatEvents.attackerPlayerId, ids));
+      const byName = playerNameMatch(combatEvents.attackerPlayerId, query.attackerName);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     if (query.victimName) {
-      const ids = await resolveNameIds(query.victimName);
-      if (ids.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(combatEvents.victimPlayerId, ids));
+      const byName = playerNameMatch(combatEvents.victimPlayerId, query.victimName);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     if (query.weapon) {
@@ -217,7 +207,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: combatEvents.id,
           eventType: combatEvents.eventType,
           serverId: combatEvents.serverId,
-          matchId: combatEvents.matchId,
+          matchId: combatEvents.matchUuid,
           weapon: combatEvents.weapon,
           damage: combatEvents.damage,
           attackerKit: combatEvents.attackerKit,
@@ -243,7 +233,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: Number(row.id),
           eventType: row.eventType,
           serverId: row.serverId,
-          matchId: row.matchId != null ? Number(row.matchId) : null,
+          matchId: row.matchId,
           weapon: row.weapon,
           damage: row.damage,
           attackerKit: row.attackerKit,
@@ -257,7 +247,10 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           victim: row.victimId ? { player_id: row.victimId, current_name: row.victimName } : null,
         })),
         nextCursor: last ? encodeCursor(last.occurredAt, last.id) : null,
-        approxTotal: await approxTotal(query, baseWhere),
+        // The count is the same for every page of one filter set, so it is
+        // computed for the first page only; cursor pages answer null and the
+        // client keeps the first page's value (#144).
+        approxTotal: query.cursor ? null : await approxTotal(query, baseWhere),
       };
     },
   );
@@ -310,7 +303,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: combatEvents.id,
           eventType: combatEvents.eventType,
           serverId: combatEvents.serverId,
-          matchId: combatEvents.matchId,
+          matchId: combatEvents.matchUuid,
           occurredAt: combatEvents.occurredAt,
           attackerId: combatEvents.attackerPlayerId,
           attackerName: attacker.canonicalName,
@@ -366,7 +359,7 @@ interface CsvSourceRow {
   id: bigint;
   eventType: string;
   serverId: string;
-  matchId: bigint | null;
+  matchId: string | null;
   occurredAt: Date;
   attackerId: string | null;
   attackerName: string | null;
@@ -380,19 +373,12 @@ interface CsvSourceRow {
   isTeamkill: boolean;
 }
 
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
-
 function csvRow(row: CsvSourceRow): string {
   const cells = [
     Number(row.id),
     row.eventType,
     row.serverId,
-    row.matchId != null ? Number(row.matchId) : null,
+    row.matchId,
     row.occurredAt.toISOString(),
     row.attackerId,
     row.attackerName,

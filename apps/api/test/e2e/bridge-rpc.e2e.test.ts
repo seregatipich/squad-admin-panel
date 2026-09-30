@@ -182,19 +182,7 @@ describe('bridge RPC surface (e2e)', () => {
     ).rejects.toThrow(/forbidden/i);
   });
 
-  it('process_info returns the current node process metadata', async () => {
-    const r = await bridge.processInfo({ pid: process.pid });
-    expect(r.pid).toBe(process.pid);
-    expect(r.exists).toBe(true);
-  });
-
-  it('process_info for a clearly-dead PID reports exists=false', async () => {
-    // PID 2^22 - 1 is above linux default kernel.pid_max; safe to assume dead.
-    const r = await bridge.processInfo({ pid: 4194303 });
-    expect(r.exists).toBe(false);
-  });
-
-  it('file_write + fileRead round-trip inside the configs allowlist', async () => {
+  it('file_atomic_write + fileRead round-trip inside the configs allowlist', async () => {
     // The bridge's writable allowlist is exclusively
     // /var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg. Pick the first
     // UUID that actually exists on disk so the test survives reinstalls that
@@ -208,17 +196,19 @@ describe('bridge RPC surface (e2e)', () => {
     const before = await bridge.fileRead({ path: allowed });
     const payload = `${before.content}\n// e2e-marker-${Date.now()}\n`;
     try {
-      const wrote = await bridge.fileWrite({ path: allowed, content: payload });
+      const wrote = await bridge.fileAtomicWrite({ path: allowed, content: payload });
       expect(['done', 'written', 'ok']).toContain(wrote.status);
       const back = await bridge.fileRead({ path: allowed });
       expect(back.content).toBe(payload);
     } finally {
       // Restore original so we don't pollute the live server.
-      await bridge.fileWrite({ path: allowed, content: before.content }).catch(() => undefined);
+      await bridge
+        .fileAtomicWrite({ path: allowed, content: before.content })
+        .catch(() => undefined);
     }
-    await expect(bridge.fileWrite({ path: '/etc/hostname', content: 'boom' })).rejects.toThrow(
-      /forbidden/i,
-    );
+    await expect(
+      bridge.fileAtomicWrite({ path: '/etc/hostname', content: 'boom' }),
+    ).rejects.toThrow(/forbidden/i);
   });
 
   it('container_start|stop|rm refuse a non-squad container name', async () => {

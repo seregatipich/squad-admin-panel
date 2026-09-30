@@ -80,7 +80,9 @@ export function buildReportsAnalyticsQuery(params: {
 export function formatTrendDay(day: string): string {
   const parsed = new Date(`${day}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return day;
-  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  // See the identical helper in dashboard/vote-analytics-data.ts (#547):
+  // `day` is a UTC calendar date, so it must be formatted in UTC too.
+  return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
 }
 
 /** Formats a duration in seconds as Russian "2 ч 15 м" / "45 с" / "3 м". Null/negative renders "—". */

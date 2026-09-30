@@ -1,10 +1,8 @@
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
-import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import websocket from '@fastify/websocket';
 import { redisSinkStream } from '@squad/shared-config';
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
@@ -17,11 +15,11 @@ import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
 import { buildLogger, shouldDisableSensitiveAuthRequestLogging } from './lib/logger.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from './lib/media-storage.js';
-import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
 import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
+import csrfPlugin from './plugins/csrf.js';
 import databasePlugin from './plugins/database.js';
 import dbHealthPlugin from './plugins/db-health.js';
 import errorDiagPlugin from './plugins/error-diag.js';
@@ -32,9 +30,12 @@ import installProgressPlugin from './plugins/install-progress.js';
 import liveBusPlugin from './plugins/live-bus.js';
 import metricsPlugin from './plugins/metrics.js';
 import orphanSweepPlugin from './plugins/orphan-sweep.js';
+import { registerRateLimits } from './plugins/rate-limit.js';
 import redisPlugin from './plugins/redis.js';
-import requestContextPlugin from './plugins/request-context.js';
+import requestContextPlugin, { genRequestId } from './plugins/request-context.js';
+import sessionPrunePlugin from './plugins/session-prune.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
+import websocketPlugin from './plugins/websocket.js';
 import { registerRoutes } from './routes/index.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
@@ -46,9 +47,7 @@ export async function buildServer(config: AppConfig) {
     loggerInstance: logger,
     trustProxy: true,
     disableRequestLogging: shouldDisableSensitiveAuthRequestLogging,
-    genReqId: (req) =>
-      (req.headers['x-request-id'] as string | undefined) ??
-      `req-${Math.random().toString(36).slice(2)}`,
+    genReqId: genRequestId,
   });
 
   app.setValidatorCompiler(validatorCompiler);
@@ -56,15 +55,11 @@ export async function buildServer(config: AppConfig) {
 
   app.decorate('encryptionKey', loadEncryptionKey(config.APP_ENCRYPTION_KEY));
   app.decorate('config', config);
-  app.decorate('rcon', createRconClient());
 
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });
-  await app.register(rateLimit, {
-    max: 1200,
-    timeWindow: '1 minute',
-    keyGenerator: (req) => `${req.ip}:${req.user?.playerId ?? ''}`,
-  });
+  // Before authPlugin: its pre-auth limiter must run ahead of the auth hook.
+  await registerRateLimits(app as unknown as FastifyInstance);
   await app.register(swagger, {
     openapi: {
       info: { title: 'Squad Admin Panel API', version: '0.1.0-p0' },
@@ -83,7 +78,7 @@ export async function buildServer(config: AppConfig) {
   // `config.permissions`, so they fall through to the fail-closed default and
   // require a session like the rest of the API.
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
-  await app.register(websocket);
+  await app.register(websocketPlugin, { allowedOrigin: config.PANEL_PUBLIC_URL });
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
 
   await app.register(requestContextPlugin);
@@ -100,11 +95,16 @@ export async function buildServer(config: AppConfig) {
   await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
+  await app.register(csrfPlugin);
   await app.register(authPlugin);
   await app.register(auditPlugin);
   await app.register(installProgressPlugin);
   await app.register(statusReconcilerPlugin);
-  await app.register(orphanSweepPlugin);
+  await app.register(orphanSweepPlugin, {
+    sweepIntervalMs: config.HOST_ORPHAN_SWEEP_INTERVAL_MS,
+    dockerPruneIntervalMs: config.HOST_DOCKER_PRUNE_INTERVAL_MS,
+  });
+  await app.register(sessionPrunePlugin);
 
   await registerRoutes(app as unknown as FastifyInstance);
 

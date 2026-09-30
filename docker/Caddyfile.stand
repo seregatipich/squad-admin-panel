@@ -1,5 +1,5 @@
 {
-	email {$ACME_EMAIL:admin@example.com}
+	email {$ACME_EMAIL}
 	servers {
 		metrics
 	}
@@ -13,7 +13,15 @@
 		resolvers 1.1.1.1 8.8.8.8
 	}
 
-	@api path /api/* /health /ready
+	# Operator-only (#9, #47): Prometheus metrics and the dependency probe,
+	# which runs a Postgres query, a Redis PING and a bridge RPC per request.
+	# Scrape and probe them on the compose network (api:3000), never from here.
+	@internal path /metrics* /ready*
+	handle @internal {
+		respond 404
+	}
+
+	@api path /api/* /health
 	handle @api {
 		reverse_proxy api:3000 {
 			header_up X-Request-Id {http.request.header.X-Request-Id}

@@ -1,5 +1,19 @@
 # Changelog — worker-event-partition
 
+## 2026-09-28
+
+### Added
+
+- `pruneProcessedEvents(sql)`: удаляет записи `processed_events` старше срока хранения `events` (24 месяца, граница месяца UTC) — к этому моменту само событие уже удалено вместе с партицией. Раньше таблица росла без ограничений (#52).
+- `pruneScheduledTaskRuns(sql)`: удаляет строки `scheduled_task_runs` старше 90 дней и все, кроме 1000 последних, для каждой задачи — задача с постоянно падающей отправкой писала строку каждые 30 с (#52).
+- Обе функции вызываются в `runPartitionTick`; `test/retention.test.ts` проверяет их на реальной базе.
+
+### Fixed
+
+- [#62](https://github.com/seregatipich/squad-admin-panel/issues/62): `processed_events` was never pruned. New exported `pruneProcessedEvents(sql)`, wired into `runPartitionTick`, deletes markers older than the `events` retention cutoff (the first day of the month 24 months back), after which the event they guarded can no longer be replayed. Test: `test/processed-events-prune.test.ts`.
+
+- Journal-table retention (issue #77): `pruneJournalTables(sql)` in `src/retention.ts`, run by every `runPartitionTick`, deletes delivered alerts after 90 days (any alert after 365), relayed `admins_cfg_sync_outbox` rows after 30 days, `scheduled_task_runs`, `chat_command_invocations` and `automation_runs` after 90 days, spent `media_upload_tokens` after 7 days, and clears `ban_appeals.submitter_ip` 30 days after the decision (90 days after submission at the latest). Rows still referenced by `expiry_notifications` or `media_files` are kept. Deletes run in batches of 5 000. `test/journal-retention.test.ts` covers every table and a backlog larger than one batch.
+
 ## 2026-09-27
 
 ### Fixed

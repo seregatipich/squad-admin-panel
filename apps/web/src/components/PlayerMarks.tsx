@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -60,20 +60,39 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingClear, setPendingClear] = useState<PlayerMark | null>(null);
 
+  /**
+   * Refetches mark types and the player's marks. Never rejects: it runs from
+   * `finally` blocks, the mount effect and live events, where a thrown error
+   * would skip `setBusy(false)` (freezing the widget) or go unhandled. A
+   * failure is reported through `loadError` instead.
+   */
+  // A reload that finishes after the component moved to another player must not overwrite
+  // that player's marks, so every response is checked against the player it was requested for.
+  const currentPlayerId = useRef(playerId);
+  currentPlayerId.current = playerId;
+
   const reload = useCallback(async () => {
-    const [typesRes, marksRes] = await Promise.all([
-      fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' }),
-      fetch(`/api/v1/players/${playerId}/marks?include_cleared=true`, {
-        credentials: 'include',
-        cache: 'no-store',
-      }),
-    ]);
-    if (typesRes.ok) setTypes((await typesRes.json()) as MarkTypeOption[]);
-    if (marksRes.ok) {
+    try {
+      const [typesRes, marksRes] = await Promise.all([
+        fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' }),
+        fetch(`/api/v1/players/${playerId}/marks?include_cleared=true`, {
+          credentials: 'include',
+          cache: 'no-store',
+        }),
+      ]);
+      if (!typesRes.ok) throw new Error(`HTTP ${typesRes.status}`);
+      if (!marksRes.ok) throw new Error(`HTTP ${marksRes.status}`);
+      const nextTypes = (await typesRes.json()) as MarkTypeOption[];
       const body = (await marksRes.json()) as { items: PlayerMark[] };
+      if (currentPlayerId.current !== playerId) return;
+      setTypes(nextTypes);
       setMarks(body.items);
+      setLoadError(null);
+    } catch (e) {
+      if (currentPlayerId.current === playerId) setLoadError((e as Error).message);
     }
   }, [playerId]);
 
@@ -195,6 +214,9 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
       <CardBody className="space-y-3">
         {error ? (
           <InlineBanner tone="crit" title="Не удалось изменить метки" description={error} />
+        ) : null}
+        {loadError ? (
+          <InlineBanner tone="crit" title="Не удалось загрузить метки" description={loadError} />
         ) : null}
 
         {active.length > 0 ? (

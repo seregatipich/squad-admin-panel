@@ -10,6 +10,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { raceAgainstOpenTransaction } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -71,15 +72,20 @@ async function createSeason(
 }
 
 // uuidv7's leading characters encode the timestamp, so slicing it does not
-// yield a unique name within a single test run — use a counter instead.
+// yield a unique name within a single test run — use a counter instead. The
+// same counter also spaces out the default `starts_at` by a day per call:
+// seasons_start_day_key (#576) rejects two seasons starting the same UTC day,
+// and several tests here create more than one default-payload season.
 let seasonNameCounter = 0;
 
 function seasonPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   seasonNameCounter += 1;
+  const startsAt = new Date(Date.UTC(2026, 5, seasonNameCounter));
+  const endsAt = new Date(Date.UTC(2026, 8, seasonNameCounter));
   return {
     name: `Season ${seasonNameCounter}`,
-    starts_at: '2026-06-01T00:00:00.000Z',
-    ends_at: '2026-08-31T00:00:00.000Z',
+    starts_at: startsAt.toISOString(),
+    ends_at: endsAt.toISOString(),
     ...overrides,
   };
 }
@@ -164,11 +170,12 @@ describeIfDb('GET /api/v1/seasons', () => {
       url: '/api/v1/seasons',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists seasons for a panel user without can_edit_roles', async () => {
-    await createSeason(ownerCookie, seasonPayload({ name: 'Readable' }));
+    const payload = seasonPayload({ name: 'Readable' });
+    await createSeason(ownerCookie, payload);
 
     const res = await h.app.inject({
       method: 'GET',
@@ -183,7 +190,7 @@ describeIfDb('GET /api/v1/seasons', () => {
       status: 'upcoming',
       finalized: false,
     });
-    expect(body.items[0]?.starts_at).toBe('2026-06-01T00:00:00.000Z');
+    expect(body.items[0]?.starts_at).toBe(payload.starts_at);
   });
 
   it('filters by status', async () => {
@@ -219,17 +226,37 @@ describeIfDb('POST /api/v1/seasons', () => {
   });
 
   it('creates a season for a role holding can_edit_roles', async () => {
-    const res = await createSeason(editorCookie, seasonPayload({ name: 'Summer 2026' }));
+    const payload = seasonPayload({ name: 'Summer 2026' });
+    const res = await createSeason(editorCookie, payload);
     expect(res.statusCode).toBe(201);
     const body = res.json() as SeasonBody;
     expect(body).toMatchObject({
       name: 'Summer 2026',
-      starts_at: '2026-06-01T00:00:00.000Z',
-      ends_at: '2026-08-31T00:00:00.000Z',
+      starts_at: payload.starts_at,
+      ends_at: payload.ends_at,
       status: 'upcoming',
       finalized: false,
     });
     expect(body.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('rejects an API token whose scopes do not delegate role editing (#268)', async () => {
+    const mint = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie: ownerCookie },
+      payload: { name: `seasons-scope-${Date.now()}`, scopes: ['server:view'] },
+    });
+    expect(mint.statusCode).toBe(201);
+    const { plaintext } = mint.json() as { plaintext: string };
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/seasons',
+      headers: { authorization: `Bearer ${plaintext}` },
+      payload: seasonPayload({ name: 'TokenMade' }),
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it('creates a season for the Owner (capability short-circuit)', async () => {
@@ -260,6 +287,23 @@ describeIfDb('POST /api/v1/seasons', () => {
     const res = await createSeason(editorCookie, seasonPayload({ name: 'Duplicate' }));
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'season_name_taken' });
+  });
+
+  it('rejects a second season starting the same UTC day with 409 season_start_day_taken (#576)', async () => {
+    const first = await createSeason(
+      editorCookie,
+      seasonPayload({ name: 'Day First', starts_at: '2026-09-01T00:00:00.000Z' }),
+    );
+    expect(first.statusCode).toBe(201);
+
+    const second = await createSeason(
+      editorCookie,
+      // A later time on the same UTC day still collides — the season is
+      // resolved purely by that day, both here and in the web UI's picker.
+      seasonPayload({ name: 'Day Second', starts_at: '2026-09-01T18:00:00.000Z' }),
+    );
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({ error: 'season_start_day_taken' });
   });
 
   it('refuses to create a season directly in the closed state', async () => {
@@ -370,6 +414,30 @@ describeIfDb('PATCH /api/v1/seasons/:id', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toEqual({ error: 'season_finalized' });
+  });
+
+  it('refuses a PATCH that races the finalize tick with 422 and leaves the season closed (#274)', async () => {
+    const season = await makeSeason({ name: 'RacingFinalize' });
+    const res = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx
+          .update(seasons)
+          .set({ status: 'closed', finalized: true })
+          .where(eq(seasons.id, season.id));
+      },
+      () =>
+        h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/seasons/${season.id}`,
+          headers: { cookie: editorCookie },
+          payload: { status: 'active', name: 'RacingFinalizeReopened' },
+        }),
+    );
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: 'season_finalized' });
+    const [stored] = await h.db.select().from(seasons).where(eq(seasons.id, season.id));
+    expect(stored).toMatchObject({ name: 'RacingFinalize', status: 'closed', finalized: true });
   });
 
   it('writes an audit row carrying both the before and the after snapshot', async () => {

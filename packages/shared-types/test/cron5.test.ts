@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cron5Matches,
   expandCron5Occurrences,
+  findLastCron5Occurrence,
   isValidCron5,
   minCron5IntervalMinutes,
   parseCron5,
@@ -123,6 +124,123 @@ describe('expandCron5Occurrences', () => {
       new Date('2026-07-02T00:00:00.000Z'),
     );
     expect(occurrences).toEqual([]);
+  });
+});
+
+describe('findLastCron5Occurrence', () => {
+  it('finds a quarterly occurrence more than 40 days behind `now` (#1014)', () => {
+    // Quarterly on the 1st of Jan/Apr/Jul/Oct; created 2026-02-05, "now" is
+    // 2026-09-28 — the cursor is ~235 days behind, well past the old 40-day
+    // minute-expansion cap. The most recent occurrence is 2026-07-01.
+    const occurrence = findLastCron5Occurrence(
+      '0 0 1 1,4,7,10 *',
+      new Date('2026-02-05T00:00:00.000Z'),
+      new Date('2026-09-28T00:00:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+  });
+
+  it('finds an annual occurrence after a full year of downtime', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 0 1 1 *',
+      new Date('2025-01-02T00:00:00.000Z'),
+      new Date('2026-09-28T00:00:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('collapses multiple missed daily occurrences after a long pause to the single latest one', () => {
+    // A daily 00:00 task paused for 100 days must fire exactly once, at the
+    // most recent midnight, not replay every missed day.
+    const occurrence = findLastCron5Occurrence(
+      '0 0 * * *',
+      new Date('2026-06-20T00:00:01.000Z'),
+      new Date('2026-09-28T12:00:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-09-28T00:00:00.000Z');
+  });
+
+  it('returns null when the range contains no occurrence', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * 6',
+      new Date('2026-07-01T00:00:00.000Z'),
+      new Date('2026-07-02T00:00:00.000Z'),
+    );
+    expect(occurrence).toBeNull();
+  });
+
+  it('returns null when `from` is after `to`', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * 6',
+      new Date('2026-07-14T00:00:00.000Z'),
+      new Date('2026-07-01T00:00:00.000Z'),
+    );
+    expect(occurrence).toBeNull();
+  });
+
+  it('matches either day field when both day-of-month and day-of-week are restricted', () => {
+    // 2026-07-01 is a Wednesday (day-of-month hit), 2026-07-04 a Saturday (day-of-week hit).
+    const from = new Date('2026-06-30T00:00:00.000Z');
+    expect(
+      findLastCron5Occurrence(
+        '0 10 1 * 6',
+        from,
+        new Date('2026-07-03T00:00:00.000Z'),
+      )?.toISOString(),
+    ).toBe('2026-07-01T10:00:00.000Z');
+    expect(
+      findLastCron5Occurrence(
+        '0 10 1 * 6',
+        from,
+        new Date('2026-07-05T00:00:00.000Z'),
+      )?.toISOString(),
+    ).toBe('2026-07-04T10:00:00.000Z');
+  });
+
+  it('honours a day-of-week only restriction', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * 6',
+      new Date('2026-07-01T00:00:00.000Z'),
+      new Date('2026-07-14T23:59:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-07-11T10:00:00.000Z');
+  });
+
+  it('skips a candidate before `from` on the first day, then finds none', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * *',
+      new Date('2026-07-11T10:30:00.000Z'),
+      new Date('2026-07-11T12:00:00.000Z'),
+    );
+    expect(occurrence).toBeNull();
+  });
+
+  it('skips candidates after `to` on the last day and returns the latest one inside the window', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10,12 * * *',
+      new Date('2026-07-11T09:00:00.000Z'),
+      new Date('2026-07-11T11:00:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-07-11T10:00:00.000Z');
+  });
+
+  it('scans every minute of a wildcard hour and every hour of a wildcard minute', () => {
+    const to = new Date('2026-07-11T15:45:30.000Z');
+    const from = new Date('2026-07-11T00:00:00.000Z');
+    expect(findLastCron5Occurrence('30 * * * *', from, to)?.toISOString()).toBe(
+      '2026-07-11T15:30:00.000Z',
+    );
+    expect(findLastCron5Occurrence('* 10 * * *', from, to)?.toISOString()).toBe(
+      '2026-07-11T10:59:00.000Z',
+    );
+  });
+
+  it('agrees with expandCron5Occurrences on the latest match for a short window', () => {
+    const from = new Date('2026-07-01T00:00:00.000Z');
+    const to = new Date('2026-07-14T23:59:00.000Z');
+    const expanded = expandCron5Occurrences('0 10 * * 6', from, to);
+    const last = findLastCron5Occurrence('0 10 * * 6', from, to);
+    expect(last?.toISOString()).toBe(expanded.at(-1)?.toISOString());
   });
 });
 

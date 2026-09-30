@@ -102,7 +102,7 @@ interface CoplayResponse {
     player_name: string | null;
     overlap_seconds: number;
     shared_session_count: number;
-    by_server: Array<{
+    by_server?: Array<{
       server_id: string;
       server_name: string | null;
       server_slug: string | null;
@@ -130,10 +130,14 @@ describeIfDb('player coplay API (ALT-3)', () => {
     await h.cleanup();
   });
 
-  async function coplay(playerId: string, authCookie = cookie): Promise<CoplayResponse> {
+  async function coplay(
+    playerId: string,
+    query = '?include=by_server',
+    authCookie = cookie,
+  ): Promise<CoplayResponse> {
     const res = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/players/${playerId}/coplay`,
+      url: `/api/v1/players/${playerId}/coplay${query}`,
       headers: { cookie: authCookie },
     });
     expect(res.statusCode).toBe(200);
@@ -148,7 +152,7 @@ describeIfDb('player coplay API (ALT-3)', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a player without panel_access with 403', async () => {
+  it('rejects a player without panel_access with 401', async () => {
     const noAccessRole = await seedRole(h.db, { panelAccess: false });
     const denied = await seedPlayer(h.db, { roleId: noAccessRole });
     const deniedCookie = await loginAs(h, denied);
@@ -157,8 +161,8 @@ describeIfDb('player coplay API (ALT-3)', () => {
       url: `/api/v1/players/${uuidv7()}/coplay`,
       headers: { cookie: deniedCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('shows a co-play pair to both players with the same overlap (AC)', async () => {
@@ -222,7 +226,7 @@ describeIfDb('player coplay API (ALT-3)', () => {
     expect(daveEntry?.overlap_seconds).toBe(50_000);
     expect(daveEntry?.shared_session_count).toBe(7);
     expect(daveEntry?.by_server).toHaveLength(2);
-    const serverIds = daveEntry?.by_server.map((s) => s.server_id).sort();
+    const serverIds = daveEntry?.by_server?.map((s) => s.server_id).sort();
     expect(serverIds).toEqual([serverA, serverB].sort());
   });
 
@@ -253,5 +257,40 @@ describeIfDb('player coplay API (ALT-3)', () => {
     const partnerIds = body.partners.map((p) => p.player_id);
     expect(partnerIds).not.toContain(lowSessions);
     expect(partnerIds).not.toContain(lowOverlap);
+  });
+
+  // Regression (#453): the card shows ten partners and no per-server split,
+  // yet every open computed twenty plus an unbounded breakdown.
+  it('computes the per-server breakdown only on request and honours ?limit', async () => {
+    const server = await seedServer(h.db, 'CoplayLimit');
+    const frank = await seedPlayer(h.db, { name: 'CoplayFrank' });
+    const partners = [
+      await seedPlayer(h.db, { name: 'CoplayP1' }),
+      await seedPlayer(h.db, { name: 'CoplayP2' }),
+      await seedPlayer(h.db, { name: 'CoplayP3' }),
+    ];
+    for (const [index, partner] of partners.entries()) {
+      await seedCoplay(h.db, {
+        p1: frank,
+        p2: partner,
+        serverId: server,
+        overlapSeconds: 60_000 - index * 1_000,
+        sharedSessionCount: 10,
+      });
+    }
+
+    const plain = await coplay(frank, '');
+    expect(plain.partners).toHaveLength(3);
+    expect(plain.partners[0]).not.toHaveProperty('by_server');
+
+    const limited = await coplay(frank, '?limit=2');
+    expect(limited.partners.map((p) => p.player_id)).toEqual(partners.slice(0, 2));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${frank}/coplay?limit=21`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

@@ -1,9 +1,11 @@
 import { detectGeoAnomalies, type GeoObservation } from '@squad/db';
 import { geoipSettings, playerIpHistory } from '@squad/db/schema';
-import { desc, eq, isNotNull, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { desc, eq, isNotNull, lte, sql } from 'drizzle-orm';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
+import { uuidArrayParam } from '../lib/sql-params.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const feedQuery = z.object({
@@ -11,23 +13,15 @@ const feedQuery = z.object({
 });
 
 const IP_HISTORY_CAP = 500;
-const FEED_CANDIDATE_CAP = 500;
+/**
+ * Most multi-country players the feed inspects per request, most recently
+ * seen first, so a cap hit drops the stalest players, never a fresh switch.
+ */
+export const FEED_CANDIDATE_CAP = 500;
 
 interface GeoConfig {
   switchWindowHours: number;
   multiCountryThreshold: number;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 interface IpRow {
@@ -166,23 +160,50 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         .where(isNotNull(playerIpHistory.countryCode))
         .groupBy(playerIpHistory.playerId)
         .having(sql`COUNT(DISTINCT ${playerIpHistory.countryCode}) > 1`)
+        .orderBy(desc(sql`MAX(${playerIpHistory.lastSeenAt})`), playerIpHistory.playerId)
         .limit(FEED_CANDIDATE_CAP);
+
+      // One windowed query for every candidate's newest IP_HISTORY_CAP rows,
+      // instead of one query per candidate (#40, #225).
+      const ranked = app.db
+        .select({
+          playerId: playerIpHistory.playerId,
+          ip: playerIpHistory.ip,
+          countryCode: playerIpHistory.countryCode,
+          countryName: playerIpHistory.countryName,
+          latitude: playerIpHistory.latitude,
+          longitude: playerIpHistory.longitude,
+          lastSeenAt: playerIpHistory.lastSeenAt,
+          rank: sql<number>`row_number() OVER (
+            PARTITION BY ${playerIpHistory.playerId}
+            ORDER BY ${playerIpHistory.lastSeenAt} DESC
+          )`.as('rank'),
+        })
+        .from(playerIpHistory)
+        .where(
+          sql`${playerIpHistory.playerId} = ANY(${uuidArrayParam(
+            candidates.map((candidate) => candidate.playerId),
+          )})`,
+        )
+        .as('ranked');
+      const historyRows =
+        candidates.length === 0
+          ? []
+          : await app.db
+              .select()
+              .from(ranked)
+              .where(lte(ranked.rank, IP_HISTORY_CAP))
+              .orderBy(ranked.playerId, desc(ranked.lastSeenAt));
+      const historyByPlayer = new Map<string, IpRow[]>();
+      for (const row of historyRows) {
+        const rows = historyByPlayer.get(row.playerId) ?? [];
+        rows.push(row as IpRow);
+        historyByPlayer.set(row.playerId, rows);
+      }
 
       const items: Array<{ player_id: string } & ReturnType<typeof serializeAnomalies>> = [];
       for (const candidate of candidates) {
-        const rows = (await app.db
-          .select({
-            ip: playerIpHistory.ip,
-            countryCode: playerIpHistory.countryCode,
-            countryName: playerIpHistory.countryName,
-            latitude: playerIpHistory.latitude,
-            longitude: playerIpHistory.longitude,
-            lastSeenAt: playerIpHistory.lastSeenAt,
-          })
-          .from(playerIpHistory)
-          .where(eq(playerIpHistory.playerId, candidate.playerId))
-          .orderBy(desc(playerIpHistory.lastSeenAt))
-          .limit(IP_HISTORY_CAP)) as IpRow[];
+        const rows = historyByPlayer.get(candidate.playerId) ?? [];
         const serialized = serializeAnomalies(rows, config, includePoints);
         if (!serialized.multi_country && !serialized.has_recent_switch) continue;
         items.push({ player_id: candidate.playerId, ...serialized });
@@ -193,7 +214,13 @@ const playerGeoAnomaliesRoutes: FastifyPluginAsync = async (app) => {
         return b.distinct_country_count - a.distinct_country_count;
       });
 
-      return { items: items.slice(0, req.query.limit), total: items.length };
+      // `total` counts anomalies among the inspected candidates; `truncated`
+      // says the candidate cap was hit, so older players may be missing.
+      return {
+        items: items.slice(0, req.query.limit),
+        total: items.length,
+        truncated: candidates.length === FEED_CANDIDATE_CAP,
+      };
     },
   );
 };

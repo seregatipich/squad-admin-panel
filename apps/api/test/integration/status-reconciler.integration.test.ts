@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { CRASH_LOOP_THRESHOLD } from '../../src/plugins/status-reconciler.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -69,7 +71,7 @@ describe('status-reconciler tick', () => {
     const id = await createServer();
     await h.db
       .update(servers)
-      .set({ status: 'stopping', updatedAt: new Date() })
+      .set({ status: 'stopping', updatedAt: new Date(), containerId: 'docker-container-def' })
       .where(eq(servers.id, id));
     h.bridge.containerInspect = async ({ name }) => ({
       name,
@@ -88,13 +90,14 @@ describe('status-reconciler tick', () => {
 
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.status).toBe('stopped');
+    expect(row?.containerId).toBe('docker-container-def');
   });
 
   it("flips status='starting' to 'running' once docker reports running", async () => {
     const id = await createServer();
     await h.db
       .update(servers)
-      .set({ status: 'starting', updatedAt: new Date() })
+      .set({ status: 'starting', updatedAt: new Date(), containerId: 'docker-container-abc' })
       .where(eq(servers.id, id));
     h.bridge.containerInspect = async ({ name }) => ({
       name,
@@ -113,7 +116,8 @@ describe('status-reconciler tick', () => {
 
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.status).toBe('running');
-    expect(row?.containerId).toBe('12345');
+    // #78: the reconciler must not replace the Docker container id with a PID.
+    expect(row?.containerId).toBe('docker-container-abc');
   });
 
   it('treats not_found as stopped — never leaves a row stuck on a missing container', async () => {
@@ -224,13 +228,70 @@ describe('status-reconciler tick', () => {
   });
 });
 
+describe('reconciler — crash detection while the status stays running (#37)', () => {
+  function runningInspect(restartCount: number): IntegrationHarness['bridge']['containerInspect'] {
+    return async ({ name }) => ({
+      name,
+      state: 'running',
+      running: true,
+      pid: 4242,
+      started_at: '2026-04-26T00:00:00Z',
+      finished_at: '2026-04-26T00:00:00Z',
+      exit_code: 137,
+      oom_killed: false,
+      image: 'squad-server:latest',
+      restart_count: restartCount,
+      labels: {},
+    });
+  }
+
+  it('records a crash when Docker restarted the container between ticks, and fails a crash loop', async () => {
+    const id = await createServer();
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const statusFrames: Array<{ status: string; source: string }> = [];
+    const unsubscribe = h.app.liveBus.subscribe((event) => {
+      if (event.type === 'server.status' && event.data.server_id === id) {
+        statusFrames.push({ status: event.data.status, source: event.data.source });
+      }
+    });
+    try {
+      // First observation only sets the restart-count baseline.
+      h.bridge.containerInspect = runningInspect(0);
+      await h.app.statusReconciler.tickNow();
+      expect(await h.redis.zcard(`crashes:${id}`)).toBe(0);
+
+      // Docker's restart policy brought the crashed container back before the
+      // next tick: running → running, restart_count 0 → 1.
+      h.bridge.containerInspect = runningInspect(1);
+      await h.app.statusReconciler.tickNow();
+      expect(await h.redis.zcard(`crashes:${id}`)).toBe(1);
+      expect(statusFrames).toContainEqual({ status: 'running', source: 'crash_detected' });
+
+      h.bridge.containerInspect = runningInspect(2);
+      await h.app.statusReconciler.tickNow();
+      h.bridge.containerInspect = runningInspect(3);
+      await h.app.statusReconciler.tickNow();
+
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+      expect(row?.status).toBe('failed');
+      expect(statusFrames).toContainEqual({ status: 'failed', source: 'crash_loop' });
+    } finally {
+      unsubscribe();
+      await h.redis.del(`crashes:${id}`);
+    }
+  });
+});
+
 describe('POST /api/v1/servers/:id/reconcile', () => {
   it('forces an immediate reconcile and returns the resulting state', async () => {
     const cookie = await loginAsOwner(h);
     const id = await createServer();
     await h.db
       .update(servers)
-      .set({ status: 'stopping', updatedAt: new Date() })
+      .set({ status: 'stopping', updatedAt: new Date(), containerId: 'docker-container-ghi' })
       .where(eq(servers.id, id));
     h.bridge.containerInspect = async ({ name }) => ({
       name,
@@ -263,6 +324,7 @@ describe('POST /api/v1/servers/:id/reconcile', () => {
 
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.status).toBe('stopped');
+    expect(row?.containerId).toBe('docker-container-ghi');
   });
 
   it('returns 502 when the bridge throws — but the next reconcile can still recover', async () => {
@@ -530,5 +592,103 @@ describe('GET /api/v1/health/reconciler', () => {
     }>();
     expect(stuckBody.stuck_servers.find((s) => s.id === id)).toBeDefined();
     expect(stuckBody.healthy).toBe(false);
+  });
+});
+
+describe('crash-loop detection on the live tick path (#1345)', () => {
+  it("flips a server to 'failed' after CRASH_LOOP_THRESHOLD unrequested restarts", async () => {
+    const id = await createServer();
+    await h.redis.del(`crashes:${id}`, `stop:requested:${id}`);
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    // Docker keeps restarting the container: every observed state change comes
+    // with a higher restart_count. The first observation only sets a baseline.
+    const observations = [
+      { state: 'restarting', running: false },
+      { state: 'running', running: true },
+      { state: 'restarting', running: false },
+      { state: 'running', running: true },
+    ];
+    let restartCount = 0;
+    let current = observations[0];
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: current?.state ?? 'running',
+      running: current?.running ?? true,
+      pid: 1,
+      started_at: '',
+      finished_at: '',
+      exit_code: 137,
+      image: 'squad-server:latest',
+      restart_count: restartCount,
+      labels: {},
+    });
+
+    const statuses: string[] = [];
+    for (const observation of observations) {
+      restartCount++;
+      current = observation;
+      await h.app.statusReconciler.tickNow();
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+      statuses.push(row?.status ?? '');
+    }
+
+    expect(await h.redis.zcard(`crashes:${id}`)).toBe(CRASH_LOOP_THRESHOLD);
+    expect(statuses.at(-1)).toBe('failed');
+    expect(statuses.slice(0, -1)).not.toContain('failed');
+  });
+});
+
+describe('reconciler stats (#86)', () => {
+  it('counts only starting/stopping rows as transient and ignores external servers', async () => {
+    const containerId = await createServer();
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, containerId));
+    const externalId = randomUUID();
+    await h.db.insert(servers).values({
+      id: externalId,
+      displayName: 'External stuck',
+      slug: `external-stuck-${externalId.slice(0, 8)}`,
+      status: 'starting',
+      runtime: 'external',
+      updatedAt: new Date(Date.now() - 10 * 60_000),
+    });
+
+    await h.app.statusReconciler.tickNow();
+    const stats = await h.app.statusReconciler.stats();
+
+    expect(stats.last_tick_servers_inspected).toBe(1);
+    expect(stats.servers_in_transient).toBe(0);
+    expect(stats.stuck_servers.map((s) => s.id)).not.toContain(externalId);
+  });
+
+  it('reports rows still converging as servers_in_transient', async () => {
+    const id = await createServer();
+    await h.db
+      .update(servers)
+      .set({ status: 'stopping', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: 'removing',
+      running: false,
+      pid: 0,
+      started_at: '',
+      finished_at: '',
+      exit_code: 0,
+      image: '',
+      restart_count: 0,
+      labels: {},
+    });
+
+    await h.app.statusReconciler.tickNow();
+    const stats = await h.app.statusReconciler.stats();
+
+    expect(stats.last_tick_servers_inspected).toBe(1);
+    expect(stats.servers_in_transient).toBe(1);
   });
 });

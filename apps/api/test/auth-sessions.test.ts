@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import { playerNameHistory, players, roles, sessions as sessionsTable } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
@@ -26,7 +27,7 @@ async function buildApp(opts: { dbUrl: string }) {
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',
@@ -87,6 +88,22 @@ async function seedAuthedPlayer(
   return { token: result.token, sessionId: result.session.id, playerId: insertedId };
 }
 
+/**
+ * #1233 — a `__Host-` cookie is only accepted by a browser with `Secure`,
+ * `Path=/` and no `Domain`; a deletion header without `Secure` is dropped
+ * whole, leaving the dead session cookie on the client.
+ */
+function expectHostCookieCleared(setCookie: string | string[] | undefined, name: string): void {
+  const headers = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  const deletion = headers.find((header) => header.startsWith(`${name}=;`));
+  expect(deletion, `no deletion Set-Cookie for ${name}`).toBeDefined();
+  expect(deletion).toMatch(/;\s*Secure/i);
+  expect(deletion).toMatch(/;\s*HttpOnly/i);
+  expect(deletion).toMatch(/;\s*Path=\//i);
+  expect(deletion).toMatch(/;\s*SameSite=Lax/i);
+  expect(deletion).not.toMatch(/;\s*Domain=/i);
+}
+
 describe('GET /api/v1/me', () => {
   let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
   let h: Awaited<ReturnType<typeof buildApp>>;
@@ -123,6 +140,37 @@ describe('GET /api/v1/me', () => {
     expect(body.canonical_name).toBe('TestPlayer');
     expect(body.permissions.length).toBeGreaterThan(0);
   });
+
+  it('a session touch replaces the cached pre-touch deadline with the extended one (#52)', async () => {
+    const { token, sessionId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000302n);
+    const cacheKey = `session:${sessionId}`;
+    const nearExpiry = new Date(Date.now() + 60_000);
+    await h.db
+      .update(sessionsTable)
+      .set({ expiresAt: nearExpiry })
+      .where(eq(sessionsTable.id, sessionId));
+    await h.redis.del(cacheKey);
+
+    const first = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(first.statusCode).toBe(200);
+    // The touch extended the row, so the cache must not keep the old deadline.
+    // The cache entry is `{ payload, mac }` (HMAC-signed), the payload a JSON string.
+    const cachedExpiry = async (): Promise<number> => {
+      const raw = await h.redis.get(cacheKey);
+      if (!raw) return 0;
+      const { payload } = JSON.parse(raw) as { payload: string };
+      return new Date((JSON.parse(payload) as { expiresAt: string }).expiresAt).getTime();
+    };
+    const afterFirst = await cachedExpiry();
+    if (afterFirst > 0) expect(afterFirst).toBeGreaterThan(nearExpiry.getTime());
+
+    await h.app.inject({ method: 'GET', url: '/api/v1/me', cookies: { [SESSION_COOKIE]: token } });
+    expect(await cachedExpiry()).toBeGreaterThan(nearExpiry.getTime());
+  });
 });
 
 describe('POST /api/v1/auth/logout', () => {
@@ -158,6 +206,7 @@ describe('POST /api/v1/auth/logout', () => {
       .where(eq(sessionsTable.id, sessionId));
     expect(remaining.length).toBe(0);
     expect(revokedIds.has(sessionId)).toBe(true);
+    expectHostCookieCleared(res.headers['set-cookie'], SESSION_COOKIE);
   });
 
   it.each(['panel', 'self_service'] as const)(
@@ -185,7 +234,7 @@ describe('POST /api/v1/auth/logout', () => {
       expect(
         await h.db.select().from(sessionsTable).where(eq(sessionsTable.playerId, playerId)),
       ).toEqual([]);
-      expect(String(response.headers['set-cookie'])).toContain('__Host-sid=;');
+      expectHostCookieCleared(response.headers['set-cookie'], SESSION_COOKIE);
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
@@ -432,6 +481,7 @@ describe('DELETE /api/v1/me/sessions', () => {
     expect(remaining.length).toBe(0);
     expect(revokedIds.has(sessionId)).toBe(true);
     expect(revokedIds.has(second.session.id)).toBe(true);
+    expectHostCookieCleared(res.headers['set-cookie'], SESSION_COOKIE);
   });
 
   it('returns 401 when not authenticated', async () => {

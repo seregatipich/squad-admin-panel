@@ -4,6 +4,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
+import { stopSidecar } from '../lib/sidecar-lifecycle.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -38,12 +39,30 @@ const forceStopRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'server_not_stoppable', status: s.status };
       }
 
-      await app.bridge.containerRm({ name: `squad-${s.id}`, force: true });
+      // Same planned-stop fence as POST /stop (#285): the status reconciler
+      // reads it to tell this exit apart from a crash.
+      await app.redis.set(`stop:requested:${s.id}`, '1', 'EX', 300);
 
-      await app.db
+      await app.bridge.containerRm({ name: `squad-${s.id}` });
+
+      // The sidecar would otherwise keep reconnecting to the dead server's
+      // RCON. Best-effort: it is not load-bearing for the stop.
+      await stopSidecar(app.bridge, s.id, (err) => {
+        req.log.warn({ err: (err as Error).message, id: s.id }, 'sidecar stop failed (continuing)');
+      });
+
+      // Compare-and-set on the status read above: a concurrent start that
+      // finished while the container was being removed wrote its own status,
+      // and a stale force-stop must not overwrite it with 'stopped'.
+      const updated = await app.db
         .update(servers)
         .set({ status: 'stopped', updatedAt: new Date() })
-        .where(eq(servers.id, s.id));
+        .where(and(eq(servers.id, s.id), eq(servers.status, s.status)))
+        .returning({ id: servers.id });
+      if (updated.length === 0) {
+        reply.code(409);
+        return { error: 'server_status_changed' };
+      }
 
       app.liveBus?.publish({
         type: 'server.status',

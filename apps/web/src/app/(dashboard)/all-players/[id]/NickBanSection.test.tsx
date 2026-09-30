@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NickBanSection } from './NickBanSection';
 
@@ -145,5 +145,67 @@ describe('NickBanSection', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     rerender(<NickBanSection nick="CleanNick" refreshKey={1} />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  // Regression (#450): any failure (500, timeout, network) used to hide the
+  // block for good, and a later re-check could never bring it back.
+  it('keeps the block with a retry when the check fails for a reason other than auth', async () => {
+    let failing = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          failing
+            ? new Response(null, { status: 500 })
+            : new Response(JSON.stringify(checkResponse({})), { status: 200 }),
+        ),
+      ),
+    );
+    render(<NickBanSection nick="CleanNick" />);
+
+    expect(await screen.findByText('Не удалось проверить ник')).toBeInTheDocument();
+    failing = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    expect(await screen.findByRole('button', { name: /забанить ник/i })).toBeInTheDocument();
+    expect(screen.queryByText('Не удалось проверить ник')).not.toBeInTheDocument();
+  });
+
+  it('drops a stale check that answers after a newer one', async () => {
+    const matchedBody = checkResponse({
+      matched: true,
+      rule: {
+        id: 'rule-1',
+        pattern: 'CleanNick',
+        match_type: 'exact',
+        action: 'kick',
+        reason: null,
+        is_active: true,
+      },
+    });
+    let releaseFirst: (response: Response) => void = () => {};
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<Response>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return Promise.resolve(new Response(JSON.stringify(checkResponse({})), { status: 200 }));
+      }),
+    );
+    const { rerender } = render(<NickBanSection nick="CleanNick" refreshKey={0} />);
+    rerender(<NickBanSection nick="CleanNick" refreshKey={1} />);
+    expect(await screen.findByRole('button', { name: /забанить ник/i })).toBeInTheDocument();
+
+    await act(async () => {
+      releaseFirst(new Response(JSON.stringify(matchedBody), { status: 200 }));
+    });
+
+    expect(screen.queryByText(/ник забанен/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /забанить ник/i })).toBeInTheDocument();
   });
 });

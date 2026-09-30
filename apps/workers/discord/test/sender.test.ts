@@ -4,7 +4,12 @@ import type { EventEnvelope } from '@squad/shared-types';
 import pino from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { EncryptedBlob } from '../src/crypto.js';
-import { deliverEnvelope, type SenderDeps } from '../src/sender.js';
+import {
+  deliverEnvelope,
+  MAX_RETRY_AFTER_MS,
+  type SenderDeps,
+  type WebhookDeliveryLedger,
+} from '../src/sender.js';
 
 const KEY = Buffer.alloc(32, 0x42);
 const SERVER_A = '11111111-1111-1111-1111-111111111111';
@@ -211,6 +216,21 @@ describe('deliverEnvelope', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
+  it.each([400, 401, 404])(
+    'does not retry a permanent %i response and counts one failure',
+    async (status) => {
+      const row = webhookRow({ url: 'https://discord.com/api/webhooks/1/aaa' });
+      const db = makeFakeDb({ webhookRows: [row] });
+      const fetchImpl = vi.fn(async () => new Response(null, { status }));
+      const sleep = vi.fn(async () => undefined);
+      const result = await deliverEnvelope(makeDeps({ db, fetchImpl, sleep }), envelope());
+
+      expect(result).toEqual({ sent: 0, failed: 1, rateLimited: 0 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
+
   it('one webhook failing does not prevent delivery to a second webhook of the same event', async () => {
     const bad = webhookRow({ id: 'wh-bad', url: 'https://discord.com/api/webhooks/1/aaa' });
     const good = webhookRow({ id: 'wh-good', url: 'https://discord.com/api/webhooks/2/bbb' });
@@ -279,5 +299,76 @@ describe('deliverEnvelope', () => {
     const result = await deliverEnvelope(makeDeps({ db, fetchImpl }), envelope());
     expect(result).toEqual({ sent: 0, failed: 1, rateLimited: 0 });
     expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it('skips a webhook the ledger already marks delivered and marks each new success (#879)', async () => {
+    const done = webhookRow({ id: 'wh-done', url: 'https://discord.com/api/webhooks/1/aaa' });
+    const fresh = webhookRow({ id: 'wh-fresh', url: 'https://discord.com/api/webhooks/2/bbb' });
+    const db = makeFakeDb({ webhookRows: [done, fresh] });
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const delivered = new Set(['wh-done']);
+    const ledger: WebhookDeliveryLedger = {
+      isDelivered: async (id) => delivered.has(id),
+      markDelivered: async (id) => {
+        delivered.add(id);
+      },
+    };
+
+    const result = await deliverEnvelope(makeDeps({ db, fetchImpl }), envelope(), ledger);
+
+    expect(result).toEqual({ sent: 1, failed: 0, rateLimited: 0 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain('/2/bbb');
+    expect([...delivered].sort()).toEqual(['wh-done', 'wh-fresh']);
+  });
+
+  it('does not mark a failed webhook as delivered in the ledger (#879)', async () => {
+    const row = webhookRow({ id: 'wh-1', url: 'https://discord.com/api/webhooks/1/aaa' });
+    const db = makeFakeDb({ webhookRows: [row] });
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 502 }));
+    const markDelivered = vi.fn(async () => undefined);
+
+    const result = await deliverEnvelope(makeDeps({ db, fetchImpl }), envelope(), {
+      isDelivered: async () => false,
+      markDelivered,
+    });
+
+    expect(result.failed).toBe(1);
+    expect(markDelivered).not.toHaveBeenCalled();
+  });
+
+  it('aborts a webhook POST that hangs past the request timeout instead of waiting forever (#893)', async () => {
+    const row = webhookRow({ url: 'https://discord.com/api/webhooks/1/aaa' });
+    const db = makeFakeDb({ webhookRows: [row] });
+    const fetchImpl = vi.fn(
+      (_url: string | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+
+    const result = await deliverEnvelope(
+      makeDeps({ db, fetchImpl: fetchImpl as unknown as typeof fetch, requestTimeoutMs: 20 }),
+      envelope(),
+    );
+
+    expect(result).toEqual({ sent: 0, failed: 1, rateLimited: 0 });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it('gives up at once instead of sleeping when Discord asks to wait longer than the cap (#893)', async () => {
+    const row = webhookRow({ url: 'https://discord.com/api/webhooks/1/aaa' });
+    const db = makeFakeDb({ webhookRows: [row] });
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '3600' } }),
+    );
+    const sleep = vi.fn(async () => undefined);
+
+    const result = await deliverEnvelope(makeDeps({ db, fetchImpl, sleep }), envelope());
+
+    expect(3_600_000).toBeGreaterThan(MAX_RETRY_AFTER_MS);
+    expect(result).toEqual({ sent: 0, failed: 1, rateLimited: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

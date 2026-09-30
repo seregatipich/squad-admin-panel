@@ -1,13 +1,19 @@
 import { players } from '@squad/db/schema';
+import { fetchSteamBans, fetchSteamOwnedGames, fetchSteamProfile } from '@squad/steam-api';
 import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { fetchSteamBans } from '../lib/steam-bans.js';
-import { fetchSteamOwnedGames } from '../lib/steam-owned-games.js';
-import { fetchSteamProfile } from '../lib/steam-profile.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
+
+/**
+ * Refreshes one user may trigger per minute. Each uncached player costs up to
+ * three Steam Web API calls against the operator's shared daily key quota, so
+ * the global 1200/min limit alone would let any `player:view` holder drain it
+ * by walking player ids.
+ */
+export const STEAM_REFRESH_RATE_LIMIT_PER_MINUTE = 20;
 
 /**
  * INT-1 (#76): on-demand Steam Web API enrichment for a single player.
@@ -22,6 +28,10 @@ const playerIdParams = z.object({ playerId: z.string().uuid() });
  * burning the operator's daily Steam quota. The write is all-or-nothing — if
  * any of the three reads fails the route answers 502 and leaves the stored
  * snapshot untouched, so a partial outage never produces a half-updated row.
+ *
+ * Rate-limited per user ({@link STEAM_REFRESH_RATE_LIMIT_PER_MINUTE}): the
+ * limit runs as a `preHandler`, after authentication, so it is keyed on the
+ * caller's player id rather than a shared IP.
  */
 const playerSteamRefreshRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -33,6 +43,12 @@ const playerSteamRefreshRoutes: FastifyPluginAsync = async (app) => {
       config: {
         permissions: ['player:view'],
         audit: { action: 'player.steam_refresh', resource: 'player' },
+        rateLimit: {
+          max: STEAM_REFRESH_RATE_LIMIT_PER_MINUTE,
+          timeWindow: '1 minute',
+          hook: 'preHandler',
+          keyGenerator: (req) => `steam-refresh:${req.user?.playerId ?? req.ip}`,
+        },
       },
     },
     async (req, reply) => {

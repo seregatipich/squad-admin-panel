@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import type { BridgeClient } from '@squad/bridge-client';
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import {
   DEPOT_VOLUME_NAME,
   PANEL_CONFIGS_ROOT,
   PANEL_SAVED_ROOT,
+  resolveRconHost,
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import {
@@ -11,8 +13,8 @@ import {
   externalServerCreateInput,
   serverCreateInput,
 } from '@squad/shared-types';
-import { and, eq, isNull, or } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import { and, eq, isNull } from 'drizzle-orm';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
@@ -20,11 +22,12 @@ import { z } from 'zod';
 import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { canViewIps, redactPayloadIp } from '../lib/ip-visibility.js';
-import { resolveRconHost } from '../lib/rcon-host.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
 import { stopSidecar } from '../lib/sidecar-lifecycle.js';
 
@@ -32,6 +35,46 @@ const serverIdParams = z.object({ id: z.string().uuid() });
 
 function containerName(id: string) {
   return `squad-${id}`;
+}
+
+/**
+ * Replaces a server's squad container with a fresh `docker run` built from
+ * its current `server_settings` (#30, finding #320). Ports, max players,
+ * tickrate and MULTIHOME are baked into the container's arguments when it is
+ * created, so restarting an existing container with `containerStart` would
+ * silently ignore every PUT /settings change since — and leave it listening on
+ * ports whose UFW rules that PUT already closed. Only stopped containers reach
+ * this: callers short-circuit (start) or stop first (restart).
+ *
+ * @param bridge - Bridge client.
+ * @param serverId - Panel server UUID.
+ * @param settings - The server's current settings row.
+ * @param exists - Whether a container is present to remove first.
+ * @returns The new container's id.
+ * @throws when the bridge refuses the remove or the run.
+ */
+async function runFreshServerContainer(
+  bridge: Pick<BridgeClient, 'containerRm' | 'containerRun'>,
+  serverId: string,
+  settings: typeof serverSettings.$inferSelect,
+  exists: boolean,
+): Promise<string> {
+  if (exists) await bridge.containerRm({ name: containerName(serverId) });
+  const run = await bridge.containerRun({
+    server_id: serverId,
+    image: SERVER_IMAGE,
+    game_port: settings.gamePort,
+    query_port: settings.queryPort,
+    beacon_port: settings.beaconPort,
+    rcon_port: settings.rconPort,
+    max_players: settings.maxPlayers,
+    tickrate: settings.tickrate,
+    multihome: settings.multihome,
+    configs_host: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`,
+    saved_host: `${PANEL_SAVED_ROOT}/${serverId}`,
+    depot_volume: DEPOT_VOLUME_NAME,
+  });
+  return run.container_id;
 }
 
 /**
@@ -84,6 +127,22 @@ async function readSeedingSummary(redis: Redis, serverId: string): Promise<Seedi
 
 const HOST_INFO_TTL_MS = 60_000;
 
+/**
+ * Parses a JSON string cached by a background worker (a2s:status:<id>,
+ * crashes:<id>) without letting a malformed or partially-written entry crash
+ * the whole request. A single bad Redis key must not 500 the entire server
+ * list/detail (finding #338) the way the parallel `rcon:status` parse below
+ * is already guarded against.
+ */
+function safeJsonParse(raw: string, log: FastifyBaseLogger, context: Record<string, unknown>) {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (err) {
+    log.warn({ err: (err as Error).message, ...context }, 'failed to parse cached JSON from redis');
+    return null;
+  }
+}
+
 const serverRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -126,7 +185,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(servers.displayName);
       const items = await Promise.all(
         rows.map(async (r) => {
-          const raw = await app.redis.get(`rcon:status:${r.id}`);
+          // #339: these three reads are independent — running them
+          // sequentially costs N·3 round trips for a list of N servers.
+          const [raw, a2sRaw, seeding] = await Promise.all([
+            app.redis.get(`rcon:status:${r.id}`),
+            app.redis.get(`a2s:status:${r.id}`),
+            readSeedingSummary(app.redis, r.id),
+          ]);
           let rconState: string | null = null;
           let playerCount: number | null = null;
           let lastPollAt: string | null = null;
@@ -144,14 +209,14 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               // ignore
             }
           }
-          const a2sRaw = await app.redis.get(`a2s:status:${r.id}`);
-          const seeding = await readSeedingSummary(app.redis, r.id);
           return {
             ...r,
             rcon_state: rconState,
             player_count: playerCount,
             last_poll_at: lastPollAt,
-            a2s_status: a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null,
+            a2s_status: a2sRaw
+              ? safeJsonParse(a2sRaw, app.log, { serverId: r.id, key: 'a2s:status' })
+              : null,
             crash_loop: r.status === 'failed',
             seeding,
           };
@@ -176,31 +241,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
 
       // --- cross-server port collision check (mirrors PUT /:id/settings) ---
       const requestedPorts = [body.game_port, body.query_port, body.beacon_port, body.rcon_port];
-      const conflictRows = await app.db
-        .select({ serverId: serverSettings.serverId })
-        .from(serverSettings)
-        .innerJoin(servers, eq(serverSettings.serverId, servers.id))
-        .where(
-          and(
-            isNull(servers.deletedAt),
-            // External servers live on other hosts: their ports never collide
-            // with a container bound on this one.
-            eq(servers.runtime, 'container'),
-            or(
-              ...requestedPorts.map((p) =>
-                or(
-                  eq(serverSettings.gamePort, p),
-                  eq(serverSettings.queryPort, p),
-                  eq(serverSettings.beaconPort, p),
-                  eq(serverSettings.rconPort, p),
-                ),
-              ),
-            ),
-          ),
-        )
-        .limit(1);
-
-      if (conflictRows.length > 0) {
+      if (await hasContainerPortConflict(app.db, requestedPorts)) {
         reply.code(409);
         return {
           error: 'port_conflict',
@@ -208,46 +249,54 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         };
       }
 
-      await app.db.transaction(async (tx) => {
-        await tx.insert(servers).values({
-          id,
-          displayName: body.display_name,
-          slug: body.slug,
-          description: body.description ?? null,
-          status: 'pending',
-          runtime: 'container',
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(servers).values({
+            id,
+            displayName: body.display_name,
+            slug: body.slug,
+            description: body.description ?? null,
+            status: 'pending',
+            runtime: 'container',
+          });
+          await tx.insert(serverSettings).values({
+            serverId: id,
+            installPath: `${PANEL_CONFIGS_ROOT}/${id}`,
+            gamePort: body.game_port,
+            queryPort: body.query_port,
+            beaconPort: body.beacon_port,
+            rconPort: body.rcon_port,
+            maxPlayers: body.max_players ?? 100,
+            tickrate: body.tickrate ?? 50,
+            multihome: body.multihome ?? '0.0.0.0',
+            extraArgs: body.extra_args ?? '',
+            launchArgsOverride: body.launch_args_override ?? null,
+            cpuAffinity: body.cpu_affinity ?? null,
+            cpuWeight: body.cpu_weight ?? null,
+            niceness: body.niceness ?? null,
+            memoryHighMb: body.memory_high_mb ?? null,
+            memoryMaxMb: body.memory_max_mb ?? null,
+            ioWeight: body.io_weight ?? null,
+          });
+          const rconPassword = randomBytes(24).toString('base64url');
+          const blob = encrypt(app.encryptionKey, rconPassword);
+          // Leave rconHost unset so each downstream caller (api vs worker-rcon)
+          // resolves it against its own RCON_HOST_DEFAULT env var at connect
+          // time — see apps/workers/rcon/src/index.ts reconcile() and
+          // server-configs.ts reloadServerConfig().
+          await tx.insert(serverCredentials).values({
+            serverId: id,
+            rconPort: body.rcon_port,
+            rconPasswordEncrypted: serialize(blob),
+          });
         });
-        await tx.insert(serverSettings).values({
-          serverId: id,
-          installPath: `${PANEL_CONFIGS_ROOT}/${id}`,
-          gamePort: body.game_port,
-          queryPort: body.query_port,
-          beaconPort: body.beacon_port,
-          rconPort: body.rcon_port,
-          maxPlayers: body.max_players ?? 100,
-          tickrate: body.tickrate ?? 50,
-          multihome: body.multihome ?? '0.0.0.0',
-          extraArgs: body.extra_args ?? '',
-          launchArgsOverride: body.launch_args_override ?? null,
-          cpuAffinity: body.cpu_affinity ?? null,
-          cpuWeight: body.cpu_weight ?? null,
-          niceness: body.niceness ?? null,
-          memoryHighMb: body.memory_high_mb ?? null,
-          memoryMaxMb: body.memory_max_mb ?? null,
-          ioWeight: body.io_weight ?? null,
-        });
-        const rconPassword = randomBytes(24).toString('base64url');
-        const blob = encrypt(app.encryptionKey, rconPassword);
-        // Leave rconHost unset so each downstream caller (api vs worker-rcon)
-        // resolves it against its own RCON_HOST_DEFAULT env var at connect
-        // time — see apps/workers/rcon/src/index.ts reconcile() and
-        // server-configs.ts reloadServerConfig().
-        await tx.insert(serverCredentials).values({
-          serverId: id,
-          rconPort: body.rcon_port,
-          rconPasswordEncrypted: serialize(blob),
-        });
-      });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          reply.code(409);
+          return { error: 'slug_in_use', message: 'An active server already uses this slug.' };
+        }
+        throw err;
+      }
       reply.code(201);
       return { id, status: 'pending' };
     },
@@ -305,11 +354,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           });
         });
       } catch (err) {
-        // Drizzle wraps the driver error in DrizzleQueryError; the Postgres
-        // SQLSTATE lives on `cause` there and on the error itself elsewhere.
-        const code =
-          (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
-        if (code === '23505') {
+        if (isUniqueViolation(err)) {
           reply.code(409);
           return { error: 'slug_in_use', message: 'An active server already uses this slug.' };
         }
@@ -411,13 +456,18 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      const settingsRow = await app.db.query.serverSettings.findFirst({
-        where: eq(serverSettings.serverId, req.params.id),
-      });
-      const credsRow = await app.db.query.serverCredentials.findFirst({
-        where: eq(serverCredentials.serverId, req.params.id),
-      });
-      const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
+      // #339: these four reads (two DB, two Redis) are independent of each
+      // other — fetching them sequentially only adds latency.
+      const [settingsRow, credsRow, rconRaw, a2sRaw] = await Promise.all([
+        app.db.query.serverSettings.findFirst({
+          where: eq(serverSettings.serverId, req.params.id),
+        }),
+        app.db.query.serverCredentials.findFirst({
+          where: eq(serverCredentials.serverId, req.params.id),
+        }),
+        app.redis.get(`rcon:status:${row.id}`),
+        app.redis.get(`a2s:status:${row.id}`),
+      ]);
       let rcon_status: {
         state: string;
         ts?: string;
@@ -434,8 +484,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           rcon_status = { state: 'not_polled' };
         }
       }
-      const a2sRaw = await app.redis.get(`a2s:status:${row.id}`);
-      const a2s_status: unknown = a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null;
+      const a2s_status: unknown = a2sRaw
+        ? safeJsonParse(a2sRaw, app.log, { serverId: row.id, key: 'a2s:status' })
+        : null;
 
       const external = isExternalRuntime(row.runtime);
       const name = containerName(row.id);
@@ -481,10 +532,14 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           : null;
 
-      const crashRaw = await app.redis.zrevrange(`crashes:${row.id}`, 0, 9);
-      const crash_history = crashRaw.map((c: string) => JSON.parse(c) as unknown);
+      const [crashRaw, seeding] = await Promise.all([
+        app.redis.zrevrange(`crashes:${row.id}`, 0, 9),
+        readSeedingSummary(app.redis, row.id),
+      ]);
+      const crash_history = crashRaw
+        .map((c: string) => safeJsonParse(c, app.log, { serverId: row.id, key: 'crashes' }))
+        .filter((entry): entry is unknown => entry !== null);
       const crash_loop = row.status === 'failed';
-      const seeding = await readSeedingSummary(app.redis, row.id);
 
       // SRV-6 (#45): license *state* only — the key itself never leaves the
       // API. License.cfg is requires_restart, so the license is live only if
@@ -615,31 +670,33 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           .update(servers)
           .set({ status: 'starting', updatedAt: new Date() })
           .where(eq(servers.id, s.id));
+        // Re-check the depot lock we already checked above (#20 follow-up):
+        // the initial check plus the containerInspect round-trip left a
+        // window where a depot update could see this server as
+        // 'stopped'/'ready' and proceed. Whichever side observes the other
+        // first now wins — depot/update's own servers_running check (which
+        // includes 'starting') catches us if it acquires the lock first, and
+        // this recheck catches it if we flip to 'starting' first — so no
+        // interleaving lets both sides through.
+        if (await isDepotUpdating(app.redis)) {
+          await app.db
+            .update(servers)
+            .set({ status: s.status, updatedAt: new Date() })
+            .where(eq(servers.id, s.id));
+          reply.code(409);
+          return { error: 'depot_update_in_progress' };
+        }
         app.liveBus?.publish({
           type: 'server.status',
           ts: new Date().toISOString(),
           data: { server_id: s.id, status: 'starting', source: 'start' },
         });
-        let containerId: string | null = s.containerId ?? null;
-        if (inspect && inspect.state !== 'not_found') {
-          await app.bridge.containerStart({ name });
-        } else {
-          const runRes = await app.bridge.containerRun({
-            server_id: s.id,
-            image: SERVER_IMAGE,
-            game_port: settings.gamePort,
-            query_port: settings.queryPort,
-            beacon_port: settings.beaconPort,
-            rcon_port: settings.rconPort,
-            max_players: settings.maxPlayers,
-            tickrate: settings.tickrate,
-            multihome: settings.multihome,
-            configs_host: `${PANEL_CONFIGS_ROOT}/${s.id}/ServerConfig`,
-            saved_host: `${PANEL_SAVED_ROOT}/${s.id}`,
-            depot_volume: DEPOT_VOLUME_NAME,
-          });
-          containerId = runRes.container_id;
-        }
+        const containerId = await runFreshServerContainer(
+          app.bridge,
+          s.id,
+          settings,
+          inspect !== null && inspect.state !== 'not_found',
+        );
         await req.diag.emit({
           component: 'api',
           kind: 'server.start.done',
@@ -737,7 +794,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           try {
             const password = decryptString(
               app.encryptionKey,
-              deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+              deserialize(Buffer.from(creds.rconPasswordEncrypted)),
             );
             const target = {
               host: resolveRconHost(creds.rconHost),
@@ -955,6 +1012,24 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'depot_update_in_progress' };
       }
+      const settings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, s.id),
+      });
+      if (!settings) {
+        reply.code(400);
+        return { error: 'server_not_installed' };
+      }
+      const actorPlayerId = req.user?.playerId;
+      const restartT0 = Date.now();
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restart.requested',
+        severity: 'info',
+        serverId: s.id,
+        actorPlayerId,
+        message: 'restart requested',
+        payload: {},
+      });
       const name = containerName(s.id);
       await app.db
         .update(servers)
@@ -965,8 +1040,73 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         ts: new Date().toISOString(),
         data: { server_id: s.id, status: 'starting', source: 'restart' },
       });
-      await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
-      await app.bridge.containerStart({ name });
+      try {
+        const inspect = await app.bridge.containerInspect({ name }).catch(() => null);
+        if (inspect?.state === 'not_found') {
+          // Removed out of band: recreate it, as /start does.
+          await runFreshServerContainer(app.bridge, s.id, settings, false);
+        } else {
+          try {
+            await app.bridge.containerStop({ name, timeout_sec: 60 });
+          } catch (stopErr) {
+            req.log.warn(
+              { err: (stopErr as Error).message, id: s.id },
+              'container_stop failed during restart',
+            );
+            // `docker start` on a still-running container does nothing, so a
+            // failed stop that left it up must not be reported as a restart.
+            const after = await app.bridge.containerInspect({ name }).catch(() => null);
+            if (after?.running !== false) {
+              await app.db
+                .update(servers)
+                .set({ status: 'running', updatedAt: new Date() })
+                .where(eq(servers.id, s.id));
+              await req.diag.emit({
+                component: 'api',
+                kind: 'server.restart.failed',
+                severity: 'error',
+                serverId: s.id,
+                actorPlayerId,
+                message: `restart failed: container_stop: ${(stopErr as Error).message}`,
+                payload: {
+                  stage: 'container_stop',
+                  errorMessage: (stopErr as Error).message,
+                  durationMs: Date.now() - restartT0,
+                },
+              });
+              reply.code(502);
+              return {
+                error: 'container_stop_failed',
+                message: 'The container could not be stopped, so it was not restarted.',
+              };
+            }
+          }
+          // Recreated from the current settings: a plain `containerStart`
+          // would keep the ports and slots the container was created with.
+          await runFreshServerContainer(app.bridge, s.id, settings, true);
+        }
+      } catch (err) {
+        const errorMessage = (err as Error).message;
+        await req.diag.emit({
+          component: 'api',
+          kind: 'server.restart.failed',
+          severity: 'error',
+          serverId: s.id,
+          actorPlayerId,
+          message: `restart failed: ${errorMessage}`,
+          payload: { errorMessage, durationMs: Date.now() - restartT0 },
+        });
+        throw err;
+      }
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restart.done',
+        severity: 'info',
+        serverId: s.id,
+        actorPlayerId,
+        message: 'restart succeeded',
+        payload: { durationMs: Date.now() - restartT0 },
+      });
       // The sidecar was not part of the restart, but a prior manual stop may
       // have left it down; relaunch it so a restarted cutover server keeps its
       // log publisher. Non-fatal: the squad container is already restarting.
@@ -984,7 +1124,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/reconcile',
     {
       config: {
-        permissions: ['server:view'],
+        // Triggers a bridge containerInspect call, a DB status write, a
+        // live-event publish, and an audit entry — a mutating action, so it
+        // requires a mutating permission, not the read-only server:view.
+        permissions: ['server:restart'],
         audit: { action: 'server.reconcile', resource: 'server' },
       },
       schema: { params: serverIdParams },
@@ -1113,6 +1256,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           },
           row.id,
         );
+        app.installProgress.reset(row.id);
         app.liveBus.publish({
           type: 'server.deleted',
           ts: new Date().toISOString(),

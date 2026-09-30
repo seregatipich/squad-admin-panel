@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import {
   PLAYER_LINK_STATUSES,
@@ -6,11 +7,18 @@ import {
   playerLinks,
   players,
 } from '@squad/db/schema';
-import { eq, or } from 'drizzle-orm';
+import { desc, eq, inArray, or } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { altEvidenceSnapshot } from '../lib/alt-candidates.js';
+import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
+
+/**
+ * Upper bound on the links `GET /players/:playerId/links` returns, newest
+ * first; the response sets `truncated` when a player has more.
+ */
+export const PLAYER_LINKS_LIMIT = 500;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const linkIdParams = z.object({ linkId: z.string().uuid() });
@@ -20,7 +28,9 @@ const createBody = z.object({
   link_type: z.enum(PLAYER_LINK_TYPES),
   status: z.enum(PLAYER_LINK_STATUSES).default('confirmed'),
   note: z.string().trim().max(2000).optional(),
-  evidence_snapshot: z.record(z.string(), z.unknown()).optional(),
+  // A client-sent `evidence_snapshot` is no longer read (#461): unknown keys
+  // are stripped, so older clients keep working while the stored evidence is
+  // always the server's own ALT-1 computation.
 });
 
 const patchBody = z
@@ -54,12 +64,26 @@ function serializeLink(
   };
 }
 
+/**
+ * The audit before/after view of a link. `audit_log` is append-only, so the
+ * free-form evidence snapshot is recorded as its SHA-256 (enough to prove
+ * which snapshot the row held) instead of being copied in full.
+ */
 function snapshot(row: PlayerLinkRow) {
-  return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+  const { evidenceSnapshot, ...rest } = row;
+  return {
+    ...rest,
+    evidenceSnapshotSha256:
+      evidenceSnapshot == null
+        ? null
+        : createHash('sha256').update(JSON.stringify(evidenceSnapshot)).digest('hex'),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }
 
 async function auditMutation(
-  db: DatabaseClient,
+  db: DatabaseClient | AuditTransaction,
   req: FastifyRequest,
   input: { action: string; targetId: string; before: unknown; after: unknown },
 ): Promise<void> {
@@ -85,11 +109,20 @@ async function auditMutation(
  * flipping a verdict is a PATCH `status` update, so the decision history
  * (and its `audit_log` trail) is never lost. All three routes are gated on
  * the fine `player:view_ips` permission, same as the candidate engine.
+ *
+ * `evidence_snapshot` is computed here, from the ALT-1 engine's output for the
+ * pair at decision time (`altEvidenceSnapshot`), never taken from the request
+ * body — otherwise any link creator could store fabricated «evidence» (#461).
  */
 const playerLinksRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function loadPlayerSummary(id: string): Promise<PlayerSummaryRow | null> {
+  /** One query for every summary a response needs, keyed by player id. */
+  async function loadPlayerSummaries(
+    ids: ReadonlyArray<string | null>,
+  ): Promise<Map<string, PlayerSummaryRow>> {
+    const uniqueIds = Array.from(new Set(ids.filter((id): id is string => id != null)));
+    if (uniqueIds.length === 0) return new Map();
     const rows = await app.db
       .select({
         id: players.id,
@@ -97,94 +130,95 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
         steam_id64: players.steamId64,
       })
       .from(players)
-      .where(eq(players.id, id))
-      .limit(1);
-    const row = rows[0];
-    if (!row) return null;
-    return {
-      id: row.id,
-      current_name: row.current_name,
-      steam_id64: row.steam_id64?.toString() ?? null,
-    };
+      .where(inArray(players.id, uniqueIds));
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.id,
+          current_name: row.current_name,
+          steam_id64: row.steam_id64?.toString() ?? null,
+        },
+      ]),
+    );
   }
 
-  async function loadCreatedBy(
+  function createdByOf(
+    summaries: Map<string, PlayerSummaryRow>,
     id: string | null,
-  ): Promise<{ player_id: string; name: string } | null> {
-    if (!id) return null;
-    const rows = await app.db
-      .select({ id: players.id, name: players.canonicalName })
-      .from(players)
-      .where(eq(players.id, id))
-      .limit(1);
-    const row = rows[0];
-    return row ? { player_id: row.id, name: row.name } : null;
+  ): { player_id: string; name: string } | null {
+    const summary = id ? summaries.get(id) : undefined;
+    return summary ? { player_id: summary.id, name: summary.current_name } : null;
   }
 
   fast.post(
     '/api/v1/players/:playerId/links',
     {
       schema: { params: playerIdParams, body: createBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req, reply) => {
       const { playerId } = req.params;
-      const {
-        other_player_id: otherPlayerId,
-        link_type,
-        status,
-        note,
-        evidence_snapshot,
-      } = req.body;
+      const { other_player_id: otherPlayerId, link_type, status, note } = req.body;
 
       if (otherPlayerId === playerId) {
         reply.code(400);
         return { error: 'self_link' };
       }
 
-      const [target, other] = await Promise.all([
-        loadPlayerSummary(playerId),
-        loadPlayerSummary(otherPlayerId),
-      ]);
-      if (!target || !other) {
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
+      const actorId = req.user!.playerId;
+      const summaries = await loadPlayerSummaries([playerId, otherPlayerId, actorId]);
+      const other = summaries.get(otherPlayerId);
+      if (!summaries.has(playerId) || !other) {
         reply.code(404);
         return { error: 'player_not_found' };
       }
 
+      const evidenceSnapshot = await altEvidenceSnapshot(
+        app.db,
+        {
+          id: playerId,
+          steamId64: summaries.get(playerId)?.steam_id64
+            ? BigInt(summaries.get(playerId)?.steam_id64 as string)
+            : null,
+        },
+        otherPlayerId,
+      );
+
       const [playerAId, playerBId] =
         playerId < otherPlayerId ? [playerId, otherPlayerId] : [otherPlayerId, playerId];
 
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
-      const actorId = req.user!.playerId;
-      const result = await app.db
-        .insert(playerLinks)
-        .values({
-          playerAId,
-          playerBId,
-          linkType: link_type,
-          status,
-          note: note ?? null,
-          evidenceSnapshot: evidence_snapshot ?? null,
-          createdBy: actorId,
-        })
-        .onConflictDoNothing({ target: [playerLinks.playerAId, playerLinks.playerBId] })
-        .returning();
-      const inserted = result[0];
+      const inserted = await app.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(playerLinks)
+          .values({
+            playerAId,
+            playerBId,
+            linkType: link_type,
+            status,
+            note: note ?? null,
+            evidenceSnapshot,
+            createdBy: actorId,
+          })
+          .onConflictDoNothing({ target: [playerLinks.playerAId, playerLinks.playerBId] })
+          .returning();
+        if (!row) return null;
+        await auditMutation(tx, req, {
+          action: 'player_link.create',
+          targetId: row.id,
+          before: null,
+          after: snapshot(row),
+        });
+        return row;
+      });
       if (!inserted) {
         reply.code(409);
         return { error: 'link_exists' };
       }
 
       reply.code(201);
-      await auditMutation(app.db, req, {
-        action: 'player_link.create',
-        targetId: inserted.id,
-        before: null,
-        after: snapshot(inserted),
-      });
-
-      const createdBy = await loadCreatedBy(inserted.createdBy);
-      return serializeLink(inserted, other, createdBy);
+      return serializeLink(inserted, other, createdByOf(summaries, inserted.createdBy));
     },
   );
 
@@ -199,47 +233,27 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
       const rows = await app.db
         .select()
         .from(playerLinks)
-        .where(or(eq(playerLinks.playerAId, playerId), eq(playerLinks.playerBId, playerId)));
+        .where(or(eq(playerLinks.playerAId, playerId), eq(playerLinks.playerBId, playerId)))
+        .orderBy(desc(playerLinks.updatedAt), desc(playerLinks.id))
+        .limit(PLAYER_LINKS_LIMIT + 1);
+      const truncated = rows.length > PLAYER_LINKS_LIMIT;
+      const page = truncated ? rows.slice(0, PLAYER_LINKS_LIMIT) : rows;
 
-      const otherIds = rows.map((row) =>
-        row.playerAId === playerId ? row.playerBId : row.playerAId,
-      );
-      const createdByIds = rows
-        .map((row) => row.createdBy)
-        .filter((id): id is string => id != null);
-      const uniqueIds = Array.from(new Set([...otherIds, ...createdByIds]));
-      const summaryRows = uniqueIds.length
-        ? await app.db
-            .select({
-              id: players.id,
-              current_name: players.canonicalName,
-              steam_id64: players.steamId64,
-            })
-            .from(players)
-            .where(or(...uniqueIds.map((id) => eq(players.id, id))))
-        : [];
-      const summaryById = new Map(
-        summaryRows.map((row) => [
-          row.id,
-          {
-            id: row.id,
-            current_name: row.current_name,
-            steam_id64: row.steam_id64?.toString() ?? null,
-          },
-        ]),
+      const otherIdOf = (row: PlayerLinkRow) =>
+        row.playerAId === playerId ? row.playerBId : row.playerAId;
+      const summaries = await loadPlayerSummaries(
+        page.flatMap((row) => [otherIdOf(row), row.createdBy]),
       );
 
-      const links = rows.map((row) => {
-        const otherId = row.playerAId === playerId ? row.playerBId : row.playerAId;
-        const otherPlayer = summaryById.get(otherId) ?? null;
-        const createdBySummary = row.createdBy ? summaryById.get(row.createdBy) : null;
-        const createdBy = createdBySummary
-          ? { player_id: createdBySummary.id, name: createdBySummary.current_name }
-          : null;
-        return serializeLink(row, otherPlayer, createdBy);
-      });
+      const links = page.map((row) =>
+        serializeLink(
+          row,
+          summaries.get(otherIdOf(row)) ?? null,
+          createdByOf(summaries, row.createdBy),
+        ),
+      );
 
-      return { links };
+      return { links, truncated };
     },
   );
 
@@ -247,51 +261,54 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/player-links/:linkId',
     {
       schema: { params: linkIdParams, body: patchBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req, reply) => {
       const { linkId } = req.params;
-      const existingRows = await app.db
-        .select()
-        .from(playerLinks)
-        .where(eq(playerLinks.id, linkId))
-        .limit(1);
-      const existing = existingRows[0];
-      if (!existing) {
-        reply.code(404);
-        return { error: 'link_not_found' };
-      }
-
       const updates: Partial<typeof playerLinks.$inferInsert> = { updatedAt: new Date() };
       if (req.body.link_type !== undefined) updates.linkType = req.body.link_type;
       if (req.body.status !== undefined) updates.status = req.body.status;
       if (req.body.note !== undefined) updates.note = req.body.note;
 
-      const updateResult = await app.db
-        .update(playerLinks)
-        .set(updates)
-        .where(eq(playerLinks.id, linkId))
-        .returning();
-      const updated = updateResult[0];
-      if (!updated) {
-        reply.code(500);
-        return { error: 'update_failed' };
-      }
-
-      await auditMutation(app.db, req, {
-        action: 'player_link.update',
-        targetId: existing.id,
-        before: snapshot(existing),
-        after: snapshot(updated),
+      // The row lock keeps the audit `before` snapshot exact under concurrent
+      // PATCHes, and the audit row commits or rolls back with the update.
+      const updated = await app.db.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(playerLinks)
+          .where(eq(playerLinks.id, linkId))
+          .limit(1)
+          .for('update');
+        if (!existing) return null;
+        const [row] = await tx
+          .update(playerLinks)
+          .set(updates)
+          .where(eq(playerLinks.id, linkId))
+          .returning();
+        if (!row) throw new Error('player_links update returned no row');
+        await auditMutation(tx, req, {
+          action: 'player_link.update',
+          targetId: existing.id,
+          before: snapshot(existing),
+          after: snapshot(row),
+        });
+        return row;
       });
+      if (!updated) {
+        reply.code(404);
+        return { error: 'link_not_found' };
+      }
 
       // PATCH has no "viewpoint" player (unlike POST/GET, which are scoped to
       // one side of the pair) — return both sides' summaries explicitly.
-      const [playerA, playerB, createdBy] = await Promise.all([
-        loadPlayerSummary(updated.playerAId),
-        loadPlayerSummary(updated.playerBId),
-        loadCreatedBy(updated.createdBy),
+      const summaries = await loadPlayerSummaries([
+        updated.playerAId,
+        updated.playerBId,
+        updated.createdBy,
       ]);
+      const createdBy = createdByOf(summaries, updated.createdBy);
+      const playerA = summaries.get(updated.playerAId) ?? null;
+      const playerB = summaries.get(updated.playerBId) ?? null;
       return {
         id: updated.id,
         link_type: updated.linkType,

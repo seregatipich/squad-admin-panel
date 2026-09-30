@@ -42,9 +42,9 @@ Idempotent unary methods perform exactly **one** transparent retry when the firs
 
 | Auto-retries | Pass-through |
 |---|---|
-| `ping`, `hostInfo`, `hostMetrics`, `processInfo` | `fileWrite` (non-atomic) |
-| `fileRead`, `fileAtomicWrite` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
-| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `ping`, `hostInfo`, `hostMetrics` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
+| `fileRead`, `fileAtomicWrite` | `hostAgentRestart`, `squadLogRetentionSweep` |
+| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | |
 | `containerInspect`, `containerStats` | streaming methods (`containerLogsFollow`, `depotUpdate`, `dockerPrune`) |
 
 Streaming methods are never retried — partial output would already have been delivered to the caller. State-changing container/host RPC's are not retried because we cannot safely tell whether the bridge processed the request before the socket dropped (e.g. `container_run` would risk creating a duplicate). Callers that need retry semantics for those should layer it themselves with appropriate idempotency guards.
@@ -117,56 +117,15 @@ Throws `BridgeError('forbidden')` if the path is outside the allowlist.
 
 ---
 
-#### `fileReadTail(p: FileReadTailParams): Promise<FileReadTailResult>`
+#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
 
-Reads up to `max_bytes` from the **end** of an allowlisted file. When the file is larger than `max_bytes` the read snaps forward to the next `\n` so the result never starts mid-line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
-
-```ts
-interface FileReadTailParams {
-  path: string;
-  max_bytes?: number; // default 65536, max 1 MiB
-}
-
-interface FileReadTailResult {
-  content: string;
-  offset: number;     // byte offset where `content` starts in the source file
-  size: number;       // total file size in bytes at read time
-  truncated: boolean; // true iff size > max_bytes (some prefix was skipped)
-}
-```
-
-| Param | Type | Required | Default | Notes |
-|---|---|---:|---|---|
-| `path` | `string` | yes | — | Same allowlist as `fileRead`. |
-| `max_bytes` | `number` | no | `65536` | Values `<= 0` or `> 1048576` snap to the default. |
-
-```ts
-const tail = await client.fileReadTail({
-  path: '/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log',
-  max_bytes: 65536,
-});
-// { content, offset: 12516352, size: 12582912, truncated: true }
-```
-
-Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
-
----
-
-#### `fileWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes a file with standard `os.WriteFile`. Not atomic — use `fileAtomicWrite` for config edits.
+Writes via a unique temp file plus rename (atomic on Linux ext4/XFS; concurrent writers of one path never interleave). Creates missing intermediate directories at `0755` without changing existing ones. Use this for all config and sentinel writes.
 
 | Param | Type | Required |
 |---|---|---|
 | `path` | `string` | yes |
 | `content` | `string` | yes |
-| `mode` | `number` | no (defaults to `0644`) |
-
----
-
-#### `fileAtomicWrite(p: FileWriteParams): Promise<{ status: string }>`
-
-Writes via a temp-file rename (atomic on Linux ext4/XFS). Creates intermediate directories up to the allowed root. Use this for all config-editor saves.
+| `mode` | `number` | no — omitted means `0644`; otherwise only `0o644`, `0o640`, `0o600`, anything else rejects with `BridgeError('forbidden')` |
 
 ---
 
@@ -177,20 +136,9 @@ Adds or removes a UFW firewall rule.
 | Param | Type | Values |
 |---|---|---|
 | `action` | `'add' \| 'remove'` | |
-| `port` | `number` | 1–65535 |
+| `port` | `number` | 1024–65535 |
 | `proto` | `'tcp' \| 'udp'` | |
-| `comment` | `string` | optional |
-
----
-
-#### `processInfo(p: ProcessInfoParams): Promise<ProcessInfoResult>`
-
-Reads `/proc/{pid}/` data.
-
-```ts
-const info = await client.processInfo({ pid: 12345 });
-// { pid, exists, rss_bytes?, vsz_bytes?, cmdline?, state?, threads? }
-```
+| `comment` | `string` | optional; must match `^[a-z][a-z0-9-]{0,63}$` or the bridge rejects with `forbidden` |
 
 ---
 
@@ -208,8 +156,7 @@ Spawns a new Squad server container. Timeout: 60 s.
 | `rcon_port` | `number` | |
 | `max_players` | `number` | optional, default 100 |
 | `tickrate` | `number` | optional, default 50 |
-| `multihome` | `string \| null` | optional bind address |
-| `extra_args` | `string[]` | optional additional launch args |
+| `multihome` | `string \| null` | optional bind address; the bridge rejects anything but an IP literal (#53) |
 | `configs_host` | `string` | host path for ServerConfig bind-mount |
 | `saved_host` | `string` | host path for Saved bind-mount |
 | `depot_volume` | `string` | named volume for the SteamCMD depot |
@@ -237,7 +184,7 @@ Gracefully stops a running container. Timeout: 120 s.
 
 #### `containerRm(p: ContainerControlParams): Promise<{ status: string }>`
 
-Removes a stopped container. Timeout: 30 s.
+Removes a container, running or not — the bridge always runs `docker rm -f`. `ContainerControlParams` is `{ name, timeout_sec? }`, mirroring the Go `containerParams` struct; there is no `force` flag. Timeout: 30 s.
 
 ---
 
@@ -265,12 +212,12 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). Timeout: 30 s.
 
-Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute. The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
+Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute (rate-limited bridge-side: within 30 s of the last computation the cache answers, and concurrent forced calls share one computation). The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
 
 | Field | Type | Description |
 |---|---|---|
 | `configs_bytes` | `number` | Bytes used by `/var/lib/squad-panel/configs/` |
-| `saved_total_bytes` | `number` | Bytes used by `/var/lib/squad-panel/saved/` |
+| `saved_total_bytes` | `number` | Bytes used by the per-server directories under `/var/lib/squad-panel/saved/` (sum of `saved_per_server`) |
 | `saved_per_server` | `{ uuid: string; bytes: number }[]` | Per-server breakdown of `saved/` (one entry per uuid sub-directory) |
 | `depot_volume_bytes` | `number` | Size of the `squad-depot` named volume |
 | `docker_volumes` | `{ name: string; bytes: number }[]` | Other panel-owned Docker volumes |
@@ -334,7 +281,7 @@ Streaming calls accept an `onStream` callback that receives `BridgeStreamFrame` 
 
 #### `containerLogsFollow(p: ContainerLogsParams, onStream): Promise<{ exit_code: number }>`
 
-Tails Docker logs for a running container in real-time. Timeout: `Infinity` — call `client.close()` to abort.
+Tails Docker logs for a running container in real-time. Timeout: `Infinity` — call `client.close()` to abort. The protocol has no per-call cancel: the bridge stops the follow (and its `docker logs -f`) only when the connection carrying it closes, so always run it on a dedicated client and close that client to stop it.
 
 ```ts
 const done = client.containerLogsFollow(
@@ -379,15 +326,17 @@ client.on('rtt', (ms) => { if (ms > 50) console.warn('slow RPC', ms); });
 | `connected` | `{ rttMs: number; version: string; hostname: string }` | After the **first successful `ping()` response on a freshly-opened socket** — not on raw socket connect. The `version` and `hostname` fields are read from the ping result; `rttMs` is `Date.now() - request_started_at`. Fires at most once per socket lifetime; reconnect re-arms it. |
 | `disconnected` | `reason: 'socket-error' \| 'socket-closed' \| 'frame-decode-error' \| 'client-closed'` | Fired only if a `connected` event was previously emitted for the current socket — disconnects on a never-handshaked socket are silent. `client-closed` fires from `close()`; the other reasons fire from socket-level events / framing failures. |
 | `rpc-error` | `{ method: string; code: BridgeErrorCode; message: string }` | After every response with `ok: false`. The corresponding `call()` promise rejects with `BridgeError(code, message)` immediately afterwards. Use this for per-method error counters / structured logging. |
-| `rtt` | `rttMs: number` | After every successful (ok=true) response. `rttMs` is the wall-clock delay between dispatch and response handling. Streaming methods (`containerLogsFollow`, `depotUpdate`) only emit this when the final exit-code response arrives — per-frame RTT is not tracked. |
+| `rtt` | `rttMs: number, method: string` | After every successful (ok=true) response. `rttMs` is the wall-clock delay between dispatch and response handling — for long-running methods that is the operation's duration, so filter on `method` (e.g. `ping`) for transport latency. Streaming methods (`containerLogsFollow`, `depotUpdate`) only emit this when the final exit-code response arrives — per-frame RTT is not tracked. |
 
-The api wires these into `app.diag.emit` from [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts) so they show up as `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier` (only when `rttMs > 50`) entries in the `diag:queue` Redis Stream. See [`docs/components/api/api.md`](../api/api.md#bridge-listener-event-kinds) for the API-side mapping.
+The api wires these into `app.diag.emit` from [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts) so they show up as `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier` (only for a `ping` with `rttMs > 50`, throttled to one per 60 s) entries in the `diag:queue` Redis Stream. See [`docs/components/api/api.md`](../api/api.md#bridge-listener-event-kinds) for the API-side mapping.
 
 ---
 
 ## `BridgeError`
 
-Thrown by every RPC method on failure.
+Thrown by every RPC method on failure. Defined in `src/errors.ts`.
+
+Every frame the bridge sends is validated with zod before it is routed: a response needs `id: string`, `ok: boolean` and, when present, `error: { code, message, detail? }`; a stream frame needs `id`, `stream: 'stdout' | 'stderr' | 'event'` and `data`. A malformed response that carries a pending call's `id` rejects that call at once with `BridgeError('internal', 'malformed bridge response to <method>: …')` instead of letting it time out; other malformed frames (no usable id, an unknown stream kind) are logged as `malformed bridge frame` and dropped. `result` stays `unknown` at the envelope level and is typed per method.
 
 ```ts
 import { BridgeError } from '@squad/bridge-client';
@@ -405,9 +354,10 @@ try {
 |---|---|
 | `forbidden` | Path or image outside the allowlist |
 | `invalid_args` | Missing or malformed params |
+| `not_found` | File read on a path that does not exist |
 | `runtime_error` | Docker CLI or OS command failed |
 | `timeout` | Client-side deadline exceeded |
-| `internal` | Unexpected Go-side error |
+| `internal` | Unexpected Go-side error, an error code this client does not know, or a malformed response envelope |
 | `transport` | Socket-level error (connect failed, closed) |
 
 ---
@@ -424,3 +374,5 @@ const { frames, remainder } = decodeFrames(buf);
 ```
 
 Throws `FrameTooLargeError` if a payload exceeds `BRIDGE_MAX_FRAME_BYTES` (16 MiB).
+
+The client itself reassembles incoming frames with `FrameAccumulator`: socket chunks are queued without copying and joined once per complete frame (its size is known from the header), so receiving a frame costs copying it about twice instead of once per chunk, and the leftover partial frame is copied out rather than pinning the joined buffer.

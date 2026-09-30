@@ -66,7 +66,7 @@ beforeAll(async () => {
   const ownerRoleId = ownerRows[0]?.id;
   if (!ownerRoleId) throw new Error('no Owner role seeded in live DB');
 
-  await db
+  const [e2ePlayer] = await db
     .insert(players)
     .values({
       steamId64: TEST_STEAM_ID,
@@ -74,13 +74,15 @@ beforeAll(async () => {
       canonicalNameNormalized: 'e2e reload player',
       roleId: ownerRoleId,
     })
-    .onConflictDoUpdate({ target: players.steamId64, set: { roleId: ownerRoleId } });
+    .onConflictDoUpdate({ target: players.steamId64, set: { roleId: ownerRoleId } })
+    .returning({ id: players.id });
+  if (!e2ePlayer) throw new Error('e2e player upsert returned no row');
 
   const { token, tokenId } = mintSessionToken();
   sessionTokenId = tokenId;
   await db.insert(sessions).values({
     id: tokenId,
-    steamId64: TEST_STEAM_ID,
+    playerId: e2ePlayer.id,
     expiresAt: new Date(Date.now() + 3_600_000),
     lastActivityAt: new Date(),
     ip: null,

@@ -44,7 +44,7 @@ function resolveDbPassword(): string {
   const url = dotenvLookup('DATABASE_URL');
   if (url) {
     const m = url.match(/^postgres:\/\/[^:]+:([^@]+)@/);
-    if (m) return m[1];
+    if (m?.[1]) return m[1];
   }
 
   throw new Error(

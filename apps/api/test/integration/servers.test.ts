@@ -14,10 +14,30 @@ import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
+  type FakeBridge,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+type ContainerInspectResult = Awaited<ReturnType<FakeBridge['containerInspect']>>;
+
+/** A containerInspect stub answering the given fields; the rest are Docker's idle defaults. */
+function inspectReturning(fields: Partial<ContainerInspectResult>): FakeBridge['containerInspect'] {
+  return async ({ name }) => ({
+    name,
+    state: 'not_found',
+    running: false,
+    pid: 0,
+    started_at: '',
+    finished_at: '',
+    exit_code: 0,
+    image: '',
+    restart_count: 0,
+    labels: {},
+    ...fields,
+  });
+}
 
 // The start/restart routes relaunch the per-server rnsquadjs sidecar via
 // relaunchSidecar, which performs real fs writes under /run and consults
@@ -210,6 +230,22 @@ describe('POST /api/v1/servers', () => {
     expect([400, 422]).toContain(resp.statusCode);
   });
 
+  it('rejects a multihome that is not an IP literal with 400/422 and creates nothing (#52)', async () => {
+    const cookie = await login();
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'multihome-flag-test', multihome: '0.0.0.0 -SomeFlag' },
+    });
+    expect([400, 422]).toContain(resp.statusCode);
+    const rows = await h.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(eq(servers.slug, 'multihome-flag-test'));
+    expect(rows).toHaveLength(0);
+  });
+
   it('rejects creating a server whose port collides with an existing server with 409 port_conflict', async () => {
     const cookie = await login();
     const first = await h.app.inject({
@@ -310,9 +346,9 @@ describe('POST /api/v1/servers/:id/start', () => {
     let ran = false;
     h.bridge.containerRun = async () => {
       ran = true;
-      return { container_id: 'abc' };
+      return { container_id: 'abc', status: 'started' };
     };
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -338,7 +374,7 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 
   it('short-circuits when the container is already running', async () => {
-    h.bridge.containerInspect = async () => ({ running: true, state: 'running' });
+    h.bridge.containerInspect = inspectReturning({ running: true, state: 'running' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -358,7 +394,7 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 
   it('relaunches the rnsquadjs sidecar after the squad container starts', async () => {
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -378,8 +414,48 @@ describe('POST /api/v1/servers/:id/start', () => {
     expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), id);
   });
 
+  it('aborts and reverts status when a depot update acquires the lock during the containerInspect round-trip (#20 follow-up)', async () => {
+    // Simulates the race the initial isDepotUpdating() check alone missed:
+    // a depot update lands strictly between that first check and the eager
+    // status flip below (modeled here as landing during the bridge's
+    // containerInspect network round-trip).
+    h.bridge.containerInspect = async () => {
+      await h.redis.set('depot:updating', new Date().toISOString(), 'EX', 3600, 'NX');
+      return { state: 'not_found' };
+    };
+    let ran = false;
+    h.bridge.containerRun = async () => {
+      ran = true;
+      return { container_id: 'abc' };
+    };
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'start-depot-race' },
+      })
+    ).json<{ id: string }>();
+    const [before] = await h.db.select().from(servers).where(eq(servers.id, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(409);
+    expect(resp.json()).toEqual({ error: 'depot_update_in_progress' });
+    expect(ran).toBe(false);
+    const [after] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(after?.status).toBe(before?.status);
+
+    await h.redis.del('depot:updating');
+  });
+
   it('still returns 200 when the sidecar relaunch rejects', async () => {
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));
     const cookie = await login();
     const { id } = (
@@ -401,11 +477,90 @@ describe('POST /api/v1/servers/:id/start', () => {
   });
 });
 
+describe('launch settings reach an existing container (#30, finding #320)', () => {
+  type RunParams = Parameters<IntegrationHarness['bridge']['containerRun']>[0];
+
+  async function createServerWithStoppedContainer(slug: string) {
+    const calls: string[] = [];
+    const runs: RunParams[] = [];
+    h.bridge.containerInspect = async () => ({ state: 'exited', running: false });
+    h.bridge.containerStart = async ({ name }) => {
+      calls.push(`start:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerStop = async ({ name }) => {
+      calls.push(`stop:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRm = async ({ name }) => {
+      calls.push(`rm:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async (params) => {
+      calls.push(`run:${params.server_id}`);
+      runs.push(params);
+      return { container_id: 'recreated' };
+    };
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug },
+      })
+    ).json<{ id: string }>();
+    await h.db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, id));
+    const settingsResp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/settings`,
+      headers: { cookie },
+      payload: { game_port: 7797, rcon_port: 21124, max_players: 64, tickrate: 40 },
+    });
+    expect(settingsResp.statusCode).toBe(200);
+    return { id, cookie, calls, runs };
+  }
+
+  it('POST /start recreates a stopped container with the current settings', async () => {
+    const { id, cookie, calls, runs } = await createServerWithStoppedContainer('recreate-start');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(calls).toEqual([`rm:squad-${id}`, `run:${id}`]);
+    expect(runs[0]).toMatchObject({
+      game_port: 7797,
+      rcon_port: 21124,
+      max_players: 64,
+      tickrate: 40,
+    });
+  });
+
+  it('POST /restart recreates the container with the current settings', async () => {
+    const { id, cookie, calls, runs } = await createServerWithStoppedContainer('recreate-restart');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(calls).toEqual([`stop:squad-${id}`, `rm:squad-${id}`, `run:${id}`]);
+    expect(runs[0]).toMatchObject({ game_port: 7797, max_players: 64, tickrate: 40 });
+  });
+});
+
 describe('POST /api/v1/servers/:id/stop', () => {
   it('calls container_stop and transitions to stopping when no creds are present', async () => {
     let stopped = false;
     h.bridge.containerStop = async () => {
       stopped = true;
+      return { status: 'ok' };
     };
     const cookie = await login();
     const { id } = (
@@ -434,7 +589,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
 
   it('writes status=starting BEFORE calling container_run/start so a crash leaves a recoverable state', async () => {
     const cookie = await login();
-    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    h.bridge.containerInspect = inspectReturning({ state: 'not_found' });
     let statusAtRunCall: string | null = null;
     h.bridge.containerRun = async () => {
       const [row] = await h.db.select().from(servers);
@@ -479,6 +634,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
     h.bridge.containerStop = async () => {
       const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
       statusAtStopCall = row?.status ?? null;
+      return { status: 'ok' };
     };
 
     const resp = await h.app.inject({
@@ -542,10 +698,18 @@ describe('POST /api/v1/servers/:id/stop', () => {
 });
 
 describe('POST /api/v1/servers/:id/restart', () => {
-  it('issues stop+start via bridge and flips status to starting', async () => {
+  it('issues stop+recreate via bridge and flips status to starting', async () => {
+    // Restart recreates the container (#30, finding #320) so settings changed
+    // since it was created take effect; containerStart is never used.
     let startCalls = 0;
+    let runCalls = 0;
     h.bridge.containerStart = async () => {
       startCalls++;
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async () => {
+      runCalls++;
+      return { container_id: 'restarted' };
     };
     const cookie = await login();
     const { id } = (
@@ -563,7 +727,8 @@ describe('POST /api/v1/servers/:id/restart', () => {
     });
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'restarting' });
-    expect(startCalls).toBe(1);
+    expect(runCalls).toBe(1);
+    expect(startCalls).toBe(0);
     await assertAuditRow(h, { action: 'server.restart', resource: 'server', targetId: id });
   });
 
@@ -606,6 +771,120 @@ describe('POST /api/v1/servers/:id/restart', () => {
     });
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'restarting' });
+  });
+});
+
+// Regression (#43 finding 335): restart swallowed a failed container_stop and
+// then called container_start, which is a no-op on a still-running container
+// and throws on a removed one.
+describe('POST /api/v1/servers/:id/restart — container state', () => {
+  async function createServer(cookie: string, slug: string): Promise<string> {
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug },
+    });
+    return resp.json<{ id: string }>().id;
+  }
+
+  it('recreates a missing container with container_run instead of failing', async () => {
+    const runs: string[] = [];
+    let startCalls = 0;
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: 'not_found',
+      running: false,
+      pid: 0,
+      started_at: '',
+      finished_at: '',
+      exit_code: 0,
+      image: '',
+      restart_count: 0,
+      labels: {},
+    });
+    h.bridge.containerRun = async ({ server_id }) => {
+      runs.push(String(server_id));
+      return { container_id: 'fake-container-id', status: 'started' };
+    };
+    h.bridge.containerStart = async () => {
+      startCalls++;
+      throw new Error('No such container');
+    };
+    const cookie = await login();
+    const id = await createServer(cookie, 'restart-missing-container');
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'restarting' });
+    expect(runs).toEqual([id]);
+    expect(startCalls).toBe(0);
+  });
+
+  it('answers 502 container_stop_failed when the container is still running after a failed stop', async () => {
+    let startCalls = 0;
+    h.bridge.containerStop = async () => {
+      throw new Error('bridge call container_stop timed out');
+    };
+    h.bridge.containerStart = async () => {
+      startCalls++;
+      return { status: 'ok' };
+    };
+    const cookie = await login();
+    const id = await createServer(cookie, 'restart-stop-failed');
+    await h.db.update(servers).set({ status: 'running' }).where(eq(servers.id, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'container_stop_failed' });
+    expect(startCalls).toBe(0);
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('running');
+  });
+});
+
+// Regression (#43 finding 336): a taken slug on the container-server create
+// route fell through to a 500 carrying the driver's constraint message.
+describe('POST /api/v1/servers — slug already in use', () => {
+  it('answers 409 slug_in_use', async () => {
+    const cookie = await login();
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'slug-taken' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        ...createBody,
+        slug: 'slug-taken',
+        game_port: 7797,
+        query_port: 27175,
+        beacon_port: 15010,
+        rcon_port: 21124,
+      },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ error: 'slug_in_use' });
+    expect(second.body).not.toContain('duplicate key');
   });
 });
 

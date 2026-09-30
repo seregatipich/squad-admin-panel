@@ -85,9 +85,9 @@ export async function sweepServerConfigDrift(
     SELECT DISTINCT ON (filename) filename, id, encode(sha256, 'hex') AS sha
     FROM config_versions
     WHERE server_id = ${serverId}
-    ORDER BY filename, created_at DESC
+    ORDER BY filename, created_at DESC, id DESC
   `);
-  const tips = new Map((tipRows as unknown as TipRow[]).map((r) => [r.filename, r]));
+  const tips = new Map(tipRows.map((r) => [r.filename, r]));
 
   const files: Record<string, ConfigDriftFileStatus> = {};
   for (const name of CONFIG_DRIFT_SWEEP_FILES) {

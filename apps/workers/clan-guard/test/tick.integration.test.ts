@@ -171,6 +171,35 @@ describe('clan-guard audit integration', () => {
         ),
       );
     expect(auditRows).toHaveLength(2);
+
+    const repeatResult = await runClanGuardTick({
+      ...deps,
+      now: new Date(CONNECTED_AT.getTime() + 421_000),
+      diag,
+    });
+    expect(repeatResult.errors).toBe(0);
+    const actionsAfterRepeat = await db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(
+        and(
+          eq(moderationActions.playerId, PLAYER_ID),
+          eq(moderationActions.actionType, 'clan_tag_protection'),
+        ),
+      );
+    expect(actionsAfterRepeat).toHaveLength(2);
+    const auditAfterRepeat = await db
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.targetType, 'player'),
+          eq(auditLog.targetId, PLAYER_ID),
+          inArray(auditLog.actionType, ['clan.tag_protection.warn', 'clan.tag_protection.kick']),
+        ),
+      );
+    expect(auditAfterRepeat).toHaveLength(2);
+
     expect(auditRows).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ actionType: 'clan.tag_protection.warn' }),

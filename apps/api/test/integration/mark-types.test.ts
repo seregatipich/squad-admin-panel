@@ -2,6 +2,7 @@ import { markTypes, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ensureMarkTypes, MARK_TYPE_SEED_ID_CEILING } from '../../src/lib/mark-types.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -195,7 +196,7 @@ describeIfDb('POST /api/v1/mark-types', () => {
       sort_order: number;
     };
     expect(created.slug).toBe('ghost_peek');
-    expect(created.id).toBe(9);
+    expect(created.id).toBe(MARK_TYPE_SEED_ID_CEILING + 1);
     expect(created.is_active).toBe(true);
     expect(created.sort_order).toBe(9);
 
@@ -310,6 +311,50 @@ describeIfDb('POST /api/v1/mark-types', () => {
       .from(markTypes)
       .where(eq(markTypes.slug, 'race_slug_test'));
     expect(rows).toHaveLength(1);
+  });
+});
+
+describeIfDb('POST /api/v1/mark-types concurrency (#70)', () => {
+  it('creates every type when distinct slugs are posted concurrently, numbering them above the seed range', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/mark-types',
+          headers: { cookie: editorCookie, 'content-type': 'application/json' },
+          payload: JSON.stringify({
+            slug: `parallel_type_${i}`,
+            label_en: `Parallel ${i}`,
+            label_ru: `Параллельный ${i}`,
+            icon: 'flag',
+            severity: 1,
+          }),
+        }),
+      ),
+    );
+    expect(results.map((r) => r.statusCode)).toEqual(Array(8).fill(201));
+    const ids = results.map((r) => (r.json() as { id: number }).id);
+    expect(new Set(ids).size).toBe(8);
+    for (const id of ids) expect(id).toBeGreaterThan(MARK_TYPE_SEED_ID_CEILING);
+  });
+
+  it('ensureMarkTypes tolerates a custom type that already holds a seed slug', async () => {
+    await h.db.delete(markTypes).where(eq(markTypes.id, 8));
+    await h.db.insert(markTypes).values({
+      id: 31000,
+      slug: 'toxic',
+      labelEn: 'Custom toxicity',
+      labelRu: 'Своя токсичность',
+      icon: 'flag',
+      severity: 1,
+      sortOrder: 31000,
+    });
+    await expect(ensureMarkTypes(h.db)).resolves.toBeUndefined();
+
+    await h.db.delete(markTypes).where(eq(markTypes.id, 31000));
+    await ensureMarkTypes(h.db);
+    const [restored] = await h.db.select().from(markTypes).where(eq(markTypes.id, 8));
+    expect(restored?.slug).toBe('toxic');
   });
 });
 

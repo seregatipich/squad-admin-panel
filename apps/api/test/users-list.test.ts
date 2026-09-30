@@ -201,7 +201,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('role.name is null-safe when player has no role (LEFT JOIN scenario)', async () => {
@@ -218,5 +218,60 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     const body = res.json() as Array<{ steam_id64: string }>;
     const found = body.find((u) => u.steam_id64 === String(stubSteam));
     expect(found).toBeUndefined();
+  });
+
+  // Regression tests for finding #358: the `q` search used to compare a
+  // merely lower-cased/trimmed query against canonical_name_normalized
+  // (which strips clan tags via normalizePlayerName) and never escaped `%`/
+  // `_` for LIKE, so `_` matched "any character" and clan-tag-prefixed names
+  // never matched.
+  it('matches a clan-tag-prefixed name via a plain-nickname query', async () => {
+    const cookie = await loginAsOwner(h);
+    const steamId = testSteamId(710011);
+    await h.db.insert(players).values({
+      steamId64: steamId,
+      canonicalName: '[RU] Vasya',
+      canonicalNameNormalized: 'vasya',
+      roleId: ownerRoleId,
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/users?q=vasya',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ steam_id64: string }>;
+    expect(body.some((u) => u.steam_id64 === String(steamId))).toBe(true);
+  });
+
+  it('does not treat a literal underscore in the query as a LIKE wildcard', async () => {
+    const cookie = await loginAsOwner(h);
+    const underscoreSteam = testSteamId(710012);
+    const otherSteam = testSteamId(710013);
+    await h.db.insert(players).values([
+      {
+        steamId64: underscoreSteam,
+        canonicalName: 'clan_tag',
+        canonicalNameNormalized: 'clan_tag',
+        roleId: ownerRoleId,
+      },
+      {
+        steamId64: otherSteam,
+        canonicalName: 'clanXtag',
+        canonicalNameNormalized: 'clanxtag',
+        roleId: ownerRoleId,
+      },
+    ]);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/users?${new URLSearchParams({ q: 'clan_tag' }).toString()}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ steam_id64: string }>;
+    expect(body.some((u) => u.steam_id64 === String(underscoreSteam))).toBe(true);
+    // Before the fix, "_" matched any character, so "clanXtag" would also
+    // match a "clan_tag" query — it must not.
+    expect(body.some((u) => u.steam_id64 === String(otherSteam))).toBe(false);
   });
 });

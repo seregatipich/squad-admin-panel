@@ -15,7 +15,7 @@ import Redis from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { publishDepotProgressDone, publishDepotProgressLine } from '../src/lib/depot-progress.js';
-import depotRoutes from '../src/routes/depot.js';
+import depotRoutes, { DEPOT_STREAMS_PER_CALLER } from '../src/routes/depot.js';
 import { hostRedisUrl } from './integration/isolated-db.js';
 
 let app: ReturnType<typeof Fastify>;
@@ -145,6 +145,33 @@ describe('GET /api/v1/depot/progress/ws', () => {
     expect(last).toEqual({ done: true, final: 'error', error: 'boom' });
   });
 
+  it('backfills the newest 500 entries and ignores an old done beyond that window', async () => {
+    await publishDepotProgressDone(redis, 'done');
+    for (let i = 0; i < 600; i++) {
+      await publishDepotProgressLine(redis, 'stdout', `line ${i}`);
+    }
+    await redis.set('depot:updating', new Date().toISOString(), 'EX', 3600);
+
+    const { ws, frames } = connect();
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    await waitFor(() =>
+      frames.some((f) => (f as { backfill_complete?: boolean }).backfill_complete === true),
+    );
+
+    const messages = frames
+      .map((f) => (f as { message?: string }).message)
+      .filter((m): m is string => typeof m === 'string');
+    expect(messages).toHaveLength(500);
+    expect(messages[0]).toBe('line 100');
+    expect(messages.at(-1)).toBe('line 599');
+    expect(frames.some((f) => (f as { done?: boolean }).done)).toBe(false);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    const closed = waitForClose(ws);
+    await publishDepotProgressDone(redis, 'done');
+    await closed;
+  });
+
   it('synthesizes an immediate done frame from depot:last_update when idle (ok)', async () => {
     await redis.set(
       'depot:last_update',
@@ -185,5 +212,20 @@ describe('GET /api/v1/depot/progress/ws', () => {
     expect(ws.readyState).toBe(WebSocket.OPEN);
     expect(frames.some((f) => (f as { done?: boolean }).done)).toBe(false);
     ws.close();
+  });
+
+  it('#1298: refuses a caller past its concurrent stream limit with close code 1013', async () => {
+    const open: WebSocket[] = [];
+    for (let i = 0; i < DEPOT_STREAMS_PER_CALLER; i++) {
+      const { ws } = connect();
+      await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+      open.push(ws);
+    }
+    const { ws: extra, frames } = connect();
+    const code = await new Promise<number>((resolve) => extra.on('close', (c) => resolve(c)));
+    expect(code).toBe(1013);
+    expect(frames).toContainEqual({ error: 'too_many_streams' });
+    for (const ws of open) ws.close();
+    await Promise.all(open.map(waitForClose));
   });
 });

@@ -95,7 +95,9 @@ function stubFetch(routes: Record<string, RouteBody>): FetchCall[] {
     '/api/v1/host/metrics': { body: null, status: 500 },
     '/api/v1/servers': { body: { items: SERVERS } },
     '/api/v1/audit': { body: { items: AUDIT } },
-    '/ready': { body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } } },
+    '/api/v1/health/dependencies': {
+      body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } },
+    },
     '/api/v1/health/workers': { body: { items: [] } },
     '/api/v1/host/disk-usage': { body: null, status: 500 },
     '/api/v1/analytics/': { body: null, status: 500 },
@@ -147,7 +149,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return {
             ok: true,
             json: async () => ({ status: 'ok', checks: {} }),
@@ -172,6 +174,108 @@ describe('DashboardPage', () => {
     });
 
     expect(capturedBody).toEqual({ server_ids: ['server-1', 'server-2'] });
+  });
+
+  // #774: the modal shows the rejection message, so it must name the API's reason.
+  it('rejects onStart with the API error code when the update is refused', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/health/dependencies') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'update_in_progress' }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['server-1'])).rejects.toThrow('update_in_progress');
+  });
+
+  it('maps servers_running from depot/update to a Russian hint with the missing count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/health/dependencies') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow(
+      'Отметьте все запущенные серверы для остановки: не выбрано 2.',
+    );
+  });
+
+  it('falls back to the HTTP status for other depot/update failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/health/dependencies') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return { ok: false, status: 500, json: async () => ({}) } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow('HTTP 500');
+  });
+
+  it('does not flag a worker crit before its heartbeat TTL, only before 2x the interval (#548)', async () => {
+    // 20s: behind the 2×HEARTBEAT_INTERVAL_MS=10s "warn" threshold, but well
+    // under the HEARTBEAT_TTL_SECONDS=30s the worker is actually considered
+    // dead by — the old hardcoded 15s crit threshold fired here regardless.
+    stubFetch({
+      '/api/v1/health/workers': {
+        body: { items: [{ name: 'rcon', age_ms: 20_000, pid: 1, status: 'жив' }] },
+      },
+    });
+    await renderDashboard();
+
+    const row = await screen.findByText('worker-rcon');
+    const dot = row.closest('li')?.querySelector('[aria-hidden="true"]');
+    expect(dot?.className).toContain('bg-warn');
+    expect(dot?.className).not.toContain('bg-crit');
+  });
+
+  it('reads PostgreSQL and Redis state from the authenticated API, not the public /ready path', async () => {
+    const calls = stubFetch({});
+    await renderDashboard();
+    const urls = calls.map((call) => call.url);
+    expect(urls).toContain('/api/v1/health/dependencies');
+    expect(urls).not.toContain('/ready');
   });
 
   it('carries exactly one first-level heading', async () => {
@@ -412,12 +516,64 @@ describe('DashboardPage', () => {
   });
 
   it('keeps the loading skeletons while the bridge is up but metrics have not arrived', async () => {
-    stubFetch({});
+    // Never resolves: this is genuinely "the first response hasn't landed
+    // yet", not a repeated failure (see the next test for that case).
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/v1/host/info') || url.startsWith('/api/v1/host/metrics')) {
+          return new Promise<Response>(() => {});
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            if (url.startsWith('/api/v1/host/bridge-status')) {
+              return { connected: true, version: '1.0', round_trip_ms: 3 };
+            }
+            if (url.startsWith('/api/v1/servers')) return { items: SERVERS };
+            if (url.startsWith('/api/v1/audit')) return { items: AUDIT };
+            if (url.startsWith('/api/v1/health/dependencies')) return { status: 'ok', checks: {} };
+            if (url.startsWith('/api/v1/health/workers')) return { items: [] };
+            return null;
+          },
+        } as Response);
+      }),
+    );
     await renderDashboard();
 
     expect(screen.getByText('Загружаем метрики хоста')).toBeInTheDocument();
     expect(screen.queryByText('Метрики хоста недоступны')).not.toBeInTheDocument();
     expect(screen.getByText('Загружаем сведения о хосте…')).toBeInTheDocument();
+  });
+
+  /*
+   * DASH-545: до фикса ошибки info/metrics/audit/ready/workers молча
+   * проглатывались, и панель хоста вечно крутила «Загружаем метрики хоста»,
+   * даже когда каждый опрос отвечал одной и той же ошибкой.
+   */
+  it('shows an error instead of spinning forever when host metrics repeatedly fail', async () => {
+    stubFetch({
+      '/api/v1/host/info': { status: 500 },
+      '/api/v1/host/metrics': { status: 500 },
+    });
+    await renderDashboard();
+
+    expect(screen.getByText('Не удалось загрузить метрики хоста')).toBeInTheDocument();
+    expect(screen.queryByText('Загружаем метрики хоста')).not.toBeInTheDocument();
+    expect(screen.getByText(/Не удалось загрузить сведения о хосте/)).toBeInTheDocument();
+  });
+
+  it('names the missing permission instead of spinning forever on a 403', async () => {
+    stubFetch({
+      '/api/v1/host/metrics': { status: 403 },
+      '/api/v1/audit': { status: 403 },
+    });
+    await renderDashboard();
+
+    expect(screen.getByText('Нет прав на просмотр метрик хоста')).toBeInTheDocument();
+    expect(screen.getByText('Нет прав на просмотр журнала')).toBeInTheDocument();
+    expect(screen.queryByText('Действий пока нет')).not.toBeInTheDocument();
   });
 
   it('shows the initial empty state when the audit feed itself is empty', async () => {
@@ -426,5 +582,141 @@ describe('DashboardPage', () => {
 
     const empty = screen.getByText('Действий пока нет');
     expect(empty.closest('[data-variant]')).toHaveAttribute('data-variant', 'initial');
+  });
+
+  describe('polling (DASH-546 / DASH-1334 / DASH-544)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fetches host/info once, not on every 4s poll tick', async () => {
+      const calls = stubFetch({});
+      vi.useFakeTimers();
+      render(<DashboardPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const infoCallsAfterMount = calls.filter((c) => c.url.startsWith('/api/v1/host/info')).length;
+      expect(infoCallsAfterMount).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000 * 4);
+      });
+
+      // Several poll ticks passed; host/info must still have been fetched
+      // exactly once, since it forks `docker --version` on the bridge and its
+      // data barely changes.
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/host/info')).length).toBe(1);
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/servers')).length).toBeGreaterThan(1);
+    });
+
+    it('does not poll while the tab is hidden', async () => {
+      const calls = stubFetch({});
+      vi.useFakeTimers();
+      render(<DashboardPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const before = calls.filter((c) => c.url.startsWith('/api/v1/servers')).length;
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000 * 5);
+      });
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/servers')).length).toBe(before);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/servers')).length).toBeGreaterThan(
+        before,
+      );
+    });
+
+    it('skips a tick instead of overlapping when the previous poll is still in flight', async () => {
+      let resolveServers: (() => void) | undefined;
+      const calls: FetchCall[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          calls.push({ url, init });
+          if (url.startsWith('/api/v1/servers')) {
+            return new Promise<Response>((resolve) => {
+              resolveServers = () =>
+                resolve({
+                  ok: true,
+                  status: 200,
+                  json: async () => ({ items: SERVERS }),
+                } as Response);
+            });
+          }
+          if (url.startsWith('/api/v1/host/info')) {
+            return Promise.resolve({ ok: false, status: 500, json: async () => null } as Response);
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => {
+              if (url.startsWith('/api/v1/host/bridge-status')) {
+                return { connected: true };
+              }
+              if (url.startsWith('/api/v1/audit')) return { items: [] };
+              if (url.startsWith('/api/v1/health/dependencies'))
+                return { status: 'ok', checks: {} };
+              if (url.startsWith('/api/v1/health/workers')) return { items: [] };
+              return null;
+            },
+          } as Response);
+        }),
+      );
+      vi.useFakeTimers();
+      render(<DashboardPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const before = calls.filter((c) => c.url.startsWith('/api/v1/servers')).length;
+      expect(before).toBe(1);
+
+      // Two more ticks pass while the first /api/v1/servers request is still
+      // unresolved: a second in-flight load() must not be started.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000 * 2);
+      });
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/servers')).length).toBe(1);
+
+      await act(async () => {
+        resolveServers?.();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // Now that the in-flight load finished, the next tick is free to poll again.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/servers')).length).toBeGreaterThan(1);
+    });
+  });
+
+  it('shows every worker with a heartbeat, not only the hardcoded four', async () => {
+    stubFetch({
+      '/api/v1/health/workers': {
+        body: {
+          items: [
+            { name: 'rcon', age_ms: 1000, pid: 1, status: 'ok' },
+            { name: 'scheduler', age_ms: 1000, pid: 2, status: 'ok' },
+          ],
+        },
+      },
+    });
+    await renderDashboard();
+
+    expect(screen.getByText('worker-rcon')).toBeInTheDocument();
+    expect(screen.getByText('worker-scheduler')).toBeInTheDocument();
+    // The other three hardcoded names still show up as missing heartbeats.
+    expect(screen.getByText('worker-log-ingest')).toBeInTheDocument();
   });
 });

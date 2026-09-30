@@ -30,10 +30,6 @@ import {
   toRotationEntry,
 } from './helpers';
 
-interface Me {
-  squad_permissions: string[];
-}
-
 interface RotationResponse {
   file_exists: boolean;
   has_managed_segment: boolean;
@@ -75,20 +71,17 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [meRes, rotationRes, layersRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      const [rotationRes, layersRes] = await Promise.all([
         fetch(`/api/v1/servers/${id}/rotation`, { credentials: 'include', cache: 'no-store' }),
         fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
       ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
       if (!rotationRes.ok) throw new Error(`HTTP ${rotationRes.status}`);
       if (!layersRes.ok) throw new Error(`HTTP ${layersRes.status}`);
-      const me = (await meRes.json()) as Me;
       const rotation = (await rotationRes.json()) as RotationResponse;
       const layersBody = (await layersRes.json()) as { rows: LayerRow[] };
-      setCanEdit(rotation.can_edit && me.squad_permissions.includes('changemap'));
+      setCanEdit(rotation.can_edit);
       setEntries(rotation.entries);
-      setPool(layersBody.rows);
+      setPool(layersBody.rows.filter((layer) => !layer.deprecated));
       setDirty(false);
     } catch (e) {
       setErr((e as Error).message);
@@ -238,6 +231,7 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
               if (canEdit && dragIndex !== null) e.preventDefault();
             }}
             onDrop={() => handleDrop(index)}
+            onDragEnd={() => setDragIndex(null)}
             className={`flex items-center justify-between gap-3 rounded-card border border-line bg-surface px-3 py-2 ${
               dragIndex === index ? 'opacity-40' : ''
             }`}

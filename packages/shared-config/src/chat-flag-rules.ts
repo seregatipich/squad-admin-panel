@@ -22,8 +22,31 @@ export type ChatFlagValidation = { ok: true } | { ok: false; error: string };
 
 interface QuantifierRead {
   next: number;
+  /** `*`, `+` or `{n,}` — no upper bound on repetitions. */
   unbounded: boolean;
+  /** May match its atom more than once (`*`, `+`, `{n,m}` with an upper bound above 1). */
+  repeating: boolean;
   repeatTooBig: boolean;
+}
+
+/**
+ * What an atom can start matching: one literal character (lower-cased, since
+ * rules compile with the `i` flag), or `wide` for anything the scanner does
+ * not model precisely — character classes, escapes, `.`, groups. `wide` is
+ * assumed to overlap everything.
+ */
+type AtomStart = string | 'wide';
+
+/** Scanner state for one group (the pattern itself is the outermost frame). */
+interface GroupFrame {
+  /** First atom of each finished alternative; `null` marks an empty alternative. */
+  alternativeStarts: (AtomStart | null)[];
+  /** First atom of the alternative being scanned; `undefined` until one is seen. */
+  currentStart: AtomStart | null | undefined;
+  /** Any quantifier anywhere inside this group, including nested groups. */
+  containsQuantifier: boolean;
+  /** An ambiguous alternation anywhere inside this group, including nested groups. */
+  containsAmbiguousAlternation: boolean;
 }
 
 /* v8 ignore start -- internal ReDoS scanner; behavior is verified through validateChatFlagPattern's accept/reject tests */
@@ -32,12 +55,12 @@ function readQuantifier(pattern: string, index: number): QuantifierRead | null {
   if (ch === '*' || ch === '+') {
     let next = index + 1;
     if (pattern[next] === '?') next += 1;
-    return { next, unbounded: true, repeatTooBig: false };
+    return { next, unbounded: true, repeating: true, repeatTooBig: false };
   }
   if (ch === '?') {
     let next = index + 1;
     if (pattern[next] === '?') next += 1;
-    return { next, unbounded: false, repeatTooBig: false };
+    return { next, unbounded: false, repeating: false, repeatTooBig: false };
   }
   if (ch === '{') {
     const close = pattern.indexOf('}', index);
@@ -50,11 +73,12 @@ function readQuantifier(pattern: string, index: number): QuantifierRead | null {
     const maxRaw = match[3];
     const max = hasComma && maxRaw ? Number(maxRaw) : undefined;
     const unbounded = hasComma && (maxRaw === undefined || maxRaw === '');
+    const repeating = unbounded || (max ?? min) > 1;
     const repeatTooBig =
       min > CHAT_FLAG_MAX_REPEAT || (max !== undefined && max > CHAT_FLAG_MAX_REPEAT);
     let next = close + 1;
     if (pattern[next] === '?') next += 1;
-    return { next, unbounded, repeatTooBig };
+    return { next, unbounded, repeating, repeatTooBig };
   }
   return null;
 }
@@ -86,63 +110,116 @@ function skipCharClass(pattern: string, index: number): number {
   return i + 1;
 }
 
-function markTop(stack: { unbounded: boolean }[]): void {
-  const top = stack[stack.length - 1];
-  if (top) top.unbounded = true;
+function newFrame(): GroupFrame {
+  return {
+    alternativeStarts: [],
+    currentStart: undefined,
+    containsQuantifier: false,
+    containsAmbiguousAlternation: false,
+  };
 }
 
+function finishAlternative(frame: GroupFrame): void {
+  frame.alternativeStarts.push(frame.currentStart ?? null);
+  frame.currentStart = undefined;
+}
+
+/**
+ * An alternation is unambiguous only when every alternative starts with its
+ * own literal character: then the next input character alone picks the
+ * branch, so a repeated group never has two ways to consume the same text.
+ */
+function hasAmbiguousAlternation(frame: GroupFrame): boolean {
+  if (frame.alternativeStarts.length < 2) return false;
+  const seen = new Set<string>();
+  for (const start of frame.alternativeStarts) {
+    if (start === null || start === 'wide' || seen.has(start)) return true;
+    seen.add(start);
+  }
+  return false;
+}
+
+/**
+ * Conservative static ReDoS scan for user-supplied chat-flag regexes (#344).
+ *
+ * The rules run synchronously on the API event loop (reindex) and in the chat
+ * ingest workers, so a pattern with super-linear backtracking stalls the whole
+ * process. Rejected shapes:
+ *
+ * - `nested_quantifier` — a group repeated more than once (`*`, `+`, `{n,m}`
+ *   with m > 1) that itself contains any quantifier: `(a+)+`, `(ab?)+`,
+ *   `(a{1,3}){1,50}`. Star height above one is the classic exponential case.
+ * - `ambiguous_alternation` — a repeated group containing an alternation whose
+ *   branches do not all start with distinct literal characters: `(a|a)*`,
+ *   `(\w|\d)+`, `(a|ab)*`.
+ * - `overlapping_quantifiers` — three or more unbounded quantifiers whose atoms
+ *   may match the same character (`\w*\w*\w*`, `.*x.*y.*`, `a+a+a+`): each
+ *   one multiplies the backtracking work on a failing match (polynomial blow-up).
+ * - `repeat_too_large` — a `{n,m}` bound above {@link CHAT_FLAG_MAX_REPEAT}.
+ *
+ * It intentionally over-rejects some safe patterns (for example `(a|b)+`,
+ * which `[ab]+` expresses safely); chat-flag rules rarely need more.
+ */
 function detectDangerousRegex(pattern: string): string | null {
-  const stack: { unbounded: boolean }[] = [{ unbounded: false }];
+  const stack: GroupFrame[] = [newFrame()];
+  let wideUnbounded = 0;
+  const literalUnbounded = new Map<string, number>();
   let i = 0;
   const n = pattern.length;
-  while (i < n) {
-    const ch = pattern[i];
-    if (ch === '\\') {
-      i += 2;
-      const quant = readQuantifier(pattern, i);
-      if (quant) {
-        if (quant.repeatTooBig) return 'repeat_too_large';
-        if (quant.unbounded) markTop(stack);
-        i = quant.next;
-      }
-      continue;
-    }
-    if (ch === '[') {
-      i = skipCharClass(pattern, i);
-      const quant = readQuantifier(pattern, i);
-      if (quant) {
-        if (quant.repeatTooBig) return 'repeat_too_large';
-        if (quant.unbounded) markTop(stack);
-        i = quant.next;
-      }
-      continue;
-    }
-    if (ch === '(') {
-      i = skipGroupPrefix(pattern, i + 1);
-      stack.push({ unbounded: false });
-      continue;
-    }
-    if (ch === ')') {
-      const closed = stack.pop() ?? { unbounded: false };
-      i += 1;
-      const quant = readQuantifier(pattern, i);
-      if (quant) {
-        if (quant.repeatTooBig) return 'repeat_too_large';
-        if (quant.unbounded && closed.unbounded) return 'nested_quantifier';
-        if (quant.unbounded || closed.unbounded) markTop(stack);
-        i = quant.next;
-      } else if (closed.unbounded) {
-        markTop(stack);
-      }
-      continue;
-    }
-    i += 1;
+
+  const top = (): GroupFrame => stack[stack.length - 1] as GroupFrame;
+
+  /** Records an atom and its optional quantifier; returns an error code or null. */
+  const consumeAtom = (start: AtomStart, inner: GroupFrame | null): string | null => {
+    const frame = top();
+    if (frame.currentStart === undefined) frame.currentStart = start;
     const quant = readQuantifier(pattern, i);
+    const innerQuantified = inner?.containsQuantifier ?? false;
+    const innerAmbiguous =
+      inner !== null && (inner.containsAmbiguousAlternation || hasAmbiguousAlternation(inner));
     if (quant) {
       if (quant.repeatTooBig) return 'repeat_too_large';
-      if (quant.unbounded) markTop(stack);
+      if (quant.repeating && innerQuantified) return 'nested_quantifier';
+      if (quant.repeating && innerAmbiguous) return 'ambiguous_alternation';
+      if (quant.unbounded) {
+        if (start === 'wide') wideUnbounded += 1;
+        else literalUnbounded.set(start, (literalUnbounded.get(start) ?? 0) + 1);
+        const maxLiteral = Math.max(0, ...literalUnbounded.values());
+        if (wideUnbounded + maxLiteral >= 3) return 'overlapping_quantifiers';
+      }
       i = quant.next;
     }
+    if (quant || innerQuantified) frame.containsQuantifier = true;
+    if (innerAmbiguous) frame.containsAmbiguousAlternation = true;
+    return null;
+  };
+
+  while (i < n) {
+    const ch = pattern[i] as string;
+    let error: string | null = null;
+    if (ch === '\\') {
+      i += 2;
+      error = consumeAtom('wide', null);
+    } else if (ch === '[') {
+      i = skipCharClass(pattern, i);
+      error = consumeAtom('wide', null);
+    } else if (ch === '(') {
+      i = skipGroupPrefix(pattern, i + 1);
+      stack.push(newFrame());
+    } else if (ch === '|') {
+      finishAlternative(top());
+      i += 1;
+    } else if (ch === ')') {
+      const closed = stack.length > 1 ? (stack.pop() as GroupFrame) : newFrame();
+      finishAlternative(closed);
+      i += 1;
+      error = consumeAtom('wide', closed);
+    } else {
+      i += 1;
+      const literal = ch === '.' || ch === '^' || ch === '$' ? 'wide' : ch.toLowerCase();
+      error = consumeAtom(literal, null);
+    }
+    if (error) return error;
   }
   return null;
 }
@@ -202,12 +279,11 @@ export function compileChatFlagRule(rule: ChatFlagRuleInput): CompiledChatFlagRu
       return null;
     }
   }
-  try {
-    const regex = new RegExp(rule.pattern, 'i');
-    return { id: rule.id, test: (message) => regex.test(message) };
-  } catch {
-    return null;
-  }
+  // Rules stored before a stricter ReDoS scan landed are skipped, never run (#344).
+  if (!validateChatFlagPattern(rule.pattern, 'regex').ok) return null;
+  // validateChatFlagPattern already compiled the pattern, so this cannot throw.
+  const regex = new RegExp(rule.pattern, 'i');
+  return { id: rule.id, test: (message) => regex.test(message) };
 }
 
 export function compileChatFlagRules(rules: ChatFlagRuleInput[]): CompiledChatFlagRule[] {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bonusValueSeconds,
   buildWeekGrid,
   cellBackground,
   cellFillFraction,
@@ -9,7 +8,6 @@ import {
   fmtDuration,
   type PresenceSession,
   type ServerPresence,
-  serverLabel,
   sortServersByOnline,
   weekStartMsForEndDay,
 } from './presence';
@@ -28,15 +26,6 @@ function session(overrides: Partial<PresenceSession> = {}): PresenceSession {
     ...overrides,
   };
 }
-
-describe('bonusValueSeconds', () => {
-  it('applies the default formula online + 2×boost and ignores queue', () => {
-    expect(bonusValueSeconds({ online_seconds: 100, boost_seconds: 50, queue_seconds: 999 })).toBe(
-      200,
-    );
-    expect(bonusValueSeconds({ online_seconds: 0, boost_seconds: 0, queue_seconds: 0 })).toBe(0);
-  });
-});
 
 describe('weekStartMsForEndDay', () => {
   it('places the window start six days before the (inclusive) end day at UTC midnight', () => {
@@ -158,14 +147,6 @@ describe('sortServersByOnline', () => {
       base({ server_id: 'c', server_slug: 'c', online_seconds: 300 }),
     ];
     expect(sortServersByOnline(servers).map((s) => s.server_id)).toEqual(['b', 'c', 'a']);
-  });
-});
-
-describe('serverLabel', () => {
-  it('prefers slug, then name, then dash', () => {
-    expect(serverLabel({ server_slug: 'eu', server_name: 'EU Main' })).toBe('eu');
-    expect(serverLabel({ server_slug: null, server_name: 'EU Main' })).toBe('EU Main');
-    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
   });
 });
 

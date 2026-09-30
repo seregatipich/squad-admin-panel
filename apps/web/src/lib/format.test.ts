@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dateInputToIso,
   formatBytes,
   formatBytesPerSec,
+  formatDateTimeRu,
+  formatMatchDuration,
   formatPercent,
-  formatRelativeTime,
   formatUptime,
   ratio,
+  serverLabel,
 } from './format';
 
 describe('formatBytes', () => {
@@ -109,30 +112,62 @@ describe('formatUptime', () => {
   });
 });
 
-describe('formatRelativeTime', () => {
-  const now = new Date('2026-04-24T12:00:00Z');
+describe('serverLabel', () => {
+  it('prefers slug, falls back to name, then dash', () => {
+    expect(serverLabel({ server_slug: 'eu-1', server_name: 'EU Main' })).toBe('eu-1');
+    expect(serverLabel({ server_slug: null, server_name: 'EU Main' })).toBe('EU Main');
+    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
+  });
+});
 
-  it('renders seconds-ago', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T11:59:57Z'), now)).toBe('3s ago');
+describe('formatMatchDuration', () => {
+  it('formats hours, minutes, seconds and guards invalid input', () => {
+    expect(formatMatchDuration(3661)).toBe('1ч 1м');
+    expect(formatMatchDuration(125)).toBe('2м 5с');
+    expect(formatMatchDuration(42)).toBe('42с');
+    expect(formatMatchDuration(null)).toBe('—');
+    expect(formatMatchDuration(-5)).toBe('—');
+  });
+});
+
+describe('formatDateTimeRu', () => {
+  it('renders the fallback for null, undefined and an unparsable value', () => {
+    expect(formatDateTimeRu(null)).toBe('—');
+    expect(formatDateTimeRu(undefined)).toBe('—');
+    expect(formatDateTimeRu('not-a-date')).toBe('—');
+    expect(formatDateTimeRu('not-a-date', 'not-a-date')).toBe('not-a-date');
   });
 
-  it('renders minutes-ago', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T11:58:00Z'), now)).toBe('2m ago');
+  it('formats a valid timestamp as ru-RU day, month, year, hour and minute', () => {
+    const iso = '2026-07-09T10:05:00.000Z';
+    expect(formatDateTimeRu(iso)).toBe(
+      new Date(iso).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    );
+  });
+});
+
+describe('dateInputToIso', () => {
+  it('returns null for an empty or unparsable value', () => {
+    expect(dateInputToIso('', false)).toBeNull();
+    expect(dateInputToIso('not-a-date', true)).toBeNull();
   });
 
-  it('renders hours-ago under 24h', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T07:00:00Z'), now)).toBe('5h ago');
-  });
-
-  it('renders > 1d ago for over 24h', () => {
-    expect(formatRelativeTime(new Date('2026-04-22T12:00:00Z'), now)).toBe('> 1d ago');
-  });
-
-  it('renders только что for future timestamps', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T12:00:05Z'), now)).toBe('только что');
-  });
-
-  it('returns em-dash on invalid date', () => {
-    expect(formatRelativeTime('not-a-date', now)).toBe('—');
+  // Regression (#462, #474): the bounds used to be UTC midnight, while every
+  // timestamp in the panel is rendered in the browser's zone. The expectation
+  // is built with the local-time Date constructor, so it holds in any TZ —
+  // run with `TZ=Europe/Moscow` to see the old UTC bounds fail it.
+  it('builds the bounds of the picked day in the browser time zone', () => {
+    expect(dateInputToIso('2026-07-01', false)).toBe(
+      new Date(2026, 6, 1, 0, 0, 0, 0).toISOString(),
+    );
+    expect(dateInputToIso('2026-07-01', true)).toBe(
+      new Date(2026, 6, 1, 23, 59, 59, 999).toISOString(),
+    );
   });
 });

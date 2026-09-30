@@ -5,11 +5,25 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { csvCell } from '../lib/csv.js';
+import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
+import { steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
-import { revokeAllForPlayer } from '../lib/sessions.js';
+import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
+import { checkRoleAssignment } from '../lib/role-hierarchy.js';
+import { revokeAllForPlayer, revokeAllForPlayers } from '../lib/sessions.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const STEAM_ID64_RE = /^\d{17}$/;
 const IMPORT_MAX_ROWS = 5000;
+const IMPORT_MAX_CHARS = 2_000_000;
+/**
+ * Request body cap for the CSV import. Fastify's 1 MiB default rejected
+ * files well inside {@link IMPORT_MAX_ROWS} with a bare 413 before the schema
+ * ran; this fits {@link IMPORT_MAX_CHARS} characters of 3-byte UTF-8 (e.g.
+ * Cyrillic comments) plus JSON escaping, so the row/char limits decide.
+ */
+const IMPORT_BODY_LIMIT_BYTES = 6 * 1024 * 1024;
 const COMMENT_MAX_LEN = 512;
 const BULK_MAX_IDS = 5000;
 
@@ -34,7 +48,7 @@ const memberParam = z.object({
   id: z.string().uuid(),
   playerId: z.string().uuid(),
 });
-const importBody = z.object({ csv: z.string().trim().min(1).max(2_000_000) });
+const importBody = z.object({ csv: z.string().trim().min(1).max(IMPORT_MAX_CHARS) });
 const bulkDeleteBody = z.object({
   player_ids: z.array(z.string().uuid()).min(1).max(BULK_MAX_IDS),
 });
@@ -70,12 +84,6 @@ function parseImportRow(raw: string): { steamId64: string; comment: string | nul
   return { steamId64, comment: comment.length > 0 ? comment : null };
 }
 
-/** Escape a CSV cell (quote when it contains a delimiter, quote, or newline). */
-function csvCell(value: string): string {
-  if (/[";,\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
 const roleMembersRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -87,6 +95,18 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
       .limit(1);
     return rows[0]?.id ?? null;
+  }
+
+  /**
+   * The subset of `playerIds` that currently hold `roleId` — the players a
+   * bulk remove/move scoped to `roleId = :id` would actually change.
+   */
+  async function membersOf(roleId: string, playerIds: readonly string[]): Promise<string[]> {
+    const rows = await app.db
+      .select({ id: players.id })
+      .from(players)
+      .where(and(eq(players.roleId, roleId), inArray(players.id, [...playerIds])));
+    return rows.map((row) => row.id);
   }
 
   fast.get(
@@ -106,13 +126,15 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_not_found' };
       }
       const q = req.query.q?.toLowerCase().trim();
+      // `%`/`_` in the query match literally; a full SteamID64 is compared as
+      // a bigint so the steam_id64 index serves it.
+      const nameMatch = q
+        ? ilike(players.canonicalNameNormalized, `%${escapeLike(q)}%`)
+        : undefined;
       const where = q
         ? and(
             eq(players.roleId, req.params.id),
-            or(
-              ilike(players.canonicalNameNormalized, `%${q}%`),
-              sql`${players.steamId64}::text = ${q}`,
-            ),
+            or(nameMatch, steamId64Equals(players.steamId64, q)),
           )
         : eq(players.roleId, req.params.id);
       const totalRows = await app.db
@@ -192,6 +214,20 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: role.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
+      // After the hierarchy check so a self-assignment reads `cannot_change_own_role`.
+      const beyond = await roleGrantBeyondActor(app.db, role.id, req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
+      }
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
@@ -205,6 +241,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(playerId);
+      await publishDiscordRoleSync(app.redis, playerId, 'role.member.add', app.log);
       if (!role.panelAccess) {
         await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       }
@@ -235,6 +272,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       // biome-ignore lint/style/noNonNullAssertion: length-checked above
       const r = role[0]!;
       const playerId = req.params.playerId;
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       if (r.isSystemRole && r.name === 'Owner') {
         const membership = await app.db
           .select({ id: players.id })
@@ -268,6 +313,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!removed) return { ok: true };
       invalidatePermissionCache(playerId);
+      await publishDiscordRoleSync(app.redis, playerId, 'role.member.remove', app.log);
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
     },
@@ -279,6 +325,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
   fast.post(
     '/api/v1/roles/:id/members/import',
     {
+      bodyLimit: IMPORT_BODY_LIMIT_BYTES,
       schema: { params: roleIdParam, body: importBody },
       config: {
         permissions: ['user:manage_roles'],
@@ -305,6 +352,11 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       if (role.isSystemRole && role.name === 'Owner') {
         reply.code(403);
         return { error: 'owner_assignment_forbidden' };
+      }
+      const beyond = await roleGrantBeyondActor(app.db, role.id, req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
       }
 
       const lines = req.body.csv.split(/\r\n|\r|\n/).filter((line) => line.trim().length > 0);
@@ -384,12 +436,31 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(422);
         return { error: 'validation_failed', errors, imported: 0 };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: assignments.map((a) => a.playerId),
+        newRoleId: role.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       await app.db.transaction(async (tx) => {
-        for (const a of assignments) {
-          await tx
-            .update(players)
-            .set({ roleId: req.params.id, roleExpiresAt: null, roleComment: a.comment })
-            .where(eq(players.id, a.playerId));
+        // One UPDATE … FROM (VALUES …) for the whole file (at most
+        // IMPORT_MAX_ROWS rows, 2 bind parameters each — far below
+        // Postgres' 65 535-parameter limit) instead of one round trip per row.
+        if (assignments.length > 0) {
+          const values = sql.join(
+            assignments.map((a) => sql`(${a.playerId}::uuid, ${a.comment}::text)`),
+            sql`, `,
+          );
+          await tx.execute(sql`
+            UPDATE players
+               SET role_id = ${req.params.id}::uuid,
+                   role_expires_at = NULL,
+                   role_comment = v.comment
+              FROM (VALUES ${values}) AS v(id, comment)
+             WHERE players.id = v.id
+          `);
         }
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.import',
@@ -398,11 +469,17 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           request_id: req.id,
         });
       });
-      for (const a of assignments) {
-        invalidatePermissionCache(a.playerId);
-        if (!role.panelAccess) {
-          await revokeAllForPlayer(app.db, app.redis, a.playerId, app.liveBus);
-        }
+      for (const a of assignments) invalidatePermissionCache(a.playerId);
+      if (assignments.length > 0) {
+        await publishDiscordRoleSync(app.redis, null, 'role.member.import', app.log);
+      }
+      if (!role.panelAccess) {
+        await revokeAllForPlayers(
+          app.db,
+          app.redis,
+          assignments.map((a) => a.playerId),
+          app.liveBus,
+        );
       }
       reply.code(201);
       return { ok: true, imported: assignments.length };
@@ -480,6 +557,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       // biome-ignore lint/style/noNonNullAssertion: length-checked above
       const r = role[0]!;
       const playerIds = [...new Set(req.body.player_ids)];
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: await membersOf(r.id, playerIds),
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
 
       if (r.isSystemRole && r.name === 'Owner') {
         const totalRows = await app.db
@@ -512,10 +597,11 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           request_id: req.id,
         });
       });
-      for (const id of removedIds) {
-        invalidatePermissionCache(id);
-        await revokeAllForPlayer(app.db, app.redis, id, app.liveBus);
+      for (const id of removedIds) invalidatePermissionCache(id);
+      if (removedIds.length > 0) {
+        await publishDiscordRoleSync(app.redis, null, 'role.member.bulk_remove', app.log);
       }
+      await revokeAllForPlayers(app.db, app.redis, removedIds, app.liveBus);
       return { ok: true, removed: removedIds.length };
     },
   );
@@ -567,8 +653,21 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403);
         return { error: 'owner_assignment_forbidden' };
       }
+      const beyond = await roleGrantBeyondActor(app.db, targetRole.id, req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
+      }
 
       const playerIds = [...new Set(req.body.player_ids)];
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: await membersOf(src.id, playerIds),
+        newRoleId: targetRole.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       if (src.isSystemRole && src.name === 'Owner') {
         const totalRows = await app.db
           .select({ c: sql<number>`count(*)::int` })
@@ -600,11 +699,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           request_id: req.id,
         });
       });
-      for (const id of movedIds) {
-        invalidatePermissionCache(id);
-        if (!targetRole.panelAccess) {
-          await revokeAllForPlayer(app.db, app.redis, id, app.liveBus);
-        }
+      for (const id of movedIds) invalidatePermissionCache(id);
+      if (movedIds.length > 0) {
+        await publishDiscordRoleSync(app.redis, null, 'role.member.move', app.log);
+      }
+      if (!targetRole.panelAccess) {
+        await revokeAllForPlayers(app.db, app.redis, movedIds, app.liveBus);
       }
       return { ok: true, moved: movedIds.length };
     },

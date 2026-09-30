@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
+  BANNED_NAME_NICK_MAX,
   BANNED_NAME_PATTERN_MAX,
   type BannedNameRuleForMatch,
   findBannedNameRuleMatch,
   isBannedNameAction,
   isBannedNameMatchType,
+  isSafeBannedNameRegex,
   matchBannedName,
   validateBannedNamePattern,
 } from '../src/banned-names.js';
@@ -53,12 +55,86 @@ describe('validateBannedNamePattern', () => {
     if (!result.ok) expect(result.error.length).toBeGreaterThan(0);
   });
 
+  it('rejects catastrophic-backtracking regex patterns (#52 finding 1155)', () => {
+    for (const evil of ['(a+)+$', '(a|aa)+$']) {
+      expect(validateBannedNamePattern(evil, 'regex'), evil).toEqual({
+        ok: false,
+        error: 'pattern_unsafe_regex',
+      });
+    }
+  });
+
   it('accepts a non-regex pattern of allowed length', () => {
     expect(validateBannedNamePattern('BadName', 'exact')).toEqual({ ok: true });
   });
 });
 
+// Audit #115 — a regex with nested or alternating repetition backtracks
+// exponentially on a crafted nickname and blocks the API event loop.
+describe('isSafeBannedNameRegex', () => {
+  it.each([
+    '(a+)+$',
+    '(a*)*b',
+    '(\\w+\\s?)*$',
+    '(a?){20}a{20}',
+    '(a|aa)+$',
+    '(?:x+y?)+z',
+    '((ab)+c)*',
+    '(.*a){12}',
+    '(a)\\1',
+    '(?<n>a)\\k<n>',
+    '(a{2,}){2}',
+    '(a){2,}b|c)',
+    'a)',
+  ])('refuses %s', (pattern) => {
+    expect(isSafeBannedNameRegex(pattern)).toBe(false);
+  });
+
+  it.each([
+    '^\\[TAG\\].*',
+    'admin\\d+',
+    '(foo|bar)',
+    '^(bad){2}$',
+    '[a-z]+[0-9]*',
+    '(\\(x+\\))',
+    '[(+*)]+',
+    '\\(a+\\)+',
+    'a{3}',
+    'a{2,}',
+    'a{2,5}',
+    'a{x',
+    'a+?',
+    '[^a-z]+',
+    '[\\]x]+',
+    'ab\\',
+  ])('accepts %s', (pattern) => {
+    expect(isSafeBannedNameRegex(pattern)).toBe(true);
+  });
+
+  it('makes validateBannedNamePattern refuse an unsafe regex', () => {
+    expect(validateBannedNamePattern('(a+)+$', 'regex')).toEqual({
+      ok: false,
+      error: 'pattern_unsafe_regex',
+    });
+    expect(validateBannedNamePattern('(a+)+$', 'substring')).toEqual({ ok: true });
+  });
+
+  it('never runs a stored unsafe regex, so a crafted nickname cannot stall matching', () => {
+    const started = Date.now();
+    expect(matchBannedName('(a+)+$', 'regex', `${'a'.repeat(24)}!`)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('caps a checked nickname well above the Steam 32-character name limit', () => {
+    expect(BANNED_NAME_NICK_MAX).toBe(64);
+  });
+});
+
 describe('matchBannedName', () => {
+  it('treats a regex that does not compile as no match', () => {
+    expect(matchBannedName('[unclosed', 'regex', 'anything')).toBe(false);
+  });
+
   it('never matches an empty pattern', () => {
     expect(matchBannedName('', 'exact', 'anything')).toBe(false);
   });
@@ -81,6 +157,12 @@ describe('matchBannedName', () => {
   it('matches regex case-insensitively (parity with the log-ingest worker matcher)', () => {
     expect(matchBannedName('BadWord', 'regex', 'thisisabadwordhere')).toBe(true);
     expect(matchBannedName('^admin', 'regex', 'ADMIN_Bob')).toBe(true);
+  });
+
+  it('never evaluates a catastrophic-backtracking regex (#52 finding 1155)', () => {
+    // A rule stored before validation tightened must not run: it would match
+    // here, and on a longer non-matching nick it would block the event loop.
+    expect(matchBannedName('(a+)+$', 'regex', 'aaa')).toBe(false);
   });
 
   it('returns false for an invalid regex instead of throwing', () => {

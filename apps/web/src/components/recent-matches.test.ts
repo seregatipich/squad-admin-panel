@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { formatMatchDuration } from '../lib/format';
 import {
   allMatchesHref,
-  formatMatchDuration,
   outcomeLabel,
-  outcomeToneClasses,
+  parseMatchSummary,
   type RecentMatch,
-  serverLabel,
   type Winrate,
   winratePercent,
   winrateSummaryText,
@@ -17,19 +16,22 @@ function winrate(overrides: Partial<Winrate> = {}): Winrate {
 
 describe('outcomeLabel', () => {
   it('maps every outcome to its Russian label', () => {
-    expect(outcomeLabel('win')).toBe('Победа');
-    expect(outcomeLabel('loss')).toBe('Поражение');
-    expect(outcomeLabel('draw')).toBe('Ничья');
-    expect(outcomeLabel(null)).toBe('В процессе');
+    const ended = '2026-06-01T11:00:00.000Z';
+    expect(outcomeLabel({ outcome: 'win', ended_at: ended })).toBe('Победа');
+    expect(outcomeLabel({ outcome: 'loss', ended_at: ended })).toBe('Поражение');
+    expect(outcomeLabel({ outcome: 'draw', ended_at: ended })).toBe('Ничья');
   });
-});
 
-describe('outcomeToneClasses', () => {
-  it('gives distinct tones for win/loss and a neutral tone otherwise', () => {
-    expect(outcomeToneClasses('win')).toContain('emerald');
-    expect(outcomeToneClasses('loss')).toContain('red');
-    expect(outcomeToneClasses('draw')).toContain('neutral');
-    expect(outcomeToneClasses(null)).toContain('neutral');
+  it('labels a match without an end time as in progress', () => {
+    expect(outcomeLabel({ outcome: null, ended_at: null })).toBe('В процессе');
+  });
+
+  it('labels a finished match without a recorded winner as unknown, not in progress', () => {
+    // #804: the API returns outcome=null for an aborted match (winner=null) or an
+    // unknown team, so a finished match must not read «В процессе».
+    expect(outcomeLabel({ outcome: null, ended_at: '2026-06-01T11:00:00.000Z' })).toBe(
+      'Неизвестно',
+    );
   });
 });
 
@@ -56,24 +58,6 @@ describe('allMatchesHref', () => {
   });
 });
 
-describe('serverLabel', () => {
-  it('prefers slug, falls back to name, then dash', () => {
-    expect(serverLabel({ server_slug: 'eu-1', server_name: 'EU Main' })).toBe('eu-1');
-    expect(serverLabel({ server_slug: null, server_name: 'EU Main' })).toBe('EU Main');
-    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
-  });
-});
-
-describe('formatMatchDuration', () => {
-  it('formats hours, minutes, seconds and guards invalid input', () => {
-    expect(formatMatchDuration(3661)).toBe('1ч 1м');
-    expect(formatMatchDuration(125)).toBe('2м 5с');
-    expect(formatMatchDuration(42)).toBe('42с');
-    expect(formatMatchDuration(null)).toBe('—');
-    expect(formatMatchDuration(-5)).toBe('—');
-  });
-});
-
 describe('RecentMatch shape', () => {
   it('carries the per-player fields needed to render a row', () => {
     const row: RecentMatch = {
@@ -93,7 +77,44 @@ describe('RecentMatch shape', () => {
       play_seconds: 3000,
       outcome: 'win',
     };
-    expect(outcomeLabel(row.outcome)).toBe('Победа');
+    expect(outcomeLabel(row)).toBe('Победа');
     expect(formatMatchDuration(row.play_seconds)).toBe('50м 0с');
+  });
+});
+
+describe('parseMatchSummary', () => {
+  const row = {
+    match_id: 'm1',
+    server_id: 's1',
+    server_name: 'EU',
+    server_slug: 'eu',
+    layer: null,
+    map: null,
+    game_mode: null,
+    winner: null,
+    is_seed: false,
+    started_at: '2026-06-01T10:00:00.000Z',
+    ended_at: null,
+    duration_seconds: null,
+    team: null,
+    play_seconds: 3000,
+    outcome: null,
+  };
+  const wr = { wins: 1, losses: 0, draws: 0, decided: 1, considered: 1, window: 30 };
+
+  it('accepts a well-formed summary', () => {
+    expect(parseMatchSummary({ recent: [row], winrate: wr })).toEqual({
+      recent: [row],
+      winrate: wr,
+    });
+  });
+
+  it('rejects payloads of the wrong shape instead of letting render crash', () => {
+    expect(parseMatchSummary(null)).toBeNull();
+    expect(parseMatchSummary({})).toBeNull();
+    expect(parseMatchSummary({ recent: 'x', winrate: wr })).toBeNull();
+    expect(parseMatchSummary({ recent: [row], winrate: null })).toBeNull();
+    expect(parseMatchSummary({ recent: [{ ...row, outcome: 'nope' }], winrate: wr })).toBeNull();
+    expect(parseMatchSummary({ recent: [], winrate: { ...wr, decided: '1' } })).toBeNull();
   });
 });

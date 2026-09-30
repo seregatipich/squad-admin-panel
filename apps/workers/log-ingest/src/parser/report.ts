@@ -16,6 +16,7 @@ import { type LogLine, parseLine } from './patterns.js';
 
 export interface ParsedReport {
   ts: string;
+  tick: number;
   channel: string;
   reporterEos: string | null;
   reporterSteam: string | null;
@@ -98,6 +99,7 @@ export function parseReportFromLogLine(parsed: LogLine): ParsedReport | null {
 
   return {
     ts: parsed.ts.toISOString(),
+    tick: parsed.tick,
     channel: chat.groups.channel as string,
     reporterEos,
     reporterSteam,

@@ -231,12 +231,23 @@ describe('BalancerBrowser decisions', () => {
     expect(JSON.parse(String(decisionCall?.[1]?.body)).decision).toBe('acknowledge');
   });
 
-  it('surfaces the API veto_reason_required rejection verbatim', async () => {
-    mockApi({
-      items: [IMBALANCE_ITEM],
-      decisionStatus: 400,
-      decisionBody: { error: 'veto_reason_required' },
-    });
+  it('sends no veto fields with an acknowledgement', async () => {
+    const spy = mockApi({ items: [IMBALANCE_ITEM] });
+
+    render(<BalancerBrowser canEdit />);
+    await waitFor(() => expect(screen.getByText('snap-imbalance')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Разобрать' }));
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Принять к сведению' }));
+
+    await waitFor(() => expect(screen.getByText(/Решение сохранено/)).toBeInTheDocument());
+    const decisionCall = spy.mock.calls.find(([url]) => String(url).includes('/decision'));
+    const sent = JSON.parse(String(decisionCall?.[1]?.body));
+    expect(sent).toEqual({ decision: 'acknowledge' });
+  });
+
+  it('blocks a veto without a comment before calling the API', async () => {
+    const spy = mockApi({ items: [IMBALANCE_ITEM] });
 
     render(<BalancerBrowser canEdit />);
     await waitFor(() => expect(screen.getByText('snap-imbalance')).toBeInTheDocument());
@@ -245,8 +256,43 @@ describe('BalancerBrowser decisions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Вето' }));
 
     await waitFor(() => {
-      expect(screen.getByText('veto_reason_required')).toBeInTheDocument();
+      expect(screen.getByText('Для вето нужен комментарий')).toBeInTheDocument();
     });
+    expect(spy.mock.calls.some(([url]) => String(url).includes('/decision'))).toBe(false);
+  });
+
+  it('maps a known API error code to a Russian message', async () => {
+    mockApi({
+      items: [IMBALANCE_ITEM],
+      decisionStatus: 400,
+      decisionBody: { error: 'unauthenticated' },
+    });
+
+    render(<BalancerBrowser canEdit />);
+    await waitFor(() => expect(screen.getByText('snap-imbalance')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Разобрать' }));
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Отклонить' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Сессия истекла, войдите заново')).toBeInTheDocument();
+    });
+  });
+
+  it('reports the HTTP status when a proxy answers with a non-JSON body', async () => {
+    mockApi({ items: [IMBALANCE_ITEM], decisionStatus: 502, decisionBody: undefined });
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      url.includes('/decision') ? new Response('<html>', { status: 502 }) : base(url, init),
+    );
+
+    render(<BalancerBrowser canEdit />);
+    await waitFor(() => expect(screen.getByText('snap-imbalance')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Разобрать' }));
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Отклонить' }));
+
+    await waitFor(() => expect(screen.getByText('HTTP 502')).toBeInTheDocument());
   });
 
   it('locks every write control for a viewer without balancer:edit', async () => {
@@ -276,5 +322,72 @@ describe('BalancerBrowser rules form', () => {
     await waitFor(() => expect(screen.getByText('Правила сохранены')).toBeInTheDocument());
     const putCall = spy.mock.calls.find(([, init]) => (init as RequestInit)?.method === 'PUT');
     expect(JSON.parse(String((putCall?.[1] as RequestInit).body)).win_streak_threshold).toBe(7);
+  });
+
+  it('does not let the 8s settings poll clobber an unsaved edit (#493)', async () => {
+    mockApi({ items: [] });
+
+    // Captures the poll interval's own callback so it can be invoked directly
+    // — avoids mixing fake timers with testing-library's own setTimeout-based
+    // polling (`findBy*`/`waitFor`), which fight each other.
+    const captured: { pollTick: (() => void) | null } = { pollTick: null };
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        // The component's own 8s poll — not vitest/testing-library's unrelated
+        // internal intervals, which also go through window.setInterval here.
+        if (timeout === 8000 && captured.pollTick === null) {
+          captured.pollTick = handler as () => void;
+        }
+        return 0 as unknown as ReturnType<typeof setInterval>;
+      });
+
+    render(<BalancerBrowser canEdit />);
+    const field = (await screen.findByLabelText(/Серия побед/)) as HTMLInputElement;
+    expect(field.value).toBe('3');
+    expect(captured.pollTick).not.toBeNull();
+
+    fireEvent.change(field, { target: { value: '7' } });
+    expect(field.value).toBe('7');
+
+    // Fire the poll tick (as if 8s had elapsed) while the edit is unsaved,
+    // then let its fetch round-trips settle.
+    captured.pollTick?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((screen.getByLabelText(/Серия побед/) as HTMLInputElement).value).toBe('7');
+    setIntervalSpy.mockRestore();
+  });
+
+  it('refuses to save an emptied threshold and names the field', async () => {
+    const spy = mockApi({ items: [] });
+
+    render(<BalancerBrowser canEdit />);
+    await waitFor(() => expect(screen.getByLabelText(/Серия побед/)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Серия побед/), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правила' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Поле «Серия побед»: допустимо от 1 до 100')).toBeInTheDocument();
+    });
+    expect(spy.mock.calls.some(([, init]) => (init as RequestInit)?.method === 'PUT')).toBe(false);
+  });
+});
+
+describe('BalancerBrowser list state', () => {
+  it('tells the operator when the list is truncated by the page limit', async () => {
+    vi.stubGlobal('fetch', async (url: string) =>
+      url.startsWith('/api/v1/balancer/settings')
+        ? new Response(JSON.stringify({ settings: SETTINGS }), { status: 200 })
+        : new Response(JSON.stringify({ items: [IMBALANCE_ITEM], next_cursor: 'abc' }), {
+            status: 200,
+          }),
+    );
+
+    render(<BalancerBrowser canEdit />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Показаны последние 25 снимков/)).toBeInTheDocument();
+    });
   });
 });

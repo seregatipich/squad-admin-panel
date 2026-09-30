@@ -92,16 +92,6 @@ sudo systemctl restart panel-host-bridge
 
 ---
 
-## `RoleEditor` shows "Не удалось загрузить список permissions"
-
-**Symptom:** The permission checkboxes on `/roles/new` or `/roles/:id` do not appear and an error message is shown.
-
-**Cause:** `GET /api/v1/permissions` returned a non-OK response. This endpoint does not require any specific permission beyond being authenticated, so a 401 indicates an expired session.
-
-**Fix:** Refresh the page to trigger a session re-check, or navigate to `/login` and re-authenticate.
-
----
-
 ## ConnectionBanner stuck red after refresh
 
 **Symptom:** The top of every dashboard page shows «Связь с панелью потеряна — переподключаемся…» and never disappears.

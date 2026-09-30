@@ -39,14 +39,16 @@ renewal tick:
    `renews_every_days` from the later of now and the current expiry.
 3. Advances `next_renewal_at` by one period **from the date that was due**, not
    from the wall clock, so an outage does not shift the billing schedule.
-4. If the balance cannot cover the price (or the tier's role can no longer be
-   granted), flips the row to `expired`, writes a `player.subscription.expire`
+4. If the balance cannot cover the price, the tier's role can no longer be
+   granted, or the tier now maps to a panel-access or system role (reason
+   `role_grants_panel_access` — the same escalation guard as a purchase, #31),
+   charges nothing and flips the row to `expired`, writes a `player.subscription.expire`
    audit row, records a broadcast `alert_events` row on the seeded
    `role_expiring` rule with `event_kind: 'subscription_expired'`, and publishes
    the matching `alert.triggered` live-bus frame. The role itself is **not**
    removed here — the already-paid period runs out first and the main tick
    removes it on schedule.
-5. Enqueues one Admins.cfg sync for the whole run, not one per subscription.
+5. Enqueues the Admins.cfg sync outbox rows (one per panel-hosted server) inside each renewal transaction, so a charge and its sync are committed or rolled back together.
 
 A subscription cancelled between the scan and the charge is skipped and nothing
 is billed. One failing subscription never aborts the batch.

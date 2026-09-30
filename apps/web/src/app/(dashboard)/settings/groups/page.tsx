@@ -1,7 +1,7 @@
 'use client';
 
 import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
-import type { RoleColor } from '@squad/shared-config/role-colors';
+import { isRoleColor, type RoleColor, roleColorToHex } from '@squad/shared-config/role-colors';
 import {
   SQUAD_PERMISSIONS,
   type SquadPermissionDef,
@@ -32,7 +32,6 @@ import {
   TrashIcon,
 } from '@/components/ui';
 
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const SAVE_DEBOUNCE_MS = 500;
 
 interface RoleRow {
@@ -48,6 +47,10 @@ interface RoleRow {
   can_manage_ban_sources: boolean;
   can_manage_clans: boolean;
   can_manage_economy: boolean;
+  can_manage_infrastructure: boolean;
+  can_manage_issues: boolean;
+  can_manage_integrations: boolean;
+  can_handle_reports: boolean;
   squad_permissions: SquadPermissionKey[];
   assigned_users_count: number;
 }
@@ -64,7 +67,11 @@ type FlagKey =
   | 'can_edit_roles'
   | 'can_manage_ban_sources'
   | 'can_manage_clans'
-  | 'can_manage_economy';
+  | 'can_manage_economy'
+  | 'can_manage_infrastructure'
+  | 'can_manage_issues'
+  | 'can_manage_integrations'
+  | 'can_handle_reports';
 
 const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: string }> = [
   {
@@ -78,6 +85,15 @@ const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: s
   { key: 'can_manage_ban_sources', label: 'Может управлять источниками банов' },
   { key: 'can_manage_clans', label: 'Может управлять кланами' },
   { key: 'can_manage_economy', label: 'Может управлять экономикой' },
+  {
+    key: 'can_manage_infrastructure',
+    label: 'Может управлять инфраструктурой',
+    description:
+      'Установка, удаление, обновление и force-stop серверов, хост-демон, правка конфигов и Admins.cfg, выпуск API-токенов.',
+  },
+  { key: 'can_manage_issues', label: 'Может управлять обращениями (issues)' },
+  { key: 'can_manage_integrations', label: 'Может управлять интеграциями' },
+  { key: 'can_handle_reports', label: 'Может обрабатывать жалобы' },
 ];
 
 function chunk<T>(arr: readonly T[], cols: number): T[][] {
@@ -100,12 +116,26 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [rolesRes, meRes] = await Promise.all([
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (rolesRes.ok) setRows((await rolesRes.json()) as RoleRow[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
+    try {
+      const [rolesRes, meRes] = await Promise.all([
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      let loadErr: string | null = null;
+      if (rolesRes.ok) {
+        setRows((await rolesRes.json()) as RoleRow[]);
+      } else {
+        loadErr = `Не удалось загрузить список ролей: ${rolesRes.status}`;
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.status}`;
+      }
+      setGlobalErr(loadErr);
+    } catch {
+      setGlobalErr('Не удалось загрузить список ролей: ошибка сети.');
+    }
   }, []);
 
   useEffect(() => {
@@ -136,6 +166,13 @@ export default function GroupsPage() {
       if (patch.can_manage_clans !== undefined) body.can_manage_clans = patch.can_manage_clans;
       if (patch.can_manage_economy !== undefined)
         body.can_manage_economy = patch.can_manage_economy;
+      if (patch.can_manage_infrastructure !== undefined)
+        body.can_manage_infrastructure = patch.can_manage_infrastructure;
+      if (patch.can_manage_issues !== undefined) body.can_manage_issues = patch.can_manage_issues;
+      if (patch.can_manage_integrations !== undefined)
+        body.can_manage_integrations = patch.can_manage_integrations;
+      if (patch.can_handle_reports !== undefined)
+        body.can_handle_reports = patch.can_handle_reports;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
       const res = await fetch(`/api/v1/roles/${role.id}`, {
         method: 'PUT',
@@ -150,7 +187,26 @@ export default function GroupsPage() {
         return;
       }
       const fresh = (await res.json()) as RoleRow;
-      setRows((prev) => (prev ? prev.map((r) => (r.id === role.id ? fresh : r)) : prev));
+      setRows((prev) =>
+        prev
+          ? prev.map((r) => {
+              if (r.id !== role.id) return r;
+              // Only accept the server's value for a field sent in this
+              // request if nothing has changed it locally since the request
+              // was sent (i.e. it still equals what we asked the server to
+              // set). Otherwise a newer, still-unsent local edit (applied by
+              // `onLocal` while this request — or an even older, now-stale
+              // one — was in flight) would be silently discarded (#694).
+              const merged = { ...r };
+              for (const key of Object.keys(patch) as (keyof RoleRow)[]) {
+                if (JSON.stringify(r[key]) === JSON.stringify(patch[key])) {
+                  (merged as Record<string, unknown>)[key] = fresh[key];
+                }
+              }
+              return merged;
+            })
+          : prev,
+      );
     } catch (err) {
       setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
       await refresh();
@@ -173,6 +229,10 @@ export default function GroupsPage() {
       can_manage_ban_sources: false,
       can_manage_clans: false,
       can_manage_economy: false,
+      can_manage_infrastructure: false,
+      can_manage_issues: false,
+      can_manage_integrations: false,
+      can_handle_reports: false,
     };
     let attempt = 0;
     while (attempt < 5) {
@@ -268,6 +328,13 @@ export default function GroupsPage() {
           title={globalErr}
           onDismiss={() => setGlobalErr(null)}
           dismissLabel="Скрыть сообщение"
+          action={
+            !rows || !me ? (
+              <Button size="sm" onClick={() => void refresh()}>
+                Повторить
+              </Button>
+            ) : undefined
+          }
         />
       ) : null}
 
@@ -403,6 +470,10 @@ function RoleCard({
       patch.can_manage_ban_sources = false;
       patch.can_manage_clans = false;
       patch.can_manage_economy = false;
+      patch.can_manage_infrastructure = false;
+      patch.can_manage_issues = false;
+      patch.can_manage_integrations = false;
+      patch.can_handle_reports = false;
     }
     onLocal(patch);
     debounce(patch);
@@ -411,12 +482,18 @@ function RoleCard({
   const setName = (name: string) => {
     if (!canEdit) return;
     onLocal({ name });
+    if (!name.trim() || name.length > 64) {
+      // Invalid intermediate value — the server would reject it (400/409),
+      // which would bounce back through refresh() mid-edit. Show it locally
+      // only; persisting happens once the name is valid again.
+      return;
+    }
     debounce({ name });
   };
 
   const setColor = (color: string) => {
     if (!canEdit) return;
-    if (!HEX_RE.test(color)) {
+    if (!isRoleColor(color)) {
       // intermediate keystroke (e.g. user is typing a hex value) — show
       // it locally without persisting.
       onLocal({ color });
@@ -461,7 +538,7 @@ function RoleCard({
           <InlineBanner
             tone="warn"
             title="Системная роль"
-            description="Имя, цвет и права нельзя редактировать через интерфейс — Owner всегда имеет все 3 флага доступа и все 21 Squad permission."
+            description={`Имя, цвет и права нельзя редактировать через интерфейс — Owner всегда имеет все ${ACCESS_FLAGS.length} флагов доступа и все ${SQUAD_PERMISSIONS.length} Squad permissions.`}
           />
         ) : null}
 
@@ -482,7 +559,7 @@ function RoleCard({
             <input
               id={colorInputId}
               type="color"
-              value={HEX_RE.test(role.color) ? role.color : '#737373'}
+              value={roleColorToHex(role.color)}
               disabled={!canEdit}
               onChange={(e) => setColor(e.target.value.toUpperCase())}
               className="h-8 w-12 cursor-pointer rounded-ctl border border-line bg-raised disabled:cursor-not-allowed disabled:opacity-40"

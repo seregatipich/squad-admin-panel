@@ -1,5 +1,6 @@
-import { panelMeta, players } from '@squad/db/schema';
+import { panelMeta, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
+import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -56,13 +57,25 @@ beforeAll(async () => {
   });
   ownerCookie = await loginAsOwner(h);
 
-  // A second, authenticated player with no role — reaches the setup handler but
-  // is not the Owner, so `/setup/complete` must reject them with 403.
+  // A second, authenticated panel user who is not the Owner: they reach the
+  // setup handler (a session without panel_access is dropped to anonymous, #33),
+  // so `/setup/complete` must reject them with 403.
+  const [strangerRole] = await h.db
+    .insert(roles)
+    .values({
+      id: uuidv7(),
+      name: 'SetupStranger',
+      color: 'neutral',
+      isSystemRole: false,
+      panelAccess: true,
+    })
+    .returning({ id: roles.id });
+  if (!strangerRole) throw new Error('failed to seed the stranger role');
   await h.db.insert(players).values({
     steamId64: NON_OWNER_STEAM,
     canonicalName: 'SetupStranger',
     canonicalNameNormalized: 'setupstranger',
-    roleId: null,
+    roleId: strangerRole.id,
   });
   nonOwnerCookie = await loginAsSteam(NON_OWNER_STEAM);
 });
@@ -146,6 +159,7 @@ describeIfDb('POST /api/v1/setup/complete', () => {
   });
 
   it('completes for the owner and persists the org name + setup_completed flag', async () => {
+    const startedAt = Date.now();
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/setup/complete',
@@ -160,7 +174,47 @@ describeIfDb('POST /api/v1/setup/complete', () => {
     // z.string().trim() normalises the stored name.
     expect(row?.organizationName).toBe('Breaking Squad');
 
-    await assertAuditRow(h, { action: 'setup.complete', resource: 'panel' });
+    // Only rows written since this request count: earlier tests in the file
+    // audit their own (refused or successful) setup.complete calls, and this
+    // row may still be in flight when the first poll runs.
+    const auditRow = await assertAuditRow(h, {
+      action: 'setup.complete',
+      resource: 'panel',
+      statusCode: 200,
+      withinMs: Date.now() - startedAt + 1,
+    });
+    // Regression for finding #350: the audit row must record the org name
+    // that was actually saved, via req.auditSnapshots.
+    expect(auditRow.beforeSnapshot).toEqual({ organization_name: '' });
+    expect(auditRow.afterSnapshot).toEqual({ organization_name: 'Breaking Squad' });
+  });
+
+  // Regression test for finding #350: the UPDATE used to be unconditional
+  // (WHERE id = 1 only), so two concurrent completions could both appear to
+  // succeed and the second would silently overwrite the first's org name.
+  // Scoping the UPDATE to setup_completed = false means only the first
+  // commit can ever return a row.
+  it('only the first of two concurrent completions succeeds; the loser sees 410', async () => {
+    const [first, second] = await Promise.all([
+      h.app.inject({
+        method: 'POST',
+        url: '/api/v1/setup/complete',
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: { organization_name: 'Racer One' },
+      }),
+      h.app.inject({
+        method: 'POST',
+        url: '/api/v1/setup/complete',
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: { organization_name: 'Racer Two' },
+      }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 410]);
+
+    const [row] = await h.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
+    expect(row?.setupCompleted).toBe(true);
+    expect(['Racer One', 'Racer Two']).toContain(row?.organizationName);
   });
 
   it('returns 410 setup_already_completed on a repeat completion by the owner', async () => {

@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -21,6 +21,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 
 const POLL_MS = 30_000;
 
@@ -43,6 +44,12 @@ interface CreateResponse extends ApiToken {
   plaintext: string;
 }
 
+const CREATE_ERROR_MESSAGES: Record<string, string> = {
+  too_many_active_tokens: 'Слишком много активных токенов: отзовите ненужные и повторите.',
+  invalid_scopes:
+    'Среди выбранных скоупов есть недоступные вам. Обновите страницу и выберите заново.',
+};
+
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ru-RU');
@@ -62,7 +69,13 @@ export default function TokensPage() {
 
   const sortedPermissions = useMemo(() => (me ? [...me.permissions].sort() : []), [me]);
 
+  // Bumped by every load and every completed mutation: a poll that started earlier
+  // would otherwise overwrite the list with data older than the user's own change.
+  const listGeneration = useRef(0);
+
   const load = useCallback(async () => {
+    listGeneration.current += 1;
+    const generation = listGeneration.current;
     try {
       const [meRes, tokRes] = await Promise.all([
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
@@ -70,19 +83,32 @@ export default function TokensPage() {
       ]);
       if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
       if (!tokRes.ok) throw new Error(`HTTP ${tokRes.status}`);
-      setMe((await meRes.json()) as Me);
-      setTokens((await tokRes.json()) as ApiToken[]);
+      const freshMe = (await meRes.json()) as Me;
+      const freshTokens = (await tokRes.json()) as ApiToken[];
+      if (generation !== listGeneration.current) return;
+      setMe(freshMe);
+      setTokens(freshTokens);
+      // A token cannot carry a scope the caller no longer holds (invalid_scopes).
+      setSelectedScopes((prev) => {
+        const kept = [...prev].filter((scope) => freshMe.permissions.includes(scope));
+        return kept.length === prev.size ? prev : new Set(kept);
+      });
       // Удачный опрос отменяет ошибку, но не подтверждение действия: «Токен
       // отозван» оператор должен успеть прочитать.
       setMsg((prev) => (prev?.kind === 'err' ? null : prev));
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      if (generation === listGeneration.current) {
+        setMsg({ kind: 'err', text: describeLoadError(e) });
+      }
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
+    // A hidden tab has nobody to show the list to.
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void load();
+    }, POLL_MS);
     return () => clearInterval(t);
   }, [load]);
 
@@ -114,10 +140,13 @@ export default function TokensPage() {
         }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
+        const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        const known = typeof body?.error === 'string' ? CREATE_ERROR_MESSAGES[body.error] : null;
+        setMsg({ kind: 'err', text: known ?? describeHttpStatus(res.status) });
+        return;
       }
       const created = (await res.json()) as CreateResponse;
+      listGeneration.current += 1;
       setJustCreated(created);
       setTokens((prev) => [
         ...prev,
@@ -133,7 +162,7 @@ export default function TokensPage() {
       setName('');
       setSelectedScopes(new Set());
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeLoadError(e) });
     } finally {
       setCreating(false);
     }
@@ -148,12 +177,13 @@ export default function TokensPage() {
         credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      listGeneration.current += 1;
       setTokens((prev) =>
         prev.map((t) => (t.id === id ? { ...t, revoked_at: new Date().toISOString() } : t)),
       );
       setMsg({ kind: 'ok', text: 'Токен отозван.' });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeLoadError(e) });
     } finally {
       setRevokingId(null);
       setPendingRevoke(null);
@@ -165,8 +195,11 @@ export default function TokensPage() {
     try {
       await navigator.clipboard.writeText(justCreated.plaintext);
       setMsg({ kind: 'ok', text: 'Токен скопирован в буфер обмена.' });
-    } catch (e) {
-      setMsg({ kind: 'err', text: `Не удалось скопировать: ${(e as Error).message}` });
+    } catch {
+      setMsg({
+        kind: 'err',
+        text: 'Не удалось скопировать: браузер не дал доступ к буферу обмена.',
+      });
     }
   }
 

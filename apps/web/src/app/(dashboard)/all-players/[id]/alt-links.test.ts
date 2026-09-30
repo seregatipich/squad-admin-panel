@@ -5,6 +5,8 @@ import {
   formatRejectedMark,
   LINK_TYPE_LABELS_RU,
   PLAYER_LINK_TYPES,
+  parseCandidateResponse,
+  parseLinksResponse,
   splitCandidates,
 } from './alt-links';
 
@@ -109,32 +111,50 @@ describe('formatRejectedMark', () => {
 });
 
 describe('buildLinkPayload', () => {
-  it('embeds the candidate score/confidence/shared_ip_count snapshot', () => {
-    const candidate = makeCandidate();
-    const payload = buildLinkPayload('other-1', 'alt', 'confirmed', '', candidate);
+  // Regression (#461): the browser used to author the «audit» snapshot.
+  it('sends the decision only, leaving the evidence to the server', () => {
+    const payload = buildLinkPayload('other-1', 'alt', 'confirmed', '');
 
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
       other_player_id: 'other-1',
       link_type: 'alt',
       status: 'confirmed',
     });
-    expect(payload.note).toBeUndefined();
-    expect(payload.evidence_snapshot).toMatchObject({
-      score: 75,
-      confidence: 'high',
-      shared_ip_count: 2,
-      shared_names: ['ghost'],
-    });
+    expect(payload).not.toHaveProperty('evidence_snapshot');
   });
 
   it('trims and includes a non-empty note', () => {
-    const payload = buildLinkPayload(
-      'other-1',
-      'family_share',
-      'rejected',
-      '  test note  ',
-      makeCandidate(),
-    );
+    const payload = buildLinkPayload('other-1', 'family_share', 'rejected', '  test note  ');
     expect(payload.note).toBe('test note');
+  });
+});
+
+describe('parseLinksResponse (#438)', () => {
+  it('accepts a well-formed response', () => {
+    const body = { links: [] };
+    expect(parseLinksResponse(body)).toEqual(body);
+  });
+
+  it('rejects a response missing the links array', () => {
+    expect(parseLinksResponse({})).toBeNull();
+    expect(parseLinksResponse({ links: 'nope' })).toBeNull();
+  });
+
+  it('rejects a non-object payload, e.g. an HTML error page parsed as JSON', () => {
+    expect(parseLinksResponse(null)).toBeNull();
+    expect(parseLinksResponse('<html>')).toBeNull();
+  });
+});
+
+describe('parseCandidateResponse (#438)', () => {
+  it('accepts a well-formed response', () => {
+    const body = { candidates: [makeCandidate()], total: 1 };
+    expect(parseCandidateResponse(body)).toEqual(body);
+  });
+
+  it('rejects a response missing candidates or total', () => {
+    expect(parseCandidateResponse({ candidates: [] })).toBeNull();
+    expect(parseCandidateResponse({ total: 1 })).toBeNull();
+    expect(parseCandidateResponse({ candidates: 'nope', total: 1 })).toBeNull();
   });
 });

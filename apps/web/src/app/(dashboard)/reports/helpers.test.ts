@@ -11,7 +11,6 @@ import {
   isExternalLinkEvidence,
   isImageEvidence,
   isRecidivist,
-  isValidBanLength,
   isVideoEvidence,
   parseFilters,
   playerLabel,
@@ -186,26 +185,6 @@ describe('evidenceLabel', () => {
 
   it('falls back to the original filename when there is no title or URL', () => {
     expect(evidenceLabel(makeEvidence({ title: null, external_url: null }))).toBe('screenshot.png');
-  });
-});
-
-describe('isValidBanLength', () => {
-  it('accepts a bare number of days and permanent (0)', () => {
-    expect(isValidBanLength('0')).toBe(true);
-    expect(isValidBanLength('7')).toBe(true);
-  });
-
-  it('accepts a number with a duration unit suffix', () => {
-    expect(isValidBanLength('3d')).toBe(true);
-    expect(isValidBanLength('12h')).toBe(true);
-    expect(isValidBanLength('2w')).toBe(true);
-  });
-
-  it('rejects empty, non-numeric, or malformed values', () => {
-    expect(isValidBanLength('')).toBe(false);
-    expect(isValidBanLength('x')).toBe(false);
-    expect(isValidBanLength('1 d')).toBe(false);
-    expect(isValidBanLength('-1')).toBe(false);
   });
 });
 

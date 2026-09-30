@@ -1,9 +1,10 @@
 import { auditLog, playerNotes, players, roles } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
+import { raceAgainstOpenTransaction, withFailingAuditInsert } from './helpers/row-lock.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -305,6 +306,32 @@ describe('player notes', () => {
       expect((auditRows[0]?.afterSnapshot as { body: string }).body).toBe('after edit');
     });
 
+    // Regression (#449): edits never reached the other open cards.
+    it('publishes a note.updated live event with the edited note', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'live before');
+      const received: LiveEvent[] = [];
+      const unsub = h.app.liveBus.subscribe((event) => received.push(event));
+      try {
+        const res = await h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+          payload: { body: 'live after' },
+        });
+        expect(res.statusCode).toBe(200);
+        const evt = received.find((e) => e.type === 'note.updated');
+        expect(evt).toMatchObject({
+          type: 'note.updated',
+          data: {
+            player_id: subjectId,
+            note: { id: created.id, body: 'live after', edited: true },
+          },
+        });
+      } finally {
+        unsub();
+      }
+    });
+
     it('403 when a different admin (no can_edit_roles) edits', async () => {
       const authorId = await seedPlayer(h, 'Admin', 'AuthorAdmin');
       const authorCookie = await loginAs(h, authorId);
@@ -380,6 +407,28 @@ describe('player notes', () => {
       ).not.toBeNull();
     });
 
+    // Regression (#449): deletions never reached the other open cards.
+    it('publishes a note.deleted live event', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'live delete');
+      const received: LiveEvent[] = [];
+      const unsub = h.app.liveBus.subscribe((event) => received.push(event));
+      try {
+        const res = await h.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+        });
+        expect(res.statusCode).toBe(200);
+        const evt = received.find((e) => e.type === 'note.deleted');
+        expect(evt).toMatchObject({
+          type: 'note.deleted',
+          data: { player_id: subjectId, note_id: created.id },
+        });
+      } finally {
+        unsub();
+      }
+    });
+
     it('allows an owner (can_edit_roles) to delete another admin note', async () => {
       const authorId = await seedPlayer(h, 'Admin', 'AuthorForOwnerDelete');
       const authorCookie = await loginAs(h, authorId);
@@ -420,6 +469,158 @@ describe('player notes', () => {
         headers: { cookie: ownerCookie },
       });
       expect(second.statusCode).toBe(404);
+    });
+  });
+
+  describe('audit #71: pagination precision and mutation atomicity', () => {
+    it('does not skip notes that share the cursor millisecond (#228)', async () => {
+      const newer = '0199a000-0000-7000-8000-000000000002';
+      const older = '0199a000-0000-7000-8000-000000000001';
+      await h.db.execute(sql`
+        INSERT INTO player_notes (id, player_id, author_id, body, created_at) VALUES
+          (${newer}, ${subjectId}, ${h.seed.ownerPlayerId}, 'same-ms newer', '2026-01-01T00:00:00.000900Z'),
+          (${older}, ${subjectId}, ${h.seed.ownerPlayerId}, 'same-ms older', '2026-01-01T00:00:00.000100Z')
+      `);
+
+      const page1 = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${subjectId}/notes?limit=1`,
+        headers: { cookie: ownerCookie },
+      });
+      const b1 = page1.json() as { items: Array<{ id: string }>; next_cursor: string | null };
+      expect(b1.items.map((n) => n.id)).toEqual([newer]);
+      expect(b1.next_cursor).not.toBeNull();
+
+      const page2 = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${subjectId}/notes?limit=1&cursor=${encodeURIComponent(b1.next_cursor ?? '')}`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(page2.statusCode).toBe(200);
+      const b2 = page2.json() as { items: Array<{ id: string }> };
+      expect(b2.items.map((n) => n.id)).toEqual([older]);
+    });
+
+    it('rejects a malformed cursor with 400', async () => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${subjectId}/notes?cursor=not-a-cursor`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_cursor' });
+    });
+
+    it('PATCH of a note deleted concurrently answers 404 and keeps the body (#229)', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'original body');
+      const res = await raceAgainstOpenTransaction(
+        h.url,
+        async (tx) => {
+          await tx
+            .update(playerNotes)
+            .set({ deletedAt: new Date(), deletedBy: h.seed.ownerPlayerId })
+            .where(eq(playerNotes.id, created.id));
+        },
+        () =>
+          h.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/notes/${created.id}`,
+            headers: { cookie: ownerCookie },
+            payload: { body: 'edited after delete' },
+          }),
+      );
+      expect(res.statusCode).toBe(404);
+      const stored = await h.db
+        .select({ body: playerNotes.body })
+        .from(playerNotes)
+        .where(eq(playerNotes.id, created.id));
+      expect(stored[0]?.body).toBe('original body');
+    });
+
+    it('a DELETE racing another delete answers 404 and writes no audit row (#229)', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'deleted twice');
+      const res = await raceAgainstOpenTransaction(
+        h.url,
+        async (tx) => {
+          await tx
+            .update(playerNotes)
+            .set({ deletedAt: new Date(), deletedBy: subjectId })
+            .where(eq(playerNotes.id, created.id));
+        },
+        () =>
+          h.app.inject({
+            method: 'DELETE',
+            url: `/api/v1/notes/${created.id}`,
+            headers: { cookie: ownerCookie },
+          }),
+      );
+      expect(res.statusCode).toBe(404);
+      const stored = await h.db
+        .select({ deletedBy: playerNotes.deletedBy })
+        .from(playerNotes)
+        .where(eq(playerNotes.id, created.id));
+      expect(stored[0]?.deletedBy).toBe(subjectId);
+      const auditRows = await h.db
+        .select()
+        .from(auditLog)
+        .where(
+          and(eq(auditLog.actionType, 'player_note.delete'), eq(auditLog.targetId, created.id)),
+        );
+      expect(auditRows).toHaveLength(0);
+    });
+
+    it('rolls the edit back when its audit row cannot be written (#229)', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'audited body');
+      const res = await withFailingAuditInsert(h.db, 'player_note.update', () =>
+        h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+          payload: { body: 'unaudited edit' },
+        }),
+      );
+      expect(res.statusCode).toBe(500);
+      const stored = await h.db
+        .select({ body: playerNotes.body, updatedAt: playerNotes.updatedAt })
+        .from(playerNotes)
+        .where(eq(playerNotes.id, created.id));
+      expect(stored[0]?.body).toBe('audited body');
+      expect(stored[0]?.updatedAt).toBeNull();
+    });
+
+    it('rolls the soft delete back when its audit row cannot be written (#229)', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'audited delete');
+      const res = await withFailingAuditInsert(h.db, 'player_note.delete', () =>
+        h.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+        }),
+      );
+      expect(res.statusCode).toBe(500);
+      const stored = await h.db
+        .select({ deletedAt: playerNotes.deletedAt })
+        .from(playerNotes)
+        .where(eq(playerNotes.id, created.id));
+      expect(stored[0]?.deletedAt).toBeNull();
+    });
+
+    it('gates every notes route on the player:view permission (#232)', async () => {
+      const mint = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/tokens',
+        headers: { cookie: ownerCookie },
+        payload: { name: 'notes-scope-test', scopes: ['host:view'] },
+      });
+      expect(mint.statusCode).toBe(201);
+      const token = (mint.json() as { plaintext: string }).plaintext;
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${subjectId}/notes`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'forbidden', required: ['player:view'] });
     });
   });
 });

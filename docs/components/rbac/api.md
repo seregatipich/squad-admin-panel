@@ -24,9 +24,9 @@ Return the full permission registry as defined in `@squad/shared-config`.
     "dangerous": true
   },
   {
-    "key": "player:set_flags",
+    "key": "player:view_notes",
     "category": "players",
-    "label": "Custom теги (toxic, helpful)",
+    "label": "Заметки про игрока",
     "unimplemented": true
   }
 ]

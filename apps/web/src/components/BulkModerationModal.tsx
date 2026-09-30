@@ -42,16 +42,20 @@ const ACTION_LABEL: Record<BulkActionType, string> = {
   ban: 'Бан',
 };
 
-const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: '1d', label: '1 день' },
-  { value: '3d', label: '3 дня' },
-  { value: '7d', label: '7 дней' },
-  { value: '30d', label: '30 дней' },
-  { value: '0', label: 'Навсегда' },
+/** Ban-length choices for both this modal and the live-roster quick-moderation dialog. */
+export const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string; permanent: boolean }> = [
+  { value: '1d', label: '1 день', permanent: false },
+  { value: '3d', label: '3 дня', permanent: false },
+  { value: '7d', label: '7 дней', permanent: false },
+  { value: '30d', label: '30 дней', permanent: false },
+  { value: '0', label: 'Навсегда', permanent: true },
 ];
 
-/** Human-readable per-target failure reasons returned in `results[].error`. */
-const ERROR_LABEL: Record<string, string> = {
+/**
+ * Human-readable per-target failure reasons returned in `results[].error`,
+ * shared with the live-roster quick-moderation dialog.
+ */
+export const TARGET_ERROR_LABEL: Record<string, string> = {
   player_not_found: 'Игрок не найден',
   target_identity_missing: 'Нет SteamID64 и EOS ID',
   target_offline: 'Игрок не в сети',
@@ -111,12 +115,16 @@ export function BulkModerationModal({
     ...(canKick ? (['kick'] as const) : []),
     ...(canBanTemp || canBanPerm ? (['ban'] as const) : []),
   ];
-  const banLengths = BAN_LENGTHS.filter((entry) => (entry.value === '0' ? canBanPerm : canBanTemp));
+  const banLengths = BAN_LENGTHS.filter((entry) => (entry.permanent ? canBanPerm : canBanTemp));
 
   const [step, setStep] = useState<Step>('form');
-  const [actionType, setActionType] = useState<BulkActionType>(actionTypes[0] ?? 'kick');
+  const defaultActionType: BulkActionType = actionTypes[0] ?? 'kick';
+  const [actionType, setActionType] = useState<BulkActionType>(defaultActionType);
   const [reason, setReason] = useState('');
-  const [banLength, setBanLength] = useState(banLengths[0]?.value ?? '0');
+  // Never fall back to '0' (permanent): the fallback only applies when no
+  // ban is offered, and it must not become the harshest option by accident.
+  const defaultBanLength = banLengths[0]?.value ?? BAN_LENGTHS[0].value;
+  const [banLength, setBanLength] = useState(defaultBanLength);
   const [challenge, setChallenge] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +153,16 @@ export function BulkModerationModal({
     setResult(null);
     setBatch([]);
   }, [open]);
+
+  // The caller's keys can arrive after mount (`/api/v1/me` races the roster
+  // on the server page), so the defaults are re-derived whenever they change —
+  // otherwise the state stays pinned to the empty-permission fallback and the
+  // form submits an action or ban length the <select> does not even show.
+  useEffect(() => {
+    if (!open) return;
+    setActionType(defaultActionType);
+    setBanLength(defaultBanLength);
+  }, [open, defaultActionType, defaultBanLength]);
 
   if (!targets) return null;
 
@@ -347,7 +365,7 @@ export function BulkModerationModal({
                     .map((row) => (
                       <li key={row.player_id}>
                         {nameById.get(row.player_id) ?? row.player_id} —{' '}
-                        {ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
+                        {TARGET_ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
                         {row.detail ? ` (${row.detail})` : ''}
                       </li>
                     ))}

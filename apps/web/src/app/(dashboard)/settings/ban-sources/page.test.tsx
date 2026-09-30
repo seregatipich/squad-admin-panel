@@ -38,7 +38,7 @@ const PUBLICATION = {
   updated_at: null,
 };
 
-function mockFetch(opts: { canManage?: boolean } = {}) {
+function mockFetch(opts: { canManage?: boolean; discordUrl?: string | null } = {}) {
   const canManage = opts.canManage ?? true;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -47,8 +47,15 @@ function mockFetch(opts: { canManage?: boolean } = {}) {
     if (url.includes('/api/v1/ban-sources/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
+    if (url.endsWith('/api/v1/ban-sources') && init?.method === 'POST') {
+      return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 201 }));
+    }
     if (url.endsWith('/api/v1/ban-sources')) {
-      return Promise.resolve(new Response(JSON.stringify([SOURCE]), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify([{ ...SOURCE, discord_url: opts.discordUrl ?? null }]), {
+          status: 200,
+        }),
+      );
     }
     if (url.endsWith('/api/v1/me')) {
       return Promise.resolve(
@@ -71,6 +78,25 @@ afterEach(() => {
 });
 
 describe('BanSourcesPage', () => {
+  it(
+    'renders the community Discord link only for http(s) URLs',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ discordUrl: 'https://discord.gg/example' }).fn);
+      const first = render(<BanSourcesPage />);
+      expect(await screen.findByRole('link', { name: 'Discord сообщества' })).toHaveAttribute(
+        'href',
+        'https://discord.gg/example',
+      );
+      first.unmount();
+
+      vi.stubGlobal('fetch', mockFetch({ discordUrl: 'data:text/html,x' }).fn);
+      render(<BanSourcesPage />);
+      await screen.findByText('Ру-Баны');
+      expect(screen.queryByRole('link', { name: 'Discord сообщества' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it('is a valid React component', () => {
     expect(BanSourcesPage).toBeDefined();
     expect(typeof BanSourcesPage).toBe('function');
@@ -127,6 +153,95 @@ describe('BanSourcesPage', () => {
       expect(screen.queryByRole('button', { name: 'Удалить источник Ру-Баны' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Синхронизировать' })).toBeNull();
       expect(screen.getByText('Только просмотр')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // #680: a failed /api/v1/ban-sources GET (HTTP error or network rejection)
+  // previously left `sources` null forever with no error banner at all.
+  it(
+    'shows an error banner with retry on an HTTP error from /ban-sources',
+    async () => {
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith('/api/v1/ban-sources')) {
+          return Promise.resolve(new Response('{}', { status: 500 }));
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: [], can_manage_ban_sources: true }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+
+      expect(await screen.findByText(/Не удалось загрузить источники/)).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Повторить' }).length).toBeGreaterThan(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows an error banner on a network-level rejection, not just an HTTP error',
+    async () => {
+      const fn = vi.fn(() => Promise.reject(new Error('network down')));
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+
+      expect(await screen.findByText(/Не удалось загрузить источники/)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the poll interval field stay empty while typing instead of snapping to 60',
+    async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+      await screen.findByRole('heading', { name: 'Ру-Баны' });
+
+      const input = screen.getByLabelText('Интервал опроса (мин)') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: '30' } });
+      expect(input.value).toBe('30');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'clamps the poll interval to the 15-minute minimum on blur, and sends it on submit',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+      await screen.findByRole('heading', { name: 'Ру-Баны' });
+
+      const interval = screen.getByLabelText('Интервал опроса (мин)') as HTMLInputElement;
+      fireEvent.change(interval, { target: { value: '5' } });
+      fireEvent.blur(interval);
+      expect(interval.value).toBe('15');
+
+      fireEvent.change(screen.getByLabelText('Имя'), { target: { value: 'Новый источник' } });
+      fireEvent.change(screen.getByLabelText('URL банлиста'), {
+        target: { value: 'https://example.com/new.cfg' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Добавить источник' }));
+
+      await waitFor(() => {
+        const createCall = calls.find(
+          (c) => c.url.endsWith('/api/v1/ban-sources') && c.init?.method === 'POST',
+        );
+        expect(createCall).toBeDefined();
+        expect(JSON.parse(String(createCall?.init?.body))).toMatchObject({
+          poll_interval_minutes: 15,
+        });
+      });
     },
     TEST_TIMEOUT_MS,
   );

@@ -2,7 +2,44 @@ import { HEARTBEAT_PREFIX, type HeartbeatPayload } from '@squad/shared-config';
 import { sql } from 'drizzle-orm';
 import fp from 'fastify-plugin';
 
-export default fp(async (app) => {
+/** Default upper bound for each `/ready` dependency probe. */
+export const READY_CHECK_TIMEOUT_MS = 3_000;
+
+export interface HealthPluginOptions {
+  /** Per-check timeout for `/ready`; defaults to {@link READY_CHECK_TIMEOUT_MS}. */
+  readyCheckTimeoutMs?: number;
+}
+
+type CheckResult = 'ok' | 'fail';
+
+export default fp<HealthPluginOptions>(async (app, opts) => {
+  const readyCheckTimeoutMs = opts.readyCheckTimeoutMs ?? READY_CHECK_TIMEOUT_MS;
+
+  /**
+   * Runs one dependency probe bounded by the timeout. `/ready` is public, so
+   * the caller only learns `ok`/`fail`; the reason (connection errors, the
+   * bridge socket path, …) goes to the log, never into the response (#70).
+   */
+  const probe = async (name: string, check: () => Promise<boolean>): Promise<CheckResult> => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`timed out after ${readyCheckTimeoutMs}ms`)),
+        readyCheckTimeoutMs,
+      );
+    });
+    try {
+      if (await Promise.race([check(), timeout])) return 'ok';
+      app.log.warn({ check: name }, 'readiness check returned an unhealthy answer');
+      return 'fail';
+    } catch (err) {
+      app.log.warn({ check: name, err: (err as Error).message }, 'readiness check failed');
+      return 'fail';
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   app.get(
     '/health',
     { config: { public: true, audit: false }, schema: { hide: true } },
@@ -13,32 +50,40 @@ export default fp(async (app) => {
     }),
   );
 
+  /**
+   * Probes Postgres, Redis and the bridge. Reports only ok/fail per check; the
+   * reason for a failure goes to the log, never to the caller (#47).
+   */
+  async function probeDependencies() {
+    const [postgres, redis, bridge] = await Promise.all([
+      probe('postgres', async () => {
+        await app.db.execute(sql`SELECT 1`);
+        return true;
+      }),
+      probe('redis', async () => (await app.redis.ping()) === 'PONG'),
+      probe('bridge', async () => (await app.bridge.ping()).pong === true),
+    ]);
+    const checks = { postgres, redis, bridge };
+    const ok = Object.values(checks).every((v) => v === 'ok');
+    return { ok, body: { status: ok ? 'ok' : 'degraded', checks } };
+  }
+
+  // Operator-only dependency probe: the reverse proxy never exposes it (#47).
   app.get(
     '/ready',
     { config: { public: true, audit: false }, schema: { hide: true } },
     async (_req, reply) => {
-      const checks: Record<string, 'ok' | string> = {};
-      try {
-        await app.db.execute(sql`SELECT 1`);
-        checks.postgres = 'ok';
-      } catch (err) {
-        checks.postgres = (err as Error).message;
-      }
-      try {
-        const pong = await app.redis.ping();
-        checks.redis = pong === 'PONG' ? 'ok' : pong;
-      } catch (err) {
-        checks.redis = (err as Error).message;
-      }
-      try {
-        const res = await app.bridge.ping();
-        checks.bridge = res.pong ? 'ok' : 'no pong';
-      } catch (err) {
-        checks.bridge = (err as Error).message;
-      }
-      const ok = Object.values(checks).every((v) => v === 'ok');
-      return reply.code(ok ? 200 : 503).send({ status: ok ? 'ok' : 'degraded', checks });
+      const { ok, body } = await probeDependencies();
+      return reply.code(ok ? 200 : 503).send(body);
     },
+  );
+
+  // Authenticated twin of /ready for the dashboard, which cannot reach the
+  // proxy-hidden probe. Always 200: a degraded dependency is data, not an error.
+  app.get(
+    '/api/v1/health/dependencies',
+    { config: { permissions: ['host:view'], audit: false } },
+    async () => (await probeDependencies()).body,
   );
 
   app.get(

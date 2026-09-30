@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -96,42 +96,73 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() => emptyForm(new Date(), ''));
 
+  // A ref, not state: it must be readable synchronously the instant an edit
+  // happens, with no wait for a re-render to land before the next `load()`.
+  const profilesDirtyRef = useRef(false);
+
   const rangeTo = useMemo(() => {
     const end = new Date(weekStart.getTime());
     end.setUTCDate(end.getUTCDate() + 7);
-    end.setUTCSeconds(-60);
+    // One millisecond before next Monday 00:00 UTC — Sunday 23:59:59.999 —
+    // so `entriesInRange`'s inclusive `<=` bound covers the whole last second
+    // of the week instead of losing it to truncation.
+    end.setUTCMilliseconds(-1);
     return end;
   }, [weekStart]);
 
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const [calendarRes, layersRes] = await Promise.all([
-        fetch(
+  // The layer catalog does not vary per week: fetched once on mount, not on
+  // every week switch or mutation.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/v1/layers', {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<{ rows: LayerOption[] }>;
+      })
+      .then((layers) => setLayerPool(layers.rows))
+      .catch((error) => {
+        if ((error as Error).name !== 'AbortError') setErr((error as Error).message);
+      });
+    return () => controller.abort();
+  }, []);
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      setErr(null);
+      try {
+        const calendarRes = await fetch(
           `/api/v1/servers/${id}/rotation-schedule?from=${weekStart.toISOString()}&to=${rangeTo.toISOString()}`,
-          { credentials: 'include', cache: 'no-store' },
-        ),
-        fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
-      ]);
-      if (!calendarRes.ok) throw new Error(`HTTP ${calendarRes.status}`);
-      if (!layersRes.ok) throw new Error(`HTTP ${layersRes.status}`);
-      const calendar = (await calendarRes.json()) as CalendarResponse;
-      const layers = (await layersRes.json()) as { rows: LayerOption[] };
-      setEntries(calendar.entries);
-      setHistory(calendar.history);
-      setProfiles(profileDrafts(calendar.profiles));
-      setWarnings(calendar.warnings);
-      setCanEdit(calendar.can_edit);
-      setLayerPool(layers.rows);
-    } catch (error) {
-      setErr((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [id, rangeTo, weekStart]);
+          { credentials: 'include', cache: 'no-store', signal },
+        );
+        if (!calendarRes.ok) throw new Error(`HTTP ${calendarRes.status}`);
+        const calendar = (await calendarRes.json()) as CalendarResponse;
+        if (signal?.aborted) return;
+        setEntries(calendar.entries);
+        setHistory(calendar.history);
+        // Unsaved profile edits must not be clobbered by a background
+        // refresh (e.g. after toggling an entry) or a week switch.
+        setProfiles((current) =>
+          profilesDirtyRef.current ? current : profileDrafts(calendar.profiles),
+        );
+        setWarnings(calendar.warnings);
+        setCanEdit(calendar.can_edit);
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') setErr((error as Error).message);
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [id, rangeTo, weekStart],
+  );
 
   useEffect(() => {
-    void load();
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
   }, [load]);
 
   const scheduled = useMemo(
@@ -256,6 +287,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
       setMsg('Профили сохранены — применятся со следующего матча');
+      profilesDirtyRef.current = false;
       await load();
     } catch (error) {
       setErr((error as Error).message);
@@ -264,10 +296,16 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
     }
   }
 
+  /** Every edit to the profiles draft goes through here so it marks the draft dirty. */
+  function updateProfiles(updater: (current: ProfileDraft[]) => ProfileDraft[]) {
+    profilesDirtyRef.current = true;
+    setProfiles(updater);
+  }
+
   function addProfile() {
     const usedDays = new Set(profiles.map((profile) => profile.weekday));
     const weekday = [1, 2, 3, 4, 5, 6, 0].find((day) => !usedDays.has(day)) ?? null;
-    setProfiles((current) => [...current, { name: 'Новый профиль', weekday, layers: [] }]);
+    updateProfiles((current) => [...current, { name: 'Новый профиль', weekday, layers: [] }]);
   }
 
   if (loading) {
@@ -343,7 +381,11 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                 {dayScheduled.map((entry) => (
                   <div
                     key={entry.id}
-                    className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-accent-ink"
+                    className={`rounded-ctl border px-1.5 py-1 text-2xs ${
+                      entry.enabled
+                        ? 'border-accent/40 bg-accent-dim text-accent-ink'
+                        : 'border-line bg-raised/60 text-ink-3 opacity-70'
+                    }`}
                   >
                     <span className={`block ${CHIP_LABEL}`}>
                       {entry.enabled ? 'Запланировано' : 'Выключено'}
@@ -413,7 +455,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                     aria-label="Название профиля"
                     disabled={!canEdit}
                     onChange={(event) =>
-                      setProfiles((current) =>
+                      updateProfiles((current) =>
                         current.map((item, index) =>
                           index === profileIndex ? { ...item, name: event.target.value } : item,
                         ),
@@ -425,7 +467,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                     aria-label="День профиля"
                     disabled={!canEdit}
                     onChange={(event) =>
-                      setProfiles((current) =>
+                      updateProfiles((current) =>
                         current.map((item, index) =>
                           index === profileIndex
                             ? {
@@ -456,7 +498,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                     aria-label="Слои профиля"
                     disabled={!canEdit}
                     onChange={(event) =>
-                      setProfiles((current) =>
+                      updateProfiles((current) =>
                         current.map((item, index) =>
                           index === profileIndex
                             ? {
@@ -484,7 +526,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                       size="sm"
                       className="self-start"
                       onClick={() =>
-                        setProfiles((current) =>
+                        updateProfiles((current) =>
                           current.filter((_, index) => index !== profileIndex),
                         )
                       }

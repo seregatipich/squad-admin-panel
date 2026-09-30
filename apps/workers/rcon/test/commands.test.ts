@@ -1,4 +1,9 @@
-import { RCON_COMMAND_GROUP, rconCommandResultKey, rconCommandStream } from '@squad/shared-types';
+import {
+  RCON_COMMAND_GROUP,
+  rconCommandDoneKey,
+  rconCommandResultKey,
+  rconCommandStream,
+} from '@squad/shared-types';
 import type Redis from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import { buildOperatorCommand, RconCommandQueue } from '../src/commands.js';
@@ -48,6 +53,18 @@ function makeRedis(
 }
 
 describe('buildOperatorCommand', () => {
+  it.each(['AdminWarn', 'AdminKick'])('rejects a whitespace-bearing %s target', (command) => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command, args: ['Bob Smith', 'reason'] })),
+    ).toThrow(/must not contain whitespace/);
+  });
+
+  it('rejects a whitespace-bearing AdminBan target', () => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminBan', args: ['Bob Smith', '0', 'r'] })),
+    ).toThrow(/must not contain whitespace/);
+  });
+
   it('builds only the whitelisted operator commands', () => {
     expect(buildOperatorCommand(commandRequest())).toBe(
       'AdminBroadcast Server restart in 15 seconds',
@@ -268,6 +285,7 @@ describe('RconCommandQueue', () => {
   it('creates the consumer group from the beginning of the stream', async () => {
     const redis = makeRedis(null);
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -289,6 +307,7 @@ describe('RconCommandQueue', () => {
     const redis = makeRedis(null);
     redis.xgroup.mockRejectedValueOnce(new Error('BUSYGROUP Consumer Group name already exists'));
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -302,6 +321,7 @@ describe('RconCommandQueue', () => {
     const redis = makeRedis([['1700-0', ['request', JSON.stringify(commandRequest())]]]);
     const execute = vi.fn().mockResolvedValue('Broadcast sent');
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -339,9 +359,51 @@ describe('RconCommandQueue', () => {
     );
   });
 
+  it('acknowledges without a failure result when only the result write fails after execution', async () => {
+    const redis = makeRedis([['1700-9', ['request', JSON.stringify(commandRequest())]]]);
+    redis.set.mockRejectedValue(new Error('redis write failed'));
+    const execute = vi.fn().mockResolvedValue('done');
+    const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(redis.set).toHaveBeenCalledOnce();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-9',
+    );
+  });
+
+  it('reuses one consumer name per server across queue instances', async () => {
+    const consumers = new Set<string>();
+    for (let i = 0; i < 2; i++) {
+      const redis = makeRedis(null);
+      const queue = new RconCommandQueue({
+        redis,
+        log: makeLogger(),
+        serverId: 'srv-1',
+        execute: vi.fn(),
+        blockMs: 1,
+      });
+      await queue.processOnce();
+      consumers.add(redis.xreadgroup.mock.calls[0][2] as string);
+    }
+    expect(consumers.size).toBe(1);
+  });
+
   it('stores a failed result and acknowledges when RCON execution throws', async () => {
     const redis = makeRedis([['1700-1', ['request', JSON.stringify(commandRequest())]]]);
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -365,12 +427,107 @@ describe('RconCommandQueue', () => {
     );
   });
 
+  it('drops a request past its deadline without executing it (#36 findings 1337/39)', async () => {
+    const redis = makeRedis([
+      [
+        '1700-5',
+        [
+          'request',
+          JSON.stringify(
+            commandRequest({ command: 'AdminBan', args: ['76561198000000001', '0', 'x'] }),
+          ),
+          'deadline_at',
+          new Date(Date.parse('2026-07-07T12:00:05.000Z') - 1_000).toISOString(),
+        ],
+      ],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Banned');
+    const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    expect(stored).toMatchObject({ ok: false, request_id: 'req-1', error: 'expired' });
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-5',
+    );
+  });
+
+  it('drops an expired request reclaimed after a restart', async () => {
+    const redis = makeRedis(null, [
+      [
+        '1700-6',
+        [
+          'request',
+          JSON.stringify(commandRequest()),
+          'deadline_at',
+          new Date(Date.parse('2026-07-07T12:00:05.000Z') - 60_000).toISOString(),
+        ],
+      ],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.reclaimPendingOnce()).resolves.toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-6',
+    );
+  });
+
+  it('executes a request whose deadline is still ahead, or that carries none', async () => {
+    const redis = makeRedis([
+      [
+        '1700-7',
+        [
+          'request',
+          JSON.stringify(commandRequest()),
+          'deadline_at',
+          new Date(Date.parse('2026-07-07T12:00:05.000Z') + 60_000).toISOString(),
+        ],
+      ],
+      ['1700-8', ['request', JSON.stringify(commandRequest({ request_id: 'req-2' }))]],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects malformed operator commands with a result instead of executing them', async () => {
     const redis = makeRedis([
       ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminNuke' }))]],
     ]);
     const execute = vi.fn();
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -403,6 +560,7 @@ describe('RconCommandQueue', () => {
     ]);
     const execute = vi.fn().mockResolvedValue('Broadcast sent');
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -462,6 +620,7 @@ describe('RconCommandQueue', () => {
     );
     const execute = vi.fn();
     const queue = new RconCommandQueue({
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
       redis,
       log: makeLogger(),
       serverId: 'srv-1',
@@ -478,5 +637,126 @@ describe('RconCommandQueue', () => {
       RCON_COMMAND_GROUP,
       '1700-10',
     );
+  });
+
+  it('drops a command older than the staleness threshold instead of executing it late (#1293, #968)', async () => {
+    const redis = makeRedis([
+      [
+        '1700-20',
+        ['request', JSON.stringify(commandRequest({ enqueued_at: '2026-07-07T11:00:00.000Z' }))],
+      ],
+    ]);
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      maxCommandAgeMs: 45_000,
+      now: () => Date.parse('2026-07-07T12:00:00.000Z'), // an hour after enqueued_at
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    expect(stored).toMatchObject({ ok: false, request_id: 'req-1', error: 'stale' });
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-20',
+    );
+  });
+
+  it('falls back to the stream entry id timestamp when enqueued_at is absent', async () => {
+    const request: Record<string, unknown> = commandRequest();
+    request.enqueued_at = undefined;
+    // Stream id `<ms>-<seq>`: one hour before `now` below.
+    const staleStreamId = `${Date.parse('2026-07-07T11:00:00.000Z')}-0`;
+    const redis = makeRedis([[staleStreamId, ['request', JSON.stringify(request)]]]);
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      maxCommandAgeMs: 45_000,
+      now: () => Date.parse('2026-07-07T12:00:00.000Z'),
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    const stored = JSON.parse(String(redis.set.mock.calls[0]?.[1]));
+    expect(stored).toMatchObject({ ok: false, error: 'stale' });
+  });
+
+  it('still executes a command comfortably inside the staleness window', async () => {
+    const redis = makeRedis([['1700-21', ['request', JSON.stringify(commandRequest())]]]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      maxCommandAgeMs: 45_000,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'), // 5s after enqueued_at
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(execute).toHaveBeenCalledWith('AdminBroadcast Server restart in 15 seconds');
+  });
+
+  it('writes a long-TTL done marker alongside the result, and reuses it to dedup a redelivery after the ephemeral result key is gone', async () => {
+    // Simulates the API's `redis.del(resultKey)` right after it reads the
+    // result: the ephemeral key is already gone, but the done marker
+    // (never deleted by the API) still remembers the command ran (#1293).
+    const doneMarkers: Record<string, string> = {
+      [rconCommandDoneKey('req-1')]: '1',
+    };
+    const redis = makeRedis(
+      null,
+      [['1700-22', ['request', JSON.stringify(commandRequest())]]],
+      doneMarkers,
+    );
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+    });
+
+    await expect(queue.reclaimPendingOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-22',
+    );
+  });
+
+  it('writes the done marker on a successful execution, with a TTL the API never clears', async () => {
+    const redis = makeRedis([['1700-23', ['request', JSON.stringify(commandRequest())]]]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      blockMs: 1,
+      now: () => Date.parse('2026-07-07T12:00:05.000Z'),
+    });
+
+    await expect(queue.processOnce()).resolves.toBe(1);
+
+    expect(redis.set).toHaveBeenCalledWith(rconCommandDoneKey('req-1'), '1', 'EX', 24 * 3_600);
   });
 });

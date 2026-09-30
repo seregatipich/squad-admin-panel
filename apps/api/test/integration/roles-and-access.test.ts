@@ -186,7 +186,7 @@ describeIfDb('flag-derived panel permissions', () => {
     expect(ctx.squadPermissions.has('reserve')).toBe(true);
   });
 
-  it('panel_access=true grants the broad panel permission set without role:* / user:manage_roles', async () => {
+  it('panel_access=true grants the broad panel permission set without role:* / user:manage_roles / infrastructure keys', async () => {
     const moderator = await h.db
       .select({ id: roles.id })
       .from(roles)
@@ -206,7 +206,11 @@ describeIfDb('flag-derived panel permissions', () => {
     const ctx = await loadUserPermissions(h.db, bobRow.id);
     expect(ctx.panelAccess).toBe(true);
     expect(ctx.permissions.has('server:view')).toBe(true);
-    expect(ctx.permissions.has('server:install')).toBe(true);
+    expect(ctx.permissions.has('player:view')).toBe(true);
+    // #36: server lifecycle and host keys need can_manage_infrastructure,
+    // which the seeded Moderator does not carry.
+    expect(ctx.permissions.has('server:install')).toBe(false);
+    expect(ctx.permissions.has('host:manage')).toBe(false);
     expect(ctx.permissions.has('role:edit')).toBe(false);
     expect(ctx.permissions.has('user:manage_roles')).toBe(false);
   });

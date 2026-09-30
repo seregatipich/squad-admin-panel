@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
-import websocket from '@fastify/websocket';
+import { type BridgeClient, BridgeError } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { auditLog, players, roles } from '@squad/db/schema';
@@ -19,13 +19,15 @@ import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
+import csrfPlugin from '../../src/plugins/csrf.js';
 import errorDiagPlugin from '../../src/plugins/error-diag.js';
 import healthPlugin from '../../src/plugins/health.js';
 import heartbeatWatchPlugin from '../../src/plugins/heartbeat-watch.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
-import requestContextPlugin from '../../src/plugins/request-context.js';
+import requestContextPlugin, { genRequestId } from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
+import websocketPlugin from '../../src/plugins/websocket.js';
 import { registerRoutes } from '../../src/routes/index.js';
 import { createIsolatedSchema, ensureWorkerDatabase, hostRedisUrl } from './isolated-db.js';
 
@@ -75,23 +77,22 @@ export interface FakeBridge {
   squadLogList: (p: { path: string }) => Promise<{
     files: Array<{ name: string; size: number; mtime: string; is_live: boolean }>;
   }>;
-  fileWrite: (p: { path: string; content: string; mode?: number }) => Promise<{ status: string }>;
   fileAtomicWrite: (p: {
     path: string;
     content: string;
     mode?: number;
   }) => Promise<{ status: string }>;
   containerInspect: (p: { name: string }) => Promise<{
-    name: string;
+    name?: string;
     state: string;
-    running: boolean;
-    pid: number;
-    started_at: string;
-    finished_at: string;
-    exit_code: number;
-    image: string;
-    restart_count: number;
-    labels: Record<string, string>;
+    running?: boolean;
+    pid?: number;
+    started_at?: string;
+    finished_at?: string;
+    exit_code?: number;
+    image?: string;
+    restart_count?: number;
+    labels?: Record<string, string>;
     oom_killed?: boolean;
     error?: string;
   }>;
@@ -107,13 +108,18 @@ export interface FakeBridge {
   }>;
   containerRun: (
     p: Record<string, unknown>,
-  ) => Promise<{ container_id: string; status: 'started' }>;
+  ) => Promise<{ container_id: string; status?: 'started' }>;
   containerRunRnsquadjs: (p: {
     server_id: string;
     env: Record<string, string>;
-  }) => Promise<{ container_id: string; status: 'started' }>;
+  }) => Promise<{ container_id: string; status?: 'started' }>;
   containerStart: (p: { name: string }) => Promise<{ status: string }>;
   containerStop: (p: { name: string; timeout_sec?: number }) => Promise<{ status: string }>;
+  dockerPrune: () => Promise<{
+    exit_code: number;
+    reclaimed_bytes: number;
+    reclaimed_human: string;
+  }>;
   containerRm: (p: { name: string; force?: boolean }) => Promise<{ status: string }>;
   containerLogsFollow: (
     p: { name: string; tail?: number },
@@ -129,7 +135,6 @@ export interface FakeBridge {
     comment?: string;
   }) => Promise<{ output: string; status: string }>;
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
-  processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
   backupSnapshots: () => Promise<{
     snapshots: Array<{
@@ -159,6 +164,8 @@ export interface FakeBridge {
   }>;
   connect(): Promise<void>;
   close(): Promise<void>;
+  pause(): void;
+  resume(): void;
   /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
    *  read/write pathways that hit this map via `fileRead`/`fileAtomicWrite`. */
   files: Map<string, Buffer>;
@@ -172,6 +179,8 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     files,
     async connect() {},
     async close() {},
+    pause() {},
+    resume() {},
     ping: async () => ({ pong: true, version: 'test', hostname: 'test-host' }),
     hostInfo: async () => ({
       hostname: 'test-host',
@@ -201,20 +210,16 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     }),
     fileRead: async ({ path }) => {
       const buf = files.get(path);
-      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (!buf) throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
       return { content: buf.toString('utf-8') };
     },
     fileReadStream: async ({ path }, onStream) => {
       const buf = files.get(path);
-      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (!buf) throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
       onStream({ id: 'fake', stream: 'stdout', data: buf.toString('base64') });
       return { bytes_sent: buf.length };
     },
     squadLogList: async () => ({ files: [] }),
-    fileWrite: async ({ path, content }) => {
-      files.set(path, Buffer.from(content, 'utf-8'));
-      return { status: 'ok' };
-    },
     fileAtomicWrite: async ({ path, content }) => {
       files.set(path, Buffer.from(content, 'utf-8'));
       return { status: 'ok' };
@@ -244,13 +249,13 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     containerRun: async () => ({ container_id: 'fake-container-id', status: 'started' }),
     containerRunRnsquadjs: async () => ({ container_id: 'fake-rnsquadjs-id', status: 'started' }),
     containerStart: async () => ({ status: 'ok' }),
+    dockerPrune: async () => ({ exit_code: 0, reclaimed_bytes: 0, reclaimed_human: '0B' }),
     containerStop: async () => ({ status: 'ok' }),
     containerRm: async () => ({ status: 'ok' }),
     containerLogsFollow: async () => ({ exit_code: 0 }),
     depotUpdate: async () => ({ exit_code: 0 }),
     ufwRule: async () => ({ output: '', status: 'ok' }),
     directoryDelete: async () => ({ removed: true }),
-    processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
     backupSnapshots: async () => ({ snapshots: [] }),
     backupRun: async () => ({ exit_code: 0 }),
@@ -329,7 +334,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   const bridge = opts.bridge ?? makeFakeBridge();
   const mediaDir = mkdtempSync(path.join(tmpdir(), 'squad-media-test-'));
 
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, genReqId: genRequestId });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
@@ -342,12 +347,13 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     APP_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     SESSION_SECRET: TEST_SESSION_SECRET,
     BRIDGE_SOCKET: '/dev/null',
-    COOKIE_SECURE: false,
     APP_DOMAIN: 'test.localhost',
     LOG_LEVEL: 'info',
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
+    HOST_ORPHAN_SWEEP_INTERVAL_MS: 5 * 60_000,
+    HOST_DOCKER_PRUNE_INTERVAL_MS: 24 * 60 * 60_000,
     // OAuth round-trip config (DISCORD-4) and the origin the delegated-upload
     // link is built against (VIDEO-3): both need a public origin, and the
     // Discord routes also need client credentials to build their redirects.
@@ -360,16 +366,20 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', bridge);
-  app.decorate('makeBridgeClient', () => bridge);
+  // FakeBridge implements the RPC surface routes call, not the socket internals.
+  app.decorate('bridge', bridge as unknown as BridgeClient);
+  app.decorate('makeBridgeClient', () => bridge as unknown as BridgeClient);
 
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
-  await app.register(websocket);
+  await app.register(websocketPlugin, { allowedOrigin: 'https://panel.test' });
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
   await app.register(requestContextPlugin);
   await app.register(diagPlugin);
-  await app.register(errorDiagPlugin);
+  // Many harness apps share one vitest process: report unhandled rejections
+  // but leave failing the run to vitest instead of exiting the worker.
+  await app.register(errorDiagPlugin, { exitOnUnhandledRejection: false });
   await app.register(heartbeatWatchPlugin);
+  await app.register(csrfPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);
@@ -489,7 +499,13 @@ export async function loginAsOwner(h: IntegrationHarness): Promise<string> {
  */
 export async function assertAuditRow(
   h: IntegrationHarness,
-  expected: { action: string; resource?: string; targetId?: string | null; withinMs?: number },
+  expected: {
+    action: string;
+    resource?: string;
+    targetId?: string | null;
+    statusCode?: number;
+    withinMs?: number;
+  },
 ): Promise<typeof auditLog.$inferSelect> {
   const withinMs = expected.withinMs ?? 5_000;
   const cutoff = new Date(Date.now() - withinMs);
@@ -500,6 +516,7 @@ export async function assertAuditRow(
       gte(auditLog.createdAt, cutoff),
       ...(expected.resource ? [eq(auditLog.targetType, expected.resource)] : []),
       ...(expected.targetId != null ? [eq(auditLog.targetId, expected.targetId)] : []),
+      ...(expected.statusCode != null ? [eq(auditLog.statusCode, expected.statusCode)] : []),
     );
   // Polling loop — onResponse hook completes shortly after inject resolves.
   while (Date.now() < deadline) {

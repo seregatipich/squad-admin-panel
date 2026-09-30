@@ -21,10 +21,29 @@ export const mediaUploadMetadata = z
   .strict();
 export type MediaUploadMetadata = z.infer<typeof mediaUploadMetadata>;
 
+/**
+ * An external evidence URL. Only `http:`/`https:` are accepted: `z.string().url()`
+ * alone lets `javascript:`, `data:` and `file:` through, and the stored value is
+ * rendered as a link by the web UI and served to every API consumer.
+ */
+export const externalMediaUrl = z
+  .string()
+  .url()
+  .max(2000)
+  .refine((value) => {
+    // Zod still runs refinements after a failed `.url()` check.
+    try {
+      const { protocol } = new URL(value);
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'external_url must be an http(s) URL');
+
 /** Request body for `POST /api/v1/media/link` — registers an external URL. */
 export const mediaLinkInput = z
   .object({
-    external_url: z.string().url().max(2000),
+    external_url: externalMediaUrl,
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).optional(),
   })

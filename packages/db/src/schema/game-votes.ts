@@ -39,10 +39,6 @@ export const gameVotes = pgTable(
       table.serverId,
       table.startedAt,
     ),
-    serverStartedIdx: index('game_votes_server_started_idx').on(
-      table.serverId,
-      table.startedAt.desc(),
-    ),
     startedIdx: index('game_votes_started_idx').on(table.startedAt.desc()),
     initiatorIdx: index('game_votes_initiator_idx')
       .on(table.initiatorPlayerId)

@@ -1,8 +1,11 @@
 import {
   alertEvents,
   alertRules,
+  altDetectionSettings,
   auditLog,
+  events,
   moderationActions,
+  playerIpHistory,
   playerLinks,
   playerReports,
   players,
@@ -12,8 +15,12 @@ import {
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadBanAltWarning } from '../../src/lib/ban-alt-warning.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
-import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
+import {
+  sendRconCommandViaWorker,
+  type WorkerRconCommandOutcome,
+} from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -42,7 +49,7 @@ let altSteam: bigint;
 let serverId: string;
 let pairSeq = 0;
 
-function okOutcome() {
+function okOutcome(): WorkerRconCommandOutcome {
   return {
     attempted: true,
     ok: true,
@@ -84,7 +91,7 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
 }
 
 async function insertConfirmedAlt(): Promise<void> {
-  const [playerAId, playerBId] = [targetId, altId].sort();
+  const [playerAId, playerBId] = targetId < altId ? [targetId, altId] : [altId, targetId];
   await h.db.insert(playerLinks).values({
     playerAId,
     playerBId,
@@ -99,6 +106,7 @@ beforeAll(async () => {
     seedOwner: { steamId64: OWNER_STEAM },
     bridge: makeFakeBridge(),
   });
+  if (!h.seed.ownerPlayerId) throw new Error('owner was not seeded');
   ownerId = h.seed.ownerPlayerId;
 });
 
@@ -141,6 +149,53 @@ describeIfDb('GET /api/v1/players/:id/ban-alt-warning', () => {
     });
   });
 
+  // Regression (#40, #1249/#216): the warning's "active ban" matched any
+  // action_type containing "ban", so an unbanned alt still showed as banned.
+  it('reports an alt as not banned once only unban/kick rows or a reverted ban remain', async () => {
+    await h.db.insert(moderationActions).values([
+      {
+        playerId: altId,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '0' },
+        revertedAt: new Date(),
+      },
+      { playerId: altId, actionType: 'unban', authorSystemLabel: 'test-fixture', context: {} },
+      {
+        playerId: altId,
+        actionType: 'external_ban_kick',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+      },
+    ]);
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: false }],
+    });
+  });
+
+  it('reports an alt with an active temporary ban as banned', async () => {
+    await h.db.insert(moderationActions).values({
+      playerId: altId,
+      actionType: 'ban',
+      authorSystemLabel: 'test-fixture',
+      context: { ban_length: '7d' },
+    });
+    const response = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/ban-alt-warning`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(response.json()).toMatchObject({
+      confirmed: [{ player_id: altId, has_active_ban: true }],
+    });
+  });
+
   it('degrades to a count without leaking names without player:view_ips', async () => {
     const roleId = uuidv7();
     await h.db.insert(roles).values({
@@ -177,6 +232,7 @@ describeIfDb('ALT-7 report ban flow', () => {
         createdBy: ownerId,
       })
       .returning({ id: alertRules.id });
+    if (!rule) throw new Error('rule: insert returned no row');
     const [report] = await h.db
       .insert(playerReports)
       .values({
@@ -188,6 +244,7 @@ describeIfDb('ALT-7 report ban flow', () => {
         status: 'pending',
       })
       .returning({ id: playerReports.id });
+    if (!report) throw new Error('report: insert returned no row');
     const cookie = await loginAsOwner(h);
 
     const response = await h.app.inject({
@@ -237,5 +294,148 @@ describeIfDb('ALT-7 report ban flow', () => {
     expect(
       auditRows.some((row) => (row.context as Record<string, unknown>).related_action_id),
     ).toBe(true);
+  });
+});
+
+describeIfDb('report ban through the shared MOD-2 pipeline (#41)', () => {
+  async function insertReport(): Promise<string> {
+    const [report] = await h.db
+      .insert(playerReports)
+      .values({
+        serverId,
+        reporterPlayerId: ownerId,
+        targetPlayerId: targetId,
+        body: 'report pipeline test',
+        source: 'ui',
+        status: 'pending',
+      })
+      .returning({ id: playerReports.id });
+    if (!report) throw new Error('failed to seed report');
+    return report.id;
+  }
+
+  it('records expires_at, source and the RCON request on a temporary report ban (#245)', async () => {
+    const reportId = await insertReport();
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/reports/${reportId}/actions`,
+      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        action_type: 'ban',
+        reason: 'temp ban',
+        ban_length: '1d',
+        also_player_ids: [altId],
+      }),
+    });
+    expect(response.statusCode).toBe(200);
+
+    const actions = await h.db
+      .select()
+      .from(moderationActions)
+      .where(eq(moderationActions.reportId, reportId));
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      const context = action.context as Record<string, unknown>;
+      expect(context).toMatchObject({
+        ban_length: '1d',
+        source: 'report',
+        rcon_request_id: 'alt-warning-test',
+        report_id: reportId,
+      });
+      expect(typeof context.expires_at).toBe('string');
+      expect(context.target).toBeTruthy();
+    }
+    const primary = actions.find((action) => action.playerId === targetId);
+    expect(primary?.context).toMatchObject({ also_player_ids: [altId] });
+  });
+
+  it('keeps the ledger, event and audit trail of targets banned before a later target fails (#244)', async () => {
+    vi.mocked(sendRconCommandViaWorker)
+      .mockReset()
+      .mockResolvedValueOnce(okOutcome())
+      .mockResolvedValueOnce({ attempted: false, reason: 'worker_not_connected' });
+    const reportId = await insertReport();
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/reports/${reportId}/actions`,
+      headers: { cookie: await loginAsOwner(h), 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        action_type: 'ban',
+        reason: 'partial',
+        ban_length: '0',
+        also_player_ids: [altId],
+      }),
+    });
+    expect(response.statusCode).toBe(502);
+    const body = response.json() as {
+      error: string;
+      player_id: string;
+      applied: Array<{ player_id: string; moderation_action_id: string }>;
+    };
+    expect(body.error).toBe('action_failed');
+    expect(body.player_id).toBe(altId);
+    expect(body.applied).toHaveLength(1);
+    expect(body.applied[0]?.player_id).toBe(targetId);
+
+    const actions = await h.db
+      .select()
+      .from(moderationActions)
+      .where(eq(moderationActions.reportId, reportId));
+    expect(actions.map((action) => action.playerId)).toEqual([targetId]);
+    expect(actions[0]?.id).toBe(body.applied[0]?.moderation_action_id);
+
+    const ledgerEvents = await h.db
+      .select()
+      .from(events)
+      .where(and(eq(events.serverId, serverId), eq(events.kind, 'moderation.ban')));
+    expect(ledgerEvents).toHaveLength(1);
+
+    const reportAudit = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, reportId)));
+    expect(reportAudit).toHaveLength(1);
+    expect(reportAudit[0]?.context).toMatchObject({
+      moderation_action_id: body.applied[0]?.moderation_action_id,
+    });
+    const failedAudit = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, altId)));
+    expect(failedAudit).toHaveLength(1);
+    expect(failedAudit[0]?.afterSnapshot).toMatchObject({ status: 'failed' });
+  });
+});
+
+describeIfDb('loadBanAltWarning candidate lookup (#66)', () => {
+  afterEach(async () => {
+    await h.db.delete(altDetectionSettings);
+  });
+
+  it('computes high-confidence candidates in-process, independent of the caller credentials', async () => {
+    // One shared IP is enough for `high` once the cutoffs are lowered.
+    await h.db
+      .insert(altDetectionSettings)
+      .values({ id: 1, mediumThreshold: 1, highThreshold: 1 })
+      .onConflictDoUpdate({
+        target: altDetectionSettings.id,
+        set: { mediumThreshold: 1, highThreshold: 1 },
+      });
+    const candidateId = await seedPlayer(
+      testSteamId(PAIR_STEAM_BASE + 5000 + pairSeq),
+      'Shared IP candidate',
+    );
+    await h.db.insert(playerIpHistory).values([
+      { playerId: targetId, ip: '198.51.100.77' },
+      { playerId: candidateId, ip: '198.51.100.77' },
+    ]);
+
+    // No cookie/authorization: the old app.inject round-trip answered 401 and
+    // the warning silently degraded to "no candidates".
+    const warning = await loadBanAltWarning(h.app, { playerId: targetId, canViewIps: true });
+
+    expect(warning?.candidates.map((candidate) => candidate.player_id)).toContain(candidateId);
+    expect(warning?.candidate_count).toBeGreaterThanOrEqual(1);
   });
 });

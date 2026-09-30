@@ -12,14 +12,34 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { validateLayerName } from '../lib/rotation-segment.js';
+import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 const entryParams = z.object({ id: z.string().uuid(), entryId: z.string().uuid() });
-const calendarQuery = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-});
+// #314: the raw querystring had no from<=to check and no maximum window, so
+// e.g. ?from=2000-01-01&to=2100-01-01 requested the server's entire match
+// history in one unbounded response.
+const CALENDAR_MAX_WINDOW_DAYS = 90;
+const CALENDAR_MATCH_HISTORY_LIMIT = 500;
+const calendarQuery = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .refine((query) => !query.from || !query.to || new Date(query.from) <= new Date(query.to), {
+    message: 'from must not be after to',
+    path: ['from'],
+  })
+  .refine(
+    (query) => {
+      if (!query.from || !query.to) return true;
+      const spanMs = new Date(query.to).getTime() - new Date(query.from).getTime();
+      return spanMs <= CALENDAR_MAX_WINDOW_DAYS * 86_400_000;
+    },
+    { message: `from..to must not span more than ${CALENDAR_MAX_WINDOW_DAYS} days`, path: ['to'] },
+  );
 const scheduleBody = z.object({
   scheduled_at: z.string().datetime(),
   layer: z.string().min(1).max(128),
@@ -95,18 +115,6 @@ function serializeProfile(row: typeof rotationProfiles.$inferSelect): RotationPr
   };
 }
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 function changemapGuard(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -147,19 +155,41 @@ interface RotationWarning {
   starts_at?: string;
 }
 
-async function scheduleWarnings(
+/** Inputs every warning check needs, loaded once per request. */
+interface WarningContext {
+  seedRows: Array<typeof seedSchedule.$inferSelect>;
+  depotUpdating: boolean;
+}
+
+/**
+ * Loads the server's enabled seed-schedule rows and the depot-update flag.
+ * One call serves any number of `scheduleWarnings` evaluations, so a calendar
+ * read costs one query and one Redis GET regardless of how many entries it
+ * returns.
+ */
+async function loadWarningContext(
   app: Parameters<FastifyPluginAsync>[0],
   serverId: string,
-  scheduledAt: Date,
-): Promise<RotationWarning[]> {
+): Promise<WarningContext> {
+  const [seedRows, depotFlag] = await Promise.all([
+    app.db
+      .select()
+      .from(seedSchedule)
+      .where(and(eq(seedSchedule.serverId, serverId), eq(seedSchedule.enabled, true))),
+    app.redis.get('depot:updating'),
+  ]);
+  return { seedRows, depotUpdating: Boolean(depotFlag) };
+}
+
+/**
+ * Warnings for a layer change planned at `scheduledAt`: every seed start
+ * within an hour either side, plus a running depot update.
+ */
+function scheduleWarnings(context: WarningContext, scheduledAt: Date): RotationWarning[] {
   const warnings: RotationWarning[] = [];
-  const seedRows = await app.db
-    .select()
-    .from(seedSchedule)
-    .where(and(eq(seedSchedule.serverId, serverId), eq(seedSchedule.enabled, true)));
   const from = new Date(scheduledAt.getTime() - 60 * 60_000);
   const to = new Date(scheduledAt.getTime() + 60 * 60_000);
-  for (const seed of seedRows) {
+  for (const seed of context.seedRows) {
     let conflict = false;
     let occurrence = seed.startsAt;
     if (seed.recurrence && isValidCron5(seed.recurrence)) {
@@ -184,7 +214,7 @@ async function scheduleWarnings(
       });
     }
   }
-  if (await app.redis.get('depot:updating')) {
+  if (context.depotUpdating) {
     warnings.push({
       type: 'depot_update_window',
       message: 'Сейчас выполняется обновление депо; смена будет повторена планировщиком позже.',
@@ -218,7 +248,13 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         app.db
           .select()
           .from(rotationSchedule)
-          .where(eq(rotationSchedule.serverId, req.params.id))
+          .where(
+            and(
+              eq(rotationSchedule.serverId, req.params.id),
+              gte(rotationSchedule.scheduledAt, range.from),
+              lte(rotationSchedule.scheduledAt, range.to),
+            ),
+          )
           .orderBy(asc(rotationSchedule.scheduledAt)),
         app.db
           .select({
@@ -239,19 +275,21 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
               lte(matches.startedAt, range.to),
             ),
           )
-          .orderBy(desc(matches.startedAt)),
+          .orderBy(desc(matches.startedAt))
+          .limit(CALENDAR_MATCH_HISTORY_LIMIT),
         app.db
           .select()
           .from(rotationProfiles)
           .where(eq(rotationProfiles.serverId, req.params.id))
           .orderBy(asc(rotationProfiles.weekday), asc(rotationProfiles.name)),
       ]);
-      const warningGroups = await Promise.all(
-        scheduleRows.map(
-          async (row) =>
-            [row.id, await scheduleWarnings(app, row.serverId, row.scheduledAt)] as const,
-        ),
-      );
+      // Executed entries are history: they need no warnings.
+      const pendingRows = scheduleRows.filter((row) => row.lastExecutedAt === null);
+      const warningContext =
+        pendingRows.length > 0 ? await loadWarningContext(app, req.params.id) : null;
+      const warningGroups = warningContext
+        ? pendingRows.map((row) => [row.id, scheduleWarnings(warningContext, row.scheduledAt)])
+        : [];
       return {
         entries: scheduleRows.map(serializeSchedule),
         history: historyRows.map((row) => ({
@@ -273,7 +311,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/rotation-schedule',
-    { config: { audit: false }, schema: { params: serverIdParams, body: scheduleBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: scheduleBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -304,7 +342,15 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         })
         .returning();
       if (!row) throw new Error('rotation_schedule insert returned no row');
-      const warnings = await scheduleWarnings(app, req.params.id, row.scheduledAt);
+      const warnings = scheduleWarnings(
+        await loadWarningContext(app, req.params.id),
+        row.scheduledAt,
+      );
+      // #316: writeAuditEntry used to run before reply.code(201), so audit_log
+      // recorded statusCode 200 for a route that actually replied 201 —
+      // reply.code() must be called first for statusCode to reflect what the
+      // client received.
+      reply.code(201);
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,
@@ -315,14 +361,13 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         context: { server_id: req.params.id, warnings },
         statusCode: reply.statusCode,
       });
-      reply.code(201);
       return { ...serializeSchedule(row), warnings };
     },
   );
 
   fast.patch(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams, body: scheduleUpdateBody } },
+    { config: { audit: 'manual' }, schema: { params: entryParams, body: scheduleUpdateBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -359,13 +404,29 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.layer !== undefined) updates.layer = req.body.layer;
       if (req.body.mode !== undefined) updates.mode = req.body.mode;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
+      const cursor = rescheduledCursor({
+        // #312: a fired one-off entry edited to a new layer or mode must be
+        // re-armed as well, or it stays on the calendar but never fires.
+        scheduleChanged:
+          (updates.scheduledAt !== undefined &&
+            updates.scheduledAt.getTime() !== existing.scheduledAt.getTime()) ||
+          req.body.layer !== undefined ||
+          req.body.mode !== undefined,
+        reenabled: req.body.enabled === true && !existing.enabled,
+        recurring: false,
+        now: new Date(),
+      });
+      if (cursor !== undefined) updates.lastExecutedAt = cursor;
       const [row] = await app.db
         .update(rotationSchedule)
         .set(updates)
         .where(eq(rotationSchedule.id, existing.id))
         .returning();
       if (!row) throw new Error('rotation_schedule update returned no row');
-      const warnings = await scheduleWarnings(app, req.params.id, row.scheduledAt);
+      const warnings = scheduleWarnings(
+        await loadWarningContext(app, req.params.id),
+        row.scheduledAt,
+      );
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,
@@ -383,7 +444,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: false }, schema: { params: entryParams } },
+    { config: { audit: 'manual' }, schema: { params: entryParams } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -420,7 +481,7 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/rotation-profiles',
-    { config: { audit: false }, schema: { params: serverIdParams, body: profilesBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: profilesBody } },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;

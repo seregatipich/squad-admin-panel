@@ -29,7 +29,7 @@ export default async function LogsPage() {
         title="Логи"
         subtitle="Последние 1000 записей из всех коннекторов панели. Обновление в реальном времени."
       />
-      <LogList servers={servers} />
+      <LogList servers={servers} canExport={me.permissions.includes('host:metrics')} />
     </PageContainer>
   );
 }

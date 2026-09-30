@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { rm, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import type { DatabaseClient } from '@squad/db';
 import { type MediaFileRow, mediaFiles } from '@squad/db/schema';
 import {
@@ -11,17 +11,19 @@ import {
   mediaUploadMetadata,
 } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { insertUploadedMedia, softDeleteMedia } from '../lib/media-files.js';
 import {
   MediaMagicByteMismatchError,
   MediaSizeLimitExceededError,
   resolveMediaPath,
   storeMediaUpload,
 } from '../lib/media-storage.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 
@@ -36,18 +38,6 @@ function multipartFieldValue(field: unknown): string | undefined {
     return String((value as { value: unknown }).value);
   }
   return undefined;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 export function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
@@ -113,7 +103,7 @@ function parseRangeHeader(
 const mediaRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.post('/api/v1/media', { config: { audit: false } }, async (req, reply) => {
+  fast.post('/api/v1/media', { config: { audit: 'manual' } }, async (req, reply) => {
     const denied = panelGuard(req, reply);
     if (denied) return denied;
     const actorId = req.user?.playerId;
@@ -173,38 +163,23 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
     const kind = mimeType.startsWith('video/') ? 'video' : 'image';
 
-    // Dedup by content hash: if an active row already stores identical bytes,
-    // reuse its storage_path and discard the file we just wrote so the same
-    // content is never stored twice on disk.
-    const existing = await app.db
-      .select({ storagePath: mediaFiles.storagePath })
-      .from(mediaFiles)
-      .where(and(eq(mediaFiles.sha256, stored.sha256), isNull(mediaFiles.deletedAt)))
-      .limit(1);
-    const dedupPath = existing[0]?.storagePath;
-    const storagePath = dedupPath ?? stored.relativePath;
-    if (dedupPath) {
-      await rm(stored.absolutePath, { force: true });
-    }
-
-    const inserted = await app.db
-      .insert(mediaFiles)
-      .values({
+    // Dedup by content hash: identical bytes reuse the existing row's
+    // storage_path and the file just written is discarded.
+    const { row, deduped } = await insertUploadedMedia(
+      app.db,
+      app.config.MEDIA_STORAGE_DIR,
+      stored,
+      {
         id,
         uploaderPlayerId: actorId,
         kind,
         originalFilename: filePart.filename,
         mimeType,
-        sizeBytes: stored.sizeBytes,
-        sha256: stored.sha256,
-        storagePath,
         externalUrl: null,
         title: metadataParse.data.title ?? null,
         description: metadataParse.data.description ?? null,
-      })
-      .returning();
-    const row = inserted[0];
-    if (!row) throw new Error('media_files insert returned no row');
+      },
+    );
 
     await writeAuditEntry(app.db, {
       actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
@@ -213,7 +188,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
       targetType: 'media_file',
       targetId: id,
       after: serializeMediaFile(row),
-      context: { request_id: req.id, deduped: Boolean(dedupPath) },
+      context: { request_id: req.id, deduped },
       statusCode: 201,
     });
 
@@ -223,7 +198,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/link',
-    { schema: { body: mediaLinkInput }, config: { audit: false } },
+    { schema: { body: mediaLinkInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -338,7 +313,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/media/:id',
-    { schema: { params: idParams }, config: { audit: false } },
+    { schema: { params: idParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -360,10 +335,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'forbidden', required: 'can_manage_media' };
       }
 
-      await app.db
-        .update(mediaFiles)
-        .set({ deletedAt: new Date() })
-        .where(eq(mediaFiles.id, row.id));
+      await softDeleteMedia(app.db, app.config.MEDIA_STORAGE_DIR, row);
 
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },

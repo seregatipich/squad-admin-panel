@@ -1,5 +1,5 @@
+import { fetchSteamBans, STEAM_BANS_BATCH_SIZE } from '@squad/steam-api';
 import { describe, expect, it, vi } from 'vitest';
-import { fetchSteamBans, STEAM_BANS_BATCH_SIZE } from '../src/lib/steam-bans.js';
 
 const fakeRedis = () => {
   const store = new Map<string, string>();

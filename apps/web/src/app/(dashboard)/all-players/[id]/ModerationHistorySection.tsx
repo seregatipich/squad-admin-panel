@@ -2,60 +2,46 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  AlertDialog,
   Badge,
-  type BadgeTone,
   Button,
   Card,
   CardBody,
   CardHeader,
   EmptyState,
   InlineBanner,
+  SafeExternalLink,
   Skeleton,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
+import { moderationActionLabel, moderationActionTone } from '@/lib/moderation-actions';
 import {
   authorLabel,
   canDetachEvidence,
   detachEvidenceUrl,
   evidenceLabel,
-  formatModerationDate,
+  MODERATION_HISTORY_PAGE_SIZE,
   type ModerationEvidence,
   type ModerationHistoryAction,
   mediaStreamUrl,
-  moderationActionLabel,
+  moderationActionsUrl,
 } from './moderation-history';
 
 interface ModerationHistoryResponse {
   actions: ModerationHistoryAction[];
 }
 
-/**
- * Тяжесть действия модерации. Подпись из {@link moderationActionLabel} всё
- * равно называет его словом, тон лишь помогает найти взглядом бан среди
- * предупреждений (§5).
- */
-const ACTION_TONE: Record<string, BadgeTone> = {
-  warn: 'warn',
-  kick: 'warn',
-  ban: 'crit',
-  unban: 'good',
-  name_kick: 'warn',
-  external_ban_kick: 'warn',
-  'external_ban.local_ban': 'crit',
-  clan_tag_protection: 'accent',
-};
+interface DetachTarget {
+  actionId: string;
+  mediaId: string;
+  label: string;
+}
 
 function EvidenceBody({ item }: { item: ModerationEvidence }) {
   if (item.kind === 'external_link') {
     if (!item.external_url) return null;
     return (
-      <a
-        href={item.external_url}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 block break-all text-accent"
-      >
-        {item.external_url}
-      </a>
+      <SafeExternalLink href={item.external_url} className="mt-2 block break-all text-accent" />
     );
   }
   if (item.kind === 'image') {
@@ -81,31 +67,45 @@ function EvidenceBody({ item }: { item: ModerationEvidence }) {
  * through the Range-streaming route (`/api/v1/media/:id/stream`, VIDEO-1 #157);
  * external links open in a new tab.
  *
+ * The ledger is paged by the API (#441): the first page is loaded on mount
+ * and «Показать ещё» follows the cursor of the last row shown. The header count
+ * carries a «+» while more rows exist, so a page is never passed off as the
+ * whole history.
+ *
  * «Открепить» is offered only on evidence the viewer linked themselves — see
  * `canDetachEvidence` for why the `can_manage_media` case cannot be gated
- * client-side today. The section self-hides on `401`/`403`, matching the other
- * player-card sections.
+ * client-side today — and asks for confirmation first (#446). A successful
+ * detach calls `onEvidenceDetached` so the page can refresh the «Доказательства»
+ * section, which lists the same links. The section self-hides on `401`/`403`,
+ * matching the other player-card sections.
  */
 export function ModerationHistorySection({
   playerId,
   viewerPlayerId,
+  onEvidenceDetached,
 }: {
   playerId: string;
   viewerPlayerId: string | null;
+  /** Called after an evidence link was detached on the server. */
+  onEvidenceDetached?: () => void;
 }) {
   const [actions, setActions] = useState<ModerationHistoryAction[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detachError, setDetachError] = useState<string | null>(null);
-  const [detaching, setDetaching] = useState<string | null>(null);
+  const [detachTarget, setDetachTarget] = useState<DetachTarget | null>(null);
+  const [detaching, setDetaching] = useState(false);
 
   const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/moderation-actions`, {
+    fetch(moderationActionsUrl(playerId, null), {
       credentials: 'include',
       cache: 'no-store',
     })
@@ -118,7 +118,9 @@ export function ModerationHistorySection({
         return (await res.json()) as ModerationHistoryResponse;
       })
       .then((body) => {
-        if (!cancelled && body) setActions(body.actions);
+        if (cancelled || !body) return;
+        setActions(body.actions.slice(0, MODERATION_HISTORY_PAGE_SIZE));
+        setHasMore(body.actions.length > MODERATION_HISTORY_PAGE_SIZE);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError((err as Error).message);
@@ -133,8 +135,34 @@ export function ModerationHistorySection({
 
   useEffect(() => load(), [load]);
 
-  async function detach(actionId: string, mediaId: string) {
-    setDetaching(`${actionId}:${mediaId}`);
+  async function loadMore() {
+    const cursor = actions?.at(-1)?.id;
+    if (!cursor) return;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    try {
+      const res = await fetch(moderationActionsUrl(playerId, cursor), {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as ModerationHistoryResponse;
+      const page = body.actions.slice(0, MODERATION_HISTORY_PAGE_SIZE);
+      setActions((current) => {
+        const known = new Set((current ?? []).map((row) => row.id));
+        return [...(current ?? []), ...page.filter((row) => !known.has(row.id))];
+      });
+      setHasMore(body.actions.length > MODERATION_HISTORY_PAGE_SIZE);
+    } catch (err) {
+      setLoadMoreError((err as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  async function detach(target: DetachTarget) {
+    const { actionId, mediaId } = target;
+    setDetaching(true);
     setDetachError(null);
     try {
       const res = await fetch(detachEvidenceUrl(mediaId, actionId), {
@@ -155,10 +183,12 @@ export function ModerationHistorySection({
               return { ...action, evidence, evidence_count: evidence.length };
             }),
       );
+      onEvidenceDetached?.();
     } catch (err) {
       setDetachError((err as Error).message);
     } finally {
-      setDetaching(null);
+      setDetaching(false);
+      setDetachTarget(null);
     }
   }
 
@@ -168,7 +198,7 @@ export function ModerationHistorySection({
     <Card padding="none" as="section">
       <CardHeader
         title="История модерации"
-        count={actions && actions.length > 0 ? actions.length : undefined}
+        count={actions && actions.length > 0 ? `${actions.length}${hasMore ? '+' : ''}` : undefined}
       />
       <CardBody className="space-y-3">
         {detachError ? <InlineBanner tone="crit" title={detachError} /> : null}
@@ -197,14 +227,12 @@ export function ModerationHistorySection({
               <li key={action.id} className="rounded-ctl border border-line p-2 text-[13px]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="flex flex-wrap items-center gap-2">
-                    <Badge size="sm" tone={ACTION_TONE[action.action_type] ?? 'neutral'}>
+                    <Badge size="sm" tone={moderationActionTone(action.action_type)}>
                       {moderationActionLabel(action.action_type)}
                     </Badge>
                     {action.reverted_at ? <Badge size="sm">отменено</Badge> : null}
                   </span>
-                  <span className="text-xs text-ink-3">
-                    {formatModerationDate(action.created_at)}
-                  </span>
+                  <span className="text-xs text-ink-3">{formatDateTimeRu(action.created_at)}</span>
                 </div>
 
                 {action.reason ? <p className="mt-1 text-ink-2">{action.reason}</p> : null}
@@ -223,8 +251,13 @@ export function ModerationHistorySection({
                           {canDetachEvidence(item.linked_by_player_id, viewerPlayerId) ? (
                             <Button
                               size="sm"
-                              onClick={() => void detach(action.id, item.id)}
-                              loading={detaching === `${action.id}:${item.id}`}
+                              onClick={() =>
+                                setDetachTarget({
+                                  actionId: action.id,
+                                  mediaId: item.id,
+                                  label: evidenceLabel(item),
+                                })
+                              }
                             >
                               Открепить
                             </Button>
@@ -239,7 +272,38 @@ export function ModerationHistorySection({
             ))}
           </ul>
         )}
+
+        {actions && hasMore && !error ? (
+          <div className="space-y-2">
+            {loadMoreError ? (
+              <InlineBanner
+                tone="crit"
+                title="Не удалось загрузить следующую страницу"
+                description={loadMoreError}
+              />
+            ) : null}
+            <Button size="sm" loading={loadingMore} onClick={() => void loadMore()}>
+              Показать ещё
+            </Button>
+          </div>
+        ) : null}
       </CardBody>
+
+      <AlertDialog
+        open={detachTarget !== null}
+        onClose={() => setDetachTarget(null)}
+        title="Открепить доказательство?"
+        body={
+          detachTarget
+            ? `«${detachTarget.label}» больше не будет привязано к этому действию модерации. Сам файл останется в медиатеке.`
+            : ''
+        }
+        confirmLabel="Открепить доказательство"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={detaching}
+        onConfirm={() => (detachTarget ? detach(detachTarget) : undefined)}
+      />
     </Card>
   );
 }

@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { rconOperatorCommandNameSchema } from './rcon-commands.js';
+import {
+  RCON_OPERATOR_COMMAND_ARG_COUNTS,
+  rconOperatorCommandNameSchema,
+} from './rcon-commands.js';
 
 /**
  * Automation trigger engine (AUTO-1, #72) contracts.
@@ -8,7 +11,8 @@ import { rconOperatorCommandNameSchema } from './rcon-commands.js';
  * action (of {@link AUTOMATION_ACTION_TYPES}). The `condition`/`action` jsonb
  * columns are validated against the discriminated schemas below both at the API
  * boundary (`apps/api/src/routes/automation-rules.ts`) and by the evaluation
- * engine (`apps/workers/automation/src/rules/engine.ts`).
+ * engine (`evaluate` in `./automation-engine.js`, re-exported by
+ * `apps/workers/automation/src/rules/engine.ts`).
  */
 
 export const AUTOMATION_CONDITION_TYPES = [
@@ -66,6 +70,16 @@ export const playerCountConditionSchema = z
   .strict();
 export type PlayerCountCondition = z.infer<typeof playerCountConditionSchema>;
 
+/** True when `timeZone` is a zone the runtime's Intl database resolves. */
+function isKnownTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A daily time window expressed as minutes-since-midnight in `timezone`.
  * `endMinute < startMinute` denotes a window that wraps past midnight (e.g.
@@ -76,7 +90,15 @@ export const timeOfDayConditionSchema = z
   .object({
     startMinute: z.number().int().min(0).max(1439),
     endMinute: z.number().int().min(0).max(1439),
-    timezone: z.string().trim().min(1).max(64).default('UTC'),
+    // An unknown zone makes Intl.DateTimeFormat throw at evaluation time, which
+    // the engine treats as "no match" — so reject it here, at save time.
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .refine(isKnownTimeZone, 'unknown IANA timezone')
+      .default('UTC'),
     weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   })
   .strict();
@@ -94,18 +116,35 @@ export type PlayerFlagCondition = z.infer<typeof playerFlagConditionSchema>;
 // Action config schemas
 // ---------------------------------------------------------------------------
 
+/**
+ * An operator RCON command. `args` must carry exactly the count worker-rcon
+ * requires for `command` ({@link RCON_OPERATOR_COMMAND_ARG_COUNTS}), each
+ * non-blank: the worker refuses anything else after the run was already
+ * recorded as executed.
+ */
 export const rconCommandActionSchema = z
   .object({
     command: rconOperatorCommandNameSchema,
-    args: z.array(z.string().max(300)).max(8).default([]),
+    args: z.array(z.string().trim().min(1).max(300)).max(8).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const expected = RCON_OPERATOR_COMMAND_ARG_COUNTS[value.command];
+    if (value.args.length !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['args'],
+        message: `${value.command} expects exactly ${expected} argument(s)`,
+      });
+    }
+  });
 export type RconCommandAction = z.infer<typeof rconCommandActionSchema>;
 
 /** Kicks the player that triggered the rule (target resolved from the event). */
 export const kickActionSchema = z
   .object({
-    reason: z.string().max(RCON_TEXT_MAX).default(''),
+    // Required: worker-rcon refuses `AdminKick` with a blank reason.
+    reason: z.string().trim().min(1).max(RCON_TEXT_MAX),
   })
   .strict();
 export type KickAction = z.infer<typeof kickActionSchema>;

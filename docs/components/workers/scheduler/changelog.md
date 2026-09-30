@@ -1,5 +1,18 @@
 # Changelog — worker-scheduler
 
+## 2026-09-27 — ticks no longer overlap
+
+### Fixed
+
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 999):
+  the tick ran on a bare `setInterval`, so a slow pass — a scheduled restart
+  waits on `containerStop` for up to two minutes before `last_executed_at` is
+  written — overlapped the next one, which read the task as still due and
+  restarted the server again (and likewise duplicated rotation/seed layer
+  commands). `src/tick-loop.ts` now schedules each tick with `setTimeout`
+  only after the previous one settles; `SCHEDULER_INTERVAL_MS` is the pause
+  between ticks. Regression test: `test/tick-loop.test.ts`.
+
 ## 2026-07-28 — boot no longer requires the host bridge (#229)
 
 ### Changed

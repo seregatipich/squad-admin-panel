@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fp from 'fastify-plugin';
+import { z } from 'zod';
 
 export type LiveEvent =
   | {
@@ -92,6 +93,29 @@ export type LiveEvent =
       };
     }
   | {
+      /** A note was edited; carries the whole edited note (#449). */
+      type: 'note.updated';
+      ts: string;
+      data: {
+        player_id: string;
+        note: {
+          id: string;
+          player_id: string;
+          author: { id: string; name: string; role_color: string | null };
+          body: string;
+          created_at: string;
+          updated_at: string | null;
+          edited: boolean;
+        };
+      };
+    }
+  | {
+      /** A note was (soft-)deleted (#449). */
+      type: 'note.deleted';
+      ts: string;
+      data: { player_id: string; note_id: string };
+    }
+  | {
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
@@ -159,6 +183,7 @@ export type LiveEvent =
         steam_id64: string | null;
         eos_id: string | null;
         message: string;
+        source: 'log' | 'rcon' | 'panel';
       };
     }
   | {
@@ -174,6 +199,26 @@ export type LiveEvent =
         damage: number | null;
         is_teamkill: boolean;
         is_suicide: boolean;
+        occurred_at: string;
+      };
+    }
+  | {
+      /**
+       * A vehicle was damaged or destroyed; published by log-ingest
+       * (`apps/workers/log-ingest/src/combat/store.ts`). Gated like
+       * `combat.event`: only sockets with combat:view receive it.
+       */
+      type: 'combat.vehicle';
+      ts: string;
+      data: {
+        server_id: string;
+        match_id: string | null;
+        kind: 'vehicle_destroyed' | 'vehicle_damage';
+        attacker_player_id: string | null;
+        victim_vehicle: string;
+        attacker_vehicle: string | null;
+        weapon: string | null;
+        damage: number | null;
         occurred_at: string;
       };
     }
@@ -321,8 +366,82 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Which sockets may receive a LiveEvent type over `/api/v1/ws/live`:
+ * `server` needs only the connection's baseline `server:view`, `combat` also
+ * needs combat:view. `satisfies` makes the map list every LiveEvent type and
+ * nothing else, so it is also the allow-list of types accepted from Redis.
+ * `routes/live.ts` applies further per-type filters on top (session,
+ * role-expiry and media frames).
+ */
+export const LIVE_EVENT_AUDIENCE = {
+  'server.status': 'server',
+  'server.deleted': 'server',
+  'server.restored': 'server',
+  'rcon.status': 'server',
+  'server.events.appended': 'server',
+  'rcon.roster': 'server',
+  'server.seeding': 'server',
+  'bridge.connection': 'server',
+  'worker.heartbeat': 'server',
+  'note.created': 'server',
+  'note.updated': 'server',
+  'note.deleted': 'server',
+  'mark_type.changed': 'server',
+  'session.revoked': 'server',
+  'issue.created': 'server',
+  'issue.updated': 'server',
+  'issue.comment.created': 'server',
+  'mark.changed': 'server',
+  'chat.message': 'server',
+  'combat.event': 'combat',
+  'combat.vehicle': 'combat',
+  'vote.ended': 'server',
+  'report.created': 'server',
+  'report.updated': 'server',
+  'appeal.created': 'server',
+  'appeal.updated': 'server',
+  'server.map.changed': 'server',
+  'externalban.matched': 'server',
+  'media.uploaded': 'server',
+  'alert.triggered': 'server',
+} as const satisfies Record<LiveEvent['type'], 'server' | 'combat'>;
+
+function isLiveEventType(type: unknown): type is LiveEvent['type'] {
+  return typeof type === 'string' && Object.hasOwn(LIVE_EVENT_AUDIENCE, type);
+}
+
+/**
+ * Checks the envelope of a frame read from the Redis `live-bus` channel:
+ * workers publish there without the API's types, so a frame is forwarded only
+ * when its `type` is a known LiveEvent type, `ts` is a string and `data` an
+ * object (#37). The per-type payload shape is not validated.
+ */
+function toLiveFrame(frame: unknown): (LiveEvent & { _origin?: string }) | null {
+  if (typeof frame !== 'object' || frame === null) return null;
+  const { type, ts, data } = frame as { type?: unknown; ts?: unknown; data?: unknown };
+  if (!isLiveEventType(type) || typeof ts !== 'string') return null;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+  return frame as LiveEvent & { _origin?: string };
+}
+
 const LIVE_BUS_CHANNEL = 'live-bus';
 const RCON_STATUS_CHANNEL = 'rcon:status:changed';
+
+/** Shape of an `rcon:status:changed` message; checked rather than cast (#1301). */
+const rconStatusMessage = z.object({
+  server_id: z.string().min(1),
+  state: z.string().min(1),
+  player_count: z.number().optional(),
+});
+
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
 
 export default fp(async (app) => {
   const emitter = new EventEmitter();
@@ -337,6 +456,9 @@ export default fp(async (app) => {
   const instanceId = randomUUID();
 
   const localEmit = (event: LiveEvent) => emitter.emit('event', event);
+  // Types already reported as dropped, so a worker publishing an unknown type
+  // on every tick logs it once instead of flooding the log.
+  const droppedFrameTypes = new Set<string>();
 
   let subscriber: ReturnType<typeof app.redis.duplicate> | null = null;
   const canDuplicate = typeof app.redis?.duplicate === 'function';
@@ -347,33 +469,32 @@ export default fp(async (app) => {
     });
     subscriber.on('message', (channel: string, raw: string) => {
       if (channel === LIVE_BUS_CHANNEL) {
-        try {
-          const { _origin, ...evt } = JSON.parse(raw) as LiveEvent & { _origin?: string };
-          if (_origin === instanceId) return;
-          emitter.emit('event', evt as LiveEvent);
-        } catch (err) {
-          app.log.warn(
-            { err: (err as Error).message, raw: raw.slice(0, 200) },
-            'live-bus: bad redis message',
-          );
+        const parsed = parseJson(raw);
+        const frame = toLiveFrame(parsed);
+        if (!frame) {
+          const type = (parsed as { type?: unknown } | null | undefined)?.type;
+          const key = typeof type === 'string' ? type : '<malformed>';
+          if (!droppedFrameTypes.has(key)) {
+            droppedFrameTypes.add(key);
+            app.log.warn(
+              { type: key, raw: raw.slice(0, 200) },
+              'live-bus: dropping frame that is not a known LiveEvent (logged once per type)',
+            );
+          }
+          return;
         }
+        const { _origin, ...evt } = frame;
+        if (_origin === instanceId) return;
+        localEmit(evt as LiveEvent);
         return;
       }
       if (channel === RCON_STATUS_CHANNEL) {
-        try {
-          const data = JSON.parse(raw) as {
-            server_id: string;
-            state: string;
-            player_count?: number;
-          };
-          emitter.emit('event', {
-            type: 'rcon.status',
-            ts: new Date().toISOString(),
-            data,
-          } satisfies LiveEvent);
-        } catch (err) {
-          app.log.warn({ err: (err as Error).message }, 'live-bus: bad rcon status message');
+        const data = rconStatusMessage.safeParse(parseJson(raw));
+        if (!data.success) {
+          app.log.warn({ raw: raw.slice(0, 200) }, 'live-bus: dropped malformed rcon status');
+          return;
         }
+        localEmit({ type: 'rcon.status', ts: new Date().toISOString(), data: data.data });
       }
     });
     try {
@@ -399,7 +520,19 @@ export default fp(async (app) => {
       }
     },
     subscribe(cb) {
-      const handler = (event: LiveEvent) => cb(event);
+      // EventEmitter delivers synchronously and stops at the first throw, so an
+      // unguarded subscriber would starve the ones after it and, on a local
+      // publish, fail the route that already committed its change.
+      const handler = (event: LiveEvent) => {
+        try {
+          cb(event);
+        } catch (err) {
+          app.log.error(
+            { err: (err as Error).message, type: event.type },
+            'live-bus: subscriber threw',
+          );
+        }
+      };
       emitter.on('event', handler);
       return () => emitter.off('event', handler);
     },

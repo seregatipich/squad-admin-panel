@@ -18,12 +18,14 @@ Each tick (`MEDIA_PUBLISHER_INTERVAL_MS`, default 60 s) claims up to `MEDIA_PUBL
 WITH due AS (
   SELECT p.id FROM media_publications p
   JOIN media_files m ON m.id = p.media_id
-  WHERE p.status = 'queued' AND p.next_attempt_at <= now() AND m.deleted_at IS NULL
+  WHERE p.status IN ('queued', 'uploading') AND p.next_attempt_at <= now() AND m.deleted_at IS NULL
   ORDER BY p.next_attempt_at ASC LIMIT $n
   FOR UPDATE OF p SKIP LOCKED
 )
-UPDATE media_publications p SET status = 'uploading' ... RETURNING ...
+UPDATE media_publications p SET status = 'uploading', next_attempt_at = now() + lease ... RETURNING ...
 ```
+
+A claim is a lease (`MEDIA_PUBLISH_LEASE_MS`, 6 h): while a row is `uploading`, `next_attempt_at` is the lease expiry. A row still `uploading` past it belongs to a worker that died mid-upload (OOM, SIGKILL, deploy), so the next claim takes it back with `attempts + 1` and `error = 'upload_interrupted'`; once that exhausts the retry budget the row goes to `failed` without another upload (#52). The lease is far above any real upload, because reclaiming a live upload would publish the media twice.
 
 `FOR UPDATE ... SKIP LOCKED` plus the `status = 'queued'` re-check on the `UPDATE` is what makes a second replica — or a second tick overlapping a slow one — unable to take the same row.
 
@@ -62,6 +64,8 @@ Three guards must all hold first, each protecting against losing evidence outrig
 2. every other publication of that media has already finished — otherwise a still-queued destination loses the file it was about to upload;
 3. no second `media_files` row shares the `storage_path` — uploads are deduplicated by sha256, so one file on disk can back several rows.
 
+Guard 3 and the swap run in one transaction holding `pg_advisory_xact_lock(hashtext('media_storage_path'), hashtext(storage_path))` — the same lock the API's upload dedup and `DELETE /api/v1/media/:id` take (`apps/api/src/lib/media-files.ts`) — so an upload cannot start sharing the file between the check and the release.
+
 The swap itself is a single `UPDATE`: `media_files_exactly_one_location_check` forbids a row holding both or neither location, so it cannot be split into two statements.
 
 ## Configuration
@@ -71,8 +75,8 @@ The swap itself is a single `UPDATE`: `media_files_exactly_one_location_check` f
 | `DATABASE_URL` | — | required |
 | `REDIS_URL` | — | required (heartbeat + diag) |
 | `MEDIA_STORAGE_DIR` | `./media` | **Must be the same directory the API writes to.** Both compose files pin `api` and this worker to the shared `media_data` volume at `/var/lib/squad-panel/media`; their WORKDIRs differ, so the relative default would give them two separate directories. |
-| `MEDIA_PUBLISHER_INTERVAL_MS` | `60000` | tick interval |
-| `MEDIA_PUBLISHER_BATCH_SIZE` | `3` | publications per tick |
+| `MEDIA_PUBLISHER_INTERVAL_MS` | `60000` | tick interval; integer 1000-3600000, the worker exits on anything else |
+| `MEDIA_PUBLISHER_BATCH_SIZE` | `3` | publications per tick; integer 1-50, the worker exits on anything else |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | unset | all three required, or YouTube stays off |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | both required, or Telegram stays off |
 

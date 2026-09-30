@@ -174,6 +174,20 @@ describe('runRoleSyncLoop', () => {
     expect(JSON.parse(status?.value ?? '{}')).toMatchObject({ state: 'ok' });
   });
 
+  it.each(['not_linked', 'not_a_guild_member'] as const)(
+    'leaves the published status untouched when the player outcome is %s',
+    async (outcome) => {
+      syncPlayerMock.mockResolvedValue({ outcome, added: [], removed: [] });
+      const redis = fakeRedis([
+        ['7-1', ['payload', JSON.stringify({ player_id: PLAYER_ID, reason: 'role.assign' })]],
+      ]);
+      await runRoleSyncLoop(makeOpts(redis));
+
+      expect(redis.acked).toEqual(['7-1']);
+      expect(redis.statusWrites).toEqual([]);
+    },
+  );
+
   it('creates its consumer group on the dedicated role-sync stream', async () => {
     const redis = fakeRedis([]);
     await runRoleSyncLoop(makeOpts(redis));
@@ -185,5 +199,59 @@ describe('runRoleSyncLoop', () => {
       '$',
       'MKSTREAM',
     );
+  });
+
+  it('keeps running and retries when the consumer group cannot be created yet (#1292)', async () => {
+    const redis = fakeRedis([]);
+    redis.xgroup.mockRejectedValueOnce(new Error('LOADING Redis is loading the dataset'));
+    let iterations = 0;
+
+    await expect(
+      runRoleSyncLoop(makeOpts(redis, { shouldStop: () => iterations++ > 1 })),
+    ).resolves.toBeUndefined();
+
+    expect(redis.xgroup).toHaveBeenCalledTimes(2);
+    expect(redis.xreadgroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-creates the consumer group after a NOGROUP read error (#1292)', async () => {
+    const redis = fakeRedis([]);
+    redis.xreadgroup.mockRejectedValueOnce(new Error('NOGROUP No such key or consumer group'));
+    let iterations = 0;
+
+    await runRoleSyncLoop(makeOpts(redis, { shouldStop: () => iterations++ > 1 }));
+
+    expect(redis.xgroup).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces several full-reconcile requests in one batch into a single sweep (#886)', async () => {
+    const redis = fakeRedis([
+      ['8-1', ['payload', JSON.stringify({ player_id: null, reason: 'mapping.create' })]],
+      ['8-2', ['payload', JSON.stringify({ player_id: null, reason: 'mapping.update' })]],
+      ['8-3', ['payload', JSON.stringify({ player_id: null, reason: 'manual' })]],
+    ]);
+    await runRoleSyncLoop(makeOpts(redis));
+
+    expect(reconcileMock).toHaveBeenCalledTimes(1);
+    expect(redis.acked).toEqual(['8-1', '8-2', '8-3']);
+  });
+
+  it('hands the loop shutdown flag to the reconcile sweep so SIGTERM does not wait for it (#886)', async () => {
+    const redis = fakeRedis([
+      ['9-1', ['payload', JSON.stringify({ player_id: null, reason: 'manual' })]],
+    ]);
+    let stop = false;
+    let iterations = 0;
+    await runRoleSyncLoop(
+      makeOpts(redis, {
+        shouldStop: () => {
+          if (iterations++ > 0) stop = true;
+          return stop;
+        },
+      }),
+    );
+
+    const options = reconcileMock.mock.calls[0]?.[1];
+    expect(options?.shouldStop?.()).toBe(true);
   });
 });

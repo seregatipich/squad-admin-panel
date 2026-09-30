@@ -101,7 +101,7 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
   });
 
   it('returns 403 on read for a role without combat:view', async () => {
-    const role = await seedRole(h.db, { panelAccess: false, combatView: false });
+    const role = await seedRole(h.db, { panelAccess: true, combatView: false });
     const player = await seedPlayer(h.db, role);
     const cookie = await loginAs(h, player);
     const res = await h.app.inject({
@@ -113,7 +113,7 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
   });
 
   it('returns 403 on write for a role without the config-edit right', async () => {
-    const role = await seedRole(h.db, { panelAccess: false, combatView: false });
+    const role = await seedRole(h.db, { panelAccess: true, combatView: false });
     const player = await seedPlayer(h.db, role);
     const cookie = await loginAs(h, player);
     const res = await h.app.inject({
@@ -123,7 +123,10 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
       payload: { name_en: 'x', name_ru: 'x', vehicle_class: 'IFV' },
     });
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ required: 'config:edit' });
+    // #361: the manual writeGuard was replaced with declarative
+    // `config.permissions`, enforced by the global auth hook, which reports
+    // the full required-permissions array rather than a single string.
+    expect(res.json()).toMatchObject({ error: 'forbidden', required: ['config:edit'] });
   });
 
   it('upserts a new catalog entry and writes an audit row with before/after', async () => {

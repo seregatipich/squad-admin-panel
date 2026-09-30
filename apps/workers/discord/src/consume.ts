@@ -7,7 +7,15 @@ import {
 } from '@squad/shared-types';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
-import { type DeliveryResult, deliverEnvelope, type SenderDeps } from './sender.js';
+
+import { mapEventToDiscordType } from './mapping.js';
+
+import {
+  type DeliveryResult,
+  deliverEnvelope,
+  type SenderDeps,
+  type WebhookDeliveryLedger,
+} from './sender.js';
 
 /** Consumer group name every worker-discord process shares when reading event streams. */
 export const NOTIFY_CONSUMER_GROUP = 'discord-notify:v1';
@@ -26,6 +34,46 @@ export const DEFAULT_BATCH_SIZE = 50;
 export const DEFAULT_RECLAIM_MIN_IDLE_MS = 30_000;
 /** Max entries claimed per stream per XAUTOCLAIM call. */
 export const DEFAULT_RECLAIM_BATCH_SIZE = 50;
+/** How often the pending-entry reclaim sweep runs (it also runs once at boot). */
+export const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
+/**
+ * How often the stream set is re-discovered. Discovery is a keyspace-wide
+ * `SCAN` whose cost grows with every key in Redis, so it runs on a timer
+ * rather than on every poll (#883). A new server's stream is picked up within
+ * this interval; its consumer group starts at `0`, so nothing published before
+ * discovery is missed.
+ */
+export const DEFAULT_STREAM_REFRESH_MS = 30_000;
+
+/**
+ * How many times an entry whose delivery failed for at least one webhook is
+ * retried before it is acknowledged anyway. Each retry happens when the
+ * reclaim sweep picks the entry up again (after `reclaimMinIdleMs`), so the
+ * default 30 s idle window rides out roughly five minutes of Discord or DNS
+ * outage without holding a poisoned entry forever.
+ */
+export const MAX_DELIVERY_ATTEMPTS = 10;
+
+/** Redis counter of failed delivery attempts for one event in one consumer group. */
+function deliveryAttemptsKey(group: string, eventId: string): string {
+  return `discord:notify:attempts:${group}:${eventId}`;
+}
+
+/**
+ * Per-webhook delivery marks for one event, stored next to the per-event
+ * dedup key (`dedup:<group>:<event_id>:<webhook_id>`) with the same TTL. A
+ * retried entry skips every webhook that already received the embed, so a
+ * failure on one webhook never re-posts the message to the others.
+ */
+function redisDeliveryLedger(redis: Redis, group: string, eventId: string): WebhookDeliveryLedger {
+  const keyFor = (webhookId: string) => DEDUP_KEY(group, `${eventId}:${webhookId}`);
+  return {
+    isDelivered: async (webhookId) => (await redis.get(keyFor(webhookId))) !== null,
+    markDelivered: async (webhookId) => {
+      await redis.set(keyFor(webhookId), '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
+    },
+  };
+}
 
 /**
  * Parses the `envelope` field out of a raw XREADGROUP field array (as
@@ -48,13 +96,19 @@ export function parseStreamEnvelope(fields: string[]): EventEnvelope | null {
   }
 }
 
-/** Creates the consumer group for `stream` if it doesn't already exist (idempotent). */
+/**
+ * Creates the consumer group for `stream` if it doesn't already exist (idempotent).
+ *
+ * @param startId Where a newly created group starts reading: `'$'` (default)
+ *   skips the entries already in the stream, `'0'` delivers all of them.
+ */
 export async function ensureConsumerGroup(
   redis: Redis,
   stream: string,
   group: string,
+  startId: '$' | '0' = '$',
 ): Promise<void> {
-  await redis.xgroup('CREATE', stream, group, '$', 'MKSTREAM').catch((err: Error) => {
+  await redis.xgroup('CREATE', stream, group, startId, 'MKSTREAM').catch((err: Error) => {
     if (!String(err.message).includes('BUSYGROUP')) throw err;
   });
 }
@@ -70,8 +124,9 @@ const LIVE_SERVER_STREAM = /^events:server:[^:]+$/;
 /**
  * Discovers every event stream this worker might care about: the shared
  * `events:global` stream plus every per-server `events:server:<id>` stream
- * currently present in Redis (via `SCAN`). Called once per poll iteration so
- * a newly started game server's stream is picked up without a restart.
+ * currently present in Redis (via `SCAN`). The notify loop calls it every
+ * `streamRefreshMs`, so a newly started game server's stream is picked up
+ * without a restart.
  * Sidecar shadow streams are skipped (see `LIVE_SERVER_STREAM`).
  */
 export async function discoverEventStreams(redis: Redis): Promise<string[]> {
@@ -102,14 +157,21 @@ export interface NotifyDeps extends SenderDeps {
  * Processes one stream entry: crash-safe, at-least-once delivery.
  *
  * Order matters for the no-loss/no-duplicate guarantee: the dedup key is
- * only SET *after* `deliverEnvelope` returns successfully, and XACK only
- * happens after that SET. If the process is killed at any point before the
- * XACK, the entry stays in the consumer group's pending list and is
- * redelivered on restart — at worst re-sending an embed that was in flight
- * when the kill happened (at-least-once), never silently dropping it. A
- * pre-existing dedup key (set by an earlier, already-acknowledged delivery
- * of the same `event_id`) short-circuits straight to XACK without invoking
- * `deliverEnvelope` at all, so a completed send is never re-posted.
+ * only SET *after* `deliverEnvelope` reports every webhook delivered, and
+ * XACK only happens after that SET. If the process is killed at any point
+ * before the XACK, the entry stays in the consumer group's pending list and
+ * is redelivered on restart — at worst re-sending an embed that was in
+ * flight when the kill happened (at-least-once). A pre-existing dedup key
+ * (set by an earlier, already-acknowledged delivery of the same `event_id`)
+ * short-circuits straight to XACK without invoking `deliverEnvelope` at all,
+ * so a completed send is never re-posted.
+ *
+ * A delivery that failed for any webhook (network error, 5xx, exhausted 429
+ * retries) is *not* acknowledged: the entry stays pending and the reclaim
+ * sweep retries it, skipping webhooks already marked in the per-webhook
+ * ledger. After `MAX_DELIVERY_ATTEMPTS` failed attempts the entry is
+ * acknowledged with an error log so one permanently broken webhook cannot
+ * pin it in the pending list forever.
  */
 async function processEntry(
   deps: NotifyDeps,
@@ -127,6 +189,11 @@ async function processEntry(
     return;
   }
 
+  if (!mapEventToDiscordType(envelope.type)) {
+    await redis.xack(stream, group, id);
+    return;
+  }
+
   const dedupKey = DEDUP_KEY(group, envelope.event_id);
   const alreadyDelivered = await redis.get(dedupKey);
   if (alreadyDelivered) {
@@ -134,10 +201,33 @@ async function processEntry(
     return;
   }
 
-  const result = await deliverEnvelope(deps, envelope);
+  const result = await deliverEnvelope(
+    deps,
+    envelope,
+    redisDeliveryLedger(redis, group, envelope.event_id),
+  );
   onDelivery?.(result);
+
+  const attemptsKey = deliveryAttemptsKey(group, envelope.event_id);
+  if (result.failed > 0) {
+    const attempts = await redis.incr(attemptsKey);
+    await redis.expire(attemptsKey, DEDUP_TTL_SECONDS);
+    if (attempts < MAX_DELIVERY_ATTEMPTS) {
+      log.warn(
+        { stream, id, eventId: envelope.event_id, failed: result.failed, attempts },
+        'discord delivery failed; entry left pending for a retry',
+      );
+      return;
+    }
+    log.error(
+      { stream, id, eventId: envelope.event_id, failed: result.failed, attempts },
+      'discord delivery still failing after every retry; acknowledging the entry',
+    );
+  }
+
   await redis.set(dedupKey, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
   await redis.xack(stream, group, id);
+  await redis.del(attemptsKey);
 }
 
 /**
@@ -146,6 +236,10 @@ async function processEntry(
  * delivered to — and processes each exactly like a freshly-read entry. Used
  * both as a boot-time sweep (picks up anything orphaned by a prior crash)
  * and periodically during the loop (catches a consumer that dies mid-run).
+ *
+ * @returns `false` when Redis answered `NOGROUP` (the stream key was deleted
+ *   and recreated, so the group is gone and must be created again), `true`
+ *   otherwise.
  */
 async function reclaimPendingEntries(
   deps: NotifyDeps,
@@ -155,7 +249,7 @@ async function reclaimPendingEntries(
   minIdleMs: number,
   batchSize: number,
   onDelivery?: (result: DeliveryResult) => void,
-): Promise<void> {
+): Promise<boolean> {
   const { redis, log } = deps;
   let claimed: [string, string[]][];
   try {
@@ -171,10 +265,9 @@ async function reclaimPendingEntries(
     claimed = result?.[1] ?? [];
   } catch (err) {
     const message = (err as Error).message;
-    if (!message.includes('NOGROUP')) {
-      log.warn({ stream, err: message }, 'xautoclaim failed');
-    }
-    return;
+    if (message.includes('NOGROUP')) return false;
+    log.warn({ stream, err: message }, 'xautoclaim failed');
+    return true;
   }
   for (const [id, fields] of claimed) {
     try {
@@ -186,6 +279,7 @@ async function reclaimPendingEntries(
       );
     }
   }
+  return true;
 }
 
 export interface RunNotifyLoopOpts extends NotifyDeps {
@@ -196,10 +290,16 @@ export interface RunNotifyLoopOpts extends NotifyDeps {
   /** Entries idle longer than this are reclaimed from a dead consumer (see `reclaimPendingEntries`). */
   reclaimMinIdleMs?: number;
   reclaimBatchSize?: number;
+  /** How often the reclaim sweep runs; it always runs on the first iteration. */
+  reclaimIntervalMs?: number;
+  /** How often the stream set is re-discovered; see `DEFAULT_STREAM_REFRESH_MS`. */
+  streamRefreshMs?: number;
   /** Polled once per loop iteration; the loop returns once this is true. */
   shouldStop: () => boolean;
   /** Override stream discovery — used by tests to pin a fixed stream set. */
   discoverStreams?: (redis: Redis) => Promise<string[]>;
+  /** Clock for the discovery and reclaim timers; injectable for tests. */
+  now?: () => number;
   /** Invoked with the per-envelope delivery counters, e.g. for heartbeat status. */
   onDelivery?: (result: DeliveryResult) => void;
 }
@@ -207,13 +307,15 @@ export interface RunNotifyLoopOpts extends NotifyDeps {
 /**
  * The discord-notify worker's event-stream consumer: a consumer-group
  * reader (mirroring `apps/workers/automation/src/dispatch.ts`'s XREADGROUP
- * loop) that discovers event streams, reads envelopes, and delivers each to
- * subscribed Discord webhooks via `deliverEnvelope`. A failure processing
- * one entry (bad JSON, a Redis blip) is logged and the loop continues — it
- * never crashes the worker. Errors thrown by `deliverEnvelope` itself (e.g.
- * the DB connection dropping) propagate out of `processEntry` and leave the
- * entry unacked for redelivery, which the outer catch here logs and retries
- * on the next iteration instead of throwing out of the loop.
+ * loop) that periodically discovers event streams and reclaims stale pending
+ * entries, reads envelopes, and delivers each to subscribed Discord webhooks
+ * via `deliverEnvelope`.
+ *
+ * Nothing inside an iteration rejects this function: a failing discovery
+ * keeps the previous stream set, a failing group creation skips that stream
+ * until the next iteration retries it, a `NOGROUP` read error forgets every
+ * created group so they are re-created, and an entry whose processing throws
+ * (e.g. the DB connection dropping) stays unacked for the reclaim sweep.
  */
 export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
   const {
@@ -224,48 +326,82 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
     batchSize = DEFAULT_BATCH_SIZE,
     reclaimMinIdleMs = DEFAULT_RECLAIM_MIN_IDLE_MS,
     reclaimBatchSize = DEFAULT_RECLAIM_BATCH_SIZE,
+    reclaimIntervalMs = DEFAULT_RECLAIM_INTERVAL_MS,
+    streamRefreshMs = DEFAULT_STREAM_REFRESH_MS,
     shouldStop,
     discoverStreams = discoverEventStreams,
+    now = Date.now,
     onDelivery,
     log,
   } = opts;
 
-  const knownStreams = new Set<string>();
+  // Streams whose group this loop has ensured. A stream first seen on a later
+  // iteration was created after the loop started — typically by the XADD of a
+  // new server's first event — so its group starts at '0' and that event is
+  // delivered; '$' would skip everything XADDed before discovery (#60,
+  // finding 1291). Only the first discovery starts at '$', so a first start
+  // against an existing install does not replay stream history. Redelivery of
+  // an already-handled entry is harmless: consumers dedup by `event_id`.
+  const groupsCreated = new Set<string>();
+  let initialDiscovery = true;
+  let streams: string[] = [];
+  let nextDiscoveryAt = Number.NEGATIVE_INFINITY;
+  let nextReclaimAt = Number.NEGATIVE_INFINITY;
 
   while (!shouldStop()) {
-    let streams: string[];
-    try {
-      streams = await discoverStreams(redis);
-    } catch (err) {
-      log.error({ err: (err as Error).message }, 'event stream discovery failed');
-      await sleep(1000);
-      continue;
+    if (now() >= nextDiscoveryAt) {
+      try {
+        streams = await discoverStreams(redis);
+        nextDiscoveryAt = now() + streamRefreshMs;
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'event stream discovery failed');
+        if (streams.length === 0) {
+          await sleep(1000);
+          continue;
+        }
+      }
     }
-    if (streams.length === 0) {
+
+    const readable: string[] = [];
+    for (const stream of streams) {
+      if (!groupsCreated.has(stream)) {
+        try {
+          await ensureConsumerGroup(redis, stream, group, initialDiscovery ? '$' : '0');
+          groupsCreated.add(stream);
+        } catch (err) {
+          log.error(
+            { err: (err as Error).message, stream },
+            'consumer group creation failed; stream skipped until the next iteration',
+          );
+          continue;
+        }
+      }
+      readable.push(stream);
+    }
+    if (readable.length === 0) {
       await sleep(blockMs);
       continue;
     }
-
-    for (const stream of streams) {
-      if (knownStreams.has(stream)) continue;
-      await ensureConsumerGroup(redis, stream, group);
-      knownStreams.add(stream);
-    }
+    initialDiscovery = false;
 
     // Reclaim before reading new entries: an entry orphaned by a crashed
     // consumer (this process's own previous incarnation, or another replica)
     // is picked up here even though XREADGROUP `>` below would never
     // re-deliver it under a new consumer name.
-    for (const stream of streams) {
-      await reclaimPendingEntries(
-        opts,
-        stream,
-        group,
-        consumer,
-        reclaimMinIdleMs,
-        reclaimBatchSize,
-        onDelivery,
-      );
+    if (now() >= nextReclaimAt) {
+      nextReclaimAt = now() + reclaimIntervalMs;
+      for (const stream of readable) {
+        const groupExists = await reclaimPendingEntries(
+          opts,
+          stream,
+          group,
+          consumer,
+          reclaimMinIdleMs,
+          reclaimBatchSize,
+          onDelivery,
+        );
+        if (!groupExists) groupsCreated.delete(stream);
+      }
     }
 
     try {
@@ -278,8 +414,8 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
         'BLOCK',
         blockMs,
         'STREAMS',
-        ...streams,
-        ...streams.map(() => '>'),
+        ...readable,
+        ...readable.map(() => '>'),
       )) as [string, [string, string[]][]][] | null;
       if (!res) continue;
 
@@ -296,7 +432,13 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
         }
       }
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'notify poll iteration failed');
+      const message = (err as Error).message;
+      // A known stream was deleted (its group went with it) and possibly
+      // re-created by a later XADD: the multiplexed XREADGROUP then rejects
+      // NOGROUP for every stream. Forget the cache so the next iteration
+      // re-ensures each group; existing ones answer BUSYGROUP.
+      log.error({ err: message }, 'notify poll iteration failed');
+      if (message.includes('NOGROUP')) groupsCreated.clear();
       await sleep(1000);
     }
   }

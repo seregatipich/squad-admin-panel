@@ -25,6 +25,8 @@ const PLAYER_A = testSteamId(810002);
 const PLAYER_B = testSteamId(810003);
 const PLAYER_C = testSteamId(810004); // unrelated, different IP
 const TEST_PLAYER_LIMITED_VIEWER = testSteamId(810005); // role without can_view_ips
+const PLAYER_D = testSteamId(810006);
+const PLAYER_E = testSteamId(810007);
 
 let h: IntegrationHarness;
 
@@ -42,6 +44,7 @@ async function seedPlayer(
       createdAt: extra?.createdAt,
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -50,6 +53,7 @@ async function seedServer(name: string): Promise<string> {
     .insert(servers)
     .values({ id: uuidv7(), displayName: name, slug: `${name.toLowerCase()}-${uuidv7()}` })
     .returning({ id: servers.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -96,6 +100,8 @@ const TEST_PLAYER_STEAM_IDS = [
   PLAYER_B,
   PLAYER_C,
   TEST_PLAYER_LIMITED_VIEWER,
+  PLAYER_D,
+  PLAYER_E,
   PLAYER_A + 500n,
   PLAYER_A + 50_000n,
   PLAYER_A + 60_000n,
@@ -164,10 +170,10 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       total: number;
     };
     expect(bodyA.candidates).toHaveLength(1);
-    expect(bodyA.candidates[0].player_id).toBe(idB);
-    expect(bodyA.candidates[0].shared_ip_count).toBe(1);
-    expect(bodyA.candidates[0].min_time_delta_seconds).toBe(90);
-    expect(bodyA.candidates[0].matches[0]).toMatchObject({ ip: '203.0.113.10', ignored: false });
+    expect(bodyA.candidates[0]?.player_id).toBe(idB);
+    expect(bodyA.candidates[0]?.shared_ip_count).toBe(1);
+    expect(bodyA.candidates[0]?.min_time_delta_seconds).toBe(90);
+    expect(bodyA.candidates[0]?.matches[0]).toMatchObject({ ip: '203.0.113.10', ignored: false });
 
     const resB = await h.app.inject({
       method: 'GET',
@@ -177,7 +183,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(resB.statusCode).toBe(200);
     const bodyB = resB.json() as { candidates: Array<{ player_id: string }> };
     expect(bodyB.candidates).toHaveLength(1);
-    expect(bodyB.candidates[0].player_id).toBe(idA);
+    expect(bodyB.candidates[0]?.player_id).toBe(idA);
   });
 
   it('excludes a shared IP covered by an ignored CIDR from the score, but keeps the pair visible', async () => {
@@ -211,11 +217,11 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     };
     expect(body.candidates).toHaveLength(1);
     const candidate = body.candidates[0];
-    expect(candidate.shared_ip_count).toBe(0);
-    expect(candidate.ignored_shared_ip_count).toBe(1);
-    expect(candidate.matches[0].ignored).toBe(true);
-    expect(candidate.score).toBe(0);
-    expect(candidate.confidence).toBe('low');
+    expect(candidate?.shared_ip_count).toBe(0);
+    expect(candidate?.ignored_shared_ip_count).toBe(1);
+    expect(candidate?.matches[0]?.ignored).toBe(true);
+    expect(candidate?.score).toBe(0);
+    expect(candidate?.confidence).toBe('low');
   });
 
   it('raises the score and lists a shared historical nickname', async () => {
@@ -244,9 +250,9 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
         score: number;
       }>;
     };
-    expect(body.candidates[0].signals.shared_names.value).toEqual(['ghostsniper']);
+    expect(body.candidates[0]?.signals.shared_names.value).toEqual(['ghostsniper']);
     // 50 (shared IP) + 25 (shared name) with the seeded default weights.
-    expect(body.candidates[0].score).toBe(75);
+    expect(body.candidates[0]?.score).toBe(75);
   });
 
   it('flags a young account created after the target player last ban', async () => {
@@ -275,7 +281,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     const body = res.json() as {
       candidates: Array<{ signals: { young_account: { value: boolean } } }>;
     };
-    expect(body.candidates[0].signals.young_account.value).toBe(true);
+    expect(body.candidates[0]?.signals.young_account.value).toBe(true);
   });
 
   it('flags SteamID64 proximity below the threshold and not above it', async () => {
@@ -305,7 +311,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(far?.signals.steamid_proximity.value).toBe(false);
   });
 
-  it('flags a non-reverted permanent ban as active+permanent, and a reverted one as neither', async () => {
+  it('flags a non-reverted permanent ban as active+permanent, and a reverted+unbanned one as neither', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
     const idC = await seedPlayer(PLAYER_C, 'PlayerC');
@@ -330,6 +336,8 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
         context: {},
         revertedAt: new Date(),
       },
+      // The unban path appends its own non-reverted `unban` row (#36 finding 14).
+      { playerId: idC, actionType: 'unban', authorSystemLabel: 'test-fixture', context: {} },
     ]);
 
     const cookie = await loginAsOwner(h);
@@ -346,6 +354,161 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(candidateB).toMatchObject({ has_active_ban: true, has_permanent_ban: true });
     expect(candidateC).toMatchObject({ has_active_ban: false, has_permanent_ban: false });
   });
+
+  // Regression (#40, #1249/#216): "ban" was `action_type LIKE '%ban%'`, which
+  // also matched `unban` and `external_ban_kick` rows, and expiry was ignored.
+  it('counts only unexpired, unreverted ban rows as an active ban', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idUnbanned = await seedPlayer(PLAYER_B, 'Unbanned');
+    const idKicked = await seedPlayer(PLAYER_C, 'ExternalKicked');
+    const idExpired = await seedPlayer(PLAYER_D, 'ExpiredTemp');
+    const idTemp = await seedPlayer(PLAYER_E, 'ActiveTemp');
+    await h.db.insert(playerIpHistory).values(
+      [idA, idUnbanned, idKicked, idExpired, idTemp].map((playerId) => ({
+        playerId,
+        ip: '203.0.113.10',
+      })),
+    );
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
+    await h.db.insert(moderationActions).values([
+      {
+        playerId: idUnbanned,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '0' },
+        revertedAt: new Date(),
+      },
+      {
+        playerId: idUnbanned,
+        actionType: 'unban',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+      },
+      {
+        playerId: idKicked,
+        actionType: 'external_ban_kick',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+      },
+      {
+        playerId: idExpired,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '1d' },
+        createdAt: threeDaysAgo,
+      },
+      {
+        playerId: idTemp,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '7d' },
+      },
+    ]);
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      candidates: Array<{ player_id: string; has_active_ban: boolean; has_permanent_ban: boolean }>;
+    };
+    const flags = (id: string) => {
+      const c = body.candidates.find((candidate) => candidate.player_id === id);
+      return { active: c?.has_active_ban, permanent: c?.has_permanent_ban };
+    };
+    expect(flags(idUnbanned)).toEqual({ active: false, permanent: false });
+    expect(flags(idKicked)).toEqual({ active: false, permanent: false });
+    expect(flags(idExpired)).toEqual({ active: false, permanent: false });
+    expect(flags(idTemp)).toEqual({ active: true, permanent: false });
+  });
+
+  it('does not date young_account from an unban, a kick or a reverted ban', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    await h.db.insert(moderationActions).values([
+      {
+        playerId: idA,
+        actionType: 'ban',
+        authorSystemLabel: 'test-fixture',
+        context: { ban_length: '0' },
+        createdAt: new Date('2026-04-01T00:00:00Z'),
+        revertedAt: new Date('2026-05-01T00:00:00Z'),
+      },
+      {
+        playerId: idA,
+        actionType: 'unban',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+        createdAt: new Date('2026-05-01T00:00:00Z'),
+      },
+      {
+        playerId: idA,
+        actionType: 'external_ban_kick',
+        authorSystemLabel: 'test-fixture',
+        context: {},
+        createdAt: new Date('2026-05-02T00:00:00Z'),
+      },
+    ]);
+    const idB = await seedPlayer(PLAYER_B, 'PlayerB', {
+      createdAt: new Date('2026-05-15T00:00:00Z'),
+    });
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.10' },
+      { playerId: idB, ip: '203.0.113.10' },
+    ]);
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      candidates: Array<{ signals: { young_account: { value: boolean } } }>;
+    };
+    expect(body.candidates[0]?.signals.young_account.value).toBe(false);
+  });
+
+  // Regression (#40, #217): every candidate id was bound as its own parameter,
+  // twice in the co-play query, so a CGNAT-sized candidate set overflowed
+  // Postgres' 65 535 bind-parameter limit and the route answered 500.
+  it('answers a CGNAT-sized candidate set without overflowing bind parameters', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    await h.db.insert(playerIpHistory).values({ playerId: idA, ip: '198.51.100.7' });
+    const crowdFirst = testSteamId(600001);
+    const crowdLast = testSteamId(633000);
+    await h.db.execute(sql`
+      WITH crowd AS (
+        INSERT INTO players (id, steam_id64, canonical_name, canonical_name_normalized)
+        SELECT gen_random_uuid(), ${crowdFirst}::bigint + g, 'cgnat-' || g, 'cgnat-' || g
+        FROM generate_series(0, ${crowdLast - crowdFirst}::int) AS g
+        RETURNING id
+      )
+      INSERT INTO player_ip_history (player_id, ip)
+      SELECT id, '198.51.100.7'::inet FROM crowd
+    `);
+
+    try {
+      const cookie = await loginAsOwner(h);
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${idA}/alt-candidates?limit=5`,
+        headers: { cookie },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json() as { candidates: unknown[]; total: number };
+      expect(body.candidates).toHaveLength(5);
+      expect(body.total).toBeGreaterThan(0);
+    } finally {
+      // The crowd players stay (deleting 33k players walks every FK that
+      // references them); without IP history they are no candidates, and
+      // re-analysing keeps the plan the index-usage case asserts.
+      await h.db.execute(sql`DELETE FROM player_ip_history WHERE ip = '198.51.100.7'::inet`);
+      await h.db.execute(sql`ANALYZE player_ip_history`);
+    }
+  }, 60_000);
 
   it('sorts by confidence/score descending and paginates with limit/offset', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
@@ -374,8 +537,10 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       total: number;
     };
     expect(fullBody.total).toBe(2);
-    expect(fullBody.candidates[0].player_id).toBe(idHigh);
-    expect(fullBody.candidates[0].score).toBeGreaterThan(fullBody.candidates[1].score);
+    expect(fullBody.candidates[0]?.player_id).toBe(idHigh);
+    expect(fullBody.candidates[0]?.score).toBeGreaterThan(
+      fullBody.candidates[1]?.score ?? Number.POSITIVE_INFINITY,
+    );
 
     const page1 = await h.app.inject({
       method: 'GET',
@@ -384,7 +549,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     });
     const page1Body = page1.json() as { candidates: Array<{ player_id: string }>; total: number };
     expect(page1Body.candidates).toHaveLength(1);
-    expect(page1Body.candidates[0].player_id).toBe(idHigh);
+    expect(page1Body.candidates[0]?.player_id).toBe(idHigh);
     expect(page1Body.total).toBe(2);
 
     const page2 = await h.app.inject({
@@ -394,7 +559,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     });
     const page2Body = page2.json() as { candidates: Array<{ player_id: string }> };
     expect(page2Body.candidates).toHaveLength(1);
-    expect(page2Body.candidates[0].player_id).toBe(idLow);
+    expect(page2Body.candidates[0]?.player_id).toBe(idLow);
   });
 
   it('rejects an unauthenticated request', async () => {

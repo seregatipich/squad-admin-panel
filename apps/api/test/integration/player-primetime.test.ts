@@ -40,6 +40,7 @@ async function seedPlayer(name: string, steamSeed: number): Promise<string> {
       canonicalNameNormalized: name.toLowerCase(),
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 

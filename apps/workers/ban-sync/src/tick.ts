@@ -42,14 +42,42 @@ export interface TickDeps {
   listEnabledSources(): Promise<DueSource[]>;
   syncOne(source: DueSource): Promise<SyncReport>;
   backoff: BackoffMap;
+  /**
+   * Sources being synced right now, shared with the manual-queue consumer:
+   * a source already in it is skipped, like one that is not due yet (#853).
+   */
+  inFlight: Set<string>;
+  /** Checked before each source, so a shutdown does not wait for the whole tick. */
+  shouldStop?: () => boolean;
+}
+
+/**
+ * Runs `sync` for `source` unless a sync of the same source is already under
+ * way in this process, in which case it returns `null` without running.
+ * Two overlapping syncs of one source would read the same existing rows and
+ * race each other's inserts, revocations and status writes (#853).
+ */
+export async function syncExclusively(
+  inFlight: Set<string>,
+  source: DueSource,
+  sync: (source: DueSource) => Promise<SyncReport>,
+): Promise<SyncReport | null> {
+  if (inFlight.has(source.id)) return null;
+  inFlight.add(source.id);
+  try {
+    return await sync(source);
+  } finally {
+    inFlight.delete(source.id);
+  }
 }
 
 /**
  * One poll cycle across every enabled source: syncs each due source
  * sequentially (never in parallel — a slow/misbehaving source must not
  * starve others of their timeout budget), skipping any source still inside
- * its in-memory backoff window from a prior failure. Backoff is cleared on
- * success and (re)computed on failure via `backoffDelayMs`.
+ * its in-memory backoff window from a prior failure or already being synced
+ * by an overlapping manual sync. Backoff is cleared on success and
+ * (re)computed on failure via `backoffDelayMs`.
  */
 export async function runBanSyncTick(deps: TickDeps): Promise<TickResult> {
   const now = deps.now ?? new Date();
@@ -60,6 +88,7 @@ export async function runBanSyncTick(deps: TickDeps): Promise<TickResult> {
   let skippedBackoff = 0;
 
   for (const source of sources) {
+    if (deps.shouldStop?.()) break;
     if (!isDue(source, now)) continue;
 
     const entry = deps.backoff.get(source.id);
@@ -68,7 +97,8 @@ export async function runBanSyncTick(deps: TickDeps): Promise<TickResult> {
       continue;
     }
 
-    const report = await deps.syncOne(source);
+    const report = await syncExclusively(deps.inFlight, source, deps.syncOne);
+    if (!report) continue;
     if (report.ok) {
       deps.backoff.delete(source.id);
       synced++;
@@ -87,9 +117,13 @@ export function createTickDeps(
   db: DatabaseClient,
   syncSourceDeps: Omit<SyncSourceDeps, 'now'>,
   backoff: BackoffMap,
+  inFlight: Set<string>,
+  shouldStop: () => boolean,
 ): TickDeps {
   return {
     backoff,
+    inFlight,
+    shouldStop,
     listEnabledSources: async () => {
       const rows = await db
         .select()

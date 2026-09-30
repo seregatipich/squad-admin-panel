@@ -17,6 +17,21 @@ function optionalSecret(min: number) {
   );
 }
 
+/**
+ * A millisecond interval for a periodic host task, at least one minute.
+ *
+ * Blank means unset (compose passes `${VAR:-}` as `''`). Anything that is not
+ * a whole number of at least 60 000 — a typo like `5m`, `0`, `NaN` — fails
+ * startup instead of reaching `setInterval`, which would treat it as ~1 ms and
+ * hammer the privileged bridge (#85).
+ */
+function hostIntervalMs(defaultMs: number) {
+  return z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(60_000).default(defaultMs),
+  );
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -31,17 +46,17 @@ const envSchema = z
     SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
     SESSION_TOUCH_THROTTLE_SECONDS: z.coerce.number().int().positive().default(60),
     BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge/bridge.sock'),
-    COOKIE_SECURE: z.coerce.boolean().default(true),
     APP_DOMAIN: z.string().default('admin.localhost'),
     PANEL_PUBLIC_URL: z.string().url(),
     STEAM_API_KEY: z.string().optional(),
     DISCORD_CLIENT_ID: z.string().optional(),
     DISCORD_CLIENT_SECRET: z.string().optional(),
     DISCORD_PUBLIC_KEY: z.string().optional(),
-    GLITCHTIP_DSN: z.string().optional(),
     BALANCER_WEBHOOK_SECRET: optionalSecret(32),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     MEDIA_STORAGE_DIR: z.string().default('./media'),
+    HOST_ORPHAN_SWEEP_INTERVAL_MS: hostIntervalMs(5 * 60_000),
+    HOST_DOCKER_PRUNE_INTERVAL_MS: hostIntervalMs(24 * 60 * 60_000),
     // VIDEO-4 (#160) media publishing. Optional on both sides: the API only ever
     // reports whether a destination is configured, and `worker-media-publisher`
     // defers publications for a destination whose credentials are missing instead

@@ -4,7 +4,7 @@
 # Usage: sudo ./scripts/rebuild.sh
 #
 # This is a DESTRUCTIVE operation: it drops the database, Redis, Caddy certs,
-# per-server configs/saves, and the ~12 GB SteamCMD depot cache.
+# per-server configs/saves, uploaded media, and the ~12 GB SteamCMD depot cache.
 # Only .env secrets and the host bridge are preserved.
 
 set -Eeuo pipefail
@@ -36,6 +36,7 @@ ${C_BOLD}${C_RED}║${C_RST}     - PostgreSQL database (users, servers, audit lo
 ${C_BOLD}${C_RED}║${C_RST}     - Redis state (streams, cache)                             ${C_BOLD}${C_RED}║${C_RST}
 ${C_BOLD}${C_RED}║${C_RST}     - Caddy TLS certificates                                  ${C_BOLD}${C_RED}║${C_RST}
 ${C_BOLD}${C_RED}║${C_RST}     - Per-server configs and saves                             ${C_BOLD}${C_RED}║${C_RST}
+${C_BOLD}${C_RED}║${C_RST}     - Uploaded media                                           ${C_BOLD}${C_RED}║${C_RST}
 ${C_BOLD}${C_RED}║${C_RST}     - SteamCMD depot cache (~12 GB)                            ${C_BOLD}${C_RED}║${C_RST}
 ${C_BOLD}${C_RED}║${C_RST}                                                                ${C_BOLD}${C_RED}║${C_RST}
 ${C_BOLD}${C_RED}║${C_RST}   ${C_DIM}Preserved: .env secrets, host bridge.${C_RST}                       ${C_BOLD}${C_RED}║${C_RST}
@@ -50,7 +51,7 @@ echo
 
 # ── step 1: stop everything ────────────────────────────────────────────────
 
-printf '%b[1/5]%b Stopping containers...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
+printf '%b[1/6]%b Stopping containers...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
 cd "${REPO}"
 # docker/compose.yml; an install whose .env predates COMPOSE_FILE finds it too.
 export COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
@@ -59,31 +60,44 @@ log "containers stopped"
 
 # ── step 2: remove docker volumes ──────────────────────────────────────────
 
-printf '%b[2/5]%b Removing Docker volumes...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
+printf '%b[2/6]%b Removing Docker volumes...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
 docker compose down -v 2>/dev/null || true
 log "compose volumes removed"
 
-# ── step 3: wipe data directories (preserve depot) ─────────────────────────
+# ── step 3: wipe data directories ──────────────────────────────────────────
+# Destroys everything, depot included (the banner above says so); servers/
+# is recreated with the permissions install-host-bridge.sh gives it (0750)
+# so a fresh stack doesn't start against directories with the wrong mode.
 
+# Every directory here backs a bind-mounted volume, so each one is recreated
+# empty even when it did not exist yet: a missing bind source stops the stack.
 printf '%b[3/6]%b Wiping all data directories...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
-for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot; do
-  if [[ -d "${DATA_DIR}/${sub}" ]]; then
-    rm -rf "${DATA_DIR:?}/${sub:?}"
-    mkdir -p "${DATA_DIR}/${sub}"
-    log "wiped ${sub}/"
-  fi
+for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot media; do
+  rm -rf "${DATA_DIR:?}/${sub:?}"
+  mkdir -p "${DATA_DIR}/${sub}"
+  log "wiped ${sub}/"
 done
 if [[ -d "${DATA_DIR}/servers" ]]; then
   rm -rf "${DATA_DIR:?}/servers/"*
+  mkdir -p "${DATA_DIR}/servers/configs" "${DATA_DIR}/servers/saved"
+  chmod 0750 "${DATA_DIR}/servers/configs" "${DATA_DIR}/servers/saved"
   log "wiped servers/ contents"
 fi
 
-# ── step 4: remove squad-depot Docker volume ───────────────────────────────
+# ── step 4: re-bind the squad-depot Docker volume ─────────────────────────
 
-printf '%b[4/6]%b Removing squad-depot Docker volume...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
+# Recreated exactly as install-host-bridge.sh creates it. Left removed, the
+# bridge's first depot update would create a plain volume under
+# /var/lib/docker, while the bridge and the API read ${DATA_DIR}/depot.
+printf '%b[4/6]%b Re-binding squad-depot Docker volume...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
 docker volume rm squad-depot 2>/dev/null && log "squad-depot volume removed" || log "squad-depot volume not found (ok)"
+docker volume create \
+  --driver local \
+  --opt type=none --opt o=bind --opt device="${DATA_DIR}/depot" \
+  squad-depot >/dev/null
+log "squad-depot volume bound to ${DATA_DIR}/depot"
 
-# ── step 4: rebuild images ─────────────────────────────────────────────────
+# ── step 5: rebuild images ─────────────────────────────────────────────────
 
 printf '%b[5/6]%b Rebuilding Docker images (no cache)...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
 docker compose build --no-cache --progress=plain
@@ -97,19 +111,27 @@ log "containers started"
 
 # ── wait for healthy ───────────────────────────────────────────────────────
 
+# Resolve the actual container id for a compose service by name, not by
+# guessing the project-prefixed container name (which only matches when the
+# repo directory happens to be named "squad-admin-panel").
+compose_container() { docker compose ps -q "$1" 2>/dev/null | head -n1; }
+
 printf '\n  Waiting for health checks (up to 3 min)...\n'
 DEADLINE=$(( $(date +%s) + 180 ))
 while [[ $(date +%s) -lt $DEADLINE ]]; do
-  API_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' squad-admin-panel-api-1 2>/dev/null || echo 'pending')
-  MIG_STATE=$(docker inspect -f '{{.State.Status}}' squad-admin-panel-migrator-1 2>/dev/null || echo 'running')
-  MIG_RC=$(docker inspect -f '{{.State.ExitCode}}' squad-admin-panel-migrator-1 2>/dev/null || echo '?')
+  api_cid=$(compose_container api)
+  mig_cid=$(compose_container migrator)
+  API_HEALTH=$([[ -n "$api_cid" ]] && docker inspect -f '{{.State.Health.Status}}' "$api_cid" 2>/dev/null || echo 'pending')
+  MIG_STATE=$([[ -n "$mig_cid" ]] && docker inspect -f '{{.State.Status}}' "$mig_cid" 2>/dev/null || echo 'running')
+  MIG_RC=$([[ -n "$mig_cid" ]] && docker inspect -f '{{.State.ExitCode}}' "$mig_cid" 2>/dev/null || echo '?')
   if [[ "$API_HEALTH" == "healthy" && "$MIG_STATE" == "exited" && "$MIG_RC" == "0" ]]; then
     break
   fi
   sleep 3
 done
 
-API_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' squad-admin-panel-api-1 2>/dev/null || echo '?')
+api_cid=$(compose_container api)
+API_HEALTH=$([[ -n "$api_cid" ]] && docker inspect -f '{{.State.Health.Status}}' "$api_cid" 2>/dev/null || echo '?')
 if [[ "$API_HEALTH" == "healthy" ]]; then
   APP_DOMAIN=$(grep '^APP_DOMAIN=' "${REPO}/.env" | cut -d= -f2)
   cat <<DONE

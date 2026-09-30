@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeSeedingTick, isSeedLayer, type SeedingState } from '../src/seeding.js';
+import {
+  computeSeedingTick,
+  isSeedLayer,
+  type SeedingState,
+  seedingStateSchema,
+} from '../src/seeding.js';
 
 const LIVE_AT = 60;
 const HYSTERESIS = 5;
@@ -223,5 +228,51 @@ describe('computeSeedingTick: full crossing sequence (acceptance criterion 1)', 
       if (result.transition) transitions.push(result.transition);
     }
     expect(transitions).toEqual(['started', 'ended']);
+  });
+});
+
+describe('computeSeedingTick: threshold changes without a transition', () => {
+  it('reports the current live_at when the threshold changed while live', () => {
+    const result = computeSeedingTick(liveState({ live_at: 50 }), {
+      playerCount: 80,
+      liveAt: 70,
+      hysteresis: HYSTERESIS,
+      layer: 'Yehorivka RAAS v11',
+      seedLayer: false,
+      now: '2026-07-14T10:05:00.000Z',
+    });
+    expect(result.transition).toBeNull();
+    expect(result.state.live_at).toBe(70);
+  });
+
+  it('reports the current live_at when the threshold changed while seeding', () => {
+    const result = computeSeedingTick(
+      liveState({ state: 'seeding', started_at: '2026-07-14T10:00:00.000Z', live_at: 50 }),
+      {
+        playerCount: 20,
+        liveAt: 70,
+        hysteresis: HYSTERESIS,
+        layer: 'Sumari Seed v1',
+        seedLayer: true,
+        now: '2026-07-14T10:05:00.000Z',
+      },
+    );
+    expect(result.transition).toBeNull();
+    expect(result.state.live_at).toBe(70);
+  });
+});
+
+describe('seedingStateSchema', () => {
+  it('accepts a well-formed state', () => {
+    expect(seedingStateSchema.safeParse(liveState()).success).toBe(true);
+  });
+
+  it.each([
+    ['a wrong field type', { ...liveState(), current_players: '80' }],
+    ['a missing field', { state: 'live' }],
+    ['an unknown state name', { ...liveState(), state: 'paused' }],
+    ['a non-object value', null],
+  ])('rejects %s', (_label, value) => {
+    expect(seedingStateSchema.safeParse(value).success).toBe(false);
   });
 });

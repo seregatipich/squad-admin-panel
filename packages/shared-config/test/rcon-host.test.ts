@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRconHost } from '../src/rcon-host.js';
+import { resolveRconHost, seedPublicHost } from '../src/rcon-host.js';
 
 describe('resolveRconHost', () => {
   it('returns the explicit value when credentials pin a host', () => {
@@ -43,5 +43,18 @@ describe('resolveRconHost', () => {
       if (previous === undefined) delete process.env.RCON_HOST_DEFAULT;
       else process.env.RCON_HOST_DEFAULT = previous;
     }
+  });
+});
+
+describe('seedPublicHost (#980)', () => {
+  it('returns the panel public url hostname, not any RCON dial default', () => {
+    expect(seedPublicHost({ PANEL_PUBLIC_URL: 'https://panel.example.com:8443/x' })).toBe(
+      'panel.example.com',
+    );
+  });
+
+  it('returns null when the url is unset or invalid, never a loopback fallback', () => {
+    expect(seedPublicHost({})).toBeNull();
+    expect(seedPublicHost({ PANEL_PUBLIC_URL: 'not a url' })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
 import {
   Button,
@@ -82,9 +82,27 @@ export default function NewServerWizard() {
   const [lines, setLines] = useState<ProgressLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Closes a still-open install-progress socket on unmount (route change,
+  // back navigation) so it does not keep running against an unmounted page.
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    try {
+      await createAndInstall();
+    } catch (err) {
+      setError(`Не удалось создать сервер: ${(err as Error).message}`);
+      setSubmitting(false);
+    }
+  }
+
+  async function createAndInstall() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = form;
@@ -130,21 +148,27 @@ export default function NewServerWizard() {
     const ws = new WebSocket(
       `${proto}://${window.location.host}/api/v1/servers/${created.id}/install/ws`,
     );
+    wsRef.current = ws;
+    let done = false;
     ws.onmessage = (ev) => {
       try {
         const frame = JSON.parse(ev.data);
         if (frame.done) {
+          done = true;
           setStep(frame.final === 'done' ? 'done' : 'error');
           ws.close();
           return;
         }
         if (frame.error) {
+          done = true;
           setError(String(frame.error));
           setStep('error');
           ws.close();
           return;
         }
-        setLines((prev) => [...prev, frame as ProgressLine]);
+        if (frame.step && frame.message && frame.ts) {
+          setLines((prev) => [...prev, frame as ProgressLine]);
+        }
       } catch {
         // ignore bad frame
       }
@@ -153,10 +177,27 @@ export default function NewServerWizard() {
       setError('Потеряно соединение с API');
       setStep('error');
     };
+    // A close without a prior `done`/`error` frame (dropped connection, or the
+    // backend replaying only a terminal snapshot) must not leave the wizard
+    // stuck on "Установка…" with no way forward (#660).
+    ws.onclose = () => {
+      if (done) return;
+      setError('Соединение с установкой закрылось раньше отчёта о завершении');
+      setStep('error');
+    };
   }
 
   async function submitExternal(e: React.FormEvent) {
     e.preventDefault();
+    try {
+      await connectExternal();
+    } catch (err) {
+      setError(`Не удалось подключить сервер: ${(err as Error).message}`);
+      setSubmitting(false);
+    }
+  }
+
+  async function connectExternal() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = external;

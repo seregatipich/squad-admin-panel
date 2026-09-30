@@ -25,6 +25,50 @@ describe('serverSettingsUpdate port uniqueness', () => {
   });
 });
 
+describe('serverSettingsUpdate multihome (#52 finding 1170)', () => {
+  it('accepts an IP literal and an explicit null', () => {
+    expect(serverSettingsUpdate.safeParse({ multihome: '192.168.1.20' }).success).toBe(true);
+    expect(serverSettingsUpdate.safeParse({ multihome: '::' }).success).toBe(true);
+    expect(serverSettingsUpdate.safeParse({ multihome: null }).success).toBe(true);
+  });
+
+  it('rejects anything that is not an IP literal', () => {
+    for (const multihome of ['0.0.0.0 -SomeFlag', 'not-an-ip', '']) {
+      expect(serverSettingsUpdate.safeParse({ multihome }).success, multihome).toBe(false);
+    }
+  });
+});
+
+describe('serverSettingsUpdate launch/resource knobs (#53)', () => {
+  // #1186: none of these ever reached `docker run`, so accepting them told the
+  // operator a limit was in force when the container ran unlimited.
+  it.each([
+    ['extra_args', '-log'],
+    ['cpu_affinity', '0-3'],
+    ['cpu_weight', 100],
+    ['niceness', 5],
+    ['memory_high_mb', 4096],
+    ['memory_max_mb', 8192],
+    ['io_weight', 100],
+  ])('rejects the never-applied knob %s', (key, value) => {
+    expect(serverSettingsUpdate.safeParse({ [key]: value }).success).toBe(false);
+  });
+
+  it('still accepts the unset value of each knob', () => {
+    expect(
+      serverSettingsUpdate.safeParse({
+        extra_args: '',
+        cpu_affinity: null,
+        cpu_weight: null,
+        niceness: null,
+        memory_high_mb: null,
+        memory_max_mb: null,
+        io_weight: null,
+      }).success,
+    ).toBe(true);
+  });
+});
+
 describe('serverPatch license pairing (SRV-6 #45)', () => {
   const incompleteMessages = (input: unknown): string[] => {
     const result = serverPatch.safeParse(input);

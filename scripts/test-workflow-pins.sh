@@ -16,12 +16,19 @@
 # Exit 0 = every remote `uses:` reference is SHA-pinned; exit 1 = at least one
 # is not, or the scan found no pinnable `uses:` lines at all.
 set -uo pipefail
+shopt -s nullglob
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
 
 failures=()
 checked=0
+
+workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
+if [ ${#workflow_files[@]} -eq 0 ]; then
+  echo "test-workflow-pins: found no workflow files under .github/workflows/ — the scan is broken" >&2
+  exit 1
+fi
 
 while IFS=: read -r file line content; do
   ref=$(printf '%s' "$content" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//')
@@ -39,7 +46,7 @@ while IFS=: read -r file line content; do
   if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     failures+=("$file:$line: $content")
   fi
-done < <(grep -rn 'uses:' .github/workflows/*.yml)
+done < <(grep -rn 'uses:' "${workflow_files[@]}")
 
 if [ "$checked" -eq 0 ]; then
   echo "test-workflow-pins: found no pinnable 'uses:' lines — the scan is broken" >&2

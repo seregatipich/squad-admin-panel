@@ -1,9 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { mediaFiles, mediaLinks, moderationActions, players, roles } from '@squad/db/schema';
+import {
+  mediaFiles,
+  mediaLinks,
+  mediaPublications,
+  moderationActions,
+  players,
+  roles,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
+import { PLAYER_MEDIA_LIMIT } from '../src/routes/media-links.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -318,6 +326,55 @@ describe('GET evidence listing', () => {
     expect(actionItems.some((it) => it.media.id === mediaId)).toBe(true);
   });
 
+  // Regression (#444, #440): the card fetched publications once per evidence
+  // item and could not tell who may publish; both now ride on this listing.
+  it('embeds each file publications and the caller can_manage_media flag', async () => {
+    const targetPlayerId = await insertPlayer({
+      steamId64: testSteamId(978017),
+      canonicalName: 'MediaLinksTarget8',
+    });
+    const mediaId = await insertMediaFile(h.seed.ownerPlayerId ?? null);
+    await h.db.insert(mediaPublications).values({
+      id: randomUUID(),
+      mediaId,
+      destination: 'telegram',
+      status: 'queued',
+    });
+    const attach = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/media/${mediaId}/links`,
+      headers: { cookie: ownerCookie },
+      payload: { entity_type: 'player', entity_id: targetPlayerId },
+    });
+    expect(attach.statusCode).toBe(201);
+
+    const asOwner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}/media`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(asOwner.statusCode).toBe(200);
+    const body = asOwner.json() as {
+      can_manage_media: boolean;
+      items: Array<{ media: { id: string }; publications: Array<Record<string, unknown>> }>;
+    };
+    expect(body.can_manage_media).toBe(true);
+    const item = body.items.find((it) => it.media.id === mediaId);
+    expect(item?.publications).toHaveLength(1);
+    expect(item?.publications[0]).toMatchObject({
+      media_id: mediaId,
+      destination: 'telegram',
+      status: 'queued',
+    });
+
+    const asLinker = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}/media`,
+      headers: { cookie: linkerCookie },
+    });
+    expect(asLinker.json()).toMatchObject({ can_manage_media: false });
+  });
+
   it('accumulates evidence for an EOS-only player without steam_id64', async () => {
     const eosPlayerId = await insertPlayer({
       steamId64: null,
@@ -342,6 +399,55 @@ describe('GET evidence listing', () => {
     expect(playerMedia.statusCode).toBe(200);
     const items = playerMedia.json().items as Array<{ media: { id: string } }>;
     expect(items.some((it) => it.media.id === mediaId)).toBe(true);
+  });
+});
+
+describe('GET /api/v1/players/:playerId/media bounds (#70)', () => {
+  it('returns at most PLAYER_MEDIA_LIMIT links, newest first, skipping deleted media', async () => {
+    const playerId = await insertPlayer({
+      steamId64: testSteamId(978030),
+      canonicalName: 'MediaLinksBulk',
+    });
+    const actionId = await insertModerationAction(playerId);
+    const mediaIds: string[] = [];
+    for (let i = 0; i < PLAYER_MEDIA_LIMIT + 5; i++) mediaIds.push(randomUUID());
+    await h.db.insert(mediaFiles).values(
+      mediaIds.map((id) => ({
+        id,
+        uploaderPlayerId: null,
+        kind: 'external_link',
+        originalFilename: `bulk-${id}.mp4`,
+        mimeType: 'text/uri-list',
+        sizeBytes: 0,
+        sha256: randomUUID().replace(/-/g, ''),
+        storagePath: null,
+        externalUrl: `https://clips.example.com/${id}`,
+      })),
+    );
+    const base = Date.parse('2026-01-01T00:00:00Z');
+    await h.db.insert(mediaLinks).values(
+      mediaIds.map((mediaId, i) => ({
+        id: randomUUID(),
+        mediaId,
+        entityType: i % 2 === 0 ? 'player' : 'moderation_action',
+        entityId: i % 2 === 0 ? playerId : actionId,
+        createdAt: new Date(base + i * 1000),
+      })),
+    );
+    const newest = mediaIds.at(-1) as string;
+    const deleted = mediaIds.at(-2) as string;
+    await h.db.update(mediaFiles).set({ deletedAt: new Date() }).where(eq(mediaFiles.id, deleted));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${playerId}/media`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<{ media: { id: string } }>;
+    expect(items).toHaveLength(PLAYER_MEDIA_LIMIT);
+    expect(items[0]?.media.id).toBe(newest);
+    expect(items.some((it) => it.media.id === deleted)).toBe(false);
   });
 });
 

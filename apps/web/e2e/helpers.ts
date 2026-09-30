@@ -1,6 +1,6 @@
-import { execSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
-import type { BrowserContext, Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import type { BrowserContext } from '@playwright/test';
 
 export const TEST_PASSWORD = 'correct-horse-battery-staple';
 
@@ -8,26 +8,49 @@ export function uniqueEmail(prefix = 'pw'): string {
   return `${prefix}-${randomBytes(3).toString('hex')}@test.local`;
 }
 
+const POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'squad-admin-panel-postgres-1';
+const POSTGRES_USER = process.env.E2E_POSTGRES_USER ?? 'admin';
+const POSTGRES_DB = process.env.E2E_POSTGRES_DB ?? 'admin';
+const REDIS_CONTAINER = process.env.E2E_REDIS_CONTAINER ?? 'squad-admin-panel-redis-1';
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'https://localhost';
+
+/**
+ * Runs one SQL statement in the stack's Postgres container.
+ *
+ * The statement is passed as an argument vector, never through a shell, so `$1`, `$$`
+ * and backticks reach psql untouched. The container, user and database default to the
+ * local stack and can be pointed at an isolated database with `E2E_POSTGRES_*`.
+ */
 export function runSql(sql: string): string {
-  return execSync(
-    `docker exec -i squad-admin-panel-postgres-1 psql -U admin -d admin -At -c ${JSON.stringify(sql)}`,
+  return execFileSync(
+    'docker',
+    [
+      'exec',
+      '-i',
+      POSTGRES_CONTAINER,
+      'psql',
+      '-U',
+      POSTGRES_USER,
+      '-d',
+      POSTGRES_DB,
+      '-At',
+      '-c',
+      sql,
+    ],
     { encoding: 'utf-8' },
   ).trim();
 }
 
+/** Runs one `redis-cli` command in the stack's Redis container (`E2E_REDIS_CONTAINER`). */
 export function redisCmd(args: string[]): string {
-  const escaped = args.map((a) => JSON.stringify(a)).join(' ');
-  return execSync(`docker exec -i squad-admin-panel-redis-1 redis-cli ${escaped}`, {
+  return execFileSync('docker', ['exec', '-i', REDIS_CONTAINER, 'redis-cli', ...args], {
     encoding: 'utf-8',
   }).trim();
 }
 
 function mintRawToken(): { token: string; tokenId: string } {
   const raw = randomBytes(24).toString('base64url');
-  const uuidPart = execSync(`node -e "process.stdout.write(require('crypto').randomUUID())"`, {
-    encoding: 'utf-8',
-  }).trim();
-  const token = `s_${uuidPart}_${raw}`;
+  const token = `s_${randomUUID()}_${raw}`;
   const tokenId = createHash('sha256').update(token).digest('base64url');
   return { token, tokenId };
 }
@@ -50,15 +73,8 @@ export async function seedOwner(steamId64?: string): Promise<{ uid: string; toke
   runSql(
     `INSERT INTO sessions (id, player_id, expires_at, last_activity_at) VALUES ('${tokenId}', '${playerId}', '${expiresAt}', now())`,
   );
-
-  const sessionJson = JSON.stringify({
-    playerId,
-    expiresAt,
-    lastActivityAt: new Date().toISOString(),
-    ip: null,
-    userAgent: null,
-  });
-  redisCmd(['SET', `session:${tokenId}`, sessionJson, 'EX', '86400']);
+  // No Redis cache entry: the API authenticates its own cache entries (#30)
+  // and loads this session from the row above on first use.
 
   return { uid: sid, token };
 }
@@ -82,18 +98,16 @@ export async function teardownOwner(uid: string) {
   }
 }
 
+/** Attaches the seeded owner's session cookie to `context` for `PLAYWRIGHT_BASE_URL`. */
 export async function loginAndAttachCookie(
-  page: Page,
   context: BrowserContext,
-  _unused: unknown,
   seedResult: { uid: string; token: string },
 ): Promise<string> {
-  const baseURL = (context as unknown as { _options?: { baseURL?: string } })._options?.baseURL;
   await context.addCookies([
     {
       name: '__Host-sid',
       value: seedResult.token,
-      url: baseURL ?? page.url() ?? 'https://squad-panel.lan',
+      url: BASE_URL,
       httpOnly: true,
       secure: true,
       sameSite: 'Lax',

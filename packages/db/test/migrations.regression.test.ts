@@ -27,6 +27,28 @@ afterAll(async () => {
 });
 
 describeIfDb('migration regressions', () => {
+  it('player search and report-analytics indexes exist (0126, audit #71)', async () => {
+    const rows = await db.execute(sql`
+      SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname IN (
+          'players_canonical_name_normalized_trgm_idx',
+          'player_name_history_name_normalized_trgm_idx',
+          'player_reports_created_at_idx'
+        )
+      ORDER BY indexname;
+    `);
+    const defs = new Map(
+      (rows as Array<{ indexname: string; indexdef: string }>).map((r) => [
+        r.indexname,
+        r.indexdef,
+      ]),
+    );
+    expect(defs.get('players_canonical_name_normalized_trgm_idx')).toContain('gin_trgm_ops');
+    expect(defs.get('player_name_history_name_normalized_trgm_idx')).toContain('gin_trgm_ops');
+    expect(defs.get('player_reports_created_at_idx')).toContain('(created_at)');
+  });
+
   it('server_log_sources exists with the ssh-only kind check (0113)', async () => {
     const cols = await db.execute(sql`
       SELECT column_name FROM information_schema.columns

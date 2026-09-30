@@ -18,6 +18,7 @@ export {
   type ChatRecord,
   handleChat,
   LIVE_BUS_CHANNEL,
+  PlayerIdCache,
   recordChatMessage,
   resolvePlayerId,
 } from './store.js';

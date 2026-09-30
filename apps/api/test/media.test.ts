@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { mediaFiles, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { insertUploadedMedia } from '../src/lib/media-files.js';
+import { storeMediaUpload } from '../src/lib/media-storage.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
@@ -177,7 +179,7 @@ describe('POST /api/v1/media', () => {
       headers: { cookie, 'content-type': contentType },
       payload: body,
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('stores a valid PNG upload, writes a row + file on disk, and audit-logs the upload', async () => {
@@ -348,6 +350,20 @@ describe('POST /api/v1/media/link', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it.each([
+    'javascript:alert(document.cookie)',
+    'data:text/html,<script>alert(1)</script>',
+    'file:///etc/passwd',
+  ])('rejects the non-http(s) URL %s with 400 (#70)', async (externalUrl) => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/media/link',
+      headers: { cookie: ownerCookie },
+      payload: { external_url: externalUrl },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
 
 describe('GET /api/v1/media/:id and /stream', () => {
@@ -497,5 +513,90 @@ describe('DELETE /api/v1/media/:id', () => {
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('media bytes on disk (#70)', () => {
+  async function upload(content: Buffer): Promise<{ id: string; absolutePath: string }> {
+    const { body, contentType } = buildMultipartPayload(
+      {},
+      { fieldname: 'file', filename: 'disk.png', contentType: 'image/png', content },
+    );
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/media',
+      headers: { cookie: ownerCookie, 'content-type': contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(201);
+    const id = res.json().id as string;
+    const [row] = await h.db.select().from(mediaFiles).where(eq(mediaFiles.id, id));
+    return { id, absolutePath: path.join(h.mediaDir, row?.storagePath ?? '') };
+  }
+
+  async function remove(id: string): Promise<void> {
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/media/${id}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it('frees the file when the last row referencing it is deleted, not before', async () => {
+    const content = pngBytes(555);
+    const first = await upload(content);
+    const second = await upload(content);
+    expect(second.absolutePath).toBe(first.absolutePath);
+    expect(existsSync(first.absolutePath)).toBe(true);
+
+    await remove(first.id);
+    expect(existsSync(first.absolutePath)).toBe(true);
+
+    await remove(second.id);
+    expect(existsSync(first.absolutePath)).toBe(false);
+  });
+
+  it('removes the partial file when the upload stream breaks mid-transfer', async () => {
+    const id = randomUUID();
+    async function* brokenSource(): AsyncGenerator<Buffer> {
+      yield pngBytes(64);
+      // Let the first chunk reach the disk before the client "disconnects".
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      throw new Error('client disconnected');
+    }
+    await expect(
+      storeMediaUpload({ baseDir: h.mediaDir, id, mimeType: 'image/png', source: brokenSource() }),
+    ).rejects.toThrow('client disconnected');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const leftovers = readdirSync(h.mediaDir, { recursive: true }).filter((f) =>
+      String(f).includes(id),
+    );
+    expect(leftovers).toEqual([]);
+  });
+
+  it('removes the stored file when the media_files insert fails', async () => {
+    const id = randomUUID();
+    async function* source(): AsyncGenerator<Buffer> {
+      yield pngBytes(321);
+    }
+    const stored = await storeMediaUpload({
+      baseDir: h.mediaDir,
+      id,
+      mimeType: 'image/png',
+      source: source(),
+    });
+    expect(existsSync(stored.absolutePath)).toBe(true);
+    await expect(
+      insertUploadedMedia(h.db, h.mediaDir, stored, {
+        id,
+        uploaderPlayerId: randomUUID(),
+        kind: 'image',
+        originalFilename: 'orphan.png',
+        mimeType: 'image/png',
+        externalUrl: null,
+      }),
+    ).rejects.toThrow();
+    expect(existsSync(stored.absolutePath)).toBe(false);
   });
 });

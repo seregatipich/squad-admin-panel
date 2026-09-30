@@ -6,6 +6,7 @@ import {
   CHART_BORDER,
   CHART_FRAME,
   CHART_GRID,
+  CHART_HOVER,
   CHART_SERIES,
   CHART_SURFACE,
   CHART_TOOLTIP_STYLE,
@@ -32,6 +33,7 @@ describe('палитра графиков', () => {
     ['CHART_FRAME', CHART_FRAME, 'line-2'],
     ['CHART_SURFACE', CHART_SURFACE, 'surface'],
     ['CHART_BORDER', CHART_BORDER, 'line'],
+    ['CHART_HOVER', CHART_HOVER, 'ink'],
   ])('%s совпадает с токеном темы', (_name, value, tokenName) => {
     expect(value.toLowerCase()).toBe(token(tokenName));
   });
@@ -39,6 +41,7 @@ describe('палитра графиков', () => {
   it.each([
     ['cpu', CHART_SERIES.cpu, 'good'],
     ['ram', CHART_SERIES.ram, 'accent'],
+    ['disk', CHART_SERIES.disk, 'purple-500'],
     ['rx', CHART_SERIES.rx, 'accent'],
     ['tx', CHART_SERIES.tx, 'warn'],
   ])('серия %s взята из палитры состояний', (_key, value, tokenName) => {

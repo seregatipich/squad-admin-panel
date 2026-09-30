@@ -98,27 +98,33 @@ export default function DiscordRoleMappingsSection() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [mappingsRes, rolesRes] = await Promise.all([
-      fetch(BASE, { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (mappingsRes.status === 403) {
-      setHidden(true);
-      return;
-    }
-    if (!mappingsRes.ok) {
+    try {
+      const [mappingsRes, rolesRes] = await Promise.all([
+        fetch(BASE, { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (mappingsRes.status === 403) {
+        setHidden(true);
+        return;
+      }
+      if (!mappingsRes.ok) {
+        setError('Не удалось загрузить маппинги ролей');
+        setLoaded(true);
+        return;
+      }
+      const body = (await mappingsRes.json()) as {
+        items: RoleMappingRow[];
+        status: RoleSyncStatus | null;
+      };
+      setItems(body.items);
+      setStatus(body.status);
+      if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
+      setError(null);
+      setLoaded(true);
+    } catch {
       setError('Не удалось загрузить маппинги ролей');
       setLoaded(true);
-      return;
     }
-    const body = (await mappingsRes.json()) as {
-      items: RoleMappingRow[];
-      status: RoleSyncStatus | null;
-    };
-    setItems(body.items);
-    setStatus(body.status);
-    if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -152,6 +158,8 @@ export default function DiscordRoleMappingsSection() {
       setFormRoleId('');
       setFormDiscordRoleId('');
       await load();
+    } catch (err) {
+      setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -172,6 +180,8 @@ export default function DiscordRoleMappingsSection() {
         return;
       }
       await load();
+    } catch (err) {
+      setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -187,6 +197,8 @@ export default function DiscordRoleMappingsSection() {
         return;
       }
       await load();
+    } catch (err) {
+      setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -203,6 +215,8 @@ export default function DiscordRoleMappingsSection() {
         return;
       }
       setNotice('Синхронизация поставлена в очередь');
+    } catch (err) {
+      setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }

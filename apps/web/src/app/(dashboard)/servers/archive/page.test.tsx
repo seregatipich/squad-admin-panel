@@ -30,10 +30,10 @@ function mockArchiveFetch({
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
-      if (url === '/api/v1/me') {
-        return Promise.resolve(new Response(JSON.stringify({ permissions }), { status: 200 }));
-      }
       if (url === '/api/v1/servers/archive') {
+        if (!permissions.includes('server:view')) {
+          return Promise.resolve(new Response('{}', { status: 403 }));
+        }
         return Promise.resolve(
           new Response(JSON.stringify({ items, total: items.length }), { status: 200 }),
         );
@@ -100,5 +100,15 @@ describe('ArchivePage', () => {
     expect(banner).toHaveTextContent('Доступ запрещён');
     expect(banner).toHaveTextContent('server:view');
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('не запрашивает /api/v1/me: отказ определяется ответом самого архива', async () => {
+    mockArchiveFetch();
+    await renderPage();
+    await screen.findByText('EU Main');
+    const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (call) => call[0],
+    );
+    expect(urls).toEqual(['/api/v1/servers/archive']);
   });
 });

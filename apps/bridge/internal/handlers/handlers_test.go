@@ -640,9 +640,9 @@ func newDiskUsageDispatcher(t *testing.T, root string) (*Dispatcher, *atomic.Int
 	var dockerCalls atomic.Int32
 	d := &Dispatcher{
 		panelRoot: root,
-		duFn: func(path string) (int64, error) {
+		duFn: func(ctx context.Context, path string) (int64, error) {
 			duCalls.Add(1)
-			return realDuBytes(path)
+			return realDuBytes(ctx, path)
 		},
 		statfsFn: func(path string, st *syscall.Statfs_t) error {
 			statfsCalls.Add(1)
@@ -651,7 +651,7 @@ func newDiskUsageDispatcher(t *testing.T, root string) (*Dispatcher, *atomic.Int
 			st.Bsize = 4096
 			return nil
 		},
-		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+		dockerDfFn: func(context.Context) ([]dockerVol, []dockerImg, int64, error) {
 			dockerCalls.Add(1)
 			return []dockerVol{
 					{Name: "squad-depot", Bytes: 1_000_000},
@@ -840,6 +840,9 @@ func TestPanelDiskUsage_ForceBypassesCache(t *testing.T) {
 		t.Fatalf("non-force call re-ran probes")
 	}
 
+	// force is rate-limited to one recompute per panelDiskForceMinInterval;
+	// step past that window (still inside the TTL) to exercise the bypass.
+	ageDiskUsageCache(panelDiskForceMinInterval + time.Second)
 	forceReq := &rpc.Request{ID: "req-2", Method: "panel_disk_usage", Params: []byte(`{"force":true}`)}
 	respForce := d.Handle(context.Background(), forceReq, func(rpc.StreamFrame) {})
 	if !respForce.OK {
@@ -951,9 +954,9 @@ func TestDispatcher_PanicEmitsDiagAndReturnsInternalError(t *testing.T) {
 	t.Cleanup(resetPanelDiskUsageCache)
 
 	d := &Dispatcher{
-		duFn:     func(string) (int64, error) { panic("synthetic-du-panic") },
+		duFn:     func(context.Context, string) (int64, error) { panic("synthetic-du-panic") },
 		statfsFn: func(string, *syscall.Statfs_t) error { return nil },
-		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+		dockerDfFn: func(context.Context) ([]dockerVol, []dockerImg, int64, error) {
 			return []dockerVol{}, []dockerImg{}, 0, nil
 		},
 		panelRoot: t.TempDir(),
@@ -984,269 +987,6 @@ func TestDispatcher_PanicEmitsDiagAndReturnsInternalError(t *testing.T) {
 	}
 	if !strings.Contains(out, `"request_id":"req-panic-1"`) {
 		t.Fatalf("expected request_id field, got %q", out)
-	}
-}
-
-func TestFileReadTail_SnapsToNextNewline(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-
-	logPath := filepath.Join(tmp, "SquadGame.log")
-	content := []byte("line1\nline2\nline3\nline4\n")
-	if err := os.WriteFile(logPath, content, 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 10})
-	req := &rpc.Request{ID: "req-tail-1", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if !resp.OK {
-		t.Fatalf("expected OK, got %+v", resp.Error)
-	}
-	var got struct {
-		Content   string `json:"content"`
-		Offset    int64  `json:"offset"`
-		Size      int64  `json:"size"`
-		Truncated bool   `json:"truncated"`
-	}
-	if err := json.Unmarshal(resp.Result, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Size != int64(len(content)) {
-		t.Fatalf("size = %d, want %d", got.Size, len(content))
-	}
-	if !got.Truncated {
-		t.Fatalf("truncated = false, want true (file 24 bytes, max_bytes 10)")
-	}
-	if got.Content == "" {
-		t.Fatalf("content empty")
-	}
-	if !strings.HasPrefix(got.Content, "line") {
-		t.Fatalf("content = %q does not start at a line boundary", got.Content)
-	}
-	if !strings.HasSuffix(got.Content, "\n") {
-		t.Fatalf("content = %q does not end with newline", got.Content)
-	}
-	if got.Offset <= 0 || got.Offset >= got.Size {
-		t.Fatalf("offset = %d, want between 1 and %d", got.Offset, got.Size-1)
-	}
-	if content[got.Offset-1] != '\n' {
-		t.Fatalf("offset %d does not point to a byte right after a newline", got.Offset)
-	}
-}
-
-func TestFileReadTail_SmallFileReturnsWholeContent(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-
-	logPath := filepath.Join(tmp, "small.log")
-	content := []byte("line1\nline2\n")
-	if err := os.WriteFile(logPath, content, 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 1024})
-	req := &rpc.Request{ID: "req-tail-small", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if !resp.OK {
-		t.Fatalf("expected OK, got %+v", resp.Error)
-	}
-	var got struct {
-		Content   string `json:"content"`
-		Offset    int64  `json:"offset"`
-		Size      int64  `json:"size"`
-		Truncated bool   `json:"truncated"`
-	}
-	if err := json.Unmarshal(resp.Result, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Truncated {
-		t.Fatalf("truncated = true on under-cap file")
-	}
-	if got.Offset != 0 {
-		t.Fatalf("offset = %d, want 0", got.Offset)
-	}
-	if got.Content != string(content) {
-		t.Fatalf("content = %q, want %q", got.Content, string(content))
-	}
-}
-
-func TestFileReadTail_ForbiddenPath(t *testing.T) {
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": "/etc/passwd", "max_bytes": 1024})
-	req := &rpc.Request{ID: "req-tail-forbid", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if resp.OK {
-		t.Fatalf("expected error response, got success")
-	}
-	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
-		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
-	}
-}
-
-func TestFileReadTail_DefaultCap(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-
-	logPath := filepath.Join(tmp, "huge.log")
-	line := []byte("0123456789abcdef0123456789abcdef\n")
-	totalBytes := int64(0)
-	f, err := os.Create(logPath)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	for totalBytes < 200*1024 {
-		n, err := f.Write(line)
-		if err != nil {
-			f.Close()
-			t.Fatalf("write: %v", err)
-		}
-		totalBytes += int64(n)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 0})
-	req := &rpc.Request{ID: "req-tail-cap", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if !resp.OK {
-		t.Fatalf("expected OK, got %+v", resp.Error)
-	}
-	var got struct {
-		Content   string `json:"content"`
-		Offset    int64  `json:"offset"`
-		Size      int64  `json:"size"`
-		Truncated bool   `json:"truncated"`
-	}
-	if err := json.Unmarshal(resp.Result, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Size != totalBytes {
-		t.Fatalf("size = %d, want %d", got.Size, totalBytes)
-	}
-	if !got.Truncated {
-		t.Fatalf("truncated = false on 200 KB file with default cap")
-	}
-	if int64(len(got.Content)) > fileReadTailDefaultMaxBytes {
-		t.Fatalf("content length %d exceeds default cap %d", len(got.Content), fileReadTailDefaultMaxBytes)
-	}
-	if got.Size-got.Offset > fileReadTailDefaultMaxBytes {
-		t.Fatalf("read window %d exceeds default cap %d", got.Size-got.Offset, fileReadTailDefaultMaxBytes)
-	}
-}
-
-func TestFileReadTail_ClampsToCeiling(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-
-	logPath := filepath.Join(tmp, "huge.log")
-	line := []byte("0123456789abcdef0123456789abcdef\n")
-	fileSize := int64(0)
-	targetSize := int64(2 << 20)
-	f, err := os.Create(logPath)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	for fileSize < targetSize {
-		n, err := f.Write(line)
-		if err != nil {
-			f.Close()
-			t.Fatalf("write: %v", err)
-		}
-		fileSize += int64(n)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": int64(2 << 20)})
-	req := &rpc.Request{ID: "req-tail-clamp", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if !resp.OK {
-		t.Fatalf("expected OK, got %+v", resp.Error)
-	}
-	var got struct {
-		Content   string `json:"content"`
-		Offset    int64  `json:"offset"`
-		Size      int64  `json:"size"`
-		Truncated bool   `json:"truncated"`
-	}
-	if err := json.Unmarshal(resp.Result, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Size != fileSize {
-		t.Fatalf("size = %d, want %d", got.Size, fileSize)
-	}
-	if !got.Truncated {
-		t.Fatalf("truncated = false, want true")
-	}
-	contentLen := int64(len(got.Content))
-	ceiling := fileReadTailMaxAllowedBytes
-	if contentLen > ceiling {
-		t.Fatalf("content length %d exceeds 1 MiB ceiling %d", contentLen, ceiling)
-	}
-	if contentLen < ceiling-int64(len(line)) {
-		t.Fatalf("content length %d well below 1 MiB ceiling %d (expected ~1 MiB minus newline-snap slack)", contentLen, ceiling)
-	}
-	if contentLen <= fileReadTailDefaultMaxBytes {
-		t.Fatalf("content length %d collapsed to default cap %d instead of clamping to ceiling", contentLen, fileReadTailDefaultMaxBytes)
-	}
-}
-
-func TestFileReadTail_HonorsExplicitMaxBytes(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-
-	logPath := filepath.Join(tmp, "huge.log")
-	line := []byte("0123456789abcdef0123456789abcdef\n")
-	fileSize := int64(0)
-	f, err := os.Create(logPath)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	for fileSize < 200*1024 {
-		n, err := f.Write(line)
-		if err != nil {
-			f.Close()
-			t.Fatalf("write: %v", err)
-		}
-		fileSize += int64(n)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	requested := int64(32 * 1024)
-	d := &Dispatcher{}
-	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": requested})
-	req := &rpc.Request{ID: "req-tail-exact", Method: "file_read_tail", Params: params}
-	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
-	if !resp.OK {
-		t.Fatalf("expected OK, got %+v", resp.Error)
-	}
-	var got struct {
-		Content   string `json:"content"`
-		Offset    int64  `json:"offset"`
-		Size      int64  `json:"size"`
-		Truncated bool   `json:"truncated"`
-	}
-	if err := json.Unmarshal(resp.Result, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !got.Truncated {
-		t.Fatalf("truncated = false on file larger than requested window")
-	}
-	window := got.Size - got.Offset
-	if window > requested {
-		t.Fatalf("read window %d exceeds requested %d", window, requested)
-	}
-	if window < requested-int64(len(line)) {
-		t.Fatalf("read window %d well below requested %d (newline-snap should drop at most one line)", window, requested)
 	}
 }
 
@@ -1306,7 +1046,7 @@ func TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize(t *testing.T) {
 		_ = exec.Command("docker", "volume", "rm", volName).Run()
 	})
 
-	got, err := volumeOnDiskBytes(volName)
+	got, err := volumeOnDiskBytes(context.Background(), volName)
 	if err != nil {
 		t.Fatalf("volumeOnDiskBytes: %v", err)
 	}
@@ -1725,5 +1465,40 @@ func TestBackupRestore_BadSnapshotIDForbidden(t *testing.T) {
 	}
 	if len(f.Calls) != 0 {
 		t.Fatalf("expected no restore invocation for a rejected snapshot id")
+	}
+}
+
+// #1298: every container_logs_follow runs a root `docker logs --follow`
+// process for as long as its client stays connected, so the bridge caps how
+// many run at once instead of spawning one per connection without bound.
+func TestContainerLogsFollow_RefusesPastConcurrencyCap(t *testing.T) {
+	d := &Dispatcher{Docker: runner.NewDocker(&runner.Fake{})}
+	params, _ := json.Marshal(map[string]any{
+		"name": "squad-019dbaa5-1234-7abc-8def-0123456789ab",
+		"tail": 10,
+	})
+	req := &rpc.Request{ID: "req-logs-cap", Method: "container_logs_follow", Params: params}
+
+	for i := 0; i < maxConcurrentLogFollows; i++ {
+		logFollowSlots <- struct{}{}
+	}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	for i := 0; i < maxConcurrentLogFollows; i++ {
+		<-logFollowSlots
+	}
+	if resp.OK {
+		t.Fatalf("expected the capped call to fail, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeRuntimeError ||
+		!strings.Contains(resp.Error.Message, "too many concurrent log follows") {
+		t.Fatalf("expected the concurrency-cap error, got %+v", resp.Error)
+	}
+
+	resp = d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.Error != nil && strings.Contains(resp.Error.Message, "too many concurrent log follows") {
+		t.Fatalf("a free slot must not be refused, got %+v", resp.Error)
+	}
+	if len(logFollowSlots) != 0 {
+		t.Fatalf("a finished follow must release its slot, %d still held", len(logFollowSlots))
 	}
 }

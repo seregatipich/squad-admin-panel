@@ -1,7 +1,7 @@
 import { banAppeals, moderationActions, players } from '@squad/db/schema';
-import { and, desc, eq, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
@@ -41,28 +41,49 @@ const patchBody = z.object({
   internal_note: z.string().trim().max(NOTE_MAX).optional(),
 });
 
-interface AppealRow {
-  id: string;
-  number: string | number;
-  status: string;
-  steamId64: bigint;
-  body: string;
-  contact: string | null;
-  decisionNote: string | null;
-  internalNote: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  decidedAt: Date | null;
-  playerId: string | null;
-  playerName: string | null;
-  playerSteamId64: bigint | null;
-  actionId: string | null;
-  actionType: string | null;
-  actionReason: string | null;
-  actionCreatedAt: Date | null;
-  actionContext: unknown;
-  handlerId: string | null;
-  handlerName: string | null;
+const appellant = alias(players, 'appeal_player');
+const handler = alias(players, 'appeal_handler');
+
+/** The appeal row joined with its appellant, moderation action and handler. */
+function baseSelection(db: FastifyInstance['db']) {
+  return db
+    .select({
+      id: banAppeals.id,
+      number: banAppeals.number,
+      status: banAppeals.status,
+      steamId64: banAppeals.steamId64,
+      body: banAppeals.body,
+      contact: banAppeals.contact,
+      decisionNote: banAppeals.decisionNote,
+      internalNote: banAppeals.internalNote,
+      createdAt: banAppeals.createdAt,
+      updatedAt: banAppeals.updatedAt,
+      decidedAt: banAppeals.decidedAt,
+      playerId: appellant.id,
+      playerName: appellant.canonicalName,
+      playerSteamId64: appellant.steamId64,
+      actionId: moderationActions.id,
+      actionType: moderationActions.actionType,
+      actionReason: moderationActions.reason,
+      actionCreatedAt: moderationActions.createdAt,
+      actionContext: moderationActions.context,
+      handlerId: handler.id,
+      handlerName: handler.canonicalName,
+    })
+    .from(banAppeals)
+    .leftJoin(appellant, eq(appellant.id, banAppeals.playerId))
+    .leftJoin(moderationActions, eq(moderationActions.id, banAppeals.moderationActionId))
+    .leftJoin(handler, eq(handler.id, banAppeals.handlerPlayerId));
+}
+
+/** One row of {@link baseSelection}, typed from the schema (#97). */
+type AppealRow = Awaited<ReturnType<typeof baseSelection>>[number];
+
+/** Ids of what an approval reverted, across every server it reached. */
+interface RevertSummary {
+  reverted_action_ids: string[];
+  unban_action_ids: string[];
+  removed_lines: number;
 }
 
 function serializeAppeal(row: AppealRow) {
@@ -124,45 +145,9 @@ function isAppealStatus(value: string): value is AppealStatus {
  */
 const appealsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
-  const appellant = alias(players, 'appeal_player');
-  const handler = alias(players, 'appeal_handler');
-
-  function baseSelection() {
-    return app.db
-      .select({
-        id: banAppeals.id,
-        number: banAppeals.number,
-        status: banAppeals.status,
-        steamId64: banAppeals.steamId64,
-        body: banAppeals.body,
-        contact: banAppeals.contact,
-        decisionNote: banAppeals.decisionNote,
-        internalNote: banAppeals.internalNote,
-        createdAt: banAppeals.createdAt,
-        updatedAt: banAppeals.updatedAt,
-        decidedAt: banAppeals.decidedAt,
-        playerId: appellant.id,
-        playerName: appellant.canonicalName,
-        playerSteamId64: appellant.steamId64,
-        actionId: moderationActions.id,
-        actionType: moderationActions.actionType,
-        actionReason: moderationActions.reason,
-        actionCreatedAt: moderationActions.createdAt,
-        actionContext: moderationActions.context,
-        handlerId: handler.id,
-        handlerName: handler.canonicalName,
-      })
-      .from(banAppeals)
-      .leftJoin(appellant, eq(appellant.id, banAppeals.playerId))
-      .leftJoin(moderationActions, eq(moderationActions.id, banAppeals.moderationActionId))
-      .leftJoin(handler, eq(handler.id, banAppeals.handlerPlayerId));
-  }
-
   async function loadAppeal(id: string): Promise<AppealRow | null> {
-    const rows = (await baseSelection()
-      .where(eq(banAppeals.id, id))
-      .limit(1)) as unknown as AppealRow[];
-    return rows[0] ?? null;
+    const [row] = await baseSelection(app.db).where(eq(banAppeals.id, id)).limit(1);
+    return row ?? null;
   }
 
   fast.get(
@@ -183,11 +168,11 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
         .from(banAppeals)
         .where(where);
 
-      const rows = (await baseSelection()
+      const rows = await baseSelection(app.db)
         .where(where)
         .orderBy(desc(banAppeals.createdAt), desc(banAppeals.id))
         .limit(pageSize)
-        .offset((page - 1) * pageSize)) as unknown as AppealRow[];
+        .offset((page - 1) * pageSize);
 
       return {
         items: rows.map(serializeAppeal),
@@ -223,7 +208,7 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/appeals/:id',
     {
       schema: { params: idParams, body: patchBody },
-      config: { permissions: ['mod:unban'], audit: false },
+      config: { permissions: ['mod:unban'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: the mod:unban gate guarantees req.user
@@ -250,27 +235,11 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
       const before = serializeAppeal(existing);
       const decided = req.body.status === 'approved' || req.body.status === 'rejected';
 
-      let revert: {
-        reverted_action_ids: string[];
-        unban_action_ids: string[];
-        removed_lines: number;
-      } | null = null;
-
-      if (req.body.status === 'approved') {
-        const outcome = await revertAppellantBans(
-          existing,
-          { playerId: actor.playerId, canonicalName: actor.canonicalName },
-          req.ip ?? null,
-          `Апелляция #${Number(existing.number)} одобрена`,
-        );
-        if (!outcome.ok) {
-          reply.code(409);
-          return { error: outcome.error };
-        }
-        revert = outcome.summary;
-      }
-
-      await app.db
+      // Claim the transition with a compare-and-set on the status read above:
+      // of two concurrent decisions only one UPDATE matches, so an approve
+      // can never lift bans while a racing reject records the opposite
+      // outcome (#37). The bans are reverted only after the claim succeeds.
+      const claimed = await app.db
         .update(banAppeals)
         .set({
           status: req.body.status,
@@ -280,7 +249,71 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
           decidedAt: decided ? new Date() : existing.decidedAt,
           updatedAt: new Date(),
         })
-        .where(eq(banAppeals.id, existing.id));
+        .where(and(eq(banAppeals.id, existing.id), eq(banAppeals.status, current)))
+        .returning({ id: banAppeals.id });
+      if (claimed.length === 0) {
+        const latest = await loadAppeal(existing.id);
+        const latestStatus = latest?.status;
+        const terminal =
+          latestStatus !== undefined &&
+          isAppealStatus(latestStatus) &&
+          ALLOWED_TRANSITIONS[latestStatus].length === 0;
+        reply.code(409);
+        return { error: terminal ? 'appeal_already_decided' : 'appeal_status_changed' };
+      }
+
+      let revert: RevertSummary | null = null;
+
+      if (req.body.status === 'approved') {
+        const outcome = await revertAppellantBans(
+          existing,
+          { playerId: actor.playerId, canonicalName: actor.canonicalName },
+          req.ip ?? null,
+          `Апелляция #${Number(existing.number)} одобрена`,
+        );
+        if (!outcome.ok) {
+          // Hand the appeal back in its previous state so the moderator can retry;
+          // the audit entry below records what a partial approval already unbanned.
+          await app.db
+            .update(banAppeals)
+            .set({
+              status: current,
+              handlerPlayerId: existing.handlerId,
+              decisionNote: existing.decisionNote,
+              internalNote: existing.internalNote,
+              decidedAt: existing.decidedAt,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(banAppeals.id, existing.id), eq(banAppeals.status, 'approved')));
+          // Servers before the conflicting one are already unbanned and stay
+          // so (#93): record that partial state in the hash chain and report
+          // it, instead of implying the approval changed nothing.
+          const partial = outcome.partial;
+          const partialRevert = partial.unban_action_ids.length > 0 ? partial : null;
+          if (partialRevert) {
+            await writeAuditEntry(app.db, {
+              actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
+              actorIp: req.ip ?? null,
+              actionType: 'appeal.unban_partial',
+              targetType: 'ban_appeal',
+              targetId: existing.id,
+              context: {
+                requestId: req.id,
+                method: req.method,
+                url: req.url,
+                player_id: existing.playerId,
+                reverted_action_ids: partialRevert.reverted_action_ids,
+                unban_action_ids: partialRevert.unban_action_ids,
+                conflict_server_id: outcome.conflictServerId,
+              },
+              statusCode: 409,
+            });
+          }
+          reply.code(outcome.error === 'bans_cfg_unavailable' ? 502 : 409);
+          return { error: outcome.error, partial_revert: partialRevert };
+        }
+        revert = outcome.summary;
+      }
 
       const updated = await loadAppeal(existing.id);
       if (!updated) throw new Error('ban_appeals row missing immediately after update');
@@ -340,9 +373,14 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
    *
    * An appeal whose SteamID64 never resolved to a player, or whose player
    * holds no active ban, is a no-op that still succeeds: the decision belongs
-   * to the moderator and there is simply nothing left to lift. A
-   * `bans_cfg_conflict` on any server aborts the whole approval — the caller
-   * turns it into `409` and leaves the appeal open to retry.
+   * to the moderator and there is simply nothing left to lift.
+   *
+   * Servers are processed in ban order and each unban commits on its own, so
+   * a `bans_cfg_conflict` or `bans_cfg_unavailable` stops the loop but does **not** undo the servers
+   * already unbanned (#93). The failure carries those ids in `partial` and
+   * the conflicting server, so the caller can answer `409`, audit the partial
+   * state and roll the appeal back to its previous status — a retry then reaches only the servers
+   * still holding an active ban.
    */
   async function revertAppellantBans(
     appeal: AppealRow,
@@ -350,19 +388,17 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
     actorIp: string | null,
     reason: string,
   ): Promise<
-    | { ok: false; error: 'bans_cfg_conflict' }
     | {
-        ok: true;
-        summary: {
-          reverted_action_ids: string[];
-          unban_action_ids: string[];
-          removed_lines: number;
-        };
+        ok: false;
+        error: 'bans_cfg_conflict' | 'bans_cfg_unavailable';
+        partial: RevertSummary;
+        conflictServerId: string;
       }
+    | { ok: true; summary: RevertSummary }
   > {
-    const summary = {
-      reverted_action_ids: [] as string[],
-      unban_action_ids: [] as string[],
+    const summary: RevertSummary = {
+      reverted_action_ids: [],
+      unban_action_ids: [],
       removed_lines: 0,
     };
     if (!appeal.playerId) return { ok: true, summary };
@@ -389,13 +425,21 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
           eq(moderationActions.actionType, 'ban'),
           isNull(moderationActions.revertedAt),
         ),
-      );
+      )
+      .orderBy(moderationActions.createdAt, moderationActions.id);
 
     // One unban per distinct server: both `markBansReverted` and the
-    // `Bans.cfg` it mirrors are scoped to a single server's config.
+    // `Bans.cfg` it mirrors are scoped to a single server's config. A ban whose
+    // server was deleted (server_id set NULL) has no Bans.cfg left to edit,
+    // but it is still active in the ledger and in the public banlist, so it is
+    // reverted in the ledger alone below (#37).
     const targetBanPerServer = new Map<string, string>();
+    const serverlessBanIds: string[] = [];
     for (const ban of activeBans) {
-      if (!ban.serverId) continue;
+      if (!ban.serverId) {
+        serverlessBanIds.push(ban.id);
+        continue;
+      }
       if (!targetBanPerServer.has(ban.serverId)) targetBanPerServer.set(ban.serverId, ban.id);
     }
 
@@ -411,10 +455,49 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
         targetActionId,
         extraContext: { appeal_id: appeal.id, appeal_number: Number(appeal.number) },
       });
-      if (!result.ok) return { ok: false, error: result.error };
+      if (!result.ok) {
+        // A ban reverted concurrently (player card) needs no second unban.
+        if (result.error === 'already_reverted') continue;
+        return { ok: false, error: result.error, partial: summary, conflictServerId: serverId };
+      }
       summary.reverted_action_ids.push(...result.revertedActionIds);
       summary.unban_action_ids.push(result.unbanActionId);
       summary.removed_lines += result.removedLines.length;
+    }
+
+    if (serverlessBanIds.length > 0) {
+      const reverted = await app.db
+        .update(moderationActions)
+        .set({ revertedAt: new Date(), revertedBy: actor.playerId })
+        .where(
+          and(
+            inArray(moderationActions.id, serverlessBanIds),
+            isNull(moderationActions.revertedAt),
+          ),
+        )
+        .returning({ id: moderationActions.id });
+      const revertedIds = reverted.map((row) => row.id);
+      // No EVT-1 envelope: moderation events are published per server stream,
+      // and these bans no longer belong to a server.
+      const [unban] = await app.db
+        .insert(moderationActions)
+        .values({
+          playerId,
+          serverId: null,
+          actionType: 'unban',
+          authorPlayerId: actor.playerId,
+          reason,
+          context: {
+            removed_ban_lines: [],
+            reverted_action_ids: revertedIds,
+            appeal_id: appeal.id,
+            appeal_number: Number(appeal.number),
+          },
+        })
+        .returning({ id: moderationActions.id });
+      if (!unban) throw new Error('unban moderation action insert returned no row');
+      summary.reverted_action_ids.push(...revertedIds);
+      summary.unban_action_ids.push(unban.id);
     }
 
     return { ok: true, summary };

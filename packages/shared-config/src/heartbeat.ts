@@ -15,6 +15,37 @@ export const HEARTBEAT_INTERVAL_MS = 5_000;
 export const HEARTBEAT_TTL_SECONDS = 30;
 export const HEARTBEAT_PREFIX = 'worker:heartbeat:';
 
+/**
+ * Heartbeat names of the workers every deployment runs — one per `worker-*`
+ * service in `docker/compose.yml` (a test in `apps/api` keeps the two in
+ * sync). The API's heartbeat watch reports `worker.heartbeat_lost` when one
+ * of them stops publishing. `backup` and `stats` have no compose service and
+ * are therefore not watched.
+ */
+export const MONITORED_WORKERS = [
+  'audit-archiver',
+  'automation',
+  'ban-sync',
+  'clan-guard',
+  'clan-priority-expirer',
+  'config-sync',
+  'diag-flush',
+  'discord',
+  'event-partition',
+  'leaderboard-aggregator',
+  'log-ingest',
+  'media-publisher',
+  'metrics-sampler',
+  'presence-daily',
+  'rcon',
+  'role-expirer',
+  'scheduler',
+  'seed-reward',
+  'steam-refresh',
+] as const;
+
+export type MonitoredWorker = (typeof MONITORED_WORKERS)[number];
+
 export interface HeartbeatPayload {
   name: string;
   ts: string;
@@ -58,16 +89,16 @@ export function startHeartbeat(opts: StartHeartbeatOptions): () => void {
   const started = new Date().toISOString();
 
   const publish = async () => {
-    const payload: HeartbeatPayload = {
-      name: opts.name,
-      ts: new Date().toISOString(),
-      pid: process.pid,
-      hostname: process.env.HOSTNAME,
-      version: opts.version,
-      started_at: started,
-      status: opts.statusFn?.(),
-    };
     try {
+      const payload: HeartbeatPayload = {
+        name: opts.name,
+        ts: new Date().toISOString(),
+        pid: process.pid,
+        hostname: process.env.HOSTNAME,
+        version: opts.version,
+        started_at: started,
+        status: opts.statusFn?.(),
+      };
       await opts.redis.set(heartbeatKey(opts.name), JSON.stringify(payload), 'EX', ttl);
     } catch (err) {
       opts.onError?.(err as Error);

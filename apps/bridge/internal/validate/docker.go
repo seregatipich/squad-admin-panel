@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -193,4 +194,17 @@ func panelServerRoot(p, root, label string) (string, error) {
 		return "", fmt.Errorf("%w: %s server root segment %q is not a uuid", ErrForbidden, label, parts[0])
 	}
 	return cleaned, nil
+}
+
+// Multihome checks the bind address the squad-server container is started
+// with. It is interpolated into the server's command line (`RCONIP=%s`,
+// `MULTIHOME=%s`), which Unreal splits on whitespace, so anything but a bare
+// IPv4/IPv6 literal could append extra launch flags.
+func Multihome(addr string) error {
+	if net.ParseIP(addr) == nil {
+		// Both sentinels: a malformed address is structurally invalid and, being
+		// a launch-flag injection vector, a policy violation (RPC code forbidden).
+		return fmt.Errorf("%w: %w: multihome %q is not an IP address", ErrForbidden, ErrInvalidArgs, addr)
+	}
+	return nil
 }

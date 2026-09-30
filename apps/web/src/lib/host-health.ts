@@ -1,4 +1,5 @@
-export type HealthLevel = 'healthy' | 'warning' | 'critical';
+/** `unknown` — the bridge is up but host info or metrics have not arrived, so no verdict is possible. */
+export type HealthLevel = 'healthy' | 'warning' | 'critical' | 'unknown';
 
 export interface HostHealthInputInfo {
   cpu_cores: number;
@@ -34,7 +35,7 @@ export function computeHostHealth(
   }
 
   if (!info || !metrics) {
-    return { level: 'healthy', reasons: [] };
+    return { level: 'unknown', reasons: [] };
   }
 
   const diskRatio =

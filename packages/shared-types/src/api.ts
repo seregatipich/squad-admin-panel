@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isRestrictedNetworkHost } from './network-host.js';
 
 export const uuidString = z.string().uuid();
 
@@ -54,24 +55,34 @@ export type ServerStatus = z.infer<typeof serverStatus>;
 
 export const serverCreateInput = z
   .object({
-    display_name: z.string().min(1).max(120),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines'),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     description: z.string().max(500).nullable().optional(),
     game_port: z.number().int().min(1024).max(65_535),
     query_port: z.number().int().min(1024).max(65_535),
     beacon_port: z.number().int().min(1024).max(65_535),
     rcon_port: z.number().int().min(1024).max(65_535),
-    multihome: z.string().default('0.0.0.0'),
+    // Interpolated into the Squad command line (RCONIP=/MULTIHOME=) by the
+    // bridge, so only a bare IP literal is accepted (#52).
+    multihome: z.string().ip().default('0.0.0.0'),
     max_players: z.number().int().min(1).max(100).default(100),
     tickrate: z.number().int().min(10).max(120).default(50),
-    extra_args: z.string().default(''),
-    launch_args_override: z.string().nullable().optional(),
-    cpu_affinity: z.string().nullable().optional(),
-    cpu_weight: z.number().int().min(1).max(10_000).nullable().optional(),
-    niceness: z.number().int().min(-20).max(19).nullable().optional(),
-    memory_high_mb: z.number().int().positive().nullable().optional(),
-    memory_max_mb: z.number().int().positive().nullable().optional(),
-    io_weight: z.number().int().min(1).max(10_000).nullable().optional(),
+    // Launch-arg and cgroup knobs: the container is never started with them,
+    // so only their "unset" value is accepted (kept for existing clients that
+    // send the defaults) — a real limit is rejected rather than stored as if it
+    // were in force (#53).
+    extra_args: z.literal('').optional(),
+    launch_args_override: z.null().optional(),
+    cpu_affinity: z.null().optional(),
+    cpu_weight: z.null().optional(),
+    niceness: z.null().optional(),
+    memory_high_mb: z.null().optional(),
+    memory_max_mb: z.null().optional(),
+    io_weight: z.null().optional(),
   })
   .strict()
   .refine(
@@ -92,13 +103,42 @@ export type ServerCreateInput = z.infer<typeof serverCreateInput>;
 export const serverRuntime = z.enum(['container', 'external']);
 export type ServerRuntime = z.infer<typeof serverRuntime>;
 
-/** Hostname or IP literal the panel dials for RCON/A2S — no scheme, no port, no spaces. */
+/**
+ * Hostname or IP literal the panel dials for RCON/A2S/SSH — no scheme, no
+ * port, no spaces, and never the panel host itself (loopback, link-local,
+ * single-label service names; see {@link isRestrictedNetworkHost}, #30).
+ */
 export const rconHostString = z
   .string()
   .trim()
   .min(1)
   .max(253)
-  .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal');
+  .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal')
+  .refine((host) => !isRestrictedNetworkHost(host), {
+    message: 'host must not be a loopback, link-local or internal address',
+  });
+
+/**
+ * An RCON password as stored in the target's `Rcon.cfg`. It is sent verbatim
+ * as the body of the SERVERDATA_AUTH packet, so control characters are
+ * refused: CR/LF/NUL let a password smuggle line-protocol commands into
+ * whatever service the host/port really points at (#30, finding #333).
+ */
+export const rconPasswordString = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((password) => ![...password].some((c) => c < ' ' || c === '\u007f'), {
+    message: 'rcon_password must not contain control characters',
+  });
+
+/**
+ * RCON host of an external server: {@link rconHostString}, which already
+ * refuses every address that resolves into the panel host itself (loopback,
+ * link-local, Docker/Podman host aliases, service names). Container-runtime
+ * servers keep dialling loopback, but they never go through this schema.
+ */
+export const externalRconHost = rconHostString;
 
 /**
  * Body of `POST /api/v1/servers/external` — registers an already-running
@@ -109,12 +149,16 @@ export const rconHostString = z
  */
 export const externalServerCreateInput = z
   .object({
-    display_name: z.string().min(1).max(120),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines'),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     description: z.string().max(500).nullable().optional(),
-    rcon_host: rconHostString,
+    rcon_host: externalRconHost,
     rcon_port: z.number().int().min(1).max(65_535),
-    rcon_password: z.string().min(1).max(200),
+    rcon_password: rconPasswordString,
     query_port: z.number().int().min(1).max(65_535),
     game_port: z.number().int().min(1).max(65_535).default(7787),
     max_players: z.number().int().min(1).max(100).default(100),
@@ -129,9 +173,9 @@ export type ExternalServerCreateInput = z.infer<typeof externalServerCreateInput
  */
 export const externalServerConnectionUpdate = z
   .object({
-    rcon_host: rconHostString.optional(),
+    rcon_host: externalRconHost.optional(),
     rcon_port: z.number().int().min(1).max(65_535).optional(),
-    rcon_password: z.string().min(1).max(200).optional(),
+    rcon_password: rconPasswordString.optional(),
     query_port: z.number().int().min(1).max(65_535).optional(),
     game_port: z.number().int().min(1).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),

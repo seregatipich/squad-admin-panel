@@ -166,6 +166,22 @@ describe('Th', () => {
     expect(screen.getByRole('columnheader', { name: 'Ник' })).toHaveStyle({ width: '12rem' });
     expect(screen.getByRole('columnheader', { name: 'Роль' }).getAttribute('style')).toBeNull();
   });
+
+  it('renders a native tooltip when a title is given', () => {
+    render(
+      <Table ariaLabel="Игроки">
+        <TableHead>
+          <TableRow>
+            <Th title="Отношение убийств к смертям">K/D</Th>
+          </TableRow>
+        </TableHead>
+      </Table>,
+    );
+    expect(screen.getByRole('columnheader', { name: 'K/D' })).toHaveAttribute(
+      'title',
+      'Отношение убийств к смертям',
+    );
+  });
 });
 
 describe('Td', () => {
@@ -247,6 +263,13 @@ describe('SortableTh', () => {
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'descending');
   });
 
+  it('draws the sort direction with vector icons, not text glyphs', () => {
+    renderSortableHeader();
+    const header = screen.getByRole('columnheader');
+    expect(header.querySelector('svg')).not.toBeNull();
+    expect(header.textContent).not.toMatch(/[↑↓⇅]/);
+  });
+
   it('reports an inactive column as unsorted whatever the direction is', () => {
     renderSortableHeader({ sortKey: 'score', activeKey: 'name', direction: 'desc' });
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'none');
@@ -255,6 +278,14 @@ describe('SortableTh', () => {
   it('reports every column as unsorted while the table has no order', () => {
     renderSortableHeader({ activeKey: null });
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'none');
+  });
+
+  it('renders a native tooltip when a title is given', () => {
+    renderSortableHeader({ title: 'Отношение убийств к смертям' });
+    expect(screen.getByRole('columnheader')).toHaveAttribute(
+      'title',
+      'Отношение убийств к смертям',
+    );
   });
 
   it('follows the active column across rerenders', () => {

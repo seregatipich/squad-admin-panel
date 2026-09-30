@@ -11,13 +11,13 @@ import {
 
 const OWNER = 76561198000000001n;
 
-async function seedRunning(h: IntegrationHarness) {
+async function seedRunning(h: IntegrationHarness, status = 'running') {
   const id = uuidv7();
   await h.db.insert(servers).values({
     id,
     displayName: `Server ${id.slice(0, 4)}`,
     slug: `s-${id}`,
-    status: 'running',
+    status,
     runtime: 'container',
   });
   await h.db.insert(serverSettings).values({
@@ -57,6 +57,12 @@ beforeEach(async () => {
   // Cases swap bridge methods and seed fake files on the shared app.
   Object.assign(h.bridge, makeFakeBridge());
   await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
+  // Each case seeds its own 'running'/'starting' container server via
+  // seedRunning(); left over from a previous case, one of these would count
+  // as a live container server not listed in server_ids and now (#20
+  // follow-up) trip the servers_running guard for every later case in this
+  // file.
+  await h.db.delete(servers);
 });
 
 afterEach(async () => {
@@ -271,5 +277,182 @@ describe('POST /api/v1/depot/update background orchestration', () => {
     const lastText = lastFields[lastFields.indexOf('text') + 1] ?? '{}';
     expect(lastStream).toBe('event');
     expect(JSON.parse(lastText)).toEqual({ done: true, final: 'error', error: 'steamcmd failed' });
+  });
+
+  async function progressLines(stream: string): Promise<string[]> {
+    const entries = (await h.redis.xrange('depot:progress', '-', '+')) as Array<[string, string[]]>;
+    return entries
+      .map(([, fields]) => fields)
+      .filter((fields) => fields[fields.indexOf('stream') + 1] === stream)
+      .map((fields) => fields[fields.indexOf('text') + 1] ?? '');
+  }
+
+  it('reports a server that failed to stop instead of swallowing the error (#143)', async () => {
+    const id = await seedRunning(h);
+    const cookie = await loginAsOwner(h);
+    h.bridge.containerStop = async () => {
+      throw new Error('container stop timed out');
+    };
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [id] },
+    });
+    await waitForDepotUpdate();
+
+    const stderr = await progressLines('stderr');
+    expect(stderr.some((line) => line.includes(`squad-${id}`) && line.includes('timed out'))).toBe(
+      true,
+    );
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('running');
+  });
+
+  it('does not mark a server starting when it could not be restarted (#143)', async () => {
+    const id = await seedRunning(h);
+    await h.db.delete(serverSettings).where(eq(serverSettings.serverId, id));
+    const cookie = await loginAsOwner(h);
+    h.bridge.containerStart = async () => {
+      throw new Error('no such container');
+    };
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [id] },
+    });
+    await waitForDepotUpdate();
+
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('stopped');
+    const stderr = await progressLines('stderr');
+    expect(stderr.some((line) => line.includes(`squad-${id}`))).toBe(true);
+  });
+});
+
+describe('POST /api/v1/depot/update with servers that are not running (#135)', () => {
+  it('neither stops nor restarts a server the operator left stopped', async () => {
+    const running = await seedRunning(h);
+    const stopped = await seedRunning(h, 'stopped');
+    const cookie = await loginAsOwner(h);
+
+    const stoppedNames: string[] = [];
+    const startedNames: string[] = [];
+    const ranContainers: string[] = [];
+    h.bridge.containerStop = async ({ name }) => {
+      stoppedNames.push(name);
+      return { status: 'ok' };
+    };
+    h.bridge.containerStart = async ({ name }) => {
+      startedNames.push(name);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async ({ server_id }) => {
+      ranContainers.push(String(server_id));
+      return { status: 'started', container_id: 'x' };
+    };
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [running, stopped] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      status: 'started',
+      servers_to_stop: [running],
+      servers_skipped: [stopped],
+    });
+
+    await waitForDepotUpdate();
+
+    expect(stoppedNames).toEqual([`squad-${running}`]);
+    expect(startedNames).toEqual([`squad-${running}`]);
+    expect(ranContainers).toEqual([]);
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, stopped));
+    expect(row?.status).toBe('stopped');
+  });
+});
+
+describe('POST /api/v1/depot/update lock ownership (#136)', () => {
+  it('does not release a depot lock that another run took over', async () => {
+    const cookie = await loginAsOwner(h);
+    let finishUpdate: () => void = () => undefined;
+    const updateRunning = new Promise<void>((started) => {
+      h.bridge.depotUpdate = async () => {
+        started();
+        await new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        });
+        return { exit_code: 0 };
+      };
+    });
+    const runClosed = new Promise<void>((resolve) => {
+      h.bridge.close = async () => resolve();
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: {},
+    });
+    expect(res.json().status).toBe('started');
+    await updateRunning;
+
+    // The first run's lock expired and a second run acquired the key.
+    await h.redis.set('depot:updating', 'second-run', 'EX', 60);
+    finishUpdate();
+    await runClosed;
+
+    expect(await h.redis.get('depot:updating')).toBe('second-run');
+    await h.redis.del('depot:updating');
+  });
+
+  it('reports the start time of the run holding the lock', async () => {
+    const cookie = await loginAsOwner(h);
+    let finishUpdate: () => void = () => undefined;
+    const updateRunning = new Promise<void>((started) => {
+      h.bridge.depotUpdate = async () => {
+        started();
+        await new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        });
+        return { exit_code: 0 };
+      };
+    });
+
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: {},
+    });
+    await updateRunning;
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: {},
+    });
+    finishUpdate();
+
+    expect(second.json()).toEqual({
+      status: 'already_in_progress',
+      since: first.json().started_at,
+    });
   });
 });

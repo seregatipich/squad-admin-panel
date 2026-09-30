@@ -56,6 +56,15 @@ describe('PERMISSIONS registry', () => {
     expect(def?.dangerous).toBe(true);
   });
 
+  // #36: these keys stop riding on panel_access alone — rbac.ts gates them
+  // behind the role's can_manage_infrastructure flag.
+  it('marks the infrastructure keys as dangerous', () => {
+    const byKey = new Map<string, PermissionDef>(PERMISSIONS.map((p) => [p.key, p]));
+    for (const key of ['config:edit', 'config:rollback', 'admin_group:edit', 'api_token:create']) {
+      expect(byKey.get(key)?.dangerous).toBe(true);
+    }
+  });
+
   it('marks every mod:* key as implemented', () => {
     const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
 
@@ -74,6 +83,24 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('balancer:edit')?.category).toBe('balancer');
     expect(byKey.get('balancer:view')?.unimplemented).toBeUndefined();
     expect(byKey.get('balancer:edit')?.unimplemented).toBeUndefined();
+  });
+
+  // Audit #101: the automation-rule and ban-source reads authorise on these
+  // keys, so an API token reaches them only when delegated the scope.
+  it('exposes production-active read keys for automation rules and ban sources', () => {
+    const byKey = new Map<string, PermissionDef>(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('trigger:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('ban_source:view')?.category).toBe('moderation');
+    expect(byKey.get('ban_source:view')?.unimplemented).toBeUndefined();
+  });
+
+  it('exposes enforced trigger:view/trigger:edit keys for automation rules (#111)', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('trigger:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('trigger:edit')?.unimplemented).toBeUndefined();
+    expect(byKey.get('trigger:edit')?.dangerous).toBe(true);
   });
 
   it('PERMISSION_KEYS matches PERMISSIONS', () => {

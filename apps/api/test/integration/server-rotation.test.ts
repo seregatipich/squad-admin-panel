@@ -177,7 +177,7 @@ describe('GET /api/v1/servers/:id/rotation', () => {
       url: `/api/v1/servers/${serverId}/rotation`,
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns 404 for a nonexistent server', async () => {
@@ -460,5 +460,58 @@ describe('PUT /api/v1/servers/:id/rotation', () => {
     const context = row.context as { before_segment: string | null; after_segment: string };
     expect(context.before_segment).toContain(KNOWN_LAYER_A);
     expect(context.after_segment).toContain(KNOWN_LAYER_A);
+  });
+});
+
+// Regression (#43 finding 310): any bridge read failure was treated as an empty
+// file, so a PUT during a bridge timeout rewrote LayerRotation.cfg with only the
+// managed segment and dropped every operator line outside it.
+describe('rotation reads that fail for a reason other than a missing file', () => {
+  async function withFailingRead<T>(run: () => Promise<T>): Promise<T> {
+    const original = h.bridge.fileRead;
+    h.bridge.fileRead = async () => {
+      throw new Error('bridge call file_read timed out after 15000ms');
+    };
+    try {
+      return await run();
+    } finally {
+      h.bridge.fileRead = original;
+    }
+  }
+
+  it('PUT answers 502 bridge_read_failed and leaves the file untouched', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    seedRotationFile(serverId, FIXTURE);
+
+    const res = await withFailingRead(() =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${serverId}/rotation`,
+        headers: { cookie },
+        payload: { layers: [KNOWN_LAYER_B] },
+      }),
+    );
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'bridge_read_failed' });
+    expect(readRotationFile(serverId)).toBe(FIXTURE);
+  });
+
+  it('GET answers 502 bridge_read_failed instead of reporting a missing file', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    seedRotationFile(serverId, FIXTURE);
+
+    const res = await withFailingRead(() =>
+      h.app.inject({
+        method: 'GET',
+        url: `/api/v1/servers/${serverId}/rotation`,
+        headers: { cookie },
+      }),
+    );
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'bridge_read_failed' });
   });
 });

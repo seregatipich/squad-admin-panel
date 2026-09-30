@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import {
@@ -39,14 +39,21 @@ export function ServerControls({ serverId }: { serverId: string }) {
   const router = useRouter();
   const [server, setServer] = useState<ServerSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [pollErr, setPollErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [forceStopOpen, setForceStopOpen] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateRunning, setUpdateRunning] = useState(false);
+  // Guards against overlapping requests to the same expensive route
+  // (containerInspect + docker stats via the privileged bridge) piling up
+  // behind a slow response (#641).
+  const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     try {
       const r = await fetch(`/api/v1/servers/${serverId}`, {
         credentials: 'include',
@@ -59,14 +66,24 @@ export function ServerControls({ serverId }: { serverId: string }) {
         status: body.server.status,
         runtime: body.server.runtime,
       });
+      setPollErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      setPollErr((e as Error).message);
+    } finally {
+      refreshInFlightRef.current = false;
     }
   }, [serverId]);
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
+    // `server.status` already pushes every status change live (below); this
+    // poll is only a backstop, so it can skip entirely while the tab is
+    // hidden instead of hammering the bridge/docker daemon for a screen no
+    // one is watching (#641).
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      void refresh();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -82,7 +99,8 @@ export function ServerControls({ serverId }: { serverId: string }) {
   if (!server) return null;
 
   const external = server.runtime === 'external';
-  const canStart = server.status !== 'running' && server.status !== 'starting';
+  const canStart =
+    server.status === 'stopped' || server.status === 'ready' || server.status === 'failed';
   const canStop = server.status === 'running' || server.status === 'starting';
 
   async function action(name: 'start' | 'stop' | 'restart' | 'delete') {
@@ -107,6 +125,8 @@ export function ServerControls({ serverId }: { serverId: string }) {
         }
       }
       await refresh();
+    } catch (e) {
+      setErr(`${name} failed: ${(e as Error).message}`);
     } finally {
       setActing(null);
     }
@@ -148,7 +168,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
 
   return (
     <div className="space-y-3">
-      {err ? <InlineBanner tone="crit" title={err} /> : null}
+      {(err ?? pollErr) ? <InlineBanner tone="crit" title={err ?? pollErr ?? ''} /> : null}
       <GroupedList
         title="Управление"
         footnote={
@@ -192,7 +212,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
               >
                 Рестарт
               </Button>
-              {server.status === 'stopped' || updateRunning ? (
+              {server.status === 'stopped' || server.status === 'ready' || updateRunning ? (
                 <Button onClick={() => void startUpdate()} disabled={acting !== null}>
                   {acting === 'update'
                     ? 'Запуск обновления...'
@@ -244,7 +264,11 @@ export function ServerControls({ serverId }: { serverId: string }) {
             method: 'POST',
             credentials: 'include',
           });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          // The dialog shows this message, so carry the API's error code.
+          if (!r.ok) {
+            const body = (await r.json().catch(() => null)) as { error?: string } | null;
+            throw new Error(body?.error ?? `HTTP ${r.status}`);
+          }
           void refresh();
         }}
       />

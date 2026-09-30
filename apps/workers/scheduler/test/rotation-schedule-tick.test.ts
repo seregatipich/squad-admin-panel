@@ -87,6 +87,40 @@ describe('runRotationScheduleTick', () => {
     );
   });
 
+  it('skips a one-off entry more than 15 minutes late instead of firing it (#1004)', async () => {
+    const entry = makeEntry();
+    const deps = makeDeps({
+      // 20 minutes after scheduledAt — as if the worker was down and just recovered.
+      now: new Date('2026-07-13T10:20:00.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await expect(runRotationScheduleTick(deps)).resolves.toEqual({
+      executed: 0,
+      skippedDepotUpdate: 0,
+    });
+    expect(deps.sendRconCommand).not.toHaveBeenCalled();
+    // The cursor still advances, so the entry does not retry forever.
+    expect(deps.setLastExecutedAt).toHaveBeenCalledWith(entry.id, entry.scheduledAt);
+    expect(deps.writeAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ actionType: 'server.rotation_schedule.skip_expired' }),
+    );
+  });
+
+  it('still fires an entry inside the 15-minute lateness window', async () => {
+    const entry = makeEntry();
+    const deps = makeDeps({
+      now: new Date('2026-07-13T10:14:00.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await expect(runRotationScheduleTick(deps)).resolves.toEqual({
+      executed: 1,
+      skippedDepotUpdate: 0,
+    });
+    expect(deps.sendRconCommand).toHaveBeenCalled();
+  });
+
   it('does not advance a schedule while a depot update is active', async () => {
     const entry = makeEntry();
     const deps = makeDeps({
@@ -104,5 +138,34 @@ describe('runRotationScheduleTick', () => {
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({ actionType: 'server.rotation_schedule.skip_depot_update' }),
     );
+  });
+
+  it('audits a depot-update skip once per occurrence across ticks', async () => {
+    const entry = makeEntry();
+    const deps = makeDeps({
+      now: new Date('2026-07-13T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+      isDepotUpdating: vi.fn().mockResolvedValue(true),
+      auditedDepotSkips: new Set<string>(),
+    });
+
+    await runRotationScheduleTick(deps);
+    const second = await runRotationScheduleTick(deps);
+
+    expect(second.skippedDepotUpdate).toBe(1);
+    expect(deps.writeAuditEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the depot flag once per tick however many entries are due', async () => {
+    const entries = [makeEntry(), makeEntry({ id: '019f7800-0000-7000-8000-000000000003' })];
+    const deps = makeDeps({
+      now: new Date('2026-07-13T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue(entries),
+    });
+
+    await runRotationScheduleTick(deps);
+
+    expect(deps.isDepotUpdating).toHaveBeenCalledTimes(1);
+    expect(deps.sendRconCommand).toHaveBeenCalledTimes(2);
   });
 });

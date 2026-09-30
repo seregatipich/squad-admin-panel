@@ -2,9 +2,10 @@ import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
+import { resolveWindow, type WindowBounds } from './analytics.js';
 
-const DEFAULT_WINDOW_DAYS = 30;
-const MAX_WINDOW_DAYS = 366;
+const REPORT_WINDOW_BOUNDS: WindowBounds = { defaultDays: 30, maxDays: 366 };
 const RANK_LIMIT_DEFAULT = 10;
 const RANK_LIMIT_MAX = 50;
 const DAY_MS = 86_400_000;
@@ -19,32 +20,77 @@ const analyticsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(RANK_LIMIT_MAX).default(RANK_LIMIT_DEFAULT),
 });
 
-interface ResolvedWindow {
-  from: Date;
-  to: Date;
-}
-
-function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow {
-  const to = toRaw ? new Date(toRaw) : new Date();
-  const from = fromRaw ? new Date(fromRaw) : new Date(to.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS);
-  const span = to.getTime() - from.getTime();
-  if (span < 0) return { from: to, to };
-  if (span > MAX_WINDOW_DAYS * DAY_MS) {
-    return { from: new Date(to.getTime() - MAX_WINDOW_DAYS * DAY_MS), to };
-  }
-  return { from, to };
-}
-
+/**
+ * `panel_access` first, like every other reports route (`report-actions.ts`,
+ * `reports.ts`): `can_handle_reports` alone does not depend on it, so a role
+ * that lost panel access must not keep reading moderator performance data.
+ */
 function reportsGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
     reply.code(401);
     return { error: 'unauthenticated' };
   }
-  if (!req.user.permissions.canHandleReports) {
+  if (!req.user.permissions.panelAccess || !req.user.permissions.canHandleReports) {
     reply.code(403);
     return { error: 'forbidden' };
   }
   return null;
+}
+
+/*
+ * Row shapes of the raw analytics queries. Postgres returns `numeric`
+ * aggregates (avg, percentile_cont) as strings, hence `number | string`;
+ * every value is normalised with `Number()` when the payload is built.
+ */
+interface SummaryRow extends Record<string, unknown> {
+  total: number;
+  pending: number;
+  in_review: number;
+  resolved: number;
+  rejected: number;
+  avg_resolution_seconds: number | string | null;
+  median_resolution_seconds: number | string | null;
+}
+
+interface TrendRow extends Record<string, unknown> {
+  day: string;
+  count: number;
+}
+
+interface ByServerRow extends Record<string, unknown> {
+  server_id: string;
+  server_name: string | null;
+  total: number;
+  resolved: number;
+  rejected: number;
+}
+
+interface ByHandlerRow extends Record<string, unknown> {
+  player_id: string;
+  name: string | null;
+  handled: number;
+  resolved: number;
+  rejected: number;
+  avg_resolution_seconds: number | string | null;
+}
+
+interface TopTargetRow extends Record<string, unknown> {
+  player_id: string;
+  name: string | null;
+  count_30d: number;
+  count_90d: number;
+}
+
+interface TopReporterRow extends Record<string, unknown> {
+  player_id: string;
+  name: string | null;
+  total: number;
+  resolved: number;
+  rejected: number;
+  confirmed: number;
+  accuracy: number;
+  trusted: boolean;
+  spam_flagged: boolean;
 }
 
 interface ReportAnalyticsPayload {
@@ -92,17 +138,10 @@ interface ReportAnalyticsPayload {
   }>;
 }
 
-function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
 function toCsv(payload: ReportAnalyticsPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
   };
   push('meta', 'server_id', payload.server_id ?? 'all');
   push('meta', 'from', payload.from);
@@ -144,10 +183,11 @@ function toCsv(payload: ReportAnalyticsPayload): string {
 
 /**
  * REPORT-5 (#115) report analytics: SLA/status/handler breakdowns, trend,
- * top targets (fixed 30/90d windows), and reporter trust ranking sourced
- * from `reporter_stats`. Modeled on GET /api/v1/analytics/votes
- * (vote-analytics.ts). Gated by `can_handle_reports` (not just
- * `panelAccess`) since this exposes reporter/handler performance data.
+ * top targets (fixed 30/90d windows), and the reporter ranking for the
+ * requested server/window with each reporter's trust flags from
+ * `reporter_stats`. Modeled on GET /api/v1/analytics/votes
+ * (vote-analytics.ts). Gated by `panelAccess` and `can_handle_reports`
+ * since this exposes reporter/handler performance data.
  */
 const reportAnalyticsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -160,7 +200,7 @@ const reportAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       if (guard) return guard;
 
       const serverId = req.query.server_id ?? null;
-      const { from, to } = resolveWindow(req.query.from, req.query.to);
+      const { from, to } = resolveWindow(req.query.from, req.query.to, REPORT_WINDOW_BOUNDS);
       const fromIso = from.toISOString();
       const toIso = to.toISOString();
       const limit = req.query.limit;
@@ -169,130 +209,100 @@ const reportAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         AND pr.created_at < ${toIso}::timestamptz
         AND (${serverId}::uuid IS NULL OR pr.server_id = ${serverId}::uuid)`;
 
-      const summaryRows = (await app.db.execute(sql`
-        SELECT
-          count(*)::int AS total,
-          count(*) FILTER (WHERE pr.status = 'pending')::int AS pending,
-          count(*) FILTER (WHERE pr.status = 'in_review')::int AS in_review,
-          count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
-          count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected,
-          avg(extract(epoch FROM pr.resolved_at - pr.created_at))
-            FILTER (WHERE pr.resolved_at IS NOT NULL) AS avg_resolution_seconds,
-          percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM pr.resolved_at - pr.created_at))
-            FILTER (WHERE pr.resolved_at IS NOT NULL) AS median_resolution_seconds
-        FROM player_reports pr
-        WHERE ${reportFilter}
-      `)) as unknown as Array<{
-        total: number;
-        pending: number;
-        in_review: number;
-        resolved: number;
-        rejected: number;
-        avg_resolution_seconds: number | string | null;
-        median_resolution_seconds: number | string | null;
-      }>;
-      const summaryRow = summaryRows[0];
-
-      const trendRows = (await app.db.execute(sql`
-        SELECT to_char(date_trunc('day', pr.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
-               count(*)::int AS count
-        FROM player_reports pr
-        WHERE ${reportFilter}
-        GROUP BY 1
-        ORDER BY 1
-      `)) as unknown as Array<{ day: string; count: number }>;
-
-      const byServerRows = (await app.db.execute(sql`
-        SELECT pr.server_id AS server_id,
-               s.display_name AS server_name,
-               count(*)::int AS total,
-               count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
-               count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected
-        FROM player_reports pr
-        LEFT JOIN servers s ON s.id = pr.server_id
-        WHERE ${reportFilter}
-        GROUP BY pr.server_id, s.display_name
-        ORDER BY total DESC, server_name ASC
-      `)) as unknown as Array<{
-        server_id: string;
-        server_name: string | null;
-        total: number;
-        resolved: number;
-        rejected: number;
-      }>;
-
-      const byHandlerRows = (await app.db.execute(sql`
-        SELECT pr.handler_player_id AS player_id,
-               p.canonical_name AS name,
-               count(*)::int AS handled,
-               count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
-               count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected,
-               avg(extract(epoch FROM pr.resolved_at - pr.created_at))
-                 FILTER (WHERE pr.resolved_at IS NOT NULL) AS avg_resolution_seconds
-        FROM player_reports pr
-        JOIN players p ON p.id = pr.handler_player_id
-        WHERE ${reportFilter} AND pr.handler_player_id IS NOT NULL
-        GROUP BY pr.handler_player_id, p.canonical_name
-        ORDER BY handled DESC, name ASC
-        LIMIT ${limit}
-      `)) as unknown as Array<{
-        player_id: string;
-        name: string | null;
-        handled: number;
-        resolved: number;
-        rejected: number;
-        avg_resolution_seconds: number | string | null;
-      }>;
-
       const shortSince = new Date(Date.now() - TARGET_WINDOW_SHORT_DAYS * DAY_MS).toISOString();
       const longSince = new Date(Date.now() - TARGET_WINDOW_LONG_DAYS * DAY_MS).toISOString();
-      const topTargetRows = (await app.db.execute(sql`
-        SELECT pr.target_player_id AS player_id,
-               p.canonical_name AS name,
-               count(*) FILTER (WHERE pr.created_at >= ${shortSince}::timestamptz)::int AS count_30d,
-               count(*) FILTER (WHERE pr.created_at >= ${longSince}::timestamptz)::int AS count_90d
-        FROM player_reports pr
-        JOIN players p ON p.id = pr.target_player_id
-        WHERE pr.target_player_id IS NOT NULL
-          AND pr.created_at >= ${longSince}::timestamptz
-          AND (${serverId}::uuid IS NULL OR pr.server_id = ${serverId}::uuid)
-        GROUP BY pr.target_player_id, p.canonical_name
-        HAVING count(*) FILTER (WHERE pr.created_at >= ${longSince}::timestamptz) > 0
-        ORDER BY count_90d DESC, count_30d DESC, name ASC
-        LIMIT ${limit}
-      `)) as unknown as Array<{
-        player_id: string;
-        name: string | null;
-        count_30d: number;
-        count_90d: number;
-      }>;
 
-      const topReporterRows = (await app.db.execute(sql`
-        SELECT rs.player_id AS player_id,
-               p.canonical_name AS name,
-               rs.total_reports AS total,
-               rs.resolved_reports AS resolved,
-               rs.rejected_reports AS rejected,
-               rs.confirmed_reports AS confirmed,
-               rs.accuracy AS accuracy,
-               rs.trusted AS trusted,
-               (rs.spam_flagged_at IS NOT NULL) AS spam_flagged
-        FROM reporter_stats rs
-        JOIN players p ON p.id = rs.player_id
-        WHERE rs.total_reports > 0
-        ORDER BY rs.total_reports DESC, name ASC
-        LIMIT ${limit}
-      `)) as unknown as Array<{
-        player_id: string;
-        name: string | null;
-        total: number;
-        resolved: number;
-        rejected: number;
-        confirmed: number;
-        accuracy: number;
-        trusted: boolean;
-        spam_flagged: boolean;
-      }>;
+      // The six sections are independent reads, so they run concurrently.
+      const [summaryRows, trendRows, byServerRows, byHandlerRows, topTargetRows, topReporterRows] =
+        await Promise.all([
+          app.db.execute<SummaryRow>(sql`
+          SELECT
+            count(*)::int AS total,
+            count(*) FILTER (WHERE pr.status = 'pending')::int AS pending,
+            count(*) FILTER (WHERE pr.status = 'in_review')::int AS in_review,
+            count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
+            count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected,
+            avg(extract(epoch FROM pr.resolved_at - pr.created_at))
+              FILTER (WHERE pr.resolved_at IS NOT NULL) AS avg_resolution_seconds,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM pr.resolved_at - pr.created_at))
+              FILTER (WHERE pr.resolved_at IS NOT NULL) AS median_resolution_seconds
+          FROM player_reports pr
+          WHERE ${reportFilter}
+        `),
+          app.db.execute<TrendRow>(sql`
+          SELECT to_char(date_trunc('day', pr.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+                 count(*)::int AS count
+          FROM player_reports pr
+          WHERE ${reportFilter}
+          GROUP BY 1
+          ORDER BY 1
+        `),
+          app.db.execute<ByServerRow>(sql`
+          SELECT pr.server_id AS server_id,
+                 s.display_name AS server_name,
+                 count(*)::int AS total,
+                 count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
+                 count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected
+          FROM player_reports pr
+          LEFT JOIN servers s ON s.id = pr.server_id
+          WHERE ${reportFilter}
+          GROUP BY pr.server_id, s.display_name
+          ORDER BY total DESC, server_name ASC
+        `),
+          app.db.execute<ByHandlerRow>(sql`
+          SELECT pr.handler_player_id AS player_id,
+                 p.canonical_name AS name,
+                 count(*)::int AS handled,
+                 count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
+                 count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected,
+                 avg(extract(epoch FROM pr.resolved_at - pr.created_at))
+                   FILTER (WHERE pr.resolved_at IS NOT NULL) AS avg_resolution_seconds
+          FROM player_reports pr
+          JOIN players p ON p.id = pr.handler_player_id
+          WHERE ${reportFilter} AND pr.handler_player_id IS NOT NULL
+          GROUP BY pr.handler_player_id, p.canonical_name
+          ORDER BY handled DESC, name ASC
+          LIMIT ${limit}
+        `),
+          app.db.execute<TopTargetRow>(sql`
+          SELECT pr.target_player_id AS player_id,
+                 p.canonical_name AS name,
+                 count(*) FILTER (WHERE pr.created_at >= ${shortSince}::timestamptz)::int AS count_30d,
+                 count(*) FILTER (WHERE pr.created_at >= ${longSince}::timestamptz)::int AS count_90d
+          FROM player_reports pr
+          JOIN players p ON p.id = pr.target_player_id
+          WHERE pr.target_player_id IS NOT NULL
+            AND pr.created_at >= ${longSince}::timestamptz
+            AND (${serverId}::uuid IS NULL OR pr.server_id = ${serverId}::uuid)
+          GROUP BY pr.target_player_id, p.canonical_name
+          HAVING count(*) FILTER (WHERE pr.created_at >= ${longSince}::timestamptz) > 0
+          ORDER BY count_90d DESC, count_30d DESC, name ASC
+          LIMIT ${limit}
+        `),
+          // Ranked by the reports filed in the requested server/window, like
+          // every other section; confirmed/accuracy/trusted/spam_flagged are the
+          // reporter's overall reputation from reporter_stats.
+          app.db.execute<TopReporterRow>(sql`
+          SELECT pr.reporter_player_id AS player_id,
+                 p.canonical_name AS name,
+                 count(*)::int AS total,
+                 count(*) FILTER (WHERE pr.status = 'resolved')::int AS resolved,
+                 count(*) FILTER (WHERE pr.status = 'rejected')::int AS rejected,
+                 COALESCE(rs.confirmed_reports, 0) AS confirmed,
+                 COALESCE(rs.accuracy, 0) AS accuracy,
+                 COALESCE(rs.trusted, false) AS trusted,
+                 (rs.spam_flagged_at IS NOT NULL) AS spam_flagged
+          FROM player_reports pr
+          JOIN players p ON p.id = pr.reporter_player_id
+          LEFT JOIN reporter_stats rs ON rs.player_id = pr.reporter_player_id
+          WHERE ${reportFilter} AND pr.reporter_player_id IS NOT NULL
+          GROUP BY pr.reporter_player_id, p.canonical_name, rs.confirmed_reports, rs.accuracy,
+                   rs.trusted, rs.spam_flagged_at
+          ORDER BY total DESC, name ASC
+          LIMIT ${limit}
+        `),
+        ]);
+      const summaryRow = summaryRows[0];
 
       const payload: ReportAnalyticsPayload = {
         server_id: serverId,

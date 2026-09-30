@@ -133,7 +133,7 @@ describe('GET /api/v1/host/disk-usage', () => {
       url: '/api/v1/host/disk-usage',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 
   it('returns 401 without a session', async () => {
@@ -166,5 +166,41 @@ describe('GET /api/v1/host/disk-usage', () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]).toBeUndefined();
     expect(calls[1]).toEqual({ force: true });
+  });
+
+  it('treats ?refresh=false and ?refresh=0 as "use the cache", not as a forced walk', async () => {
+    const calls: Array<{ force?: boolean } | undefined> = [];
+    h.bridge.panelDiskUsage = async (opts) => {
+      calls.push(opts);
+      return { ...SAMPLE_USAGE };
+    };
+    const cookie = await loginAsOwner(h);
+
+    for (const value of ['false', '0']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/host/disk-usage?refresh=${value}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode, value).toBe(200);
+    }
+    const forced = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/disk-usage?refresh=true',
+      headers: { cookie },
+    });
+    expect(forced.statusCode).toBe(200);
+
+    expect(calls).toEqual([undefined, undefined, { force: true }]);
+  });
+
+  it('rejects an unrecognised refresh value with 400', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/disk-usage?refresh=maybe',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

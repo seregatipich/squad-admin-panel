@@ -1,5 +1,24 @@
 # `shared-types` — changelog
 
+## 2026-09-27
+
+### Security
+- `api.ts` (#34): `externalRconHost` refuses hosts that land on the panel host itself (loopback, unspecified, link-local, IPv4-mapped/compatible IPv6, `localhost`, `*.docker.internal`, `*.containers.internal`, single-label names, non-canonical numeric IPv4 such as `127.1`), and `rconPasswordString` refuses CR, LF and NUL. Both replace the bare `rconHostString` / `z.string()` fields in `externalServerCreateInput` and `externalServerConnectionUpdate`; `rconHostString` itself (used by `ssh_host`) is unchanged.
+
+## 2026-09-28
+
+### Security
+- `serverCreateInput.multihome` и `serverSettingsUpdate.multihome` принимают только IP-литерал (`z.string().ip()`): bridge подставляет значение в командную строку сервера Squad (`RCONIP=`/`MULTIHOME=`), и строка с пробелами могла добавить параметры запуска (#52).
+
+## 2026-09-28 — Validation gaps from the #53 audit
+
+### Fixed
+- `automation.ts`: `kickActionSchema.reason` is required (non-blank) — worker-rcon refuses `AdminKick` with an empty reason, yet such rules were saved and every firing recorded as executed. Migration `0120_automation_kick_default_reason` backfills a reason on existing blank-reason kick rules.
+- `automation.ts`: `rconCommandActionSchema` requires exactly the argument count worker-rcon demands for the command (new `RCON_OPERATOR_COMMAND_ARG_COUNTS` in `rcon-commands.ts`), each argument non-blank.
+- `automation.ts`: `timeOfDayConditionSchema.timezone` must resolve through `Intl` (`unknown IANA timezone` otherwise) instead of saving a rule that silently never fires.
+- `automation-engine.ts`: `chat_keyword` `word` mode uses Unicode letter/digit boundaries (`u` flag), so Cyrillic keywords no longer match inside other words.
+- `api.ts` / `server-settings.ts`: `multihome` must be an IPv4/IPv6 literal. `extra_args`, `launch_args_override`, `cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight` accept only their unset value (`''`/`null`): the container was never started with them, so a value is now rejected instead of pretending a limit is in force.
+
 ## 2026-07-27
 
 ### Added

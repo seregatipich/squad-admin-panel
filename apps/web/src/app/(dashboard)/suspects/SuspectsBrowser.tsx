@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   Badge,
@@ -24,6 +24,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { describeLoadError } from '@/lib/load-error';
 import { type MarkTone, type MarkTypeOption, markIconEmoji, severityTone } from '@/lib/marks';
 
 interface SuspectMark {
@@ -100,6 +101,8 @@ export function SuspectsBrowser() {
   const [sort, setSort] = useState<SortOption>('last_seen_desc');
 
   const sortId = useId();
+  // Bumped by every first-page load; older responses compare against it and are dropped.
+  const requestGeneration = useRef(0);
 
   useEffect(() => {
     fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' })
@@ -114,6 +117,8 @@ export function SuspectsBrowser() {
   );
 
   const load = useCallback(async () => {
+    requestGeneration.current += 1;
+    const generation = requestGeneration.current;
     setLoading(true);
     setError(null);
     try {
@@ -124,12 +129,13 @@ export function SuspectsBrowser() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as SuspectsResponse;
+      if (generation !== requestGeneration.current) return;
       setRows(body.items);
       setNextCursor(body.next_cursor);
     } catch (e) {
-      setError((e as Error).message);
+      if (generation === requestGeneration.current) setError(describeLoadError(e));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [filters]);
 
@@ -139,6 +145,7 @@ export function SuspectsBrowser() {
 
   async function loadMore() {
     if (!nextCursor || busy) return;
+    const generation = requestGeneration.current;
     setBusy(true);
     setError(null);
     try {
@@ -150,10 +157,12 @@ export function SuspectsBrowser() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as SuspectsResponse;
+      // A filter change while this page was in flight started a newer load.
+      if (generation !== requestGeneration.current) return;
       setRows((prev) => [...prev, ...body.items]);
       setNextCursor(body.next_cursor);
     } catch (e) {
-      setError((e as Error).message);
+      if (generation === requestGeneration.current) setError(describeLoadError(e));
     } finally {
       setBusy(false);
     }

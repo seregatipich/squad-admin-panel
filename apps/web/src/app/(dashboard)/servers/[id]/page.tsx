@@ -156,8 +156,15 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectNowRef = useRef<(() => void) | null>(null);
+  // Guards against overlapping requests: each GET /servers/:id triggers
+  // several DB/Redis reads and two privileged bridge RPCs (containerInspect,
+  // docker stats), so a slow response must not pile up behind the next poll
+  // tick or a live rcon.status/server.status nudge (#633).
+  const refreshInFlightRef = useRef(false);
 
   async function refresh() {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     try {
       const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -165,13 +172,22 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
+      refreshInFlightRef.current = false;
     }
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh closes over `id`
   useEffect(() => {
     void refresh();
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
+    const t = setInterval(() => {
+      // server.status/rcon.status already push every change live; the poll
+      // is only a backstop, so it can skip entirely while the tab is hidden
+      // instead of hammering the bridge/docker daemon for a screen no one is
+      // watching (#633).
+      if (document.hidden) return;
+      void refresh();
+    }, POLL_INTERVAL_MS);
     const onVisibility = () => {
       if (document.visibilityState === 'visible') void refresh();
     };
@@ -233,9 +249,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const currentStatus = data?.server.status ?? null;
   const isExternal = data?.server.runtime === 'external';
   // У внешнего сервера нет контейнера, а значит и потока docker logs.
-  const logsEnabled =
+  const containerLogsExist =
     !isExternal &&
     (currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'stopping');
+  // В потоке те же строки, что в SquadGame.log, вместе с IP игроков, поэтому
+  // API пускает к нему только с server:download_logs (#1239).
+  const logsEnabled = containerLogsExist && canDownloadLogs;
 
   useEffect(() => {
     if (!logsEnabled) {
@@ -276,6 +295,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       clearBackoff();
       attempts = 0;
       const ws = wsRef.current;
+      // CLOSING falls through deliberately: a socket mid-close still has its
+      // own onclose pending, and letting `open()` replace `wsRef.current`
+      // right now would orphan that old socket — its onclose would still
+      // fire, see `wsRef.current !== ws` below, and no longer re-schedule a
+      // reconnect for it, but only because every handler checks identity
+      // first (#632).
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         return;
       }
@@ -284,19 +309,39 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
     function open() {
       if (cancelled) return;
+      // Never leave the previous socket's handlers live once a new one
+      // takes over `wsRef.current`: without this a CLOSING socket's onclose
+      // would still fire after a replacement is already connected, scheduling
+      // a spurious extra reconnect and leaving two sockets appending frames
+      // (#632).
+      const previous = wsRef.current;
+      if (previous) {
+        previous.onopen = null;
+        previous.onmessage = null;
+        previous.onclose = null;
+        previous.onerror = null;
+        previous.close();
+      }
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(
         `${proto}://${window.location.host}/api/v1/servers/${id}/logs/ws?lines=200`,
       );
       wsRef.current = ws;
       ws.onopen = () => {
-        if (cancelled) return;
+        if (cancelled || wsRef.current !== ws) return;
         attempts = 0;
         clearBackoff();
         setLogsLive(true);
         setLogsError(null);
+        // The server always backfills the last 200 lines on connect
+        // (#631) — starting from an empty buffer keeps a reconnect (backoff,
+        // visibilitychange, `online`, or a manual retry) from re-appending
+        // up to 200 lines the operator already saw, out of order with
+        // whatever arrived since.
+        setLogs([]);
       };
       ws.onmessage = (ev) => {
+        if (cancelled || wsRef.current !== ws) return;
         try {
           const frame = JSON.parse(ev.data) as LogEntry & {
             error?: string;
@@ -305,14 +350,17 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           };
           if (frame.heartbeat) return;
           if (frame.error) {
-            setLogs((prev) => [
-              ...prev,
-              {
-                ts: new Date().toISOString(),
-                stream: 'stderr',
-                message: `[log-stream] ${frame.error}`,
-              },
-            ]);
+            setLogs((prev) => {
+              const next = [
+                ...prev,
+                {
+                  ts: new Date().toISOString(),
+                  stream: 'stderr' as const,
+                  message: `[log-stream] ${frame.error}`,
+                },
+              ];
+              return next.length > 2000 ? next.slice(-2000) : next;
+            });
             return;
           }
           if (frame.done) return;
@@ -325,7 +373,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         }
       };
       ws.onclose = (ev) => {
-        if (cancelled) return;
+        if (cancelled || wsRef.current !== ws) return;
         setLogsLive(false);
         const willRetry = attempts < MAX_AUTO_ATTEMPTS;
         const nextDelay = willRetry ? nextBackoffMs(attempts) : null;
@@ -347,6 +395,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         scheduleReconnect();
       };
       ws.onerror = () => {
+        if (cancelled || wsRef.current !== ws) return;
         setLogsLive(false);
       };
     }
@@ -448,7 +497,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       {/* 3. Чат и объявления — то, что оператор отправляет в игру. */}
       <ChatPanel serverId={id} canBan={canBan} />
 
-      <BroadcastComposer serverId={server.id} canChat={canChat} />
+      <BroadcastComposer serverId={server.id} serverName={server.display_name} canChat={canChat} />
 
       <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 
@@ -518,11 +567,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
                 : null
             }
             emptyText={
-              !logsEnabled
-                ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
-                : server.status === 'running' || server.status === 'starting'
-                  ? 'Подключение к логу контейнера…'
-                  : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
+              containerLogsExist && !canDownloadLogs
+                ? 'Лог контейнера доступен только с правом на логи сервера.'
+                : !logsEnabled
+                  ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
+                  : server.status === 'running' || server.status === 'starting'
+                    ? 'Подключение к логу контейнера…'
+                    : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
             }
           />
 

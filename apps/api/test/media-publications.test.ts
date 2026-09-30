@@ -328,6 +328,26 @@ describe('GET /api/v1/media/:id/publications', () => {
     expect(items[0]).toMatchObject({ destination: 'telegram', status: 'queued' });
   });
 
+  // Regression (#440): the publish control could not tell a reader from a
+  // manager, so it offered «Опубликовать» to everyone and failed on submit.
+  it('tells the caller whether it may publish', async () => {
+    const mediaId = await insertStoredMedia();
+
+    const asPlain = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/media/${mediaId}/publications`,
+      headers: { cookie: plainCookie },
+    });
+    const asOwner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/media/${mediaId}/publications`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(asPlain.json()).toMatchObject({ can_manage_media: false });
+    expect(asOwner.json()).toMatchObject({ can_manage_media: true });
+  });
+
   it('surfaces a retrying quota-blocked publication as still queued with a future schedule', async () => {
     const mediaId = await insertStoredMedia();
     await h.app.inject({
@@ -437,6 +457,32 @@ describe('DELETE /api/v1/media/:id/publications/:destination', () => {
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'publication_not_found' });
+  });
+
+  // Regression (#40, #198): a row the worker already claimed (`uploading`)
+  // was deleted anyway, so the upload finished with no panel record and a
+  // retry queued a duplicate public post.
+  it('refuses to delete a publication that is already uploading with 409', async () => {
+    const mediaId = await insertStoredMedia();
+    await queueTelegram(mediaId);
+    await h.db
+      .update(mediaPublications)
+      .set({ status: 'uploading' })
+      .where(eq(mediaPublications.mediaId, mediaId));
+
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/media/${mediaId}/publications/telegram`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'publication_in_progress' });
+    const rows = await h.db
+      .select({ status: mediaPublications.status })
+      .from(mediaPublications)
+      .where(eq(mediaPublications.mediaId, mediaId));
+    expect(rows).toEqual([{ status: 'uploading' }]);
   });
 
   it('rejects an unknown destination with 400', async () => {

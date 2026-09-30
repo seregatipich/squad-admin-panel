@@ -9,6 +9,16 @@
 (notify, role sync, status channel) are disabled by design. Set both to enable
 webhook delivery, role sync, and the status channel/slash commands.
 
+**Container restarts with "loop crashed; exiting so the worker restarts":** one
+of the three loops failed on an error it could not retry, and the worker exited
+on purpose so compose restarts it (#62). The `loop` field names which one.
+
+**A notification arrived late or twice:** a webhook failed and the entry was
+retried by the reclaim sweep (every ~30 s, up to 10 attempts). Webhooks that
+already received it are skipped; only a crash between the POST and the
+per-webhook mark can repeat a message. "discord delivery still failing after
+every retry; acknowledging the entry" means the event was given up on.
+
 **Roles are not being granted or revoked:**
 
 1. Check the banner on `/settings/integrations/discord` — it renders whatever

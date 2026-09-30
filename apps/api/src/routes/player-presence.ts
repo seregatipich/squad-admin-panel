@@ -7,9 +7,10 @@ import {
   servers,
 } from '@squad/db/schema';
 import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calendarDaySchema } from '../lib/calendar-day.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
@@ -19,20 +20,19 @@ const ONLINE_STATUS_CAP = 1000;
 const BONUS_FORMULA_LABEL = 'online + 2×boost';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
+/**
+ * A real calendar day as `YYYY-MM-DD`. `z.string().date()` rejects impossible
+ * dates such as `2024-13-45` or `2023-02-29` with a 400, where a bare format
+ * regex let them through to `Date.parse` (NaN, a 500) or V8's silent rollover.
+ */
 const presenceQuery = z.object({
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 const DAILY_RANGE_DAYS = { '30': 30, '90': 90, '365': 365 } as const;
 const dailyPresenceQuery = z.object({
   range: z.enum(['30', '90', '365']).default('30'),
-  end: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  end: calendarDaySchema.optional(),
 });
 
 function resolveDailyWindow(
@@ -44,18 +44,6 @@ function resolveDailyWindow(
   const endMidnight = Date.parse(`${toDay}T00:00:00.000Z`);
   const fromDay = new Date(endMidnight - (rangeDays - 1) * DAY_MS).toISOString().slice(0, 10);
   return { rangeDays, fromDay, toDay };
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 function resolveWindow(endDay: string | undefined): {
@@ -77,11 +65,11 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/presence',
-    { schema: { params: playerIdParams, querystring: presenceQuery }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    {
+      schema: { params: playerIdParams, querystring: presenceQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
+    async (req) => {
       const { playerId } = req.params;
       const { weekStart, weekEnd, endDay } = resolveWindow(req.query.end);
 
@@ -173,12 +161,9 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/presence/daily',
     {
       schema: { params: playerIdParams, querystring: dailyPresenceQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    async (req) => {
       const { playerId } = req.params;
       const { rangeDays, fromDay, toDay } = resolveDailyWindow(req.query.range, req.query.end);
 
@@ -235,11 +220,8 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/primetime',
-    { schema: { params: playerIdParams }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
+    async (req) => {
       const { playerId } = req.params;
       const now = new Date();
       const windowEndMs = now.getTime();
@@ -308,18 +290,19 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/players/online-status', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
+  fast.get(
+    '/api/v1/players/online-status',
+    { config: { permissions: ['player:view'], audit: false } },
+    async () => {
+      const rows = await app.db
+        .selectDistinct({ playerId: playerSessions.playerId })
+        .from(playerSessions)
+        .where(isNull(playerSessions.disconnectedAt))
+        .limit(ONLINE_STATUS_CAP);
 
-    const rows = await app.db
-      .selectDistinct({ playerId: playerSessions.playerId })
-      .from(playerSessions)
-      .where(isNull(playerSessions.disconnectedAt))
-      .limit(ONLINE_STATUS_CAP);
-
-    return { online_player_ids: rows.map((row) => row.playerId) };
-  });
+      return { online_player_ids: rows.map((row) => row.playerId) };
+    },
+  );
 };
 
 export default playerPresenceRoutes;

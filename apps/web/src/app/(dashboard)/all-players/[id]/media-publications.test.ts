@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   destinationLabel,
+  destinationsForKind,
+  hasPendingPublication,
   isPublishable,
   type MediaPublication,
+  occupiedDestinations,
   PUBLICATION_DESTINATIONS,
   publicationErrorLabel,
   publicationsUrl,
+  publicationUrl,
   statusLabel,
 } from './media-publications';
 
@@ -43,6 +47,29 @@ describe('publicationsUrl', () => {
   });
 });
 
+describe('publicationsUrl encoding', () => {
+  it('encodes the media id path segment (#472)', () => {
+    expect(publicationsUrl('../x')).toBe('/api/v1/media/..%2Fx/publications');
+  });
+});
+
+describe('hasPendingPublication', () => {
+  it('is true while a destination is queued or uploading', () => {
+    expect(hasPendingPublication([publication({ status: 'queued' })])).toBe(true);
+    expect(hasPendingPublication([publication({ status: 'uploading' })])).toBe(true);
+  });
+
+  it('is false once every destination has settled', () => {
+    expect(hasPendingPublication([])).toBe(false);
+    expect(
+      hasPendingPublication([
+        publication({ status: 'published' }),
+        publication({ id: 'pub-2', destination: 'youtube', status: 'failed' }),
+      ]),
+    ).toBe(false);
+  });
+});
+
 describe('isPublishable', () => {
   it('allows stored video and image files', () => {
     expect(isPublishable('video')).toBe(true);
@@ -51,6 +78,33 @@ describe('isPublishable', () => {
 
   it('rejects an external link, which has no local file to upload', () => {
     expect(isPublishable('external_link')).toBe(false);
+  });
+});
+
+describe('publicationUrl', () => {
+  it('builds the per-destination publication endpoint', () => {
+    expect(publicationUrl('abc', 'youtube')).toBe('/api/v1/media/abc/publications/youtube');
+  });
+});
+
+describe('destinationsForKind (#439)', () => {
+  it('offers both destinations for a video', () => {
+    expect(destinationsForKind('video')).toEqual(['youtube', 'telegram']);
+  });
+
+  it('excludes YouTube for an image — the worker rejects it as unsupported', () => {
+    expect(destinationsForKind('image')).toEqual(['telegram']);
+  });
+});
+
+describe('occupiedDestinations (#439)', () => {
+  it('treats a failed publication as free, not occupying its destination', () => {
+    const occupied = occupiedDestinations([
+      publication({ destination: 'youtube', status: 'failed' }),
+      publication({ destination: 'telegram', status: 'queued' }),
+    ]);
+    expect(occupied.has('youtube')).toBe(false);
+    expect(occupied.has('telegram')).toBe(true);
   });
 });
 

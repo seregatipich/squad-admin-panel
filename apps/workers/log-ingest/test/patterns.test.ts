@@ -23,11 +23,48 @@ describe('log line prefix parser', () => {
   });
 
   it('filters the audio-export noise', () => {
+    const noise = (line: string) => {
+      const parsed = parseLine(`[2026.04.23-11.30.20:485][  0]${line}`);
+      if (!parsed) throw new Error(`fixture did not parse: ${line}`);
+      return isBenignNoise(parsed);
+    };
     expect(
-      isBenignNoise('LogStreaming: Error: CreateExport: /Game/Vehicles/Foo EngineFailedStartAudio'),
+      noise('LogStreaming: Error: CreateExport: /Game/Vehicles/Foo EngineFailedStartAudio'),
     ).toBe(true);
-    expect(isBenignNoise('LogSquad: Error: Failed to spawn EquipableItem')).toBe(true);
-    expect(isBenignNoise('LogGameMode: Display: Match State Changed')).toBe(false);
+    expect(noise('LogSquad: Error: Failed to spawn EquipableItem Foo')).toBe(true);
+    expect(noise('LogRedpointEOS: Verbose: tick')).toBe(true);
+    expect(noise('LogStreaming: Warning: Skipped failed export /Game/Foo')).toBe(true);
+    expect(noise('LogGameMode: Display: Match State Changed')).toBe(false);
+  });
+});
+
+describe('benign-noise filter against player-controlled text (regression #930)', () => {
+  const EOS = '0002a10186d9414496bf20d22d3860ba';
+  const STEAM = '76561198012345678';
+  const SENDER = `${STEAM} [Online IDs: EOS: ${EOS} steam: ${STEAM}] Alpha Player`;
+
+  it('a nickname containing a noise marker still produces player.connected', () => {
+    const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000 });
+    ing.ingest('[2026.04.23-11.30.00:000][0]LogNet: Join succeeded: LogRedpointEOS: Verbose: ');
+    const events = ing.ingest(
+      `[2026.04.23-11.30.00:100][0]LogRedpointEOS: EOSNet VoiceChat EOS:${EOS} Steam:${STEAM}`,
+    );
+    expect(events.map((event) => event.type)).toEqual(['player.connected']);
+    expect((events[0]?.payload as Record<string, unknown>).name).toBe('LogRedpointEOS: Verbose: ');
+  });
+
+  it.each([
+    'LogSquad: Error: Failed to spawn EquipableItem',
+    'LogStreaming: Warning: Skipped failed export',
+    'LogStreaming: Error: CreateExport: x EngineFailedStartAudio',
+  ])('a chat message containing %j is still delivered', (marker) => {
+    const onChat = vi.fn();
+    const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000, onChat });
+    ing.ingest(
+      `[2026.04.23-11.30.20:485][123]LogSquad: ChatMessage: ${SENDER} : ChatAll : ${marker}`,
+    );
+    expect(onChat).toHaveBeenCalledTimes(1);
+    expect(onChat.mock.calls[0]?.[0].message).toBe(marker);
   });
 });
 
@@ -124,6 +161,18 @@ describe('Squad fatal/log-exit/assertion detection', () => {
     expect(match?.file).toBe('/SquadGame/SCharacter.cpp');
     expect(match?.line).toBe(1842);
     expect(match?.ts).toBeNull();
+  });
+
+  it('detects an Assertion failed line behind the standard log prefix', () => {
+    const line =
+      '[2026.04.23-11.41.10:500][123]LogOutputDevice: Error: Assertion failed: bIsValid [File:/SquadGame/Foo.cpp Line: 42]';
+    expect(detectSquadFatal(line)?.file).toBe('/SquadGame/Foo.cpp');
+  });
+
+  it('ignores an assertion string typed into player chat', () => {
+    const line =
+      '[2026.04.23-11.41.10:500][123]LogSquad: ChatMessage: Player : ChatAll : Assertion failed: x [File:/a.cpp Line: 1]';
+    expect(detectSquadFatal(line)).toBeNull();
   });
 
   it('LogIngestor invokes onSquadFatal once per matching line for each pattern', () => {

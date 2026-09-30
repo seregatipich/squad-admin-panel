@@ -46,16 +46,64 @@ export function formatUptime(seconds: number): string {
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 }
 
-export function formatRelativeTime(sampledAt: string | Date, now: Date = new Date()): string {
-  const ts = sampledAt instanceof Date ? sampledAt : new Date(sampledAt);
-  if (Number.isNaN(ts.getTime())) return '—';
-  const diffMs = now.getTime() - ts.getTime();
-  if (diffMs < 0) return 'только что';
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return '> 1d ago';
+/** Server display name: slug, then name, then a dash. */
+export function serverLabel(server: {
+  server_slug: string | null;
+  server_name: string | null;
+}): string {
+  return server.server_slug ?? server.server_name ?? '—';
+}
+
+/** Match duration as `«Xч Yм»`, `«Xм Yс»` or `«Xс»`; a dash for missing or invalid input. */
+export function formatMatchDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${hours}ч ${minutes}м`;
+  if (minutes > 0) return `${minutes}м ${secs}с`;
+  return `${secs}с`;
+}
+
+const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Converts an `<input type="date">` value into the ISO bound of that day in
+ * the browser's time zone — the zone every panel timestamp is rendered in, so
+ * a filter "с 01.09" keeps exactly the rows the table labels 01.09 (#462).
+ *
+ * @param value `YYYY-MM-DD` as produced by a date input; empty means no bound.
+ * @param endOfDay `true` for the inclusive upper bound (23:59:59.999 local).
+ * @returns The bound as a UTC ISO string, or `null` for an empty/invalid value.
+ */
+export function dateInputToIso(value: string, endOfDay: boolean): string | null {
+  const match = DATE_INPUT_PATTERN.exec(value);
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+  const bound = endOfDay
+    ? new Date(year, month, day, 23, 59, 59, 999)
+    : new Date(year, month, day, 0, 0, 0, 0);
+  if (Number.isNaN(bound.getTime()) || bound.getMonth() !== month) return null;
+  return bound.toISOString();
+}
+
+/**
+ * The panel's single `ru-RU` date-time format (`09.07.2026, 13:05`), rendered
+ * in the browser's zone.
+ *
+ * @param iso ISO timestamp; `null`, `undefined` or an unparsable value yields `fallback`.
+ * @param fallback What to show when there is no valid timestamp; defaults to an em dash.
+ */
+export function formatDateTimeRu(iso: string | null | undefined, fallback = '—'): string {
+  if (!iso) return fallback;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

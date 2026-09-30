@@ -20,7 +20,10 @@ import { containerOnlyPreHandler } from '../lib/server-runtime.js';
  *     Streams the chosen file to the client as an attachment. The bridge emits
  *     the file in chunks (`file_read_stream`) which are piped straight to the
  *     reply, so a multi-hundred-megabyte log is never buffered in full — the
- *     hard acceptance criterion for this feature.
+ *     hard acceptance criterion for this feature. When the client reads slower
+ *     than the bridge sends, the bridge connection is paused until the reply
+ *     stream drains (#291); an aborted download closes it, which cancels the
+ *     read on the bridge side.
  */
 
 // Files Squad writes: the live `SquadGame.log` plus rotated
@@ -72,10 +75,15 @@ const serverLogFilesRoutes: FastifyPluginAsync = async (app) => {
       const { id, name } = req.params;
       const path = `${logsDir(id)}/${name}`;
 
-      // Dedicated bridge connection so an aborted download tears down the
-      // bridge-side read cleanly (mirrors server-logs.ts).
+      // Dedicated bridge connection: pausing it applies backpressure to this
+      // download alone, and closing it cancels the bridge-side read.
       const client = app.makeBridgeClient();
       const stream = new PassThrough();
+      let finished = false;
+      // Fastify destroys the stream when the client goes away mid-download.
+      stream.on('close', () => {
+        if (!finished) void client.close().catch(() => undefined);
+      });
 
       void reply.header('Content-Type', 'application/octet-stream');
       void reply.header('Content-Disposition', `attachment; filename="${name}"`);
@@ -88,8 +96,13 @@ const serverLogFilesRoutes: FastifyPluginAsync = async (app) => {
           await client.connect();
           await client.fileReadStream({ path }, (frame) => {
             const data = typeof frame.data === 'string' ? frame.data : '';
-            if (data.length > 0) stream.write(Buffer.from(data, 'base64'));
+            if (data.length === 0 || stream.destroyed) return;
+            if (!stream.write(Buffer.from(data, 'base64'))) {
+              client.pause();
+              stream.once('drain', () => client.resume());
+            }
           });
+          finished = true;
           stream.end();
         } catch (err) {
           stream.destroy(err as Error);

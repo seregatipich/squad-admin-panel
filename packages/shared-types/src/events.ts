@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { httpUrlSchema } from './url.js';
+
+/** Squad join links use `steam://connect/...`, so http(s)-only is too strict. */
+const joinLinkSchema = httpUrlSchema(512, ['http:', 'https:', 'steam:']);
 
 export const EVENT_TYPES = [
   'server.ready',
@@ -184,7 +188,7 @@ export type AltBanEvasionSuspectedPayload = z.infer<typeof altBanEvasionSuspecte
 export const seedCallSentPayload = z
   .object({
     server_name: z.string().min(1).max(128),
-    join_link: z.string().url().max(512),
+    join_link: joinLinkSchema,
     seed_layer: z.string().max(128).nullable(),
     scheduled_for: z.string().datetime().nullable(),
     source: z.enum(['manual', 'schedule']),
@@ -249,7 +253,7 @@ export const seedingTransitionPayload = z
     hysteresis: z.number().int().nonnegative(),
     progress_pct: z.number().int().min(0).max(100),
     server_name: z.string().min(1).max(128).optional(),
-    join_link: z.string().url().max(512).optional(),
+    join_link: joinLinkSchema.optional(),
   })
   .strict();
 export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;

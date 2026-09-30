@@ -47,6 +47,7 @@ import {
   formatDamage,
   formatEventTime,
   hasActiveFilters,
+  matchesLiveFilters,
   PAGE_LIMIT,
   parseFilters,
   playerHref,
@@ -114,6 +115,14 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const [rows, setRows] = useState<CombatApiRow[]>([]);
+  /**
+   * Live rows prepended via the `combat.event` live-bus subscription, kept in
+   * their own array separate from the paginated `rows` history. Capping this
+   * array on its own (instead of slicing the merged list) means an unattended
+   * Live view never drops history rows the loaded page's `nextCursor` still
+   * expects to find — see COMBAT-529.
+   */
+  const [liveRows, setLiveRows] = useState<CombatApiRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [approxTotal, setApproxTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -178,18 +187,22 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     )
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as CombatListResponse;
+        const body = (await res.json()) as Partial<CombatListResponse>;
+        if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
+        return body as CombatListResponse;
       })
       .then((data) => {
         if (!current()) return;
         setRows(data.rows);
+        setLiveRows([]);
         setNextCursor(data.nextCursor);
         setApproxTotal(data.approxTotal);
       })
       .catch((err: unknown) => {
         if (!current()) return;
-        setError((err as Error).message);
+        setError(err instanceof Error ? err.message : String(err));
         setRows([]);
+        setLiveRows([]);
         setNextCursor(null);
       })
       .finally(() => {
@@ -206,6 +219,12 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    // Captured at the start: if the user changes filters while this request
+    // is in flight, loadFirstPage bumps listRequestRef and this stale
+    // response is dropped instead of appending rows (or a cursor) from the
+    // filter that was active when it was sent.
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -213,13 +232,16 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as CombatListResponse;
-      setRows((prev) => appendPage(prev, data.rows));
-      setNextCursor(data.nextCursor);
+      const body = (await res.json()) as Partial<CombatListResponse>;
+      if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
+      if (!current()) return;
+      setRows((prev) => appendPage(prev, body.rows as CombatApiRow[]));
+      setNextCursor(body.nextCursor ?? null);
     } catch (err) {
-      setError((err as Error).message);
+      if (!current()) return;
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoadingMore(false);
+      if (current()) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore, lockedServerId]);
 
@@ -237,16 +259,19 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const onCombat = useCallback(
     (event: Extract<LiveEvent, { type: 'combat.event' }>) => {
       if (!liveEnabled) return;
-      if (lockedServerId && event.data.server_id !== lockedServerId) return;
-      setRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
+      const row = combatEventToRow(event.data);
+      if (!matchesLiveFilters(row, filters, lockedServerId)) return;
+      setLiveRows((prev) => prependLiveRow(prev, row));
     },
-    [liveEnabled, lockedServerId],
+    [liveEnabled, lockedServerId, filters],
   );
   useLiveSubscription('combat.event', onCombat);
 
+  const combinedRows = useMemo(() => [...liveRows, ...rows], [liveRows, rows]);
+
   const displayRows = useMemo(
-    () => (damageVisible ? sortRowsByDamage(rows, damageSort) : rows),
-    [rows, damageVisible, damageSort],
+    () => (damageVisible ? sortRowsByDamage(combinedRows, damageSort) : combinedRows),
+    [combinedRows, damageVisible, damageSort],
   );
 
   const exportHref = `/api/v1/combat-events/export?${buildExportApiQuery(filters, { lockedServerId })}`;
@@ -666,7 +691,7 @@ function PlayerAutocomplete({
         .then((res) => (res.ok ? res.json() : { items: [] }))
         .then((data: PlayersResponse) => {
           if (cancelled) return;
-          const names = data.items
+          const names = (data.items ?? [])
             .map((item) => item.canonical_name)
             .filter((name): name is string => Boolean(name));
           setSuggestions(Array.from(new Set(names)).slice(0, 10));
@@ -692,7 +717,14 @@ function PlayerAutocomplete({
           list={listId}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => onCommit(draft.trim())}
+          onBlur={() => {
+            // Only commit when the draft actually changed. A deep link sets
+            // attackerPlayerId/victimPlayerId with an empty query — a blur
+            // with nothing typed (e.g. Tab past the field) must not fire
+            // onCommit and silently clear that id-based filter (#530).
+            const trimmed = draft.trim();
+            if (trimmed !== value) onCommit(trimmed);
+          }}
           placeholder={placeholder}
         />
       </FieldRow>

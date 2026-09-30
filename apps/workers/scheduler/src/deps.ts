@@ -24,31 +24,23 @@ import {
   STREAM_NAME,
   seedCallSentPayload,
 } from '@squad/shared-types';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
+import type { SendRconCommandInput } from './due-occurrence.js';
 import type {
-  MapVoteAuditEntry,
   MapVoteCandidateEntry,
   MapVoteServerEntry,
   MapVoteTickDeps,
 } from './map-vote-tick.js';
-import type {
-  RotationProfileAuditEntry,
-  RotationProfileEntry,
-  RotationProfileTickDeps,
-} from './rotation-profile-tick.js';
-import type {
-  RotationScheduleAuditEntry,
-  RotationScheduleEntry,
-  RotationScheduleTickDeps,
-} from './rotation-schedule-tick.js';
-import type {
-  ScheduledBroadcastEcho,
-  ScheduledTaskAuditEntry,
-  ScheduledTaskEntry,
-  ScheduledTaskRunRecord,
-  ScheduledTaskTickDeps,
+import type { RotationProfileEntry, RotationProfileTickDeps } from './rotation-profile-tick.js';
+import type { RotationScheduleEntry, RotationScheduleTickDeps } from './rotation-schedule-tick.js';
+import {
+  PermanentTaskDispatchError,
+  type ScheduledBroadcastEcho,
+  type ScheduledTaskEntry,
+  type ScheduledTaskRunRecord,
+  type ScheduledTaskTickDeps,
 } from './scheduled-task-tick.js';
 import type {
   ActiveSeason,
@@ -57,42 +49,45 @@ import type {
 } from './season-finalize-tick.js';
 import type {
   SeedingLiveness,
-  SeedScheduleAuditEntry,
   SeedScheduleEntry,
   SeedScheduleTickDeps,
-  SendRconCommandInput,
 } from './seed-schedule-tick.js';
 
 const RCON_STREAM_MAXLEN = 500;
 const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
 
-function seedPublicHost(): string {
-  const panelUrl = process.env.PANEL_PUBLIC_URL;
-  if (panelUrl) {
-    try {
-      return new URL(panelUrl).hostname;
-    } catch {
-      // Fall through to the service's configured RCON host.
-    }
-  }
-  return process.env.RCON_HOST_DEFAULT ?? '127.0.0.1';
-}
-
+/**
+ * Loads the seed-schedule entries the tick can still execute: enabled
+ * recurring entries, and enabled one-off entries that have not run yet.
+ * Filtering executed one-offs in SQL keeps the per-tick read from growing with
+ * the calendar's history; the query matches the partial index
+ * `seed_schedule_active_idx`.
+ */
 export async function loadEnabledSeedScheduleEntries(
   db: DatabaseClient,
 ): Promise<SeedScheduleEntry[]> {
-  const rows = await db.select().from(seedSchedule).where(eq(seedSchedule.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    startsAt: row.startsAt,
-    seedLayer: row.seedLayer,
-    broadcastText: row.broadcastText,
-    notifyMinutesBefore: row.notifyMinutesBefore,
-    recurrence: row.recurrence,
-    lastExecutedAt: row.lastExecutedAt,
-    createdAt: row.createdAt,
-  }));
+  const rows = await db
+    .select({
+      id: seedSchedule.id,
+      serverId: seedSchedule.serverId,
+      startsAt: seedSchedule.startsAt,
+      seedLayer: seedSchedule.seedLayer,
+      broadcastText: seedSchedule.broadcastText,
+      notifyMinutesBefore: seedSchedule.notifyMinutesBefore,
+      recurrence: seedSchedule.recurrence,
+      lastExecutedAt: seedSchedule.lastExecutedAt,
+      createdAt: seedSchedule.createdAt,
+    })
+    .from(seedSchedule)
+    .innerJoin(servers, eq(servers.id, seedSchedule.serverId))
+    .where(
+      and(
+        eq(seedSchedule.enabled, true),
+        isNull(servers.deletedAt),
+        or(isNotNull(seedSchedule.recurrence), isNull(seedSchedule.lastExecutedAt)),
+      ),
+    );
+  return rows;
 }
 
 export async function isDepotUpdating(redis: Pick<Redis, 'get'>): Promise<boolean> {
@@ -163,9 +158,22 @@ export async function setLastExecutedAt(
     .where(eq(seedSchedule.id, entryId));
 }
 
-export async function writeSeedScheduleAuditEntry(
-  db: DatabaseClient,
-  entry: SeedScheduleAuditEntry,
+/** Fields shared by every system-actor `audit_log` row this worker writes. */
+export interface SystemAuditEntry {
+  actor: { kind: 'system'; label: string };
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  context: Record<string, unknown>;
+}
+
+/**
+ * Appends one `audit_log` row for a scheduler action. `rowHash` is a
+ * placeholder: the `audit_log_append` trigger computes the real hash chain.
+ */
+export async function writeSystemAuditEntry(
+  db: Pick<DatabaseClient, 'insert'>,
+  entry: SystemAuditEntry,
 ): Promise<void> {
   await db.insert(auditLog).values({
     actorKind: entry.actor.kind,
@@ -184,19 +192,34 @@ export async function writeSeedScheduleAuditEntry(
   });
 }
 
-/** Loads enabled one-off rotation changes for the scheduler tick. */
+/**
+ * Loads the enabled one-off rotation changes that have not run yet, excluding soft-deleted servers. Executed
+ * entries stay enabled for the calendar's history, so they are filtered here
+ * rather than re-read every tick; the query matches the partial index
+ * `rotation_schedule_pending_idx`.
+ */
 export async function loadEnabledRotationScheduleEntries(
   db: DatabaseClient,
 ): Promise<RotationScheduleEntry[]> {
-  const rows = await db.select().from(rotationSchedule).where(eq(rotationSchedule.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    scheduledAt: row.scheduledAt,
-    layer: row.layer,
-    mode: row.mode,
-    lastExecutedAt: row.lastExecutedAt,
-  }));
+  const rows = await db
+    .select({
+      id: rotationSchedule.id,
+      serverId: rotationSchedule.serverId,
+      scheduledAt: rotationSchedule.scheduledAt,
+      layer: rotationSchedule.layer,
+      mode: rotationSchedule.mode,
+      lastExecutedAt: rotationSchedule.lastExecutedAt,
+    })
+    .from(rotationSchedule)
+    .innerJoin(servers, eq(servers.id, rotationSchedule.serverId))
+    .where(
+      and(
+        eq(rotationSchedule.enabled, true),
+        isNull(rotationSchedule.lastExecutedAt),
+        isNull(servers.deletedAt),
+      ),
+    );
+  return rows;
 }
 
 /** Advances a rotation schedule cursor only after its RCON request is queued. */
@@ -209,27 +232,6 @@ export async function setRotationScheduleLastExecutedAt(
     .update(rotationSchedule)
     .set({ lastExecutedAt: executedAt, updatedAt: new Date() })
     .where(eq(rotationSchedule.id, entryId));
-}
-
-export async function writeRotationScheduleAuditEntry(
-  db: DatabaseClient,
-  entry: RotationScheduleAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
 }
 
 /** Loads profiles together with each server's configured timezone. */
@@ -263,38 +265,58 @@ export async function setRotationProfileLastAppliedAt(
     .where(eq(rotationProfiles.id, profileId));
 }
 
-export async function writeRotationProfileAuditEntry(
-  db: DatabaseClient,
-  entry: RotationProfileAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
+/**
+ * Resolves the SEED-4 join link through the host bridge exactly like
+ * `POST /api/v1/servers/:id/seed-call` does (`loadServerContext` in
+ * `apps/api/src/routes/server-seed-notifications.ts`): `host_info`'s
+ * `hostname`, falling back to its first `ip_addresses` entry. Returns `null`
+ * when the bridge call fails or neither is set, the same "host unavailable"
+ * condition the API route surfaces as a 503 rather than a broken
+ * `steam://connect/127.0.0.1:...` link.
+ */
+async function resolveSeedJoinLink(
+  bridge: Pick<BridgeClient, 'hostInfo'>,
+  gamePort: number,
+): Promise<string | null> {
+  let host: Awaited<ReturnType<BridgeClient['hostInfo']>>;
+  try {
+    host = await bridge.hostInfo();
+  } catch {
+    return null;
+  }
+  const address = host.hostname || host.ip_addresses[0];
+  return address ? `steam://connect/${address}:${gamePort}` : null;
 }
 
 /**
- * Publishes the scheduled SEED-4 call once per cooldown window. The scheduler
- * has no bridge dependency, so it uses the public panel host (the deployment
- * host in the supported compose files) and the configured game port.
+ * Publishes the scheduled SEED-4 call once per cooldown window.
+ *
+ * Loads the server, its settings, and the join-link host BEFORE claiming the
+ * cooldown key (#1003): a deleted/misconfigured server or an unreachable
+ * bridge returns early without touching Redis, so the operator's next manual
+ * `POST /seed-call` is not blocked by a cooldown that was claimed but never
+ * actually notified anyone. Once claimed, an error while inserting the event
+ * or notifying subscribers releases the cooldown key again rather than
+ * silently burning the 2-hour window with zero notifications sent.
  */
 export async function notifyScheduledSeeders(
   db: DatabaseClient,
-  redis: Pick<Redis, 'set' | 'xadd' | 'publish'>,
+  redis: Pick<Redis, 'set' | 'xadd' | 'publish' | 'del'>,
+  bridge: Pick<BridgeClient, 'hostInfo'>,
   entry: SeedScheduleEntry,
   occurrence: Date,
 ): Promise<void> {
+  const [server, settings] = await Promise.all([
+    db.query.servers.findFirst({
+      where: and(eq(servers.id, entry.serverId), isNull(servers.deletedAt)),
+    }),
+    db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, entry.serverId) }),
+  ]);
+  if (!server || !settings) return;
+
+  const joinLink = await resolveSeedJoinLink(bridge, settings.gamePort);
+  if (!joinLink) return;
+
   const key = `seed:call:cooldown:${entry.serverId}`;
   const claimed = await redis.set(
     key,
@@ -305,85 +327,87 @@ export async function notifyScheduledSeeders(
   );
   if (!claimed) return;
 
-  const [server, settings] = await Promise.all([
-    db.query.servers.findFirst({
-      where: and(eq(servers.id, entry.serverId), isNull(servers.deletedAt)),
-    }),
-    db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, entry.serverId) }),
-  ]);
-  if (!server || !settings) return;
-
-  const payload = seedCallSentPayload.parse({
-    server_name: server.displayName,
-    join_link: `steam://connect/${seedPublicHost()}:${settings.gamePort}`,
-    seed_layer: entry.seedLayer,
-    scheduled_for: occurrence.toISOString(),
-    source: 'schedule',
-    message: entry.broadcastText ?? 'Нужен сид',
-  });
-  const eventId = uuidv7();
-  const ts = new Date();
-  const envelope: EventEnvelope = {
-    event_id: eventId,
-    version: 1,
-    type: 'seed.call_sent',
-    server_id: entry.serverId,
-    ts: ts.toISOString(),
-    actor: { kind: 'system', id: null },
-    correlation_id: null,
-    payload,
-  };
-  await db.insert(events).values({
-    eventId,
-    serverId: entry.serverId,
-    occurredAt: ts,
-    kind: envelope.type,
-    version: envelope.version,
-    actorKind: 'system',
-    actorId: null,
-    correlationId: null,
-    payload,
-  });
-  await redis.xadd(
-    STREAM_NAME.eventsServer(entry.serverId),
-    'MAXLEN',
-    '~',
-    '10000',
-    '*',
-    'envelope',
-    JSON.stringify(envelope),
-  );
-  const notified = await notifySeedSubscribers(db, redis, {
-    serverId: entry.serverId,
-    eventKind: 'seed.call_sent',
-    payload,
-  });
-  await writeSeedScheduleAuditEntry(db, {
-    actor: { kind: 'system', label: 'seed-scheduler' },
-    actionType: 'seed.call_sent',
-    targetType: 'seed_schedule',
-    targetId: entry.id,
-    context: {
-      server_id: entry.serverId,
+  try {
+    const payload = seedCallSentPayload.parse({
+      server_name: server.displayName,
+      join_link: joinLink,
+      seed_layer: entry.seedLayer,
+      scheduled_for: occurrence.toISOString(),
+      source: 'schedule',
+      message: entry.broadcastText ?? 'Нужен сид',
+    });
+    const eventId = uuidv7();
+    const ts = new Date();
+    const envelope: EventEnvelope = {
       event_id: eventId,
-      occurrence: occurrence.toISOString(),
-      notified,
-    },
-  });
+      version: 1,
+      type: 'seed.call_sent',
+      server_id: entry.serverId,
+      ts: ts.toISOString(),
+      actor: { kind: 'system', id: null },
+      correlation_id: null,
+      payload,
+    };
+    await db.insert(events).values({
+      eventId,
+      serverId: entry.serverId,
+      occurredAt: ts,
+      kind: envelope.type,
+      version: envelope.version,
+      actorKind: 'system',
+      actorId: null,
+      correlationId: null,
+      payload,
+    });
+    await redis.xadd(
+      STREAM_NAME.eventsServer(entry.serverId),
+      'MAXLEN',
+      '~',
+      '10000',
+      '*',
+      'envelope',
+      JSON.stringify(envelope),
+    );
+    const notified = await notifySeedSubscribers(db, redis, {
+      serverId: entry.serverId,
+      eventKind: 'seed.call_sent',
+      payload,
+    });
+    await writeSystemAuditEntry(db, {
+      actor: { kind: 'system', label: 'seed-scheduler' },
+      actionType: 'seed.call_sent',
+      targetType: 'seed_schedule',
+      targetId: entry.id,
+      context: {
+        server_id: entry.serverId,
+        event_id: eventId,
+        occurrence: occurrence.toISOString(),
+        notified,
+      },
+    });
+  } catch (err) {
+    // The notification never went out — release the cooldown so a manual
+    // seed-call or the next scheduled occurrence isn't blocked for 2 hours
+    // over nothing sent.
+    await redis.del(key).catch(() => undefined);
+    throw err;
+  }
 }
 
 export function createSeedScheduleDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'get' | 'set' | 'xadd' | 'publish'>,
+  redis: Pick<Redis, 'get' | 'set' | 'xadd' | 'publish' | 'del'>,
+  bridge: Pick<BridgeClient, 'hostInfo'>,
 ): Omit<SeedScheduleTickDeps, 'now' | 'diag'> {
   return {
     loadEnabledEntries: () => loadEnabledSeedScheduleEntries(db),
     isDepotUpdating: () => isDepotUpdating(redis),
     getSeedingLiveness: (serverId) => getSeedingLiveness(redis, serverId),
     sendRconCommand: (input) => sendRconCommand(redis, input),
-    notifySeeders: (entry, occurrence) => notifyScheduledSeeders(db, redis, entry, occurrence),
+    notifySeeders: (entry, occurrence) =>
+      notifyScheduledSeeders(db, redis, bridge, entry, occurrence),
     setLastExecutedAt: (entryId, executedAt) => setLastExecutedAt(db, entryId, executedAt),
-    writeAuditEntry: (entry) => writeSeedScheduleAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -397,7 +421,8 @@ export function createRotationScheduleDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     setLastExecutedAt: (entryId, executedAt) =>
       setRotationScheduleLastExecutedAt(db, entryId, executedAt),
-    writeAuditEntry: (entry) => writeRotationScheduleAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
+    auditedDepotSkips: new Set<string>(),
   };
 }
 
@@ -526,27 +551,6 @@ export async function setMapVotePickFailure(
   await db.update(mapVotePicks).set({ failureReason: reason }).where(eq(mapVotePicks.id, pickId));
 }
 
-export async function writeMapVoteAuditEntry(
-  db: DatabaseClient,
-  entry: MapVoteAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
 export function createMapVoteDeps(
   db: DatabaseClient,
   redis: Pick<Redis, 'get' | 'xadd'>,
@@ -562,7 +566,7 @@ export function createMapVoteDeps(
     setPickFailure: (pickId, reason) => setMapVotePickFailure(db, pickId, reason),
     isDepotUpdating: () => isDepotUpdating(redis),
     sendRconCommand: (input, requestId) => sendRconCommand(redis, input, requestId),
-    writeAuditEntry: (entry) => writeMapVoteAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -575,26 +579,30 @@ export function createRotationProfileDeps(
     bridge,
     setLastAppliedAt: (profileId, appliedAt) =>
       setRotationProfileLastAppliedAt(db, profileId, appliedAt),
-    writeAuditEntry: (entry) => writeRotationProfileAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
-/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick. */
+/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick, excluding soft-deleted servers. */
 export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<ScheduledTaskEntry[]> {
-  const rows = await db.select().from(scheduledTasks).where(eq(scheduledTasks.enabled, true));
-  return rows.map((row) => ({
-    id: row.id,
-    serverId: row.serverId,
-    name: row.name,
-    taskType: row.taskType,
-    params: row.params ?? {},
-    scheduledAt: row.scheduledAt,
-    recurrence: row.recurrence,
-    lastExecutedAt: row.lastExecutedAt,
-    rotationIndex: row.rotationIndex,
-    createdBy: row.createdBy,
-    createdAt: row.createdAt,
-  }));
+  const rows = await db
+    .select({
+      id: scheduledTasks.id,
+      serverId: scheduledTasks.serverId,
+      name: scheduledTasks.name,
+      taskType: scheduledTasks.taskType,
+      params: scheduledTasks.params,
+      scheduledAt: scheduledTasks.scheduledAt,
+      recurrence: scheduledTasks.recurrence,
+      lastExecutedAt: scheduledTasks.lastExecutedAt,
+      rotationIndex: scheduledTasks.rotationIndex,
+      createdBy: scheduledTasks.createdBy,
+      createdAt: scheduledTasks.createdAt,
+    })
+    .from(scheduledTasks)
+    .innerJoin(servers, eq(servers.id, scheduledTasks.serverId))
+    .where(and(eq(scheduledTasks.enabled, true), isNull(servers.deletedAt)));
+  return rows.map((row) => ({ ...row, params: row.params ?? {} }));
 }
 
 /** Advances a scheduled task's execution cursor after a successful dispatch. */
@@ -654,32 +662,22 @@ export async function recordScheduledTaskRun(
   });
 }
 
-export async function writeScheduledTaskAuditEntry(
-  db: DatabaseClient,
-  entry: ScheduledTaskAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
 /**
  * Restarts a server via the SRV-3 container-restart mechanism — the same
  * `containerStop` + `containerStart` on `squad-<serverId>` that
  * `POST /api/v1/servers/:id/restart` performs, driven here through the host
- * bridge the scheduler already holds.
+ * bridge the scheduler already holds. `containerStop` errors are swallowed
+ * the same way the API route swallows them (Docker's `start` on an already-
+ * running or already-stopped container is itself a no-op success), so this
+ * mirrors that route's container-level behavior.
+ *
+ * It does NOT reproduce the rest of that route: it does not flip
+ * `servers.status` to `'starting'` in the DB, publish to `liveBus` (the
+ * scheduler worker has no websocket fan-out), or call `relaunchSidecar`
+ * (API-only `apps/api/src/lib` logic worker packages do not import — see
+ * `docs/development/conventions.md`). A scheduled restart is therefore
+ * visible to the UI only once the status reconciler's next pass catches up,
+ * and a sidecar stopped manually before the scheduled restart stays down.
  */
 export async function restartServerContainer(
   bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
@@ -701,14 +699,22 @@ export function createScheduledTaskDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     restartServer: async (serverId) => {
       // A scheduled restart drives the panel's own container; an external
-      // server's process is not ours to bounce, so the run is recorded as
-      // failed instead of silently touching a non-existent container.
+      // server's process is not ours to bounce, and a soft-deleted server's
+      // container is gone too, so both are recorded as failed instead of
+      // retrying forever against a non-existent container.
       const row = await db.query.servers.findFirst({
-        where: eq(servers.id, serverId),
+        where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
         columns: { runtime: true },
       });
-      if (row?.runtime === 'external') {
-        throw new Error(`server ${serverId} is external: restart is not available`);
+      if (!row) {
+        throw new PermanentTaskDispatchError(
+          `server ${serverId} not found or deleted: restart is not available`,
+        );
+      }
+      if (row.runtime === 'external') {
+        throw new PermanentTaskDispatchError(
+          `server ${serverId} is external: restart is not available`,
+        );
       }
       await restartServerContainer(bridge, serverId);
     },
@@ -718,7 +724,7 @@ export function createScheduledTaskDeps(
       setScheduledTaskRotationIndex(db, taskId, nextIndex),
     echoBroadcastToChat: (echo) => echoScheduledBroadcast(db, echo),
     recordRun: (run) => recordScheduledTaskRun(db, run),
-    writeAuditEntry: (entry) => writeScheduledTaskAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -742,59 +748,44 @@ export async function loadActiveSeasons(db: DatabaseClient): Promise<ActiveSeaso
 }
 
 /**
- * Closes a season and freezes its materialised slice in one statement, so the
- * two can never drift apart. `loadActiveSeasonTarget` in @squad/db skips
+ * Closes a season, freezes its materialised slice and appends its audit row in
+ * one transaction, so none of the three can happen without the others. `loadActiveSeasonTarget` in @squad/db skips
  * finalized rows, which is what stops the aggregator recomputing it.
  */
-export async function finalizeSeason(db: DatabaseClient, seasonId: string): Promise<void> {
-  await db
-    .update(seasons)
-    .set({ status: 'closed', finalized: true, updatedAt: new Date() })
-    .where(eq(seasons.id, seasonId));
+export async function finalizeSeason(
+  db: DatabaseClient,
+  seasonId: string,
+  audit: SeasonFinalizeAuditEntry,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(seasons)
+      .set({ status: 'closed', finalized: true, updatedAt: new Date() })
+      .where(eq(seasons.id, seasonId));
+    await writeSystemAuditEntry(tx, audit);
+  });
 }
 
 export async function invalidateLeaderboardCache(
-  redis: Pick<Redis, 'scanStream' | 'del'>,
+  redis: Pick<Redis, 'scanStream' | 'unlink'>,
 ): Promise<number> {
-  const keys: string[] = [];
+  let removed = 0;
   const stream = redis.scanStream({ match: `${LEADERBOARD_CACHE_PREFIX}*`, count: 200 });
-  for await (const batch of stream) {
-    for (const key of batch as string[]) keys.push(key);
+  for await (const batch of stream as AsyncIterable<string[]>) {
+    if (batch.length === 0) continue;
+    await redis.unlink(...batch);
+    removed += batch.length;
   }
-  if (keys.length === 0) return 0;
-  await redis.del(...keys);
-  return keys.length;
-}
-
-export async function writeSeasonFinalizeAuditEntry(
-  db: DatabaseClient,
-  entry: SeasonFinalizeAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
+  return removed;
 }
 
 export function createSeasonFinalizeDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'scanStream' | 'del'>,
+  redis: Pick<Redis, 'scanStream' | 'unlink'>,
 ): Omit<SeasonFinalizeTickDeps, 'now' | 'diag'> {
   return {
     loadActiveSeasons: () => loadActiveSeasons(db),
-    finalizeSeason: (seasonId) => finalizeSeason(db, seasonId),
+    finalizeSeason: (seasonId, audit) => finalizeSeason(db, seasonId, audit),
     invalidateLeaderboardCache: () => invalidateLeaderboardCache(redis),
-    writeAuditEntry: (entry) => writeSeasonFinalizeAuditEntry(db, entry),
   };
 }

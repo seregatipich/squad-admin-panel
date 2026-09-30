@@ -1,6 +1,8 @@
 const WEBHOOK_URL_PARTS = /\/webhooks\/(\d+)\/([A-Za-z0-9_.-]+)/;
+// HTTPS only: the webhook token is part of the URL path, so a plain-HTTP URL
+// would send it over the network in cleartext.
 const WEBHOOK_URL_VALIDATION =
-  /^https?:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i;
+  /^https:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i;
 
 export const BOT_TOKEN_MASK = '****';
 

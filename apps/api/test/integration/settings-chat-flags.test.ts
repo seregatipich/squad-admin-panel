@@ -1,7 +1,8 @@
 import { chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { CHAT_FLAG_REINDEX_LOCK_KEY, reindexChatFlags } from '../../src/lib/chat-flags.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { auditLogMark, expectAuditRowSince } from '../helpers/audit-since.js';
 import {
@@ -96,7 +97,7 @@ describe('GET /api/v1/settings/chat-flag-rules', () => {
       url: '/api/v1/settings/chat-flag-rules',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('allows a panel viewer to list but marks can_mutate false', async () => {
@@ -278,5 +279,246 @@ describe('POST /api/v1/settings/chat-flag-rules/reindex', () => {
       .where(and(eq(chatMessages.playerId, playerId)));
     expect(rows[0]?.isFlagged).toBe(false);
     expect(rows[0]?.ruleId).toBeNull();
+  });
+
+  it('updates rows across keyset batch boundaries in one pass (#36 finding 18)', async () => {
+    const cookie = await loginAsOwner(h);
+    const { serverId, playerId } = await seedMessage('warm-up line');
+    const base = Date.now() - 60_000;
+    // More than one REINDEX batch (500), with identical sent_at ties at the boundary.
+    await h.db.insert(chatMessages).values(
+      Array.from({ length: 1_203 }, (_, i) => ({
+        playerId,
+        serverId,
+        sentAt: new Date(base + Math.floor(i / 3)),
+        scope: 'all',
+        message: i % 2 === 0 ? `batchword number ${i}` : `clean number ${i}`,
+        source: 'log',
+        isFlagged: false,
+      })),
+    );
+    await post(cookie, '/api/v1/settings/chat-flag-rules', {
+      pattern: 'batchword',
+      pattern_type: 'word',
+      locale: 'all',
+    });
+
+    const res = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+    expect(res.statusCode).toBe(200);
+    const flaggedCount = (await h.db.execute(sql`
+      SELECT count(*)::int AS n FROM chat_messages
+       WHERE player_id = ${playerId} AND is_flagged AND message LIKE 'batchword%'
+    `)) as unknown as Array<{ n: number }>;
+    expect(flaggedCount[0]?.n).toBe(602);
+    const wrong = (await h.db.execute(sql`
+      SELECT count(*)::int AS n FROM chat_messages
+       WHERE player_id = ${playerId} AND is_flagged AND message NOT LIKE 'batchword%'
+    `)) as unknown as Array<{ n: number }>;
+    expect(wrong[0]?.n).toBe(0);
+  });
+
+  it('refuses a second reindex while one is running (#36 finding 18)', async () => {
+    const cookie = await loginAsOwner(h);
+    await h.redis.set(CHAT_FLAG_REINDEX_LOCK_KEY, 'other-run', 'PX', 60_000);
+    try {
+      const res = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'reindex_in_progress' });
+    } finally {
+      await h.redis.del(CHAT_FLAG_REINDEX_LOCK_KEY);
+    }
+    const again = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+    expect(again.statusCode).toBe(200);
+    expect(await h.redis.get(CHAT_FLAG_REINDEX_LOCK_KEY)).toBeNull();
+  });
+
+  it('walks the keyset on a (sent_at, id) btree index present on every partition', async () => {
+    const rows = (await h.db.execute(sql`
+      SELECT c.relname AS partition,
+             EXISTS (
+               SELECT 1 FROM pg_index i
+                 JOIN pg_class ic ON ic.oid = i.indexrelid
+                WHERE i.indrelid = c.oid
+                  AND pg_get_indexdef(i.indexrelid) LIKE '%btree (sent_at, id)%'
+             ) AS has_index
+        FROM pg_inherits inh
+        JOIN pg_class c ON c.oid = inh.inhrelid
+       WHERE inh.inhparent = 'chat_messages'::regclass
+    `)) as unknown as Array<{ partition: string; has_index: boolean }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter((r) => !r.has_index)).toEqual([]);
+  });
+});
+
+describe('chat-flag rule changes reconcile already-flagged history (#346)', () => {
+  async function seedFlaggedMessage(ruleId: string): Promise<string> {
+    const serverId = uuidv7();
+    const playerId = uuidv7();
+    await h.db.insert(servers).values({
+      id: serverId,
+      displayName: 'Flag Cleanup Server',
+      slug: `flag-cleanup-${serverId}`,
+    });
+    await h.db.insert(players).values({
+      id: playerId,
+      canonicalName: 'Flag Cleanup Player',
+      canonicalNameNormalized: 'flag cleanup player',
+    });
+    await h.db.insert(chatMessages).values({
+      playerId,
+      serverId,
+      sentAt: new Date(),
+      scope: 'all',
+      message: 'flagged by the rule under test',
+      source: 'log',
+      isFlagged: true,
+      matchedRuleId: ruleId,
+    });
+    return playerId;
+  }
+
+  async function flagState(playerId: string) {
+    const [row] = await h.db
+      .select({ isFlagged: chatMessages.isFlagged, ruleId: chatMessages.matchedRuleId })
+      .from(chatMessages)
+      .where(eq(chatMessages.playerId, playerId));
+    return row;
+  }
+
+  async function createRule(cookie: string, pattern: string): Promise<string> {
+    const res = await post(cookie, '/api/v1/settings/chat-flag-rules', {
+      pattern,
+      pattern_type: 'word',
+    });
+    expect(res.statusCode).toBe(201);
+    return (res.json() as { id: string }).id;
+  }
+
+  it('DELETE unflags the messages the rule had flagged', async () => {
+    const cookie = await loginAsOwner(h);
+    const ruleId = await createRule(cookie, `cleanup-delete-${uuidv7()}`);
+    const playerId = await seedFlaggedMessage(ruleId);
+
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/settings/chat-flag-rules/${ruleId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await flagState(playerId)).toEqual({ isFlagged: false, ruleId: null });
+  });
+
+  it('PATCH enabled=false unflags the messages the rule had flagged', async () => {
+    const cookie = await loginAsOwner(h);
+    const ruleId = await createRule(cookie, `cleanup-disable-${uuidv7()}`);
+    const playerId = await seedFlaggedMessage(ruleId);
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/settings/chat-flag-rules/${ruleId}`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await flagState(playerId)).toEqual({ isFlagged: false, ruleId: null });
+  });
+
+  it('PATCH of the pattern unflags the messages matched by the old pattern', async () => {
+    const cookie = await loginAsOwner(h);
+    const ruleId = await createRule(cookie, `cleanup-repattern-${uuidv7()}`);
+    const playerId = await seedFlaggedMessage(ruleId);
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/settings/chat-flag-rules/${ruleId}`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { pattern: `cleanup-new-${uuidv7()}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await flagState(playerId)).toEqual({ isFlagged: false, ruleId: null });
+  });
+
+  it('PATCH of the locale alone leaves existing flags untouched', async () => {
+    const cookie = await loginAsOwner(h);
+    const ruleId = await createRule(cookie, `cleanup-locale-${uuidv7()}`);
+    const playerId = await seedFlaggedMessage(ruleId);
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/settings/chat-flag-rules/${ruleId}`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { locale: 'ru' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await flagState(playerId)).toEqual({ isFlagged: true, ruleId });
+  });
+
+  it('indexes chat_messages.matched_rule_id so the rule FK action is not a full scan', async () => {
+    const rows = (await h.db.execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE tablename = 'chat_messages' AND indexname = 'chat_messages_matched_rule_idx'
+    `)) as unknown as Array<{ indexdef: string }>;
+    expect(rows[0]?.indexdef).toMatch(/\(matched_rule_id\) WHERE \(matched_rule_id IS NOT NULL\)/);
+  });
+});
+
+describe('reindex concurrency guard (#345)', () => {
+  it('answers 409 while another reindex holds the lock, and runs once it is released', async () => {
+    const cookie = await loginAsOwner(h);
+    await h.redis.set(CHAT_FLAG_REINDEX_LOCK_KEY, 'other-run', 'EX', 60);
+    try {
+      const blocked = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+      expect(blocked.statusCode).toBe(409);
+      expect((blocked.json() as { error: string }).error).toBe('reindex_in_progress');
+      expect(await h.redis.get(CHAT_FLAG_REINDEX_LOCK_KEY)).toBe('other-run');
+    } finally {
+      await h.redis.del(CHAT_FLAG_REINDEX_LOCK_KEY);
+    }
+
+    const ok = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+    expect(ok.statusCode).toBe(200);
+    expect(await h.redis.get(CHAT_FLAG_REINDEX_LOCK_KEY)).toBeNull();
+  });
+
+  it('rewrites every changed row across several batches', async () => {
+    const cookie = await loginAsOwner(h);
+    const token = `batchword${uuidv7().replace(/-/g, '')}`;
+    const serverId = uuidv7();
+    const playerId = uuidv7();
+    await h.db.insert(servers).values({
+      id: serverId,
+      displayName: 'Batch Server',
+      slug: `batch-${serverId}`,
+    });
+    await h.db.insert(players).values({
+      id: playerId,
+      canonicalName: 'Batch Player',
+      canonicalNameNormalized: 'batch player',
+    });
+    const base = Date.now();
+    await h.db.insert(chatMessages).values(
+      Array.from({ length: 7 }, (_, index) => ({
+        playerId,
+        serverId,
+        sentAt: new Date(base - index * 1000),
+        scope: 'all',
+        message: index % 2 === 0 ? `say ${token} now` : 'clean line',
+        source: 'log',
+        isFlagged: false,
+      })),
+    );
+    await post(cookie, '/api/v1/settings/chat-flag-rules', {
+      pattern: token,
+      pattern_type: 'word',
+    });
+
+    const summary = await reindexChatFlags(h.db, { days: 1, batchSize: 2 });
+    expect(summary.changed).toBeGreaterThanOrEqual(4);
+    const rows = await h.db
+      .select({ isFlagged: chatMessages.isFlagged, message: chatMessages.message })
+      .from(chatMessages)
+      .where(eq(chatMessages.playerId, playerId));
+    expect(rows).toHaveLength(7);
+    for (const row of rows) expect(row.isFlagged).toBe(row.message.includes(token));
   });
 });

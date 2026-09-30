@@ -1,15 +1,17 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import type { DatabaseClient } from '@squad/db';
+import { type DatabaseClient, withMediaStoragePathLock } from '@squad/db';
 import { mediaFiles, mediaPublications, mediaPublishSettings } from '@squad/db/schema';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { createTelegramPublisher } from './publishers/telegram.js';
 import { createYouTubePublisher } from './publishers/youtube.js';
-import type {
-  MediaPublicationDestination,
-  MediaPublicationJob,
-  MediaPublisher,
-  MediaPublisherTickDeps,
+import {
+  MEDIA_PUBLISH_INTERRUPTED_ERROR,
+  MEDIA_PUBLISH_LEASE_MS,
+  type MediaPublicationDestination,
+  type MediaPublicationJob,
+  type MediaPublisher,
+  type MediaPublisherTickDeps,
 } from './tick.js';
 
 /** Environment slice carrying the third-party publishing credentials. */
@@ -44,6 +46,8 @@ interface ClaimedRow {
   title: string | null;
   description: string | null;
   original_filename: string;
+  interrupted: boolean;
+  upload_session_url: string | null;
 }
 
 export function createMediaPublisherDeps(
@@ -79,32 +83,46 @@ export function createMediaPublisherDeps(
     /**
      * Claims due publications in a single statement.
      *
-     * `FOR UPDATE ... SKIP LOCKED` inside the CTE plus the `status = 'queued'`
-     * re-check on the UPDATE is what makes a second worker (or a second tick
-     * overlapping a slow one) unable to pick up the same row: whichever
-     * statement gets the lock flips the status, and the other either skips the
-     * locked row or finds it no longer queued.
+     * `FOR UPDATE ... SKIP LOCKED` inside the CTE plus the status re-check on
+     * the UPDATE is what makes a second worker (or a second tick overlapping a
+     * slow one) unable to pick up the same row: whichever statement gets the
+     * lock flips the status, and the other either skips the locked row or
+     * finds it no longer due.
+     *
+     * A claim is a lease: `next_attempt_at` is set to `now + MEDIA_PUBLISH_LEASE_MS`.
+     * An `uploading` row whose lease has run out belongs to a worker that died
+     * mid-upload (nothing else leaves a row there), so it is claimed again with
+     * `attempts + 1` and `error = 'upload_interrupted'`; without this it would
+     * be stranded for good, since the `(media_id, destination)` unique index
+     * blocks queueing the publication again.
      */
     async claimDue(now: Date, limit: number): Promise<MediaPublicationJob[]> {
+      const nowIso = now.toISOString();
+      const leaseUntil = new Date(now.getTime() + MEDIA_PUBLISH_LEASE_MS).toISOString();
       const rows = (await db.execute(sql`
         WITH due AS (
-          SELECT p.id
+          SELECT p.id, p.status = 'uploading' AS interrupted
           FROM media_publications p
           JOIN media_files m ON m.id = p.media_id
-          WHERE p.status = 'queued'
+          WHERE p.status IN ('queued', 'uploading')
             AND p.next_attempt_at IS NOT NULL
-            AND p.next_attempt_at <= ${now.toISOString()}::timestamptz
+            AND p.next_attempt_at <= ${nowIso}::timestamptz
             AND m.deleted_at IS NULL
-          ORDER BY p.next_attempt_at ASC
+          ORDER BY p.next_attempt_at ASC NULLS LAST, p.updated_at ASC
           LIMIT ${limit}
           FOR UPDATE OF p SKIP LOCKED
         )
         UPDATE media_publications p
-        SET status = 'uploading', updated_at = now()
+        SET status = 'uploading',
+            attempts = p.attempts + CASE WHEN p.status = 'uploading' THEN 1 ELSE 0 END,
+            error = CASE WHEN p.status = 'uploading' THEN ${MEDIA_PUBLISH_INTERRUPTED_ERROR} ELSE p.error END,
+            next_attempt_at = ${leaseUntil}::timestamptz,
+            updated_at = now()
         FROM due, media_files m
         WHERE p.id = due.id
           AND m.id = p.media_id
-          AND p.status = 'queued'
+          AND p.status IN ('queued', 'uploading')
+          AND p.next_attempt_at <= ${nowIso}::timestamptz
         RETURNING
           p.id,
           p.media_id,
@@ -115,7 +133,9 @@ export function createMediaPublisherDeps(
           m.size_bytes,
           m.title,
           m.description,
-          m.original_filename
+          m.original_filename,
+          due.interrupted,
+          p.upload_session_url
       `)) as unknown as ClaimedRow[];
 
       return rows.map((row) => ({
@@ -129,6 +149,8 @@ export function createMediaPublisherDeps(
         title: row.title,
         description: row.description,
         originalFilename: row.original_filename,
+        interrupted: row.interrupted,
+        uploadSessionUrl: row.upload_session_url,
       }));
     },
 
@@ -141,6 +163,7 @@ export function createMediaPublisherDeps(
           externalUrl: result.externalUrl,
           error: null,
           nextAttemptAt: null,
+          uploadSessionUrl: null,
           updatedAt: now,
         })
         .where(eq(mediaPublications.id, id));
@@ -155,6 +178,9 @@ export function createMediaPublisherDeps(
           error: patch.error,
           nextAttemptAt: patch.nextAttemptAt,
           updatedAt: new Date(),
+          ...(patch.uploadSessionUrl !== undefined
+            ? { uploadSessionUrl: patch.uploadSessionUrl }
+            : {}),
         })
         .where(eq(mediaPublications.id, id));
     },
@@ -167,6 +193,7 @@ export function createMediaPublisherDeps(
           attempts,
           error,
           nextAttemptAt: null,
+          uploadSessionUrl: null,
           updatedAt: new Date(),
         })
         .where(eq(mediaPublications.id, id));
@@ -228,29 +255,40 @@ export function createMediaPublisherDeps(
         .limit(1);
       if (pending.length > 0) return false;
 
-      const sharing = await db
-        .select({ id: mediaFiles.id })
-        .from(mediaFiles)
-        .where(
-          and(
-            eq(mediaFiles.storagePath, job.storagePath),
-            ne(mediaFiles.id, job.mediaId),
-            isNull(mediaFiles.deletedAt),
-          ),
-        )
-        .limit(1);
-      if (sharing.length > 0) return false;
+      // The sharing check and the update that clears storage_path must be
+      // atomic against the media upload route's sha256-dedup insert
+      // (apps/api/src/routes/media.ts), which reads a live storage_path and
+      // points a new row at it with no lock of its own: without this shared
+      // advisory lock, a dedup insert landing between the check below and
+      // the delete could end up referencing a file this call is about to
+      // remove (#63 finding 944).
+      const storagePath = job.storagePath;
+      const released = await withMediaStoragePathLock(db, storagePath, async (tx) => {
+        const sharing = await tx
+          .select({ id: mediaFiles.id })
+          .from(mediaFiles)
+          .where(
+            and(
+              eq(mediaFiles.storagePath, storagePath),
+              ne(mediaFiles.id, job.mediaId),
+              isNull(mediaFiles.deletedAt),
+            ),
+          )
+          .limit(1);
+        if (sharing.length > 0) return false;
 
-      const updated = await db
-        .update(mediaFiles)
-        .set({ storagePath: null, externalUrl })
-        .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, job.storagePath)))
-        .returning({ id: mediaFiles.id });
-      if (updated.length === 0) return false;
+        const updated = await tx
+          .update(mediaFiles)
+          .set({ storagePath: null, externalUrl })
+          .where(and(eq(mediaFiles.id, job.mediaId), eq(mediaFiles.storagePath, storagePath)))
+          .returning({ id: mediaFiles.id });
+        return updated.length > 0;
+      });
+      if (!released) return false;
 
       // The database no longer references the bytes; reclaiming them is best
       // effort, and a missing file must not fail the publication.
-      await removeFile(path.join(options.mediaBaseDir, job.storagePath)).catch(() => undefined);
+      await removeFile(path.join(options.mediaBaseDir, storagePath)).catch(() => undefined);
       return true;
     },
   };

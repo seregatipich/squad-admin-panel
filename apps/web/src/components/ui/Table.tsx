@@ -1,6 +1,7 @@
 'use client';
 
 import type { CSSProperties, ReactNode } from 'react';
+import { SortAscIcon, SortDescIcon, SortIcon } from './icons';
 
 /** Горизонтальное выравнивание ячейки — заголовка или тела. */
 export type TableAlign = 'left' | 'right' | 'center';
@@ -209,6 +210,7 @@ export function Th({
   width,
   scope = 'col',
   className,
+  title,
   children,
 }: {
   align?: TableAlign;
@@ -216,12 +218,15 @@ export function Th({
   width?: string;
   scope?: 'col' | 'row' | 'colgroup' | 'rowgroup';
   className?: string;
+  /** Нативная подсказка на наведение — например, что означает сокращённое название колонки. */
+  title?: string;
   children?: ReactNode;
 }) {
   return (
     <th
       scope={scope}
       style={width ? { width } : undefined}
+      title={title}
       className={classes('px-3 py-2', TH_TYPE, ALIGN[align], className)}
     >
       {children}
@@ -262,6 +267,7 @@ export function SortableTh({
   align = 'left',
   width,
   className,
+  title,
 }: {
   /** Идентификатор, который вернётся в {@link onSort}; совпадает с `activeKey` у активной колонки. */
   sortKey: string;
@@ -275,6 +281,8 @@ export function SortableTh({
   align?: TableAlign;
   width?: string;
   className?: string;
+  /** Нативная подсказка на наведение — например, что означает сокращённое название колонки. */
+  title?: string;
 }) {
   const active = activeKey === sortKey;
 
@@ -283,6 +291,7 @@ export function SortableTh({
       scope="col"
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
       style={width ? { width } : undefined}
+      title={title}
       className={classes('p-0!', TH_TYPE, ALIGN[align], className)}
     >
       <button
@@ -296,13 +305,11 @@ export function SortableTh({
         <span>{label}</span>
         {active ? (
           <>
-            <span aria-hidden="true">{direction === 'asc' ? '↑' : '↓'}</span>
+            {direction === 'asc' ? <SortAscIcon /> : <SortDescIcon />}
             <span className="sr-only">{directionText[direction]}</span>
           </>
         ) : (
-          <span aria-hidden="true" className="text-ink-4">
-            ⇅
-          </span>
+          <SortIcon className="size-4 text-ink-4" />
         )}
       </button>
     </th>

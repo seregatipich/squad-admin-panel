@@ -1,12 +1,15 @@
 import cookie from '@fastify/cookie';
+import type { BridgeClient } from '@squad/bridge-client';
 import { players } from '@squad/db/schema';
 import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import authPlugin from '../../src/plugins/auth.js';
 import metricsPlugin from '../../src/plugins/metrics.js';
 import steamRoutes from '../../src/routes/auth-steam.js';
+import { narrowedOwnerHeaders } from '../helpers/narrowed-token.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -36,9 +39,12 @@ let noRoleCookie: string;
  */
 async function buildBareApp(harness: IntegrationHarness) {
   const app = Fastify({ logger: false });
+  // Same compilers as server.ts: the Steam callback validates its query with zod.
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', harness.db);
   app.decorate('redis', harness.redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   app.decorate('config', {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',
@@ -62,9 +68,8 @@ beforeAll(async () => {
     bridge: makeFakeBridge(),
   });
 
-  // A player with no role at all: `req.user` is set (a real session resolves)
-  // but `permissions.permissions` is an empty Set — the "authenticated, holds
-  // no permissions" case the fail-closed floor must NOT over-restrict.
+  // A player with no role at all: the session resolves but holds no
+  // panel_access, so the auth hook drops it to anonymous (#33).
   const [noRolePlayer] = await h.db
     .insert(players)
     .values({
@@ -101,14 +106,23 @@ describeIfDb('fail-closed auth default (#246)', () => {
       expect(res.json()).toEqual({ error: 'unauthenticated' });
     });
 
-    it('a bare route with no config.permissions and no config.public returns 200 to an authenticated request holding no permissions', async () => {
+    it('a bare route with no config.permissions and no config.public returns 200 to an authenticated request holding no permission it needs', async () => {
+      const res = await bareApp.inject({
+        method: 'GET',
+        url: '/test/bare-route',
+        headers: await narrowedOwnerHeaders(h, ['host:view']),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+    });
+
+    it('a bare route returns 401 to a session without panel_access (#33)', async () => {
       const res = await bareApp.inject({
         method: 'GET',
         url: '/test/bare-route',
         headers: { cookie: noRoleCookie },
       });
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ ok: true });
+      expect(res.statusCode).toBe(401);
     });
 
     it('a route with config.public === true returns 200 to an unauthenticated request', async () => {
@@ -184,11 +198,20 @@ describeIfDb('fail-closed auth default (#246)', () => {
       expect(res.json()).toEqual({ error: 'unauthenticated' });
     });
 
-    it('returns 403 to an authenticated request without host:metrics', async () => {
+    it('returns 401 to a session whose player has no role (no panel_access)', async () => {
       const res = await bareApp.inject({
         method: 'GET',
         url: '/metrics',
         headers: { cookie: noRoleCookie },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('returns 403 to an authenticated request without host:metrics', async () => {
+      const res = await bareApp.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: await narrowedOwnerHeaders(h, ['host:view']),
       });
       expect(res.statusCode).toBe(403);
     });

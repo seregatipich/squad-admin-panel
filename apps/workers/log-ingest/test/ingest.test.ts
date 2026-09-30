@@ -21,6 +21,47 @@ describe('LogIngestor – player connect/disconnect flow', () => {
     expect((events[0]?.payload as Record<string, unknown>).ip).toBeNull();
   });
 
+  // Regression for #63 finding 931: two connects racing through the same
+  // window used to cross-assign IP/name/EOS via single-slot "most recent"
+  // correlation. FIFO pairing must keep each connect's own lines together.
+  it('keeps two interleaved simultaneous connects paired instead of cross-assigning IP/EOS/name', () => {
+    const ing = new LogIngestor({
+      serverId: SERVER_ID,
+      beaconPort: 15000,
+      joinCorrelationWindowMs: 2500,
+    });
+
+    ing.ingest(
+      '[2026.04.23-11.30.00:000][0]LogNet: AddClientConnection: Added client connection: [UNetConnection] RemoteAddr: 203.0.113.10:7787, Name: EOSIpNetConnection_1, Driver: GameNetDriver EOSNetDriver_1, IsServer: YES, PC: NULL, Owner: NULL, UniqueId: INVALID',
+    );
+    ing.ingest(
+      '[2026.04.23-11.30.00:010][0]LogNet: AddClientConnection: Added client connection: [UNetConnection] RemoteAddr: 203.0.113.20:7787, Name: EOSIpNetConnection_2, Driver: GameNetDriver EOSNetDriver_2, IsServer: YES, PC: NULL, Owner: NULL, UniqueId: INVALID',
+    );
+    ing.ingest('[2026.04.23-11.30.00:020][0]LogNet: Join succeeded: PlayerA');
+    ing.ingest('[2026.04.23-11.30.00:030][0]LogNet: Join succeeded: PlayerB');
+    const eventsA = ing.ingest(
+      '[2026.04.23-11.30.00:040][0]LogRedpointEOS: EOSNet VoiceChat EOS:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa Steam:76561198000000001',
+    );
+    const eventsB = ing.ingest(
+      '[2026.04.23-11.30.00:050][0]LogRedpointEOS: EOSNet VoiceChat EOS:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb Steam:76561198000000002',
+    );
+
+    expect(eventsA).toHaveLength(1);
+    expect(eventsB).toHaveLength(1);
+    const payloadA = eventsA[0]?.payload as Record<string, unknown>;
+    const payloadB = eventsB[0]?.payload as Record<string, unknown>;
+    expect(payloadA).toMatchObject({
+      name: 'PlayerA',
+      ip: '203.0.113.10',
+      steam_id64: '76561198000000001',
+    });
+    expect(payloadB).toMatchObject({
+      name: 'PlayerB',
+      ip: '203.0.113.20',
+      steam_id64: '76561198000000002',
+    });
+  });
+
   it('emits player.connected with the real IP when AddClientConnection correlates before the join', () => {
     const ing = new LogIngestor({
       serverId: SERVER_ID,

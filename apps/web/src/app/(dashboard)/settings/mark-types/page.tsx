@@ -1,5 +1,11 @@
 'use client';
 
+import {
+  MARK_TYPE_ICONS,
+  MARK_TYPE_SEVERITY_MAX,
+  MARK_TYPE_SEVERITY_MIN,
+  type MarkTypeIcon,
+} from '@squad/shared-config/mark-types';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   Badge,
@@ -10,7 +16,6 @@ import {
   EmptyState,
   FieldRow,
   InlineBanner,
-  PageContainer,
   PageHeader,
   Select,
   SkeletonTable,
@@ -26,11 +31,10 @@ import { getLiveBus } from '@/lib/live-bus';
 import {
   isSameOrder,
   isValidSlug,
-  MARK_TYPE_ICONS,
-  MARK_TYPE_SEVERITY_MAX,
-  MARK_TYPE_SEVERITY_MIN,
   type MarkType,
   moveItem,
+  RequestFailure,
+  requestFailureText,
   severityLabel,
   sortByOrder,
 } from './helpers';
@@ -43,7 +47,7 @@ interface DraftForm {
   slug: string;
   label_en: string;
   label_ru: string;
-  icon: string;
+  icon: MarkTypeIcon;
   severity: number;
 }
 
@@ -65,7 +69,11 @@ export default function MarkTypesPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [msg, setMsg] = useState<{
+    kind: 'ok' | 'err' | 'invalid';
+    text: string;
+    retryable?: boolean;
+  } | null>(null);
   const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<Omit<DraftForm, 'slug'>>({
@@ -84,7 +92,7 @@ export default function MarkTypesPage() {
       credentials: 'include',
       cache: 'no-store',
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new RequestFailure(res.status);
     setTypes(sortByOrder((await res.json()) as MarkType[]));
   }, []);
 
@@ -98,13 +106,13 @@ export default function MarkTypesPage() {
           cache: 'no-store',
         }),
       ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!typesRes.ok) throw new Error(`HTTP ${typesRes.status}`);
+      if (!meRes.ok) throw new RequestFailure(meRes.status);
+      if (!typesRes.ok) throw new RequestFailure(typesRes.status);
       setMe((await meRes.json()) as Me);
       setTypes(sortByOrder((await typesRes.json()) as MarkType[]));
       setMsg(null);
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: requestFailureText(e), retryable: true });
     } finally {
       setLoading(false);
     }
@@ -117,21 +125,40 @@ export default function MarkTypesPage() {
   useEffect(() => {
     const bus = getLiveBus();
     return bus.subscribe((event) => {
-      if (event.type === 'mark_type.changed') void loadTypes();
+      if (event.type !== 'mark_type.changed') return;
+      loadTypes().catch((error) =>
+        setMsg({ kind: 'err', text: requestFailureText(error), retryable: true }),
+      );
     });
   }, [loadTypes]);
+
+  /**
+   * Re-reads the list after a successful mutation. The mutation already
+   * succeeded, so a failed re-read is reported as a stale list, not as a failed save.
+   */
+  async function reloadAfterMutation(successText: string) {
+    try {
+      await loadTypes();
+      setMsg({ kind: 'ok', text: successText });
+    } catch {
+      setMsg({
+        kind: 'ok',
+        text: `${successText} Список не удалось обновить — перезагрузите страницу.`,
+      });
+    }
+  }
 
   async function createType(e: React.FormEvent) {
     e.preventDefault();
     if (!isValidSlug(draft.slug)) {
       setMsg({
-        kind: 'err',
+        kind: 'invalid',
         text: 'Идентификатор: 2–40 символов, только a–z, 0–9 и подчёркивание.',
       });
       return;
     }
     if (!draft.label_en.trim() || !draft.label_ru.trim()) {
-      setMsg({ kind: 'err', text: 'Заполните оба названия.' });
+      setMsg({ kind: 'invalid', text: 'Заполните оба названия.' });
       return;
     }
     setBusy(true);
@@ -153,12 +180,11 @@ export default function MarkTypesPage() {
         setMsg({ kind: 'err', text: 'Тип с таким идентификатором уже существует.' });
         return;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new RequestFailure(res.status);
       setDraft(EMPTY_DRAFT);
-      await loadTypes();
-      setMsg({ kind: 'ok', text: 'Тип метки создан и уже доступен в модалке установки.' });
+      await reloadAfterMutation('Тип метки создан и уже доступен в модалке установки.');
     } catch (err) {
-      setMsg({ kind: 'err', text: (err as Error).message });
+      setMsg({ kind: 'err', text: requestFailureText(err) });
     } finally {
       setBusy(false);
     }
@@ -177,7 +203,7 @@ export default function MarkTypesPage() {
 
   async function saveEdit(id: number) {
     if (!editDraft.label_en.trim() || !editDraft.label_ru.trim()) {
-      setMsg({ kind: 'err', text: 'Заполните оба названия.' });
+      setMsg({ kind: 'invalid', text: 'Заполните оба названия.' });
       return;
     }
     setBusy(true);
@@ -194,12 +220,11 @@ export default function MarkTypesPage() {
           severity: editDraft.severity,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new RequestFailure(res.status);
       setEditingId(null);
-      await loadTypes();
-      setMsg({ kind: 'ok', text: 'Тип метки обновлён.' });
+      await reloadAfterMutation('Тип метки обновлён.');
     } catch (err) {
-      setMsg({ kind: 'err', text: (err as Error).message });
+      setMsg({ kind: 'err', text: requestFailureText(err) });
     } finally {
       setBusy(false);
     }
@@ -215,16 +240,14 @@ export default function MarkTypesPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ is_active: !type.is_active }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await loadTypes();
-      setMsg({
-        kind: 'ok',
-        text: type.is_active
+      if (!res.ok) throw new RequestFailure(res.status);
+      await reloadAfterMutation(
+        type.is_active
           ? 'Тип деактивирован: скрыт из модалки, но сохранён в истории и фильтрах.'
           : 'Тип снова активен.',
-      });
+      );
     } catch (err) {
-      setMsg({ kind: 'err', text: (err as Error).message });
+      setMsg({ kind: 'err', text: requestFailureText(err) });
     } finally {
       setBusy(false);
     }
@@ -242,17 +265,27 @@ export default function MarkTypesPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ordered_ids: next.map((t) => t.id) }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new RequestFailure(res.status);
       await loadTypes();
     } catch (err) {
       setTypes(previous);
-      setMsg({ kind: 'err', text: (err as Error).message });
+      setMsg({ kind: 'err', text: requestFailureText(err) });
     } finally {
       setBusy(false);
     }
   }
 
+  function reorder(fromIndex: number, toIndex: number) {
+    if (busy) return;
+    const next = moveItem(types, fromIndex, toIndex);
+    if (!isSameOrder(next, types)) void persistOrder(next);
+  }
+
   function handleDrop(targetIndex: number) {
+    if (busy) {
+      setDragIndex(null);
+      return;
+    }
     if (dragIndex === null || dragIndex === targetIndex) {
       setDragIndex(null);
       return;
@@ -263,7 +296,7 @@ export default function MarkTypesPage() {
   }
 
   return (
-    <PageContainer width="wide">
+    <>
       <PageHeader
         title="Типы меток"
         subtitle="Справочник причин для меток подозрения. Порядок задаёт очерёдность в модалке установки. Деактивированный тип исчезает из модалки, но остаётся в истории игроков и фильтрах вотчлиста."
@@ -277,15 +310,25 @@ export default function MarkTypesPage() {
           dismissLabel="Скрыть сообщение"
         />
       ) : null}
+      {msg?.kind === 'invalid' ? (
+        <InlineBanner
+          tone="warn"
+          title={msg.text}
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
+      ) : null}
       {msg?.kind === 'err' ? (
         <InlineBanner
           tone="crit"
           title="Не удалось выполнить запрос"
           description={msg.text}
           action={
-            <Button size="sm" onClick={() => void loadAll()}>
-              Повторить
-            </Button>
+            msg.retryable ? (
+              <Button size="sm" onClick={() => void loadAll()}>
+                Повторить
+              </Button>
+            ) : undefined
           }
         />
       ) : null}
@@ -327,7 +370,9 @@ export default function MarkTypesPage() {
                 <Select
                   id={`${slugId}-icon`}
                   value={draft.icon}
-                  onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, icon: e.target.value as MarkTypeIcon }))
+                  }
                 >
                   {MARK_TYPE_ICONS.map((icon) => (
                     <option key={icon} value={icon}>
@@ -365,7 +410,7 @@ export default function MarkTypesPage() {
           count={types.length}
           description={
             canEdit && types.length > 0
-              ? 'Перетаскивайте строки за рукоятку слева, чтобы изменить порядок.'
+              ? 'Перетаскивайте строки за рукоятку слева или используйте кнопки «Выше» и «Ниже», чтобы изменить порядок.'
               : undefined
           }
         />
@@ -440,7 +485,9 @@ export default function MarkTypesPage() {
                             size="sm"
                             aria-label={`Иконка для ${type.slug}`}
                             value={editDraft.icon}
-                            onChange={(e) => setEditDraft((d) => ({ ...d, icon: e.target.value }))}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, icon: e.target.value as MarkTypeIcon }))
+                            }
                           >
                             {MARK_TYPE_ICONS.map((icon) => (
                               <option key={icon} value={icon}>
@@ -502,6 +549,20 @@ export default function MarkTypesPage() {
                             </>
                           ) : (
                             <>
+                              <Button
+                                size="sm"
+                                disabled={busy || index === 0}
+                                onClick={() => reorder(index, index - 1)}
+                              >
+                                Выше
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={busy || index === types.length - 1}
+                                onClick={() => reorder(index, index + 1)}
+                              >
+                                Ниже
+                              </Button>
                               <Button size="sm" disabled={busy} onClick={() => startEdit(type)}>
                                 Изменить
                               </Button>
@@ -526,7 +587,7 @@ export default function MarkTypesPage() {
                 return canEdit && !isEditing ? (
                   <tr
                     key={type.id}
-                    draggable
+                    draggable={!busy}
                     onDragStart={() => setDragIndex(index)}
                     onDragOver={(e) => {
                       if (dragIndex !== null) e.preventDefault();
@@ -546,6 +607,6 @@ export default function MarkTypesPage() {
           </Table>
         )}
       </Card>
-    </PageContainer>
+    </>
   );
 }

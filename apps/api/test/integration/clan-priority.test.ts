@@ -7,7 +7,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -32,6 +32,8 @@ let managerCookie: string;
 let nobodyCookie: string;
 let serverId: string;
 let reserveRoleId: string;
+/** A `panel_access` role without `can_manage_clans`, held by clan deputies acting through the panel. */
+let panelMemberRoleId: string;
 
 let playerSeq = 895100;
 let clanSeq = 0;
@@ -184,10 +186,18 @@ beforeAll(async () => {
     roleName: 'PriorityNobodyRole',
     steamId64: NOBODY_STEAM,
     canManageClans: false,
-    panelAccess: false,
+    panelAccess: true,
   });
   managerCookie = await makeCookieFor(managerId);
   nobodyCookie = await makeCookieFor(nobodyId);
+
+  panelMemberRoleId = uuidv7();
+  await h.db.insert(roles).values({
+    id: panelMemberRoleId,
+    name: 'PriorityPanelMemberRole',
+    color: '#557799',
+    panelAccess: true,
+  });
 
   reserveRoleId = uuidv7();
   await h.db.insert(roles).values({
@@ -227,6 +237,52 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
       payload: JSON.stringify({ enabled: true }),
     });
     expect(res.statusCode).toBe(403);
+  });
+
+  // Audit #125 — like adding and removing members, a deputy may act on
+  // rank-and-file members only: not on the leader, another deputy or itself.
+  it('lets a deputy toggle only rank-and-file members', async () => {
+    const clan = await seedClan({ leaderHasPriority: true });
+    const deputy = await seedPlayer('ЗаместительПриоритета');
+    const otherDeputy = await seedPlayer('ВторойЗаместитель');
+    await h.db
+      .update(players)
+      .set({ roleId: panelMemberRoleId })
+      .where(eq(players.steamId64, deputy.steamId64));
+    await h.db.insert(clanMembers).values([
+      { clanId: clan.clanId, playerId: deputy.id, memberRole: 'deputy', hasPriority: false },
+      { clanId: clan.clanId, playerId: otherDeputy.id, memberRole: 'deputy', hasPriority: false },
+    ]);
+    const deputyCookie = await makeCookieFor(deputy.id);
+    const toggle = (playerId: string, enabled: boolean) =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/clans/${clan.clanId}/members/${playerId}/priority`,
+        headers: jsonHeaders(deputyCookie),
+        payload: JSON.stringify({ enabled }),
+      });
+
+    await drainSyncStream();
+    for (const [playerId, enabled] of [
+      [clan.leaderId, false],
+      [otherDeputy.id, true],
+      [deputy.id, true],
+    ] as const) {
+      const res = await toggle(playerId, enabled);
+      expect(res.statusCode, res.body).toBe(403);
+    }
+    const rows = await h.db
+      .select({ playerId: clanMembers.playerId, hasPriority: clanMembers.hasPriority })
+      .from(clanMembers)
+      .where(eq(clanMembers.clanId, clan.clanId));
+    const priority = new Map(rows.map((row) => [row.playerId, row.hasPriority]));
+    expect(priority.get(clan.leaderId)).toBe(true);
+    expect(priority.get(otherDeputy.id)).toBe(false);
+    expect(priority.get(deputy.id)).toBe(false);
+    expect(await syncTaskCount()).toBe(0);
+
+    const allowed = await toggle(clan.memberId, true);
+    expect(allowed.statusCode, allowed.body).toBe(200);
   });
 
   it('enables priority, writes an audit row, and publishes an admins-cfg sync event', async () => {
@@ -280,6 +336,27 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
       .from(clanMembers)
       .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.memberId)));
     expect(row?.hasPriority).toBe(false);
+  });
+
+  it('checks the pool against a limit lowered while the toggle waited (#130)', async () => {
+    const clan = await seedClan({ maxPrioritySlots: 2, leaderHasPriority: true });
+    // Lower the limit while holding the clan row lock, so the toggle has
+    // already loaded the old limit when it queues on that lock.
+    let pending: Promise<{ statusCode: number; json: () => unknown }> | undefined;
+    await h.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM clans WHERE id = ${clan.clanId} FOR UPDATE`);
+      pending = h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}/priority`,
+        headers: jsonHeaders(managerCookie),
+        payload: JSON.stringify({ enabled: true }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await tx.update(clans).set({ maxPrioritySlots: 1 }).where(eq(clans.id, clan.clanId));
+    });
+    const res = await pending;
+    expect(res?.statusCode).toBe(409);
+    expect(res?.json()).toMatchObject({ error: 'priority_pool_limit', limit: 1, used: 1 });
   });
 
   it('rejects enabling when the clan priority window has expired with 409', async () => {

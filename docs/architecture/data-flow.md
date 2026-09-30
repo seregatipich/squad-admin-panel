@@ -106,7 +106,7 @@ If the API process crashes between the eager UPDATE and `container_stop`, the ro
 UI delete confirm                 api                                    bridge
 ─────────────────                 ───                                    ──────
 DELETE /servers/:id ─────────▶  softDeleteServer(ctx, id):
-                                 phase 1 (THROWS on total fail):
+                                 phase 1 (THROWS if any file fails other than not_found):
                                    for cfg in ALLOWED_CONFIG_FILES:
                                      ─bridge.fileRead({path})───────▶   read configs/{id}/ServerConfig/<cfg>
                                                               ◀────    {content}
@@ -149,7 +149,9 @@ Restore (3 endpoints, UI wizard glues them together)
                                                   ─▶  for each filename (skip License.cfg, Rcon.cfg):
                                                        bridge.fileAtomicWrite onto /configs/{newId}/ServerConfig/
                                                        INSERT config_versions (message='restored from server <id> backup <iso>')
-4. POST /servers/:newId/start                     ─▶  bridge.containerStart
+4. POST /servers/:newId/start                     ─▶  bridge.containerRm (if present) → bridge.containerRun
+                                                       from current server_settings (#30: start and restart
+                                                       always recreate, so PUT /settings changes apply)
 ```
 
 ## Live-bus fan-out
@@ -240,7 +242,7 @@ POST /api/v1/depot/update   →  api spawns dedicated bridge connection
               WS /api/v1/depot/progress/ws   ──replays last 500 + tails──→  ui
 ```
 
-Multiple UI tabs can subscribe to the same update; the lock key `depot:updating` prevents concurrent runs.
+Multiple UI tabs can subscribe to the same update; the lock key `depot:updating` prevents concurrent runs. The lock ([`apps/api/src/lib/depot-lock.ts`](../../apps/api/src/lib/depot-lock.ts)) stores a per-run token, is renewed every minute while the run lasts (so an update longer than the one-hour TTL keeps it), and is released with a compare-and-delete, so a run never frees a lock another run holds. Of the `server_ids` sent to the fleet update, only servers in `running`/`starting` are stopped and restarted; the rest come back as `servers_skipped` and stay as they were.
 
 ## RCON polling loop
 

@@ -18,6 +18,11 @@ var ErrForbidden = errors.New("forbidden")
 //   - absolute (never relative / traversal)
 //   - clean (no . or .. segments after Clean)
 //   - lives under a permitted root
+//
+// The check is lexical only: it does not resolve symlinks. Directories bind-
+// mounted into a game container may contain planted symlinks, so callers must
+// then open the path through an os.Root anchored at its trust root (see
+// fsx.Write/fsx.AtomicWrite and handlers.openReadableRoot) rather than by name.
 func Path(p string, allowedRoots ...string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("%w: empty path", ErrForbidden)

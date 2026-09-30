@@ -160,6 +160,58 @@ describeIfDb('alert-rules validation', () => {
     });
     expect(statusCode).toBe(400);
   });
+
+  it('rejects a PUT that strips a custom rule of its eventKind (400, #81)', async () => {
+    const { body } = await createRule(editorCookie, {
+      type: 'custom',
+      config: { eventKind: 'rcon.disconnected' },
+    });
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/alert-rules/${body.id as string}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ config: {} }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'invalid_config' });
+    const [stored] = await h.db
+      .select({ config: alertRules.config })
+      .from(alertRules)
+      .where(eq(alertRules.id, body.id as string));
+    expect(stored?.config).toEqual({ eventKind: 'rcon.disconnected' });
+  });
+
+  it('rejects a PUT that zeroes an unusual_activity connectThreshold (400, #81)', async () => {
+    const { body } = await createRule(editorCookie, {
+      type: 'unusual_activity',
+      config: { windowMinutes: 5, connectThreshold: 10 },
+    });
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/alert-rules/${body.id as string}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ config: { windowMinutes: 5 } }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts a PUT with a valid per-type config', async () => {
+    const { body } = await createRule(editorCookie, {
+      type: 'unusual_activity',
+      config: { windowMinutes: 5, connectThreshold: 10 },
+    });
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/alert-rules/${body.id as string}`,
+      headers: { cookie: editorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ config: { windowMinutes: 5, connectThreshold: 20 } }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { config: unknown }).config).toEqual({
+      windowMinutes: 5,
+      connectThreshold: 20,
+    });
+  });
 });
 
 describeIfDb('alert-rules update / delete', () => {

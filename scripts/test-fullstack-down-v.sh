@@ -65,10 +65,36 @@ command -v docker >/dev/null 2>&1 || fail "docker is not installed / not on PATH
 docker compose version >/dev/null 2>&1 || fail "docker compose v2 is required"
 [[ -f "$ENV_FILE" ]] || fail "missing $ENV_FILE (needed for RESTIC_*, POSTGRES_PASSWORD, DATA_DIR)"
 
-# Resolve DATA_DIR the way docker compose does (from .env, default ./data).
-DATA_DIR="$(grep -E '^DATA_DIR=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
-DATA_DIR="${DATA_DIR:-./data}"
-[[ "$DATA_DIR" = /* ]] || DATA_DIR="${REPO}/${DATA_DIR#./}"
+# Prints DATA_DIR the way docker compose reads it from the env file: the last
+# assignment wins, surrounding quotes are dropped, an unquoted value loses a
+# trailing " # comment", the default is ./data, and a relative path resolves
+# against the repository root.
+resolve_data_dir() {
+  local env_file="$1" value
+  value="$(grep -E '^DATA_DIR=' "$env_file" | tail -n1 | cut -d= -f2- || true)"
+  if [[ "$value" =~ ^\"(.*)\"[[:space:]]*$ || "$value" =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  else
+    value="${value%%[[:space:]]#*}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+  value="${value:-./data}"
+  [[ "$value" = /* ]] || value="${REPO}/${value#./}"
+  printf '%s\n' "$value"
+}
+
+# Empties a bind-mounted data directory, dot files included, and proves it is
+# empty. Any removal error (for example a non-root run against the 0700
+# postgres tree) fails the run: a silent no-op would let the canaries survive
+# without a restore and report a false PASS.
+wipe_bind_dir() {
+  local dir="$1"
+  [[ -d "$dir" ]] || fail "bind directory $dir does not exist — is DATA_DIR right?"
+  find "$dir" -mindepth 1 -delete || fail "could not wipe $dir (run as root?)"
+  [[ -z "$(ls -A "$dir")" ]] || fail "bind directory $dir is still not empty after the wipe"
+}
+
+DATA_DIR="$(resolve_data_dir "$ENV_FILE")"
 
 wait_api_health() {
   # The api container has no host port mapping; probe its in-container /health.
@@ -119,7 +145,8 @@ step "Destroying the stack and its volumes (docker compose --profile backup down
 # down -v drops the named volume definitions, but the postgres/redis volumes are
 # bind-backed (device: \${DATA_DIR}/...), so their host trees persist. Wipe them
 # to make the data loss real.
-rm -rf "${DATA_DIR:?}/postgres"/* "${DATA_DIR:?}/redis"/* 2>/dev/null || true
+wipe_bind_dir "${DATA_DIR:?}/postgres"
+wipe_bind_dir "${DATA_DIR:?}/redis"
 ok "volumes destroyed and postgres/redis binds wiped"
 
 # ── 5. restore from the restic backup ────────────────────────────────────────

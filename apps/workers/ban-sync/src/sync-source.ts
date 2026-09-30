@@ -4,6 +4,7 @@ import type { Diag } from '@squad/diag';
 import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
+import type { Logger } from 'pino';
 import { parseBanList } from './adapters/index.js';
 import { raiseBanSyncFailureAlert } from './alerts.js';
 import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
@@ -61,15 +62,41 @@ export interface SyncSourceDeps {
   /** Best-effort invalidation signal for log-ingest's in-memory CBAN-4 cache. */
   onSyncComplete?: () => Promise<void>;
   diag: Pick<Diag, 'emit'>;
+  /** Where a failed best-effort step (event, diag, alert, status write) is reported. */
+  log?: Pick<Logger, 'warn'>;
+}
+
+/**
+ * Runs a side effect whose failure must not change the sync's outcome; the
+ * failure is logged instead of thrown.
+ */
+async function bestEffort(
+  deps: SyncSourceDeps,
+  step: string,
+  sourceId: string,
+  effect: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await effect();
+  } catch (err) {
+    deps.log?.warn(
+      { err: err instanceof Error ? err.message : String(err), step, sourceId },
+      'ban-sync side effect failed',
+    );
+  }
 }
 
 /**
  * Runs one full sync for a single ban source: decrypt → fetch → parse →
- * merge/apply → persist source status + emit `bansync.completed` on
- * success, or record the error + emit `bansync.failed` (and, on exactly
- * the 3rd consecutive failure, raise the AUTO-3 alert) on any failure at
- * any stage. Never throws — the caller (tick / manual-queue consumer)
- * always gets a `SyncReport` back.
+ * merge/apply → mark the source ok, then emit `bansync.completed`; or, when
+ * any of those stages fails, record the error + emit `bansync.failed` (and,
+ * on exactly the 3rd consecutive failure, raise the AUTO-3 alert).
+ *
+ * Only those stages decide the outcome (#856): once the merge is applied and
+ * the source marked ok, the sync counts as successful even if publishing the
+ * completion event or the diag event fails afterwards. Every step after the
+ * outcome is known is best-effort (see `bestEffort`), so this never throws —
+ * the caller (tick / manual-queue consumer) always gets a `SyncReport` back.
  */
 export async function syncSource(
   deps: SyncSourceDeps,
@@ -78,26 +105,34 @@ export async function syncSource(
   const now = deps.now ?? (() => new Date());
   const startedAt = now();
 
+  let fetched: FetchBanListResult;
+  let applied: { added: number; updated: number; revoked: number };
+  let totalSkipped: number;
   try {
     const authHeader = source.authHeaderEncrypted
       ? deps.decryptAuthHeader(source.authHeaderEncrypted)
       : null;
 
-    const fetched = await deps.fetchBanList(source.url, authHeader);
+    fetched = await deps.fetchBanList(source.url, authHeader);
     const { records, skipped } = parseBanList(source.format, fetched.text, source.parserConfig);
     const existing = await deps.loadExistingBans(source.id);
     const plan = planMerge(existing, records);
-    const applied = await deps.applyMergePlan(source.id, plan);
+    applied = await deps.applyMergePlan(source.id, plan);
+    totalSkipped = skipped + plan.skippedDuplicateKeys;
 
-    const totalSkipped = skipped + plan.skippedDuplicateKeys;
-    const syncedAt = now();
     await deps.updateSourceOk(source.id, {
-      lastSyncAt: syncedAt,
+      lastSyncAt: now(),
       importedCount: applied.added + applied.updated,
     });
-    if (deps.onSyncComplete) await deps.onSyncComplete().catch(() => undefined);
+  } catch (err) {
+    return recordFailure(deps, source, startedAt, now(), err);
+  }
 
-    await deps.persistAndPublish(
+  const onSyncComplete = deps.onSyncComplete;
+  if (onSyncComplete) await bestEffort(deps, 'cache_invalidation', source.id, onSyncComplete);
+
+  await bestEffort(deps, 'publish_completed', source.id, () =>
+    deps.persistAndPublish(
       buildBansyncEnvelope('bansync.completed', {
         source_id: source.id,
         added: applied.added,
@@ -107,72 +142,91 @@ export async function syncSource(
         duration_ms: fetched.durationMs,
         bytes: fetched.bytes,
       }),
-    );
+    ),
+  );
 
-    await deps.diag.emit({
+  await bestEffort(deps, 'diag_completed', source.id, () =>
+    deps.diag.emit({
       component: 'worker-ban-sync',
       kind: 'ban_sync.completed',
       severity: 'info',
       message: `synced source ${source.name}: +${applied.added} ~${applied.updated} -${applied.revoked}`,
       payload: { sourceId: source.id, ...applied, skipped: totalSkipped },
-    });
+    }),
+  );
 
-    return {
-      ok: true,
-      added: applied.added,
-      updated: applied.updated,
-      revoked: applied.revoked,
-      skipped: totalSkipped,
-      durationMs: fetched.durationMs,
-      bytes: fetched.bytes,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const consecutiveFailures = source.consecutiveFailures + 1;
-    const failedAt = now();
+  return {
+    ok: true,
+    added: applied.added,
+    updated: applied.updated,
+    revoked: applied.revoked,
+    skipped: totalSkipped,
+    durationMs: fetched.durationMs,
+    bytes: fetched.bytes,
+  };
+}
 
-    await deps.updateSourceError(source.id, {
+/**
+ * Records a failed sync: error status, `bansync.failed`, diag event and — on
+ * exactly the threshold failure — the AUTO-3 alert. Each step is best-effort,
+ * so an unreachable database or Redis cannot turn the failure into a throw.
+ */
+async function recordFailure(
+  deps: SyncSourceDeps,
+  source: SyncSourceInput,
+  startedAt: Date,
+  failedAt: Date,
+  err: unknown,
+): Promise<SyncReport> {
+  const message = err instanceof Error ? err.message : String(err);
+  const consecutiveFailures = source.consecutiveFailures + 1;
+  const durationMs = failedAt.getTime() - startedAt.getTime();
+
+  await bestEffort(deps, 'status_error', source.id, () =>
+    deps.updateSourceError(source.id, {
       lastSyncAt: failedAt,
       lastSyncError: message,
       consecutiveFailures,
-    });
+    }),
+  );
 
-    await deps.persistAndPublish(
+  await bestEffort(deps, 'publish_failed', source.id, () =>
+    deps.persistAndPublish(
       buildBansyncEnvelope('bansync.failed', {
         source_id: source.id,
         error: message,
         consecutive_failures: consecutiveFailures,
-        duration_ms: failedAt.getTime() - startedAt.getTime(),
+        duration_ms: durationMs,
       }),
-    );
+    ),
+  );
 
-    await deps.diag.emit({
+  await bestEffort(deps, 'diag_failed', source.id, () =>
+    deps.diag.emit({
       component: 'worker-ban-sync',
       kind: 'ban_sync.failed',
       severity: 'error',
       message: `sync failed for source ${source.name}: ${message}`,
       payload: { sourceId: source.id, error: message, consecutiveFailures },
-    });
+    }),
+  );
 
-    if (consecutiveFailures === ALERT_CONSECUTIVE_FAILURE_THRESHOLD) {
-      await deps.raiseFailureAlert(
-        { id: source.id, name: source.name },
-        message,
-        consecutiveFailures,
-      );
-    }
-
-    return {
-      ok: false,
-      added: 0,
-      updated: 0,
-      revoked: 0,
-      skipped: 0,
-      durationMs: failedAt.getTime() - startedAt.getTime(),
-      bytes: 0,
-      error: message,
-    };
+  if (consecutiveFailures === ALERT_CONSECUTIVE_FAILURE_THRESHOLD) {
+    await bestEffort(deps, 'failure_alert', source.id, () =>
+      deps.raiseFailureAlert({ id: source.id, name: source.name }, message, consecutiveFailures),
+    );
   }
+
+  return {
+    ok: false,
+    added: 0,
+    updated: 0,
+    revoked: 0,
+    skipped: 0,
+    durationMs,
+    bytes: 0,
+    error: message,
+  };
 }
 
 /** Wires `syncSource`'s injectable deps to real Postgres/Redis/crypto implementations. */
@@ -181,15 +235,28 @@ export function createSyncSourceDeps(
   redis: Redis,
   diag: Pick<Diag, 'emit'>,
   encryptionKeyBase64: string,
+  log?: Pick<Logger, 'warn'>,
 ): Omit<SyncSourceDeps, 'now'> {
   const key = loadEncryptionKey(encryptionKeyBase64);
   return {
     decryptAuthHeader: (blob) => decrypt(key, deserialize(blob)),
     fetchBanList: (url, authHeader) => fetchBanList(url, authHeader),
-    loadExistingBans: async (sourceId) => {
-      const rows = await db.select().from(externalBans).where(eq(externalBans.sourceId, sourceId));
-      return rows as unknown as ExistingBanRow[];
-    },
+    loadExistingBans: (sourceId): Promise<ExistingBanRow[]> =>
+      db
+        .select({
+          id: externalBans.id,
+          steamId64: externalBans.steamId64,
+          eosId: externalBans.eosId,
+          nickname: externalBans.nickname,
+          reason: externalBans.reason,
+          adminName: externalBans.adminName,
+          issuedAt: externalBans.issuedAt,
+          expiresAt: externalBans.expiresAt,
+          raw: externalBans.raw,
+          revokedAt: externalBans.revokedAt,
+        })
+        .from(externalBans)
+        .where(eq(externalBans.sourceId, sourceId)),
     applyMergePlan: (sourceId, plan) => applyMergePlan(db, sourceId, plan),
     updateSourceOk: async (sourceId, patch) => {
       await db
@@ -217,7 +284,8 @@ export function createSyncSourceDeps(
     persistAndPublish: (envelope) => persistAndPublish(db, redis, envelope),
     onSyncComplete: () => redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY).then(() => undefined),
     raiseFailureAlert: (source, errorText, consecutiveFailures) =>
-      raiseBanSyncFailureAlert(db, redis, source, errorText, consecutiveFailures),
+      raiseBanSyncFailureAlert(db, source, errorText, consecutiveFailures),
     diag,
+    log,
   };
 }

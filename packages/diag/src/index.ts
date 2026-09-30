@@ -19,8 +19,8 @@ export function createDiag({ redis, log }: DiagDeps): Diag {
     async emit(ev: DiagEvent) {
       const id = uuidv7();
       const ts = new Date().toISOString();
-      const payload = JSON.stringify(ev.payload ?? {});
       try {
+        const payload = JSON.stringify(ev.payload ?? {});
         await redis.xadd(
           DIAG_STREAM_KEY,
           'MAXLEN',

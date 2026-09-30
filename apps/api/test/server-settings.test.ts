@@ -92,11 +92,45 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(row?.maxPlayers).toBe(60);
     expect(row?.tickrate).toBe(40);
 
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'server.update_settings',
       resource: 'server',
       targetId: serverId,
     });
+    // #331: before/after used to be absent from config.audit-based writes;
+    // a security-sensitive change (ports, resource limits) could not be
+    // reconstructed from audit_log alone.
+    expect(audit.beforeSnapshot).toMatchObject({ max_players: 80, tickrate: 50 });
+    expect(audit.afterSnapshot).toMatchObject({ max_players: 60, tickrate: 40 });
+  });
+
+  // #330: server_settings.multihome is a Postgres `inet` column; a non-IP
+  // value used to reach the UPDATE and 500 there instead of 400ing.
+  it('rejects a non-IP multihome value → 400', async () => {
+    const serverId = await seedServer({ slug: 'settings-bad-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { multihome: 'not-an-ip' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts a valid multihome IP → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-good-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { multihome: '10.0.0.5' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ multihome: string }>().multihome).toBe('10.0.0.5');
   });
 
   it('rejects port change on a running server → 409', async () => {
@@ -148,36 +182,71 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(body.error).toBe('port_conflict');
   });
 
-  it('allows resource-limit changes on a running server → 200', async () => {
+  // #53 (#1186): these knobs never reached `docker run`; a 200 told the
+  // operator a memory/CPU limit was in force on an unlimited container.
+  it('rejects never-applied resource limits → 400 and leaves the row untouched', async () => {
     const serverId = await seedServer({ slug: 'settings-resource-running', status: 'running' });
+    const cookie = await loginAsOwner(h);
+
+    for (const payload of [
+      { memory_max_mb: 8192 },
+      { memory_high_mb: 4096 },
+      { cpu_weight: 500 },
+      { cpu_affinity: '0-3' },
+      { niceness: -5 },
+      { io_weight: 100 },
+      { extra_args: '-ExecCmds=quit' },
+    ]) {
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${serverId}/settings`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+
+    const [row] = await h.db
+      .select()
+      .from(serverSettings)
+      .where(eq(serverSettings.serverId, serverId));
+    expect(row?.memoryMaxMb).toBeNull();
+    expect(row?.cpuWeight).toBeNull();
+    expect(row?.extraArgs).toBe('');
+  });
+
+  it('still accepts the unset value of each resource knob → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-resource-unset', status: 'running' });
     const cookie = await loginAsOwner(h);
 
     const res = await h.app.inject({
       method: 'PUT',
       url: `/api/v1/servers/${serverId}/settings`,
       headers: { cookie, 'content-type': 'application/json' },
-      payload: {
-        cpu_weight: 500,
-        niceness: -5,
-        memory_high_mb: 4096,
-        memory_max_mb: 8192,
-        io_weight: 100,
-      },
+      payload: { extra_args: '', cpu_weight: null, memory_max_mb: null, max_players: 90 },
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      cpu_weight: number;
-      niceness: number;
-      memory_high_mb: number;
-      memory_max_mb: number;
-      io_weight: number;
-    };
-    expect(body.cpu_weight).toBe(500);
-    expect(body.niceness).toBe(-5);
-    expect(body.memory_high_mb).toBe(4096);
-    expect(body.memory_max_mb).toBe(8192);
-    expect(body.io_weight).toBe(100);
+    expect((res.json() as { max_players: number }).max_players).toBe(90);
+  });
+
+  // #53 (#1187): multihome becomes the RCONIP=/MULTIHOME= launch arguments.
+  it('rejects a non-IP multihome → 400 and accepts an IP literal → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+    const put = (multihome: string) =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${serverId}/settings`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: { multihome },
+      });
+
+    expect((await put('0.0.0.0 -ExecCmds=quit')).statusCode).toBe(400);
+    expect((await put('localhost')).statusCode).toBe(400);
+    const ok = await put('10.0.0.7');
+    expect(ok.statusCode).toBe(200);
+    expect((ok.json() as { multihome: string }).multihome).toBe('10.0.0.7');
   });
 
   it('calls ufwRule remove+add when a port changes on a stopped server', async () => {
@@ -206,6 +275,63 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(res.statusCode).toBe(200);
     expect(ufwCalls).toContainEqual({ action: 'remove', port: 7787, proto: 'udp' });
     expect(ufwCalls).toContainEqual({ action: 'add', port: 7799, proto: 'udp' });
+  });
+
+  // Regression (#43 finding 323): old rules were removed before the new ones
+  // were added and before the DB was written, so a failing `add` left the old
+  // ports closed, some new ones open and server_settings on the old ports.
+  it('keeps the old ports open and rolls back added rules when a ufw add fails', async () => {
+    const serverId = await seedServer({ slug: 'settings-ufw-fail', status: 'stopped' });
+    const ufwCalls: Array<{ action: string; port: number; proto: string }> = [];
+    h.bridge.ufwRule = vi.fn(async (p) => {
+      ufwCalls.push({ action: p.action, port: p.port, proto: p.proto });
+      if (p.action === 'add' && p.port === 27199) throw new Error('ufw: exit status 1');
+      return { output: '', status: 'ok' };
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { game_port: 7799, query_port: 27199 },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'ufw_update_failed' });
+    expect(ufwCalls.filter((c) => c.action === 'remove' && c.port === 7787)).toHaveLength(0);
+    expect(ufwCalls.filter((c) => c.action === 'remove' && c.port === 27165)).toHaveLength(0);
+    // The rule that did get added is taken back out.
+    expect(ufwCalls).toContainEqual({ action: 'remove', port: 7799, proto: 'udp' });
+    const [row] = await h.db
+      .select({ gamePort: serverSettings.gamePort, queryPort: serverSettings.queryPort })
+      .from(serverSettings)
+      .where(eq(serverSettings.serverId, serverId));
+    expect(row).toEqual({ gamePort: 7787, queryPort: 27165 });
+  });
+
+  it('adds new rules before removing old ones and keeps a rule a swapped port still needs', async () => {
+    const serverId = await seedServer({ slug: 'settings-ufw-swap', status: 'stopped' });
+    const ufwCalls: Array<{ action: string; port: number; proto: string }> = [];
+    h.bridge.ufwRule = vi.fn(async (p) => {
+      ufwCalls.push({ action: p.action, port: p.port, proto: p.proto });
+      return { output: '', status: 'ok' };
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      // game 7787 → 27165 and query 27165 → 7787: both udp rules stay needed.
+      payload: { game_port: 27165, query_port: 7787, beacon_port: 15001 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ufwCalls).toEqual([
+      { action: 'add', port: 15001, proto: 'udp' },
+      { action: 'remove', port: 15000, proto: 'udp' },
+    ]);
   });
 
   it('returns 404 for an unknown server id', async () => {
@@ -258,7 +384,17 @@ describe('PATCH /api/v1/servers/:id', () => {
     expect(row?.displayName).toBe('New Name');
     expect(row?.tags).toEqual(['pvp', 'ru']);
 
-    await assertAuditRow(h, { action: 'server.patch', resource: 'server', targetId: serverId });
+    const audit = await assertAuditRow(h, {
+      action: 'server.patch',
+      resource: 'server',
+      targetId: serverId,
+    });
+    // #331: PATCH /servers/:id used to audit only the action, with no
+    // before/after — the license key itself must stay redacted even now
+    // that the snapshot exists.
+    expect(audit.beforeSnapshot).toMatchObject({ display_name: 'Test patch-meta' });
+    expect(audit.afterSnapshot).toMatchObject({ display_name: 'New Name', tags: ['pvp', 'ru'] });
+    expect(audit.afterSnapshot).not.toHaveProperty('license_key');
   });
 
   it('updates description (nullable)', async () => {

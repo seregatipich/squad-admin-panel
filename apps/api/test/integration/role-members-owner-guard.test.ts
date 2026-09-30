@@ -97,6 +97,8 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — last-Owner invarian
     // read "2 owners" before either commits). Each removal races as its own
     // implicit single-statement transaction, so the trigger's
     // pg_advisory_xact_lock is the only thing serializing them.
+    const ownerPlayerId = h.seed.ownerPlayerId;
+    if (!ownerPlayerId) throw new Error('owner was not seeded');
     const clientA = postgres(h.url, { max: 1, prepare: false, onnotice: () => undefined });
     const clientB = postgres(h.url, { max: 1, prepare: false, onnotice: () => undefined });
 
@@ -105,7 +107,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — last-Owner invarian
       // `databaseUrl()` in isolated-db.ts) — tables live in its default
       // `public` schema, unqualified, same as the app's own connection.
       const results = await Promise.allSettled([
-        clientA.unsafe('UPDATE players SET role_id = NULL WHERE id = $1', [h.seed.ownerPlayerId]),
+        clientA.unsafe('UPDATE players SET role_id = NULL WHERE id = $1', [ownerPlayerId]),
         clientB.unsafe('UPDATE players SET role_id = NULL WHERE id = $1', [secondOwnerId]),
       ]);
 

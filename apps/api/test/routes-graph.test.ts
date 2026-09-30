@@ -49,6 +49,7 @@ vi.mock('@squad/shared-config', () => ({
   SQUAD_PERMISSIONS: [],
   decodeLogEntry: vi.fn(),
   LOG_LEVELS: ['debug', 'info', 'warn', 'error'],
+  LOG_SOURCES: [],
   sourceCode: vi.fn(),
   PANEL_LOGS_STREAM: 'panel:logs',
   SERVER_CONTAINER_PREFIX: 'squad-',
@@ -117,7 +118,8 @@ vi.mock('../src/lib/steam-openid.js', () => ({
   verifyWithSteam: vi.fn(),
 }));
 
-vi.mock('../src/lib/steam-profile.js', () => ({
+vi.mock('@squad/steam-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@squad/steam-api')>()),
   fetchSteamProfile: vi.fn(),
 }));
 
@@ -136,10 +138,6 @@ vi.mock('../src/lib/rcon-send.js', () => ({
   rconSendOnce: vi.fn(),
 }));
 
-vi.mock('../src/lib/rcon-host.js', () => ({
-  resolveRconHost: vi.fn(),
-}));
-
 vi.mock('../src/lib/auto-prune.js', () => ({
   fireAutoPrune: vi.fn(),
 }));
@@ -154,6 +152,7 @@ vi.mock('../src/lib/server-delete.js', () => ({
 
 vi.mock('../src/lib/server-restore.js', () => ({
   restoreConfigsFromArchive: vi.fn(),
+  deletionBackupRows: vi.fn(),
 }));
 
 vi.mock('../src/lib/audit.js', () => ({

@@ -1,24 +1,13 @@
 import { mediaUploadTokens } from '@squad/db/schema';
 import { mintUploadTokenInput, type UploadTokenResponse } from '@squad/shared-types';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { writeAuditEntry } from '../lib/audit.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from '../lib/media-storage.js';
 import { mintUploadToken, uploadTokenUrl } from '../lib/media-upload-tokens.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { entityExists } from './media-links.js';
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * VIDEO-3 (#159) — minting half of the delegated-upload flow. Issues a
@@ -35,7 +24,7 @@ const mediaUploadTokensRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/upload-tokens',
-    { schema: { body: mintUploadTokenInput }, config: { audit: false } },
+    { schema: { body: mintUploadTokenInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

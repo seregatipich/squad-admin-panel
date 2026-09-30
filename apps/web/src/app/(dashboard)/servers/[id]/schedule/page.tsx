@@ -35,6 +35,8 @@ type RunStatus = 'executed' | 'skipped_depot_update' | 'failed';
 const MIN_BROADCAST_INTERVAL_MINUTES = 5;
 /** MSG-4 (#187): a broadcast rotation carries at most this many messages. */
 const MAX_ROTATION_MESSAGES = 10;
+/** Mirrors BROADCAST_MESSAGE_MAX in the scheduled-tasks API (AdminBroadcast cap). */
+const BROADCAST_MESSAGE_MAX = 300;
 
 interface ScheduledTask {
   id: string;
@@ -268,7 +270,9 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
       ? true
       : isLayerType(taskType)
         ? layer !== ''
-        : effectiveMessages.length >= 1;
+        : effectiveMessages.length >= 1 &&
+          effectiveMessages.length <= MAX_ROTATION_MESSAGES &&
+          effectiveMessages.every((text) => text.length <= BROADCAST_MESSAGE_MAX);
   const canSubmit =
     canEditAny &&
     name.trim() !== '' &&
@@ -288,7 +292,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
         body.params = { messages: effectiveMessages };
         if (selectedServerIds.length > 0) body.server_ids = selectedServerIds;
       }
-      if (scheduleMode === 'one_off') body.scheduled_at = new Date(scheduledAt).toISOString();
+      if (scheduleMode === 'one_off') body.scheduled_at = new Date(`${scheduledAt}Z`).toISOString();
       else body.recurrence = recurrence.trim();
 
       const res = await fetch(`/api/v1/servers/${id}/scheduled-tasks`, {
@@ -375,7 +379,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
       {!canEditAny ? (
         <InlineBanner
           tone="info"
-          title="Только просмотр — нужны привилегии на рестарт (server:restart), смену слоя (changemap) или оповещение (chat)."
+          title="Только просмотр — нужны привилегии на рестарт (server:restart), смену слоя (changemap) или оповещение (chat и role:edit)."
         />
       ) : null}
 
@@ -485,6 +489,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
                         type="text"
                         value={message}
                         onChange={(e) => setMessage(e.target.value)}
+                        maxLength={BROADCAST_MESSAGE_MAX}
                         placeholder="Текст оповещения"
                       />
                     </FieldRow>
@@ -570,7 +575,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
               </FieldRow>
 
               {scheduleMode === 'one_off' ? (
-                <FieldRow label="Дата и время">
+                <FieldRow label="Дата и время (UTC)">
                   <TextInput
                     type="datetime-local"
                     value={scheduledAt}

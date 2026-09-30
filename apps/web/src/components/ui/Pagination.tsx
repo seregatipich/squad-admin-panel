@@ -86,7 +86,11 @@ export function Pagination({
 
   return (
     <nav aria-labelledby={statusId} className="flex items-center gap-2">
-      <Button size="sm" onClick={() => onChange(page - 1)} disabled={page <= 1}>
+      <Button
+        size="sm"
+        onClick={() => onChange(Math.min(page - 1, Math.max(pageCount, 1)))}
+        disabled={page <= 1}
+      >
         {labels.previous}
       </Button>
 

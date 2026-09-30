@@ -5,12 +5,16 @@
  * test so we assert the route's JSON shape and its streaming/permission
  * behaviour without a real host filesystem.
  */
+
+import { request as httpRequest } from 'node:http';
 import { players, roles } from '@squad/db/schema';
 import { PANEL_SAVED_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { narrowedOwnerHeaders } from './helpers/narrowed-token.js';
+import { VIEWER_PERMISSIONS } from './helpers/viewer-fixture.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -47,17 +51,6 @@ async function ownerRoleId(): Promise<string> {
     .limit(1);
   const id = rows[0]?.id;
   if (!id) throw new Error('Owner role missing — migration 0009 not applied?');
-  return id;
-}
-
-async function viewerRoleId(): Promise<string> {
-  const rows = await h.db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.name, 'Viewer'))
-    .limit(1);
-  const id = rows[0]?.id;
-  if (!id) throw new Error('Viewer fixture role missing');
   return id;
 }
 
@@ -117,13 +110,11 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for a role without server:download_logs (Viewer)', async () => {
-    await assignRole(await viewerRoleId());
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without server:download_logs (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: `/api/v1/servers/${SERVER_ID}/logs/files`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });
@@ -213,13 +204,11 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for a role without server:download_logs (Viewer)', async () => {
-    await assignRole(await viewerRoleId());
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without server:download_logs (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: `/api/v1/servers/${SERVER_ID}/logs/files/SquadGame.log/download`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });
@@ -235,5 +224,105 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
       expect(resp.statusCode, `filename ${bad} should be rejected`).toBe(400);
     }
     expect(emittedFrames).toBe(0);
+  });
+});
+
+describe('download backpressure and abort (#291)', () => {
+  const FRAME = Buffer.alloc(16 * 1024, 0x61).toString('base64');
+  const state = {
+    paused: false,
+    closed: false,
+    emitted: 0,
+    maxFrames: 0,
+    frameDelayMs: 0,
+    pauseCalls: 0,
+  };
+  let baseUrl = '';
+
+  beforeAll(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
+      bridge: makeFakeBridge({
+        pause: () => {
+          state.paused = true;
+          state.pauseCalls += 1;
+        },
+        resume: () => {
+          state.paused = false;
+        },
+        close: async () => {
+          state.closed = true;
+        },
+        // A fast producer: frames keep coming until the maximum, unless the
+        // route pauses the connection or closes it.
+        fileReadStream: async (_params, onStream) => {
+          while (!state.closed && state.emitted < state.maxFrames) {
+            if (state.paused) {
+              await new Promise((r) => setTimeout(r, 5));
+              continue;
+            }
+            onStream({ id: 'fake', stream: 'stdout', data: FRAME });
+            state.emitted += 1;
+            await new Promise((r) =>
+              state.frameDelayMs > 0 ? setTimeout(r, state.frameDelayMs) : setImmediate(r),
+            );
+          }
+          if (state.closed) throw new Error('client closed');
+          return { bytes_sent: state.emitted * 16 * 1024 };
+        },
+      }),
+    });
+    await h.app.listen({ port: 0, host: '127.0.0.1' });
+    const addr = h.app.server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  beforeEach(() => {
+    Object.assign(state, {
+      paused: false,
+      closed: false,
+      emitted: 0,
+      pauseCalls: 0,
+      frameDelayMs: 0,
+    });
+  });
+
+  function startDownload(cookie: string) {
+    return httpRequest(`${baseUrl}/api/v1/servers/${SERVER_ID}/logs/files/SquadGame.log/download`, {
+      headers: { cookie },
+    });
+  }
+
+  it('pauses the bridge read while the HTTP client is not reading', async () => {
+    state.maxFrames = 2_000; // ~32 MiB if nothing pushes back
+    const cookie = await loginAsOwner(h);
+    const req = startDownload(cookie);
+    req.on('response', (res) => res.pause());
+    req.on('error', () => undefined);
+    req.end();
+
+    await new Promise((r) => setTimeout(r, 750));
+    expect(state.pauseCalls).toBeGreaterThan(0);
+    expect(state.emitted).toBeLessThan(state.maxFrames);
+    req.destroy();
+  });
+
+  it('closes the bridge connection when the client aborts the download', async () => {
+    state.maxFrames = 5_000;
+    state.frameDelayMs = 2;
+    const cookie = await loginAsOwner(h);
+    const req = startDownload(cookie);
+    req.on('response', (res) => res.once('data', () => req.destroy()));
+    req.on('error', () => undefined);
+    req.end();
+
+    await vi.waitFor(() => expect(state.closed).toBe(true), { timeout: 2_000 });
+    expect(state.emitted).toBeLessThan(state.maxFrames);
   });
 });

@@ -4,26 +4,35 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import PublicAppealPage from './page';
 
 const TEST_TIMEOUT_MS = 15_000;
+const STEAM_ID = '76561198000000001';
 
-const STEAM_PLACEHOLDER = '76561198000000000';
+interface MockOptions {
+  /** `/api/v1/me` status; 200 means the visitor is signed in through Steam. */
+  meStatus?: number;
+  postStatus?: number;
+  token?: string;
+}
 
-function mockFetch(opts: { postStatus?: number; token?: string } = {}) {
+function mockFetch(opts: MockOptions = {}) {
+  const meStatus = opts.meStatus ?? 200;
   const postStatus = opts.postStatus ?? 201;
   const token = opts.token ?? 'tracking-token-abcdef123456';
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init });
+    if (url === '/api/v1/me') {
+      const body =
+        meStatus === 200
+          ? JSON.stringify({ steam_id64: STEAM_ID, canonical_name: 'Апеллянт' })
+          : JSON.stringify({ error: 'unauthenticated' });
+      return Promise.resolve(new Response(body, { status: meStatus }));
+    }
     if (url.endsWith('/api/v1/public/appeals') && init?.method === 'POST') {
       const body =
         postStatus === 201
-          ? JSON.stringify({
-              id: 'appeal-1',
-              number: 12,
-              status: 'pending',
-              tracking_token: token,
-            })
-          : JSON.stringify({ error: postStatus === 429 ? 'rate_limited' : 'appeal_already_open' });
+          ? JSON.stringify({ id: 'appeal-1', number: 12, status: 'pending', tracking_token: token })
+          : JSON.stringify({ error: 'x' });
       return Promise.resolve(new Response(body, { status: postStatus }));
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
@@ -31,9 +40,20 @@ function mockFetch(opts: { postStatus?: number; token?: string } = {}) {
   return { fn, calls };
 }
 
-function fillForm(steam: string, body: string) {
-  fireEvent.change(screen.getByPlaceholderText(STEAM_PLACEHOLDER), { target: { value: steam } });
+async function renderSignedIn(opts: MockOptions = {}) {
+  const mock = mockFetch(opts);
+  vi.stubGlobal('fetch', mock.fn);
+  render(<PublicAppealPage />);
+  await screen.findByDisplayValue(STEAM_ID);
+  return mock;
+}
+
+function fillBody(body: string) {
   fireEvent.change(screen.getByPlaceholderText(/опишите, почему/i), { target: { value: body } });
+}
+
+function submit() {
+  fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
 }
 
 afterEach(() => {
@@ -42,29 +62,27 @@ afterEach(() => {
 });
 
 describe('PublicAppealPage', () => {
+  // Regression (#40, #234): the form accepted any SteamID64 anonymously.
   it(
-    'renders the appeal form without any session',
-    () => {
-      vi.stubGlobal('fetch', mockFetch().fn);
+    'asks an anonymous visitor to sign in through Steam instead of showing the form',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ meStatus: 401 }).fn);
       render(<PublicAppealPage />);
-      expect(screen.getByPlaceholderText(STEAM_PLACEHOLDER)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /отправить апелляцию/i })).toBeInTheDocument();
+
+      const link = await screen.findByRole('link', { name: 'Войти через Steam' });
+      expect(link).toHaveAttribute('href', '/api/v1/auth/steam/login?return_to=%2Fappeal');
+      expect(screen.queryByRole('button', { name: /отправить апелляцию/i })).toBeNull();
     },
     TEST_TIMEOUT_MS,
   );
 
   it(
-    'blocks submit and shows a validation error for a non-17-digit SteamID',
+    'shows the signed-in SteamID64 read-only',
     async () => {
-      const { fn, calls } = mockFetch();
-      vi.stubGlobal('fetch', fn);
-      render(<PublicAppealPage />);
-
-      fillForm('123', 'Меня забанили по ошибке, прошу пересмотреть решение.');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
-
-      expect(await screen.findByText(/корректный SteamID64/i)).toBeInTheDocument();
-      expect(calls.some((c) => c.init?.method === 'POST')).toBe(false);
+      await renderSignedIn();
+      const field = screen.getByDisplayValue(STEAM_ID);
+      expect(field).toHaveAttribute('readonly');
+      expect(screen.getByText('Апеллянт')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -72,12 +90,9 @@ describe('PublicAppealPage', () => {
   it(
     'blocks submit when the body is too short',
     async () => {
-      const { fn, calls } = mockFetch();
-      vi.stubGlobal('fetch', fn);
-      render(<PublicAppealPage />);
-
-      fillForm('76561198000000001', 'разбань');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
+      const { calls } = await renderSignedIn();
+      fillBody('разбань');
+      submit();
 
       expect(await screen.findByText(/не менее 20 символов/i)).toBeInTheDocument();
       expect(calls.some((c) => c.init?.method === 'POST')).toBe(false);
@@ -86,40 +101,64 @@ describe('PublicAppealPage', () => {
   );
 
   it(
-    'shows the tracking link after a successful submission',
+    'renders the tracking link as an absolute, clickable URL (#757)',
     async () => {
-      vi.stubGlobal('fetch', mockFetch({ token: 'my-tracking-token-1234' }).fn);
-      render(<PublicAppealPage />);
+      await renderSignedIn({ token: 'abs-token-5678' });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
 
-      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
-
-      await waitFor(() =>
-        expect(screen.getByText(/\/appeal\/my-tracking-token-1234/)).toBeInTheDocument(),
-      );
-      expect(screen.getByText(/сохраните эту ссылку/i)).toBeInTheDocument();
+      const expected = `${window.location.origin}/appeal/abs-token-5678`;
+      const link = await screen.findByRole('link', { name: expected });
+      expect(link).toHaveAttribute('href', expected);
     },
     TEST_TIMEOUT_MS,
   );
 
   it(
-    'sends the optional contact field when it is filled in',
+    'reports an error instead of a broken tracking link when the 201 body is not an appeal',
     async () => {
-      const { fn, calls } = mockFetch();
-      vi.stubGlobal('fetch', fn);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) =>
+          Promise.resolve(
+            String(input) === '/api/v1/me'
+              ? new Response(JSON.stringify({ steam_id64: STEAM_ID, canonical_name: 'Апеллянт' }), {
+                  status: 200,
+                })
+              : new Response('<html>proxy</html>', { status: 201 }),
+          ),
+        ),
+      );
       render(<PublicAppealPage />);
+      await screen.findByDisplayValue(STEAM_ID);
 
-      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
+
+      expect(await screen.findByText(/не удалось отправить апелляцию/i)).toBeInTheDocument();
+      expect(screen.queryByText(/\/appeal\/undefined/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'submits for the signed-in account with the optional contact and shows the tracking link',
+    async () => {
+      const { calls } = await renderSignedIn({ token: 'my-tracking-token-1234' });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
       fireEvent.change(screen.getByPlaceholderText(/discord/i), {
         target: { value: 'discord: me#1' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
+      submit();
 
-      await waitFor(() => expect(calls.some((c) => c.init?.method === 'POST')).toBe(true));
-      const payload = JSON.parse(
-        String(calls.find((c) => c.init?.method === 'POST')?.init?.body),
-      ) as Record<string, unknown>;
-      expect(payload.steam_id64).toBe('76561198000000001');
+      await waitFor(() =>
+        expect(screen.getByText(/\/appeal\/my-tracking-token-1234/)).toBeInTheDocument(),
+      );
+      expect(screen.getByText(/сохраните эту ссылку/i)).toBeInTheDocument();
+      const post = calls.find((c) => c.init?.method === 'POST');
+      expect(post?.init?.credentials).toBe('include');
+      const payload = JSON.parse(String(post?.init?.body)) as Record<string, unknown>;
+      expect(payload.steam_id64).toBe(STEAM_ID);
       expect(payload.contact).toBe('discord: me#1');
     },
     TEST_TIMEOUT_MS,
@@ -128,12 +167,9 @@ describe('PublicAppealPage', () => {
   it(
     'shows the duplicate message on a 409',
     async () => {
-      vi.stubGlobal('fetch', mockFetch({ postStatus: 409 }).fn);
-      render(<PublicAppealPage />);
-
-      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
-
+      await renderSignedIn({ postStatus: 409 });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
       await waitFor(() => expect(screen.getByText(/уже на рассмотрении/i)).toBeInTheDocument());
     },
     TEST_TIMEOUT_MS,
@@ -142,13 +178,22 @@ describe('PublicAppealPage', () => {
   it(
     'shows the throttling message on a 429',
     async () => {
-      vi.stubGlobal('fetch', mockFetch({ postStatus: 429 }).fn);
-      render(<PublicAppealPage />);
-
-      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
-
+      await renderSignedIn({ postStatus: 429 });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
       await waitFor(() => expect(screen.getByText(/слишком много заявок/i)).toBeInTheDocument());
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'falls back to the Steam sign-in when the session expired before submitting',
+    async () => {
+      await renderSignedIn({ postStatus: 401 });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
+      expect(await screen.findByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
+      expect(screen.getByText(/вход через steam истёк/i)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -156,15 +201,17 @@ describe('PublicAppealPage', () => {
   it(
     'shows a network error banner when the request throws',
     async () => {
+      const { fn } = mockFetch();
       vi.stubGlobal(
         'fetch',
-        vi.fn(() => Promise.reject(new Error('offline'))),
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+          init?.method === 'POST' ? Promise.reject(new Error('offline')) : fn(input, init),
+        ),
       );
       render(<PublicAppealPage />);
-
-      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
-      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
-
+      await screen.findByDisplayValue(STEAM_ID);
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
       await waitFor(() => expect(screen.getByText(/ошибка сети/i)).toBeInTheDocument());
     },
     TEST_TIMEOUT_MS,

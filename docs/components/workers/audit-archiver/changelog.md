@@ -1,5 +1,13 @@
 # Changelog — worker-audit-archiver
 
+## 2026-09-30 — the stub no longer reports successful archive cycles (#92)
+
+### Removed
+
+- The hourly `runArchiverCycle` and its `audit_archiver.run_ok` / `audit_archiver.run_failed`
+  diagnostics. Nothing is archived yet, so a periodic "cycle ok" event was a false signal; the
+  worker keeps its heartbeat (`idle (P1)`) and the `started` / `stopped` events.
+
 ## 2026-04-29
 
 ### Added

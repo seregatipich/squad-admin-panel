@@ -5,8 +5,8 @@ describe('diag.emit', () => {
   it('XADDs the event to diag:queue with all fields serialized', async () => {
     const xadd = vi.fn().mockResolvedValue('1700000000000-0');
     const redis = { xadd } as never;
-    const log = { warn: vi.fn(), debug: vi.fn() } as never;
-    const diag = createDiag({ redis, log });
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const diag = createDiag({ redis, log: log as never });
 
     await diag.emit({
       component: 'api',
@@ -34,13 +34,33 @@ describe('diag.emit', () => {
     expect(JSON.parse(fields.payload as string)).toEqual({ reason: 'manual' });
   });
 
+  it('never throws — an unserializable payload (e.g. BigInt) falls back to pino.warn', async () => {
+    const xadd = vi.fn().mockResolvedValue('1700000000000-0');
+    const redis = { xadd } as never;
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const diag = createDiag({ redis, log: log as never });
+
+    await expect(
+      diag.emit({
+        component: 'api',
+        kind: 'x',
+        severity: 'info',
+        message: 'hi',
+        payload: { bad: 1n },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(xadd).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalled();
+  });
+
   it('falls back to pino.warn when Redis throws', async () => {
     const redis = { xadd: vi.fn().mockRejectedValue(new Error('NOREDIS')) } as never;
-    const log = { warn: vi.fn(), debug: vi.fn() } as never;
-    const diag = createDiag({ redis, log });
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const diag = createDiag({ redis, log: log as never });
     await diag.emit({ component: 'api', kind: 'x', severity: 'info', message: 'hi' });
     expect(log.warn).toHaveBeenCalled();
-    const arg = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+    const arg = log.warn.mock.calls[0]?.[0] as {
       diag_event: { kind: string };
     };
     expect(arg.diag_event.kind).toBe('x');

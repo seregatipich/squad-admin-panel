@@ -13,6 +13,32 @@ import (
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
+// #53: an injected multihome must be refused before `docker run` is invoked.
+func TestDockerRunRejectsNonIPMultihome(t *testing.T) {
+	for _, multihome := range []string{"0.0.0.0 -ExecCmds=quit", "localhost"} {
+		f := &Fake{Stdout: []byte("containerid\n")}
+		d := NewDocker(f)
+		_, err := d.Run(context.Background(), ContainerRunSpec{
+			ServerID:    "019dbb45-3556-751f-9124-d4cf0e6b0053",
+			Image:       "squad-server:latest",
+			GamePort:    7788,
+			QueryPort:   27166,
+			BeaconPort:  15001,
+			RCONPort:    21115,
+			Multihome:   multihome,
+			ConfigsHost: "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig",
+			SavedHost:   "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053",
+			DepotVolume: "squad-depot",
+		})
+		if !errors.Is(err, validate.ErrForbidden) {
+			t.Errorf("multihome %q: expected ErrForbidden, got %v", multihome, err)
+		}
+		if len(f.Calls) != 0 {
+			t.Errorf("multihome %q: expected no docker call, got %d", multihome, len(f.Calls))
+		}
+	}
+}
+
 func TestDockerRunComposesCommand(t *testing.T) {
 	f := &Fake{Stdout: []byte("containerid\n")}
 	d := NewDocker(f)
@@ -543,6 +569,7 @@ func TestRunRNSquadJS(t *testing.T) {
 	f := &Fake{Stdout: []byte("rns-container-id\n")}
 	d := NewDocker(f)
 	d.SocketRoot = root
+	d.SavedRoot = t.TempDir()
 	spec := RNSquadJSRunSpec{
 		ServerID: "0196f0a2-1111-2222-3333-444444444444",
 		Env:      map[string]string{"PANEL_BRIDGE_MODE": "shadow"},
@@ -883,5 +910,87 @@ func TestBackupRestoreUnconfiguredComposeDirForbidden(t *testing.T) {
 	_, err := d.BackupRestore(context.Background(), "a1b2c3d4", nil, nil)
 	if err == nil || !errors.Is(err, validate.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+// #47: the stand runs docker/compose.stand.yml with .env.stand + .release.env,
+// so the backup RPCs must target the compose file and env files the host
+// configures instead of hardcoding docker/compose.yml + .env.
+func TestBackupSnapshotsUsesConfiguredComposeFileAndEnvFiles(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "/srv/panel")
+	t.Setenv("PANEL_COMPOSE_FILE", "docker/compose.stand.yml")
+	t.Setenv("PANEL_COMPOSE_ENV_FILES", ".env.stand,.release.env")
+	f := &Fake{Stdout: []byte("[]")}
+	d := &DockerRunner{Bin: "docker", R: f}
+	if _, err := d.BackupSnapshots(context.Background()); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	args := strings.Join(f.Calls[0].Args, " ")
+	want := "compose -f /srv/panel/docker/compose.stand.yml --env-file /srv/panel/.env.stand --env-file /srv/panel/.release.env --profile backup"
+	if !strings.HasPrefix(args, want) {
+		t.Errorf("expected args to start with %q, got: %s", want, args)
+	}
+}
+
+func TestBackupComposeFileOrEnvFileOutsideComposeDirForbidden(t *testing.T) {
+	for name, env := range map[string][2]string{
+		"absolute compose file":  {"/etc/compose.yml", ""},
+		"escaping compose file":  {"../other/compose.yml", ""},
+		"escaping env file":      {"", "../secrets.env"},
+		"absolute env file":      {"", "/root/.env"},
+		"empty env file in list": {"", ".env,,.release.env"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("PANEL_COMPOSE_FILE", env[0])
+			t.Setenv("PANEL_COMPOSE_ENV_FILES", env[1])
+			f := &Fake{}
+			d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+			_, err := d.BackupSnapshots(context.Background())
+			if err == nil || !errors.Is(err, validate.ErrForbidden) {
+				t.Fatalf("expected ErrForbidden, got %v", err)
+			}
+			if len(f.Calls) != 0 {
+				t.Fatalf("expected no docker invocation")
+			}
+		})
+	}
+}
+
+func TestBackupRestorePassesComposeTargetToRestoreScript(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_FILE", "docker/compose.stand.yml")
+	t.Setenv("PANEL_COMPOSE_ENV_FILES", ".env.stand,.release.env")
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/srv/panel"}
+	if _, err := d.BackupRestore(context.Background(), "latest", nil, nil); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	env := strings.Join(f.Calls[0].Env, "\n")
+	for _, must := range []string{
+		"COMPOSE_FILE=/srv/panel/docker/compose.stand.yml",
+		"COMPOSE_ENV_FILES=/srv/panel/.env.stand,/srv/panel/.release.env",
+		"ENV_FILE=/srv/panel/.env.stand",
+	} {
+		if !strings.Contains(env, must) {
+			t.Errorf("expected restore env to contain %q, got:\n%s", must, env)
+		}
+	}
+	if !strings.Contains(env, "PATH=") {
+		t.Errorf("expected restore env to keep the bridge environment (PATH), got:\n%s", env)
+	}
+}
+
+func TestListSidecarContainersKeepsOnlyStrictSidecarNames(t *testing.T) {
+	uuid := "019dbb45-3556-751f-9124-d4cf0e6b0053"
+	f := &Fake{Stdout: []byte("rnsquadjs-" + uuid + "\nrnsquadjs-evil\nxrnsquadjs-" + uuid + "\nsquad-" + uuid + "\n")}
+	d := NewDocker(f)
+	names, err := d.ListSidecarContainers(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !reflect.DeepEqual(names, []string{"rnsquadjs-" + uuid}) {
+		t.Errorf("names = %v", names)
+	}
+	if args := strings.Join(f.Calls[0].Args, " "); !strings.Contains(args, "--filter name=^rnsquadjs-") {
+		t.Errorf("expected a rnsquadjs name filter, got: %s", args)
 	}
 }

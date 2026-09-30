@@ -1,4 +1,4 @@
-import { players, roles, type VipTierRow, vipTiers } from '@squad/db/schema';
+import { players, roles, type VipTierRow, vipSubscriptions, vipTiers } from '@squad/db/schema';
 import { and, asc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -90,13 +90,32 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
-  async function roleExists(roleId: string): Promise<boolean> {
-    const rows = await app.db
-      .select({ id: roles.id })
+  /**
+   * Validates the role a tier grants. Beyond existence, it applies the same
+   * escalation guard as the purchase paths (`resolveTier` in
+   * `vip-subscriptions.ts`, the privilege shop in `economy.ts`): a tier must
+   * never map to a role that opens the panel or to a system role, because the
+   * subscription renewal tick (`apps/workers/role-expirer/src/renewal.ts`)
+   * grants `vip_tiers.role_id` as-is and would otherwise let a
+   * `can_edit_roles` holder hand out Owner-level roles without
+   * `can_assign_roles` (#31).
+   *
+   * @param roleId the requested `vip_tiers.role_id`
+   * @returns `null` when the role is grantable, otherwise the HTTP status and error code
+   */
+  async function tierRoleProblem(
+    roleId: string,
+  ): Promise<{ status: 400 | 403; error: 'role_not_found' | 'role_grants_panel_access' } | null> {
+    const [role] = await app.db
+      .select({ panelAccess: roles.panelAccess, isSystemRole: roles.isSystemRole })
       .from(roles)
       .where(eq(roles.id, roleId))
       .limit(1);
-    return rows.length > 0;
+    if (!role) return { status: 400, error: 'role_not_found' };
+    if (role.panelAccess || role.isSystemRole) {
+      return { status: 403, error: 'role_grants_panel_access' };
+    }
+    return null;
   }
 
   fast.get('/api/v1/vip-tiers', { config: { audit: false } }, async (req, reply) => {
@@ -111,7 +130,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/vip-tiers',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -122,9 +141,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const body = req.body;
-      if (!(await roleExists(body.role_id))) {
-        reply.code(400);
-        return { error: 'role_not_found' };
+      const roleProblem = await tierRoleProblem(body.role_id);
+      if (roleProblem) {
+        reply.code(roleProblem.status);
+        return { error: roleProblem.error };
       }
       if (body.price_bonuses != null && body.default_days == null) {
         reply.code(422);
@@ -179,7 +199,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -196,9 +216,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const body = req.body;
-      if (body.role_id !== undefined && !(await roleExists(body.role_id))) {
-        reply.code(400);
-        return { error: 'role_not_found' };
+      const roleProblem = body.role_id !== undefined ? await tierRoleProblem(body.role_id) : null;
+      if (roleProblem) {
+        reply.code(roleProblem.status);
+        return { error: roleProblem.error };
       }
 
       const nextPrice = body.price_bonuses !== undefined ? body.price_bonuses : before.priceBonuses;
@@ -254,7 +275,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -287,7 +308,32 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'vip_tier_has_active_assignments' };
       }
 
-      await app.db.delete(vipTiers).where(eq(vipTiers.id, req.params.id));
+      // vip_subscriptions.tier_id is ON DELETE RESTRICT: a tier anyone ever
+      // subscribed to (even a cancelled or expired subscription) is kept for
+      // that history and can only be deactivated (#365).
+      const [subscription] = await app.db
+        .select({ id: vipSubscriptions.id })
+        .from(vipSubscriptions)
+        .where(eq(vipSubscriptions.tierId, req.params.id))
+        .limit(1);
+      if (subscription) {
+        reply.code(409);
+        return { error: 'vip_tier_has_subscriptions' };
+      }
+
+      try {
+        await app.db.delete(vipTiers).where(eq(vipTiers.id, req.params.id));
+      } catch (err) {
+        // A subscription created between the check and the delete.
+        if (
+          (err as { code?: string }).code === '23503' ||
+          (err as { cause?: { code?: string } }).cause?.code === '23503'
+        ) {
+          reply.code(409);
+          return { error: 'vip_tier_has_subscriptions' };
+        }
+        throw err;
+      }
 
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },

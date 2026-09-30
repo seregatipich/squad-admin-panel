@@ -15,7 +15,7 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { auditMapLikeAction, requireSquadPermission } from '../lib/map-guards.js';
 import {
   MAP_VOTE_VERSION_FILENAME,
   type MapVoteSnapshot,
@@ -77,15 +77,7 @@ function requireChangemap(
   req: FastifyRequest,
   reply: FastifyReply,
 ): { error: string; required_squad_permission?: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.squadPermissions.has('changemap')) {
-    reply.code(403);
-    return { error: 'forbidden', required_squad_permission: 'changemap' };
-  }
-  return null;
+  return requireSquadPermission(req, reply, 'changemap');
 }
 
 async function loadSettings(db: DatabaseClient, serverId: string): Promise<MapVoteSettingsView> {
@@ -106,9 +98,9 @@ const MAP_VOTE_RECENT_MATCH_LIMIT = 50;
 
 /**
  * GAME-1 (#80): panel-driven map auto-selection per the 2026-07-09
- * map-rotation ADR — a per-server candidate pool + weighted selection rule
- * applied by the scheduler tick via `AdminSetNextLayer` (no in-game chat
- * voting, no `LayerVoting*.cfg`).
+ * map-rotation ADR (docs/architecture/decisions.md) — a per-server candidate
+ * pool + weighted selection rule applied by the scheduler tick via
+ * `AdminSetNextLayer` (no in-game chat voting, no `LayerVoting*.cfg`).
  *
  * Reads are gated on `panelAccess`; writes need the `changemap` squad
  * permission and are audited. `GET /preview` runs the exact
@@ -196,23 +188,11 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     });
   }
 
-  async function auditMapVoteWrite(
+  const auditMapVoteWrite = (
     req: FastifyRequest,
     reply: FastifyReply,
     input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> {
-    if (!req.user) return;
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: input.actionType,
-      targetType: 'server',
-      targetId: input.serverId,
-      after: input.after,
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-  }
+  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote',
@@ -253,7 +233,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/settings',
-    { schema: { params: serverIdParams, body: settingsBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: settingsBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -291,7 +271,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/candidates',
-    { schema: { params: serverIdParams, body: candidatesBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: candidatesBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -299,6 +279,18 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
       const user = req.user!;
       const { serverId } = req.params;
       const { candidates, confirm_deprecated } = req.body;
+
+      // #305: unlike PUT /settings and POST /restore, this route used to skip
+      // checking the server exists — an unknown UUID hit the
+      // map_vote_candidates.server_id FK and 500ed, and a soft-deleted
+      // server's pool was silently rewritten/versioned.
+      const existingSettings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, serverId),
+      });
+      if (!existingSettings) {
+        reply.code(404);
+        return { error: 'settings_not_found' };
+      }
 
       const names = candidates.map((c) => c.layer);
       if (new Set(names).size !== names.length) {
@@ -361,19 +353,23 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
       }
       const { serverId } = req.params;
 
-      const [settings, candidateRows, recentRows, latestMatch] = await Promise.all([
+      // #306: latestMatch used to be a separate query with the same
+      // serverId/orderBy as recentRows — it's just recentRows[0], now that
+      // `id` is selected there too.
+      const [settings, candidateRows, recentRows] = await Promise.all([
         loadSettings(app.db, serverId),
         loadCandidateRows(serverId),
         app.db
-          .select({ layer: matches.layer, map: matches.map, isSeed: matches.isSeed })
+          .select({
+            id: matches.id,
+            layer: matches.layer,
+            map: matches.map,
+            isSeed: matches.isSeed,
+          })
           .from(matches)
           .where(eq(matches.serverId, serverId))
           .orderBy(desc(matches.startedAt))
           .limit(MAP_VOTE_RECENT_MATCH_LIMIT),
-        app.db.query.matches.findFirst({
-          where: eq(matches.serverId, serverId),
-          orderBy: desc(matches.startedAt),
-        }),
       ]);
 
       const result = selectNextLayer({
@@ -387,8 +383,10 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
             enabled: c.enabled,
             deprecated: c.deprecated ?? false,
           })),
+        // Same filter as the scheduler's loadRecentMatchesForMapVote (#301):
+        // a match without a layer (null or '') never counts toward cooldowns.
         recentMatches: recentRows
-          .filter((row) => row.layer !== null)
+          .filter((row) => Boolean(row.layer))
           .map((row) => ({ layer: row.layer as string, map: row.map ?? '', isSeed: row.isSeed })),
         settings: {
           selection: settings.selection,
@@ -397,7 +395,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
         },
         // Same seed the scheduler tick uses for this match, so the preview
         // shows the exact pick the tick would apply.
-        seed: latestMatch?.id ?? serverId,
+        seed: recentRows[0]?.id ?? serverId,
       });
 
       return { eligible: result.eligible, excluded: result.excluded, would_pick: result.pick };
@@ -451,7 +449,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
         can_restore: req.user.permissions.squadPermissions.has('changemap'),
         versions: rows.map((row) => ({
           id: row.id,
-          sha256: Buffer.from(row.sha256 as unknown as Buffer).toString('hex'),
+          sha256: Buffer.from(row.sha256).toString('hex'),
           parent_version_id: row.parent_version_id,
           author: row.author_name ?? row.author_label ?? null,
           message: row.message,
@@ -492,7 +490,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/map-vote/versions/:versionId/restore',
     {
       schema: { params: versionParams, body: restoreBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);

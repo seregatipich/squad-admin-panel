@@ -1,4 +1,6 @@
-import { createConnection, type Socket } from 'node:net';
+import { type LookupAddress, lookup } from 'node:dns';
+import { createConnection, isIP, type LookupFunction, type Socket } from 'node:net';
+import { isRestrictedNetworkHost } from '@squad/shared-types';
 import type { Logger } from 'pino';
 import {
   encodePacket,
@@ -20,6 +22,15 @@ export interface RconClientOptions {
   keepaliveMs?: number;
   onDisconnect?: (reason: 'remote-close' | 'explicit-close') => void;
   /**
+   * Refuse to dial a loopback, link-local or otherwise restricted address
+   * (`isRestrictedNetworkHost`), checked on the literal host and on every
+   * address DNS returns for it — the connection uses exactly the checked
+   * address, so a rebinding resolver cannot swap in 127.0.0.1 afterwards.
+   * Set for operator-supplied hosts (external servers, #30 finding #333);
+   * panel-hosted containers are legitimately reached on loopback.
+   */
+  refuseRestrictedAddresses?: boolean;
+  /**
    * Called with the raw body of every unsolicited broadcast packet Squad
    * pushes (chat, admin camera, squad creation, kicks). Interleaved with
    * command responses, so it must not block; exceptions are logged and
@@ -27,6 +38,34 @@ export interface RconClientOptions {
    */
   onBroadcast?: (body: string) => void;
 }
+
+/**
+ * `dns.lookup` that fails with an error instead of returning an address the
+ * panel must not dial. Handles both the single-address and the `all: true`
+ * (happy-eyeballs) callback shapes `net.connect` may ask for.
+ */
+const restrictedAddressLookup: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, options, (err, address, family) => {
+    if (err) {
+      callback(err, address, family);
+      return;
+    }
+    const addresses = Array.isArray(address)
+      ? (address as LookupAddress[]).map((entry) => entry.address)
+      : [address];
+    if (addresses.some((candidate) => isRestrictedNetworkHost(candidate))) {
+      callback(
+        Object.assign(new Error(`rcon host ${hostname} resolves to a restricted address`), {
+          code: 'ERESTRICTED',
+        }),
+        address,
+        family,
+      );
+      return;
+    }
+    callback(null, address, family);
+  });
+};
 
 interface PendingCommand {
   id: number;
@@ -48,11 +87,30 @@ export class RconClient {
 
   constructor(private readonly opts: RconClientOptions) {}
 
+  /**
+   * Opens the socket and authenticates.
+   *
+   * @throws when the password contains CR, LF or NUL — it is written verbatim
+   *   as the SERVERDATA_AUTH body, so a line break would smuggle commands into
+   *   any line-based service (e.g. the host's Redis) the target points at (#34).
+   *   The check runs before dialling, so such a password never leaves the process.
+   */
   async connect(): Promise<void> {
     if (this.socket) return;
+    if (/[\r\n\0]/.test(this.opts.password)) {
+      throw new Error('rcon password contains a line break or NUL; refusing to send it');
+    }
     this.closed = false;
+    const refuse = this.opts.refuseRestrictedAddresses === true;
+    if (refuse && isIP(this.opts.host) !== 0 && isRestrictedNetworkHost(this.opts.host)) {
+      throw new Error(`rcon host ${this.opts.host} is a restricted address`);
+    }
     await new Promise<void>((resolve, reject) => {
-      const sock = createConnection({ host: this.opts.host, port: this.opts.port });
+      const sock = createConnection({
+        host: this.opts.host,
+        port: this.opts.port,
+        ...(refuse ? { lookup: restrictedAddressLookup } : {}),
+      });
       const timeout = setTimeout(() => {
         sock.destroy();
         reject(new Error('rcon connect timeout'));

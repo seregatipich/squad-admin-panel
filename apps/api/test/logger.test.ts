@@ -65,7 +65,18 @@ describe('buildLogger', () => {
 });
 
 describe('sensitive auth request logging', () => {
-  it('disables automatic logs only for the Steam OpenID callback path', () => {
+  it('disables automatic logs for the Discord OAuth callback, whose query carries code/state (#66)', () => {
+    expect(
+      shouldDisableSensitiveAuthRequestLogging({
+        url: '/api/v1/auth/discord/callback?code=secret-code&state=secret-state',
+      }),
+    ).toBe(true);
+    expect(shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/discord/login' })).toBe(
+      false,
+    );
+  });
+
+  it('disables automatic logs only for the OAuth callback paths', () => {
     expect(
       shouldDisableSensitiveAuthRequestLogging({
         url: '/api/v1/auth/steam/callback?n=nonce&openid.sig=secret',
@@ -121,5 +132,75 @@ describe('LateSink', () => {
     lateSink.setInner(sink);
     lateSink.write('hello\n');
     expect(written).toContain('hello\n');
+  });
+});
+
+describe('request URL redaction (audit #71, #1310)', () => {
+  function captureRequestLog(url: string): string {
+    const chunks: string[] = [];
+    const { logger, lateSink } = buildLogger('info');
+    lateSink.setInner(
+      new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(chunk.toString());
+          cb();
+        },
+      }),
+    );
+    // The shape Fastify hands the `req` serializer for "incoming request".
+    const request = {
+      method: 'POST',
+      url,
+      headers: {},
+      host: 'panel.example',
+      ip: '203.0.113.7',
+      socket: { remotePort: 51234 },
+    };
+    logger.info({ req: request }, 'incoming request');
+    return chunks.join('');
+  }
+
+  it('never logs the one-time upload token from the query string', () => {
+    const out = captureRequestLog('/api/v1/public/media?token=sentinel-upload-token&x=1');
+    expect(out).not.toContain('sentinel-upload-token');
+    expect(out).toContain('/api/v1/public/media?token=[redacted]&x=1');
+  });
+
+  it('never logs an appeal tracking token from the path', () => {
+    const out = captureRequestLog('/api/v1/public/appeals/sentinel-appeal-token');
+    expect(out).not.toContain('sentinel-appeal-token');
+    expect(out).toContain('/api/v1/public/appeals/[redacted]');
+  });
+
+  it('keeps ordinary request URLs and the other request fields intact', () => {
+    const out = captureRequestLog('/api/v1/players?q=abc');
+    expect(out).toContain('"url":"/api/v1/players?q=abc"');
+    expect(out).toContain('"method":"POST"');
+    expect(out).toContain('"remoteAddress":"203.0.113.7"');
+  });
+});
+
+describe('request URL redaction through Fastify (audit #71, #1310)', () => {
+  it('Fastify request logs use the redacting serializer', async () => {
+    const { default: Fastify } = await import('fastify');
+    const chunks: string[] = [];
+    const { logger, lateSink } = buildLogger('info');
+    lateSink.setInner(
+      new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(chunk.toString());
+          cb();
+        },
+      }),
+    );
+    const app = Fastify({ loggerInstance: logger });
+    app.post('/api/v1/public/media', async (_req, reply) => reply.code(410).send({}));
+    await app.ready();
+    await app.inject({ method: 'POST', url: '/api/v1/public/media?token=sentinel-fastify-token' });
+    await app.close();
+    const out = chunks.join('');
+    expect(out).toContain('incoming request');
+    expect(out).toContain('token=[redacted]');
+    expect(out).not.toContain('sentinel-fastify-token');
   });
 });

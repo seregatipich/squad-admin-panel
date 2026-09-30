@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -101,6 +101,19 @@ const STATUS_STATE: Record<AppealStatus, StatusState> = {
   rejected: 'idle',
 };
 
+const DECIDE_ERROR_TEXT: Record<string, string> = {
+  appeal_already_decided: 'Заявка уже решена другим модератором.',
+  appeal_not_found: 'Заявка не найдена — возможно, её уже удалили.',
+  invalid_transition: 'Такой переход статуса недопустим для текущего состояния заявки.',
+  bans_cfg_conflict: 'Не удалось синхронизировать снятие бана с конфигом серверов.',
+  forbidden: 'Недостаточно прав для решения по апелляциям.',
+};
+
+function decideErrorText(error: unknown, status: number): string {
+  if (typeof error === 'string' && DECIDE_ERROR_TEXT[error]) return DECIDE_ERROR_TEXT[error];
+  return `Не удалось обработать апелляцию (HTTP ${status}).`;
+}
+
 const PAGINATION_LABELS = {
   previous: 'Назад',
   next: 'Вперёд',
@@ -143,39 +156,61 @@ export function AppealsBrowser() {
     },
     [filters, pathname, router],
   );
+  // `navigate` is recreated on every render (it closes over the freshly
+  // parsed `filters`), so `load` reads it through a ref instead of listing it
+  // as a dependency — otherwise the mount/poll effect below would refire on
+  // every render and never settle.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   const { status: filterStatus, page: filterPage } = filters;
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/v1/appeals?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
-        { credentials: 'include', cache: 'no-store' },
-      );
-      if (res.status === 403 || res.status === 401) {
-        setForbidden(true);
-        setItems([]);
-        return;
+  const load = useCallback(
+    async (options?: { silent?: boolean }) => {
+      // A background refresh (a live event, or the reload after deciding one
+      // appeal) must not swap the whole list for a Skeleton: that unmounts
+      // every note-input field, losing focus/cursor in an operator's unrelated
+      // in-progress reply for no reason (#486). Only a real first load — or an
+      // explicit filter/page change — shows the loading skeleton.
+      if (!options?.silent) setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/appeals?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
+          { credentials: 'include', cache: 'no-store' },
+        );
+        if (res.status === 403 || res.status === 401) {
+          setForbidden(true);
+          setItems([]);
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as AppealListResponse;
+        setForbidden(false);
+        // A decision made on the last remaining item of a page (or a status
+        // filter shrinking the list) can leave `filterPage` past the new last
+        // page — jump back to it instead of rendering an empty page (#487).
+        const pagesNow = totalPages(data.total);
+        if (filterPage > pagesNow) {
+          navigateRef.current({ page: pagesNow });
+          return;
+        }
+        setItems(data.items);
+        setTotal(data.total);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setLoading(false);
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as AppealListResponse;
-      setForbidden(false);
-      setItems(data.items);
-      setTotal(data.total);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [filterStatus, filterPage]);
+    },
+    [filterStatus, filterPage],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const onAppealChanged = useCallback(() => {
-    void load();
+    void load({ silent: true });
   }, [load]);
   useLiveSubscription('appeal.created', onAppealChanged);
   useLiveSubscription('appeal.updated', onAppealChanged);
@@ -198,10 +233,10 @@ export function AppealsBrowser() {
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setError(`Не удалось обработать апелляцию: ${data.error ?? res.status}`);
+        setError(decideErrorText(data.error, res.status));
         return;
       }
-      await load();
+      await load({ silent: true });
     } catch (e) {
       setError(`Ошибка сети: ${(e as Error).message}`);
     } finally {

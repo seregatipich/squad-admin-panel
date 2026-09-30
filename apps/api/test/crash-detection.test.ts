@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  CRASH_LOOP_THRESHOLD,
-  CRASH_LOOP_WINDOW_MS,
-  detectCrash,
-  detectCrashLoop,
-} from '../src/plugins/status-reconciler.js';
+import { detectCrash } from '../src/plugins/status-reconciler.js';
 
 describe('detectCrash', () => {
   it('returns null on first observation (sets baseline)', () => {
@@ -71,57 +66,5 @@ describe('detectCrash', () => {
     // s2 unchanged
     const r2 = detectCrash('s2', { restart_count: 2, exit_code: 0, finished_at: '' }, state);
     expect(r2).toBeNull();
-  });
-});
-
-describe('detectCrashLoop', () => {
-  it('detects crash loop when threshold met within window', () => {
-    const now = Date.now();
-    const crashes = [{ timestamp: now - 60_000 }, { timestamp: now - 30_000 }, { timestamp: now }];
-    expect(detectCrashLoop(crashes, CRASH_LOOP_WINDOW_MS, CRASH_LOOP_THRESHOLD)).toBe(true);
-  });
-
-  it('does not trigger for spread-out crashes (outside window)', () => {
-    const now = Date.now();
-    const crashes = [
-      { timestamp: now - 600_000 },
-      { timestamp: now - 400_000 },
-      { timestamp: now },
-    ];
-    expect(detectCrashLoop(crashes, CRASH_LOOP_WINDOW_MS, CRASH_LOOP_THRESHOLD)).toBe(false);
-  });
-
-  it('returns false for empty crash list', () => {
-    expect(detectCrashLoop([], CRASH_LOOP_WINDOW_MS, CRASH_LOOP_THRESHOLD)).toBe(false);
-  });
-
-  it('returns false when below threshold', () => {
-    const now = Date.now();
-    const crashes = [{ timestamp: now - 10_000 }, { timestamp: now }];
-    // threshold is 3, only 2 recent crashes
-    expect(detectCrashLoop(crashes, CRASH_LOOP_WINDOW_MS, CRASH_LOOP_THRESHOLD)).toBe(false);
-  });
-
-  it('exact threshold count triggers loop', () => {
-    const now = Date.now();
-    const crashes = Array.from({ length: CRASH_LOOP_THRESHOLD }, (_, i) => ({
-      timestamp: now - i * 10_000,
-    }));
-    expect(detectCrashLoop(crashes, CRASH_LOOP_WINDOW_MS, CRASH_LOOP_THRESHOLD)).toBe(true);
-  });
-
-  it('uses custom window and threshold', () => {
-    const now = Date.now();
-    const crashes = [{ timestamp: now - 1_000 }, { timestamp: now }];
-    expect(detectCrashLoop(crashes, 5_000, 2)).toBe(true);
-    expect(detectCrashLoop(crashes, 5_000, 3)).toBe(false);
-  });
-
-  it('CRASH_LOOP_WINDOW_MS is 5 minutes', () => {
-    expect(CRASH_LOOP_WINDOW_MS).toBe(300_000);
-  });
-
-  it('CRASH_LOOP_THRESHOLD is 3', () => {
-    expect(CRASH_LOOP_THRESHOLD).toBe(3);
   });
 });

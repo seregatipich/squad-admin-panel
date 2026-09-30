@@ -19,6 +19,7 @@ import RosterPanel, {
   priorityErrorMessage,
   type RosterMember,
   RosterRow,
+  transferLeadershipMessage,
 } from './RosterPanel';
 
 function member(overrides: Partial<RosterMember> = {}): RosterMember {
@@ -61,6 +62,23 @@ describe('RosterPanel helpers', () => {
   });
 });
 
+describe('transferLeadershipMessage', () => {
+  it('tells the viewer they will be demoted only when they are the leader', () => {
+    expect(transferLeadershipMessage(true, 'Ветеран')).toBe(
+      'Ветеран станет главой клана, а вы — заместителем.',
+    );
+  });
+
+  it('never claims an admin without a clan role will be demoted', () => {
+    // Regression for #513: an admin with can_manage_clans who is not a
+    // clan member must not be told that *they* become deputy — the server
+    // demotes the current leader, not the viewer.
+    expect(transferLeadershipMessage(false, 'Ветеран')).toBe(
+      'Ветеран станет главой клана. Текущий глава станет заместителем.',
+    );
+  });
+});
+
 describe('priorityErrorMessage', () => {
   it('renders the pool-limit message with usage numbers when present', () => {
     expect(priorityErrorMessage({ error: 'priority_pool_limit', used: 5, limit: 5 })).toBe(
@@ -90,30 +108,26 @@ describe('priorityErrorMessage', () => {
 });
 
 describe('deriveCapabilities', () => {
-  const roster = [
-    member({ player_id: 'p-leader', member_role: 'leader' }),
-    member({ player_id: 'p-deputy', member_role: 'deputy' }),
-    member({ player_id: 'p-member', member_role: 'member' }),
-  ];
-
   it('grants full control to a global clan manager', () => {
-    const caps = deriveCapabilities({ player_id: 'p-outsider', can_manage_clans: true }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-outsider', can_manage_clans: true }, null);
     expect(caps).toEqual({
       canManageFull: true,
       canAdd: true,
       canRemoveMembers: true,
       canTogglePriority: true,
+      isLeader: false,
     });
   });
 
-  it('grants full control to the clan leader', () => {
-    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, roster);
+  it('grants full control to the clan leader per the server-computed viewer_manage_level', () => {
+    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, 'full');
     expect(caps.canManageFull).toBe(true);
     expect(caps.canTogglePriority).toBe(true);
+    expect(caps.isLeader).toBe(true);
   });
 
   it('grants a deputy add/remove/priority-toggle but not full control', () => {
-    const caps = deriveCapabilities({ player_id: 'p-deputy', can_manage_clans: false }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-deputy', can_manage_clans: false }, 'deputy');
     expect(caps.canManageFull).toBe(false);
     expect(caps.canAdd).toBe(true);
     expect(caps.canRemoveMembers).toBe(true);
@@ -121,13 +135,21 @@ describe('deriveCapabilities', () => {
   });
 
   it('grants a rank-and-file member nothing', () => {
-    const caps = deriveCapabilities({ player_id: 'p-member', can_manage_clans: false }, roster);
+    const caps = deriveCapabilities({ player_id: 'p-member', can_manage_clans: false }, null);
     expect(caps).toEqual({
       canManageFull: false,
       canAdd: false,
       canRemoveMembers: false,
       canTogglePriority: false,
+      isLeader: false,
     });
+  });
+
+  it('grants a leader full control even when their own row is off the loaded/paginated members page (#509)', () => {
+    // The server computes viewer_manage_level independently of `items` — a
+    // leader whose row fell off the current search/sort/page still gets it.
+    const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, 'full');
+    expect(caps.canManageFull).toBe(true);
   });
 });
 
@@ -137,18 +159,21 @@ describe('RosterRow', () => {
     canAdd: true,
     canRemoveMembers: true,
     canTogglePriority: true,
+    isLeader: false,
   };
   const deputyCaps = {
     canManageFull: false,
     canAdd: true,
     canRemoveMembers: true,
     canTogglePriority: true,
+    isLeader: false,
   };
   const memberCaps = {
     canManageFull: false,
     canAdd: false,
     canRemoveMembers: false,
     canTogglePriority: false,
+    isLeader: false,
   };
 
   it('shows transfer + role select for a non-leader when the actor has full control', () => {
@@ -231,6 +256,48 @@ describe('RosterRow', () => {
       </table>,
     );
     expect(html).not.toContain('из клана');
+  });
+
+  // Audit #125 — mirrors the API: a deputy toggles priority for members only.
+  it.each(['leader', 'deputy'] as const)(
+    'shows a deputy the priority of a %s read-only',
+    (memberRole) => {
+      const html = renderToStaticMarkup(
+        <table>
+          <tbody>
+            <RosterRow
+              member={member({ player_id: `p-${memberRole}`, member_role: memberRole })}
+              caps={deputyCaps}
+              busy={false}
+              onChangeRole={noop}
+              onRemove={noop}
+              onTransfer={noop}
+              onTogglePriority={noopToggle}
+            />
+          </tbody>
+        </table>,
+      );
+      expect(html).not.toContain('type="checkbox"');
+    },
+  );
+
+  it('lets a deputy toggle the priority of a rank-and-file member', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <RosterRow
+            member={member({ player_id: 'p-member', member_role: 'member' })}
+            caps={deputyCaps}
+            busy={false}
+            onChangeRole={noop}
+            onRemove={noop}
+            onTransfer={noop}
+            onTogglePriority={noopToggle}
+          />
+        </tbody>
+      </table>,
+    );
+    expect(html).toContain('type="checkbox"');
   });
 
   it('renders an enabled priority checkbox for a manager', () => {
@@ -366,6 +433,44 @@ describe('RosterPanel (rendered)', () => {
     vi.useRealTimers();
   });
 
+  it('grants the leader management controls even when their own row is off the loaded page (#509)', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ player_id: 'p-leader', can_manage_clans: false }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.startsWith('/api/v1/clans/clan-1/members')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              clan_id: 'clan-1',
+              // The leader's own row (p-leader) is not on this page — a
+              // search, sort or later page pushed it off — yet the server
+              // still reports the leader's real manage level.
+              items: [member({ player_id: 'p-other', member_role: 'member' })],
+              total: 2,
+              page: 1,
+              limit: 25,
+              priority_count: 0,
+              max_priority_slots: 5,
+              viewer_manage_level: 'full',
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<RosterPanel clanId="clan-1" />);
+
+    expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
+  });
+
   it('renders a CSV export link pointing at the roster export endpoint', async () => {
     vi.stubGlobal('fetch', mockFetch({ priorityOk: true }));
     render(<RosterPanel clanId="clan-1" />);
@@ -409,6 +514,53 @@ describe('RosterPanel (rendered)', () => {
     expect(await screen.findByText('Срок приоритета клана истёк')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeDisabled();
+  });
+});
+
+describe('RosterPanel paging', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('steps back to the last existing page when the current one becomes empty', async () => {
+    const pageOf = (page: number) => {
+      const emptied = page === 2;
+      return new Response(
+        JSON.stringify({
+          clan_id: 'clan-1',
+          items: emptied
+            ? []
+            : [member({ player_id: `p-${page}`, canonical_name: 'Боец страницы' })],
+          total: emptied ? 25 : 60,
+          page,
+          limit: 25,
+          priority_count: 0,
+          max_priority_slots: 5,
+        }),
+        { status: 200 },
+      );
+    };
+    const fetchSpy = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/me') return Promise.resolve(new Response('{}', { status: 200 }));
+      const page = Number(new URL(url, 'http://x').searchParams.get('page'));
+      return Promise.resolve(pageOf(page));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Вперёд' }));
+
+    await waitFor(() => {
+      const pages = fetchSpy.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.includes('/members'))
+        .map((url) => new URL(url, 'http://x').searchParams.get('page'));
+      expect(pages).toEqual(['1', '2', '1']);
+    });
+    expect(screen.queryByText('В клане пока нет участников')).not.toBeInTheDocument();
   });
 });
 
@@ -493,5 +645,80 @@ describe('RosterPanel — подтверждение удаления', () => {
       expect(screen.queryByRole('dialog', { name: 'Удалить участника?' })).not.toBeInTheDocument();
     });
     expect(deleted).toEqual([]);
+  });
+});
+
+describe('RosterPanel — добавление первого участника', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  async function addCandidate(postBody: Record<string, unknown>) {
+    const leader = member({ player_id: 'p-leader' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const json = (body: unknown, status = 200) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status }));
+        if (url === '/api/v1/me') {
+          return json({ player_id: 'p-leader', can_manage_clans: true });
+        }
+        if (url.startsWith('/api/v1/players/search')) {
+          return json({
+            items: [
+              {
+                id: 'p-new',
+                canonical_name: 'Новичок',
+                steam_id64: '76561198000000001',
+                eos_id: null,
+                clan_id: null,
+                clan_name: null,
+              },
+            ],
+          });
+        }
+        if (url === '/api/v1/clans/clan-1/members' && init?.method === 'POST') {
+          return json(postBody, 201);
+        }
+        if (url.startsWith('/api/v1/clans/clan-1/members')) {
+          return json({
+            clan_id: 'clan-1',
+            items: [leader],
+            total: 1,
+            page: 1,
+            limit: 25,
+            priority_count: 0,
+            max_priority_slots: 5,
+          });
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+    await user.click(await screen.findByRole('button', { name: 'Добавить участника' }));
+    await user.type(await screen.findByRole('searchbox', { name: 'Поиск игрока' }), 'Нович{Enter}');
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: 'Добавить' }));
+  }
+
+  it('показывает баннер, когда API сообщил role_overridden', async () => {
+    await addCandidate({ player_id: 'p-new', member_role: 'leader', role_overridden: true });
+
+    expect(await screen.findByText('Роль изменена автоматически')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Первый участник клана всегда становится главой — выбранная роль не применена.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('не показывает баннер, когда роль применена как запрошено', async () => {
+    await addCandidate({ player_id: 'p-new', member_role: 'member' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByText('Роль изменена автоматически')).not.toBeInTheDocument();
   });
 });

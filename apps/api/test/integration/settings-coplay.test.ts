@@ -79,6 +79,7 @@ async function loginAsRoleWithoutViewIps(): Promise<string> {
       canonicalNameNormalized: 'limitedviewer',
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
 
   const ownerCookie = await loginAsOwner(h);
   const created = await h.app.inject({
@@ -230,6 +231,7 @@ describe('PUT /api/v1/settings/coplay', () => {
         slug: `coplay-settings-${uuidv7()}`,
       })
       .returning({ id: servers.id });
+    if (!server) throw new Error('server: insert returned no row');
     const [alice] = await h.db
       .insert(players)
       .values({
@@ -238,6 +240,7 @@ describe('PUT /api/v1/settings/coplay', () => {
         canonicalNameNormalized: 'coplaysettingsalice',
       })
       .returning({ id: players.id });
+    if (!alice) throw new Error('alice: insert returned no row');
     const [bob] = await h.db
       .insert(players)
       .values({
@@ -246,6 +249,7 @@ describe('PUT /api/v1/settings/coplay', () => {
         canonicalNameNormalized: 'coplaysettingsbob',
       })
       .returning({ id: players.id });
+    if (!bob) throw new Error('bob: insert returned no row');
     const [a, b] = alice.id < bob.id ? [alice.id, bob.id] : [bob.id, alice.id];
     // Below the default thresholds (5 sessions / 36 000s): only 1 session, 100s overlap.
     await h.db.insert(playerCoplay).values({
@@ -263,7 +267,7 @@ describe('PUT /api/v1/settings/coplay', () => {
       headers: { cookie: ownerCookie },
     });
     const beforeBody = beforePut.json() as { partners: Array<{ player_id: string }> };
-    expect(beforeBody.partners.map((p) => p.player_id)).not.toContain(bob.id);
+    expect(beforeBody.partners.map((p) => p.player_id)).not.toContain(bob?.id);
 
     const put = await h.app.inject({
       method: 'PUT',
@@ -279,6 +283,6 @@ describe('PUT /api/v1/settings/coplay', () => {
       headers: { cookie: ownerCookie },
     });
     const afterBody = afterPut.json() as { partners: Array<{ player_id: string }> };
-    expect(afterBody.partners.map((p) => p.player_id)).toContain(bob.id);
+    expect(afterBody.partners.map((p) => p.player_id)).toContain(bob?.id);
   });
 });

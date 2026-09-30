@@ -1,9 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  RCON_COMMAND_DEADLINE_FIELD,
+  RCON_COMMAND_EXPIRED_ERROR,
   RCON_COMMAND_GROUP,
   type RconCommandRequest,
   type RconCommandResult,
   type RconOperatorCommandName,
+  rconCommandDoneKey,
   rconCommandRequestSchema,
   rconCommandResultKey,
   rconCommandResultSchema,
@@ -26,6 +29,19 @@ const LAYER_NAME_MAX_CHARS = 128;
 const LAYER_NAME_PATTERN = /^[A-Za-z0-9 '_.-]{1,128}$/;
 const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
 const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
+/**
+ * How long a queued command may wait before the worker refuses to run it.
+ * Background producers (scheduler, clan-guard, log-ingest, role-expirer, ...)
+ * enqueue without a reply deadline and without checking `rcon:status`, so a
+ * disconnect or a stopped game server lets a backlog of broadcasts, layer
+ * changes, kicks and bans build up; without this, reconnecting replays all of
+ * it in one batch, possibly hours late (#1293, #968).
+ */
+const DEFAULT_MAX_COMMAND_AGE_MS = 45_000;
+/** How long the dedup marker (see `rconCommandDoneKey`) outlives a command. */
+const DONE_MARKER_TTL_SECONDS = 24 * 3_600;
+/** `error` of the result stored for a command dropped for its age. */
+const STALE_COMMAND_ERROR = 'stale';
 // Squad RCON ban-length syntax: a bare integer (days) or an integer with a
 // unit suffix (seconds/minutes/hours/days/weeks/months/years); '0' = permanent.
 const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
@@ -43,6 +59,10 @@ export interface RconCommandQueueOptions {
   resultTtlSeconds?: number;
   reclaimMinIdleMs?: number;
   reclaimIntervalMs?: number;
+  /** Age past which a queued command is dropped instead of executed. */
+  maxCommandAgeMs?: number;
+  /** Overridable clock (epoch ms) for tests; production uses the wall clock. */
+  now?: () => number;
 }
 
 export function buildOperatorCommand(input: unknown): string {
@@ -81,6 +101,8 @@ export class RconCommandQueue {
   private readonly resultTtlSeconds: number;
   private readonly reclaimMinIdleMs: number;
   private readonly reclaimIntervalMs: number;
+  private readonly maxCommandAgeMs: number;
+  private readonly now: () => number;
   private running = false;
   private loopPromise?: Promise<void>;
   private nextReclaimAt = 0;
@@ -89,11 +111,14 @@ export class RconCommandQueue {
     this.stream = rconCommandStream(opts.serverId);
     this.blockMs = opts.blockMs ?? DEFAULT_BLOCK_MS;
     this.count = opts.count ?? DEFAULT_COUNT;
-    this.consumerName =
-      opts.consumerName ?? `worker-rcon-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    // Stable per server: the queue is rebuilt on every RCON reconnect, and a
+    // random name per instance would leave one dead consumer in the group each time.
+    this.consumerName = opts.consumerName ?? `worker-rcon-${opts.serverId}`;
     this.resultTtlSeconds = opts.resultTtlSeconds ?? RESULT_TTL_SECONDS;
     this.reclaimMinIdleMs = opts.reclaimMinIdleMs ?? DEFAULT_RECLAIM_MIN_IDLE_MS;
     this.reclaimIntervalMs = opts.reclaimIntervalMs ?? DEFAULT_RECLAIM_INTERVAL_MS;
+    this.maxCommandAgeMs = opts.maxCommandAgeMs ?? DEFAULT_MAX_COMMAND_AGE_MS;
+    this.now = opts.now ?? (() => Date.now());
   }
 
   async ensureGroup(): Promise<void> {
@@ -200,42 +225,113 @@ export class RconCommandQueue {
       return;
     }
 
-    const startedAt = Date.now();
+    const startedAt = this.now();
     const requestId = requestIdOf(request);
     const commandName = commandNameOf(request);
-    if (requestId && (await this.resultExists(requestId))) {
+    // Two dedup checks covering different windows: the result key is deleted by
+    // the API as soon as it reads it, so it only protects the seconds before a
+    // caller stops polling; the long-TTL done marker also catches an
+    // XAUTOCLAIM redelivery or a retry reusing the request id long afterwards.
+    if (requestId && ((await this.resultExists(requestId)) || (await this.doneExists(requestId)))) {
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
       return;
     }
-    try {
-      const command = buildOperatorCommand(request);
-      const response = await this.opts.execute(command);
-      if (requestId) {
-        await this.writeResult({
-          ok: true,
-          server_id: this.opts.serverId,
-          request_id: requestId,
-          ...(commandName ? { command: commandName } : {}),
-          response,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
-        });
-      }
-      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
-    } catch (err) {
+    const ageMs = this.commandAgeMs(streamId, request);
+    if (ageMs > this.maxCommandAgeMs) {
+      this.opts.log.warn(
+        { streamId, requestId, command: commandName, serverId: this.opts.serverId, ageMs },
+        'dropping stale rcon command instead of executing it late',
+      );
       if (requestId) {
         await this.writeResult({
           ok: false,
           server_id: this.opts.serverId,
           request_id: requestId,
           ...(commandName ? { command: commandName } : {}),
-          error: (err as Error).message,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
+          error: STALE_COMMAND_ERROR,
+          completed_at: new Date(this.now()).toISOString(),
+          duration_ms: 0,
         });
       }
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
     }
+    // The producer stopped waiting at this deadline and already reported a
+    // timeout; running the command now would act without its audit/ledger
+    // record, or twice after a retry (#36).
+    const deadlineMs = Date.parse(getField(kv, RCON_COMMAND_DEADLINE_FIELD) ?? '');
+    if (!Number.isNaN(deadlineMs) && startedAt > deadlineMs) {
+      this.opts.log.warn(
+        { streamId, requestId, command: commandName, serverId: this.opts.serverId },
+        'rcon command expired before execution',
+      );
+      if (requestId) {
+        await this.writeResult({
+          ok: false,
+          server_id: this.opts.serverId,
+          request_id: requestId,
+          ...(commandName ? { command: commandName } : {}),
+          error: RCON_COMMAND_EXPIRED_ERROR,
+          completed_at: new Date(this.now()).toISOString(),
+          duration_ms: 0,
+        });
+      }
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
+    let result: RconCommandResult;
+    try {
+      const command = buildOperatorCommand(request);
+      const response = await this.opts.execute(command);
+      result = {
+        ok: true,
+        server_id: this.opts.serverId,
+        request_id: requestId ?? '',
+        ...(commandName ? { command: commandName } : {}),
+        response,
+        completed_at: new Date(this.now()).toISOString(),
+        duration_ms: this.now() - startedAt,
+      };
+    } catch (err) {
+      result = {
+        ok: false,
+        server_id: this.opts.serverId,
+        request_id: requestId ?? '',
+        ...(commandName ? { command: commandName } : {}),
+        error: (err as Error).message,
+        completed_at: new Date(this.now()).toISOString(),
+        duration_ms: this.now() - startedAt,
+      };
+    }
+
+    if (requestId) {
+      try {
+        await this.writeResult(result);
+      } catch (err) {
+        // A command that already ran must not be reported as failed nor run again
+        // on redelivery, so a lost success result is logged and acknowledged.
+        // A lost failure result stays pending and is retried after reclaim.
+        if (!result.ok) throw err;
+        this.opts.log.error(
+          { err: (err as Error).message, requestId, serverId: this.opts.serverId },
+          'rcon command executed but its result could not be stored',
+        );
+      }
+    }
+    await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+  }
+
+  /**
+   * Age of a queued command in milliseconds: from `enqueued_at` when the
+   * producer set it, else from the stream entry id's own millisecond
+   * timestamp (`<ms>-<seq>`), so an older producer is covered too.
+   */
+  private commandAgeMs(streamId: string, request: unknown): number {
+    const enqueuedAt = isRecord(request) ? request.enqueued_at : undefined;
+    const enqueuedAtMs = typeof enqueuedAt === 'string' ? Date.parse(enqueuedAt) : Number.NaN;
+    if (Number.isFinite(enqueuedAtMs)) return this.now() - enqueuedAtMs;
+    const idMs = Number(streamId.split('-')[0]);
+    return Number.isFinite(idMs) ? this.now() - idMs : 0;
   }
 
   private async writeResult(result: RconCommandResult): Promise<void> {
@@ -246,6 +342,22 @@ export class RconCommandQueue {
       'EX',
       this.resultTtlSeconds,
     );
+    // Written with every result (success, failure, expiry, stale drop); the API
+    // never deletes it.
+    await this.opts.redis.set(
+      rconCommandDoneKey(result.request_id),
+      '1',
+      'EX',
+      DONE_MARKER_TTL_SECONDS,
+    );
+  }
+
+  private async doneExists(requestId: string): Promise<boolean> {
+    try {
+      return (await this.opts.redis.get(rconCommandDoneKey(requestId))) !== null;
+    } catch {
+      return false;
+    }
   }
 
   private async resultExists(requestId: string): Promise<boolean> {
@@ -286,14 +398,13 @@ function validateBroadcastText(args: string[]): string {
 /**
  * Builds `AdminWarn <target> <message>`, reusing the same text-safety checks
  * as AdminBroadcast (no CR/LF/NUL, length cap) for the warning message. The
- * target is the player's EOS id, SteamID64, or in-game name — whatever the
- * caller resolved from the live roster.
+ * target must be a single token: the player's EOS id or SteamID64.
  */
 function buildAdminWarnCommand(args: string[]): string {
   if (args.length !== 2) {
     throw new Error('AdminWarn expects exactly two arguments: target id and message');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminWarn target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminWarn target');
   const message = assertSafeSingleLineText(args[1], 'AdminWarn message', BROADCAST_MAX_CHARS);
   return `AdminWarn ${target} ${message}`;
 }
@@ -301,7 +412,7 @@ function buildAdminWarnCommand(args: string[]): string {
 /**
  * Builds `AdminKick <target> <reason>`, reusing the same text-safety checks as
  * AdminWarn (no CR/LF/NUL, length cap). The target is the player's EOS id,
- * SteamID64, or in-game name resolved by the caller; the reason is surfaced to
+ * SteamID64 (a single token) resolved by the caller; the reason is surfaced to
  * the kicked player. Automated kicks (banned-name / external-ban / clan-tag
  * enforcement) enqueue this command via the worker-rcon queue.
  */
@@ -309,7 +420,7 @@ function buildAdminKickCommand(args: string[]): string {
   if (args.length !== 2) {
     throw new Error('AdminKick expects exactly two arguments: target id and reason');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminKick target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminKick target');
   const reason = assertSafeSingleLineText(args[1], 'AdminKick reason', BROADCAST_MAX_CHARS);
   return `AdminKick ${target} ${reason}`;
 }
@@ -326,7 +437,7 @@ function buildAdminBanCommand(args: string[]): string {
   if (args.length !== 3) {
     throw new Error('AdminBan expects exactly three arguments: target id, ban length and reason');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminBan target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminBan target');
   const banLength = assertValidBanLength(args[1]);
   const reason = assertSafeSingleLineText(args[2], 'AdminBan reason', BROADCAST_MAX_CHARS);
   return `AdminBan ${target} ${banLength} ${reason}`;
@@ -350,6 +461,18 @@ function assertSafeSingleLineText(
   if (!text) throw new Error(`${label} is required`);
   if (text.length > maxChars) throw new Error(`${label} exceeds ${maxChars} characters`);
   if (/[\r\n\0]/u.test(text)) throw new Error(`unsafe ${label}`);
+  return text;
+}
+
+/**
+ * Squad reads the first word after the command as the target and the rest as
+ * the reason, so a target containing whitespace (an in-game name such as
+ * `Bob Smith`) would silently address a different player. It is rejected
+ * instead; callers should pass the EOS id or SteamID64.
+ */
+function assertSafeTarget(value: string | undefined, label: string): string {
+  const text = assertSafeSingleLineText(value, label, TARGET_MAX_CHARS);
+  if (/\s/u.test(text)) throw new Error(`${label} must not contain whitespace`);
   return text;
 }
 

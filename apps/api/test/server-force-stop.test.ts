@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('POST /api/v1/servers/:id/force-stop', () => {
-  it('force-stops a running server via containerRm with force:true → 200, DB status = stopped', async () => {
+  it('force-stops a running server via containerRm (always docker rm -f) → 200, DB status = stopped', async () => {
     const seeded = await seedServer(h, { slug: 'force-stop-running', status: 'running' });
     const containerRm = vi.spyOn(h.bridge, 'containerRm');
 
@@ -79,7 +79,7 @@ describe('POST /api/v1/servers/:id/force-stop', () => {
     expect(body.status).toBe('stopped');
     expect(body.server_id).toBe(seeded.id);
 
-    expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}`, force: true });
+    expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}` });
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.status).toBe('stopped');
@@ -91,6 +91,60 @@ describe('POST /api/v1/servers/:id/force-stop', () => {
           (e as { type: string; data: { source: string } }).data.source === 'force_stop',
       ),
     ).toBe(true);
+  });
+
+  it('#285: sets the stop:requested fence and stops the RNSquadJS sidecar', async () => {
+    const seeded = await seedServer(h, { slug: 'force-stop-fence', status: 'running' });
+    const containerStop = vi.spyOn(h.bridge, 'containerStop');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${seeded.id}/force-stop`,
+      headers: { cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(await h.redis.get(`stop:requested:${seeded.id}`)).toBe('1');
+    expect(await h.redis.ttl(`stop:requested:${seeded.id}`)).toBeGreaterThan(0);
+    expect(containerStop).toHaveBeenCalledWith(
+      expect.objectContaining({ name: `rnsquadjs-${seeded.id}` }),
+    );
+  });
+
+  it('#285: a sidecar stop failure does not fail the force-stop', async () => {
+    const seeded = await seedServer(h, { slug: 'force-stop-sidecar-fail', status: 'running' });
+    vi.spyOn(h.bridge, 'containerStop').mockRejectedValue(new Error('no such container'));
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${seeded.id}/force-stop`,
+      headers: { cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.status).toBe('stopped');
+  });
+
+  it('#285: does not overwrite a status a concurrent start wrote during containerRm', async () => {
+    const seeded = await seedServer(h, { slug: 'force-stop-race', status: 'starting' });
+    // A concurrent start finishes (starting -> running) while the container is
+    // being removed; the stale force-stop must not clobber it with 'stopped'.
+    vi.spyOn(h.bridge, 'containerRm').mockImplementation(async () => {
+      await h.db.update(servers).set({ status: 'running' }).where(eq(servers.id, seeded.id));
+      return { status: 'ok' } as never;
+    });
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${seeded.id}/force-stop`,
+      headers: { cookie },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('server_status_changed');
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.status).toBe('running');
   });
 
   it('returns 404 for a non-existent server', async () => {

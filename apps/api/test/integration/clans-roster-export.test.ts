@@ -1,4 +1,5 @@
 import { clanMembers, clans, players, roles } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -17,6 +18,7 @@ let nobodyCookie: string;
 let clanId: string;
 let leaderPlayerId: string;
 let memberPlayerId: string;
+let formulaPlayerId: string;
 
 async function makeCookieFor(playerId: string): Promise<string> {
   invalidateAllPermissionCaches();
@@ -42,7 +44,18 @@ beforeAll(async () => {
       canonicalNameNormalized: 'экспорт тест',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
   memberPlayerId = member.id;
+
+  const [formulaMember] = await h.db
+    .insert(players)
+    .values({
+      steamId64: testSteamId(895004),
+      canonicalName: '=HYPERLINK("http://x.invalid","a")',
+      canonicalNameNormalized: 'hyperlink formula',
+    })
+    .returning({ id: players.id });
+  formulaPlayerId = formulaMember!.id;
 
   clanId = uuidv7();
   await h.db.insert(clans).values({
@@ -54,6 +67,7 @@ beforeAll(async () => {
   await h.db.insert(clanMembers).values([
     { clanId, playerId: leaderPlayerId, memberRole: 'leader', hasPriority: true },
     { clanId, playerId: memberPlayerId, memberRole: 'member', hasPriority: false },
+    { clanId, playerId: formulaPlayerId, memberRole: 'member', hasPriority: false },
   ]);
 
   const nobodyRoleId = uuidv7();
@@ -73,6 +87,7 @@ beforeAll(async () => {
       roleId: nobodyRoleId,
     })
     .returning({ id: players.id });
+  if (!nobody) throw new Error('nobody: insert returned no row');
   nobodyCookie = await makeCookieFor(nobody.id);
 }, 60_000);
 
@@ -96,7 +111,7 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
       url: `/api/v1/clans/${clanId}/roster/export`,
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns 404 for an unknown clan id', async () => {
@@ -106,6 +121,33 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('neutralises spreadsheet formulas in player-controlled names (#128)', async () => {
+    const [formulaPlayer] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(895005),
+        canonicalName: '=HYPERLINK("http://evil","x")',
+        canonicalNameNormalized: 'hyperlinkevilx',
+      })
+      .returning({ id: players.id });
+    if (!formulaPlayer) throw new Error('failed to seed the formula player');
+    await h.db
+      .insert(clanMembers)
+      .values({ clanId, playerId: formulaPlayer.id, memberRole: 'member', hasPriority: false });
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans/${clanId}/roster/export`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      const row = res.body.split('\r\n').find((line) => line.includes('http://evil'));
+      expect(row?.startsWith(`"'=HYPERLINK(""http://evil"",""x"")"`)).toBe(true);
+    } finally {
+      await h.db.delete(clanMembers).where(eq(clanMembers.playerId, formulaPlayer.id));
+    }
   });
 
   it('returns a CSV attachment with a header row and one row per member', async () => {
@@ -123,12 +165,24 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
     expect(lines[0]).toBe(
       'canonical_name,steam_id64,member_role,has_priority,joined_at,last_seen_at',
     );
-    // header + 2 members
-    expect(lines).toHaveLength(3);
+    // header + 3 members
+    expect(lines).toHaveLength(4);
     expect(lines.some((line) => line.includes('leader'))).toBe(true);
     expect(lines.some((line) => line.includes('member'))).toBe(true);
     // the member's canonical name contains a comma and a quote — must be
     // RFC 4180 escaped as a single quoted field.
     expect(lines.some((line) => line.startsWith('"Экспорт, ""Тест"""'))).toBe(true);
+  });
+
+  it('neutralises a spreadsheet formula in a player nickname (audit #137)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/roster/export`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.trim().split('\r\n');
+    expect(lines.some((line) => line.startsWith(`"'=HYPERLINK(`))).toBe(true);
+    expect(lines.some((line) => line.startsWith('=') || line.startsWith('"='))).toBe(false);
   });
 });

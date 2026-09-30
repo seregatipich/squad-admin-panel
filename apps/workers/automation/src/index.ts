@@ -80,7 +80,11 @@ async function main() {
     onEnvelope: (envelope) =>
       processAutomationEnvelope(runtimeDeps, envelope).then(() => undefined),
   }).catch((err) => {
-    log.error({ err: (err as Error).message }, 'dispatch loop crashed');
+    // The loop contains its own failures, so reaching this is a bug. Exit
+    // rather than keep a heartbeat that reports a worker which no longer
+    // consumes anything; the container restart policy brings it back (#1292).
+    log.fatal({ err: (err as Error).message }, 'dispatch loop crashed; exiting');
+    process.exit(1);
   });
 
   const stopHeartbeat = startHeartbeat({

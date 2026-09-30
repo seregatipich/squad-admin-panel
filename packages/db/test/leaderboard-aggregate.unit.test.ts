@@ -155,4 +155,19 @@ describe('periodsToRecompute', () => {
     const keys = periods.map((p) => `${p.periodType}:${p.periodStart}`);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  it('picks the calendar-previous month, not a fixed 31-day lookback', () => {
+    // 3 March minus 31 days is 31 January — a fixed lookback would skip
+    // February entirely and re-recompute January instead.
+    const periods = periodsToRecompute(new Date('2026-03-03T12:00:00.000Z'));
+    expect(periods).toContainEqual({ periodType: 'month', periodStart: '2026-03-01' });
+    expect(periods).toContainEqual({ periodType: 'month', periodStart: '2026-02-01' });
+    expect(periods).not.toContainEqual({ periodType: 'month', periodStart: '2026-01-01' });
+  });
+
+  it('rolls the previous month back across a year boundary', () => {
+    const periods = periodsToRecompute(new Date('2026-01-15T12:00:00.000Z'));
+    expect(periods).toContainEqual({ periodType: 'month', periodStart: '2026-01-01' });
+    expect(periods).toContainEqual({ periodType: 'month', periodStart: '2025-12-01' });
+  });
 });

@@ -1,5 +1,87 @@
 # `bridge` — changelog
 
+## 2026-09-27 — `not_found` error code for missing files (#37)
+
+### Changed
+
+- `file_read`, `file_read_stream` and `file_read_tail` answer a missing file or directory with the new `not_found` error code instead of `runtime_error`; the message is unchanged. Callers no longer have to match the OS "no such file or directory" text to tell an absent file from a failed read — `DELETE /api/v1/servers/:id` relies on it to abort when a config file exists but cannot be backed up.
+
+
+## 2026-09-28 — Лимит одновременных `container_logs_follow` (#42)
+
+### Changed
+
+- Не больше 64 одновременных `container_logs_follow` на процесс bridge; сверх лимита `runtime_error` `too many concurrent log follows (limit 64)` (#1298).
+
+## 2026-09-28 — audit hardening (#45)
+
+### Removed
+
+- RPCs `process_info`, `file_read_tail` and `file_write` (and `fsx.Write`). None had a production caller; `process_info` returned `/proc/<pid>/cmdline` of any host process to every bridge peer. Calls now fail with `invalid_args: unknown method`. `scripts/verify-bridge.sh` probes `list_panel_dirs` instead of `process_info`.
+
+### Fixed
+
+- A failed `SO_PEERCRED` lookup (e.g. the shutdown closer closed the fd first) no longer dereferences a nil peer and crashes the daemon: `auth.ResolvePeer` always returns a non-nil `Peer`, and `serveConn` recovers panics.
+- `file_atomic_write` writes through a unique `os.CreateTemp` file instead of the fixed `<path>.new`, so concurrent writers of one config cannot interleave bytes, and it only chmods the directories it creates — the installer's `0750` on `configs/` and `saved/` is no longer widened to `0755`.
+- `panel_disk_usage`: every `du`/`docker` probe runs under a 2-minute deadline; the cache lock is no longer held while computing (one computation at a time, concurrent callers share it, cache hits never wait); `force` is rate-limited to one recompute per 30 s; the saved tree is walked once (`saved_total_bytes` = sum of `saved_per_server`); `docker volume inspect` failures other than "no such volume" now fail the request.
+- `host_metrics`: net rates sum per-interface positive deltas over physical interfaces only (`lo`, `veth*`, `docker*`, `br-*` skipped), so a vanished container veth no longer produces ~1.8e19 B/s; `cpu_percent` is clamped to 0–100.
+- `container_run` / `container_run_rnsquadjs` cap container logs (`json-file`, 10 MiB x 5). Existing containers keep their old log settings until recreated.
+- `container_logs_follow` always passes `--tail` (0 for `tail<=0`, clamped to 5000), so it can never replay a container's whole log history.
+- `container_inspect` now returns `oom_killed` and `error` from Docker's `State`.
+- `docker_prune` no longer deletes panel images: the rnsquadjs sidecar is started with `--label panel.preserve=true`, and the api, web, worker, rnsquadjs, restic and caddy-duckdns images carry `LABEL panel.preserve=true`.
+- `panel-host-bridge.service` adds `CAP_CHOWN CAP_FOWNER` to `CapabilityBoundingSet`, which `container_run_rnsquadjs` needs to hand the sidecar's `sock/` directory to uid 1001.
+
+### Upgrade notes
+
+- Re-run `scripts/install-host-bridge.sh` on the host to install the new unit (capability change); a binary-only redeploy leaves `container_run_rnsquadjs` failing with `EPERM`.
+- Images built before this change have no `panel.preserve` label, so the release that is live when this ships stays exposed to `docker_prune` until it is rebuilt or superseded; avoid running "clean up Docker" before the next release is deployed.
+
+## 2026-09-28 — `container_run` проверяет multihome (#52)
+
+### Security
+
+- `validate.Multihome`: адрес привязки должен разбираться `net.ParseIP`. Он подставляется в командную строку сервера Squad (`RCONIP=%s`, `MULTIHOME=%s`), и значение с пробелами могло добавить параметры запуска. `DockerRunner.Run` отклоняет такое значение с `ErrInvalidArgs`, не вызывая docker.
+
+## 2026-09-28 — `container_run` validates `multihome`, drops `extra_args` (#53)
+
+### Security
+
+- `container_run` rejects a `multihome` that is not an IP literal (`validate.Multihome`, `forbidden`) before building `docker run`: the value becomes the `RCONIP=`/`MULTIHOME=` Squad arguments and Unreal re-tokenises its argv, so spaces or quotes could inject engine startup arguments.
+- The unvalidated `extra_args` parameter is removed; no caller ever sent it, and it appended free-form arguments to the Squad command line.
+
+## 2026-09-28 — Orphan sweep sees RNSquadJS sidecars (#66)
+
+### Added
+
+- `list_panel_dirs` also returns `sidecars`: the child directories of `/run/squad-panel/rnsquadjs` (each holds a sidecar `config.json` with a plaintext RCON password).
+- `list_squad_containers` also returns `sidecars`: every `rnsquadjs-{uuid}` container, revalidated against the strict sidecar name regex. Both fields are additive; the API treats their absence (an older bridge) as "no sidecars".
+## 2026-09-28 — Audit hardening (#74)
+
+### Removed
+
+- `file_write` (non-atomic duplicate of `file_atomic_write`) and `process_info` (cmdline/status of any host PID) RPCs, together with `fsx.Write`, the dead `metrics.Metrics` and the unused `validate.ErrInvalidArgs` / `ErrorObject.Detail`. No production caller used them.
+
+### Security
+
+- `file_atomic_write` accepts only modes `0644`/`0640`/`0600` (default `0644`); anything else is `forbidden`. The size cap is checked before directories are created, `<path>.new` is created with `O_EXCL` so a planted symlink is never followed, and the temp file is removed on every failure path.
+- `container_run` binds only the exact `configs/{server_id}/ServerConfig` and `saved/{server_id}` paths (cleaned), and validates ports (`1024..65535`), `multihome` (literal IP) and `extra_args` (token syntax plus a denylist).
+- The squad-server container runs with `--cap-drop ALL` plus `CHOWN DAC_OVERRIDE FOWNER SETUID SETGID KILL` and `--security-opt no-new-privileges`; the rnsquadjs sidecar with `--cap-drop ALL --security-opt no-new-privileges --pids-limit 512`.
+- Before launching the sidecar, every component of its `Logs` bind source below the saved root is verified as a real directory (`O_NOFOLLOW`), and missing levels are created instead of being left to docker.
+- The `ufw_rule` comment must match `^[a-z][a-z0-9-]{0,63}$`.
+
+### Fixed
+
+- A peer whose `SO_PEERCRED` could not be read (it disconnected immediately, or shutdown closed the socket first) crashed the daemon with a nil-pointer panic; `ResolvePeer` now always returns a non-nil peer.
+- Frames are written with one `write(2)` and the invalid-JSON reply goes through the per-connection write lock, so concurrent frames never interleave.
+- A response larger than `MaxFrame` (or one that cannot be encoded) is answered with an error response for the same id instead of being dropped silently; write failures are logged.
+- Error codes are chosen with `errors.Is(err, validate.ErrForbidden)`: docker stderr containing "forbidden" no longer turns a runtime failure into `forbidden`.
+- Docker sizes are parsed with decimal units (kB/MB/GB/TB = 10³/10⁶/10⁹/10¹²), matching go-units `HumanSize`.
+- `panel_disk_usage` skips a volume only on docker's own "no such volume" stderr; any other `docker volume inspect` failure is returned instead of being cached as an empty result.
+- Cancelled or timed-out commands return the context error instead of a fake exit code. Commands run in their own process group, which is killed on cancellation; pipes held by escaped descendants are force-closed after 5 s.
+- `host_metrics` no longer lazily assigns the dispatcher's cache (data race).
+- `StartLimitIntervalSec`/`StartLimitBurst` moved to `[Unit]` (systemd ignored them under `[Service]`). The watchdog interval follows `WATCHDOG_USEC`, `STOPPING=1` is sent as soon as a shutdown signal arrives, and the development socket fallback refuses to steal a live socket and creates it `0660`.
+- `golang.org/x/sys` bumped to v0.47.0 (the newest release that still supports Go 1.25; v0.48.0 requires Go 1.26).
+
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 
 ### Changed

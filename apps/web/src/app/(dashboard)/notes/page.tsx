@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   Button,
@@ -58,6 +58,21 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU');
 }
 
+/** Parses a `YYYY-MM-DD` `<input type="date">` value into local midnight, or null if malformed. */
+function parseDateInput(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+  const date = new Date(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfDay(reference: Date): Date {
+  const day = new Date(reference);
+  day.setHours(23, 59, 59, 999);
+  return day;
+}
+
 function buildParams(filters: {
   q: string;
   player: string;
@@ -65,15 +80,20 @@ function buildParams(filters: {
   dateFrom: string;
   dateTo: string;
   includeDeleted: boolean;
-  canViewDeleted: boolean;
 }): URLSearchParams {
   const params = new URLSearchParams();
   if (filters.q.trim()) params.set('q', filters.q.trim());
   if (filters.player.trim()) params.set('player', filters.player.trim());
   if (filters.author) params.set('author', filters.author);
-  if (filters.dateFrom) params.set('dateFrom', `${filters.dateFrom}T00:00:00`);
-  if (filters.dateTo) params.set('dateTo', `${filters.dateTo}T23:59:59`);
-  if (filters.canViewDeleted && filters.includeDeleted) params.set('includeDeleted', 'true');
+  const from = parseDateInput(filters.dateFrom);
+  if (from) params.set('dateFrom', from.toISOString());
+  const to = parseDateInput(filters.dateTo);
+  if (to) params.set('dateTo', endOfDay(to).toISOString());
+  // The server enforces the `can_view_deleted` permission independently, so
+  // the client only needs to gate the checkbox itself — not double-check it
+  // against a value the server just echoed back (that value flipping after
+  // the first load must not, by itself, trigger a second identical request).
+  if (filters.includeDeleted) params.set('includeDeleted', 'true');
   return params;
 }
 
@@ -94,17 +114,25 @@ export default function NotesFeedPage() {
   const [dateTo, setDateTo] = useState('');
   const [includeDeleted, setIncludeDeleted] = useState(false);
 
-  const playerId = useId();
   const authorId = useId();
   const fromId = useId();
   const toId = useId();
 
   const filters = useMemo(
-    () => ({ q, player, author, dateFrom, dateTo, includeDeleted, canViewDeleted }),
-    [q, player, author, dateFrom, dateTo, includeDeleted, canViewDeleted],
+    () => ({ q, player, author, dateFrom, dateTo, includeDeleted }),
+    [q, player, author, dateFrom, dateTo, includeDeleted],
   );
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  // Отменяет предыдущую загрузку ленты при смене фильтров или размонтировании,
+  // чтобы устаревший ответ не перезаписал rows поверх более новой выборки.
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
@@ -112,21 +140,25 @@ export default function NotesFeedPage() {
       const res = await fetch(`/api/v1/notes?${params.toString()}`, {
         credentials: 'include',
         cache: 'no-store',
+        signal: controller.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as FeedResponse;
+      if (controller.signal.aborted) return;
       setRows(body.items);
       setNextCursor(body.next_cursor);
       setCanViewDeleted(body.can_view_deleted);
     } catch (e) {
+      if (controller.signal.aborted) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, [filters]);
 
   useEffect(() => {
     void load();
+    return () => loadAbortRef.current?.abort();
   }, [load]);
 
   useEffect(() => {
@@ -138,10 +170,14 @@ export default function NotesFeedPage() {
 
   async function loadMore() {
     if (!nextCursor || busy) return;
+    // `load` bumps this ref whenever the filters change; if that happens while
+    // this page is in flight, its response belongs to a superseded query and
+    // must not be appended on top of the freshly reloaded first page.
+    const requestFilters = filters;
     setBusy(true);
     setError(null);
     try {
-      const params = buildParams(filters);
+      const params = buildParams(requestFilters);
       params.set('cursor', nextCursor);
       const res = await fetch(`/api/v1/notes?${params.toString()}`, {
         credentials: 'include',
@@ -149,6 +185,7 @@ export default function NotesFeedPage() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as FeedResponse;
+      if (requestFilters !== filtersRef.current) return;
       setRows((prev) => [...prev, ...body.items]);
       setNextCursor(body.next_cursor);
     } catch (e) {
@@ -247,16 +284,15 @@ export default function NotesFeedPage() {
         }
         filters={
           <>
-            <label htmlFor={playerId} className="text-xs text-ink-3">
-              Игрок
-            </label>
-            <TextInput
-              id={playerId}
-              value={player}
-              onChange={(e) => setPlayer(e.target.value)}
-              placeholder="ник (с учётом истории)"
-              className="w-44"
-            />
+            <span className="w-44">
+              <SearchField
+                value={player}
+                onCommit={setPlayer}
+                label="Игрок"
+                placeholder="ник (с учётом истории)"
+                clearLabel="Очистить фильтр по игроку"
+              />
+            </span>
             <label htmlFor={authorId} className="text-xs text-ink-3">
               Автор
             </label>

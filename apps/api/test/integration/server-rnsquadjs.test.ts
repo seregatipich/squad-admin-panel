@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { sidecarStatusKey } from '../../src/routes/server-rnsquadjs.js';
+import { narrowedOwnerHeaders } from '../helpers/narrowed-token.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -118,9 +119,19 @@ describeIfDb('GET /api/v1/servers/:id/rnsquadjs', () => {
     expect(resp.json()).toEqual({ error: 'unauthenticated' });
   });
 
-  it('403s for a role without server:view', async () => {
+  it('401s for a role without panel_access', async () => {
     const cookie = await asRoleWithoutPanelAccess();
     const resp = await h.app.inject({ method: 'GET', url: STATUS_URL, headers: { cookie } });
+    expect(resp.statusCode).toBe(401);
+    expect(resp.json()).toEqual({ error: 'unauthenticated' });
+  });
+
+  it('403s for a caller without server:view', async () => {
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: STATUS_URL,
+      headers: await narrowedOwnerHeaders(h, ['host:view']),
+    });
     expect(resp.statusCode).toBe(403);
     expect(resp.json()).toEqual({ error: 'forbidden', required: ['server:view'] });
   });

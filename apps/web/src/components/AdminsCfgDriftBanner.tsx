@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { InlineBanner } from '@/components/ui/InlineBanner';
 
@@ -24,6 +24,9 @@ interface DriftResponse {
 }
 
 const POLL_MS = 30_000;
+const SYNC_REFRESH_DELAY_MS = 1_500;
+// The caller lacks `admin_group:view` (or the endpoint is absent): polling again cannot succeed.
+const TERMINAL_STATUSES = new Set([401, 403, 404]);
 // Spec §2.7.7 — surface long-outage alert after this duration.
 const LONG_OUTAGE_MS = 60 * 60_000;
 // Suppress the unreachable banner for short outages — bridge-client retries
@@ -50,6 +53,8 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
   const [status, setStatus] = useState<AdminsCfgStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [polling, setPolling] = useState(true);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +64,7 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
       });
       if (!r.ok) {
         setStatus(null);
+        if (TERMINAL_STATUSES.has(r.status)) setPolling(false);
         return;
       }
       const j = (await r.json()) as DriftResponse;
@@ -69,10 +75,21 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
   }, [serverId]);
 
   useEffect(() => {
+    if (!polling) return;
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void load();
+    }, POLL_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, polling]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    },
+    [],
+  );
 
   async function forceSync() {
     setBusy(true);
@@ -88,7 +105,9 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
         return;
       }
       // Worker will pick up; refresh shortly.
-      setTimeout(() => void load(), 1500);
+      refreshTimer.current = setTimeout(() => void load(), SYNC_REFRESH_DELAY_MS);
+    } catch {
+      setErr('Не удалось связаться с API');
     } finally {
       setBusy(false);
     }
@@ -96,15 +115,8 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
 
   if (!status) return null;
   const isUnreachable = status.state === 'unreachable';
-  const lastSegHash = status.last_segment_hash;
-  const dbHash = status.last_db_hash;
-  const driftDetected =
-    status.state === 'drift' ||
-    (!isUnreachable && lastSegHash != null && dbHash != null && lastSegHash !== dbHash);
 
-  if (status.state === 'in_sync' || status.state === 'syncing' || status.state === 'unknown') {
-    return null;
-  }
+  if (status.state !== 'drift' && !isUnreachable) return null;
 
   if (isUnreachable) {
     const since = status.unreachable_since ? new Date(status.unreachable_since).getTime() : null;
@@ -122,7 +134,12 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
               )}`
             : 'Admins.cfg недоступен на этом сервере'
         }
-        description={status.error ?? 'bridge вернул ошибку при чтении файла.'}
+        description={
+          <>
+            {status.error ?? 'bridge вернул ошибку при чтении файла.'}
+            {err ? <span className="mt-1 block text-crit">{err}</span> : null}
+          </>
+        }
         action={
           <Button size="sm" onClick={forceSync} loading={busy}>
             Повторить синхронизацию
@@ -132,26 +149,22 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
     );
   }
 
-  if (driftDetected) {
-    return (
-      <InlineBanner
-        tone="warn"
-        title="Admins.cfg на этом сервере изменён вне панели"
-        description={
-          <>
-            Управляемый сегмент в файле не совпадает с базой панели. Синхронизация перезапишет
-            сегмент в файле данными из панели.
-            {err ? <span className="mt-1 block text-crit">{err}</span> : null}
-          </>
-        }
-        action={
-          <Button size="sm" onClick={forceSync} loading={busy}>
-            Синхронизировать
-          </Button>
-        }
-      />
-    );
-  }
-
-  return null;
+  return (
+    <InlineBanner
+      tone="warn"
+      title="Admins.cfg на этом сервере изменён вне панели"
+      description={
+        <>
+          Управляемый сегмент в файле не совпадает с базой панели. Синхронизация перезапишет сегмент
+          в файле данными из панели.
+          {err ? <span className="mt-1 block text-crit">{err}</span> : null}
+        </>
+      }
+      action={
+        <Button size="sm" onClick={forceSync} loading={busy}>
+          Синхронизировать
+        </Button>
+      }
+    />
+  );
 }

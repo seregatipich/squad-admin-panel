@@ -1,6 +1,6 @@
 import { chatCommandInvocations, players, servers } from '@squad/db/schema';
 import { and, desc, eq, gte, isNull, lte } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
@@ -12,18 +12,6 @@ const historyQuery = z.object({
   to: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /**
  * AUTO-4 (#75): read-only history of in-game chat commands (`!stats`, `!rules`,
@@ -38,11 +26,11 @@ const serverChatCommandsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/chat-commands',
-    { config: { audit: false }, schema: { params: serverIdParams, querystring: historyQuery } },
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: serverIdParams, querystring: historyQuery },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });

@@ -122,14 +122,14 @@ describeIfDb('GET /api/v1/settings/clan-guard', () => {
     expect(res.json().enabled).toBe(true);
   });
 
-  it('rejects a user without panel access with 403', async () => {
+  it('rejects a user without panel access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/settings/clan-guard',
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe('forbidden');
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('unauthenticated');
   });
 
   it('rejects an unauthenticated request with 401', async () => {

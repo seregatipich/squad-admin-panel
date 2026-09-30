@@ -6,6 +6,13 @@ import { Badge, Card, CardBody, CardHeader, InlineBanner, Switch } from '@/compo
 interface TagProtectionCardProps {
   clanId: string;
   initialProtected: boolean;
+  /**
+   * Whether the viewer holds `can_manage_clans` — the only permission the
+   * PATCH route (`/api/v1/clans/:id/settings`) accepts. Defaults to `true`
+   * so a caller that has not been updated keeps today's optimistic-toggle
+   * behavior (a 401/403 still falls back to the read-only badge below).
+   */
+  canToggle?: boolean;
 }
 
 interface ClanSettingsResponse {
@@ -24,9 +31,13 @@ interface ClanSettingsResponse {
  * тумблера — это цвет и геометрия, а по дизайн-системе (§5) ни то, ни другое
  * не имеет права быть единственным носителем смысла.
  */
-export default function TagProtectionCard({ clanId, initialProtected }: TagProtectionCardProps) {
+export default function TagProtectionCard({
+  clanId,
+  initialProtected,
+  canToggle: canToggleProp = true,
+}: TagProtectionCardProps) {
   const [isProtected, setIsProtected] = useState(initialProtected);
-  const [canToggle, setCanToggle] = useState(true);
+  const [canToggle, setCanToggle] = useState(canToggleProp);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,11 +45,15 @@ export default function TagProtectionCard({ clanId, initialProtected }: TagProte
     setIsProtected(initialProtected);
   }, [initialProtected]);
 
+  useEffect(() => {
+    setCanToggle(canToggleProp);
+  }, [canToggleProp]);
+
   const toggle = useCallback(async () => {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}/settings`, {
+      const res = await fetch(`/api/v1/clans/${encodeURIComponent(clanId)}/settings`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },

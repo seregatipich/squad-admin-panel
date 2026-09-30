@@ -41,6 +41,8 @@ containerLogsFollow({ name: 'squad-01903f7d-...' }, (frame) => ws.send(frame.dat
   └─ [final response] → Promise<{ exit_code: 0 }> resolves
 ```
 
+A consumer that cannot keep up calls `client.pause()` to stop reading the socket (the unread bytes fill the kernel buffer and block the bridge's writes) and `client.resume()` once it has drained; the log download route does this (#291).
+
 Because `container_logs_follow` holds a pending slot indefinitely, always use `app.makeBridgeClient()` (a dedicated connection) rather than the shared `app.bridge`. A shared-instance long stream prevented unary calls on the same socket from being dispatched — fixed by the per-WebSocket client pattern.
 
 ## Decode error — connection loss

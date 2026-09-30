@@ -30,11 +30,13 @@ function databaseUrl(database: string): string {
   return url.toString();
 }
 
-function runCli(databaseUrl: string | undefined): CliResult {
+function runCli(databaseUrl: string | undefined, batchSize?: number): CliResult {
   const env = { ...process.env };
   if (databaseUrl === undefined) delete env.DATABASE_URL;
   else env.DATABASE_URL = databaseUrl;
   delete env.TEST_DATABASE_URL;
+  if (batchSize !== undefined) env.AUDIT_CHAIN_BATCH_SIZE = String(batchSize);
+  else delete env.AUDIT_CHAIN_BATCH_SIZE;
   const result = spawnSync(TSX, [SCRIPT], {
     cwd: REPOSITORY_ROOT,
     env,
@@ -102,6 +104,26 @@ async function insertTwoRows(sql: ReturnType<typeof postgres>): Promise<void> {
   `;
 }
 
+/** Inserts `n` sequential rows via the real trigger (real, trigger-computed hashes). */
+async function insertRows(sql: ReturnType<typeof postgres>, n: number): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    await sql`
+      INSERT INTO audit_log (
+        created_at, actor_kind, actor_system_label, action_type, target_type, target_id, context
+      )
+      VALUES (
+        ${new Date(Date.UTC(2026, 7, 13, 10, 0, i))},
+        ${'system'},
+        ${'audit-chain-test'},
+        ${'server.create'},
+        ${'server'},
+        ${`server-${i}`},
+        ${sql.json({ seq: i })}
+      )
+    `;
+  }
+}
+
 describe('verify-audit-chain CLI configuration boundary', () => {
   it('uses exit 2 for missing configuration and database dependency failure', () => {
     const missing = runCli(undefined);
@@ -162,13 +184,19 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
       `;
       assert.deepEqual(
         triggers.map((trigger) => trigger.name),
-        ['trg_audit_log_ins', 'trg_audit_log_no_del', 'trg_audit_log_no_upd'],
+        [
+          'trg_audit_log_ins',
+          'trg_audit_log_no_del',
+          'trg_audit_log_no_truncate',
+          'trg_audit_log_no_upd',
+        ],
       );
       await insertTwoRows(fixture.sql);
       await assert.rejects(
         fixture.sql`UPDATE audit_log SET action_type = 'tampered' WHERE id = 1`,
         /audit_log is append-only/,
       );
+      await assert.rejects(fixture.sql`TRUNCATE audit_log`, /audit_log is append-only/);
       const result = runCli(fixture.url);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, 'ok: audit chain intact (2 rows)\n');
@@ -221,6 +249,111 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
       assert.equal(result.stdout, '');
       assert.match(result.stderr, /^Chain break at id=2: prev_hash mismatch/m);
       assert.match(result.stderr, /^ {2}verified 1 row\(s\) before the break$/m);
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  /**
+   * #49: the bigserial default used to hand out the id before the trigger took
+   * the chain lock, so a writer that got its id first but the lock second was
+   * chained after a higher id. The verifier walks by id and reported a false
+   * "Chain break". The session holding advisory lock 42 parks the first
+   * insert between id allocation and the trigger to force that interleaving.
+   */
+  it('keeps id order equal to chain order when concurrent inserts race for the lock', async () => {
+    const fixture = await auditDatabase();
+    const gate = postgres(fixture.url, { max: 1, prepare: false });
+    const slow = postgres(fixture.url, { max: 1, prepare: false });
+    try {
+      await gate`SELECT pg_advisory_lock(42)`;
+      const slowInsert = slow`
+        INSERT INTO audit_log (
+          created_at, actor_kind, actor_system_label, action_type, context
+        )
+        VALUES (
+          ${new Date('2026-08-13T10:00:00.000Z')},
+          ${'system'},
+          ${'audit-chain-test'},
+          ${'slow.writer'},
+          (SELECT '{}'::jsonb FROM (SELECT pg_advisory_lock(42)) AS parked)
+        )
+      `.execute();
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const [waiting] = await fixture.sql<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM pg_locks
+          WHERE locktype = 'advisory' AND objid = 42 AND NOT granted
+        `;
+        if (waiting?.count === '1') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await fixture.sql`
+        INSERT INTO audit_log (
+          created_at, actor_kind, actor_system_label, action_type, context
+        )
+        VALUES (
+          ${new Date('2026-08-13T10:00:01.000Z')},
+          ${'system'},
+          ${'audit-chain-test'},
+          ${'fast.writer'},
+          ${fixture.sql.json({})}
+        )
+      `;
+      await gate`SELECT pg_advisory_unlock(42)`;
+      await slowInsert;
+
+      const rows = await fixture.sql<{ action_type: string }[]>`
+        SELECT action_type FROM audit_log ORDER BY id ASC
+      `;
+      assert.deepEqual(
+        rows.map((row) => row.action_type),
+        ['fast.writer', 'slow.writer'],
+      );
+      const result = runCli(fixture.url);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'ok: audit chain intact (2 rows)\n');
+    } finally {
+      await gate.end({ timeout: 5 });
+      await slow.end({ timeout: 5 });
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  // #1216: verify-audit-chain used to SELECT the whole table into memory in
+  // one query. These force the keyset-pagination path with a tiny page size
+  // (AUDIT_CHAIN_BATCH_SIZE) instead of inserting thousands of rows.
+  it('verifies an intact chain that spans multiple pages', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 7);
+      const result = runCli(fixture.url, 3);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'ok: audit chain intact (7 rows)\n');
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  it('detects a break in a later page, with the checked count carried across pages', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 7);
+      await fixture.sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_upd`;
+      try {
+        // Row 5 falls in the second page of three (rows 4-6) at batch size 3.
+        await fixture.sql`
+          UPDATE audit_log
+          SET row_hash = decode(repeat('ff', 32), 'hex')
+          WHERE id = 5
+        `;
+      } finally {
+        await fixture.sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_upd`;
+      }
+      const result = runCli(fixture.url, 3);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /^Chain break at id=5: row_hash mismatch/m);
+      assert.match(result.stderr, /^ {2}verified 4 row\(s\) before the break$/m);
     } finally {
       await fixture.sql.end({ timeout: 5 });
     }

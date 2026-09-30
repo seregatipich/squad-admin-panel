@@ -99,11 +99,27 @@ async function roleOf(steamId64: bigint): Promise<string | null> {
   return row?.roleId ?? null;
 }
 
+/** Submits as the applicant's own Steam-verified session (#375). */
 async function submit(steamId64: bigint): Promise<string> {
+  const [player] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!player) throw new Error(`No player for steamId64=${steamId64}`);
+  invalidateAllPermissionCaches();
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: player.id,
+    ip: null,
+    userAgent: 'wl-role-guard-applicant',
+    ttlMs: 21_600_000,
+    scope: 'self_service',
+  });
   const res = await h.app.inject({
     method: 'POST',
     url: '/api/v1/public/whitelist/applications',
-    payload: { steam_id64: steamId64.toString(), body: 'guard test' },
+    headers: { cookie: `__Host-sid=${token}` },
+    payload: { body: 'guard test' },
   });
   if (res.statusCode !== 201) throw new Error(`submit failed: ${res.statusCode} ${res.body}`);
   return res.json<{ id: string }>().id;

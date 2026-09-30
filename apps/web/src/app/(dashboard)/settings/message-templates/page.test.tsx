@@ -18,7 +18,7 @@ const TEMPLATE = {
 };
 
 function mockFetch(opts: { permissions?: string[]; templates?: unknown[] } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+  const permissions = opts.permissions ?? ['message_template:manage'];
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -74,7 +74,7 @@ describe('MessageTemplatesPage', () => {
   );
 
   it(
-    'hides the editing controls without the role:edit permission',
+    'hides the editing controls without the message_template:manage permission',
     async () => {
       mockFetch({ permissions: [] });
       render(<MessageTemplatesPage />);
@@ -157,6 +157,28 @@ describe('MessageTemplatesPage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Создать' }));
 
       expect(await screen.findByText('Укажите название шаблона.')).toBeInTheDocument();
+      expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a negative, fractional or oversized sort order without calling the API (#717)',
+    async () => {
+      const { calls } = mockFetch();
+      render(<MessageTemplatesPage />);
+      fireEvent.change(await screen.findByLabelText('Название'), { target: { value: 'Тест' } });
+      fireEvent.change(screen.getByLabelText(/^Текст/), { target: { value: 'Текст {player}' } });
+
+      for (const invalid of ['-5', '1.5', '200000']) {
+        fireEvent.change(screen.getByLabelText('Порядок'), { target: { value: invalid } });
+        // Submit the form directly: the browser's own min/max/step validation would
+        // otherwise intercept the click before the page's check runs.
+        fireEvent.submit(screen.getByLabelText('Порядок').closest('form') as HTMLFormElement);
+        expect(
+          await screen.findByText('Порядок — целое число от 0 до 100000.'),
+        ).toBeInTheDocument();
+      }
       expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(0);
     },
     TEST_TIMEOUT_MS,

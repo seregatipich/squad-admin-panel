@@ -44,7 +44,7 @@ afterEach(() => {
 
 describe('statusChannelPreview', () => {
   it('shows the template a configured channel will be renamed to', () => {
-    expect(statusChannelPreview('600000000000000101')).toContain('_');
+    expect(statusChannelPreview('600000000000000101')).toBe('🟢narva_0x0_👮0');
   });
 
   it('returns null when no channel is configured', () => {
@@ -120,5 +120,39 @@ describe('DiscordStatusChannelsSection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить статус-канал Main #2' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/не удалось/i);
+  });
+
+  it('shows a load error instead of an endless skeleton on a network failure (#707)', async () => {
+    vi.stubGlobal('fetch', mockFetch({ list: () => Promise.reject(new TypeError('offline')) }));
+    render(<DiscordStatusChannelsSection />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Не удалось загрузить статус-каналы.',
+    );
+  });
+
+  it('does not report a save failure when only the reload after a successful save fails (#707)', async () => {
+    let listCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        list: () => {
+          listCalls += 1;
+          return listCalls === 1
+            ? Promise.resolve(new Response(JSON.stringify({ items: ITEMS }), { status: 200 }))
+            : Promise.reject(new TypeError('offline'));
+        },
+      }),
+    );
+    render(<DiscordStatusChannelsSection />);
+
+    const input = await screen.findByLabelText('ID статус-канала для Main #2');
+    await userEvent.type(input, '600000000000000202');
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить статус-канал Main #2' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Не удалось загрузить статус-каналы.',
+    );
+    expect(screen.queryByText(/не удалось сохранить/i)).not.toBeInTheDocument();
   });
 });

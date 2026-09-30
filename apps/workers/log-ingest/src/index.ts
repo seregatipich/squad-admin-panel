@@ -1,5 +1,5 @@
 import { BridgeClient } from '@squad/bridge-client';
-import { ChatFlagDetector, handleChat } from '@squad/chat-ingest';
+import { ChatFlagDetector, handleChat, PlayerIdCache } from '@squad/chat-ingest';
 import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
@@ -17,6 +17,7 @@ import { handleAltBanConnect } from './alt-ban/store.js';
 import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
+import { BoundedChain } from './bounded-chain.js';
 import { handleChatCommand } from './chat/commands.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
@@ -63,10 +64,12 @@ async function main() {
   );
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
-  const bridge = new BridgeClient({
-    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
-    onLog: (m, meta) => log.info({ ...meta }, m),
-  });
+  const openBridge = () =>
+    new BridgeClient({
+      socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
+      onLog: (m, meta) => log.info({ ...meta }, m),
+    });
+  const bridge = openBridge();
 
   const diag = createDiag({ redis, log });
   // SSH log sources carry a private key encrypted with APP_ENCRYPTION_KEY.
@@ -98,7 +101,12 @@ async function main() {
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
 
   const chatFlagDetector = new ChatFlagDetector(db);
-  const bannedNameCache = new BannedNameRuleCache(db);
+  // Shared by chat archiving and chat commands so a sender is resolved once.
+  const playerIds = new PlayerIdCache();
+  const bannedNameCache = new BannedNameRuleCache(db, undefined, {
+    onRegexTimeout: (ruleId) =>
+      log.warn({ ruleId }, 'banned-name regex rule exceeded its time budget; treated as no match'),
+  });
   const externalBanCache = new ExternalBanCache(db, redis);
   const alertRuleCache = new AlertRuleCache(db, {
     onInvalidRule: (ruleId, reason) =>
@@ -106,12 +114,21 @@ async function main() {
   });
   const alertSink = sinkDepsFromEnv();
 
-  const manager = new TailManager((wanted) => {
+  const manager = new TailManager((wanted, onDead) => {
     const { serverId, beaconPort } = wanted;
     log.info({ serverId, beaconPort, source: wanted.source.kind }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
     let voteChain: Promise<void> = Promise.resolve();
-    let combatChain: Promise<void> = Promise.resolve();
+    // Serialized like voteChain/matchChain: two duplicate !report lines
+    // handled concurrently would otherwise race the dedup read-then-write
+    // in report/store.ts (#63 finding 941).
+    let reportChain: Promise<void> = Promise.resolve();
+    // Combat/vehicle lines are by far the highest-volume kind on a busy
+    // server; cap the backlog instead of letting it grow without bound
+    // (#63 finding 916).
+    const combatChain = new BoundedChain(500, (queued) =>
+      log.warn({ serverId, queued }, 'combat chain backlog full, dropping event'),
+    );
     const ingestor = new LogIngestor({
       serverId,
       beaconPort,
@@ -149,9 +166,10 @@ async function main() {
           .catch(() => undefined);
       },
       onReport: (report) => {
-        handleReport(db, redis, { serverId, report }).catch((err) =>
-          log.error({ err: (err as Error).message }, 'report handling failed'),
-        );
+        reportChain = reportChain
+          .then(() => handleReport(db, redis, { serverId, report }))
+          .then(() => undefined)
+          .catch((err) => log.error({ err: (err as Error).message }, 'report handling failed'));
       },
       onMatch: (command) => {
         matchChain = matchChain
@@ -172,13 +190,16 @@ async function main() {
             chat,
             onArchiveError: (err) =>
               log.warn({ err: err.message, serverId }, 'chat archive insert failed'),
+            onFlagError: (err) =>
+              log.warn({ err: err.message, serverId }, 'chat flag detection failed'),
+            playerIds,
           },
           chatFlagDetector,
         ).catch((err) => log.error({ err: (err as Error).message }, 'chat handling failed'));
         // AUTO-4 (#75): answer in-game `!stats`/`!rules`/`!report` over RCON.
         // Independent of the chat-message record above; `!report` delegates the
         // report record itself to REPORT-1 via the ingestor's onReport path.
-        handleChatCommand(db, redis, { serverId, chat }).catch((err) =>
+        handleChatCommand(db, redis, { serverId, chat, playerIds }).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat command handling failed'),
         );
         // AUTO-1 (#72): fire automation rules whose chat_keyword condition
@@ -195,26 +216,24 @@ async function main() {
           .catch((err) => log.error({ err: (err as Error).message }, 'vote handling failed'));
       },
       onCombat: (command) => {
-        combatChain = combatChain
-          .then(() => handleCombat(db, redis, command))
-          .then(() => undefined)
-          .catch((err) =>
+        combatChain.enqueue(
+          () => handleCombat(db, redis, command),
+          (err) =>
             log.error(
               { err: (err as Error).message, kind: command.kind },
               'combat handling failed',
             ),
-          );
+        );
       },
       onVehicle: (command) => {
-        combatChain = combatChain
-          .then(() => handleVehicle(db, redis, command))
-          .then(() => undefined)
-          .catch((err) =>
+        combatChain.enqueue(
+          () => handleVehicle(db, redis, command),
+          (err) =>
             log.error(
               { err: (err as Error).message, kind: command.kind },
               'vehicle handling failed',
             ),
-          );
+        );
       },
     });
     const onLine = (line: string) => {
@@ -334,9 +353,18 @@ async function main() {
         },
         onHostKey: (fingerprint) => {
           // Trust on first use: pin the fingerprint so a later host-key change is refused.
+          // Only an empty pin for the host this tail actually connected to is written, so a
+          // tail still running against a replaced ssh_host cannot pin the old host's key.
           db.update(serverLogSources)
             .set({ hostKeyFingerprint: fingerprint, updatedAt: new Date() })
-            .where(eq(serverLogSources.serverId, serverId))
+            .where(
+              and(
+                eq(serverLogSources.serverId, serverId),
+                isNull(serverLogSources.hostKeyFingerprint),
+                eq(serverLogSources.sshHost, src.host),
+                eq(serverLogSources.sshPort, src.port),
+              ),
+            )
             .catch((err) =>
               log.warn({ err: (err as Error).message, serverId }, 'host key pin failed'),
             );
@@ -350,7 +378,8 @@ async function main() {
       };
     }
     const abort = tailContainerLogs({
-      bridge,
+      // One connection per tail: closing it is how the bridge stops the follow.
+      openBridge,
       log,
       name: `squad-${serverId}`,
       onLine,
@@ -367,6 +396,9 @@ async function main() {
           .catch(() => undefined);
       },
       onStopped: ({ reason, error }) => {
+        // A stream that ended on its own (bridge restart, socket drop, Docker
+        // restarting the container) must be re-dialled by the next reconcile.
+        if (reason !== 'aborted') onDead();
         diag
           .emit({
             component: 'worker-log-ingest',
@@ -428,10 +460,7 @@ async function main() {
         );
       for (const r of sshRows) {
         try {
-          const privateKey = decrypt(
-            encryptionKey,
-            deserialize(Buffer.from(r.blob as unknown as Buffer)),
-          );
+          const privateKey = decrypt(encryptionKey, deserialize(Buffer.from(r.blob)));
           wanted.push({
             serverId: r.id,
             beaconPort: r.beaconPort,

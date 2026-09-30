@@ -2,7 +2,7 @@ import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import { servers } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import fp from 'fastify-plugin';
 import type Redis from 'ioredis';
@@ -48,6 +48,10 @@ export const TRANSIENT_STATES = new Set(['starting', 'stopping', 'running', 'sto
 // but ops still want visibility on rows installing for >90s.
 export const STUCK_CANDIDATE_STATES = new Set(['starting', 'stopping', 'installing']);
 
+// Of the rows the tick inspects, the ones Docker has not settled yet.
+// `servers_in_transient` in the stats counts these after each tick.
+const CONVERGING_STATES = new Set(['starting', 'stopping']);
+
 export interface CrashInfo {
   restart_count: number;
   oom_killed: boolean;
@@ -70,16 +74,6 @@ export function detectCrash(
     exit_code: inspect.exit_code,
     finished_at: inspect.finished_at,
   };
-}
-
-export function detectCrashLoop(
-  crashes: Array<{ timestamp: number }>,
-  windowMs: number,
-  threshold: number,
-): boolean {
-  const now = Date.now();
-  const recent = crashes.filter((c) => now - c.timestamp < windowMs);
-  return recent.length >= threshold;
 }
 
 export type DockerStateLabel =
@@ -122,6 +116,7 @@ export interface ReconcilerStats {
   last_tick_servers_inspected: number;
   last_tick_budget_exceeded: boolean;
   consecutive_tick_errors: number;
+  /** Rows the last tick left in `starting`/`stopping`, i.e. still converging. */
   servers_in_transient: number;
   stuck_servers: Array<{ id: string; status: string; updated_at: string; age_ms: number }>;
   stale_installs_failed: number;
@@ -155,10 +150,13 @@ interface TickDeps {
   diag: Pick<Diag, 'emit'>;
   bridgeFailures: Map<string, number>;
   knownRestartCounts: Map<string, number>;
+  /** Status each server was left in by this tick, when the tick changed it. */
+  settledStatus?: Map<string, string>;
   state: {
     lastTickAt: number | null;
     lastTickDurationMs: number | null;
     lastInspected: number;
+    lastConverging: number;
     lastBudgetExceeded: boolean;
     staleInstallsFailed: number;
   };
@@ -192,35 +190,40 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
     );
     return;
   }
-  if (!mapped.status || mapped.status === row.status) return;
-  await db
-    .update(servers)
-    .set({
-      status: mapped.status,
-      updatedAt: new Date(),
-      containerId: res.pid ? String(res.pid) : null,
-    })
-    .where(eq(servers.id, row.id));
-  log.info(
-    {
-      serverId: row.id,
-      from: row.status,
-      to: mapped.status,
-      raw: res.state,
-      running: res.running,
-    },
-    'reconciler: status updated',
-  );
-  liveBus?.publish({
-    type: 'server.status',
-    ts: new Date().toISOString(),
-    data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
-  });
-  if (row.status === 'running' && mapped.status === 'stopped') {
-    await emitContainerExitDiag(deps, row.id, res);
+  if (!mapped.status) return;
+  if (mapped.status !== row.status) {
+    // `containerId` is the Docker container id written by the install/start
+    // paths; inspect only reports a PID, so the reconciler leaves it alone (#78).
+    await db
+      .update(servers)
+      .set({ status: mapped.status, updatedAt: new Date() })
+      .where(eq(servers.id, row.id));
+    deps.settledStatus?.set(row.id, mapped.status);
+    log.info(
+      {
+        serverId: row.id,
+        from: row.status,
+        to: mapped.status,
+        raw: res.state,
+        running: res.running,
+      },
+      'reconciler: status updated',
+    );
+    liveBus?.publish({
+      type: 'server.status',
+      ts: new Date().toISOString(),
+      data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
+    });
+    if (row.status === 'running' && mapped.status === 'stopped') {
+      await emitContainerExitDiag(deps, row.id, res);
+    }
   }
 
-  // Crash detection: check if restart_count incremented since last observation.
+  // Crash detection runs on every successful inspect, not only on a status
+  // change: Docker's restart policy usually brings a crashed container back
+  // between two ticks, so the reconciler sees running → running with a higher
+  // restart_count (#37).
+  const currentStatus = mapped.status;
   const crashInfo = detectCrash(
     row.id,
     {
@@ -243,7 +246,7 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
       liveBus?.publish({
         type: 'server.status',
         ts: new Date().toISOString(),
-        data: { server_id: row.id, status: row.status, source: 'crash_detected' },
+        data: { server_id: row.id, status: currentStatus, source: 'crash_detected' },
       });
 
       // Check for crash loop
@@ -261,6 +264,7 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
           .update(servers)
           .set({ status: 'failed', updatedAt: new Date() })
           .where(eq(servers.id, row.id));
+        deps.settledStatus?.set(row.id, 'failed');
         liveBus?.publish({
           type: 'server.status',
           ts: new Date().toISOString(),
@@ -326,6 +330,7 @@ export default fp(async (app) => {
     lastTickAt: null,
     lastTickDurationMs: null,
     lastInspected: 0,
+    lastConverging: 0,
     lastBudgetExceeded: false,
     staleInstallsFailed: 0,
   };
@@ -363,12 +368,15 @@ export default fp(async (app) => {
           ),
         );
       tickState.lastInspected = rows.length;
-      // Trim per-server bridge-failure counters for rows that are no longer
-      // in a transient state (dropped from the loop) — otherwise the map
-      // grows unbounded across the API process lifetime.
+      // Trim per-server counters for rows that are no longer in a transient
+      // state (dropped from the loop) — otherwise the maps grow unbounded
+      // across the API process lifetime.
       const transientIds = new Set(rows.map((r) => r.id));
       for (const id of bridgeFailures.keys()) {
         if (!transientIds.has(id)) bridgeFailures.delete(id);
+      }
+      for (const id of knownRestartCounts.keys()) {
+        if (!transientIds.has(id)) knownRestartCounts.delete(id);
       }
       // Per-server inspect runs in parallel under a single tick budget.
       // Each individual containerInspect already has a 10 s timeout in
@@ -382,9 +390,10 @@ export default fp(async (app) => {
           resolve('budget');
         }, TICK_BUDGET_MS),
       );
+      const settledStatus = new Map<string, string>();
       const work = Promise.allSettled(
         rows.map((row) =>
-          reconcileServer(deps(), row).catch((err) => {
+          reconcileServer({ ...deps(), settledStatus }, row).catch((err) => {
             app.log.warn(
               { err: (err as Error).message, serverId: row.id },
               'reconciler: per-server tick failed',
@@ -394,6 +403,9 @@ export default fp(async (app) => {
       );
       await Promise.race([work, budget]);
       tickState.lastBudgetExceeded = budgetExceeded;
+      tickState.lastConverging = rows.filter((r) =>
+        CONVERGING_STATES.has(settledStatus.get(r.id) ?? r.status),
+      ).length;
       if (budgetExceeded) {
         app.log.warn(
           { rows: rows.length, budgetMs: TICK_BUDGET_MS },
@@ -427,10 +439,15 @@ export default fp(async (app) => {
     const stale = await app.db
       .select({ id: servers.id, updatedAt: servers.updatedAt })
       .from(servers)
-      .where(and(eq(servers.status, 'installing'), isNull(servers.deletedAt)));
+      .where(
+        and(
+          eq(servers.status, 'installing'),
+          isNull(servers.deletedAt),
+          lt(servers.updatedAt, cutoff),
+        ),
+      );
     for (const row of stale) {
       const updatedAt = row.updatedAt ?? new Date();
-      if (new Date(updatedAt).getTime() > cutoff.getTime()) continue;
       await app.db
         .update(servers)
         .set({ status: 'failed', updatedAt: new Date() })
@@ -481,11 +498,7 @@ export default fp(async (app) => {
     if (changed) {
       await app.db
         .update(servers)
-        .set({
-          status: mapped.status,
-          updatedAt: new Date(),
-          containerId: inspected.pid ? String(inspected.pid) : null,
-        })
+        .set({ status: mapped.status, updatedAt: new Date() })
         .where(eq(servers.id, serverId));
       app.liveBus?.publish({
         type: 'server.status',
@@ -514,7 +527,11 @@ export default fp(async (app) => {
       })
       .from(servers)
       .where(
-        and(inArray(servers.status, Array.from(STUCK_CANDIDATE_STATES)), isNull(servers.deletedAt)),
+        and(
+          inArray(servers.status, Array.from(STUCK_CANDIDATE_STATES)),
+          isNull(servers.deletedAt),
+          eq(servers.runtime, 'container'),
+        ),
       );
     const now = Date.now();
     const stuck = candidates
@@ -536,7 +553,7 @@ export default fp(async (app) => {
       last_tick_servers_inspected: tickState.lastInspected,
       last_tick_budget_exceeded: tickState.lastBudgetExceeded,
       consecutive_tick_errors: consecutiveTickErrors,
-      servers_in_transient: tickState.lastInspected,
+      servers_in_transient: tickState.lastConverging,
       stuck_servers: stuck,
       stale_installs_failed: tickState.staleInstallsFailed,
       bridge_failures_by_server: Object.fromEntries(bridgeFailures),

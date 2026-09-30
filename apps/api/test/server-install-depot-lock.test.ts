@@ -146,3 +146,25 @@ describe('POST /api/v1/servers/:id/install during a depot update', () => {
     expect(containerRuns).toEqual([id]);
   });
 });
+
+// Regression (#43 finding 321, install path): the depot-init SteamCMD run's
+// non-zero exit code was ignored, so the install booted on a broken depot.
+describe('POST /api/v1/servers/:id/install with a failing depot-init run', () => {
+  it('fails the install and never boots the container', async () => {
+    const cookie = await loginAsOwner(h);
+    const id = await createServer(cookie);
+    h.bridge.depotUpdate = async () => ({ exit_code: 3 });
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/install`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const terminal = await waitForTerminalLine(id);
+    expect(terminal.step).toBe('error');
+    expect(terminal.message).toContain('exit code 3');
+    expect(containerRuns).toEqual([]);
+  });
+});

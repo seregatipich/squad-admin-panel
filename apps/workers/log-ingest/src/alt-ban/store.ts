@@ -10,7 +10,7 @@ import type {
   EventEnvelope,
   PlayerConnectedPayload,
 } from '@squad/shared-types';
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { persistEventEnvelope } from '../event-store.js';
@@ -42,9 +42,9 @@ async function findConnectingPlayerId(
 }
 
 /**
- * Detects a confirmed alt joining while a linked account has an unreverted
- * local ban, persists the ALT-7 domain event, and raises configured AUTO-3
- * alerts through the shared emitter.
+ * Detects a confirmed alt joining while a linked account has an unreverted,
+ * unexpired local ban, persists the ALT-7 domain event, and raises configured
+ * AUTO-3 alerts through the shared emitter.
  */
 export async function handleAltBanConnect(
   db: DatabaseClient,
@@ -70,6 +70,10 @@ export async function handleAltBanConnect(
         inArray(moderationActions.playerId, linkedPlayerIds),
         eq(moderationActions.actionType, 'ban'),
         isNull(moderationActions.revertedAt),
+        // A temporary ban (`context.expires_at`, written by
+        // apps/api/src/lib/moderation-enforce.ts) is never reverted when it
+        // runs out, so its expiry has to be checked here.
+        sql`((${moderationActions.context} ->> 'expires_at') IS NULL OR (${moderationActions.context} ->> 'expires_at')::timestamptz > now())`,
       ),
     );
   const bannedPlayerIds = Array.from(new Set(activeBans.map((ban) => ban.playerId)));

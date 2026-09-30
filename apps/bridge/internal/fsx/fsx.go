@@ -1,12 +1,21 @@
 // Package fsx implements the whitelisted file operations. Every
 // function here re-validates its paths (belt-and-braces: callers should
-// pass already-validated paths from validate.Path but we double-check).
+// pass already-validated paths from validate.Path but we double-check)
+// and then resolves them inside a trust root through an os.Root, so a
+// symlink planted by the game container cannot redirect a root-owned
+// write or chmod to a host file.
 package fsx
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
@@ -41,125 +50,263 @@ var writableRoots = []string{
 }
 
 // mkdirAllWithMode is like os.MkdirAll but re-applies `perm` to every
-// path segment it created. os.MkdirAll honours the process umask when
+// directory it created. os.MkdirAll honours the process umask when
 // creating directories, and the panel-host-bridge systemd unit runs
-// with UMask=0077 — which would otherwise leave configs/ at 0700 so
-// Squad (uid 1001) cannot read the .cfg files bind-mounted into its
+// with UMask=0077 — which would otherwise leave configs/{uuid}/ at 0700
+// so Squad (uid 1001) cannot read the .cfg files bind-mounted into its
 // container.
+//
+// Directories that already existed are never touched: the installer
+// deliberately keeps configs/ and saved/ at 0750 because the files
+// inside (Rcon.cfg with the plaintext RCON password) are 0644, so
+// widening an existing ancestor would expose them to every local user.
 func mkdirAllWithMode(p string, perm os.FileMode) error {
-	if err := os.MkdirAll(p, perm); err != nil {
-		return err
-	}
-	// Walk upward and chmod each segment that lies under the panel root;
-	// stop at the first one that already has the right permissions.
-	segments := []string{}
-	cur := p
-	for cur != "/" && cur != "." {
-		segments = append(segments, cur)
+	// Collect the missing segments, deepest first, up to the nearest
+	// existing ancestor.
+	var created []string
+	for cur := filepath.Clean(p); ; {
+		if _, err := os.Lstat(cur); err == nil {
+			break
+		}
+		created = append(created, cur)
 		parent := filepath.Dir(cur)
 		if parent == cur {
 			break
 		}
 		cur = parent
 	}
-	for _, seg := range segments {
-		info, err := os.Stat(seg)
-		if err != nil {
-			continue
-		}
-		if info.Mode().Perm() == perm {
-			break
-		}
-		if err := os.Chmod(seg, perm); err != nil {
-			// Not fatal — Squad only needs the leaf + one level up to be
-			// readable. Stop trying higher up the tree.
-			break
+	if err := os.MkdirAll(p, perm); err != nil {
+		return err
+	}
+	// Chmod from the shallowest created segment down so each level is
+	// traversable before its child is adjusted.
+	for i := len(created) - 1; i >= 0; i-- {
+		if err := os.Chmod(created[i], perm); err != nil {
+			return fmt.Errorf("chmod %s: %w", created[i], err)
 		}
 	}
 	return nil
 }
 
-// Write writes content atomically-ish (no rename); creates parent dirs
-// up through the allowed root as needed. A trailing os.Chmod bypasses
-// the process umask so Squad (uid 1001) can read what the bridge (root,
-// UMask=0077) writes.
-func Write(p string, content []byte, mode os.FileMode) error {
-	_, err := validate.Path(p, writableRoots...)
+// serverScopedBases are the writable bases whose {uuid} children are
+// bind-mounted read-write into a game container. A write below one of them is
+// confined to its own <base>/{uuid} directory: everything deeper may be a
+// planted symlink, while the {uuid} directory (a mount source or its parent)
+// cannot be replaced from inside the container. Tests override it.
+var serverScopedBases = []string{validate.PanelConfigsRoot, validate.PanelSavedRoot}
+
+// writeTrustRoot validates p against writableRoots and returns the directory
+// its resolution must stay inside plus the path relative to it: <base>/{uuid}
+// for a path under a server-scoped base, otherwise the matched writable root.
+// The per-server directory itself is never a write target.
+func writeTrustRoot(p string) (root, rel string, err error) {
+	cleaned, err := validate.Path(p, writableRoots...)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	if err := mkdirAllWithMode(filepath.Dir(p), 0o755); err != nil {
-		return fmt.Errorf("mkdir parent: %w", err)
+	for _, base := range serverScopedBases {
+		relToBase, ok := relBelow(base, cleaned)
+		if !ok {
+			continue
+		}
+		serverID, rest, _ := strings.Cut(relToBase, string(filepath.Separator))
+		if rest == "" {
+			return "", "", fmt.Errorf("%w: %q is a server directory, not a file", validate.ErrForbidden, cleaned)
+		}
+		return filepath.Join(base, serverID), rest, nil
 	}
-	if len(content) > MaxReadBytes {
-		return fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
+	for _, wr := range writableRoots {
+		wr = filepath.Clean(wr)
+		if relToRoot, ok := relBelow(wr, cleaned); ok {
+			return wr, relToRoot, nil
+		}
 	}
-	if err := os.WriteFile(p, content, mode); err != nil {
-		return err
-	}
-	return os.Chmod(p, mode)
+	return "", "", fmt.Errorf("%w: %q is a writable root, not a file", validate.ErrForbidden, cleaned)
 }
 
-func AtomicWrite(p string, content []byte, mode os.FileMode) error {
-	_, err := validate.Path(p, writableRoots...)
+// relBelow returns cleaned relative to dir when cleaned lies strictly below
+// dir; a sibling whose name merely starts with ".." still counts as below.
+func relBelow(dir, cleaned string) (string, bool) {
+	rel, err := filepath.Rel(filepath.Clean(dir), cleaned)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
+}
+
+// openWriteRoot validates p, creates its trust root (a host-owned directory
+// the game container cannot reach) with mkdirAllWithMode, then creates the
+// parent directories of rel inside the os.Root at 0755. Every step below the
+// trust root resolves through the os.Root, so a symlink leading out of it
+// fails the call instead of being followed. The caller closes the root.
+func openWriteRoot(p string, content []byte) (*os.Root, string, error) {
+	rootDir, rel, err := writeTrustRoot(p)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(content) > MaxReadBytes {
+		return nil, "", fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
+	}
+	if err := mkdirAllWithMode(rootDir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("mkdir root: %w", err)
+	}
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		return nil, "", fmt.Errorf("open root: %w", err)
+	}
+	if err := mkdirAllInRoot(root, filepath.Dir(rel), 0o755); err != nil {
+		_ = root.Close()
+		return nil, "", fmt.Errorf("mkdir parent: %w", err)
+	}
+	return root, rel, nil
+}
+
+// mkdirAllInRoot is mkdirAllWithMode confined to root: it creates dir (a path
+// relative to root) and re-applies perm to the segments it created, because
+// the bridge's UMask=0077 would otherwise leave them at 0700. Segments that
+// already existed are never touched (see mkdirAllWithMode).
+func mkdirAllInRoot(root *os.Root, dir string, perm os.FileMode) error {
+	if dir == "." {
+		return nil
+	}
+	var created []string
+	segment := ""
+	for _, part := range strings.Split(dir, string(filepath.Separator)) {
+		segment = filepath.Join(segment, part)
+		if _, err := root.Lstat(segment); err == nil {
+			continue
+		}
+		created = append(created, segment)
+	}
+	if err := root.MkdirAll(dir, perm); err != nil {
+		return err
+	}
+	for _, seg := range created {
+		if err := root.Chmod(seg, perm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireRegular fails unless f is a regular file, so a FIFO, socket or
+// device planted in an untrusted directory is refused.
+func requireRegular(f *os.File, rel string) error {
+	st, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(p)
-	if err := mkdirAllWithMode(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir parent: %w", err)
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("%w: %q is not a regular file", validate.ErrForbidden, rel)
 	}
-	if len(content) > MaxReadBytes {
-		return fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
-	}
+	return nil
+}
 
-	newPath := p + ".new"
-	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+// Write replaces p's content in place (no rename), creating parent dirs as
+// needed. The path is resolved inside its trust root (see writeTrustRoot), so
+// neither the open nor the chmod can follow a symlink out of it; O_NONBLOCK
+// keeps open(2) from hanging on a planted FIFO, and anything but a regular
+// file is refused. The mode is applied with fchmod on the open descriptor to
+// bypass the process umask so Squad (uid 1001) can read what the bridge
+// (root, UMask=0077) writes.
+func Write(p string, content []byte, mode os.FileMode) error {
+	root, rel, err := openWriteRoot(p, content)
 	if err != nil {
-		return fmt.Errorf("create new: %w", err)
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK, mode)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err := requireRegular(f, rel); err != nil {
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// AtomicWrite writes content to a sibling "<p>.new" file and renames it over
+// p, so readers see either the old or the new content. Both files are
+// resolved inside p's trust root (see writeTrustRoot): a stale or planted
+// "<p>.new" is unlinked (never followed) and recreated with O_EXCL, and the
+// rename replaces the directory entry for p even when it is a symlink, so the
+// link's target is never written.
+func AtomicWrite(p string, content []byte, mode os.FileMode) error {
+	root, rel, err := openWriteRoot(p, content)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	// A unique temp name per call, created with O_EXCL inside the trust root:
+	// with a fixed name, concurrent writers of one config would share an inode
+	// through separate descriptors and interleave their bytes before the rename.
+	// A planted file or symlink under a guessed name fails O_EXCL instead of
+	// being followed.
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Errorf("temp name: %w", err)
+	}
+	newRel := filepath.Join(filepath.Dir(rel), "."+filepath.Base(rel)+"."+hex.EncodeToString(suffix[:])+".tmp")
+	f, err := root.OpenFile(newRel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
 	}
 	if _, err := f.Write(content); err != nil {
 		_ = f.Close()
-		_ = os.Remove(newPath)
+		_ = root.Remove(newRel)
 		return fmt.Errorf("write new: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = os.Remove(newPath)
+		_ = root.Remove(newRel)
 		return fmt.Errorf("sync: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
 	}
 	// Chmod explicitly — O_CREAT honours UMask, so the file we just made
 	// is probably 0600 even though `mode` was 0644.
-	if err := os.Chmod(newPath, mode); err != nil {
-		_ = os.Remove(newPath)
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		_ = root.Remove(newRel)
 		return fmt.Errorf("chmod new: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(newRel)
+		return fmt.Errorf("close: %w", err)
 	}
 
 	// Atomic rename: tmp -> final. Existing file (if any) is overwritten
 	// atomically on POSIX; no .bak needed because the previous version
 	// is preserved by config_versions / role_squad_permissions snapshots.
-	if err := os.Rename(newPath, p); err != nil {
-		_ = os.Remove(newPath)
+	if err := root.Rename(newRel, rel); err != nil {
+		_ = root.Remove(newRel)
 		return fmt.Errorf("rename into place: %w", err)
 	}
 
 	// fsync the parent directory so the rename survives a power loss
 	// (POSIX requires the directory entry change to be flushed in a
-	// separate fsync from the file's data fsync).
-	dirF, err := os.Open(dir)
+	// separate fsync from the file's data fsync). Best-effort: the rename
+	// already committed, so a failure does not fail the request but is
+	// logged so a durability problem is visible. EINVAL means the filesystem
+	// does not support directory fsync.
+	dirF, err := root.Open(filepath.Dir(rel))
 	if err != nil {
-		// Non-fatal — the rename committed; we just couldn't fsync the
-		// directory. Worth logging but not failing the request.
+		slog.Warn("open parent directory after atomic write", "path", p, "err", err)
 		return nil
 	}
 	defer func() { _ = dirF.Close() }()
-	if err := dirF.Sync(); err != nil {
-		// Best-effort; on filesystems where directory fsync is a no-op
-		// this can return EINVAL. Don't fail the request.
-		_ = err
+	if err := dirF.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) {
+		slog.Warn("fsync parent directory after atomic write", "path", p, "err", err)
 	}
 	return nil
 }

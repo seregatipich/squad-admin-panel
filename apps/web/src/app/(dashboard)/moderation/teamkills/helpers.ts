@@ -1,3 +1,12 @@
+import {
+  isArrayOf,
+  isFiniteNumber,
+  isNullableNumber,
+  isNullableString,
+  isRecord,
+} from '@/lib/json-guards';
+import { moderationActionLabel } from '@/lib/moderation-actions';
+
 export const TEAMKILL_SORTS = ['tk_7d', 'tk_30d', 'total'] as const;
 export type TeamkillSort = (typeof TEAMKILL_SORTS)[number];
 export type TeamkillOrder = 'asc' | 'desc';
@@ -44,6 +53,63 @@ export interface TeamkillPlayerResponse {
   recent: TeamkillPlayerEvent[];
 }
 
+const SUMMARY_COUNT_FIELDS = [
+  'tk_total',
+  'tk_7d',
+  'tk_30d',
+  'victim_of_tk_total',
+  'moderation_total',
+] as const;
+const SUMMARY_NULLABLE_FIELDS = [
+  'current_name',
+  'steam_id64',
+  'eos_id',
+  'last_tk_at',
+  'last_moderation_at',
+  'last_moderation_type',
+] as const;
+
+function isSummaryRow(value: unknown): value is TeamkillSummaryRow {
+  return (
+    isRecord(value) &&
+    typeof value.player_id === 'string' &&
+    SUMMARY_COUNT_FIELDS.every((field) => isFiniteNumber(value[field])) &&
+    SUMMARY_NULLABLE_FIELDS.every((field) => isNullableString(value[field]))
+  );
+}
+
+function isEventPlayer(value: unknown): boolean {
+  return (
+    value === null ||
+    (isRecord(value) && typeof value.player_id === 'string' && isNullableString(value.current_name))
+  );
+}
+
+function isPlayerEvent(value: unknown): value is TeamkillPlayerEvent {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    typeof value.server_id === 'string' &&
+    isNullableNumber(value.match_id) &&
+    isNullableString(value.weapon) &&
+    isNullableString(value.occurred_at) &&
+    (value.role === 'attacker' || value.role === 'victim') &&
+    isEventPlayer(value.attacker) &&
+    isEventPlayer(value.victim)
+  );
+}
+
+/**
+ * Validates a decoded `GET /api/v1/players/:id/teamkills` body, returning
+ * `null` on any shape mismatch so the card shows an error instead of
+ * crashing on a drifted field (#456).
+ */
+export function parseTeamkillPlayerResponse(json: unknown): TeamkillPlayerResponse | null {
+  if (!isRecord(json)) return null;
+  if (!isSummaryRow(json.stats) || !isArrayOf(json.recent, isPlayerEvent)) return null;
+  return { stats: json.stats, recent: json.recent };
+}
+
 const SORT_LABELS: Record<TeamkillSort, string> = {
   tk_7d: '7 дней',
   tk_30d: '30 дней',
@@ -84,7 +150,13 @@ export function buildTeamkillQueryString(filters: TeamkillFilters): string {
   return params.toString();
 }
 
-export function buildTeamkillSummaryApiQuery(filters: TeamkillFilters, limit = 50): string {
+/** `GET /api/v1/moderation/teamkills` has no pagination yet — this is the whole page. */
+export const TEAMKILL_SUMMARY_LIMIT = 50;
+
+export function buildTeamkillSummaryApiQuery(
+  filters: TeamkillFilters,
+  limit = TEAMKILL_SUMMARY_LIMIT,
+): string {
   const params = new URLSearchParams();
   params.set('sort', filters.sort);
   params.set('order', filters.order);
@@ -97,7 +169,7 @@ export function buildPlayerTeamkillApiPath(playerId: string, serverId = 'all'): 
   const params = new URLSearchParams();
   if (serverId !== 'all') params.set('serverId', serverId);
   const qs = params.toString();
-  return `/api/v1/players/${playerId}/teamkills${qs ? `?${qs}` : ''}`;
+  return `/api/v1/players/${encodeURIComponent(playerId)}/teamkills${qs ? `?${qs}` : ''}`;
 }
 
 export function buildCombatLogTeamkillHref({
@@ -127,9 +199,26 @@ export function formatTeamkillDate(value: string | null): string {
   return at.toLocaleString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+interface ModerationStats {
+  moderation_total: number;
+  last_moderation_at: string | null;
+  last_moderation_type: string | null;
+}
+
+/**
+ * The latest non-reverted moderation action as «Тип · дата», with the action
+ * type translated through {@link moderationActionLabel} so no machine code
+ * reaches the Russian-only UI (#455).
+ */
+export function formatLastModeration(row: ModerationStats): string {
+  const type = row.last_moderation_type ? moderationActionLabel(row.last_moderation_type) : '—';
+  return `${type} · ${formatTeamkillDate(row.last_moderation_at)}`;
 }
 
 /**
@@ -137,13 +226,7 @@ export function formatTeamkillDate(value: string | null): string {
  * offender: the latest non-reverted action type/date plus the total count.
  * Returns "—" when the player has no moderation_actions on record.
  */
-export function formatModerationSummary(row: {
-  moderation_total: number;
-  last_moderation_at: string | null;
-  last_moderation_type: string | null;
-}): string {
+export function formatModerationSummary(row: ModerationStats): string {
   if (row.moderation_total === 0) return '—';
-  const type = row.last_moderation_type ?? '—';
-  const date = formatTeamkillDate(row.last_moderation_at);
-  return `${type} · ${date}, всего ${formatTeamkillCount(row.moderation_total)}`;
+  return `${formatLastModeration(row)}, всего ${formatTeamkillCount(row.moderation_total)}`;
 }

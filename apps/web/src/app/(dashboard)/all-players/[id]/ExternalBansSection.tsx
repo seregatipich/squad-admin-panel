@@ -10,9 +10,11 @@ import {
   CardBody,
   CardHeader,
   InlineBanner,
+  SafeExternalLink,
   Skeleton,
   StatusBadge,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   ExternalBanLocalBanModal,
   type ExternalBanLocalBanTarget,
@@ -20,7 +22,6 @@ import {
 import {
   type BanStatusLike,
   banStatusBadge,
-  formatDate,
   foundBadgeLabel,
   type PlayerExternalBansResponse,
   trustLevelLabel,
@@ -148,14 +149,12 @@ export function ExternalBansSection({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         {group.source.discord_url ? (
-                          <a
+                          <SafeExternalLink
                             href={group.source.discord_url}
-                            target="_blank"
-                            rel="noreferrer"
                             className="text-[13px] text-accent"
                           >
                             {group.source.name}
-                          </a>
+                          </SafeExternalLink>
                         ) : (
                           <span className="text-[13px] text-ink">{group.source.name}</span>
                         )}
@@ -177,8 +176,8 @@ export function ExternalBansSection({
                               {banStatusBadge(ban).label}
                             </Badge>
                             <span className="text-ink-3">
-                              {formatDate(ban.issued_at)}
-                              {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
+                              {formatDateTimeRu(ban.issued_at)}
+                              {ban.expires_at ? ` → ${formatDateTimeRu(ban.expires_at)}` : ''}
                             </span>
                           </div>
                           {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}

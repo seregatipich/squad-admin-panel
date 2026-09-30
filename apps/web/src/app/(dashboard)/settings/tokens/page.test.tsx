@@ -187,6 +187,90 @@ describe('TokensPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Отозвать токен' }));
     });
 
-    expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
+    expect(await screen.findByText('Сервер вернул ошибку (код 500).')).toBeInTheDocument();
+  });
+
+  it('explains too_many_active_tokens in Russian instead of printing the API code', async () => {
+    const fetchMock = await renderPage();
+    await screen.findByText('CI runner');
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: 'too_many_active_tokens' }), { status: 409 }),
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText('Имя'), { target: { value: 'ещё один' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Создать токен' }));
+    });
+
+    expect(await screen.findByText(/Слишком много активных токенов/)).toBeInTheDocument();
+    expect(screen.queryByText(/too_many_active_tokens/)).not.toBeInTheDocument();
+  });
+
+  it('does not poll while the tab is hidden', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = await renderPage();
+      await screen.findByText('CI runner');
+      const callsAfterMount = fetchMock.mock.calls.length;
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get');
+      visibility.mockReturnValue('hidden');
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(fetchMock.mock.calls.length).toBe(callsAfterMount);
+
+      visibility.mockReturnValue('visible');
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a poll response that was requested before the token was revoked', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = await renderPage();
+      await screen.findByText('CI runner');
+
+      // The poll's token-list request stays pending until after the revoke.
+      const original = fetchMock.getMockImplementation() as (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      let releaseStalePoll: () => void = () => {};
+      fetchMock.mockImplementation((input, init) => {
+        if (String(input) === '/api/v1/me/tokens' && !init?.method) {
+          return new Promise<Response>((resolve) => {
+            releaseStalePoll = () =>
+              resolve(new Response(JSON.stringify([ACTIVE_TOKEN]), { status: 200 }));
+          });
+        }
+        return original(input, init);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Отозвать' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Отозвать токен' });
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Отозвать токен' }));
+      });
+      expect(await screen.findByText('отозван')).toBeInTheDocument();
+
+      await act(async () => {
+        releaseStalePoll();
+      });
+      expect(screen.getByText('отозван')).toBeInTheDocument();
+      expect(screen.queryByText('активен')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

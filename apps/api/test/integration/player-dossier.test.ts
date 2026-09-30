@@ -23,7 +23,9 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
-import playerDossierRoutes from '../../src/routes/player-dossier.js';
+import playerDossierRoutes, {
+  DOSSIER_VEHICLE_ROWS_LIMIT,
+} from '../../src/routes/player-dossier.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -139,8 +141,10 @@ beforeAll(async () => {
       },
     ])
     .returning({ id: players.id });
-  playerId = inserted[0].id;
-  emptyPlayerId = inserted[1].id;
+  const [dossierPlayer, emptyPlayer] = inserted;
+  if (!dossierPlayer || !emptyPlayer) throw new Error('player insert returned no rows');
+  playerId = dossierPlayer.id;
+  emptyPlayerId = emptyPlayer.id;
 
   // Server A: one win with 4/2, server B: one loss with 1/1 → lifetime 5 kills,
   // 3 deaths, 1W/1L, winrate 0.5; serverId=A → 4 kills, 1 match, 1 win.
@@ -148,10 +152,12 @@ beforeAll(async () => {
     .insert(matches)
     .values({ serverId: SERVER_A, startedAt: new Date('2026-07-01T12:00:00Z'), winner: 'team1' })
     .returning({ id: matches.id });
+  if (!winMatch) throw new Error('winMatch: insert returned no row');
   const [lossMatch] = await h.db
     .insert(matches)
     .values({ serverId: SERVER_B, startedAt: new Date('2026-07-02T12:00:00Z'), winner: 'team1' })
     .returning({ id: matches.id });
+  if (!lossMatch) throw new Error('lossMatch: insert returned no row');
   await h.db.insert(matchPlayers).values([
     {
       matchId: winMatch.id,
@@ -188,6 +194,7 @@ beforeAll(async () => {
       isSeed: true,
     })
     .returning({ id: matches.id });
+  if (!seedMatch) throw new Error('seedMatch: insert returned no row');
   await h.db.insert(matchPlayers).values({
     matchId: seedMatch.id,
     playerId,
@@ -382,6 +389,41 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(body.kits).toEqual([]);
   });
 
+  it('caps vehicles and vehicle_kills at DOSSIER_VEHICLE_ROWS_LIMIT rows (#70)', async () => {
+    const [heavy] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(192010),
+        canonicalName: 'DossierVehicles',
+        canonicalNameNormalized: 'dossiervehicles',
+      })
+      .returning({ id: players.id });
+    if (!heavy) throw new Error('player insert failed');
+    const count = DOSSIER_VEHICLE_ROWS_LIMIT + 5;
+    await h.db.insert(playerVehicleStats).values(
+      Array.from({ length: count }, (_, i) => ({
+        playerId: heavy.id,
+        vehicleAssetId: `BP_Vehicle_${i}`,
+        kills: i,
+      })),
+    );
+    await h.db.insert(playerVehicleKills).values(
+      Array.from({ length: count }, (_, i) => ({
+        playerId: heavy.id,
+        victimVehicleAssetId: `BP_Victim_${i}`,
+        weapon: 'BP_AT4',
+        destroyedCount: i + 1,
+      })),
+    );
+
+    const res = await fetchDossier(heavy.id);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DossierBody;
+    expect(body.vehicles).toHaveLength(DOSSIER_VEHICLE_ROWS_LIMIT);
+    expect(body.vehicles[0]?.vehicle_asset_id).toBe(`BP_Vehicle_${count - 1}`);
+    expect(body.vehicle_kills).toHaveLength(DOSSIER_VEHICLE_ROWS_LIMIT);
+  });
+
   it('serializes damage as null, not 0', async () => {
     const res = await fetchDossier();
     expect(res.statusCode).toBe(200);
@@ -426,6 +468,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
         roleId,
       })
       .returning({ id: players.id });
+    if (!gated) throw new Error('gated: insert returned no row');
     const gatedCookie = await loginAs(h.db, gated.id);
 
     const res = await fetchDossier(playerId, '', gatedCookie);
@@ -452,6 +495,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
         roleId,
       })
       .returning({ id: players.id });
+    if (!selfGated) throw new Error('selfGated: insert returned no row');
     const selfCookie = await loginAs(h.db, selfGated.id);
 
     const own = await fetchDossier(selfGated.id, '', selfCookie);

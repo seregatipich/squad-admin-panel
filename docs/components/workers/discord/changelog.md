@@ -1,5 +1,67 @@
 # Changelog — worker-discord
 
+## 2026-09-28
+
+### Fixed
+
+- Шаблон с плейсхолдером-именем свойства прототипа (`{constructor}`, `{__proto__}`) больше не роняет отправку, а поле без значения (например, `{steam_id64}` у игрока только с EOS) и слишком длинный текст больше не дают HTTP 400 от Discord: это исправлено в `renderDiscordTemplate` из `@squad/shared-config` (#52).
+
+## 2026-09-28 — consumer groups on new and re-created streams (#60)
+
+### Fixed
+
+- A stream discovered after the loop started gets its consumer group at `0`, not `$`, so the first events of a new server's `events:server:<id>` stream (including the XADD that created it) are delivered. Streams present on the first discovery still start at `$`.
+- `NOGROUP` from the multiplexed `XREADGROUP` clears the known-stream cache and re-creates the groups; a deleted and re-created stream no longer stops reading every stream until a restart.
+
+- #883: the notify loop discovers streams (`SCAN events:server:*`) and runs the `XAUTOCLAIM` sweep every 30 s instead of on every poll, and no longer writes a 24-hour dedup key for event types Discord never renders.
+- #1292: a failing `XGROUP CREATE` (e.g. `LOADING` after a Redis restart) no longer ends the notify or role-sync loop — it is retried, and a `NOGROUP` read error re-creates the group; if a loop still rejects, the worker exits 1 instead of heartbeating as healthy. The Redis client now waits for the ready check. New notify groups start at `0`, so events published before a stream was discovered are delivered.
+
+## 2026-09-28 — reliability fixes (#62)
+
+### Fixed
+
+- Notify no longer acknowledges an entry whose delivery failed for any webhook:
+  the entry stays pending and is retried by the reclaim sweep (up to
+  `MAX_DELIVERY_ATTEMPTS` = 10), and a per-webhook ledger
+  (`dedup:<group>:<event_id>:<webhook_id>`) keeps a retry from re-posting to
+  webhooks that already got the embed. `deliverEnvelope` takes an optional
+  `WebhookDeliveryLedger`.
+- A `NOGROUP` answer (stream deleted and recreated) now evicts the
+  consumer-group cache so the group is recreated instead of stalling every
+  stream; group creation failures in both consumers are retried inside the
+  loop instead of ending it.
+- A loop that returns or throws before shutdown now exits the process with
+  code 1 instead of leaving a dead loop behind a green heartbeat.
+- Notify and role sync each use their own Redis connection
+  (`redis.duplicate()`), so one loop's blocking `XREADGROUP` no longer delays
+  the other loop's commands or the heartbeat.
+- Webhook POSTs time out after 10 s (`DEFAULT_WEBHOOK_TIMEOUT_MS`), a 429
+  asking to wait longer than 60 s (`MAX_RETRY_AFTER_MS`) fails fast, and the
+  retry sleep is interrupted by shutdown.
+- `fetchGuildMemberRoles` retries a 429 after `Retry-After` and reports
+  `rate_limited` when the retries run out, instead of `Discord вернул 429`.
+- `reconcileLinkedPlayers` loads mappings and link/role rows once per sweep
+  (two queries instead of three per player), accepts `{ shouldStop }` to stop
+  between players, and full-reconcile requests read in one batch are
+  coalesced into a single sweep.
+
+## 2026-09-30 — bounded REST calls and first-event delivery (#92)
+
+### Fixed
+
+- A per-server event stream discovered after the worker started gets its consumer group at `0`
+  (was `$`), so the events written before discovery are no longer skipped.
+- A single-player role-sync request for an unlinked player or a non-guild-member no longer resets
+  the published role-sync status to `ok`.
+
+### Changed
+
+- Discord HTTP calls carry a 10 s timeout; a `Retry-After` above 30 s is reported as
+  `rate_limited` instead of being waited out, and a channel-rename 429 is not retried.
+- The encrypted-blob column is validated (`{ v: 1, kv, iv, tag, ct }`) before decrypting.
+- `DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS` and `DISCORD_ROLE_SYNC_RECONCILE_MS` must be positive
+  integers; a bad value fails startup instead of silently disabling reclaim or reconciliation.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed

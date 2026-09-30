@@ -139,6 +139,9 @@ describe('RCON chat broadcasts', () => {
         steam_id64: STEAM,
         eos_id: EOS,
         message: 'hello panel',
+        // The panel's «Источник» filter keys off this field (#470) — RCON
+        // broadcasts must be labeled 'rcon', not the log-tailer's default.
+        source: 'rcon',
       });
     } finally {
       await supervisor.stop();

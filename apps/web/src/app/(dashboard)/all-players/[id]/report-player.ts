@@ -60,3 +60,20 @@ export function mapUploadError(status: number, errorCode?: string): string {
       return `Ошибка загрузки (HTTP ${status})`;
   }
 }
+
+const REPORT_ERROR_TEXT: Record<string, string> = {
+  server_not_found: 'Сервер не найден — обновите список и выберите снова.',
+  target_not_found: 'Игрок не найден.',
+  media_not_found: 'Одно из вложений удалено — уберите его и приложите заново.',
+};
+
+/**
+ * Maps a `POST /api/v1/reports` failure to a Russian message (#466), the
+ * counterpart of {@link mapUploadError} for the submission itself.
+ */
+export function mapReportError(status: number, errorCode?: string): string {
+  if (status === 401) return 'Сессия истекла, перезайдите в панель';
+  if (status === 403) return 'Нет доступа к отправке жалоб';
+  if (errorCode && REPORT_ERROR_TEXT[errorCode]) return REPORT_ERROR_TEXT[errorCode];
+  return `Ошибка HTTP ${status}`;
+}

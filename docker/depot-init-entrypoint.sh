@@ -4,7 +4,12 @@ set -e
 # runs as uid 1001 (steam) and silently ignores force_install_dir if the
 # target isn't writable — the classic "Missing configuration" error.
 if [ -d /depot ]; then
-  chown -R 1001:1001 /depot 2>/dev/null || true
+  # Recursing over every file on each run is a full-tree walk over what can be
+  # tens of GB; only the files a previous run (or the bind mount itself)
+  # didn't already leave as 1001:1001 need touching. Errors are no longer
+  # swallowed so a real permission problem surfaces immediately instead of as
+  # a later, unrelated steamcmd "Missing configuration" failure.
+  find /depot ! -user 1001 -exec chown 1001:1001 {} +
 fi
 runuser -u steam -- /home/steam/steamcmd/steamcmd.sh "$@"
 # Squad's depot ships SquadGame/ServerConfig/ but NOT SquadGame/Saved/;

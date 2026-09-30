@@ -10,7 +10,7 @@ const TEST_TIMEOUT_MS = 15_000;
 function presence(overrides: Partial<PresenceResponse> = {}): PresenceResponse {
   return {
     totals: { online_seconds: 0, boost_seconds: 0, queue_seconds: 0, seed_seconds: 7440 },
-    bonus: { formula: 'online + 2×boost', value_seconds: 0 },
+    bonus: { formula: 'online + 2×boost', value_seconds: 3600 },
     by_server: [
       {
         server_id: 's1',
@@ -74,6 +74,50 @@ describe('PresenceSection', () => {
 
       expect(await screen.findByText(/сек сид-времени/)).toBeInTheDocument();
       expect(screen.getByText('2ч 4м')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Regression (#452): the tile was titled «Бонусы» — which the economy
+  // balance is not — and its hint came from a client-side copy of the formula.
+  it(
+    'labels the weighted-time tile honestly and takes its formula from the API',
+    async () => {
+      stubFetch(presence({ bonus: { formula: 'online + 3×boost', value_seconds: 3600 } }));
+      render(<PresenceSection playerId="player-seed" />);
+
+      expect(await screen.findByText('Взвешенное время')).toBeInTheDocument();
+      expect(screen.getByText(/online \+ 3×boost/)).toBeInTheDocument();
+      expect(screen.queryByText('Бонусы')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Regression (#451): «Повторить» bypassed the effect and its cancellation.
+  it(
+    'retries a failed load through the effect',
+    async () => {
+      let failing = true;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          Promise.resolve(
+            /\/presence$/.test(url) && !failing
+              ? new Response(JSON.stringify(presence()), { status: 200 })
+              : new Response(null, { status: /\/presence$/.test(url) ? 500 : 404 }),
+          ),
+        ),
+      );
+      render(<PresenceSection playerId="player-seed" />);
+
+      await screen.findByText('Не удалось загрузить присутствие');
+      failing = false;
+      const banner = screen.getByText('Не удалось загрузить присутствие').closest('[role]');
+      fireEvent.click(
+        within((banner as HTMLElement) ?? document.body).getByRole('button', { name: 'Повторить' }),
+      );
+
+      expect(await screen.findByText(/сек сид-времени/)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

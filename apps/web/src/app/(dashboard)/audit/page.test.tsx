@@ -14,8 +14,10 @@ import AuditPage from './page';
 const LIST_ITEM = {
   id: '1',
   created_at: '2026-07-23T10:00:00Z',
-  actor_user_id: null,
   actor_kind: 'system',
+  actor_player_id: null,
+  actor_token_id: null,
+  actor_system_label: 'panel',
   action_type: 'server.create',
   target_type: 'server',
   target_id: 'srv-1',
@@ -98,5 +100,39 @@ describe('AuditPage — verify chain', () => {
     fireEvent.click(actionCell);
 
     await waitFor(() => expect(document.body.textContent).toContain('a'.repeat(64)));
+  });
+
+  it('skips the poll tick while the tab is hidden (#488)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = stubFetch({ ok: true, checked: 1, broken_at: null, reason: null });
+      render(<AuditPage />);
+      await vi.waitFor(() => expect(screen.getByText('server.create')).toBeInTheDocument());
+
+      const listCallsBefore = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/audit?'),
+      ).length;
+      expect(listCallsBefore).toBe(1);
+
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(6000);
+
+      const listCallsWhileHidden = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/audit?'),
+      ).length;
+      expect(listCallsWhileHidden).toBe(listCallsBefore);
+
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      await vi.advanceTimersByTimeAsync(6000);
+
+      const listCallsAfterVisible = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/audit?'),
+      ).length;
+      expect(listCallsAfterVisible).toBeGreaterThan(listCallsBefore);
+    } finally {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      vi.useRealTimers();
+    }
   });
 });

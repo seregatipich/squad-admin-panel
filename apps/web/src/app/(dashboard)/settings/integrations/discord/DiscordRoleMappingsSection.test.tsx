@@ -282,6 +282,24 @@ describe('DiscordRoleMappingsSection', () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
+  it('shows an error and stops the skeleton when the list request rejects (#706)', async () => {
+    vi.stubGlobal('fetch', mockFetch({ list: () => Promise.reject(new Error('offline')) }));
+    render(<DiscordRoleMappingsSection />);
+
+    expect(await screen.findByText('Не удалось загрузить маппинги ролей')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Загрузка маппингов')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a network error from a mutation instead of failing silently (#706)', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', mockFetch({ reconcile: () => Promise.reject(new Error('offline')) }));
+    render(<DiscordRoleMappingsSection />);
+
+    await user.click(await screen.findByRole('button', { name: /синхронизировать/i }));
+
+    expect(await screen.findByText(/Ошибка сети: offline/)).toBeInTheDocument();
+  });
+
   it('does not offer the Owner role as a mapping target', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<DiscordRoleMappingsSection />);

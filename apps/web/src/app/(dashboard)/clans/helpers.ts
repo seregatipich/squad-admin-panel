@@ -1,5 +1,16 @@
 export type BadgeTone = 'neutral' | 'danger' | 'warning';
 
+/** A server option for the primary-server and match-filter selects, shared by both clan pages. */
+export interface ServerOption {
+  id: string;
+  display_name: string;
+}
+
+/** The subset of `/api/v1/me` both clan pages need to gate the "manage clans" UI. */
+export interface MeResponse {
+  can_manage_clans: boolean;
+}
+
 export interface PriorityBadge {
   label: string;
   tone: BadgeTone;

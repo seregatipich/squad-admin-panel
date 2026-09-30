@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import {
   analyticsAggregatesSchema,
   computeAnalyticsAggregates,
-  escapeCsvField,
   POPULAR_LIMIT_DEFAULT,
   POPULAR_LIMIT_MAX,
   resolveWindow,
@@ -33,9 +33,7 @@ export type PublicStatsPayload = z.infer<typeof publicStatsResponse>;
 function toCsv(payload: PublicStatsPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
   };
   push('meta', 'from', payload.from);
   push('meta', 'to', payload.to);
@@ -56,13 +54,36 @@ function toCsv(payload: PublicStatsPayload): string {
   return `${lines.join('\r\n')}\r\n`;
 }
 
+/** Seconds a computed public-stats payload is served from Redis. */
+export const PUBLIC_STATS_CACHE_TTL_SECONDS = 300;
+/** Requests per minute per client IP, on each of the two public-stats routes. */
+export const PUBLIC_STATS_RATE_LIMIT = 30;
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Builds the payload for a window, through a Redis cache (#30, finding #246):
+ * the route is anonymous and every miss costs five aggregate queries, so the
+ * window is widened to whole hours (start floored, end ceiled) and the result
+ * cached under that key for {@link PUBLIC_STATS_CACHE_TTL_SECONDS}. Without
+ * the rounding the default window (`to = now`) would never hit the cache. A
+ * Redis failure only costs the cache — the payload is still computed.
+ */
 async function buildPayload(
   app: FastifyInstance,
   query: z.infer<typeof publicStatsQuery>,
 ): Promise<PublicStatsPayload> {
-  const { from, to } = resolveWindow(query.from, query.to);
-  const fromIso = from.toISOString();
-  const toIso = to.toISOString();
+  const window = resolveWindow(query.from, query.to);
+  const fromIso = new Date(Math.floor(window.from.getTime() / HOUR_MS) * HOUR_MS).toISOString();
+  const toIso = new Date(Math.ceil(window.to.getTime() / HOUR_MS) * HOUR_MS).toISOString();
+  const cacheKey = `public-stats:v1:${fromIso}:${toIso}:${query.limit}`;
+
+  try {
+    const cached = await app.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as PublicStatsPayload;
+  } catch (err) {
+    app.log.warn({ err }, 'public-stats: cache read failed');
+  }
 
   const aggregates = await computeAnalyticsAggregates(app, {
     serverId: null,
@@ -70,22 +91,36 @@ async function buildPayload(
     toIso,
     limit: query.limit,
   });
+  const payload: PublicStatsPayload = { from: fromIso, to: toIso, ...aggregates };
 
-  return { from: fromIso, to: toIso, ...aggregates };
+  try {
+    await app.redis.set(cacheKey, JSON.stringify(payload), 'EX', PUBLIC_STATS_CACHE_TTL_SECONDS);
+  } catch (err) {
+    app.log.warn({ err }, 'public-stats: cache write failed');
+  }
+  return payload;
 }
+
+const publicRouteConfig = {
+  audit: false,
+  public: true,
+  rateLimit: { max: PUBLIC_STATS_RATE_LIMIT, timeWindow: '1 minute' },
+} as const;
 
 /**
  * Public, unauthenticated stats portal. Serves a curated, PII-free aggregate
  * over network-wide match/session data (peak concurrent players by hour,
  * match outcomes, and popular maps/layers) — no session, no permissions
  * check, and no player- or server-identifying fields in the response.
+ * Responses are cached per hour-aligned window and each route carries its own
+ * per-IP rate limit, so anonymous traffic cannot keep Postgres busy.
  */
 const publicStatsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   fast.get(
     '/api/v1/public/stats',
-    { config: { audit: false, public: true }, schema: { querystring: publicStatsQuery } },
+    { config: publicRouteConfig, schema: { querystring: publicStatsQuery } },
     async (req, reply) => {
       const payload = await buildPayload(app, req.query);
 
@@ -101,7 +136,7 @@ const publicStatsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/public/stats.csv',
-    { config: { audit: false, public: true }, schema: { querystring: publicStatsQuery } },
+    { config: publicRouteConfig, schema: { querystring: publicStatsQuery } },
     async (req, reply) => {
       const payload = await buildPayload(app, req.query);
       void reply.header('content-type', 'text/csv; charset=utf-8');

@@ -1,8 +1,10 @@
-import { gameVoteBallots, gameVotes, playerNameHistory, players, servers } from '@squad/db/schema';
+import { gameVoteBallots, gameVotes, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
+import { playerNameMatch } from '../lib/player-name-search.js';
 
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
@@ -37,22 +39,6 @@ type OrderDir = z.infer<typeof orderSchema>;
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 interface Cursor {
@@ -126,28 +112,7 @@ function serializeVote(row: VoteListRow) {
 const votesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolveInitiatorIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    const pattern = `%${escapeLike(normalized)}%`;
-
-    const canonicalRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    for (const row of canonicalRows) ids.add(row.id);
-
-    const historyRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of historyRows) ids.add(row.id);
-
-    return Array.from(ids);
-  }
-
-  async function buildFilters(query: FilterInput): Promise<{ clauses: SQL[]; empty: boolean }> {
+  function buildFilters(query: FilterInput): SQL[] {
     const clauses: SQL[] = [];
 
     const serverIds = asArray(query.serverId);
@@ -165,12 +130,11 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
     if (query.initiatorPlayerId) {
       clauses.push(eq(gameVotes.initiatorPlayerId, query.initiatorPlayerId));
     } else if (query.initiatorQuery) {
-      const initiatorIds = await resolveInitiatorIds(query.initiatorQuery);
-      if (initiatorIds.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(gameVotes.initiatorPlayerId, initiatorIds));
+      const byName = playerNameMatch(gameVotes.initiatorPlayerId, query.initiatorQuery);
+      clauses.push(byName ?? sql`false`);
     }
 
-    return { clauses, empty: false };
+    return clauses;
   }
 
   function listSelection() {
@@ -209,14 +173,13 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { querystring: listQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const { order, limit } = req.query;
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { items: [], next_cursor: null, limit };
+      const clauses = buildFilters(req.query);
 
       if (req.query.cursor) {
         const cursor = decodeCursor(req.query.cursor);
@@ -252,13 +215,15 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes/count',
-    { schema: { querystring: countQuery }, config: { audit: false } },
+    {
+      schema: { querystring: countQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const { clauses, empty } = await buildFilters(req.query);
-      if (empty) return { total: 0 };
+      const clauses = buildFilters(req.query);
 
       const rows = await app.db
         .select({ total: sql<number>`count(*)::int` })
@@ -270,11 +235,11 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    {
+      schema: { params: idParam },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const voteRows = await listSelection().where(eq(gameVotes.id, req.params.id)).limit(1);
       const vote = voteRows[0];
       if (!vote) {

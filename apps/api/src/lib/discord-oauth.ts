@@ -17,6 +17,12 @@ const CURRENT_USER_ENDPOINT = 'https://discord.com/api/users/@me';
 /** Only the identity is requested — no guilds, no email. */
 export const DISCORD_OAUTH_SCOPE = 'identify';
 
+/**
+ * Upper bound on each Discord HTTP call. A stalled Discord would otherwise hold
+ * the callback request and its socket open until undici's multi-minute defaults.
+ */
+export const DISCORD_HTTP_TIMEOUT_MS = 10_000;
+
 /** Path the Discord application must have registered as its redirect URI. */
 export const DISCORD_CALLBACK_PATH = '/api/v1/auth/discord/callback';
 
@@ -38,10 +44,14 @@ export interface ExchangeCodeDeps {
   clientSecret: string;
   redirectUri: string;
   fetch?: typeof fetch;
+  /** Per-request timeout; defaults to {@link DISCORD_HTTP_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }
 
 export interface FetchDiscordUserDeps {
   fetch?: typeof fetch;
+  /** Per-request timeout; defaults to {@link DISCORD_HTTP_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }
 
 /**
@@ -73,7 +83,8 @@ export function buildAuthorizeUrl(input: BuildAuthorizeUrlInput): string {
  * `if (!deps.apiKey) return null` guard so an unconfigured panel degrades
  * instead of emitting a doomed request.
  *
- * @throws when Discord answers non-2xx or omits `access_token`.
+ * @throws when Discord answers non-2xx, omits `access_token`, or does not
+ *   answer within `deps.timeoutMs`.
  */
 export async function exchangeCode(code: string, deps: ExchangeCodeDeps): Promise<string | null> {
   if (!deps.clientId || !deps.clientSecret) return null;
@@ -91,6 +102,7 @@ export async function exchangeCode(code: string, deps: ExchangeCodeDeps): Promis
       Authorization: `Basic ${basic}`,
     },
     body: body.toString(),
+    signal: AbortSignal.timeout(deps.timeoutMs ?? DISCORD_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`discord token exchange HTTP ${res.status}`);
   const json = (await res.json()) as { access_token?: unknown };
@@ -103,7 +115,8 @@ export async function exchangeCode(code: string, deps: ExchangeCodeDeps): Promis
 /**
  * Reads the authorizing user's identity with the freshly issued access token.
  *
- * @throws when Discord answers non-2xx or the payload carries no usable `id`.
+ * @throws when Discord answers non-2xx, the payload carries no usable `id`,
+ *   or Discord does not answer within `deps.timeoutMs`.
  */
 export async function fetchDiscordUser(
   accessToken: string,
@@ -112,6 +125,7 @@ export async function fetchDiscordUser(
   const f = deps.fetch ?? fetch;
   const res = await f(CURRENT_USER_ENDPOINT, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(deps.timeoutMs ?? DISCORD_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`discord users/@me HTTP ${res.status}`);
   const json = (await res.json()) as {

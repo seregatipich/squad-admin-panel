@@ -383,6 +383,39 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     expect(resp.json()).toMatchObject({ recipients: [] });
     expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
   });
+
+  // #303: this route used to always answer 200 {ok:true} even when every
+  // recipient failed, unlike /broadcast and /players/:id/message, which
+  // answer 502 on a full failure.
+  it('502s when every recipient fails to be delivered', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValue({
+      attempted: false,
+      reason: 'worker_not_connected',
+    });
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    await h.redis.set(
+      `rcon:roster:${serverId}`,
+      storedRoster(serverId, [
+        rosterEntry({ eos_id: 'eos-c1', name: 'Echo', team_id: 1, squad_id: 5 }),
+      ]),
+    );
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/squads/5/message?team_id=1`,
+      headers: { cookie },
+      payload: { message: 'anyone there?' },
+    });
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'squad_message_failed' });
+
+    const audit = await assertAuditRow(h, {
+      action: 'server.squad_message',
+      resource: 'server',
+      targetId: serverId,
+    });
+    expect(audit.statusCode).toBe(502);
+  });
 });
 
 describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {

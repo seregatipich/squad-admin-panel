@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto';
-import { banAppeals, moderationActions, players } from '@squad/db/schema';
+import { createHash, randomBytes } from 'node:crypto';
+import { banAppeals, moderationActions } from '@squad/db/schema';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -28,11 +28,21 @@ const IP_DAILY_MAX = 10;
 const STEAM_DAILY_MAX = 3;
 const DAY_SECONDS = 86_400;
 
+/**
+ * The tracking token is a bearer credential for the public status page, so
+ * only its sha256 hex is stored (`ban_appeals.tracking_token_hash`, #1084); a
+ * database dump or backup therefore reveals no usable token.
+ */
+function hashTrackingToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 /** Postgres unique_violation — the partial open-appeal unique index tripped. */
 const PG_UNIQUE_VIOLATION = '23505';
 
 const submitBody = z.object({
-  steam_id64: z.string().regex(STEAM_ID64_RE),
+  /** Optional echo of the account being appealed; must match the Steam login. */
+  steam_id64: z.string().regex(STEAM_ID64_RE).optional(),
   body: z.string().trim().min(BODY_MIN).max(BODY_MAX),
   contact: z.string().trim().max(CONTACT_MAX).optional(),
   moderation_action_id: z.string().uuid().optional(),
@@ -41,20 +51,25 @@ const submitBody = z.object({
 const tokenParams = z.object({ token: z.string().min(TOKEN_MIN).max(TOKEN_MAX) });
 
 /**
- * Public, unauthenticated half of the ban-appeal portal (MOD-5, #62).
+ * Player-facing half of the ban-appeal portal (MOD-5, #62).
  *
- * A banned player has no panel session by definition, so both routes here are
- * anonymous; they follow the shape of the public whitelist-application portal
- * (`whitelist-applications.ts`): `config.audit: false` plus a declarative rate
- * limit, self-auditing through an explicit {@link writeAuditEntry} with a
- * `system`/`http-anonymous` actor (the `audit_log_actor_kind` check constraint
- * only accepts `steam` with an actor player or `system` with a label).
+ * Submitting requires proving ownership of the appealed account: the player
+ * signs in through Steam OpenID (a banned player without a panel role gets a
+ * `self_service` session, see `lib/authenticated-player.ts`), and the appeal
+ * is filed for that session's SteamID64. An anonymous caller gets `401`, and
+ * a `steam_id64` in the body that differs from the login gets
+ * `403 steam_id_mismatch` (#40, finding #234): before this, anyone could open
+ * an appeal in a victim's name, keep its tracking token, block the victim's
+ * own appeal with `409` and burn their per-SteamID daily quota. The `409
+ * appeal_already_open` answer now only ever reaches the account's owner.
  *
- * Both routes are deliberately blind oracles. Submitting answers `201` for a
- * banned player, an unbanned player and a SteamID64 the panel has never seen
- * alike, so the portal cannot be walked to discover who is banned; the status
- * route projects only the five applicant-facing fields and answers a single
- * `404 appeal_not_found` for both an unknown and somebody else's token.
+ * Submission is audited through an explicit {@link writeAuditEntry} with the
+ * verified player as a `steam` actor. Submitting still answers `201` whether
+ * or not the player holds an active ban, so the portal does not reveal ban
+ * state. The status route stays anonymous — the tracking token is the
+ * credential — and projects only the five applicant-facing fields, answering
+ * a single `404 appeal_not_found` for both an unknown and somebody else's
+ * token.
  */
 const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -114,33 +129,39 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: submitBody },
       config: {
-        audit: false,
-        public: true,
+        audit: 'manual',
+        selfService: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
     },
     async (req, reply) => {
       const ip = req.ip ?? null;
-      const steamId64 = BigInt(req.body.steam_id64);
+      // The global auth hook already answers 401 without a session.
+      // biome-ignore lint/style/noNonNullAssertion: the route is not `public`
+      const user = req.user!;
+      if (user.steamId64 == null) {
+        reply.code(403);
+        return { error: 'steam_login_required' };
+      }
+      const steamId64 = BigInt(user.steamId64);
+      if (req.body.steam_id64 !== undefined && BigInt(req.body.steam_id64) !== steamId64) {
+        reply.code(403);
+        return { error: 'steam_id_mismatch' };
+      }
 
       if (ip && (await overDailyLimit(`appeal-rl:ip:${ip}`, IP_DAILY_MAX))) {
         reply.code(429);
         return { error: 'rate_limited' };
       }
-      if (await overDailyLimit(`appeal-rl:steam:${req.body.steam_id64}`, STEAM_DAILY_MAX)) {
+      if (await overDailyLimit(`appeal-rl:steam:${steamId64}`, STEAM_DAILY_MAX)) {
         reply.code(429);
         return { error: 'rate_limited' };
       }
 
-      const [player] = await app.db
-        .select({ id: players.id })
-        .from(players)
-        .where(eq(players.steamId64, steamId64))
-        .limit(1);
-
-      const moderationActionId = player
-        ? await resolveActiveBanId(player.id, req.body.moderation_action_id)
-        : null;
+      const moderationActionId = await resolveActiveBanId(
+        user.playerId,
+        req.body.moderation_action_id,
+      );
 
       const trackingToken = randomBytes(24).toString('base64url');
 
@@ -149,13 +170,13 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
         const [inserted] = await app.db
           .insert(banAppeals)
           .values({
-            playerId: player?.id ?? null,
+            playerId: user.playerId,
             moderationActionId,
             steamId64,
             body: req.body.body,
             contact: req.body.contact?.trim() || null,
             status: 'pending',
-            trackingToken,
+            trackingTokenHash: hashTrackingToken(trackingToken),
             submitterIp: ip,
           })
           .returning({
@@ -178,7 +199,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await writeAuditEntry(app.db, {
-        actor: { kind: 'system', label: 'http-anonymous' },
+        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: ip,
         actionType: 'appeal.create',
         targetType: 'ban_appeal',
@@ -188,7 +209,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
           requestId: req.id,
           method: req.method,
           url: req.url,
-          steam_id64: req.body.steam_id64,
+          steam_id64: String(steamId64),
         },
         statusCode: 201,
       });
@@ -229,7 +250,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
           decisionNote: banAppeals.decisionNote,
         })
         .from(banAppeals)
-        .where(eq(banAppeals.trackingToken, req.params.token))
+        .where(eq(banAppeals.trackingTokenHash, hashTrackingToken(req.params.token)))
         .limit(1);
       if (!row) {
         reply.code(404);

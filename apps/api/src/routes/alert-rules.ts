@@ -15,8 +15,54 @@ const ALERT_RULE_TYPES = [
   'custom',
 ] as const;
 const ALERT_CHANNELS = ['email', 'webpush'] as const;
+// Mirrors the alert_events_severity_chk DB constraint (packages/db/src/schema/alert-rules.ts).
+const ALERT_EVENT_SEVERITIES = ['info', 'warning', 'critical'] as const;
 
 const configSchema = z.record(z.unknown());
+
+interface ConfigIssue {
+  path: string[];
+  message: string;
+}
+
+/**
+ * Per-type config requirements the alert engine relies on. A rule whose config
+ * fails them never fires (the engine silently returns null), so both create
+ * and update (#81) must reject such a config instead of storing it.
+ *
+ * @param type - the rule's type (for an update: the stored, immutable type).
+ * @param config - the candidate config object.
+ * @returns the violations; empty when the config is acceptable.
+ */
+function configIssues(type: string, config: Record<string, unknown>): ConfigIssue[] {
+  const issues: ConfigIssue[] = [];
+  if (type === 'custom') {
+    const kind = config.eventKind;
+    if (typeof kind !== 'string' || kind.trim().length === 0) {
+      issues.push({
+        path: ['config', 'eventKind'],
+        message: 'custom rules require a non-empty eventKind',
+      });
+    }
+    const severity = config.severity;
+    if (severity !== undefined && !ALERT_EVENT_SEVERITIES.includes(severity as never)) {
+      issues.push({
+        path: ['config', 'severity'],
+        message: `config.severity must be one of ${ALERT_EVENT_SEVERITIES.join(', ')}`,
+      });
+    }
+  }
+  if (type === 'unusual_activity') {
+    const threshold = config.connectThreshold;
+    if (typeof threshold !== 'number' || threshold <= 0) {
+      issues.push({
+        path: ['config', 'connectThreshold'],
+        message: 'unusual_activity rules require a positive connectThreshold',
+      });
+    }
+  }
+  return issues;
+}
 
 const createBody = z
   .object({
@@ -27,34 +73,28 @@ const createBody = z
     enabled: z.boolean().default(true),
   })
   .superRefine((value, ctx) => {
-    if (value.type === 'custom') {
-      const kind = value.config.eventKind;
-      if (typeof kind !== 'string' || kind.trim().length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['config', 'eventKind'],
-          message: 'custom rules require a non-empty eventKind',
-        });
-      }
-    }
-    if (value.type === 'unusual_activity') {
-      const threshold = value.config.connectThreshold;
-      if (typeof threshold !== 'number' || threshold <= 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['config', 'connectThreshold'],
-          message: 'unusual_activity rules require a positive connectThreshold',
-        });
-      }
+    for (const issue of configIssues(value.type, value.config)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, ...issue });
     }
   });
 
-const updateBody = z.object({
-  name: z.string().trim().min(1).max(128).optional(),
-  config: configSchema.optional(),
-  channels: z.array(z.enum(ALERT_CHANNELS)).max(2).optional(),
-  enabled: z.boolean().optional(),
-});
+const updateBody = z
+  .object({
+    name: z.string().trim().min(1).max(128).optional(),
+    config: configSchema.optional(),
+    channels: z.array(z.enum(ALERT_CHANNELS)).max(2).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const severity = value.config?.severity;
+    if (severity !== undefined && !ALERT_EVENT_SEVERITIES.includes(severity as never)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['config', 'severity'],
+        message: `config.severity must be one of ${ALERT_EVENT_SEVERITIES.join(', ')}`,
+      });
+    }
+  });
 
 const idParam = z.object({ id: z.string().uuid() });
 const historyQuery = z.object({
@@ -159,14 +199,21 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'system_rule_immutable' };
       }
-      const existing = (await app.db
-        .select()
+      const [current] = await app.db
+        .select({ type: alertRules.type })
         .from(alertRules)
         .where(eq(alertRules.id, req.params.id))
-        .limit(1)) as unknown as RuleRow[];
-      if (existing.length === 0) {
+        .limit(1);
+      if (!current) {
         reply.code(404);
         return { error: 'alert_rule_not_found' };
+      }
+      if (req.body.config !== undefined) {
+        const issues = configIssues(current.type, req.body.config);
+        if (issues.length > 0) {
+          reply.code(400);
+          return { error: 'invalid_config', issues };
+        }
       }
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (req.body.name !== undefined) updates.name = req.body.name;

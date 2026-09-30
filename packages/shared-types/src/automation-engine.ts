@@ -120,7 +120,11 @@ function matchChatKeyword(
   if (config.match === 'exact') {
     hit = haystack.trim() === needle;
   } else if (config.match === 'word') {
-    hit = new RegExp(`(^|\\W)${escapeRegExp(needle)}(\\W|$)`).test(haystack);
+    // Unicode-aware boundary: a bare `\W` (no `u` flag) counts every
+    // non-ASCII letter as a boundary, so Cyrillic keywords matched mid-word.
+    hit = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(needle)}([^\\p{L}\\p{N}_]|$)`, 'u').test(
+      haystack,
+    );
   } else {
     hit = haystack.includes(needle);
   }
@@ -157,12 +161,9 @@ function matchTimeOfDay(
   input: AutomationTriggerInput,
   config: TimeOfDayCondition,
 ): Record<string, unknown> | null {
-  let position: { minute: number; weekday: number };
-  try {
-    position = zoneMinuteAndWeekday(input.now, config.timezone);
-  } catch {
-    return null;
-  }
+  // `config.timezone` was validated as a known IANA zone when the condition
+  // was parsed (`isKnownTimeZone`), so formatting it cannot throw here.
+  const position = zoneMinuteAndWeekday(input.now, config.timezone);
   if (
     config.weekdays &&
     config.weekdays.length > 0 &&

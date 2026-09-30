@@ -1,8 +1,10 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { escapeCsvField, MAX_WINDOW_DAYS, resolveWindow } from './analytics.js';
+import { csvCell } from '../lib/csv.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { MAX_WINDOW_DAYS, resolveWindow } from './analytics.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_SECONDS = 3600;
@@ -161,13 +163,9 @@ export function toStatisticsCsv(payload: StatisticsPayload): string {
   const lines: string[] = ['section,metric,server_id,key,value'];
   const push = (section: string, metric: string, serverId: string, key: string, value: string) => {
     lines.push(
-      [
-        escapeCsvField(section),
-        escapeCsvField(metric),
-        escapeCsvField(serverId),
-        escapeCsvField(key),
-        escapeCsvField(value),
-      ].join(','),
+      [csvCell(section), csvCell(metric), csvCell(serverId), csvCell(key), csvCell(value)].join(
+        ',',
+      ),
     );
   };
 
@@ -231,18 +229,6 @@ export function toStatisticsCsv(payload: StatisticsPayload): string {
   }
 
   return `${lines.join('\r\n')}\r\n`;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 // A type alias, not an interface: `db.execute<T>` constrains T to
@@ -395,7 +381,8 @@ async function computeStatistics(
 
   // Hour-of-day has no daily-row representation, so it is computed live over the
   // window's sessions — a single pass bounded by the window, not AN-1's per-tick
-  // correlated subquery.
+  // correlated subquery. Like `recomputeServerDailyStats`, every connected mode
+  // (online, boost, seed) counts as online; only queue time is left out.
   const hourRows =
     serverIds.length === 0
       ? []
@@ -420,17 +407,30 @@ async function computeStatistics(
                      )
                    )::bigint AS seconds
             FROM player_sessions ps
+            -- Hours are clipped to the window up front: an old or stuck-open
+            -- session yields at most the window's hours, not one row per hour
+            -- of its whole lifetime (#354).
             CROSS JOIN LATERAL generate_series(
-              FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${HOUR_SECONDS})::bigint,
-              FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, now())) / ${HOUR_SECONDS})::bigint
+              GREATEST(
+                FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${HOUR_SECONDS})::bigint,
+                FLOOR(EXTRACT(EPOCH FROM ${fromDay}::date::timestamptz) / ${HOUR_SECONDS})::bigint
+              ),
+              LEAST(
+                FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, now())) / ${HOUR_SECONDS})::bigint,
+                FLOOR(EXTRACT(EPOCH FROM (${toDay}::date + 1)::timestamptz) / ${HOUR_SECONDS})::bigint - 1
+              )
             ) AS gh(hour_number)
-            WHERE ps.mode = 'online'
+            WHERE ps.mode <> 'queue'
               AND ps.server_id = ANY(string_to_array(${serverIdCsv}::text, ',')::uuid[])
               AND ps.connected_at < (${toDay}::date + 1)::timestamptz
-              AND COALESCE(ps.disconnected_at, now()) > ${fromDay}::date::timestamptz
-              AND gh.hour_number BETWEEN
-                    FLOOR(EXTRACT(EPOCH FROM ${fromDay}::date::timestamptz) / ${HOUR_SECONDS})::bigint
-                AND FLOOR(EXTRACT(EPOCH FROM (${toDay}::date + 1)::timestamptz) / ${HOUR_SECONDS})::bigint - 1
+              -- Split rather than COALESCE(disconnected_at, now()) so closed
+              -- sessions come from player_sessions_server_disconnected_idx and
+              -- open ones from player_sessions_open_idx, instead of every
+              -- session a server ever had.
+              AND (
+                ps.disconnected_at > ${fromDay}::date::timestamptz
+                OR (ps.disconnected_at IS NULL AND now() > ${fromDay}::date::timestamptz)
+              )
           ) seg
           WHERE seg.seconds > 0
           GROUP BY seg.server_id, hour

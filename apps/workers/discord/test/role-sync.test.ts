@@ -87,9 +87,12 @@ function conditionFilter(condition: unknown): (row: Record<string, unknown>) => 
 
 /**
  * Minimal drizzle stand-in covering exactly the query shapes `role-sync.ts`
- * issues: `select().from(t)`, `.where(cond)` and `.where(cond).limit(n)`.
+ * issues: `select().from(t)`, `.where(cond)`, `.where(cond).limit(n)` and the
+ * reconcile's `select({...}).from(playerDiscordLinks).leftJoin(players, …)`.
+ * `queries` counts every `select()` so the reconcile's query budget is
+ * observable.
  */
-function makeFakeDb(state: FakeDbState) {
+function makeFakeDb(state: FakeDbState, counter: { queries: number } = { queries: 0 }) {
   const rowsFor = (table: unknown): Record<string, unknown>[] => {
     if (table === discordRoleMappings)
       return state.mappings as unknown as Record<string, unknown>[];
@@ -105,10 +108,25 @@ function makeFakeDb(state: FakeDbState) {
     return Object.assign(promise, {
       where: (condition: unknown) => terminal(table, rows.filter(conditionFilter(condition))),
       limit: (n: number) => Promise.resolve(rows.slice(0, n)),
+      leftJoin: (joined: unknown) => {
+        if (table !== playerDiscordLinks || joined !== players) {
+          throw new Error('unexpected join in fake db');
+        }
+        return Promise.resolve(
+          state.links.map((link) => ({
+            playerId: link.playerId,
+            discordUserId: link.discordUserId,
+            panelRoleId: state.players.find((p) => p.id === link.playerId)?.roleId ?? null,
+          })),
+        );
+      },
     });
   };
   return {
-    select: () => ({ from: (table: unknown) => terminal(table, rowsFor(table)) }),
+    select: () => {
+      counter.queries++;
+      return { from: (table: unknown) => terminal(table, rowsFor(table)) };
+    },
     // biome-ignore lint/suspicious/noExplicitAny: minimal fake matching only what role-sync.ts calls
   } as any;
 }
@@ -387,6 +405,43 @@ describe('reconcileLinkedPlayers', () => {
       reason: 'missing_permissions',
       message: 'У бота нет права Manage Roles в Discord-гильдии.',
     });
+  });
+});
+
+describe('reconcileLinkedPlayers query budget and shutdown (#886)', () => {
+  it('loads mappings and linked players once for the whole sweep instead of 3 queries per player', async () => {
+    const links = Array.from({ length: 10 }, (_, i) => ({
+      playerId: `cccccccc-cccc-cccc-cccc-${String(i).padStart(12, '0')}`,
+      discordUserId: `80000000000000${String(i).padStart(4, '0')}`,
+    }));
+    const state = stateWith({
+      links,
+      players: links.map((l) => ({ id: l.playerId, roleId: ROLE_VIP })),
+    });
+    const discord = makeFakeDiscord({
+      members: Object.fromEntries(links.map((l) => [l.discordUserId, { roles: [] }])),
+    });
+    const counter = { queries: 0 };
+    const deps = { ...makeDeps(state, discord), db: makeFakeDb(state, counter) };
+
+    const summary = await reconcileLinkedPlayers(deps);
+
+    expect(summary.checked).toBe(10);
+    expect(summary.added).toBe(10);
+    expect(counter.queries).toBe(2);
+  });
+
+  it('stops between players once shutdown is requested', async () => {
+    const discord = makeFakeDiscord({
+      members: { [DISCORD_USER_A]: { roles: [] }, [DISCORD_USER_B]: { roles: [] } },
+    });
+    let checks = 0;
+    const summary = await reconcileLinkedPlayers(makeDeps(BASE_STATE, discord), {
+      shouldStop: () => checks++ >= 1,
+    });
+
+    expect(summary.checked).toBe(1);
+    expect(discord.calls.filter((c) => c.method === 'GET')).toHaveLength(1);
   });
 });
 

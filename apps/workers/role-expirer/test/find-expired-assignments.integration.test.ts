@@ -1,15 +1,24 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import {
   adminsCfgSyncOutbox,
+  auditLog,
   createDatabaseClient,
   enqueueAdminsCfgSyncForAllServers,
   players,
   roles,
   servers,
+  sessions,
+  vipSubscriptions,
+  vipTiers,
 } from '@squad/db';
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { clearExpiredAssignments, findExpiredAssignments } from '../src/tick.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  clearExpiredAssignments,
+  createRoleExpiryDeps,
+  findExpiredAssignments,
+  runRoleExpiryTick,
+} from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -108,7 +117,7 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         enqueued_at: NOW.toISOString(),
         request_id: 'stale-expiry-test',
       });
-      expect(cleared).toEqual({ cleared: [], enqueued: 0 });
+      expect(cleared).toEqual({ cleared: [], enqueued: 0, revokedSessionIds: new Map() });
       const [stored] = await db
         .select({ roleId: players.roleId, expiresAt: players.roleExpiresAt })
         .from(players)
@@ -157,7 +166,11 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         request_id: requestId,
       });
 
-      expect(result).toEqual({ cleared: [assignment], enqueued: activeIds.length });
+      expect(result).toEqual({
+        cleared: [assignment],
+        enqueued: activeIds.length,
+        revokedSessionIds: new Map(),
+      });
       const rows = await db
         .select({ serverId: adminsCfgSyncOutbox.serverId })
         .from(adminsCfgSyncOutbox)
@@ -169,6 +182,58 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${requestId}`);
       await db.delete(players).where(eq(players.steamId64, steamId64));
       await db.delete(servers).where(eq(servers.id, serverId));
+    }
+  });
+
+  it('writes the audit entry and deletes sessions in the same transaction as the role clear (#992)', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const steamId64 = 76561198914650000n + BigInt(randomInt(1, 1_000_000));
+    const sessionId = `role-expirer-tx-session-${playerId}`;
+    try {
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Истёкшая роль с сессией',
+        canonicalNameNormalized: 'истёкшая роль с сессией',
+        roleId: NORMAL_ROLE_ID,
+        roleExpiresAt: EXPIRED_AT,
+      });
+      await db
+        .insert(sessions)
+        .values({ id: sessionId, playerId, expiresAt: new Date('2026-08-01T00:00:00.000Z') });
+
+      const [assignment] = await findExpiredAssignments(db, NOW, 1000).then((rows) =>
+        rows.filter((row) => row.playerId === playerId),
+      );
+      if (!assignment) throw new Error('expired assignment was not scanned');
+
+      const result = await clearExpiredAssignments(db, [assignment], NOW, {
+        reason: 'player.role.expire',
+        actor_player_id: null,
+        enqueued_at: NOW.toISOString(),
+        request_id: `role-expirer-audit-tx-${randomUUID()}`,
+      });
+
+      expect(result.cleared).toEqual([assignment]);
+      expect(result.revokedSessionIds.get(playerId)).toEqual([sessionId]);
+
+      const remainingSessions = await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.playerId, playerId));
+      expect(remainingSessions).toHaveLength(0);
+
+      const auditRows = await db
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.targetId, playerId), eq(auditLog.actionType, 'player.role.expire')));
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0]?.beforeSnapshot).toMatchObject({ role_id: NORMAL_ROLE_ID });
+      expect(auditRows[0]?.afterSnapshot).toMatchObject({ role_id: null });
+    } finally {
+      await db.delete(sessions).where(eq(sessions.playerId, playerId));
+      await db.delete(players).where(eq(players.steamId64, steamId64));
     }
   });
 
@@ -203,6 +268,94 @@ describeIfDb('findExpiredAssignments against a real database', () => {
       expect(stored).toEqual({ roleId: NORMAL_ROLE_ID, roleExpiresAt: EXPIRED_AT });
     } finally {
       await db.delete(players).where(eq(players.steamId64, steamId64));
+    }
+  });
+
+  it('keeps a role that an active subscription is about to renew (regression #989)', async () => {
+    if (!db) throw new Error('database not configured');
+    const tierId = randomUUID();
+    const otherRoleId = randomUUID();
+    const steamBase = 76561198914800000n + BigInt(randomInt(1, 100_000)) * 10n;
+    const cases = {
+      renewing: { steam: steamBase, status: 'active', roleId: NORMAL_ROLE_ID, due: EXPIRED_AT },
+      cancelled: {
+        steam: steamBase + 1n,
+        status: 'cancelled',
+        roleId: NORMAL_ROLE_ID,
+        due: EXPIRED_AT,
+      },
+      otherRole: { steam: steamBase + 2n, status: 'active', roleId: otherRoleId, due: EXPIRED_AT },
+      renewsMuchLater: {
+        steam: steamBase + 3n,
+        status: 'active',
+        roleId: NORMAL_ROLE_ID,
+        due: new Date(EXPIRED_AT.getTime() + 10 * 86_400_000),
+      },
+    } as const;
+    const playerIds = Object.fromEntries(Object.keys(cases).map((key) => [key, randomUUID()]));
+    const steams = Object.values(cases).map((c) => c.steam);
+
+    try {
+      await db.insert(roles).values({ id: otherRoleId, name: `RoleExpirerSub-${otherRoleId}` });
+      await db.insert(vipTiers).values({
+        id: tierId,
+        name: `RoleExpirerSub ${tierId}`,
+        roleId: NORMAL_ROLE_ID,
+        defaultDays: 30,
+        priceBonuses: 100,
+      });
+      for (const [key, c] of Object.entries(cases)) {
+        await db.insert(players).values({
+          id: playerIds[key],
+          steamId64: c.steam,
+          canonicalName: `Подписчик ${key}`,
+          canonicalNameNormalized: `подписчик ${key}`,
+          bonusBalance: 500,
+          roleId: c.roleId,
+          roleExpiresAt: EXPIRED_AT,
+        });
+        await db.insert(vipSubscriptions).values({
+          id: randomUUID(),
+          playerId: playerIds[key] as string,
+          tierId,
+          status: c.status,
+          renewsEveryDays: 30,
+          priceBonuses: 100,
+          nextRenewalAt: c.due,
+        });
+      }
+
+      const scanned = new Set(
+        (await findExpiredAssignments(db, NOW, 1000)).map((row) => row.playerId),
+      );
+      expect(scanned.has(playerIds.renewing as string)).toBe(false);
+      expect(scanned.has(playerIds.cancelled as string)).toBe(true);
+      expect(scanned.has(playerIds.otherRole as string)).toBe(true);
+      expect(scanned.has(playerIds.renewsMuchLater as string)).toBe(true);
+
+      const notifySessionsRevoked = vi.fn(async () => undefined);
+      const realDeps = createRoleExpiryDeps(db, { del: vi.fn(), publish: vi.fn() } as never);
+      await runRoleExpiryTick({
+        ...realDeps,
+        now: NOW,
+        findExpiredAssignments: async (now) =>
+          (await realDeps.findExpiredAssignments(now)).filter(
+            (row) => row.playerId === playerIds.renewing,
+          ),
+        notifySessionsRevoked,
+        diag: { emit: vi.fn(async () => undefined) },
+      });
+      const [renewing] = await db
+        .select({ roleId: players.roleId })
+        .from(players)
+        .where(eq(players.steamId64, cases.renewing.steam));
+      expect(renewing?.roleId).toBe(NORMAL_ROLE_ID);
+      expect(notifySessionsRevoked).not.toHaveBeenCalled();
+    } finally {
+      await db.delete(vipSubscriptions).where(eq(vipSubscriptions.tierId, tierId));
+      await db.delete(players).where(inArray(players.steamId64, steams));
+      await db.delete(vipTiers).where(eq(vipTiers.id, tierId));
+      await db.delete(roles).where(eq(roles.id, otherRoleId));
     }
   });
 });

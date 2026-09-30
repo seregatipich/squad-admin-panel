@@ -2,10 +2,12 @@ package sysd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/runner"
+	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
 func TestUFWRuleAdd(t *testing.T) {
@@ -92,5 +94,20 @@ func TestUFWRuleNonZeroExit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ufw exit 1") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+// Regression for #74 (finding #421): an unsafe comment must be rejected
+// before ufw is ever invoked.
+func TestUFWRuleRejectsUnsafeComment(t *testing.T) {
+	fake := &runner.Fake{}
+	u := &UFW{R: fake}
+	for _, comment := range []string{"--force", "squad\ngame", strings.Repeat("x", 200)} {
+		if _, err := u.Rule(context.Background(), "add", "udp", 7787, comment); !errors.Is(err, validate.ErrForbidden) {
+			t.Errorf("comment %q: expected ErrForbidden, got %v", comment, err)
+		}
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatalf("ufw was invoked %d times for rejected comments", len(fake.Calls))
 	}
 }

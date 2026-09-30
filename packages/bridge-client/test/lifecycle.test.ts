@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { BRIDGE_MAX_FRAME_BYTES } from '@squad/shared-config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BridgeClient } from '../src/client.js';
+import { BridgeError } from '../src/errors.js';
 import { encodeFrame } from '../src/frame.js';
-import { BridgeError } from '../src/types.js';
 
 let server: Server;
 let socketPath: string;
@@ -532,54 +532,6 @@ describe('squad_log_retention_sweep', () => {
   });
 });
 
-describe('file_read_tail', () => {
-  it('fileReadTail sends method=file_read_tail and round-trips the response shape', async () => {
-    let receivedMethod: string | undefined;
-    let receivedParams: unknown;
-    server.on('connection', (conn) => {
-      conn.once('data', (chunk) => {
-        const size = chunk.readUInt32BE(0);
-        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
-          id: string;
-          method: string;
-          params?: unknown;
-        };
-        receivedMethod = req.method;
-        receivedParams = req.params;
-        sendFrame(conn, {
-          id: req.id,
-          ok: true,
-          result: {
-            content: 'line2\nline3\n',
-            offset: 6,
-            size: 18,
-            truncated: true,
-          },
-        });
-      });
-    });
-
-    const client = new BridgeClient({ socketPath });
-    try {
-      const result = await client.fileReadTail({
-        path: '/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/SquadGame/Saved/Logs/SquadGame.log',
-        max_bytes: 12,
-      });
-      expect(receivedMethod).toBe('file_read_tail');
-      expect(receivedParams).toEqual({
-        path: '/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/SquadGame/Saved/Logs/SquadGame.log',
-        max_bytes: 12,
-      });
-      expect(result.content).toBe('line2\nline3\n');
-      expect(result.offset).toBe(6);
-      expect(result.size).toBe(18);
-      expect(result.truncated).toBe(true);
-    } finally {
-      await client.close();
-    }
-  });
-});
-
 describe('event emission', () => {
   it('emits connected with rttMs+version+hostname on the first ping response', async () => {
     server.on('connection', (conn) => {
@@ -651,16 +603,17 @@ describe('event emission', () => {
     });
 
     const client = new BridgeClient({ socketPath });
-    const rttSamples: number[] = [];
-    client.on('rtt', (ms) => rttSamples.push(ms));
+    const rttSamples: Array<{ ms: number; method: string }> = [];
+    client.on('rtt', (ms, method) => rttSamples.push({ ms, method }));
 
     try {
       await client.ping();
       await client.ping();
       expect(rttSamples).toHaveLength(2);
       for (const sample of rttSamples) {
-        expect(typeof sample).toBe('number');
-        expect(sample).toBeGreaterThanOrEqual(0);
+        expect(typeof sample.ms).toBe('number');
+        expect(sample.ms).toBeGreaterThanOrEqual(0);
+        expect(sample.method).toBe('ping');
       }
     } finally {
       await client.close();

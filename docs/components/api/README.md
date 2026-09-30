@@ -21,14 +21,14 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 
 - Entrypoint: [`apps/api/src/index.ts`](../../../apps/api/src/index.ts) → [`server.ts`](../../../apps/api/src/server.ts) registers routes and plugins.
 - Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `permissions.ts`, `roles.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `users.ts`.
-- Plugins: [`apps/api/src/plugins/`](../../../apps/api/src/plugins/) — `audit.ts`, `auth.ts`, `bridge-heartbeat.ts`, `bridge.ts`, `database.ts`, `db-health.ts`, `error-diag.ts`, `health.ts`, `heartbeat-watch.ts`, `install-progress.ts`, `live-bus.ts`, `metrics.ts`, `orphan-sweep.ts`, `redis.ts`, `request-context.ts`, `status-reconciler.ts`, `types.ts`. `@fastify/rate-limit`, `@fastify/swagger`, and `@fastify/swagger-ui` are third-party plugins registered inline in [`server.ts`](../../../apps/api/src/server.ts) lines 176-191, not local files under this directory.
+- Plugins: [`apps/api/src/plugins/`](../../../apps/api/src/plugins/) — `audit.ts`, `auth.ts`, `bridge-heartbeat.ts`, `bridge.ts`, `database.ts`, `db-health.ts`, `error-diag.ts`, `health.ts`, `heartbeat-watch.ts`, `install-progress.ts`, `live-bus.ts`, `metrics.ts`, `orphan-sweep.ts`, `redis.ts`, `request-context.ts`, `session-prune.ts`, `status-reconciler.ts`, `types.ts`. `@fastify/rate-limit`, `@fastify/swagger`, and `@fastify/swagger-ui` are third-party plugins registered inline in [`server.ts`](../../../apps/api/src/server.ts) lines 176-191, not local files under this directory.
 - Libs: [`apps/api/src/lib/`](../../../apps/api/src/lib/) — `blame.ts` (Myers diff for config blame), `crypto.ts`, `seed-configs.ts`.
 
 ## Dependencies
 
 - Fastify 5.2 + `fastify-type-provider-zod` 4 + Zod 3.24
-- `@fastify/cookie/cors/helmet/rate-limit/websocket/swagger(-ui)`
-- Auth/crypto: `@oslojs/crypto|encoding`, `arctic` 3 (OpenID 2.0)
+- `@fastify/cookie/helmet/multipart/rate-limit/websocket/swagger(-ui)`
+- Auth: Steam OpenID 2.0 implemented in `src/lib/steam-openid.ts` with `node:crypto` (no auth library)
 - Logs/metrics: `pino` 9, `prom-client` 15
 - Redis: `ioredis` 5; HTTP egress: `undici` 8
 - DB: `drizzle-orm` 0.45 via `@squad/db`

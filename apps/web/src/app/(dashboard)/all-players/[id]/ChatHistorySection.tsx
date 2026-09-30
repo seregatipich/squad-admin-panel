@@ -22,6 +22,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -32,7 +33,6 @@ import {
   type ChatMsg,
   type ChatPage,
   EMPTY_CHAT_FILTERS,
-  formatChatTs,
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
@@ -58,6 +58,10 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const appliedRef = useRef<ChatFilters>(EMPTY_CHAT_FILTERS);
+  // Tracks the most recently started load()/loadMore() request; a response is
+  // applied only if it is still current, so a slower loadMore() can never
+  // overwrite a fresher filter-driven load() (see finding #433).
+  const requestIdRef = useRef(0);
   const serverFilterId = useId();
   const scopeFilterId = useId();
   const sourceFilterId = useId();
@@ -84,30 +88,24 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
 
   const load = useCallback(
     async (next: ChatFilters) => {
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError(null);
       try {
-        const [listRes, countRes] = await Promise.all([
-          fetch(`/api/v1/chat/messages${buildChatQuery(playerId, next)}`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-          fetch(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-        ]);
+        const listRes = await fetch(`/api/v1/chat/messages${buildChatQuery(playerId, next)}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
         if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
         const page = (await listRes.json()) as ChatPage;
+        if (requestIdRef.current !== requestId) return;
         setMessages(mergeChatPage([], page.items, false));
         setNextCursor(page.next_cursor);
-        if (countRes.ok) {
-          setMonthlyCount(((await countRes.json()) as { count: number }).count);
-        }
       } catch (e) {
+        if (requestIdRef.current !== requestId) return;
         setError((e as Error).message);
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === requestId) setLoading(false);
       }
     },
     [playerId],
@@ -119,8 +117,28 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
     void load(EMPTY_CHAT_FILTERS);
   }, [load]);
 
+  // The 30-day badge is independent of the filters (#436): it does not need
+  // to be re-fetched on every "Применить"/"Сбросить"/search, only once per
+  // player. Live chat events keep it current after that (onLiveMessage).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { count: number } | null) => {
+        if (!cancelled && body) setMonthlyCount(body.count);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId]);
+
   async function loadMore() {
     if (!nextCursor || busy) return;
+    const requestId = ++requestIdRef.current;
     setBusy(true);
     try {
       const res = await fetch(
@@ -129,12 +147,14 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const page = (await res.json()) as ChatPage;
+      if (requestIdRef.current !== requestId) return;
       setMessages((prev) => mergeChatPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (requestIdRef.current === requestId) setBusy(false);
     }
   }
 
@@ -338,7 +358,7 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
               {messages.map((message) => (
                 <TableRow key={message.id}>
                   <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
-                    {formatChatTs(message.sentAt)}
+                    {formatDateTimeRu(message.sentAt, message.sentAt)}
                   </Td>
                   <Td className="text-ink-2">{serverName(message.serverId)}</Td>
                   <Td>

@@ -1,10 +1,11 @@
 import { COPLAY_DEFAULT_MIN_OVERLAP_SECONDS, COPLAY_DEFAULT_MIN_SHARED_SESSIONS } from '@squad/db';
 import { type CoplaySettingsRow, coplaySettings } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const SINGLETON_ID = 1;
 /** Cap for both thresholds: 90 days (the co-play rolling window) in seconds, generous for the session-count threshold too. */
@@ -41,18 +42,6 @@ function serialize(row: CoplaySettingsRow | null): CoplaySettingsView {
   };
 }
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 /**
  * ALT-3 co-play noise-floor settings: the `coplay_settings` singleton read by
  * `GET /api/v1/players/:playerId/coplay` and the ALT-1 anti-signal. Reads are
@@ -83,7 +72,7 @@ const settingsCoplayRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/coplay',
     {
       schema: { body: putBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate

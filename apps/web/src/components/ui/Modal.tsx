@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useCallback, useEffect, useId, useRef } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { IconButton } from './Button';
 
 /** Ширина окна: `sm` — 420px, `md` — 560px, `lg` — 860px (дизайн-система, §7). */
@@ -56,9 +56,12 @@ export type ModalProps = {
  *
  * Окно управляемое: `open` только приказывает браузеру открыть или закрыть
  * диалог, а закрытие всегда идёт через `onClose` и обновление состояния
- * снаружи. `onClose` гарантированно вызывается **не больше одного раза за одно
- * открытие**, хотя браузер на Escape шлёт подряд два события (`cancel`, затем
- * `close`).
+ * снаружи. `onClose` вызывается **один раз на каждый жест** оператора (Escape,
+ * крестик, клик по подложке), хотя браузер на Escape может прислать подряд
+ * `cancel` и `close`. Владелец вправе проигнорировать вызов (например, пока
+ * идёт операция): окно остаётся открытым, а следующий жест снова дойдёт до
+ * `onClose`. Если браузер всё же закрыл диалог сам при `open = true`,
+ * примитив открывает его снова.
  *
  * @param dismissible Разрешить закрытие «мягкими» жестами — Escape и кликом по
  *   подложке. Ставьте `false`, когда внутри есть несохранённые данные или идёт
@@ -86,23 +89,31 @@ export function Modal({
   const descriptionId = useId();
 
   /**
-   * Открыто ли окно с точки зрения самого примитива. Флаг гасит повторные
-   * уведомления: Escape поднимает `cancel` и `close`, а закрытие через проп
-   * поднимает `close` уже после того, как снаружи всё закрыли.
+   * Последнее значение пропа `open`, видимое обработчикам нативных событий.
+   * По нему `close`, пришедший после закрытия через проп, отличается от
+   * закрытия, которое браузер сделал сам.
    */
-  const notifiedRef = useRef(open);
+  const openRef = useRef(open);
 
-  const notifyClose = useCallback(() => {
-    if (!notifiedRef.current) return;
-    notifiedRef.current = false;
-    onClose();
-  }, [onClose]);
+  /**
+   * Этот `cancel` не удалось отменить, и браузер следом пришлёт `close` того же
+   * Escape: он не должен уведомить владельца второй раз.
+   */
+  const escapeReportedRef = useRef(false);
 
+  /**
+   * Счётчик нативных закрытий при `open = true`. Его смена перезапускает
+   * эффект синхронизации, и тот снова открывает окно, если владелец отклонил
+   * закрытие (например, AlertDialog во время `busy`).
+   */
+  const [nativeCloseCount, setNativeCloseCount] = useState(0);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nativeCloseCount is a deliberate re-sync trigger, not read in the effect body
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    notifiedRef.current = open;
+    openRef.current = open;
     // `showModal()` на открытом диалоге и `close()` на закрытом бросают
     // InvalidStateError, поэтому состояние элемента проверяется до вызова.
     if (open) {
@@ -110,40 +121,59 @@ export function Modal({
     } else if (dialog.open) {
       dialog.close();
     }
-  }, [open]);
+  }, [open, nativeCloseCount]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
+    // Окно управляемое: браузер его сам не закрывает, закрывает только проп.
+    // Поэтому своего флага «уже уведомили» у примитива нет — каждый жест
+    // оператора доходит до `onClose`, даже если прошлый владелец отклонил.
     const handleCancel = (event: Event) => {
-      if (!dismissible) {
-        event.preventDefault();
-        return;
-      }
-      notifyClose();
+      event.preventDefault();
+      // Chrome не даёт отменить повторный Escape без активации пользователя.
+      escapeReportedRef.current = !event.defaultPrevented;
+      if (dismissible) onClose();
     };
-    const handleNativeClose = () => notifyClose();
+    const handleNativeClose = () => {
+      const escapeReported = escapeReportedRef.current;
+      escapeReportedRef.current = false;
+      if (!openRef.current) return;
+      if (!escapeReported && dismissible) onClose();
+      setNativeCloseCount((count) => count + 1);
+    };
 
     // Клик по `::backdrop` приходит на сам `<dialog>`: отдельного узла у
     // подложки нет. Панель занимает элемент целиком (`p-0`), поэтому
     // `target === dialog` случается только за её пределами.
+    // Выделение текста, начатое в панели и законченное над подложкой, тоже
+    // порождает `click` на `<dialog>`, поэтому нажатие внутри панели
+    // запоминается и такой `click` за закрытие не считается.
+    let pressStartedInPanel = false;
+    const handlePress = (event: Event) => {
+      pressStartedInPanel = event.target !== dialog;
+    };
     const handleSurfaceClick = (event: Event) => {
-      if (!dismissible || event.target !== dialog) return;
-      notifyClose();
+      const startedInPanel = pressStartedInPanel;
+      pressStartedInPanel = false;
+      if (!dismissible || event.target !== dialog || startedInPanel) return;
+      onClose();
     };
 
-    // События `cancel` и `close` не всплывают, поэтому все три слушателя
+    // События `cancel` и `close` не всплывают, поэтому все слушатели
     // висят на самом элементе, а не приходят пропсами React.
     dialog.addEventListener('cancel', handleCancel);
     dialog.addEventListener('close', handleNativeClose);
+    dialog.addEventListener('mousedown', handlePress);
     dialog.addEventListener('click', handleSurfaceClick);
     return () => {
       dialog.removeEventListener('cancel', handleCancel);
       dialog.removeEventListener('close', handleNativeClose);
+      dialog.removeEventListener('mousedown', handlePress);
       dialog.removeEventListener('click', handleSurfaceClick);
     };
-  }, [dismissible, notifyClose]);
+  }, [dismissible, onClose]);
 
   return (
     <dialog
@@ -178,7 +208,7 @@ export function Modal({
         <IconButton
           icon={<CloseIcon />}
           label={closeLabel}
-          onClick={notifyClose}
+          onClick={onClose}
           className="-mr-1 shrink-0"
         />
       </div>

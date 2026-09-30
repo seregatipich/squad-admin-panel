@@ -1,15 +1,23 @@
 import { randomBytes } from 'node:crypto';
-import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  configVersions,
+  players,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, desc, eq, isNotNull, isNull, like } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { maskConfigSecrets } from '../lib/config-secrets.js';
 import { encrypt, serialize } from '../lib/crypto.js';
-import { restoreConfigsFromArchive } from '../lib/server-restore.js';
-import { isExternalRuntime } from '../lib/server-runtime.js';
+import { uniqueViolationConstraint } from '../lib/pg-errors.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
+import { deletionBackupRows, restoreConfigsFromArchive } from '../lib/server-restore.js';
+import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 const idAndFilename = z.object({
@@ -53,15 +61,19 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           created_at: servers.createdAt,
           deleted_at: servers.deletedAt,
           deleted_by_player_id: servers.deletedByPlayerId,
+          deleted_by_steam_id64: players.steamId64,
           deletion_backup_marker_id: servers.deletionBackupMarkerId,
         })
         .from(servers)
+        .leftJoin(players, eq(players.id, servers.deletedByPlayerId))
         .where(isNotNull(servers.deletedAt))
         .orderBy(desc(servers.deletedAt));
       return {
         items: rows.map((r) => ({
           ...r,
           deleted_by_player_id: r.deleted_by_player_id ?? null,
+          deleted_by_steam_id64:
+            r.deleted_by_steam_id64 === null ? null : r.deleted_by_steam_id64.toString(),
         })),
         total: rows.length,
       };
@@ -82,6 +94,12 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      const deletedByPlayer = row.deletedByPlayerId
+        ? await app.db.query.players.findFirst({
+            where: eq(players.id, row.deletedByPlayerId),
+            columns: { steamId64: true },
+          })
+        : null;
       const settingsRow = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, row.id),
       });
@@ -96,12 +114,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           author_label: configVersions.authorLabel,
         })
         .from(configVersions)
-        .where(
-          and(
-            eq(configVersions.serverId, row.id),
-            like(configVersions.message, 'deletion-backup-marker%'),
-          ),
-        )
+        .where(deletionBackupRows(row.id, row.deletionBackupMarkerId))
         .orderBy(desc(configVersions.createdAt));
 
       const dedup = new Map<string, (typeof backups)[number]>();
@@ -117,6 +130,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           description: row.description,
           deleted_at: row.deletedAt,
           deleted_by_player_id: row.deletedByPlayerId ?? null,
+          deleted_by_steam_id64: deletedByPlayer?.steamId64?.toString() ?? null,
           deletion_backup_marker_id: row.deletionBackupMarkerId,
           tags: row.tags,
         },
@@ -170,9 +184,8 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         .from(configVersions)
         .where(
           and(
-            eq(configVersions.serverId, req.params.id),
+            deletionBackupRows(req.params.id, archive.deletionBackupMarkerId),
             eq(configVersions.filename, req.params.filename),
-            like(configVersions.message, 'deletion-backup-marker%'),
           ),
         )
         .orderBy(desc(configVersions.createdAt))
@@ -256,45 +269,71 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       const queryPort = req.body.query_port ?? archiveSettings.queryPort;
       const beaconPort = req.body.beacon_port ?? archiveSettings.beaconPort;
       const rconPort = req.body.rcon_port ?? archiveSettings.rconPort;
+      const restoredPorts = [gamePort, queryPort, beaconPort, rconPort];
+      if (new Set(restoredPorts).size !== restoredPorts.length) {
+        reply.code(409);
+        return { error: 'duplicate_ports', message: 'All four server ports must be distinct.' };
+      }
+      // The archived server's ports may have been reused since it was deleted
+      // (archived rows are excluded from this very check), so re-check them
+      // exactly like POST /api/v1/servers does.
+      if (await hasContainerPortConflict(app.db, restoredPorts)) {
+        reply.code(409);
+        return {
+          error: 'port_conflict',
+          message: 'One or more ports are already in use by another server.',
+        };
+      }
 
-      await app.db.transaction(async (tx) => {
-        await tx.insert(servers).values({
-          id: newId,
-          displayName,
-          slug,
-          description: archive.description,
-          status: 'pending',
-          runtime: 'container',
-          tags: archive.tags,
-          timezone: archive.timezone,
+      // The pre-check above is only the fast path: a concurrent create or
+      // restore can still take the slug before this insert, which the partial
+      // unique index servers_slug_active_key then rejects — same 409.
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(servers).values({
+            id: newId,
+            displayName,
+            slug,
+            description: archive.description,
+            status: 'pending',
+            runtime: 'container',
+            tags: archive.tags,
+            timezone: archive.timezone,
+          });
+          await tx.insert(serverSettings).values({
+            serverId: newId,
+            installPath: `${PANEL_CONFIGS_ROOT}/${newId}`,
+            gamePort,
+            queryPort,
+            beaconPort,
+            rconPort,
+            maxPlayers: archiveSettings.maxPlayers,
+            tickrate: archiveSettings.tickrate,
+            multihome: archiveSettings.multihome,
+            extraArgs: archiveSettings.extraArgs,
+            launchArgsOverride: archiveSettings.launchArgsOverride,
+            cpuAffinity: archiveSettings.cpuAffinity,
+            cpuWeight: archiveSettings.cpuWeight,
+            niceness: archiveSettings.niceness,
+            memoryHighMb: archiveSettings.memoryHighMb,
+            memoryMaxMb: archiveSettings.memoryMaxMb,
+            ioWeight: archiveSettings.ioWeight,
+          });
+          const rconPassword = randomBytes(24).toString('base64url');
+          const blob = encrypt(app.encryptionKey, rconPassword);
+          await tx.insert(serverCredentials).values({
+            serverId: newId,
+            rconPort,
+            rconPasswordEncrypted: serialize(blob),
+          });
         });
-        await tx.insert(serverSettings).values({
-          serverId: newId,
-          installPath: `${PANEL_CONFIGS_ROOT}/${newId}`,
-          gamePort,
-          queryPort,
-          beaconPort,
-          rconPort,
-          maxPlayers: archiveSettings.maxPlayers,
-          tickrate: archiveSettings.tickrate,
-          multihome: archiveSettings.multihome,
-          extraArgs: archiveSettings.extraArgs,
-          launchArgsOverride: archiveSettings.launchArgsOverride,
-          cpuAffinity: archiveSettings.cpuAffinity,
-          cpuWeight: archiveSettings.cpuWeight,
-          niceness: archiveSettings.niceness,
-          memoryHighMb: archiveSettings.memoryHighMb,
-          memoryMaxMb: archiveSettings.memoryMaxMb,
-          ioWeight: archiveSettings.ioWeight,
-        });
-        const rconPassword = randomBytes(24).toString('base64url');
-        const blob = encrypt(app.encryptionKey, rconPassword);
-        await tx.insert(serverCredentials).values({
-          serverId: newId,
-          rconPort,
-          rconPasswordEncrypted: serialize(blob),
-        });
-      });
+      } catch (err) {
+        if (uniqueViolationConstraint(err) === 'servers_slug_active_key') {
+          reply.code(409);
+          return { error: 'slug_in_use' };
+        }
+        throw err;
+      }
 
       app.liveBus.publish({
         type: 'server.restored',
@@ -356,6 +395,10 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      // An external server's configs live on its remote host: overlaying an
+      // archive would write local files it never reads and record
+      // config_versions that describe nothing (same rule as server-configs.ts).
+      if (isExternalRuntime(target.runtime)) return rejectExternalServer(reply);
       const archive = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.body.from_archive_id), isNotNull(servers.deletedAt)),
       });

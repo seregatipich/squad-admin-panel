@@ -1,7 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { alertEvents, alertRules } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
-import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 
 interface CustomAlertRuleConfig {
@@ -19,11 +18,12 @@ interface SourceRef {
  * `type = 'custom'` alert rule configured with `config.eventKind =
  * 'bansync.failed'` exists — `alert_events.rule_id` is a NOT NULL FK, so a
  * rule is structurally required. A deployment with no such rule configured
- * gets no alert (rule-driven, not always-on).
+ * gets no alert (rule-driven, not always-on). The alert is recorded in
+ * `alert_events` only: it names the source and its fetch error, so it is not
+ * broadcast on the `live-bus` WebSocket channel that every viewer receives.
  */
 export async function raiseBanSyncFailureAlert(
   db: DatabaseClient,
-  redis: Pick<Redis, 'publish'>,
   source: SourceRef,
   errorText: string,
   consecutiveFailures: number,
@@ -51,10 +51,6 @@ export async function raiseBanSyncFailureAlert(
       severity,
       payload,
     });
-    await redis.publish(
-      'live-bus',
-      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-    );
     raised++;
   }
   return raised;

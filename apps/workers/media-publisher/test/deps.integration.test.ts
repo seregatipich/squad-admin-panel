@@ -8,9 +8,10 @@ import {
   mediaPublications,
   mediaPublishSettings,
 } from '@squad/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMediaPublisherDeps, type MediaPublisherDepsOptions } from '../src/deps.js';
+import { MEDIA_PUBLISH_LEASE_MS } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -56,6 +57,7 @@ async function insertPublication(opts: {
   status?: string;
   attempts?: number;
   nextAttemptAt?: Date | null;
+  uploadSessionUrl?: string | null;
 }): Promise<string> {
   const id = randomUUID();
   await requireDb()
@@ -67,6 +69,7 @@ async function insertPublication(opts: {
       status: opts.status ?? 'queued',
       attempts: opts.attempts ?? 0,
       nextAttemptAt: opts.nextAttemptAt === undefined ? PAST : opts.nextAttemptAt,
+      ...(opts.uploadSessionUrl !== undefined ? { uploadSessionUrl: opts.uploadSessionUrl } : {}),
     });
   return id;
 }
@@ -135,6 +138,7 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
       storagePath: '2026/07/a.mp4',
       mimeType: 'video/mp4',
       originalFilename: 'clip.mp4',
+      interrupted: false,
     });
     expect((await readPublication(pubId)).status).toBe('uploading');
   });
@@ -178,6 +182,50 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
     expect(claimed.map((j) => j.id)).not.toContain(pubId);
   });
 
+  it('stamps a lease on a claimed publication (#52 finding 1129)', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/lease.mp4' });
+    const pubId = await insertPublication({ mediaId });
+
+    await makeDeps().claimDue(NOW, 10);
+
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+    expect(row.nextAttemptAt?.getTime()).toBe(NOW.getTime() + MEDIA_PUBLISH_LEASE_MS);
+  });
+
+  it('does not reclaim an uploading publication whose lease is still running', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/in-flight.mp4' });
+    const pubId = await insertPublication({ mediaId, status: 'uploading', nextAttemptAt: FUTURE });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).not.toContain(pubId);
+  });
+
+  it('reclaims a publication stranded in uploading once its lease expired, burning an attempt (#52 finding 1129)', async () => {
+    // The worker died mid-upload (OOM, SIGKILL, deploy): nothing ever moved the
+    // row out of 'uploading', and the (media_id, destination) unique index
+    // blocks queueing it again.
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/stranded.mp4' });
+    const pubId = await insertPublication({
+      mediaId,
+      status: 'uploading',
+      attempts: 2,
+      nextAttemptAt: PAST,
+    });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    const mine = claimed.filter((j) => j.id === pubId);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ attempts: 3, interrupted: true });
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+    expect(row.attempts).toBe(3);
+    expect(row.error).toBe('upload_interrupted');
+    expect(row.nextAttemptAt?.getTime()).toBe(NOW.getTime() + MEDIA_PUBLISH_LEASE_MS);
+  });
+
   it('never hands the same publication to two concurrent claims', async () => {
     const mediaId = await insertStoredMedia({ storagePath: '2026/07/e.mp4' });
     const pubId = await insertPublication({ mediaId });
@@ -188,6 +236,40 @@ describeIfDb('createMediaPublisherDeps — claimDue', () => {
     const wins =
       first.filter((j) => j.id === pubId).length + second.filter((j) => j.id === pubId).length;
     expect(wins).toBe(1);
+  });
+
+  // Regression for #63 finding 942: nothing ever reclaimed a row a crashed
+  // worker left stuck in 'uploading' — it was claimed forever.
+  it('reclaims a publication stuck in uploading past the lease (crashed worker)', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/stuck.mp4' });
+    const pubId = await insertPublication({ mediaId });
+    await requireDb()
+      .update(mediaPublications)
+      .set({ status: 'uploading', updatedAt: new Date(NOW.getTime() - 20 * 60_000) })
+      .where(eq(mediaPublications.id, pubId));
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).toContain(pubId);
+    const row = await readPublication(pubId);
+    expect(row.status).toBe('uploading');
+  });
+
+  it('does not reclaim a publication still within the uploading lease', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/inflight.mp4' });
+    const pubId = await insertPublication({ mediaId });
+    await requireDb()
+      .update(mediaPublications)
+      .set({
+        status: 'uploading',
+        nextAttemptAt: FUTURE,
+        updatedAt: new Date(NOW.getTime() - 60_000),
+      })
+      .where(eq(mediaPublications.id, pubId));
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.map((j) => j.id)).not.toContain(pubId);
   });
 });
 
@@ -240,6 +322,75 @@ describeIfDb('createMediaPublisherDeps — status transitions', () => {
       error: 'telegram_file_too_large',
       nextAttemptAt: null,
     });
+  });
+
+  it('claimDue surfaces a persisted upload session so a retry can resume it', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/session.mp4' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=abc';
+    const pubId = await insertPublication({
+      mediaId,
+      destination: 'youtube',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    const claimed = await makeDeps().claimDue(NOW, 10);
+
+    expect(claimed.find((j) => j.id === pubId)?.uploadSessionUrl).toBe(sessionUrl);
+  });
+
+  it('markRetry persists a new upload session when the outcome provides one', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/s1.mp4' });
+    const pubId = await insertPublication({ mediaId, status: 'uploading' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=xyz';
+
+    await makeDeps().markRetry(pubId, {
+      attempts: 1,
+      error: 'youtube_transport_error',
+      nextAttemptAt: FUTURE,
+      uploadSessionUrl: sessionUrl,
+    });
+
+    expect(await readPublication(pubId)).toMatchObject({ uploadSessionUrl: sessionUrl });
+  });
+
+  it('markRetry leaves a persisted upload session untouched when the outcome omits it', async () => {
+    const mediaId = await insertStoredMedia({ storagePath: '2026/07/s2.mp4' });
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=keep';
+    const pubId = await insertPublication({
+      mediaId,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    await makeDeps().markRetry(pubId, {
+      attempts: 1,
+      error: 'youtube_token_server_error_503',
+      nextAttemptAt: FUTURE,
+    });
+
+    expect(await readPublication(pubId)).toMatchObject({ uploadSessionUrl: sessionUrl });
+  });
+
+  it('markFailed and markPublished clear a persisted upload session', async () => {
+    const sessionUrl = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=dead';
+    const failedMedia = await insertStoredMedia({ storagePath: '2026/07/s3.mp4' });
+    const failedId = await insertPublication({
+      mediaId: failedMedia,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+    const publishedMedia = await insertStoredMedia({ storagePath: '2026/07/s4.mp4' });
+    const publishedId = await insertPublication({
+      mediaId: publishedMedia,
+      status: 'uploading',
+      uploadSessionUrl: sessionUrl,
+    });
+
+    await makeDeps().markFailed(failedId, 'youtube_upload_rejected_400', 8);
+    await makeDeps().markPublished(publishedId, { externalId: 'v', externalUrl: null }, NOW);
+
+    expect(await readPublication(failedId)).toMatchObject({ uploadSessionUrl: null });
+    expect(await readPublication(publishedId)).toMatchObject({ uploadSessionUrl: null });
   });
 
   it('deferUnconfigured requeues without consuming an attempt', async () => {
@@ -323,6 +474,50 @@ describeIfDb('createMediaPublisherDeps — releaseIfEnabled', () => {
     const released = await makeDeps().releaseIfEnabled(job, 'https://y/4');
 
     expect(released).toBe(false);
+    expect((await readMedia(mediaId)).storagePath).toBe(storagePath);
+    expect(existsSync(path.join(mediaBaseDir, storagePath))).toBe(true);
+  });
+
+  it('waits for an upload that is deduplicating onto the same file under the storage-path lock (#70)', async () => {
+    await setReleaseLocalFile(true);
+    const storagePath = '2026/07/race.mp4';
+    const sha256 = randomUUID().replace(/-/g, '');
+    const mediaId = await insertStoredMedia({ storagePath, sha256 });
+    const pubId = await insertPublication({ mediaId });
+    const job = await claimedJob(mediaId, pubId);
+    await makeDeps().markPublished(pubId, { externalId: 'x', externalUrl: 'https://y/race' }, NOW);
+
+    // Plays the API upload: it holds the storage-path lock while inserting a
+    // second row that reuses the bytes, and commits only after the release
+    // has started.
+    const uploader = createDatabaseClient(DATABASE_URL as string);
+    const dedupId = randomUUID();
+    createdMediaIds.push(dedupId);
+    let releaseStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    const upload = uploader.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${storagePath}))`);
+      await tx.insert(mediaFiles).values({
+        id: dedupId,
+        kind: 'video',
+        originalFilename: 'clip.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 16,
+        sha256,
+        storagePath,
+        externalUrl: null,
+      });
+      await started;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const release = makeDeps().releaseIfEnabled(job, 'https://y/race');
+    releaseStarted();
+    await upload;
+
+    expect(await release).toBe(false);
     expect((await readMedia(mediaId)).storagePath).toBe(storagePath);
     expect(existsSync(path.join(mediaBaseDir, storagePath))).toBe(true);
   });

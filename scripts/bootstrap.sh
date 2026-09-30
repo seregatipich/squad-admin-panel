@@ -221,10 +221,10 @@ stage_end
 
 stage_begin "data tree"
 
-for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot servers; do
+for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot media servers; do
   [[ -d "${DATA_DIR}/${sub}" ]] || die "missing ${DATA_DIR}/${sub} (install-host-bridge.sh should have created it)"
 done
-step_ok "${DATA_DIR}/{postgres,redis,caddy-data,caddy-config,backup-repo,backup-dump,depot,servers}"
+step_ok "${DATA_DIR}/{postgres,redis,caddy-data,caddy-config,backup-repo,backup-dump,depot,media,servers}"
 
 if [[ -L /var/lib/squad-panel ]] && [[ "$(readlink /var/lib/squad-panel)" == "${DATA_DIR}/servers" ]]; then
   step_ok "/var/lib/squad-panel → ${DATA_DIR}/servers"
@@ -252,12 +252,26 @@ if [[ -f "${REPO}/.env" ]]; then
   PANEL_GID=$(getent group panel | cut -d: -f3)
   set_env_key DATA_DIR "${DATA_DIR}"
   set_env_key PANEL_GID "${PANEL_GID}"
+  # Redis requires these since #32; an older .env gets them once, never rotated.
+  for key in REDIS_PASSWORD REDIS_SIDECAR_PASSWORD; do
+    grep -qE "^${key}=.+" "${REPO}/.env" || set_env_key "${key}" "$(openssl rand -hex 32)"
+  done
 else
   APP_DOMAIN_DEFAULT="${APP_DOMAIN:-squad-panel.lan}"
   PG_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
   ENC_KEY=$(openssl rand -base64 32)
   SESS=$(openssl rand -base64 32)
+  # Hex: both are embedded in redis:// URLs.
+  REDIS_PW=$(openssl rand -hex 32)
+  REDIS_SIDECAR_PW=$(openssl rand -hex 32)
+  # Hex: both are embedded verbatim (restic env, DATABASE_URL), so no URL escaping.
+  RESTIC_PW=$(openssl rand -hex 32)
+  APP_DB_PW=$(openssl rand -hex 32)
   PANEL_GID=$(getent group panel | cut -d: -f3)
+  # Create the file at 0600 from the first byte — cat > alone inherits the
+  # process umask (022 for root), so between the write and the chmod below
+  # any local user could read POSTGRES_PASSWORD/APP_ENCRYPTION_KEY/SESSION_SECRET.
+  (umask 077 && : > "${REPO}/.env")
   cat > "${REPO}/.env" <<EOF
 APP_DOMAIN=${APP_DOMAIN_DEFAULT}
 TLS_ISSUER=internal
@@ -265,10 +279,14 @@ ACME_EMAIL=admin@example.com
 POSTGRES_PASSWORD=${PG_PW}
 APP_ENCRYPTION_KEY=${ENC_KEY}
 SESSION_SECRET=${SESS}
+RESTIC_PASSWORD=${RESTIC_PW}
+PANEL_DB_USER=panel_app
+PANEL_DB_PASSWORD=${APP_DB_PW}
 DATABASE_URL=postgres://admin:${PG_PW}@postgres:5432/admin
-REDIS_URL=redis://redis:6379
+REDIS_PASSWORD=${REDIS_PW}
+REDIS_SIDECAR_PASSWORD=${REDIS_SIDECAR_PW}
+REDIS_URL=redis://:${REDIS_PW}@redis:6379
 BRIDGE_SOCKET=/run/panel-host-bridge/bridge.sock
-COOKIE_SECURE=false
 LOG_LEVEL=info
 PANEL_GID=${PANEL_GID}
 DATA_DIR=${DATA_DIR}
@@ -277,8 +295,12 @@ EOF
   chown "${OWNER}:${OWNER}" "${REPO}/.env" 2>/dev/null || true
   step_ok "wrote .env" "mode 600, owner ${OWNER}"
   echo
-  printf '  %b⚠  SAVE THIS KEY OFFLINE — losing it = cannot decrypt stored RCON passwords:%b\n' "${C_YELLOW}${C_BOLD}" "${C_RST}"
-  printf '  %bAPP_ENCRYPTION_KEY=%s%b\n\n' "${C_CYAN}" "${ENC_KEY}" "${C_RST}"
+  if [[ ${HAS_TTY} -eq 1 ]]; then
+    printf '  %b⚠  SAVE THIS KEY OFFLINE — losing it = cannot decrypt stored RCON passwords:%b\n' "${C_YELLOW}${C_BOLD}" "${C_RST}"
+    printf '  %bAPP_ENCRYPTION_KEY=%s%b\n\n' "${C_CYAN}" "${ENC_KEY}" "${C_RST}"
+  else
+    step_warn "APP_ENCRYPTION_KEY not printed (no TTY) — read it from ${REPO}/.env (mode 600) instead of a log"
+  fi
 fi
 
 APP_DOMAIN=$(awk -F= '/^APP_DOMAIN=/ {print $2}' "${REPO}/.env")

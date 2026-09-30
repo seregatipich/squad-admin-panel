@@ -64,6 +64,7 @@ The client dispatches stream frames to `PendingCall.onStream` without removing t
 type BridgeErrorCode =
   | 'forbidden'      // path/image outside allowlist
   | 'invalid_args'   // missing or malformed params
+  | 'not_found'      // file read on a path that does not exist
   | 'runtime_error'  // Docker CLI or OS command failure
   | 'timeout'        // client-side deadline exceeded
   | 'internal'       // unexpected Go error
@@ -131,16 +132,6 @@ type BridgeErrorCode =
 }
 ```
 
-### `ProcessInfoResult`
-
-```ts
-{
-  pid: number; exists: boolean;
-  rss_bytes?: number; vsz_bytes?: number;
-  cmdline?: string; state?: string; threads?: number;
-}
-```
-
 ### `HostAgentRestartResult`
 
 ```ts
@@ -184,12 +175,6 @@ type BridgeErrorCode =
 
 ```ts
 { action: 'add' | 'remove'; port: number; proto: 'tcp' | 'udp'; comment?: string }
-```
-
-### `ProcessInfoParams`
-
-```ts
-{ pid: number }
 ```
 
 ### `ContainerControlParams`

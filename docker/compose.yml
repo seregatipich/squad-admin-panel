@@ -10,11 +10,25 @@ x-logging: &default-logging
     max-size: '10m'
     max-file: '5'
 
+# Container hardening (#47): no Linux capabilities and no privilege gain
+# through setuid binaries. A service that needs a capability adds it back with
+# cap_add and says why. postgres, redis and backup only get no-new-privileges:
+# their entrypoints start as root and drop to their own user.
+x-hardening: &hardening
+  cap_drop: ['ALL']
+  security_opt: ['no-new-privileges:true']
+  # Bound fork bombs and reap zombies in every hardened service.
+  pids_limit: 256
+  init: true
+
 services:
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     init: true
     restart: unless-stopped
+    # Binds :80/:443 as root inside the container.
+    cap_add: ['NET_BIND_SERVICE']
+    <<: *hardening
     ports:
       - '80:80'
       - '443:443'
@@ -43,8 +57,13 @@ services:
       context: ..
       dockerfile: docker/api.Dockerfile
     restart: 'no'
+    <<: *hardening
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      # When both are set, the migrator provisions this least-privilege login
+      # (packages/db/src/app-role.ts) and the api and workers connect as it.
+      PANEL_DB_USER: ${PANEL_DB_USER:-}
+      PANEL_DB_PASSWORD: ${PANEL_DB_PASSWORD:-}
     working_dir: /app/packages/db
     command: ['node', '--enable-source-maps', 'dist/migrate.js']
     depends_on:
@@ -57,18 +76,22 @@ services:
       context: ..
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    # chown of the rnsquadjs sidecar config to the sidecar uid (lib/rnsquadjs.ts).
+    cap_add: ['CHOWN']
+    <<: *hardening
     environment:
       NODE_ENV: production
       API_HOST: 0.0.0.0
       API_PORT: 3000
       APP_VERSION: ${APP_VERSION:-dev}
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       # Redis the per-server sidecar container reaches. It runs with
-      # --network host, so the compose service name does not resolve there.
-      SIDECAR_REDIS_URL: ${SIDECAR_REDIS_URL:-redis://127.0.0.1:6379}
-      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
-      SESSION_SECRET: ${SESSION_SECRET}
+      # --network host, so the compose service name does not resolve there,
+      # and it authenticates as the restricted `rnsquadjs` ACL user (see redis).
+      SIDECAR_REDIS_URL: redis://rnsquadjs:${REDIS_SIDECAR_PASSWORD}@127.0.0.1:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY_is_required}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET_is_required}
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
       # Host-side path of the squad-depot volume. Must match the bind-mount
@@ -85,8 +108,16 @@ services:
       RCON_HOST_DEFAULT: host.docker.internal
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       STEAM_API_KEY: ${STEAM_API_KEY:-}
+      # Discord OAuth login and signed interactions (DISCORD-4). Unset leaves
+      # /api/v1/auth/discord/login and /integrations/discord/interactions
+      # answering 503.
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
+      # Sentry-compatible error reporting. Blank disables it.
+      GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
       # Shared secret for the inbound team-balancer proposal webhook (GAME-2,
       # #81). Unset leaves POST /api/v1/integrations/balancer/proposals
       # disabled (503), which is the safe default for a deployment with no
@@ -100,10 +131,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
-    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
-    # otherwise every RPC fails with `rejected untrusted peer`. See
-    # docs/components/bridge/troubleshooting.md.
+    # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. The api stays
+    # uid 0 (with only CAP_CHOWN): it writes the root-owned rnsquadjs tree and
+    # the media volume. See docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
       - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
@@ -128,6 +162,7 @@ services:
       context: ..
       dockerfile: docker/web.Dockerfile
     restart: unless-stopped
+    <<: *hardening
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
@@ -144,18 +179,20 @@ services:
       args:
         WORKER: log-ingest
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       # Decrypts the SSH private key of external servers' log sources
       # (server_log_sources); without it only panel-hosted containers are tailed.
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
-    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
-    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. The uid is the
+    # image's unprivileged `node` user (1000). See
     # docs/components/bridge/troubleshooting.md.
-    user: "0:${PANEL_GID:-987}"
+    user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -174,16 +211,20 @@ services:
       args:
         WORKER: config-sync
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       CONFIG_DRIFT_INTERVAL_MS: ${CONFIG_DRIFT_INTERVAL_MS:-300000}
+      ADMINS_CFG_RELAY_INTERVAL_MS: ${ADMINS_CFG_RELAY_INTERVAL_MS:-1000}
+      ADMINS_CFG_RELAY_XADD_TIMEOUT_MS: ${ADMINS_CFG_RELAY_XADD_TIMEOUT_MS:-5000}
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
-    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
-    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. The uid is the
+    # image's unprivileged `node` user (1000). See
     # docs/components/bridge/troubleshooting.md.
-    user: "0:${PANEL_GID:-987}"
+    user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -202,14 +243,17 @@ services:
       args:
         WORKER: rcon
     restart: unless-stopped
+    <<: *hardening
     network_mode: host
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
-      REDIS_URL: redis://127.0.0.1:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@127.0.0.1:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       # On --network host, Squad's RCON listener is on the local loopback.
       # Credentials with rcon_host=NULL fall back to this value.
       RCON_HOST_DEFAULT: 127.0.0.1
+      # Host of the seeding notification's steam://connect join link.
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
       RCON_INFO_INTERVAL_MS: ${RCON_INFO_INTERVAL_MS:-5000}
     depends_on:
@@ -224,9 +268,10 @@ services:
   worker-audit-archiver:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -237,9 +282,11 @@ services:
   worker-event-partition:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
     restart: unless-stopped
+    <<: *hardening
     environment:
+      # Always the schema owner: it creates and drops partitions (DDL).
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -250,9 +297,10 @@ services:
   worker-presence-daily:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -263,9 +311,10 @@ services:
   worker-role-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       ROLE_EXPIRER_INTERVAL_MS: ${ROLE_EXPIRER_INTERVAL_MS:-60000}
       ROLE_EXPIRY_REMINDER_INTERVAL_MS: ${ROLE_EXPIRY_REMINDER_INTERVAL_MS:-86400000}
       VIP_RENEWAL_INTERVAL_MS: ${VIP_RENEWAL_INTERVAL_MS:-3600000}
@@ -281,9 +330,10 @@ services:
   worker-seed-reward:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       SEED_REWARD_INTERVAL_MS: ${SEED_REWARD_INTERVAL_MS:-86400000}
     depends_on:
       postgres:
@@ -300,9 +350,10 @@ services:
   worker-steam-refresh:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       STEAM_REFRESH_INTERVAL_MS: ${STEAM_REFRESH_INTERVAL_MS:-3600000}
     depends_on:
@@ -320,9 +371,10 @@ services:
   worker-media-publisher:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MEDIA_STORAGE_DIR: /var/lib/squad-panel/media
       MEDIA_PUBLISHER_INTERVAL_MS: ${MEDIA_PUBLISHER_INTERVAL_MS:-60000}
       MEDIA_PUBLISHER_BATCH_SIZE: ${MEDIA_PUBLISHER_BATCH_SIZE:-3}
@@ -333,6 +385,8 @@ services:
       # Telegram bot (both required, or Telegram stays off).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    # Root without capabilities: it deletes media files the api (root) wrote.
+    user: '0:0'
     volumes:
       - media_data:/var/lib/squad-panel/media
     depends_on:
@@ -347,9 +401,12 @@ services:
   worker-leaderboard-aggregator:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      LEADERBOARD_AGGREGATOR_INTERVAL_MS: ${LEADERBOARD_AGGREGATOR_INTERVAL_MS:-900000}
+      LEADERBOARD_BACKFILL_MONTHS: ${LEADERBOARD_BACKFILL_MONTHS:-0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -360,14 +417,17 @@ services:
   worker-diag-flush:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       DIAG_FLUSH_BATCH_SIZE: ${DIAG_FLUSH_BATCH_SIZE:-100}
       DIAG_JOURNALD_FORWARD: ${DIAG_JOURNALD_FORWARD:-true}
       DIAG_JOURNALD_UNIT: ${DIAG_JOURNALD_UNIT:-panel-host-bridge}
       DIAG_JOURNALD_SINCE: ${DIAG_JOURNALD_SINCE:-30s ago}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Root without capabilities: it reads the host journal (root:systemd-journal 0640).
+    user: '0:0'
     volumes:
       - /var/log/journal:/var/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
@@ -387,15 +447,17 @@ services:
       args:
         WORKER: metrics-sampler
     restart: unless-stopped
+    <<: *hardening
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       LOG_LEVEL: ${LOG_LEVEL:-info}
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
-    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
-    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. The uid is the
+    # image's unprivileged `node` user (1000). See
     # docs/components/bridge/troubleshooting.md.
-    user: "0:${PANEL_GID:-987}"
+    user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -406,9 +468,10 @@ services:
   worker-clan-guard:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       CLAN_GUARD_INTERVAL_MS: ${CLAN_GUARD_INTERVAL_MS:-120000}
     depends_on:
       postgres:
@@ -424,9 +487,10 @@ services:
   worker-automation:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -439,14 +503,15 @@ services:
   worker-scheduler:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       ROTATION_PROFILE_APPLY_HOUR: ${ROTATION_PROFILE_APPLY_HOUR:-4}
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
-    user: "0:${PANEL_GID:-987}"
+    user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
@@ -461,9 +526,10 @@ services:
   worker-ban-sync:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       BAN_SYNC_INTERVAL_MS: ${BAN_SYNC_INTERVAL_MS:-60000}
     depends_on:
@@ -478,9 +544,10 @@ services:
   worker-clan-priority-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       CLAN_PRIORITY_EXPIRER_INTERVAL_MS: ${CLAN_PRIORITY_EXPIRER_INTERVAL_MS:-60000}
     depends_on:
       postgres:
@@ -494,9 +561,10 @@ services:
   worker-discord:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
     restart: unless-stopped
+    <<: *hardening
     environment:
-      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
@@ -509,12 +577,14 @@ services:
     logging: *default-logging
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     environment:
       POSTGRES_DB: admin
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_is_required}
     ports:
       - '127.0.0.1:5432:5432'
     volumes:
@@ -528,9 +598,42 @@ services:
     logging: *default-logging
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     restart: unless-stopped
-    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
+    # Redis is published on the host loopback, and the bridge starts the game
+    # servers and the rnsquadjs sidecars with --network host, so any process
+    # there can connect: every client must authenticate (#32). The default
+    # user (REDIS_PASSWORD) is the panel's; `rnsquadjs` (REDIS_SIDECAR_PASSWORD)
+    # is the third-party sidecar's and may only write its own event stream,
+    # status and heartbeat keys, never session:* or command queues. Both are
+    # embedded in redis:// URLs below, so keep them URL-safe (hex).
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1000'
+      - --requirepass
+      - '${REDIS_PASSWORD:?REDIS_PASSWORD must be set (see .env.example)}'
+      - --user
+      - rnsquadjs
+      - 'on'
+      - '>${REDIS_SIDECAR_PASSWORD:?REDIS_SIDECAR_PASSWORD must be set (see .env.example)}'
+      - resetchannels
+      - '~events:server:*'
+      - '~rnsquadjs:status:*'
+      - '~worker:heartbeat:rnsquadjs:*'
+      - '+ping'
+      - '+info'
+      - '+xadd'
+      - '+set'
+      - '+quit'
+    environment:
+      # redis-cli (healthcheck, `compose exec redis redis-cli`) authenticates with it.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - '127.0.0.1:6379:6379'
     volumes:
@@ -590,6 +693,8 @@ services:
       dockerfile: docker/restic.Dockerfile
     image: squad-panel/restic:latest
     restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     profiles: ['backup']
     depends_on:
       postgres:
@@ -598,8 +703,12 @@ services:
         condition: service_healthy
     environment:
       RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backup/repo}
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-changeme}
+      # No default: the repository holds full database and Redis dumps, so an
+      # empty or well-known password must stop compose rather than encrypt it.
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?RESTIC_PASSWORD_is_required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # redis-cli --rdb below authenticates with it.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
       BACKUP_CRON: '0 3 * * *'
       RESTIC_FORGET_ARGS: '--keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune'
       RESTIC_BACKUP_SOURCES: /data

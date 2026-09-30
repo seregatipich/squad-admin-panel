@@ -17,8 +17,8 @@ Current keys by category:
 |---|---|
 | servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update`, `server:download_logs` |
 | configs | `config:view`, `config:edit`, `config:rollback` |
-| players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
-| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban` |
+| players | `player:view`, `player:view_ips`, `player:manage_alt_detection`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags` |
+| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`, `ban_source:view`, `banlist:read` |
 | admin_groups | `admin_group:view`, `admin_group:edit` |
 | whitelist | `whitelist:view`, `whitelist:edit` |
 | host | `host:view`, `host:metrics` |
@@ -29,7 +29,7 @@ Current keys by category:
 | backup | `backup:view`*, `backup:trigger`*, `backup:restore`* |
 | api_tokens | `api_token:create`, `api_token:revoke` |
 | discord | `discord:link`* |
-| triggers | `trigger:view`*, `trigger:edit`* |
+| triggers | `trigger:view`, `trigger:edit`* |
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
 
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
@@ -91,10 +91,40 @@ Raw player IPs, and the per-IP coordinates derived from them, are gated by `play
 - `GET /api/v1/events/:eventId` and `GET /api/v1/events/export` — the top-level `ip` of every event payload (e.g. `player.connected`) is returned as `null` without it. All `/api/v1/events*` routes additionally require `events:view` through `config.permissions`, so a token must carry that scope to read the journal.
 - `GET /api/v1/players/:playerId/geo-anomalies` and `GET /api/v1/geo-anomalies` — `points` (IP + latitude/longitude) is empty without it; the country-level summary stays.
 
+### Panel reads narrowed to a catalogue scope (audit #89/#101/#114)
+
+A route guard that checks only `panel_access` lets an API token through as soon as it carries any one scope (`narrowToTokenScopes` keeps `panelAccess` for every non-empty scope set). The reads below therefore also declare a catalogue key in `config.permissions`, and keep their `panel_access` guard so a session role without `panel_access` stays out even when it holds an explicit `role_permissions` row:
+
+| Route | Scope |
+|---|---|
+| `GET /api/v1/chat/messages`, `GET /api/v1/chat/messages/count` | `events:view` |
+| `GET /api/v1/automation-rules`, `GET /api/v1/automation-runs` | `trigger:view` |
+| `GET /api/v1/ban-sources`, `GET /api/v1/ban-sources/:id` | `ban_source:view` |
+| `GET /api/v1/analytics/dashboard` | `server:view` |
+
+Session users with `panel_access` are unaffected: `derivePanelPermissions` grants them every catalogue key.
+
+### Alt-detection settings (#43)
+
+`GET /api/v1/settings/alt-detection` needs `player:view_ips` and reports `can_edit`. `PUT /api/v1/settings/alt-detection` and `POST`/`DELETE …/ignored-ips` need `player:manage_alt_detection`, which a role gets only with both `can_view_ips` and `can_edit_roles` (Owner always): weights, thresholds and ignored ranges can switch shared-IP matching off panel-wide, so IP-history read access alone must not change them. Ignore entries broader than `/8` (IPv4) or `/32` (IPv6) are rejected with 400.
+
 ### Config secrets (#10)
 
 `config:view` and `server:view` never grant a config secret. The `Password=` value of `Rcon.cfg` and the `LicenseKey=` value of `License.cfg` exist in plaintext only in the file on disk (and encrypted in `server_credentials`); every config response (`GET /configs/:name`, `versions/:vid`, `diff`, `blame`, `drift/diff`, `GET /servers/archive/:id/configs/:filename`) and every `config_versions` row the panel writes (editor writes, install seed, reset-default, deletion backup) carries `********` instead. Reads also mask rows written before the fix, since `config_versions` is append-only. See `apps/api/src/lib/config-secrets.ts`.
 
+`Password=` and `Port=` in `Rcon.cfg` are panel-managed (#42): a write through the config editor (PUT, restore, drift accept/revert, reset-default) whose resulting file disagrees with `server_credentials` is refused with `422 rcon_credentials_managed`, because the panel's RCON clients connect with the credentials row. A masked `Password=********` line is always filled with the `server_credentials` password (the file on disk only when no credentials row exists). Other lines stay editable.
+
+### Per-file config write permissions (#42)
+
+`config:edit` (and `config:rollback` for restore/revert) is not enough to write a config file whose content grants what another permission guards. The write routes (`PUT /configs/:name`, `restore/:vid`, `drift/accept`, `drift/revert`, `reset-default`) also require:
+
+| File | Extra permission | Why |
+| --- | --- | --- |
+| `Bans.cfg`, `RemoteBanListHosts.cfg` | `mod:ban_perm` (derived only for roles with the squad `ban` permission) | a line bans a player |
+| `Admins.cfg`, `RemoteAdminListHosts.cfg` | `user:manage_roles` (derived only for roles with `can_assign_roles`) | a line grants Squad admin rights |
+
+A caller without it gets `403 { error: 'forbidden', required_permission }` and the file is not touched.
+
 ## Audit-coverage CI gate
 
-`apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.
+`apps/api/test/audit-coverage.test.ts` builds the route table with `registerRoutes()` — the same list `server.ts` serves — and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a declarative `config.audit: { action, resource }`. The hook in `plugins/audit.ts` then writes an entry for every outcome, denied (`403`) and rejected (`404`/`409`/`422`) attempts included; a handler passes before/after snapshots through `req.auditSnapshots`. `'manual'` marks a handler that calls `writeAuditEntry` itself (the test checks its module does). `audit: false` is accepted only for machine-integration endpoints and for a frozen legacy list of routes that still write their own entries on the success path; that list may only shrink. Until audit #102/#116 the guard registered a hand-picked set of route modules, so `ban-sources.ts` and `banned-names.ts` shipped with `audit: false` unnoticed.

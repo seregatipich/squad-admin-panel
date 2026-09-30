@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"os"
+	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +48,7 @@ func TestWatchdogExitsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		watchdog(ctx)
+		watchdog(ctx, time.Hour)
 		close(done)
 	}()
 	cancel()
@@ -81,4 +85,89 @@ func (f *fakeWriter) Read(p []byte) (int, error) {
 	n := copy(p, f.data)
 	f.data = f.data[n:]
 	return n, nil
+}
+
+// Regression for #74 (finding #389): the development fallback used to delete
+// whatever sat at the socket path, silently stealing the socket of a bridge
+// instance that was already serving there.
+func TestPickListenerFallback_RefusesToStealLiveSocket(t *testing.T) {
+	sock := t.TempDir() + "/live-bridge.sock"
+	live, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer live.Close()
+	t.Setenv("PANEL_BRIDGE_SOCK", sock)
+
+	if l, err := pickListener(); err == nil {
+		_ = l.Close()
+		t.Fatal("pickListener must refuse a socket path another listener is serving")
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("the live listener's socket was removed: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestPickListenerFallback_ReplacesStaleSocketFile(t *testing.T) {
+	sock := t.TempDir() + "/stale-bridge.sock"
+	stale, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	stale.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = stale.Close()
+	t.Setenv("PANEL_BRIDGE_SOCK", sock)
+
+	l, err := pickListener()
+	if err != nil {
+		t.Fatalf("pickListener over a stale socket file: %v", err)
+	}
+	_ = l.Close()
+}
+
+// The fallback socket must never be reachable by other users, not even in
+// the window between listen(2) and a later chmod.
+func TestPickListenerFallback_CreatesSocketWithoutOtherAccess(t *testing.T) {
+	sock := t.TempDir() + "/mode-bridge.sock"
+	t.Setenv("PANEL_BRIDGE_SOCK", sock)
+	prev := syscall.Umask(0)
+	defer syscall.Umask(prev)
+
+	l, err := pickListener()
+	if err != nil {
+		t.Fatalf("pickListener: %v", err)
+	}
+	defer l.Close()
+	st, err := os.Stat(sock)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o660 {
+		t.Fatalf("socket mode=%o want 660", perm)
+	}
+}
+
+// Regression for #74 (finding #388): the watchdog pinged on a hard-coded 10 s
+// period regardless of the unit's WatchdogSec; it must follow the interval
+// systemd advertises via WATCHDOG_USEC (pinging at half of it).
+func TestWatchdogInterval_FollowsSystemdWatchdogUsec(t *testing.T) {
+	t.Setenv("WATCHDOG_USEC", "30000000")
+	t.Setenv("WATCHDOG_PID", strconv.Itoa(os.Getpid()))
+	interval, enabled := watchdogInterval()
+	if !enabled {
+		t.Fatal("watchdog must be enabled when systemd sets WATCHDOG_USEC for this pid")
+	}
+	if interval != 15*time.Second {
+		t.Fatalf("interval=%s want 15s", interval)
+	}
+}
+
+func TestWatchdogInterval_DisabledWithoutSystemd(t *testing.T) {
+	t.Setenv("WATCHDOG_USEC", "")
+	t.Setenv("WATCHDOG_PID", "")
+	if _, enabled := watchdogInterval(); enabled {
+		t.Fatal("watchdog must be disabled when systemd did not request it")
+	}
 }

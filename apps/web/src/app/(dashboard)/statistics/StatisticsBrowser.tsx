@@ -32,6 +32,7 @@ import {
 } from './helpers';
 
 const SELECTION_DEBOUNCE_MS = 300;
+const REVOKE_URL_DELAY_MS = 10_000;
 
 const StackedSeriesChart = dynamic(
   () => import('./StatisticsCharts').then((mod) => mod.StackedSeriesChart),
@@ -75,6 +76,13 @@ export function StatisticsBrowser() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against out-of-order responses (#729): each `load()` call gets the
+  // next id, and a response is applied only if no newer call has started
+  // since — an overlapping older request (a fast preset click, a keystroke
+  // inside the custom date inputs, or a Retry click) can otherwise resolve
+  // after a newer one and overwrite fresher data, or clear `loading` early.
+  const requestIdRef = useRef(0);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // `presetRange` reads the clock. Computing it during render makes the
   // server-rendered HTML and the first client render disagree (the CSV href
@@ -99,6 +107,23 @@ export function StatisticsBrowser() {
     };
   }, []);
 
+  // Клик вне списка и Escape закрывают его, иначе выбор серверов не применится.
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!dropdownRef.current?.contains(event.target as Node)) setDropdownOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDropdownOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [dropdownOpen]);
+
   // The selection is committed when the dropdown closes, then debounced, so a
   // burst of checkbox clicks collapses into a single request.
   useEffect(() => {
@@ -121,6 +146,7 @@ export function StatisticsBrowser() {
 
   const load = useCallback(async () => {
     if (!range) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -130,11 +156,14 @@ export function StatisticsBrowser() {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      setData((await res.json()) as StatisticsResponse);
+      const body = (await res.json()) as StatisticsResponse;
+      if (requestIdRef.current !== requestId) return;
+      setData(body);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [range, committed]);
 
@@ -156,8 +185,11 @@ export function StatisticsBrowser() {
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = 'statistics.json';
+    // Скачивание стартует асинхронно: немедленный revoke даёт пустой файл в Safari.
+    document.body.append(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), REVOKE_URL_DELAY_MS);
   }, [data]);
 
   const knownServerIds = useMemo(() => servers.map((s) => s.id), [servers]);
@@ -177,7 +209,7 @@ export function StatisticsBrowser() {
       <Toolbar
         filters={
           <>
-            <div className="relative">
+            <div ref={dropdownRef} className="relative">
               <Button onClick={() => setDropdownOpen((open) => !open)} aria-expanded={dropdownOpen}>
                 {selectionLabel}
               </Button>
@@ -321,6 +353,7 @@ export function StatisticsBrowser() {
           <Block title="Матчи">
             <ChartCard
               title="Матчей за день"
+              additive
               series={data.matches.by_day}
               servers={chartServers}
               knownServerIds={knownServerIds}
@@ -343,6 +376,7 @@ export function StatisticsBrowser() {
           <Block title="Сообщество">
             <ChartCard
               title="Новых игроков за день"
+              additive
               series={data.community.new_players}
               servers={chartServers}
               knownServerIds={knownServerIds}
@@ -351,6 +385,7 @@ export function StatisticsBrowser() {
             />
             <ChartCard
               title="Сообщений чата за день"
+              additive
               series={data.community.chat_messages}
               servers={chartServers}
               knownServerIds={knownServerIds}
@@ -359,6 +394,7 @@ export function StatisticsBrowser() {
             />
             <ChartCard
               title="Тимкиллов за день"
+              additive
               series={data.community.teamkills}
               servers={chartServers}
               knownServerIds={knownServerIds}
@@ -370,6 +406,7 @@ export function StatisticsBrowser() {
           <Block title="Модерация">
             <ChartCard
               title="Наказаний за день"
+              additive
               series={data.moderation.punishments}
               servers={chartServers}
               knownServerIds={knownServerIds}
@@ -443,6 +480,7 @@ function ChartCard({
   knownServerIds,
   labelOf,
   drill,
+  additive = false,
 }: {
   title: string;
   series: StatisticsSeries;
@@ -450,9 +488,14 @@ function ChartCard({
   knownServerIds: string[];
   labelOf: (key: string) => string;
   drill?: DrillTarget;
+  /** Точки суммируются осмысленно (счётчики); у средних и пиков «Всего» не показывается. */
+  additive?: boolean;
 }) {
   const [drillHref, setDrillHref] = useState<string | null>(null);
-  const stacked = stackedTotal(series);
+
+  // Ссылка относится к прошлой выборке: после смены данных такого столбца может не быть.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: сбрасываем при каждой новой серии
+  useEffect(() => setDrillHref(null), [series]);
 
   return (
     <Card as="section" padding="sm">
@@ -460,8 +503,8 @@ function ChartCard({
         <figcaption className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="text-[13px] font-semibold text-ink">{title}</span>
           <span className="text-xs tabular-nums text-ink-3">
-            Среднее {formatMetric(series.kpi.avg)} · Максимум {formatMetric(series.kpi.max)} · Всего{' '}
-            {formatMetric(stacked)}
+            Среднее {formatMetric(series.kpi.avg)} · Максимум {formatMetric(series.kpi.max)}
+            {additive ? ` · Всего ${formatMetric(stackedTotal(series))}` : null}
           </span>
         </figcaption>
         {series.totals.length === 0 || servers.length === 0 ? (

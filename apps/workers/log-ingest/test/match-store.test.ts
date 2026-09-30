@@ -256,4 +256,19 @@ describe('LogIngestor → match store pipeline', () => {
     expect(rows[0].endReason).toBe('server_crashed');
     expect(rows[0].winner).toBeNull();
   });
+
+  // Regression for #63 finding 933: a clean stop (exit code 0/143) must close
+  // an open match too, not just a crash — otherwise it stays open in the
+  // database across a routine restart.
+  it('closes an open match as server_restarted on a clean stop (exit code 0)', async () => {
+    await drive([
+      '[2026.07.05-18.00.00:000][100]LogWorld: Bringing World /Game/Maps/Narva/Gameplay_Layers/Narva_Invasion_v1 up for play (max tick rate 50)',
+      '[2026.07.05-18.00.10:000][110]LogGameState: Match State Changed from WaitingToStart to InProgress',
+      '[2026.07.05-18.12.00:000][500]LogCore: FUnixPlatformMisc::RequestExit(bForce=false, ReturnCode=0)',
+    ]);
+    const rows = await rowsForServer();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].endReason).toBe('server_restarted');
+    expect(rows[0].winner).toBeNull();
+  });
 });

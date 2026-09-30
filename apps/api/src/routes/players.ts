@@ -8,14 +8,18 @@ import {
   roles,
 } from '@squad/db/schema';
 import { isAdminsCfgSingleLineText, normalizePlayerName } from '@squad/shared-config';
-import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
+import { steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
+import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({
@@ -31,11 +35,20 @@ const roleAssignBody = z.object({
     .optional(),
 });
 const PLAYER_SORTS = ['nickname', 'last_seen', 'created', 'total_time'] as const;
+const PLAYER_LIST_LIMIT_DEFAULT = 200;
+const PLAYER_LIST_LIMIT_MAX = 500;
 const listQuery = z.object({
   q: z.string().min(1).max(64).optional(),
   sort: z.enum(PLAYER_SORTS).default('last_seen'),
   dir: z.enum(['asc', 'desc']).default('desc'),
   filter: z.enum(['new']).optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PLAYER_LIST_LIMIT_MAX)
+    .default(PLAYER_LIST_LIMIT_DEFAULT),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 const searchQuery = z.object({ q: z.string().trim().min(3).max(64) });
 
@@ -87,6 +100,13 @@ function playerSortColumn(sort: (typeof PLAYER_SORTS)[number]) {
 const playerRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
+  /**
+   * Lists players, filtered by `q` (name, historical name, exact SteamID64 or
+   * EOS id) and `filter=new`, ordered by `sort`/`dir` and paged with
+   * `limit` (1–500, default 200) and `offset`. `total` is the number of
+   * players matching the filters across all pages, not the page size (#40,
+   * finding #236).
+   */
   fast.get(
     '/api/v1/players',
     {
@@ -99,13 +119,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       if (q) {
         const exactMatch = q.toLowerCase();
         const nameMatch = normalizePlayerName(q);
+        const namePattern = `%${escapeLike(nameMatch)}%`;
         const nameHistoryMatch = sql`EXISTS (
           SELECT 1 FROM player_name_history h
-          WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
+          WHERE h.player_id = players.id AND h.name_normalized LIKE ${namePattern}
         )`;
         const searchClause = or(
-          sql`canonical_name_normalized LIKE ${`%${nameMatch}%`}`,
-          sql`steam_id64::text = ${exactMatch}`,
+          sql`canonical_name_normalized LIKE ${namePattern}`,
+          steamId64Equals(players.steamId64, q),
           sql`eos_id = ${exactMatch}`,
           nameHistoryMatch,
         );
@@ -116,12 +137,19 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       }
       const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
       const sortedColumn = playerSortColumn(req.query.sort);
-      const rows = await app.db
-        .select()
-        .from(players)
-        .where(whereClause)
-        .orderBy(req.query.dir === 'asc' ? asc(sortedColumn) : desc(sortedColumn), asc(players.id))
-        .limit(200);
+      const [rows, [counted]] = await Promise.all([
+        app.db
+          .select()
+          .from(players)
+          .where(whereClause)
+          .orderBy(
+            req.query.dir === 'asc' ? asc(sortedColumn) : desc(sortedColumn),
+            asc(players.id),
+          )
+          .limit(req.query.limit)
+          .offset(req.query.offset),
+        app.db.select({ total: count() }).from(players).where(whereClause),
+      ]);
       return {
         items: rows.map((r) => ({
           id: r.id,
@@ -132,7 +160,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           last_seen_at: r.lastSeenAt,
           total_time_played_seconds: Number(r.totalTimePlayedSeconds),
         })),
-        total: rows.length,
+        total: counted?.total ?? 0,
       };
     },
   );
@@ -151,7 +179,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       }
       const q = req.query.q.trim();
       const exactMatch = q.toLowerCase();
-      const nameMatch = normalizePlayerName(q);
+      const namePattern = `%${escapeLike(normalizePlayerName(q))}%`;
       const rows = (await app.db.execute(sql`
         SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.eos_id,
                p.last_seen_at::text AS last_seen_at,
@@ -159,12 +187,12 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         FROM players p
         LEFT JOIN clan_members cm ON cm.player_id = p.id
         LEFT JOIN clans c ON c.id = cm.clan_id AND c.deleted_at IS NULL
-        WHERE p.canonical_name_normalized LIKE ${`%${nameMatch}%`}
-           OR p.steam_id64::text = ${exactMatch}
+        WHERE p.canonical_name_normalized LIKE ${namePattern}
+           OR ${steamId64Equals(sql`p.steam_id64`, q)}
            OR p.eos_id = ${exactMatch}
            OR EXISTS (
              SELECT 1 FROM player_name_history h
-             WHERE h.player_id = p.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
+             WHERE h.player_id = p.id AND h.name_normalized LIKE ${namePattern}
            )
         ORDER BY p.last_seen_at DESC
         LIMIT 25
@@ -397,6 +425,23 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
+      // Runs after the hierarchy check so a self-assignment is reported as
+      // `cannot_change_own_role`; the ceiling here also covers explicit grants.
+      if (newRoleId !== null) {
+        const beyond = await roleGrantBeyondActor(app.db, newRoleId, req.user?.permissions);
+        if (beyond.length > 0) {
+          reply.code(403);
+          return roleCeilingError(beyond);
+        }
+      }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;
 
@@ -470,6 +515,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       if (current.length === 0) {
         reply.code(404);
         return { error: 'player_not_found' };
+      }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
       }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       if (wasOwner) {

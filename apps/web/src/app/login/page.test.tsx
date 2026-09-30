@@ -19,6 +19,18 @@ afterEach(() => {
 });
 
 describe('LoginPage', () => {
+  it('checks the session without the browser cache and survives a network failure', async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error('offline')));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<LoginPage />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    expect(screen.getByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
+  });
+
   it('renders the sign-in call to action in Russian', async () => {
     render(<LoginPage />);
     expect(screen.getByRole('heading', { name: 'Squad Admin Panel' })).toBeInTheDocument();
@@ -34,6 +46,15 @@ describe('LoginPage', () => {
         screen.getByText('Не удалось проверить вход через Steam. Попробуйте ещё раз.'),
       ).toBeInTheDocument(),
     );
+  });
+
+  it('shows the logout_failed banner and does not probe the session', async () => {
+    window.history.replaceState({}, '', '/login?error=logout_failed');
+    render(<LoginPage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Не удалось завершить сессию на сервере/)).toBeInTheDocument(),
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('interpolates the Steam ID into the not_authorized error', async () => {

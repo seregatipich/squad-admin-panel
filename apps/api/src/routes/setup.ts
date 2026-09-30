@@ -1,5 +1,5 @@
 import { panelMeta } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -35,29 +35,43 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
       config: { audit: { action: 'setup.complete', resource: 'panel' } },
     },
     async (req, reply) => {
-      const meta = await app.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
-      if (meta[0]?.setupCompleted) {
+      // The global auth hook already rejects an unauthenticated caller with
+      // 401 before this handler runs, so an `if (!req.user)` check here was
+      // unreachable dead code (finding #350). Precedence below (410 before
+      // 403) matches the pre-existing contract: an authenticated non-owner
+      // still sees 410 once setup is done, not 403.
+      const before = await app.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
+      if (before[0]?.setupCompleted) {
         reply.code(410);
         return { error: 'setup_already_completed' };
       }
 
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-
-      if (!req.user.permissions.isOwner) {
+      if (!req.user!.permissions.isOwner) {
         reply.code(403);
         return { error: 'only_owner_can_complete_setup' };
       }
 
-      await app.db
+      // Condition the UPDATE on setup_completed still being false so two
+      // concurrent completions can't both report success; only the winner
+      // gets a returned row (finding #350).
+      const updated = await app.db
         .update(panelMeta)
         .set({
           setupCompleted: true,
           organizationName: req.body.organization_name,
         })
-        .where(eq(panelMeta.id, 1));
+        .where(and(eq(panelMeta.id, 1), eq(panelMeta.setupCompleted, false)))
+        .returning();
+      const after = updated[0];
+      if (!after) {
+        reply.code(410);
+        return { error: 'setup_already_completed' };
+      }
+
+      req.auditSnapshots = {
+        before: { organization_name: before[0]?.organizationName ?? null },
+        after: { organization_name: after.organizationName },
+      };
 
       return { ok: true };
     },

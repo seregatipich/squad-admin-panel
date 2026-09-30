@@ -1,5 +1,5 @@
 import { externalBanSources, externalBans, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, loadUserPermissions } from '../../src/lib/rbac.js';
@@ -133,6 +133,16 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.required).toBe('can_manage_ban_sources');
   });
 
+  it('rejects a non-http(s) url or discord_url (400)', async () => {
+    const badUrl = await createSource(managerCookie, { url: 'javascript:alert(1)' });
+    expect(badUrl.statusCode).toBe(400);
+
+    const badDiscordUrl = await createSource(managerCookie, {
+      discord_url: 'javascript:alert(1)',
+    });
+    expect(badDiscordUrl.statusCode).toBe(400);
+  });
+
   it('allows a manager with can_manage_ban_sources to create (201)', async () => {
     const { statusCode, body } = await createSource(managerCookie);
     expect(statusCode).toBe(201);
@@ -141,6 +151,28 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.enabled).toBe(true);
     expect(body.poll_interval_minutes).toBe(30);
     expect(body.on_match).toBe('alert');
+  });
+
+  it('rejects a discord_url on a non-http(s) scheme (#445)', async () => {
+    const { statusCode } = await createSource(managerCookie, {
+      discord_url: 'javascript:alert(document.cookie)',
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it('rejects a non-http(s) discord_url on create and update with 400', async () => {
+    for (const discordUrl of ['javascript:alert(1)', 'data:text/html,x', 'ftp://example.com/x']) {
+      const { statusCode } = await createSource(managerCookie, { discord_url: discordUrl });
+      expect(statusCode).toBe(400);
+    }
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ discord_url: 'javascript:alert(1)' }),
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('rejects kick for a non-trusted source with 422', async () => {
@@ -395,6 +427,215 @@ describeIfDb('ban-sources mutations are audited', () => {
   });
 });
 
+// Audit #100 — the ban-sync worker fetches the stored URL unattended, so it
+// must not point into the panel's own network.
+describeIfDb('ban-source URLs cannot target internal addresses', () => {
+  it.each([
+    'http://redis:6379/',
+    'http://postgres:5432/',
+    'http://127.0.0.1:3000/api/v1/me',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.8/bans.cfg',
+    'http://[::1]/bans.cfg',
+    'http://localhost/bans.cfg',
+    'ftp://collabans.example.com/bans.cfg',
+  ])('rejects creating a source at %s with 400', async (url) => {
+    const res = await createSource(managerCookie, { url });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('url_not_allowed');
+  });
+
+  it('rejects moving an existing source to an internal address with 400', async () => {
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id as string}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data/' }),
+    });
+    expect(res.statusCode).toBe(400);
+    const [row] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, body.id as string));
+    expect(row?.url).toBe('https://collabans.example.com/bans.cfg');
+  });
+});
+
+// Audit #102 — the routes used to write their entry by hand on the success
+// path only; the declarative hook records every outcome.
+describeIfDb('ban-sources audit covers denied and rejected attempts', () => {
+  it('records a 403 create by a user without can_manage_ban_sources', async () => {
+    const res = await createSource(viewerCookie);
+    expect(res.statusCode).toBe(403);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      statusCode: 403,
+    });
+    expect(row.statusCode).toBe(403);
+  });
+
+  it('records a 422 kick_requires_trusted_source create', async () => {
+    const res = await createSource(managerCookie, { trust_level: 'normal', on_match: 'kick' });
+    expect(res.statusCode).toBe(422);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      statusCode: 422,
+    });
+    expect(row.statusCode).toBe(422);
+  });
+
+  it('records a 404 delete of a missing source', async () => {
+    const missingId = uuidv7();
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/ban-sources/${missingId}`,
+      headers: { cookie: managerCookie },
+    });
+    expect(res.statusCode).toBe(404);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.delete',
+      resource: 'ban_source',
+      targetId: missingId,
+      statusCode: 404,
+    });
+    expect(row.statusCode).toBe(404);
+  });
+
+  it('keeps before/after snapshots on a successful update', async () => {
+    const { body } = await createSource(managerCookie, { trust_level: 'trusted' });
+    const id = body.id as string;
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ trust_level: 'low' }),
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await assertAuditRow(h, {
+      action: 'ban_source.update',
+      resource: 'ban_source',
+      targetId: id,
+      statusCode: 200,
+    });
+    expect(row.statusCode).toBe(200);
+    expect(row.beforeSnapshot).toMatchObject({ trust_level: 'trusted', has_auth_header: true });
+    expect(row.afterSnapshot).toMatchObject({ trust_level: 'low', has_auth_header: true });
+    expect(JSON.stringify(row.afterSnapshot)).not.toContain('super-secret-token-xyz');
+  });
+});
+
+describeIfDb('ban-sources input and exposure hardening (#103, #104, #107, #112)', () => {
+  it('rejects a non-https discord_url on create and update (#104)', async () => {
+    for (const discordUrl of ['javascript:alert(1)', 'data:text/html,x', 'http://discord.gg/x']) {
+      const { statusCode } = await createSource(managerCookie, { discord_url: discordUrl });
+      expect(statusCode).toBe(400);
+    }
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id as string}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ discord_url: 'file:///etc/passwd' }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a feed URL that embeds credentials (#103)', async () => {
+    const { statusCode } = await createSource(managerCookie, {
+      url: 'https://user:hunter2@collabans.example.com/bans.cfg',
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it('masks query values of the feed URL in responses and audit snapshots (#103)', async () => {
+    const { statusCode, body } = await createSource(managerCookie, {
+      url: 'https://api.example.com/bans?key=s3cr3t-api-key&format=json',
+    });
+    expect(statusCode).toBe(201);
+    const id = body.id as string;
+    expect(body.url).toBe('https://api.example.com/bans?key=***&format=***');
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/ban-sources',
+      headers: { cookie: viewerCookie },
+    });
+    expect(list.body).not.toContain('s3cr3t-api-key');
+
+    const audit = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      targetId: id,
+    });
+    expect(JSON.stringify(audit.afterSnapshot)).not.toContain('s3cr3t-api-key');
+
+    // Echoing the masked URL back (GET → PUT round-trip) keeps the stored secret.
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: body.url, enabled: false }),
+    });
+    const [stored] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, id));
+    expect(stored?.url).toBe('https://api.example.com/bans?key=s3cr3t-api-key&format=json');
+  });
+
+  it('counts only active (not revoked) records (#107)', async () => {
+    const { body } = await createSource(managerCookie);
+    const sourceId = body.id as string;
+    await h.db.insert(externalBans).values([
+      { sourceId, steamId64: '76561198000000011' },
+      { sourceId, steamId64: '76561198000000012', revokedAt: new Date() },
+    ]);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/ban-sources',
+      headers: { cookie: viewerCookie },
+    });
+    const source = (res.json() as Array<{ id: string; record_count: number }>).find(
+      (entry) => entry.id === sourceId,
+    );
+    expect(source?.record_count).toBe(1);
+    const single = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/ban-sources/${sourceId}`,
+      headers: { cookie: viewerCookie },
+    });
+    expect((single.json() as { record_count: number }).record_count).toBe(1);
+  });
+
+  it('refuses a second manual sync while one is still queued (#112)', async () => {
+    const { body } = await createSource(managerCookie);
+    const id = body.id as string;
+    const before = await h.redis.xlen('bansync:manual');
+    const sync = () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/ban-sources/${id}/sync`,
+        headers: { cookie: managerCookie },
+      });
+    expect((await sync()).statusCode).toBe(200);
+    const again = await sync();
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toEqual({ error: 'sync_already_queued' });
+    expect(await h.redis.xlen('bansync:manual')).toBe(before + 1);
+  });
+
+  it('backs the active record count with a partial index (#107)', async () => {
+    const rows = await h.db.execute<{ indexdef: string }>(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND indexname = 'external_bans_active_source_idx'
+    `);
+    expect(rows[0]?.indexdef).toContain('WHERE (revoked_at IS NULL)');
+  });
+});
+
 describeIfDb('external_bans dedup unique index', () => {
   it('re-importing the same record does not create a duplicate', async () => {
     const { body } = await createSource(managerCookie);
@@ -489,5 +730,42 @@ describeIfDb('can_manage_ban_sources is only effective with panel_access', () =>
     const ctx = await loadUserPermissions(h.db, row!.id);
     expect(ctx.panelAccess).toBe(false);
     expect(ctx.canManageBanSources).toBe(false);
+  });
+});
+
+describeIfDb('ban-sources URL guard (#855)', () => {
+  it.each([
+    'http://127.0.0.1:3000/api/v1/players',
+    'http://localhost:3000/',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.5/internal',
+    'http://[::1]/',
+    'file:///etc/passwd',
+    'ftp://bans.example.com/bans.cfg',
+  ])('refuses to create a source that points at %s', async (url) => {
+    const { statusCode, body } = await createSource(managerCookie, { url });
+    expect(statusCode).toBe(400);
+    expect(JSON.stringify(body)).toContain('url_not_allowed');
+  });
+
+  it('refuses to repoint an existing source at an internal address', async () => {
+    const created = await createSource(managerCookie);
+    expect(created.statusCode).toBe(201);
+    const id = created.body.id as string;
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data/' }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('url_not_allowed');
+
+    const [row] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, id));
+    expect(row?.url).toBe('https://collabans.example.com/bans.cfg');
   });
 });

@@ -4,8 +4,8 @@ import fp from 'fastify-plugin';
 const STACK_TRUNCATE_LIMIT = 2000;
 const REASON_TRUNCATE_LIMIT = 2000;
 const MESSAGE_TRUNCATE_LIMIT = 200;
-
-let unhandledRejectionListenerAttached = false;
+/** Longest wait for the fatal diag event before the process exits anyway. */
+const FATAL_DIAG_TIMEOUT_MS = 2_000;
 
 const MAX_CAUSE_CHAIN_DEPTH = 5;
 
@@ -29,8 +29,31 @@ function isConstraintViolation(err: unknown, constraintName: string): boolean {
   return false;
 }
 
-export const errorDiagPlugin = fp(
-  async (app: FastifyInstance) => {
+export interface ErrorDiagOptions {
+  /**
+   * Exit the process with code 1 after reporting an unhandled promise
+   * rejection (default `true`). The test harness runs many app instances in
+   * one process and passes `false`, leaving rejections to vitest.
+   */
+  exitOnUnhandledRejection?: boolean;
+}
+
+/**
+ * Global error handler plus unhandled-rejection reporting.
+ *
+ * - A 5xx answers `{ statusCode, error: 'internal_error', requestId }`: the
+ *   error message can carry SQL text and parameters (drizzle's
+ *   `Failed query: … params: …`) or bridge internals, so it goes only to the
+ *   `http.5xx` diag event. A 4xx keeps Fastify's envelope with its message.
+ * - An unhandled rejection is reported as a `fatal` diag event and then ends
+ *   the process with code 1, restoring Node's default crash so Docker's
+ *   restart policy replaces an API left in an unknown state. Each app
+ *   instance owns its listener and removes it on close.
+ */
+export const errorDiagPlugin = fp<ErrorDiagOptions>(
+  async (app: FastifyInstance, opts) => {
+    const exitOnUnhandledRejection = opts.exitOnUnhandledRejection ?? true;
+
     app.setErrorHandler((err: FastifyError, req, reply) => {
       if (isConstraintViolation(err, 'players_last_owner_guard')) {
         reply.code(409).send({ error: 'cannot_remove_last_owner' });
@@ -56,14 +79,20 @@ export const errorDiagPlugin = fp(
             },
           })
           .catch(() => undefined);
+        reply.code(status).send({
+          statusCode: status,
+          error: 'internal_error',
+          requestId: req.requestId ?? req.id,
+        });
+        return;
       }
       reply.send(err);
     });
 
-    if (!unhandledRejectionListenerAttached) {
-      unhandledRejectionListenerAttached = true;
-      process.on('unhandledRejection', (reason) => {
-        const reasonStr = String(reason);
+    async function reportFatalRejection(reason: unknown): Promise<void> {
+      const reasonStr = String(reason);
+      app.log.fatal({ reason: reasonStr.slice(0, REASON_TRUNCATE_LIMIT) }, 'unhandled rejection');
+      const emitted =
         app.diag
           ?.emit({
             component: 'api',
@@ -72,9 +101,26 @@ export const errorDiagPlugin = fp(
             message: reasonStr.slice(0, MESSAGE_TRUNCATE_LIMIT),
             payload: { reason: reasonStr.slice(0, REASON_TRUNCATE_LIMIT) },
           })
-          .catch(() => undefined);
+          .catch(() => undefined) ?? Promise.resolve();
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, FATAL_DIAG_TIMEOUT_MS);
+        timer.unref();
       });
+      await Promise.race([emitted, timeout]);
+      clearTimeout(timer);
+      if (!exitOnUnhandledRejection) return;
+      process.exitCode = 1;
+      process.exit(1);
     }
+
+    const onUnhandledRejection = (reason: unknown) => {
+      void reportFatalRejection(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    app.addHook('onClose', async () => {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+    });
   },
   { name: 'error-diag' },
 );

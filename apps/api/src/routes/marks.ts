@@ -1,12 +1,14 @@
 import { markTypes, type PlayerMarkRow, playerMarks, players } from '@squad/db/schema';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
 import { ensureMarkTypes } from '../lib/mark-types.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 
 const COMMENT_MAX = 512;
 
@@ -22,31 +24,11 @@ const clearMarkBody = z
 const listQuery = z.object({ include_cleared: z.enum(['true', 'false']).optional() });
 const markTypesQuery = z.object({ include_inactive: z.enum(['true', 'false']).optional() });
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 /**
  * Detects Postgres `23505` (unique violation). Drizzle wraps driver errors in a
  * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
  * error itself — the chain has to be walked.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 function serializeMark(row: PlayerMarkRow) {
   return {
@@ -136,7 +118,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/mark-types',
-    { schema: { querystring: markTypesQuery }, config: { audit: false } },
+    {
+      schema: { querystring: markTypesQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -159,44 +144,51 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/marks/active-summary', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select({
-        playerId: playerMarks.playerId,
-        markTypeId: markTypes.id,
-        slug: markTypes.slug,
-        labelEn: markTypes.labelEn,
-        labelRu: markTypes.labelRu,
-        icon: markTypes.icon,
-        severity: markTypes.severity,
-      })
-      .from(playerMarks)
-      .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
-      .where(isNull(playerMarks.clearedAt))
-      .orderBy(desc(markTypes.severity), asc(markTypes.sortOrder));
-    const byPlayer = new Map<string, Array<Record<string, unknown>>>();
-    for (const row of rows) {
-      const marks = byPlayer.get(row.playerId) ?? [];
-      marks.push({
-        mark_type_id: row.markTypeId,
-        slug: row.slug,
-        label_en: row.labelEn,
-        label_ru: row.labelRu,
-        icon: row.icon,
-        severity: row.severity,
-      });
-      byPlayer.set(row.playerId, marks);
-    }
-    return {
-      items: Array.from(byPlayer.entries()).map(([player_id, marks]) => ({ player_id, marks })),
-    };
-  });
+  fast.get(
+    '/api/v1/marks/active-summary',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const rows = await app.db
+        .select({
+          playerId: playerMarks.playerId,
+          markTypeId: markTypes.id,
+          slug: markTypes.slug,
+          labelEn: markTypes.labelEn,
+          labelRu: markTypes.labelRu,
+          icon: markTypes.icon,
+          severity: markTypes.severity,
+        })
+        .from(playerMarks)
+        .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
+        .where(isNull(playerMarks.clearedAt))
+        .orderBy(desc(markTypes.severity), asc(markTypes.sortOrder));
+      const byPlayer = new Map<string, Array<Record<string, unknown>>>();
+      for (const row of rows) {
+        const marks = byPlayer.get(row.playerId) ?? [];
+        marks.push({
+          mark_type_id: row.markTypeId,
+          slug: row.slug,
+          label_en: row.labelEn,
+          label_ru: row.labelRu,
+          icon: row.icon,
+          severity: row.severity,
+        });
+        byPlayer.set(row.playerId, marks);
+      }
+      return {
+        items: Array.from(byPlayer.entries()).map(([player_id, marks]) => ({ player_id, marks })),
+      };
+    },
+  );
 
   fast.get(
     '/api/v1/players/:playerId/marks',
-    { schema: { params: playerIdParams, querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: listQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -217,7 +209,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/players/:playerId/marks',
-    { schema: { params: playerIdParams, body: createMarkBody }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, body: createMarkBody },
+      config: { permissions: ['player:set_flags'], audit: 'manual' },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -314,7 +309,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/players/:playerId/marks/:markId',
-    { schema: { params: markParams, body: clearMarkBody }, config: { audit: false } },
+    {
+      schema: { params: markParams, body: clearMarkBody },
+      config: { permissions: ['player:set_flags'], audit: 'manual' },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -342,15 +340,24 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const before = serializeMark(mark);
+      // `cleared_at IS NULL` makes the clear a compare-and-set: of two
+      // concurrent requests that both passed the check above, only one
+      // updates the row, audits and publishes; the other gets the 409.
       const updated = await app.db
         .update(playerMarks)
         .set({ clearedBy: actorId, clearedAt: new Date(), clearReason })
-        .where(eq(playerMarks.id, markId))
+        .where(
+          and(
+            eq(playerMarks.id, markId),
+            eq(playerMarks.playerId, playerId),
+            isNull(playerMarks.clearedAt),
+          ),
+        )
         .returning();
       const row = updated[0];
       if (!row) {
-        reply.code(500);
-        return { error: 'update_failed' };
+        reply.code(409);
+        return { error: 'mark_already_cleared' };
       }
 
       await writeAuditEntry(app.db, {

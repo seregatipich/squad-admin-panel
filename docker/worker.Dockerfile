@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS base
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS base
 ARG PNPM_VERSION=9.15.0
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -57,6 +57,9 @@ RUN pnpm turbo run build --filter="./apps/workers/*" --cache=local:,remote: && \
     cp -a --parents packages/*/dist apps/workers/*/dist /out/
 
 FROM base AS runtime
+# Spared by the panel's docker prune (--filter label!=panel.preserve=true) so the
+# previous release stays loaded for scripts/rollback-stand.sh.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 # systemd provides journalctl for worker-diag-flush's journald forwarding; it
 # is installed for every worker because they share this image.
@@ -70,4 +73,7 @@ COPY --from=builder /out /app
 ARG WORKER=
 ENV WORKER=$WORKER
 WORKDIR /app
+# Unprivileged by default (#47). Compose overrides the user only where a
+# worker needs it: the panel GID for the bridge socket, root for host files.
+USER node
 CMD ["sh", "-c", "test -n \"$WORKER\" || { echo 'WORKER is not set' >&2; exit 64; }; cd \"/app/apps/workers/$WORKER\" && exec node --enable-source-maps dist/index.js"]

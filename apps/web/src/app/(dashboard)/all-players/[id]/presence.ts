@@ -1,3 +1,5 @@
+import { serverLabel } from '@/lib/format';
+
 export type SessionMode = 'online' | 'boost' | 'queue' | 'seed';
 
 export interface PresenceSession {
@@ -41,8 +43,6 @@ export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 export const WEEK_DAYS = 7;
 
-export const BONUS_FORMULA_LABEL = 'online + 2×boost';
-
 export const MODE_LABELS: Record<SessionMode, string> = {
   online: 'Онлайн',
   boost: 'Буст',
@@ -56,12 +56,6 @@ export const MODE_HEX: Record<SessionMode, string> = {
   queue: '#409cff',
   seed: '#bf5af2',
 };
-
-export function bonusValueSeconds(
-  totals: Pick<PresenceTotals, 'online_seconds' | 'boost_seconds' | 'queue_seconds'>,
-): number {
-  return totals.online_seconds + 2 * totals.boost_seconds;
-}
 
 export function utcDayKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
@@ -179,10 +173,6 @@ function hexWithAlpha(hex: string, alpha: number): string {
     .toString(16)
     .padStart(2, '0');
   return `${hex}${byte}`;
-}
-
-export function serverLabel(server: Pick<ServerPresence, 'server_slug' | 'server_name'>): string {
-  return server.server_slug ?? server.server_name ?? '—';
 }
 
 export function sortServersByOnline(servers: ServerPresence[]): ServerPresence[] {

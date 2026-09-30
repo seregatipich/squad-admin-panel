@@ -1,8 +1,7 @@
-import { type ChatFlagDetector, handleChat } from '@squad/chat-ingest';
+import { type ChatFlagDetector, handleChat, type PlayerIdCache } from '@squad/chat-ingest';
 import {
   type DatabaseClient,
   events,
-  type GeoLookup,
   layers,
   notifySeedSubscribers,
   serverSettings,
@@ -10,9 +9,8 @@ import {
   splitOpenSessionsAtSeedingTransition,
 } from '@squad/db';
 import type { Diag } from '@squad/diag';
-import type { RconRefreshScope } from '@squad/shared-config';
+import { type RconRefreshScope, seedPublicHost } from '@squad/shared-config';
 import {
-  CONSUMER_GROUP,
   type EventEnvelope,
   SQUAD_CROWNS_TTL_SECONDS,
   STREAM_NAME,
@@ -37,7 +35,12 @@ import {
   upsertPlayers,
 } from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
-import { computeSeedingTick, isSeedLayer, type SeedingState } from './seeding.js';
+import {
+  computeSeedingTick,
+  isSeedLayer,
+  type SeedingState,
+  seedingStateSchema,
+} from './seeding.js';
 import { parseSquadCreatedBroadcast, type SquadCreatedBroadcast } from './squad-broadcast.js';
 import { applySquadEvent, type CrownBook, crownBookFromHash, crownOf } from './squad-crowns.js';
 import {
@@ -95,6 +98,11 @@ export interface Target {
   seedLiveAt?: number;
   seedHysteresis?: number;
   password: string;
+  /**
+   * The host is operator-supplied (an external server), so the client must
+   * refuse loopback/link-local addresses — see `RconClientOptions`.
+   */
+  refuseRestrictedAddresses?: boolean;
 }
 
 export interface SupervisorOptions {
@@ -122,12 +130,16 @@ export interface SupervisorOptions {
   hintFollowUpMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
-  geoLookup?: GeoLookup | null;
   /**
    * Profanity/flag matcher applied to incoming chat (CHATLOG-5). Shared across
    * every supervisor so the rule cache is loaded once.
    */
   chatFlagDetector?: ChatFlagDetector | null;
+  /**
+   * Sender cache for chat identity lookups, shared across every supervisor.
+   * Without one, every chat line runs the identity queries.
+   */
+  playerIds?: PlayerIdCache;
 }
 
 /** True when the parameters that pick the TCP/UDP endpoint or the AUTH secret differ. */
@@ -158,8 +170,12 @@ export class RconSupervisor {
         // external server, or a rotated Rcon.cfg). The running supervisor
         // holds the old dial parameters, so replace it rather than let it
         // retry a dead endpoint until the next worker restart.
-        await this.supervisors.get(id)?.stop();
+        // Unregister before awaiting: a reconcile that overlaps this one must
+        // not find the old supervisor still registered and replace it too,
+        // which would orphan whichever supervisor was created in between.
+        const stale = this.supervisors.get(id);
         this.supervisors.delete(id);
+        await stale?.stop();
         redialed.push(id);
       }
       if (!this.supervisors.has(id)) {
@@ -174,9 +190,10 @@ export class RconSupervisor {
     }
     for (const id of Array.from(this.supervisors.keys())) {
       if (!incoming.has(id)) {
-        await this.supervisors.get(id)?.stop();
+        const stale = this.supervisors.get(id);
         this.supervisors.delete(id);
         this.targets.delete(id);
+        await stale?.stop();
         removed.push(id);
       }
     }
@@ -235,6 +252,8 @@ class PerServerSupervisor {
    * roster refresh waiting behind a full poll would fire late and pointlessly.
    */
   private pollInFlight = false;
+  /** A full poll tick arrived while a lighter refresh held the client. */
+  private fullPollPending = false;
   /**
    * Last known connected-state fields. The roster, info and full-poll paths
    * each refresh a slice of them; every status write carries the whole set so
@@ -243,8 +262,19 @@ class PerServerSupervisor {
   private connectedStatus: ConnectedStatus = {};
   /** Signature of the last `rcon:status:changed` publish; see {@link PUBLISHED_STATUS_FIELDS}. */
   private lastPublishedStatus: string | null = null;
+  /** Signature of the last `rcon.roster` composition actually published; see {@link writeRoster}. */
+  private lastPublishedRoster: string | null = null;
   private backoffMs: number;
   private onDisconnect?: () => void;
+  /** The in-flight `connectLoop()` call; `stop()` awaits it so a replacement supervisor never races its teardown. */
+  private connectLoopPromise?: Promise<void>;
+  /**
+   * Resolved once, by `stop()`, and raced against both the connected-session
+   * wait and the reconnect backoff sleep so `stop()` interrupts either at once
+   * instead of leaving the loop pending for up to `maxBackoffMs` (#982).
+   */
+  private readonly stopSignal: Promise<void>;
+  private resolveStopSignal!: () => void;
   /** Serialises chat ingestion for this server; see {@link ingestBroadcast}. */
   private chatQueue: Promise<void> = Promise.resolve();
   private consecutivePollFails = 0;
@@ -292,12 +322,15 @@ class PerServerSupervisor {
     private readonly opts: SupervisorOptions,
   ) {
     this.backoffMs = opts.initialBackoffMs ?? 1000;
+    this.stopSignal = new Promise((resolve) => {
+      this.resolveStopSignal = resolve;
+    });
   }
 
   async start(): Promise<void> {
     await this.loadPriorSeedingState();
     await this.loadPriorCrowns();
-    this.connectLoop().catch((err) =>
+    this.connectLoopPromise = this.connectLoop().catch((err) =>
       this.opts.log.error(
         { err: (err as Error).message, serverId: this.target.serverId },
         'supervisor failed',
@@ -311,10 +344,8 @@ class PerServerSupervisor {
     try {
       const raw = await this.opts.redis.get(`seeding:state:${this.target.serverId}`);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as SeedingState;
-      if (parsed && (parsed.state === 'seeding' || parsed.state === 'live')) {
-        this.seedingState = parsed;
-      }
+      const parsed = seedingStateSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) this.seedingState = parsed.data;
     } catch {
       // best-effort restore; a missing/invalid key just means we start fresh
     }
@@ -337,9 +368,18 @@ class PerServerSupervisor {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    // Wakes connectLoop at once, whether it holds a live session or sleeps in
+    // backoff, and waits for its own teardown (closing sessions, writing the
+    // 'disconnected' status). Otherwise a caller that reconciles by starting a
+    // fresh supervisor for the same server could see this one's late
+    // 'disconnected' write overwrite the new 'connected' one (#982).
+    this.resolveStopSignal();
+    await this.connectLoopPromise?.catch(() => undefined);
+    // No-ops on the ordinary path (the loop's finally already did this); the
+    // net for stop() before start() ever ran the loop.
     this.clearTimers();
     await this.stopCommandQueue();
-    await this.client?.close();
+    await this.client?.close().catch(() => undefined);
     this.client = undefined;
     // The connect loop's own teardown normally closes the sessions, but a poll
     // still in flight when stop() was called can reopen them right after it.
@@ -415,6 +455,21 @@ class PerServerSupervisor {
     } catch {
       // roster cache is telemetry; the live event below still fans out
     }
+    // `scheduleRosterRefresh` calls this on every tick (every
+    // rosterIntervalMs, default 2s) even when nobody joined, left, or moved
+    // squads. Publishing unconditionally turned every open server page into
+    // an effectively-2s poll dressed up as an event: each `rcon.roster`
+    // fires a full GET /roster (Postgres join) on the client. Compare a
+    // signature of the fields the roster view actually renders and skip the
+    // publish when nothing changed — mirrors `writeStatus`'s
+    // `lastPublishedStatus` guard above.
+    const signature = JSON.stringify(
+      entries
+        .map((e) => [e.rcon_id, e.eos_id, e.name, e.team_id, e.squad_id, e.is_leader, e.role])
+        .sort((a, b) => (a[0] as number) - (b[0] as number)),
+    );
+    if (signature === this.lastPublishedRoster) return;
+    this.lastPublishedRoster = null;
     try {
       await this.opts.redis.publish(
         'live-bus',
@@ -428,6 +483,9 @@ class PerServerSupervisor {
           },
         }),
       );
+      // Remembered only once delivered, so a failed publish is retried by
+      // the next tick even when the composition didn't change again.
+      this.lastPublishedRoster = signature;
     } catch {
       // best-effort fan-out; the SET above is the source of truth
     }
@@ -457,19 +515,20 @@ class PerServerSupervisor {
   private async resolveLayerIsSeed(layerName: string | null): Promise<boolean | null> {
     if (!layerName) return null;
     if (this.layerIsSeedCache.has(layerName)) return this.layerIsSeedCache.get(layerName) ?? null;
-    let result: boolean | null = null;
     try {
       const rows = await this.opts.db
         .select({ isSeed: layers.isSeed })
         .from(layers)
         .where(eq(layers.name, layerName))
         .limit(1);
-      result = rows[0]?.isSeed ?? null;
+      const result = rows[0]?.isSeed ?? null;
+      this.layerIsSeedCache.set(layerName, result);
+      return result;
     } catch {
-      result = null;
+      // Not cached: a transient database error must not pin this layer to the
+      // name-based fallback until the supervisor restarts.
+      return null;
     }
-    this.layerIsSeedCache.set(layerName, result);
-    return result;
   }
 
   private async writeSeedingState(state: SeedingState): Promise<void> {
@@ -532,10 +591,16 @@ class PerServerSupervisor {
           }),
         ]);
         if (server && settings) {
+          // Never `this.target.host`: that is the RCON dial target (loopback
+          // for a local server), useless to a player's Steam client (#980).
+          // The link is omitted when no public host is configured.
+          const publicHost = seedPublicHost();
           eventPayload = {
             ...payload,
             server_name: server.displayName,
-            join_link: `steam://connect/${this.target.host}:${settings.gamePort}`,
+            ...(publicHost
+              ? { join_link: `steam://connect/${publicHost}:${settings.gamePort}` }
+              : {}),
           };
         }
       } catch (err) {
@@ -829,6 +894,12 @@ class PerServerSupervisor {
                 { err: err.message, serverId: this.target.serverId },
                 'rcon chat archive insert failed',
               ),
+            onFlagError: (err) =>
+              this.opts.log.warn(
+                { err: err.message, serverId: this.target.serverId },
+                'rcon chat flag detection failed',
+              ),
+            playerIds: this.opts.playerIds,
           },
           this.opts.chatFlagDetector ?? null,
         ),
@@ -843,6 +914,21 @@ class PerServerSupervisor {
       );
   }
 
+  /** Sleeps `ms`, or returns once `stop()` fires; the timer never outlives the call. */
+  private async sleepOrStop(ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, ms);
+        }),
+        this.stopSignal,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       let lastDisconnectReason: string | undefined;
@@ -855,6 +941,7 @@ class PerServerSupervisor {
           host: this.target.host,
           port: this.target.port,
           password: this.target.password,
+          refuseRestrictedAddresses: this.target.refuseRestrictedAddresses,
           log: this.opts.log.child({ serverId: this.target.serverId }),
           onDisconnect: (reason) => {
             this.opts.log.warn(
@@ -895,17 +982,10 @@ class PerServerSupervisor {
         // Fill the roster and server info right away instead of leaving the
         // panel empty until the first timer tick.
         this.requestRefresh(['roster', 'info']);
-        await Promise.race([
-          disconnected,
-          new Promise<void>((resolve) => {
-            const check = setInterval(() => {
-              if (this.stopped) {
-                clearInterval(check);
-                resolve();
-              }
-            }, 1000);
-          }),
-        ]);
+        // The stop signal replaces a per-connection 1s polling interval that
+        // was never cleared on an ordinary disconnect and leaked one timer per
+        // reconnect (#983).
+        await Promise.race([disconnected, this.stopSignal]);
       } catch (err) {
         const msg = (err as Error).message;
         this.opts.log.warn(
@@ -968,7 +1048,7 @@ class PerServerSupervisor {
             backoffMs: this.backoffMs,
           },
         });
-        await new Promise((r) => setTimeout(r, this.backoffMs));
+        await this.sleepOrStop(this.backoffMs);
         this.backoffMs = Math.min(this.backoffMs * 2, this.opts.maxBackoffMs ?? 60_000);
       } else {
         await this.writeStatus('disconnected', { reason: 'supervisor-stopped' });
@@ -1136,6 +1216,7 @@ class PerServerSupervisor {
       );
     } finally {
       this.pollInFlight = false;
+      this.resumeDeferredPoll();
     }
   }
 
@@ -1181,26 +1262,62 @@ class PerServerSupervisor {
       );
     } finally {
       this.pollInFlight = false;
+      this.resumeDeferredPoll();
     }
+  }
+
+  private resumeDeferredPoll(): void {
+    if (this.fullPollPending && !this.stopped) void this.runFullPoll();
   }
 
   private schedulePoll(): void {
     const interval = this.opts.pollIntervalMs ?? 30_000;
-    this.pollTimer = setInterval(async () => {
-      if (!this.client || this.pollInFlight) return;
-      this.pollInFlight = true;
+    this.pollTimer = setInterval(() => void this.runFullPoll(), interval);
+  }
+
+  /**
+   * One full poll: RCON snapshot, player upsert, kit-time accrual, sessions,
+   * seeding, then an A2S probe. When a roster or info refresh holds the client
+   * the poll is not dropped: it is remembered in `fullPollPending` and started
+   * as soon as that refresh finishes ({@link resumeDeferredPoll}). Skipping it
+   * would postpone kit-time accrual, sessions and seeding by a whole interval
+   * and make the next accrual look like a missed poll.
+   */
+  private async runFullPoll(): Promise<void> {
+    if (!this.client) return;
+    if (this.pollInFlight) {
+      this.fullPollPending = true;
+      return;
+    }
+    this.fullPollPending = false;
+    this.pollInFlight = true;
+    try {
+      const start = Date.now();
+      const rawPlayers = await this.client.exec('ListPlayers');
+      const rawSquads = await this.client.exec('ListSquads');
+      const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
+      const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
+      const players = parseListPlayers(rawPlayers);
+      const squads = parseListSquads(rawSquads);
+      const info = rawInfo ? parseServerInfo(rawInfo) : null;
+      const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
+      // A database failure must not count as an RCON failure: three of those
+      // in a row close a healthy client and its admin command queue (#981).
       try {
-        const start = Date.now();
-        const rawPlayers = await this.client.exec('ListPlayers');
-        const rawSquads = await this.client.exec('ListSquads');
-        const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
-        const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
-        const players = parseListPlayers(rawPlayers);
-        const squads = parseListSquads(rawSquads);
-        const info = rawInfo ? parseServerInfo(rawInfo) : null;
-        const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
-        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
-        const pollAt = new Date();
+        await upsertPlayers(this.opts.db, players, (player, err) =>
+          this.opts.log.warn(
+            { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
+            'player upsert failed',
+          ),
+        );
+      } catch (err) {
+        this.opts.log.warn(
+          { err: (err as Error).message, serverId: this.target.serverId },
+          'player upsert failed (db); rcon connection unaffected',
+        );
+      }
+      const pollAt = new Date();
+      try {
         await accruePlayerKitTime(
           this.opts.db,
           players,
@@ -1209,41 +1326,50 @@ class PerServerSupervisor {
           this.target.serverId,
           this.opts.pollIntervalMs ?? 30_000,
         );
-        this.lastKitAccrualAt = pollAt;
-        this.consecutivePollFails = 0;
-        const polledAt = pollAt.toISOString();
-        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
-        this.rosterFirstSeen = firstSeen;
-        await this.reconcileSessions(players, firstSeen, pollAt);
-        this.lastSuccessfulPollAt = pollAt;
-        await this.writeRoster(entries, polledAt);
-        await this.writeSquads(squads, polledAt);
-        await this.trackSquads(squads, players, polledAt);
-        const pollMs = Date.now() - start;
-        this.opts.log.info(
-          {
-            serverId: this.target.serverId,
-            ms: pollMs,
-            n: players.length,
-            squads: squads.length,
-          },
-          'poll listplayers',
+      } catch (err) {
+        this.opts.log.warn(
+          { err: (err as Error).message, serverId: this.target.serverId },
+          'kit-time accrual failed (db); rcon connection unaffected',
         );
-        await this.emitEvent('rcon.players_polled', {
-          players: players
-            .filter((p) => p.steam_id64 !== null)
-            .map((p) => ({
-              steam_id64: p.steam_id64,
-              eos_id: p.eos_id,
-              name: p.name,
-              team_id: p.team_id,
-              squad_id: p.squad_id,
-              is_leader: p.is_leader ?? false,
-              role: p.role ?? undefined,
-            })),
-          polled_at: polledAt,
-          latency_ms: Date.now() - start,
-        });
+      }
+      this.lastKitAccrualAt = pollAt;
+      this.consecutivePollFails = 0;
+      const polledAt = pollAt.toISOString();
+      const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+      this.rosterFirstSeen = firstSeen;
+      await this.reconcileSessions(players, firstSeen, pollAt);
+      this.lastSuccessfulPollAt = pollAt;
+      await this.writeRoster(entries, polledAt);
+      await this.writeSquads(squads, polledAt);
+      await this.trackSquads(squads, players, polledAt);
+      const pollMs = Date.now() - start;
+      this.opts.log.info(
+        {
+          serverId: this.target.serverId,
+          ms: pollMs,
+          n: players.length,
+          squads: squads.length,
+        },
+        'poll listplayers',
+      );
+      await this.emitEvent('rcon.players_polled', {
+        players: players
+          .filter((p) => p.steam_id64 !== null)
+          .map((p) => ({
+            steam_id64: p.steam_id64,
+            eos_id: p.eos_id,
+            name: p.name,
+            team_id: p.team_id,
+            squad_id: p.squad_id,
+            is_leader: p.is_leader ?? false,
+            role: p.role ?? undefined,
+          })),
+        polled_at: polledAt,
+        latency_ms: Date.now() - start,
+      });
+      // A poll still in flight when stop() ran must not write 'connected' or
+      // seeding events for a supervisor already torn down (#982).
+      if (this.client && !this.stopped) {
         await this.writeStatus('connected', {
           player_count: players.length,
           last_poll_at: new Date().toISOString(),
@@ -1258,104 +1384,106 @@ class PerServerSupervisor {
           // ShowServerInfo already parses PublicQueue_I, it just was not stored.
           public_queue: info?.public_queue ?? undefined,
         });
+      }
 
-        if (typeof info?.tickrate === 'number') {
-          const configured = this.target.tickrate ?? 50;
-          const threshold = configured * 0.8;
-          if (info.tickrate < threshold) {
-            this.consecutiveLowTick++;
-            if (this.consecutiveLowTick >= 3) {
-              this.opts.log.warn(
-                {
-                  serverId: this.target.serverId,
-                  tickrate: info.tickrate,
-                  threshold,
-                  configured,
-                  consecutive_low: this.consecutiveLowTick,
-                },
-                'performance degraded: tickrate below threshold',
-              );
-              await this.emitEvent('performance.degraded', {
+      if (typeof info?.tickrate === 'number') {
+        const configured = this.target.tickrate ?? 50;
+        const threshold = configured * 0.8;
+        if (info.tickrate < threshold) {
+          this.consecutiveLowTick++;
+          if (this.consecutiveLowTick >= 3) {
+            this.opts.log.warn(
+              {
+                serverId: this.target.serverId,
                 tickrate: info.tickrate,
                 threshold,
                 configured,
                 consecutive_low: this.consecutiveLowTick,
-              });
-            }
-          } else {
-            this.consecutiveLowTick = 0;
+              },
+              'performance degraded: tickrate below threshold',
+            );
+            await this.emitEvent('performance.degraded', {
+              tickrate: info.tickrate,
+              threshold,
+              configured,
+              consecutive_low: this.consecutiveLowTick,
+            });
           }
+        } else {
+          this.consecutiveLowTick = 0;
         }
-
-        await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
-      } catch (err) {
-        this.consecutivePollFails += 1;
-        const reason = (err as Error).message;
-        this.opts.log.warn(
-          { err: reason, serverId: this.target.serverId, fails: this.consecutivePollFails },
-          'ListPlayers poll failed',
-        );
-        await this.writeStatus('connecting', {
-          reason: 'poll-failed',
-          last_error: reason,
-          consecutive_fails: this.consecutivePollFails,
-        });
-        if (this.consecutivePollFails >= 3) {
-          this.opts.log.warn(
-            { serverId: this.target.serverId },
-            'tearing down rcon client after 3 consecutive poll failures',
-          );
-          this.consecutivePollFails = 0;
-          await this.client?.close().catch(() => undefined);
-          this.client = undefined;
-          this.onDisconnect?.();
-        }
-      } finally {
-        // The A2S probe below needs no RCON client, so the roster refresh may
-        // resume as soon as the RCON part of the tick is done.
-        this.pollInFlight = false;
       }
 
-      // A2S query — best-effort, does not affect RCON polling
-      try {
-        const a2sStart = Date.now();
-        const a2sResult = await queryA2S(this.target.host, this.target.queryPort, 2000);
-        const a2sKey = `a2s:status:${this.target.serverId}`;
-        if (a2sResult) {
+      if (!this.stopped) {
+        await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
+      }
+    } catch (err) {
+      this.consecutivePollFails += 1;
+      const reason = (err as Error).message;
+      this.opts.log.warn(
+        { err: reason, serverId: this.target.serverId, fails: this.consecutivePollFails },
+        'ListPlayers poll failed',
+      );
+      await this.writeStatus('connecting', {
+        reason: 'poll-failed',
+        last_error: reason,
+        consecutive_fails: this.consecutivePollFails,
+      });
+      if (this.consecutivePollFails >= 3) {
+        this.opts.log.warn(
+          { serverId: this.target.serverId },
+          'tearing down rcon client after 3 consecutive poll failures',
+        );
+        this.consecutivePollFails = 0;
+        await this.client?.close().catch(() => undefined);
+        this.client = undefined;
+        this.onDisconnect?.();
+      }
+    } finally {
+      // The A2S probe below needs no RCON client, so the roster refresh may
+      // resume as soon as the RCON part of the tick is done.
+      this.pollInFlight = false;
+    }
+
+    // A2S query — best-effort, does not affect RCON polling
+    try {
+      const a2sStart = Date.now();
+      const a2sResult = await queryA2S(this.target.host, this.target.queryPort, 2000);
+      const a2sKey = `a2s:status:${this.target.serverId}`;
+      if (a2sResult) {
+        await this.opts.redis.set(
+          a2sKey,
+          JSON.stringify({
+            visible: a2sResult.visible,
+            server_name: a2sResult.serverName,
+            map: a2sResult.map,
+            players: a2sResult.players,
+            max_players: a2sResult.maxPlayers,
+            latency_ms: Date.now() - a2sStart,
+            queried_at: new Date().toISOString(),
+          }),
+          'EX',
+          90,
+        );
+        this.consecutiveA2SFails = 0;
+      } else {
+        this.consecutiveA2SFails++;
+        if (this.consecutiveA2SFails >= 3) {
           await this.opts.redis.set(
             a2sKey,
             JSON.stringify({
-              visible: a2sResult.visible,
-              server_name: a2sResult.serverName,
-              map: a2sResult.map,
-              players: a2sResult.players,
-              max_players: a2sResult.maxPlayers,
-              latency_ms: Date.now() - a2sStart,
+              visible: false,
+              reason: 'timeout',
               queried_at: new Date().toISOString(),
             }),
             'EX',
             90,
           );
-          this.consecutiveA2SFails = 0;
-        } else {
-          this.consecutiveA2SFails++;
-          if (this.consecutiveA2SFails >= 3) {
-            await this.opts.redis.set(
-              a2sKey,
-              JSON.stringify({
-                visible: false,
-                reason: 'timeout',
-                queried_at: new Date().toISOString(),
-              }),
-              'EX',
-              90,
-            );
-          }
         }
-      } catch {
-        // A2S is best-effort; don't disrupt RCON polling
       }
-    }, interval);
+    } catch {
+      // A2S is best-effort; don't disrupt RCON polling
+    }
   }
 
   /**
@@ -1463,6 +1591,3 @@ class PerServerSupervisor {
     }
   }
 }
-
-// Declare the group constant is referenced so the tree-shaker doesn't drop it.
-export const _consumerGroup = CONSUMER_GROUP;

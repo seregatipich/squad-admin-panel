@@ -220,7 +220,6 @@ export class VoteAssembler {
   onVoteEnd(end: ParsedVoteEnd): VoteRecordCommand[] {
     if (!this.open) return [];
     const ballots = [...this.open.ballots.values()];
-    const yesCount = ballots.filter((ballot) => ballot.choice === 'yes').length;
     const command: VoteRecordCommand = {
       kind: 'record',
       serverId: this.serverId,
@@ -229,7 +228,7 @@ export class VoteAssembler {
       mapCurrent: this.open.mapCurrent,
       mapNext: this.open.mapNext,
       mapTarget: this.open.mapTarget,
-      votesCollected: Number.isFinite(end.votesCollected) ? end.votesCollected : yesCount,
+      votesCollected: end.votesCollected,
       votesRequired: end.votesRequired || this.open.votesRequired,
       result: end.result,
       startedAt: this.open.startedAt,

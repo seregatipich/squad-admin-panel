@@ -28,13 +28,15 @@ describe('automation plugin dispatch (integration)', () => {
   let loop: Promise<void> | null = null;
 
   let stream: string | null = null;
+  let extraStreams: string[] = [];
 
   afterEach(async () => {
     stop?.();
     await loop?.catch(() => undefined);
-    if (stream) {
-      await redis?.del(stream).catch(() => undefined);
+    for (const key of [stream, ...extraStreams]) {
+      if (key) await redis?.del(key).catch(() => undefined);
     }
+    extraStreams = [];
     await redis?.quit().catch(() => undefined);
     redis = null;
     stop = null;
@@ -47,6 +49,8 @@ describe('automation plugin dispatch (integration)', () => {
     group: string,
     streamName: string,
     pluginTimeoutMs?: number,
+    discoverStreams: () => Promise<string[]> = async () => [streamName],
+    streamRefreshMs?: number,
   ) {
     let stopped = false;
     stop = () => {
@@ -64,7 +68,8 @@ describe('automation plugin dispatch (integration)', () => {
       // Pin discovery to this test's own stream so a concurrent process
       // XADDing to the shared `events:global` stream (e.g. another
       // `pnpm test:cov` worker) can never have its envelope delivered here.
-      discoverStreams: async () => [streamName],
+      discoverStreams,
+      streamRefreshMs,
     });
   }
 
@@ -111,9 +116,9 @@ describe('automation plugin dispatch (integration)', () => {
     // same Redis db, so a unique group name alone cannot stop a foreign
     // envelope XADDed by someone else from being delivered here first.
     stream = `events:test:${randomUUID()}`;
-    // Create the consumer group (positioned at '$') before anything is
-    // pushed, so the dispatch loop's own (idempotent) group creation can't
-    // race against the XADD below and miss the entry.
+    // Create the consumer group before anything is pushed, so the dispatch
+    // loop's own (idempotent) group creation can't race against the XADD
+    // below.
     await ensureConsumerGroup(redis, stream, group);
     const received: EventEnvelope[] = [];
     const registry = new PluginRegistry();
@@ -129,6 +134,31 @@ describe('automation plugin dispatch (integration)', () => {
 
     await pollUntil(() => received.length === 1);
     expect(received[0]).toEqual(envelope);
+  });
+
+  // #60: the very first discovery of a fresh consumer group starts at '$' so a
+  // first deploy does not replay the stream's history into the automations.
+  it('does not replay history already in a stream at the first discovery', async () => {
+    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
+    const group = `test-group-${randomUUID()}`;
+    stream = `events:test:${randomUUID()}`;
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(makeEnvelope()));
+    const received: EventEnvelope[] = [];
+    const registry = new PluginRegistry();
+    registry.register(
+      subscribedHandler('receiver-plugin', ['player.connected'], (event) => {
+        received.push(event);
+      }),
+    );
+    startLoop(registry, group, stream);
+    await sleep(600);
+
+    const live = makeEnvelope();
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(live));
+
+    await pollUntil(() => received.length === 1);
+    await sleep(300);
+    expect(received).toEqual([live]);
   });
 
   it('a plugin not subscribed to the kind never receives it, while a subscribed one does', async () => {
@@ -194,4 +224,64 @@ describe('automation plugin dispatch (integration)', () => {
     await pollUntil(() => survivorReceived.length === 2);
     expect(survivorReceived[1]).toEqual(secondEnvelope);
   }, 15_000);
+  // #60 finding 1291: groups were created at '$' after SCAN found a stream, so
+  // the XADD that created a new server's stream (and anything before the next
+  // poll) was never delivered.
+  it('delivers the first events of a stream that appears while the loop runs', async () => {
+    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
+    const group = `test-group-${randomUUID()}`;
+    const anchor = `events:test:${randomUUID()}`;
+    stream = `events:test:${randomUUID()}`;
+    extraStreams = [anchor];
+    let streamExists = false;
+    const received: EventEnvelope[] = [];
+    const registry = new PluginRegistry();
+    registry.register(
+      subscribedHandler('receiver-plugin', ['player.connected'], (envelope) => {
+        received.push(envelope);
+      }),
+    );
+    startLoop(
+      registry,
+      group,
+      stream,
+      undefined,
+      async () => (streamExists ? [anchor, stream as string] : [anchor]),
+      100,
+    );
+    await sleep(400);
+
+    const first = makeEnvelope();
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(first));
+    streamExists = true;
+
+    await pollUntil(() => received.length === 1);
+    expect(received[0]).toEqual(first);
+  });
+
+  it('keeps reading after a known stream is deleted and re-created', async () => {
+    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
+    const group = `test-group-${randomUUID()}`;
+    stream = `events:test:${randomUUID()}`;
+    await ensureConsumerGroup(redis, stream, group);
+    const received: EventEnvelope[] = [];
+    const registry = new PluginRegistry();
+    registry.register(
+      subscribedHandler('receiver-plugin', ['player.connected'], (envelope) => {
+        received.push(envelope);
+      }),
+    );
+    startLoop(registry, group, stream);
+    const before = makeEnvelope();
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(before));
+    await pollUntil(() => received.length === 1);
+
+    // DEL drops the stream and its group; the next XADD re-creates a bare stream.
+    await redis.del(stream);
+    const after = makeEnvelope();
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(after));
+
+    await pollUntil(() => received.length === 2);
+    expect(received[1]).toEqual(after);
+  });
 });

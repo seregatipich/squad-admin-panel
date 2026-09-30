@@ -153,6 +153,28 @@ describe('GET /api/v1/banned-names', () => {
     expect(inactiveBody.items[0]?.pattern).toBe('nigger');
   });
 
+  it('treats LIKE wildcards and backslashes in search literally (#120)', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: 'bad_name', match_type: 'exact' });
+    await createRule(cookie, { pattern: 'badxname', match_type: 'exact' });
+    await createRule(cookie, { pattern: '100%troll', match_type: 'substring' });
+    await createRule(cookie, { pattern: 'back\\slash', match_type: 'substring' });
+
+    const search = async (term: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/banned-names?search=${encodeURIComponent(term)}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { items: Array<{ pattern: string }> }).items.map((i) => i.pattern);
+    };
+
+    expect(await search('d_n')).toEqual(['bad_name']);
+    expect(await search('%')).toEqual(['100%troll']);
+    expect(await search('k\\s')).toEqual(['back\\slash']);
+  });
+
   it('paginates via page/page_size', async () => {
     const cookie = await loginAsOwner(h);
     for (let i = 0; i < 5; i++) {
@@ -238,6 +260,17 @@ describe('POST /api/v1/banned-names — three match types + audit', () => {
     expect(body.error).toBe('invalid_pattern');
     expect(typeof body.detail).toBe('string');
     expect((body.detail as string).length).toBeGreaterThan(0);
+  });
+
+  // Audit #115.
+  it('rejects a catastrophically backtracking regex with 422', async () => {
+    const cookie = await loginAsOwner(h);
+    const { statusCode, body } = await createRule(cookie, {
+      pattern: '(a+)+$',
+      match_type: 'regex',
+    });
+    expect(statusCode).toBe(422);
+    expect(body).toMatchObject({ error: 'invalid_pattern', detail: 'pattern_unsafe_regex' });
   });
 
   it('rejects a pattern longer than 256 chars with 422', async () => {
@@ -379,6 +412,29 @@ describe('RBAC — squad-permission "ban" gate', () => {
     expect(del.statusCode).toBe(403);
   });
 
+  // Audit #116 — denied and rejected mutations reach audit_log too.
+  it('audits a 403 create by a user without ban and a 422 invalid regex', async () => {
+    const noBanCookie = await asRole({ squadBan: false });
+    const denied = await createRule(noBanCookie, { pattern: 'nope', match_type: 'exact' });
+    expect(denied.statusCode).toBe(403);
+    const deniedRow = await assertAuditRow(h, {
+      action: 'banned_name.create',
+      resource: 'banned_name',
+      statusCode: 403,
+    });
+    expect(deniedRow.statusCode).toBe(403);
+
+    const banCookie = await asRole({ squadBan: true });
+    const invalid = await createRule(banCookie, { pattern: '(unclosed', match_type: 'regex' });
+    expect(invalid.statusCode).toBe(422);
+    const invalidRow = await assertAuditRow(h, {
+      action: 'banned_name.create',
+      resource: 'banned_name',
+      statusCode: 422,
+    });
+    expect(invalidRow.statusCode).toBe(422);
+  });
+
   it('non-owner role holding the ban squad-permission can mutate', async () => {
     const cookie = await asRole({ squadBan: true });
     const { statusCode, body } = await createRule(cookie, {
@@ -413,7 +469,7 @@ describe('RBAC — squad-permission "ban" gate', () => {
     ];
     for (const request of requests) {
       const res = await h.app.inject({ ...request, headers: { cookie } });
-      expect(res.statusCode, `${request.method} ${request.url}`).toBe(403);
+      expect(res.statusCode, `${request.method} ${request.url}`).toBe(401);
     }
     const stored = await h.db
       .select({ isActive: bannedNameRules.isActive })
@@ -424,6 +480,17 @@ describe('RBAC — squad-permission "ban" gate', () => {
 });
 
 describe('GET /api/v1/banned-names/check — BANNAME-3 nick badge check', () => {
+  // Audit #115 — the nickname is player-controlled input to every regex rule.
+  it('400s a nickname longer than BANNED_NAME_NICK_MAX', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/banned-names/check?nick=${'a'.repeat(65)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('401 without a session', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/banned-names/check?nick=x' });
     expect(res.statusCode).toBe(401);

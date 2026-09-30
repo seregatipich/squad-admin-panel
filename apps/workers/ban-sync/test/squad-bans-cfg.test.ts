@@ -54,3 +54,12 @@ describe('parseSquadBansCfg', () => {
     expect(skipped).toBe(0);
   });
 });
+
+describe('parseSquadBansCfg out-of-range expiry', () => {
+  it('counts a line whose expiry overflows the Date range as skipped', async () => {
+    const { parseSquadBansCfg } = await import('../src/adapters/squad-bans-cfg.js');
+    const result = parseSquadBansCfg('Banned:76561198000000010:99999999999999');
+    expect(result.records).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+  });
+});

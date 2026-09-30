@@ -1,3 +1,5 @@
+import { BAN_LENGTH_PATTERN } from '@squad/shared-config';
+
 /**
  * Pure helpers for CBAN-5 outbound banlist federation: turning
  * `moderation_actions` ban rows into the public `squad_cfg`/`json` banlist
@@ -7,10 +9,11 @@
 
 export type BanlistPublishScope = 'all_active' | 'permanent_only';
 
-/** Matches the RCON-worker `AdminBan` duration syntax (see commands.ts). */
-const BAN_LENGTH_PATTERN = /^(\d+)([smhdwMy])?$/;
-
-const UNIT_MILLISECONDS: Record<string, number> = {
+/**
+ * Milliseconds per `AdminBan` duration unit. Exported so the SQL prefilter in
+ * `routes/public-banlist.ts` computes expiry with exactly the same table.
+ */
+export const BAN_LENGTH_UNIT_MILLISECONDS: Readonly<Record<string, number>> = {
   s: 1_000,
   m: 60_000,
   h: 3_600_000,
@@ -30,8 +33,8 @@ const UNIT_MILLISECONDS: Record<string, number> = {
  *
  * Grammar: a bare number of days, or a number followed by a unit suffix
  * (`s`/`m`/`h`/`d`/`w`/`M`/`y`); `0` (with or without a unit) means
- * permanent. A missing, empty, or malformed value is also treated as
- * permanent — this matches `AdminBan`'s own `'0'` default and errs on the
+ * permanent. A missing, empty, or malformed value, and a duration too long
+ * to represent as a `Date`, is also treated as permanent — this matches `AdminBan`'s own `'0'` default and errs on the
  * side of not under-publishing an enforcement action.
  */
 export function parseBanLengthToExpiry(
@@ -48,8 +51,13 @@ export function parseBanLengthToExpiry(
   if (!Number.isFinite(amount) || amount === 0) return null;
 
   const unit = match[2] ?? 'd';
-  const unitMs = UNIT_MILLISECONDS[unit] ?? UNIT_MILLISECONDS.d ?? 86_400_000;
-  return new Date(issuedAt.getTime() + amount * unitMs);
+  const unitMs = BAN_LENGTH_UNIT_MILLISECONDS[unit] ?? BAN_LENGTH_UNIT_MILLISECONDS.d ?? 86_400_000;
+  const expiry = new Date(issuedAt.getTime() + amount * unitMs);
+  // A duration past the Date range (e.g. '300000y') yields an Invalid Date,
+  // which every `expiresAt > now` comparison reads as "already expired".
+  // Such a ban is permanent for every practical purpose.
+  if (Number.isNaN(expiry.getTime())) return null;
+  return expiry;
 }
 
 /** A single `moderation_actions` ban row as read from the database. */
@@ -101,7 +109,10 @@ function toEntry(row: ModerationBanRow): BanlistEntry & { expiresAtMs: number | 
  * - Expired temporary bans (`expiresAt <= now`) are dropped.
  * - `scope === 'permanent_only'` additionally drops every temporary ban.
  * - Multiple ban rows for the same player are deduplicated, keeping the
- *   permanent one if any exists, otherwise the one with the latest expiry.
+ *   permanent one if any exists, otherwise the one with the latest expiry;
+ *   ties go to the most recently issued row.
+ * - The result is ordered by `playerId`, independent of the input row order,
+ *   so identical ban sets always serialize to identical bodies (and ETags).
  */
 export function buildBanlistEntries(
   rows: readonly ModerationBanRow[],
@@ -119,8 +130,11 @@ export function buildBanlistEntries(
   }
 
   const out: BanlistEntry[] = [];
-  for (const playerRows of byPlayer.values()) {
-    const candidates = playerRows
+  const playerIds = [...byPlayer.keys()].sort();
+  for (const playerId of playerIds) {
+    const playerRows = byPlayer.get(playerId) ?? [];
+    const candidates = [...playerRows]
+      .sort((a, b) => b.issuedAt.getTime() - a.issuedAt.getTime())
       .map(toEntry)
       .filter((entry) => entry.expiresAtMs === null || entry.expiresAtMs > nowMs)
       .filter((entry) => scope !== 'permanent_only' || entry.expiresAtMs === null);

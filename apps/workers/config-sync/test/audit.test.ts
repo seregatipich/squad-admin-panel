@@ -1,148 +1,59 @@
-import { createHash } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { createDatabaseClient } from '@squad/db';
+import { auditLog } from '@squad/db/schema';
+import { and, asc, eq } from 'drizzle-orm';
+import { v7 as uuidv7 } from 'uuid';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createIsolatedPackageTestDatabase } from '../../../../packages/db/test/helpers/isolated-database.js';
 import { appendWorkerAudit } from '../src/audit.js';
 
-function canonicalJsonString(obj: unknown): string {
-  if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
-  if (Array.isArray(obj)) return `[${(obj as unknown[]).map(canonicalJsonString).join(',')}]`;
-  const entries = Object.entries(obj as Record<string, unknown>).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJsonString(v)}`).join(',')}}`;
-}
+const DATABASE_URL = process.env.DATABASE_URL;
+const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
-function makeTx(lastRowHash: string | null) {
-  const executeMock = vi.fn().mockResolvedValue(undefined);
-  const selectMock = {
-    select: vi.fn().mockReturnThis(),
-    from: vi.fn().mockReturnThis(),
-    orderBy: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockResolvedValue(lastRowHash !== null ? [{ rowHash: lastRowHash }] : []),
-  };
-  return {
-    select: vi.fn().mockReturnValue(selectMock),
-    execute: executeMock,
-    _executeMock: executeMock,
-    _selectLimit: selectMock.limit,
-  };
-}
+describeIfDb('appendWorkerAudit', () => {
+  let isolated: Awaited<ReturnType<typeof createIsolatedPackageTestDatabase>>;
+  let db: ReturnType<typeof createDatabaseClient>;
 
-function makeDb(lastRowHash: string | null) {
-  const tx = makeTx(lastRowHash);
-  const db = {
-    transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
-      await fn(tx);
-    }),
-    _tx: tx,
-  };
-  return db as never;
-}
+  beforeAll(async () => {
+    if (!DATABASE_URL) return;
+    isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'config_sync_audit');
+    db = createDatabaseClient(isolated.url);
+  }, 120_000);
 
-describe('appendWorkerAudit', () => {
-  it('calls db.transaction', async () => {
-    const db = makeDb(null);
-    await appendWorkerAudit(db, {
-      actorPlayerId: null,
-      actionType: 'admins_cfg.synced',
-      targetType: 'server',
-      targetId: 'srv-001',
-      before: null,
-      after: null,
-      context: { reason: 'test' },
-    });
-    expect(
-      (db as ReturnType<typeof makeDb> & { transaction: ReturnType<typeof vi.fn> }).transaction,
-    ).toHaveBeenCalledOnce();
+  afterAll(async () => {
+    await isolated?.drop();
   });
 
-  it('uses system actor when actorPlayerId is null', async () => {
-    const db = makeDb(null);
-    await appendWorkerAudit(db, {
-      actorPlayerId: null,
-      actionType: 'admins_cfg.synced',
-      targetType: 'server',
-      targetId: 'srv-001',
-      before: null,
-      after: null,
-      context: {},
-    });
-    const executeMock = (db as ReturnType<typeof makeDb> & { _tx: ReturnType<typeof makeTx> })._tx
-      ._executeMock;
-    expect(executeMock).toHaveBeenCalledOnce();
-    const sqlArg = executeMock.mock.calls[0]?.[0];
-    expect(sqlArg).toBeDefined();
-    expect(typeof sqlArg).toBe('object');
-  });
-
-  it('inserts with steam actor when actorPlayerId is provided', async () => {
-    const db = makeDb(null);
-    await appendWorkerAudit(db, {
-      actorPlayerId: '019d0000-0000-7000-8000-000000000001',
-      actionType: 'admins_cfg.force_synced',
-      targetType: 'server',
-      targetId: 'srv-002',
-      before: { segment_hash: 'abc' },
-      after: { segment_hash: 'def' },
-      context: { groups_count: 2 },
-    });
-    const executeMock = (db as ReturnType<typeof makeDb> & { _tx: ReturnType<typeof makeTx> })._tx
-      ._executeMock;
-    expect(executeMock).toHaveBeenCalledOnce();
-  });
-
-  it('computes row_hash as sha256(prev_hash || canonical_json) when prev_hash exists', async () => {
-    const prevHash = Buffer.from('deadbeef'.repeat(8), 'hex');
-    const db = makeDb(prevHash.toString('hex'));
-
+  it('writes a system-actor row whose hash chain is maintained by the trigger', async () => {
+    const targetId = `srv-${uuidv7()}`;
     const entry = {
       actorPlayerId: null,
       actionType: 'admins_cfg.synced',
       targetType: 'server',
-      targetId: 'srv-003',
+      targetId,
       before: null,
-      after: null,
-      context: {},
+      after: { segment_hash: 'def' },
+      context: { groups_count: 2 },
     };
-    await appendWorkerAudit(db as never, entry);
 
-    const payload = {
-      actor_kind: 'system',
-      actor_player_id: null,
-      actor_system_label: 'worker-config-sync',
-      action_type: entry.actionType,
-      target_type: entry.targetType,
-      target_id: entry.targetId,
-      before_snapshot: null,
-      after_snapshot: null,
-      context: {},
-    };
-    const canonical = canonicalJsonString(payload);
-    const hasher = createHash('sha256');
-    hasher.update(prevHash.toString('hex'));
-    hasher.update(canonical, 'utf8');
-    const expectedHash = hasher.digest();
+    await appendWorkerAudit(db, entry);
+    await appendWorkerAudit(db, { ...entry, before: { segment_hash: 'def' }, after: null });
 
-    const executeMock = (db as ReturnType<typeof makeDb> & { _tx: ReturnType<typeof makeTx> })._tx
-      ._executeMock;
-    const callArgs = executeMock.mock.calls[0];
-    expect(callArgs).toBeDefined();
-    expect(expectedHash).toBeInstanceOf(Buffer);
-    expect(expectedHash.length).toBe(32);
-  });
-
-  it('computes row_hash without prev_hash when table is empty', async () => {
-    const db = makeDb(null);
-    await appendWorkerAudit(db, {
+    const rows = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.targetId, targetId), eq(auditLog.actionType, entry.actionType)))
+      .orderBy(asc(auditLog.id));
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    expect(first).toMatchObject({
+      actorKind: 'system',
       actorPlayerId: null,
-      actionType: 'admins_cfg.sync_failed',
-      targetType: 'server',
-      targetId: 'srv-004',
-      before: null,
-      after: null,
-      context: { phase: 'file_read', error: 'bridge down' },
+      actorSystemLabel: 'worker-config-sync',
+      beforeSnapshot: null,
+      afterSnapshot: { segment_hash: 'def' },
+      context: { groups_count: 2 },
     });
-    const executeMock = (db as ReturnType<typeof makeDb> & { _tx: ReturnType<typeof makeTx> })._tx
-      ._executeMock;
-    expect(executeMock).toHaveBeenCalledOnce();
+    expect(first?.rowHash.length).toBe(32);
+    expect(second?.prevHash).toEqual(first?.rowHash);
   });
 });

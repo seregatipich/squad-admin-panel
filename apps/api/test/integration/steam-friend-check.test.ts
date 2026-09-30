@@ -100,9 +100,10 @@ describeIfDb('GET /api/v1/players/:id/steam-friend-check', () => {
 
   it('returns private_profile when Steam does not expose the friends list', async () => {
     h.app.config.STEAM_API_KEY = 'test-key';
+    // Neither player's list is exposed; each lookup gets its own Response body.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })),
     );
     const response = await h.app.inject({
       method: 'GET',
@@ -116,6 +117,32 @@ describeIfDb('GET /api/v1/players/:id/steam-friend-check', () => {
       reason: 'private_profile',
       cached: false,
     });
+  });
+
+  it('reports steam_unavailable for a Steam outage and does not cache it (#68)', async () => {
+    h.app.config.STEAM_API_KEY = 'test-key';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<html>busy</html>', { status: 503 })),
+    );
+    const url = `/api/v1/players/${playerId}/steam-friend-check?other=${friendId}`;
+    const cookie = await loginAsOwner(h);
+    const outage = await h.app.inject({ method: 'GET', url, headers: { cookie } });
+    expect(outage.statusCode).toBe(200);
+    expect(outage.json()).toEqual({ in_friend: null, reason: 'steam_unavailable', cached: false });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ friendslist: { friends: [{ steamid: String(FRIEND_STEAM) }] } }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const recovered = await h.app.inject({ method: 'GET', url, headers: { cookie } });
+    expect(recovered.json()).toEqual({ in_friend: true, reason: null, cached: false });
   });
 
   it('reports Steam API not configured without making an external request', async () => {

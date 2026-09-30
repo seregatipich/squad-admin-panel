@@ -1,5 +1,5 @@
-import { GEOIP_SETTINGS_SINGLETON_ID, geoipSettings } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { auditLog, GEOIP_SETTINGS_SINGLETON_ID, geoipSettings } from '@squad/db/schema';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -99,5 +99,66 @@ describeIfDb('GeoIP settings (MaxMind creds)', () => {
     const body = resp.json<{ license_key_configured: boolean; enabled: boolean }>();
     expect(body.license_key_configured).toBe(false);
     expect(body.enabled).toBe(false);
+  });
+
+  it('serialises concurrent first-time PUTs: no 500 and no lost field', async () => {
+    await h.db.delete(geoipSettings);
+    const cookie = await loginAsOwner(h);
+    const put = (payload: Record<string, unknown>) =>
+      h.app.inject({
+        method: 'PUT',
+        url: '/api/v1/integrations/geoip',
+        headers: { cookie, 'content-type': 'application/json' },
+        payload,
+      });
+    const results = await Promise.all([
+      put({ account_id: '777777' }),
+      put({ enabled: true }),
+      put({ account_id: '777777' }),
+      put({ enabled: true }),
+    ]);
+    for (const res of results) expect(res.statusCode, res.body).toBe(200);
+    const [row] = await h.db
+      .select()
+      .from(geoipSettings)
+      .where(eq(geoipSettings.id, GEOIP_SETTINGS_SINGLETON_ID));
+    expect(row?.accountId).toBe('777777');
+    expect(row?.enabled).toBe(true);
+  });
+
+  it('audits every PUT through the declarative audit hook, including the settings snapshot', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/integrations/geoip',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { account_id: '888888', license_key: LICENSE_KEY },
+    });
+    expect(res.statusCode).toBe(200);
+    // The hook writes after the response; poll for this PUT's own row rather
+    // than the newest one, which may still belong to the concurrent case above.
+    let row: typeof auditLog.$inferSelect | undefined;
+    const deadline = Date.now() + 2_000;
+    while (!row && Date.now() < deadline) {
+      [row] = await h.db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.actionType, 'integration.geoip.update'),
+            eq(auditLog.targetType, 'geoip_settings'),
+            eq(auditLog.targetId, GEOIP_SETTINGS_SINGLETON_ID),
+            sql`${auditLog.afterSnapshot}->>'account_id' = '888888'`,
+          ),
+        )
+        .limit(1);
+      if (!row) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!row) throw new Error('expected an integration.geoip.update audit row for this PUT');
+    expect(row.afterSnapshot).toMatchObject({ account_id: '888888', license_key_configured: true });
+    expect(JSON.stringify([row.beforeSnapshot, row.afterSnapshot, row.context])).not.toContain(
+      LICENSE_KEY,
+    );
+    expect((row.context as { statusCode?: number }).statusCode).toBe(200);
   });
 });

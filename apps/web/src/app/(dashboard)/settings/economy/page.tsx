@@ -35,6 +35,7 @@ import {
   type EconomySettings,
   emptyTierForm,
   formatTierDuration,
+  formatTierPrice,
   formatUpdatedAt,
   SEED_THRESHOLD_MAX,
   SEED_THRESHOLD_MIN,
@@ -43,6 +44,8 @@ import {
   VIP_TIER_DEFAULT_DAYS_MAX,
   VIP_TIER_DEFAULT_DAYS_MIN,
   VIP_TIER_NAME_MAX,
+  VIP_TIER_PRICE_BONUSES_MAX,
+  VIP_TIER_PRICE_BONUSES_MIN,
   VIP_TIER_SORT_ORDER_MAX,
   VIP_TIER_SORT_ORDER_MIN,
   type VipTier,
@@ -59,6 +62,8 @@ interface Me {
 interface RoleOption {
   id: string;
   name: string;
+  panel_access: boolean;
+  is_system_role: boolean;
 }
 
 type FieldErrors = Partial<Record<keyof EconomyFormState, string>>;
@@ -67,9 +72,16 @@ type TierFieldErrors = Partial<Record<keyof VipTierFormState, string>>;
 
 const TIER_ERROR_MESSAGES: Record<string, string> = {
   vip_tier_name_taken: 'Тир с таким названием уже существует.',
+  role_grants_panel_access: 'Тир нельзя привязать к системной роли или роли с доступом к панели.',
   vip_tier_has_active_assignments: 'Нельзя удалить тир: у него есть активные назначения.',
+  vip_tier_has_subscriptions:
+    'Нельзя удалить тир: на него оформлялись подписки. Отключите тир вместо удаления.',
+  vip_tier_not_found: 'Тир не найден — возможно, его уже удалили.',
+  forbidden: 'Недостаточно прав для этого действия.',
   role_referenced_by_vip_tier: 'Роль привязана к VIP-тиру — сначала удалите тир.',
   role_in_use: 'Роль используется и не может быть удалена.',
+  price_requires_days: 'Цена требует срок по умолчанию: укажите срок или очистите цену.',
+  role_not_found: 'Выбранная роль не найдена.',
 };
 
 function tierErrorText(code: unknown, status: number): string {
@@ -95,29 +107,52 @@ export default function EconomySettingsPage() {
   const [tierDeleting, setTierDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [settingsRes, meRes, tiersRes, rolesRes] = await Promise.all([
-      fetch('/api/v1/settings/economy', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/vip-tiers', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (settingsRes.ok) {
-      const loaded = (await settingsRes.json()) as EconomySettings;
-      setSettings(loaded);
-      setForm(settingsToForm(loaded));
-    } else {
-      setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+    try {
+      const [settingsRes, meRes] = await Promise.all([
+        fetch('/api/v1/settings/economy', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (settingsRes.ok) {
+        const loaded = (await settingsRes.json()) as EconomySettings;
+        setSettings(loaded);
+        setForm(settingsToForm(loaded));
+        setGlobalErr(null);
+      } else {
+        setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        setGlobalErr(`Не удалось загрузить данные пользователя: ${meRes.status}`);
+      }
+    } catch (err) {
+      setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
     }
-    if (meRes.ok) setMe((await meRes.json()) as Me);
-    // Both endpoints 403 without can_edit_roles — the section is hidden then,
-    // so a failed load is not an error worth surfacing.
-    if (tiersRes.ok) setTiers(((await tiersRes.json()) as { rows: VipTier[] }).rows);
-    if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
   }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /** Reloads only the VIP tier list, without touching the economy form. */
+  const refreshTiers = useCallback(async () => {
+    try {
+      const [tiersRes, rolesRes] = await Promise.all([
+        fetch('/api/v1/vip-tiers', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      // Both endpoints 403 without can_edit_roles — the section is hidden then,
+      // so a failed load is not an error worth surfacing.
+      if (tiersRes.ok) setTiers(((await tiersRes.json()) as { rows: VipTier[] }).rows);
+      if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
+    } catch (err) {
+      setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTiers();
+  }, [refreshTiers]);
 
   const canManage = me?.can_manage_economy ?? false;
   const canEditTiers = me?.permissions?.includes('role:edit') ?? false;
@@ -214,7 +249,7 @@ export default function EconomySettingsPage() {
         return;
       }
       cancelTierForm();
-      await refresh();
+      await refreshTiers();
     } catch (err) {
       setTierErr(`Ошибка сети: ${(err as Error).message}`);
     } finally {
@@ -236,7 +271,9 @@ export default function EconomySettingsPage() {
         setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.status)}`);
         return;
       }
-      await refresh();
+      await refreshTiers();
+    } catch (err) {
+      setTierErr(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setTierDeleting(false);
       setPendingTierDelete(null);
@@ -265,7 +302,17 @@ export default function EconomySettingsPage() {
         }
       />
 
-      {globalErr ? <InlineBanner tone="crit" title={globalErr} /> : null}
+      {globalErr ? (
+        <InlineBanner
+          tone="crit"
+          title={globalErr}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : null}
       {notice ? <InlineBanner tone="good" title={notice} /> : null}
       {!loading && !canManage ? (
         <InlineBanner
@@ -415,7 +462,7 @@ export default function EconomySettingsPage() {
                 {tiers.length === 0 ? (
                   <EmptyState
                     title="Тиров пока нет"
-                    description="Добавьте первый тир — до этого магазин VIP пуст."
+                    description="Добавьте первый тир и укажите цену в бонусах — иначе он не появится в магазине."
                   />
                 ) : (
                   <Table ariaLabel="VIP-тиры">
@@ -424,6 +471,7 @@ export default function EconomySettingsPage() {
                         <Th>Название</Th>
                         <Th>Роль</Th>
                         <Th>Срок</Th>
+                        <Th>Цена</Th>
                         <Th align="right">Порядок</Th>
                         <Th>Состояние</Th>
                         <Th align="right">Действия</Th>
@@ -444,6 +492,7 @@ export default function EconomySettingsPage() {
                             {roleNameById.get(tier.role_id) ?? tier.role_id}
                           </Td>
                           <Td className="text-ink-2">{formatTierDuration(tier.default_days)}</Td>
+                          <Td className="text-ink-2">{formatTierPrice(tier.price_bonuses)}</Td>
                           <Td numeric className="text-ink-3">
                             {tier.sort_order}
                           </Td>
@@ -496,11 +545,16 @@ export default function EconomySettingsPage() {
                           onChange={(e) => updateTierField('roleId', e.target.value)}
                         >
                           <option value="">— выберите роль —</option>
-                          {roleOptions.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.name}
-                            </option>
-                          ))}
+                          {roleOptions.map((r) => {
+                            const sellable = !r.panel_access && !r.is_system_role;
+                            return (
+                              <option key={r.id} value={r.id} disabled={!sellable}>
+                                {sellable
+                                  ? r.name
+                                  : `${r.name} (нельзя продать — роль даёт доступ к панели)`}
+                              </option>
+                            );
+                          })}
                         </Select>
                       </FieldRow>
                       <FieldRow
@@ -529,6 +583,22 @@ export default function EconomySettingsPage() {
                           value={tierForm.defaultDays}
                           invalid={Boolean(tierErrors.defaultDays)}
                           onChange={(e) => updateTierField('defaultDays', e.target.value)}
+                        />
+                      </FieldRow>
+                      <FieldRow
+                        label="Цена (бонусы)"
+                        hint="Пустое поле — тир не продаётся в магазине бонусов."
+                        error={tierErrors.priceBonuses}
+                      >
+                        <TextInput
+                          type="number"
+                          inputMode="numeric"
+                          step="1"
+                          min={VIP_TIER_PRICE_BONUSES_MIN}
+                          max={VIP_TIER_PRICE_BONUSES_MAX}
+                          value={tierForm.priceBonuses}
+                          invalid={Boolean(tierErrors.priceBonuses)}
+                          onChange={(e) => updateTierField('priceBonuses', e.target.value)}
                         />
                       </FieldRow>
                       <FieldRow label="Порядок сортировки" error={tierErrors.sortOrder}>

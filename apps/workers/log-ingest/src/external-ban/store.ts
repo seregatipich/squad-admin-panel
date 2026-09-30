@@ -30,6 +30,15 @@ interface AlertRuleConfig {
   severity?: 'info' | 'warning' | 'critical';
 }
 
+const VALID_ALERT_SEVERITIES = new Set(['info', 'warning', 'critical']);
+
+/** Falls back to 'warning' for a rule's severity that fails the alert_events_severity_chk allowlist. */
+function normalizeAlertSeverity(severity: unknown): 'info' | 'warning' | 'critical' {
+  return typeof severity === 'string' && VALID_ALERT_SEVERITIES.has(severity)
+    ? (severity as 'info' | 'warning' | 'critical')
+    : 'warning';
+}
+
 function cleanText(value: string | null, max: number): string {
   return (value ?? '')
     .replace(/[\r\n\0]+/g, ' ')
@@ -141,17 +150,26 @@ async function raiseAuto3Alert(
     const config = rule.config as AlertRuleConfig;
     if (config.eventKind !== 'externalban.matched') continue;
     const alertPayload = { ...payload, event_kind: 'externalban.matched' };
-    await db.insert(alertEvents).values({
-      id: uuidv7(),
-      ruleId: rule.id,
-      severity: config.severity ?? 'warning',
-      payload: alertPayload,
-    });
-    await redis.publish(
-      'live-bus',
-      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: alertPayload }),
-    );
-    raised++;
+    try {
+      await db.insert(alertEvents).values({
+        id: uuidv7(),
+        ruleId: rule.id,
+        severity: normalizeAlertSeverity(config.severity),
+        payload: alertPayload,
+      });
+      await redis.publish(
+        'live-bus',
+        JSON.stringify({
+          type: 'alert.triggered',
+          ts: new Date().toISOString(),
+          data: alertPayload,
+        }),
+      );
+      raised++;
+    } catch {
+      // A malformed rule config must not abort processing of the remaining
+      // external-ban matches for this connect event; skip this rule only.
+    }
   }
   return raised;
 }

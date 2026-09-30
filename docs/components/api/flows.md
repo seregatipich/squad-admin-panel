@@ -164,7 +164,7 @@ writeVersion():
       ← NO disk write, NO DB row, NO RCON. History stays clean.
   Step 3 — atomic disk write (synchronous)
     bridge.fileAtomicWrite({path: "${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/${name}", content})
-    ← write to sibling ".new" → fsync → rename(2) → existing file → ".bak"
+    ← write to a unique hidden sibling temp file (".<name>.*.tmp") → fsync → rename(2) over the existing file
     ← Squad sees the new content the instant rename(2) completes:
       the host directory is bind-mounted RW into squad-${id} as
       /squad/SquadGame/ServerConfig, so the kernel exposes the same
@@ -359,7 +359,7 @@ State held in plugin closure:
 Per tick:
 
 1. If `inFlight` is set → return early.
-2. Set `inFlight = true`. For each `name` in the constant `KNOWN_WORKERS = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition', 'diag-flush', 'metrics-sampler']`:
+2. Set `inFlight = true`. For each `name` in `MONITORED_WORKERS` from `@squad/shared-config` (one entry per `worker-*` service in `docker/compose.yml`, kept in sync by `test/heartbeat-watch-plugin.test.ts`):
    - `ttl = await app.redis.pttl('worker:heartbeat:' + name)`.
    - **Key absent** (`ttl < 0`):
      - `since = lostSince.get(name) ?? now`. Record/refresh `lostSince`.
@@ -581,6 +581,8 @@ Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/
 2. `INSERT INTO audit_log (...)`. The DB trigger acquires `pg_advisory_xact_lock(audit_log_lock)`, reads the previous `row_hash`, computes `sha256(prev_hash || canonical_json)`, and writes `row_hash` + `prev_hash`.
 3. `BEFORE UPDATE OR DELETE` triggers raise `audit_log is append-only`.
 
+An anonymous request rejected with 401/403 writes no row. `context.url` keeps the path without its query string, and `context.url` and `context.userAgent` are capped at 512 characters.
+
 ## Diagnostic emission
 
 Plugin: [`apps/api/src/lib/diag.ts`](../../../apps/api/src/lib/diag.ts). Registered in [`server.ts`](../../../apps/api/src/server.ts) right after `redisPlugin` so the underlying ioredis connection is available.
@@ -750,18 +752,18 @@ bridge.on('rpc-error', {method, code, message}:
     payload: {method, code, message},
   }).catch(() => undefined)
 
-bridge.on('rtt', rttMs:
-  if rttMs > 50:
+bridge.on('rtt', rttMs, method:
+  if method == 'ping' and rttMs > 50 and no outlier emitted in the last 60 s:
     app.diag.emit({
       component: 'api', kind: 'bridge.rtt.outlier', severity: 'warn',
-      message: `bridge RTT ${rttMs}ms exceeds 50ms threshold`,
-      payload: {rttMs, thresholdMs: 50},
+      message: `bridge ping RTT ${rttMs}ms exceeds 50ms threshold`,
+      payload: {rttMs, thresholdMs: 50, method},
     }).catch(() => undefined)
 ```
 
 The `.catch(() => undefined)` swallow is load-bearing: if Redis is unavailable the diag emit rejects, but the bridge plugin must never propagate that back into the underlying `EventEmitter` cycle (a thrown exception inside a listener would unwind the dispatcher mid-frame). The emit is fire-and-forget; the diag worker reads the stream and persists rows out-of-band.
 
-`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` is gated at 50 ms (constant `RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`); below that, `rtt` events from the BridgeClient are ignored.
+`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` only considers `ping` calls — every other method's `rtt` is the operation's own duration (a container stop, an install), not transport latency — is gated at 50 ms (`RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`) and throttled to one event per 60 s (`RTT_OUTLIER_THROTTLE_MS`).
 
 #### Connector listeners (background, on every state change)
 
@@ -770,38 +772,34 @@ Sources: [`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugins/redis.t
 The redis plugin is registered BEFORE diag in [`server.ts`](../../../apps/api/src/server.ts) (diag uses `app.redis` as its xadd target — see the "Diagnostic emission" section above), so the listeners use optional chaining `app.diag?.emit(...)` to handle the brief window during boot where redis events fire before the diag decorator exists. After the diag plugin registers, the lookup sees the live decorator on every emit because the listeners read `app.diag` lazily at fire time.
 
 ```
-redis = new Redis(REDIS_URL, {...})
-redisDown = false   ← module-local flag
+redis = new Redis(REDIS_URL, {
+  maxRetriesPerRequest: 3,     ← queued commands are rejected after 3 reconnect attempts
+  commandTimeout: 5000,        ← REDIS_COMMAND_TIMEOUT_MS, also covers the offline queue
+  ...
+})
+redisDown = false; reconnectReported = false
 
 redis.on('error', err):
-  app.log.warn(...)
-  app.diag?.emit({
-    component: 'api', kind: 'redis.ping.fail', severity: 'error',
-    message: `redis error: ${err.message}`,
-    payload: { err: err.message },
-  }).catch(() => undefined)
+  if redisDown: app.log.debug(...); return      ← one report per outage
   redisDown = true
+  app.log.warn(...)
+  app.diag?.emit({ kind: 'redis.ping.fail', severity: 'error', payload: { err } })
 
 redis.on('reconnecting', delay):
   app.log.info(...)
-  app.diag?.emit({
-    component: 'api', kind: 'redis.reconnect.attempt', severity: 'warn',
-    message: 'redis reconnecting',
-    payload: { delayMs: delay },
-  }).catch(() => undefined)
+  if reconnectReported: return
+  reconnectReported = true
+  app.diag?.emit({ kind: 'redis.reconnect.attempt', severity: 'warn', payload: { delayMs } })
 
 redis.on('ready'):
   app.log.info(...)
+  reconnectReported = false
   if redisDown:
-    app.diag?.emit({
-      component: 'api', kind: 'redis.reconnect.success', severity: 'info',
-      message: 'redis ready after a prior failure',
-      payload: {},
-    }).catch(() => undefined)
+    app.diag?.emit({ kind: 'redis.reconnect.success', severity: 'info', payload: {} })
     redisDown = false
 ```
 
-The `redisDown` flag is the load-bearing piece: on a clean startup ioredis fires exactly one `ready` event (no prior `error`/`reconnecting`), and we want that to be silent — the `redis.reconnect.success` kind is reserved for actual recovery transitions. Any subsequent `error` arms the flag, the next `ready` consumes it, and the cycle repeats.
+The `redisDown` flag is the load-bearing piece: on a clean startup ioredis fires exactly one `ready` event (no prior `error`/`reconnecting`), and we want that to be silent — the `redis.reconnect.success` kind is reserved for actual recovery transitions. The first `error` arms the flag, the next `ready` consumes it, and the cycle repeats. While it is armed, further errors and reconnect attempts emit nothing: each emit is itself an `XADD` queued behind the dead connection (#37). Because of `commandTimeout`, an HTTP handler touching Redis during an outage fails after 5 s instead of hanging; `routes/depot.ts` duplicates the client with `commandTimeout: undefined` for its `XREAD BLOCK 5000` loop.
 
 The db-health plugin uses a separate 30 s `setInterval` because postgres-js (the driver behind `app.db`) does not expose connection-state events the way ioredis does. The plugin tracks `pgDown` per-app via a `WeakMap<FastifyInstance, boolean>`; the exported `pgHealthTick(app)` helper drives the loop deterministically in tests.
 

@@ -2,7 +2,7 @@
 
 import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   AlertDialog,
@@ -70,6 +70,10 @@ interface Me {
 
 const PAGE_SIZE = 100;
 
+/** Bounds of `/api/v1/players/search`'s `q` parameter (server `searchQuery`). */
+const PLAYER_SEARCH_MIN_LENGTH = 3;
+const PLAYER_SEARCH_MAX_LENGTH = 64;
+
 const PAGINATION_LABELS = {
   previous: 'Назад',
   next: 'Вперёд',
@@ -84,6 +88,33 @@ const IMPORT_REASON_LABELS: Record<string, string> = {
   owner_reassignment_forbidden: 'нельзя переназначить владельца',
 };
 
+const ACTION_ERROR_LABELS: Record<string, string> = {
+  forbidden: 'недостаточно прав',
+  role_not_found: 'роль не найдена',
+  target_role_not_found: 'целевая роль не найдена',
+  target_role_same_as_source: 'нельзя переместить в ту же роль',
+  player_not_found: 'игрок не найден в базе',
+  owner_assignment_forbidden: 'нельзя назначать или перемещать участников в роль Owner',
+  owner_role_immutable: 'роль Owner нельзя изменять',
+  cannot_remove_last_owner: 'нельзя снять роль с последнего владельца',
+  too_many_rows: 'слишком много строк в файле',
+};
+
+/**
+ * Builds the banner text for a failed member action, translating the API
+ * error codes the members routes return; unknown codes are shown verbatim.
+ *
+ * @param failure Russian description of the attempted action.
+ * @param code Error code from the response body, if any.
+ * @param status HTTP status used when the body carries no code.
+ */
+function actionErrorText(failure: string, code: unknown, status: number): string {
+  if (typeof code === 'string') return `${failure}: ${ACTION_ERROR_LABELS[code] ?? code}`;
+  return `${failure}: ${status}`;
+}
+
+const NETWORK_ERROR_TEXT = 'сетевая ошибка, проверьте соединение и повторите';
+
 export default function RoleMembersPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [data, setData] = useState<MembersResponse | null>(null);
@@ -92,6 +123,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
   const [q, setQ] = useState('');
   const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -99,25 +131,40 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
   const [pendingRemove, setPendingRemove] = useState<Member | null>(null);
   const [pendingBulkRemove, setPendingBulkRemove] = useState(false);
 
+  const latestLoad = useRef(0);
+
+  /** Loads the current page; a response that is no longer the latest request is dropped. */
   const load = useCallback(async () => {
+    const requestId = ++latestLoad.current;
     const url = new URL(`/api/v1/roles/${id}/members`, window.location.origin);
     url.searchParams.set('limit', String(PAGE_SIZE));
     url.searchParams.set('offset', String(offset));
     if (q.trim()) url.searchParams.set('q', q.trim());
-    const r = await fetch(url.toString().replace(window.location.origin, ''), {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!r.ok) {
-      setErr(`HTTP ${r.status}`);
-      return;
+    try {
+      const r = await fetch(url.toString().replace(window.location.origin, ''), {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (requestId !== latestLoad.current) return;
+      if (!r.ok) {
+        setErr(`HTTP ${r.status}`);
+        return;
+      }
+      const body = (await r.json()) as MembersResponse;
+      if (requestId !== latestLoad.current) return;
+      setSelected(new Set());
+      setData(body);
+    } catch {
+      if (requestId !== latestLoad.current) return;
+      setErr('Сетевая ошибка');
     }
-    setSelected(new Set());
-    setData((await r.json()) as MembersResponse);
   }, [id, offset, q]);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
     fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setMe(j as Me | null))
@@ -126,7 +173,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
       .then((r) => (r.ok ? r.json() : []))
       .then((j) => setRoles(j as RoleOption[]))
       .catch(() => {});
-  }, [load]);
+  }, []);
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
@@ -146,65 +193,91 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
     });
   }
 
+  /**
+   * Runs a mutating request and reports a failure in the dismissible action
+   * banner, without replacing the page. Resolves to whether the request succeeded.
+   */
+  async function runAction(failure: string, request: () => Promise<Response>): Promise<boolean> {
+    setActionErr(null);
+    try {
+      const r = await request();
+      if (r.ok) return true;
+      const e = await r.json().catch(() => ({}) as Record<string, unknown>);
+      setActionErr(actionErrorText(failure, e.error, r.status));
+    } catch {
+      setActionErr(`${failure}: ${NETWORK_ERROR_TEXT}`);
+    }
+    return false;
+  }
+
   async function removeMember(playerId: string) {
     if (!canManage) return;
-    setErr(null);
     setPendingRemove(null);
-    const r = await fetch(`/api/v1/roles/${id}/members/${playerId}`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-      setErr(`Ошибка: ${e.error ?? r.status}`);
-      return;
-    }
-    await load();
+    const ok = await runAction('Ошибка', () =>
+      fetch(`/api/v1/roles/${id}/members/${playerId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      }),
+    );
+    if (ok) await load();
   }
 
   async function addMember(playerId: string) {
-    setErr(null);
-    const r = await fetch(`/api/v1/roles/${id}/members`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ player_id: playerId }),
-    });
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-      setErr(`Ошибка: ${e.error ?? r.status}`);
-      return;
-    }
+    const ok = await runAction('Ошибка', () =>
+      fetch(`/api/v1/roles/${id}/members`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ player_id: playerId }),
+      }),
+    );
+    if (!ok) return;
     setAddOpen(false);
     await load();
   }
 
   async function bulkDelete() {
     if (!canManage || selected.size === 0) return;
-    setErr(null);
     setPendingBulkRemove(false);
-    const r = await fetch(`/api/v1/roles/${id}/members/bulk-delete`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ player_ids: [...selected] }),
-    });
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-      setErr(`Ошибка: ${e.error ?? r.status}`);
-      return;
-    }
+    const ok = await runAction('Ошибка', () =>
+      fetch(`/api/v1/roles/${id}/members/bulk-delete`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ player_ids: [...selected] }),
+      }),
+    );
+    if (ok) await load();
+  }
+
+  async function moveSelected(targetRoleId: string) {
+    const ok = await runAction('Ошибка перемещения', () =>
+      fetch(`/api/v1/roles/${id}/members/move`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ player_ids: [...selected], target_role_id: targetRoleId }),
+      }),
+    );
+    if (!ok) return;
+    setMoveOpen(false);
     await load();
   }
 
   async function exportCsv() {
-    setErr(null);
-    const r = await fetch(`/api/v1/roles/${id}/members/export`, { credentials: 'include' });
-    if (!r.ok) {
-      setErr(`Ошибка экспорта: ${r.status}`);
+    setActionErr(null);
+    let blob: Blob;
+    try {
+      const r = await fetch(`/api/v1/roles/${id}/members/export`, { credentials: 'include' });
+      if (!r.ok) {
+        setActionErr(`Ошибка экспорта: ${r.status}`);
+        return;
+      }
+      blob = await r.blob();
+    } catch {
+      setActionErr(`Ошибка экспорта: ${NETWORK_ERROR_TEXT}`);
       return;
     }
-    const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -224,7 +297,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
         <InlineBanner
           tone="crit"
           title={err}
-          description="Запрос к API не выполнился."
+          description="Не удалось загрузить список участников."
           action={
             <Button
               size="sm"
@@ -272,6 +345,15 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
           </>
         }
       />
+
+      {actionErr ? (
+        <InlineBanner
+          tone="crit"
+          title={actionErr}
+          onDismiss={() => setActionErr(null)}
+          dismissLabel="Закрыть сообщение об ошибке"
+        />
+      ) : null}
 
       <Toolbar
         search={
@@ -451,26 +533,10 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
 
       {moveOpen ? (
         <MoveModal
-          roleId={id}
           count={selected.size}
           roles={roles.filter((r) => r.id !== id && !(r.is_system_role && r.name === 'Owner'))}
           onClose={() => setMoveOpen(false)}
-          onMove={async (targetRoleId) => {
-            setErr(null);
-            const r = await fetch(`/api/v1/roles/${id}/members/move`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ player_ids: [...selected], target_role_id: targetRoleId }),
-            });
-            if (!r.ok) {
-              const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-              setErr(`Ошибка перемещения: ${e.error ?? r.status}`);
-              return;
-            }
-            setMoveOpen(false);
-            await load();
-          }}
+          onMove={moveSelected}
         />
       ) : null}
     </>
@@ -496,26 +562,33 @@ function ImportModal({
     setBusy(true);
     setErrors([]);
     setTopError(null);
-    const r = await fetch(`/api/v1/roles/${roleId}/members/import`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ csv }),
-    });
-    setBusy(false);
-    if (r.status === 201) {
-      onImported();
-      return;
+    try {
+      const r = await fetch(`/api/v1/roles/${roleId}/members/import`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ csv }),
+      });
+      if (r.status === 201) {
+        onImported();
+        return;
+      }
+      const body = (await r.json().catch(() => ({}))) as {
+        error?: string;
+        errors?: ImportRowError[];
+      };
+      if (r.status === 422 && Array.isArray(body.errors)) {
+        setErrors(body.errors);
+        return;
+      }
+      setTopError(
+        body.error ? (ACTION_ERROR_LABELS[body.error] ?? body.error) : `HTTP ${r.status}`,
+      );
+    } catch {
+      setTopError(NETWORK_ERROR_TEXT);
+    } finally {
+      setBusy(false);
     }
-    const body = (await r.json().catch(() => ({}))) as {
-      error?: string;
-      errors?: ImportRowError[];
-    };
-    if (r.status === 422 && Array.isArray(body.errors)) {
-      setErrors(body.errors);
-      return;
-    }
-    setTopError(body.error ?? `HTTP ${r.status}`);
   }
 
   return (
@@ -585,7 +658,6 @@ function MoveModal({
   onClose,
   onMove,
 }: {
-  roleId: string;
   count: number;
   roles: RoleOption[];
   onClose: () => void;
@@ -640,26 +712,42 @@ function AddMemberModal({
 }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<PlayerSearchItem[]>([]);
+  const [searchErr, setSearchErr] = useState<string | null>(null);
+  const trimmed = q.trim();
+  const queryTooShort = trimmed.length < PLAYER_SEARCH_MIN_LENGTH;
 
   useEffect(() => {
+    setSearchErr(null);
+    if (queryTooShort) {
+      setResults([]);
+      return;
+    }
+    const controller = new AbortController();
     const handler = setTimeout(async () => {
-      if (q.trim().length < 2) {
+      const url = `/api/v1/players/search?q=${encodeURIComponent(trimmed.slice(0, PLAYER_SEARCH_MAX_LENGTH))}`;
+      try {
+        const r = await fetch(url, {
+          credentials: 'include',
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!r.ok) {
+          setResults([]);
+          setSearchErr(`Не удалось выполнить поиск: ${r.status}`);
+          return;
+        }
+        setResults(((await r.json()) as { items: PlayerSearchItem[] }).items);
+      } catch {
+        if (controller.signal.aborted) return;
         setResults([]);
-        return;
-      }
-      const url = new URL('/api/v1/players', window.location.origin);
-      url.searchParams.set('q', q.trim());
-      const r = await fetch(url.toString().replace(window.location.origin, ''), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (r.ok) {
-        const j = (await r.json()) as { items: PlayerSearchItem[] };
-        setResults(j.items.slice(0, 30));
+        setSearchErr(`Не удалось выполнить поиск: ${NETWORK_ERROR_TEXT}`);
       }
     }, 250);
-    return () => clearTimeout(handler);
-  }, [q]);
+    return () => {
+      clearTimeout(handler);
+      controller.abort();
+    };
+  }, [trimmed, queryTooShort]);
 
   return (
     <Modal open onClose={onClose} title="Добавить игрока" closeLabel="Закрыть">
@@ -672,8 +760,14 @@ function AddMemberModal({
           onChange={(e) => setQ(e.target.value)}
         />
         <ul className="max-h-80 divide-y divide-line overflow-auto">
-          {results.length === 0 ? (
-            <li className="py-2 text-xs text-ink-3">Введите хотя бы 2 символа для поиска…</li>
+          {searchErr ? (
+            <li className="py-2 text-xs text-crit">{searchErr}</li>
+          ) : results.length === 0 ? (
+            <li className="py-2 text-xs text-ink-3">
+              {queryTooShort
+                ? `Введите хотя бы ${PLAYER_SEARCH_MIN_LENGTH} символа для поиска…`
+                : 'Игроки не найдены.'}
+            </li>
           ) : null}
           {results.map((r) => (
             <li key={r.id} className="flex items-center justify-between gap-3 py-2">

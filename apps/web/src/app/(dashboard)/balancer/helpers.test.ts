@@ -6,7 +6,6 @@ import {
   decisionLabel,
   formatTeam,
   proposalStateLabel,
-  proposalStateRowClass,
   proposalStateTone,
   proposalStatusLabel,
   subjectTypeLabel,
@@ -29,23 +28,6 @@ describe('proposalStateTone', () => {
 
   it('falls back to the neutral tone for an unknown payload state', () => {
     expect(proposalStateTone('teleport')).toBe('neutral');
-  });
-});
-
-describe('proposalStateRowClass', () => {
-  it('derives one distinct row class per tone, never from free text', () => {
-    const classes = [
-      proposalStateRowClass('on_target'),
-      proposalStateRowClass('no_change'),
-      proposalStateRowClass('should_move'),
-    ];
-    expect(new Set(classes).size).toBe(3);
-    expect(classes[0]).toContain('emerald');
-    expect(classes[2]).toContain('red');
-  });
-
-  it('renders an unknown state with the neutral row class', () => {
-    expect(proposalStateRowClass('???')).toBe(proposalStateRowClass('no_change'));
   });
 });
 
@@ -115,7 +97,7 @@ describe('triggerReasonLabel', () => {
 });
 
 describe('buildProposalsQuery', () => {
-  it('always sends the mode and omits the "all" server sentinel', () => {
+  it('always sends the mode and limit', () => {
     expect(buildProposalsQuery(DEFAULT_BALANCER_FILTERS)).toBe('mode=squad&limit=25');
   });
 
@@ -123,11 +105,10 @@ describe('buildProposalsQuery', () => {
     expect(
       buildProposalsQuery({
         mode: 'player',
-        serverId: '019e0083-0000-7000-8000-0000000000a1',
         status: 'open',
         limit: 50,
       }),
-    ).toBe('mode=player&server_id=019e0083-0000-7000-8000-0000000000a1&status=open&limit=50');
+    ).toBe('mode=player&status=open&limit=50');
   });
 
   it('drops an empty status filter', () => {

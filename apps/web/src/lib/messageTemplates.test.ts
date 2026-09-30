@@ -36,6 +36,21 @@ describe('substituteTokens (acceptance #1)', () => {
   });
 });
 
+describe('substituteTokens replacement patterns', () => {
+  it.each(["x$'y", 'x$&y', 'x$`y', 'x$1y', 'x$$y'])(
+    'inserts the player name %s literally',
+    (player) => {
+      expect(substituteTokens('Привет, {player}! Правила.', { player })).toBe(
+        `Привет, ${player}! Правила.`,
+      );
+    },
+  );
+
+  it('inserts the server name literally', () => {
+    expect(substituteTokens('{server}', { server: "a$'b" })).toBe("a$'b");
+  });
+});
+
 describe('pickableTemplates (acceptance #3)', () => {
   it('omits disabled templates from the picker', () => {
     const enabled = makeTemplate({ title: 'Enabled', is_enabled: true });

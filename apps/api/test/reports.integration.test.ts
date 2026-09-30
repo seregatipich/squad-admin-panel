@@ -196,7 +196,7 @@ describeIfDb('GET /api/v1/reports', () => {
       url: '/api/v1/reports',
       headers: { cookie: await loginAsSteam(NO_PANEL_STEAM) },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists all reports sorted by created_at desc', async () => {
@@ -447,5 +447,65 @@ describeIfDb('PATCH /api/v1/reports/:id', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { resolution_note: string | null };
     expect(body.resolution_note).toBe('reviewed by owner');
+  });
+});
+
+describeIfDb('PATCH /api/v1/reports/:id — reopening (audit #71, #261)', () => {
+  async function seedResolvedReport(): Promise<string> {
+    const [row] = await h.db
+      .insert(playerReports)
+      .values({
+        serverId: serverAId,
+        reporterPlayerId: reporterId,
+        targetPlayerId: targetId,
+        body: 'Reopen fixture',
+        source: 'ui',
+        status: 'resolved',
+        claimedAt: new Date(Date.now() - 120_000),
+        resolvedAt: new Date(Date.now() - 60_000),
+      })
+      .returning({ id: playerReports.id });
+    if (!row) throw new Error('report insert failed');
+    return row.id;
+  }
+
+  async function patchStatus(id: string, status: string) {
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/reports/${id}`,
+      headers: { cookie: await loginAsSteam(HANDLER_STEAM) },
+      payload: { status },
+    });
+    expect(res.statusCode).toBe(200);
+    const [stored] = await h.db
+      .select({ claimedAt: playerReports.claimedAt, resolvedAt: playerReports.resolvedAt })
+      .from(playerReports)
+      .where(eq(playerReports.id, id));
+    return {
+      body: res.json() as { status: string; resolved_at: string | null },
+      stored,
+    };
+  }
+
+  it('back to pending clears both resolved_at and claimed_at', async () => {
+    const id = await seedResolvedReport();
+    const { body, stored } = await patchStatus(id, 'pending');
+    expect(body.status).toBe('pending');
+    expect(body.resolved_at).toBeNull();
+    expect(stored?.resolvedAt).toBeNull();
+    expect(stored?.claimedAt).toBeNull();
+  });
+
+  it('back to in_review clears resolved_at and keeps the original claim time', async () => {
+    const id = await seedResolvedReport();
+    const [original] = await h.db
+      .select({ claimedAt: playerReports.claimedAt })
+      .from(playerReports)
+      .where(eq(playerReports.id, id));
+    const { body, stored } = await patchStatus(id, 'in_review');
+    expect(body.status).toBe('in_review');
+    expect(body.resolved_at).toBeNull();
+    expect(stored?.resolvedAt).toBeNull();
+    expect(stored?.claimedAt?.getTime()).toBe(original?.claimedAt?.getTime());
   });
 });

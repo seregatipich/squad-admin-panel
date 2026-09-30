@@ -133,6 +133,11 @@ describe('ExternalBansSection', () => {
     expect(screen.getByLabelText(/Причина/)).toHaveValue('RuBans: aimbot');
     expect(screen.getByLabelText(/Срок/)).toHaveValue('0');
 
+    // No server is preselected even when only one exists (#442): the operator
+    // must choose it explicitly before the destructive AdminBan can fire.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Сервер' }), {
+      target: { value: 'server-1' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Забанить' }));
     expect(
       await screen.findByText('Локальный бан отправлен на сервер «Alpha Server».'),

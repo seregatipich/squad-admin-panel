@@ -117,8 +117,16 @@ export default function GeoipIntegrationPage() {
     <>
       <PageHeader
         title="GeoIP (MaxMind)"
-        subtitle="Введите Account ID и License Key от MaxMind — панель скачает базу GeoLite2-City и будет определять страну и город по IP. Без ключа IP сохраняется, но геоданные остаются пустыми."
+        subtitle="Account ID и License Key от MaxMind для базы GeoLite2-City. Ключ хранится в зашифрованном виде. Пока база не загружена, IP сохраняется, но страна и город по нему не определяются."
       />
+
+      {settings && !settings.db_present ? (
+        <InlineBanner
+          tone="warn"
+          title="База GeoLite2-City не загружена"
+          description="Панель пока не скачивает базу автоматически: сохранённый ключ не используется, страна и город по IP не определяются."
+        />
+      ) : null}
 
       {err ? (
         <InlineBanner
@@ -207,7 +215,12 @@ export default function GeoipIntegrationPage() {
               Удалить ключ
             </Button>
           ) : null}
-          <Button variant="primary" loading={saving} onClick={() => void save()}>
+          <Button
+            variant="primary"
+            loading={saving}
+            disabled={saving || !settings}
+            onClick={() => void save()}
+          >
             Сохранить
           </Button>
         </CardFooter>

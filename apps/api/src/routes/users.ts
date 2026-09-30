@@ -1,7 +1,10 @@
+import { normalizePlayerName } from '@squad/shared-config';
 import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { steamId64Equals } from '../lib/player-search.js';
+import { containsPattern } from '../lib/sql-like.js';
 
 const listQuery = z.object({
   q: z.string().min(1).max(64).optional(),
@@ -32,6 +35,14 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         discord_linked: boolean;
       };
       const q = req.query.q?.toLowerCase().trim();
+      // canonical_name_normalized is populated by normalizePlayerName (strips
+      // clan tags / leading non-letters, collapses whitespace); matching the
+      // raw lower-cased query against it misses names like "[RU] Vasya", the
+      // way suspects.ts already normalizes its own nickname search (finding
+      // #358). The LIKE pattern is also escaped so a literal `%`/`_`/`\` in
+      // the query — `_` in particular is common in Squad clan tags — isn't
+      // treated as a wildcard.
+      const namePattern = q ? containsPattern(normalizePlayerName(q)) : undefined;
       const roleId = req.query.role_id;
       const rows = await app.db.execute<UserRow>(sql`
         SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.last_seen_at,
@@ -46,8 +57,8 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         WHERE p.role_id IS NOT NULL
           ${roleId ? sql`AND r.id = ${roleId}` : sql``}
           ${
-            q
-              ? sql`AND (p.canonical_name_normalized LIKE ${`%${q}%`} OR p.steam_id64::text = ${q})`
+            q && namePattern
+              ? sql`AND (p.canonical_name_normalized LIKE ${namePattern} OR ${steamId64Equals(sql`p.steam_id64`, q)})`
               : sql``
           }
         ORDER BY p.last_seen_at DESC

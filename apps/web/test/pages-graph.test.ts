@@ -53,9 +53,6 @@ vi.mock('../src/components/AdminsCfgDriftBanner', () => ({
 vi.mock('../src/components/RoleColorDot', () => ({
   RoleColorDot: () => null,
 }));
-vi.mock('../src/components/RoleEditor', () => ({
-  RoleEditor: () => null,
-}));
 vi.mock('../src/lib/use-live-bus', () => ({
   useLiveSubscription: vi.fn(),
   useLiveBusState: vi.fn(() => 'closed'),
@@ -74,9 +71,6 @@ import playersPage from '../src/app/(dashboard)/all-players/page';
 import auditPage from '../src/app/(dashboard)/audit/page';
 import dashboardPage from '../src/app/(dashboard)/dashboard/page';
 import logsPage from '../src/app/(dashboard)/logs/page';
-import rolesEditPage from '../src/app/(dashboard)/roles/[id]/page';
-import rolesNewPage from '../src/app/(dashboard)/roles/new/page';
-import rolesPage from '../src/app/(dashboard)/roles/page';
 import serverConfigsPage from '../src/app/(dashboard)/servers/[id]/configs/page';
 import serverEventsPage from '../src/app/(dashboard)/servers/[id]/events/page';
 import serverDetailPage from '../src/app/(dashboard)/servers/[id]/page';
@@ -133,18 +127,6 @@ describe('pages static import graph', () => {
 
   it('player detail page exports default', () => {
     expect(playerDetailPage).toBeDefined();
-  });
-
-  it('roles page exports default', () => {
-    expect(rolesPage).toBeDefined();
-  });
-
-  it('roles new page exports default', () => {
-    expect(rolesNewPage).toBeDefined();
-  });
-
-  it('roles edit page exports default', () => {
-    expect(rolesEditPage).toBeDefined();
   });
 
   it('servers page exports default', () => {

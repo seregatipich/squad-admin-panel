@@ -14,6 +14,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 
 const COMMENT_MAX = 512;
@@ -44,18 +45,6 @@ const countQuery = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 function manageGuard(
   req: FastifyRequest,
@@ -189,7 +178,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/bonus-adjustments',
     {
       schema: { params: playerIdParams, body: adjustBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
@@ -229,9 +218,22 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
           .set({ bonusBalance: nextBalance, updatedAt: new Date() })
           .where(eq(players.id, playerId));
 
+        // Inside the transaction: a failed audit insert rolls the balance change
+        // back, so no adjustment is ever committed without its audit row.
+        await writeAuditEntry(tx, {
+          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
+          actorIp: req.ip ?? null,
+          actionType: 'player.bonus.adjust',
+          targetType: 'player',
+          targetId: playerId,
+          before: { bonus_balance: current.balance },
+          after: { bonus_balance: nextBalance },
+          context: { player_id: playerId, amount, request_id: req.id },
+          statusCode: 201,
+        });
+
         return {
           status: 'ok' as const,
-          before: current.balance,
           after: nextBalance,
           ledgerRow,
         };
@@ -245,18 +247,6 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'insufficient_balance', balance: outcome.balance };
       }
-
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player.bonus.adjust',
-        targetType: 'player',
-        targetId: playerId,
-        before: { bonus_balance: outcome.before },
-        after: { bonus_balance: outcome.after },
-        context: { player_id: playerId, amount, request_id: req.id },
-        statusCode: 201,
-      });
 
       reply.code(201);
       return {
@@ -320,6 +310,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
           roleId: vipTiers.roleId,
           defaultDays: vipTiers.defaultDays,
           priceBonuses: vipTiers.priceBonuses,
+          isActive: vipTiers.isActive,
           rolePanelAccess: roles.panelAccess,
           roleIsSystem: roles.isSystemRole,
         })
@@ -330,6 +321,12 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
       if (!tier) {
         reply.code(404);
         return { error: 'tier_not_found' };
+      }
+      // A deactivated tier is hidden from /bonus-shop/tiers and must not stay
+      // purchasable by id at its old price.
+      if (!tier.isActive) {
+        reply.code(409);
+        return { error: 'tier_not_purchasable' };
       }
       // default_days is guaranteed by vip_tiers_price_requires_days_chk when a
       // price is set; the second condition is a defensive narrowing for TS.

@@ -20,6 +20,13 @@ export const CHART_SURFACE = '#2c2c2e';
 export const CHART_BORDER = '#38383a';
 
 /**
+ * Подсветка выбранного столбца: цвет текста (`ink`) с почти нулевой
+ * непрозрачностью — лёгкая вуаль поверх фона, не спорящая с данными.
+ */
+export const CHART_HOVER = '#ffffff';
+export const CHART_HOVER_OPACITY = 0.04;
+
+/**
  * Серии по смыслу метрики.
  *
  * Цвет здесь категориальный, а не оценочный: зелёная линия CPU не значит
@@ -32,8 +39,6 @@ export const CHART_SERIES = {
   rx: '#409cff',
   tx: '#ff9f0a',
 } as const;
-
-export type ChartSeriesKey = keyof typeof CHART_SERIES;
 
 /** Заливка области под линией: данные читаются, фон не спорит с сеткой. */
 export const CHART_AREA_OPACITY = 0.2;

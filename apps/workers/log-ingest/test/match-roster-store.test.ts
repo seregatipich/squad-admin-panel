@@ -10,11 +10,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  computeOpenMatchRoster,
-  handleMatchClose,
-  type RosterSnapshotReader,
-} from '../src/match-roster/store.js';
+import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match2 test database');
@@ -325,6 +321,23 @@ describe('handleMatchClose', () => {
     expect(total).toBe(1800 + 3300 + 3400);
   });
 
+  // Regression for #63 finding 923: loadSessions must keep a lower bound on
+  // connectedAt so partition pruning still applies, without excluding a
+  // session that started shortly before the match and is still open.
+  it('bounds how far before the match a session may have connected (#63 finding 923)', async () => {
+    await seedClosedMatchScenario();
+    const ancientSessionPlayer = PLAYER_D;
+    await db.insert(playerSessions).values({
+      playerId: ancientSessionPlayer,
+      serverId: SERVER_ID,
+      connectedAt: new Date(START.getTime() - 48 * 60 * 60 * 1000),
+      disconnectedAt: null,
+    });
+    await handleMatchClose(db, redis, closeCommand);
+    const rows = await rosterRows(MATCH_ID);
+    expect(rows.some((row) => row.playerId === ancientSessionPlayer)).toBe(false);
+  });
+
   it('is idempotent when the close replays', async () => {
     await seedClosedMatchScenario();
     await handleMatchClose(db, redis, closeCommand);
@@ -341,43 +354,5 @@ describe('handleMatchClose', () => {
       layer: 'Harju_RAAS_v1',
     });
     expect(result).toBeNull();
-  });
-});
-
-describe('computeOpenMatchRoster', () => {
-  it('computes the live roster on the fly without writing match_players', async () => {
-    await db.insert(matches).values({
-      id: MATCH_ID,
-      serverId: SERVER_ID,
-      layer: 'Yehorivka_RAAS_v1',
-      startedAt: START,
-      endedAt: null,
-    });
-    await db.insert(playerSessions).values([
-      { playerId: PLAYER_A, serverId: SERVER_ID, connectedAt: at(0), disconnectedAt: null },
-      { playerId: PLAYER_B, serverId: SERVER_ID, connectedAt: at(600), disconnectedAt: null },
-    ]);
-    await writeRosterSnapshot(
-      at(700),
-      [
-        { steam: STEAM_A, eos: EOS_A, team: 1, squad: 4 },
-        { steam: STEAM_B, eos: EOS_B, team: 2, squad: 1 },
-      ],
-      [
-        { team: 1, squad: 4, name: 'Alpha Squad' },
-        { team: 2, squad: 1, name: 'Bravo Squad' },
-      ],
-    );
-
-    const roster = await computeOpenMatchRoster(db, redis, { matchId: MATCH_ID, now: at(1200) });
-    const byId = new Map(roster.map((entry) => [entry.playerId, entry]));
-
-    expect(roster).toHaveLength(2);
-    expect(byId.get(PLAYER_A)?.playSeconds).toBe(1200);
-    expect(byId.get(PLAYER_A)?.team).toBe(1);
-    expect(byId.get(PLAYER_A)?.leftAt).toBeNull();
-    expect(byId.get(PLAYER_B)?.playSeconds).toBe(600);
-    expect(byId.get(PLAYER_B)?.squadName).toBe('Bravo Squad');
-    expect(await rosterRows(MATCH_ID)).toHaveLength(0);
   });
 });

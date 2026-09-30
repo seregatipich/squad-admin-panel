@@ -116,4 +116,12 @@ describe('parseRconChatLine', () => {
   ])('returns null for the non-chat broadcast %#', (line) => {
     expect(parseRconChatLine(line, '2026-09-09T10:00:00.000Z')).toBeNull();
   });
+
+  it('normalizes the channel casing to the canonical ChatChannel value', () => {
+    const parsed = parseRconChatLine(
+      `[chatall] [Online IDs:EOS: ${EOS} steam: ${STEAM}] PanelAlpha : hi`,
+      '2026-09-09T10:00:00.000Z',
+    );
+    expect(parsed?.channel).toBe('ChatAll');
+  });
 });

@@ -85,6 +85,31 @@ describe('parseStoredRoster', () => {
     const parsed = parseStoredRoster(JSON.stringify(storedRoster([entry({})])));
     expect(parsed?.players).toHaveLength(1);
   });
+
+  it.each([
+    ['an object without players', '{"polled_at":"2026-01-01T00:00:00Z"}'],
+    ['a non-array players field', '{"players":{"0":{}}}'],
+    ['a JSON null', 'null'],
+  ])('returns null for %s instead of a shape that crashes the route (#66)', (_label, raw) => {
+    expect(parseStoredRoster(raw)).toBeNull();
+  });
+
+  // #318: a bare `JSON.parse(raw) as StoredRoster` accepted any shape; the
+  // route reads `stored.players.length` immediately and
+  // collectRosterLookups calls `BigInt(steam_id64)`, so a snapshot missing
+  // `players` (unlike parseStoredSquads, which checks Array.isArray on
+  // `squads`) or with a non-numeric steam_id64 used to 500 instead of
+  // degrading to an empty roster.
+  it('returns null when players is missing', () => {
+    expect(parseStoredRoster(JSON.stringify({ server_id: 'srv' }))).toBeNull();
+  });
+
+  it('returns null when steam_id64 is not a numeric string', () => {
+    const parsed = parseStoredRoster(
+      JSON.stringify(storedRoster([entry({ steam_id64: 'not-a-steamid' })])),
+    );
+    expect(parsed).toBeNull();
+  });
 });
 
 describe('parseStoredSquads', () => {
@@ -168,6 +193,15 @@ describe('collectRosterLookups', () => {
       entry({ eos_id: EOS_ONLY, steam_id64: null }),
     ]);
     expect(eosIds).toEqual([LINKED_EOS, EOS_ONLY]);
+    expect(steamIds).toEqual([BigInt(LINKED_STEAM)]);
+  });
+
+  it('skips a malformed steam_id64 instead of throwing from BigInt (#66)', () => {
+    const { steamIds } = collectRosterLookups([
+      entry({ eos_id: LINKED_EOS, steam_id64: 'not-a-number' }),
+      entry({ eos_id: EOS_ONLY, steam_id64: '12' }),
+      entry({ eos_id: UNKNOWN_EOS, steam_id64: LINKED_STEAM }),
+    ]);
     expect(steamIds).toEqual([BigInt(LINKED_STEAM)]);
   });
 });

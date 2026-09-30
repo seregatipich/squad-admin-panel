@@ -1,5 +1,21 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-28
+
+### Fixed
+
+- [#49](https://github.com/seregatipich/squad-admin-panel/issues/49): every container tail shared the worker's single `BridgeClient`, and stopping a tail only set a local flag. The `container_logs_follow` call (timeout `Infinity`) stayed in the client's pending map forever and the bridge kept its `docker logs -f` running, so each reconcile that stopped a tail leaked one more follow. `tailContainerLogs` now takes `openBridge`, opens a dedicated client per tail and closes it on stop and on stream end; the bridge cancels a follow when its connection closes. Regression test: `test/tail.test.ts` (`gives every tail its own connection and ends it on stop`).
+
+### Security
+
+- `compileBannedNameRules` отбрасывает regex-правила ников, которые не проходят `validateBannedNamePattern` (в том числе шаблоны с катастрофическим backtracking, сохранённые до появления проверки), вместо того чтобы исполнять их на каждом нике (#52).
+
+- [#62](https://github.com/seregatipich/squad-admin-panel/issues/62): alt ban-evasion detection (`src/alt-ban/store.ts`) ignored `context.expires_at`, so a confirmed alt of a player whose temporary ban had expired raised `alt.ban_evasion_suspected` on every connect. Expired temporary bans no longer count as active. Regression test: `test/alt-ban-store.test.ts`.
+- #62: chat spam could fire automation and chat commands without limit. A `chat_keyword` rule now fires at most once per player per server per 60 s (`AUTOMATION_CHAT_COOLDOWN_SECONDS`, key `automation:chat-cooldown:<rule>:<server>:<player>`), and `!stats`/`!rules`/`!report` answer the same player at most once per command per 10 s (`CHAT_COMMAND_COOLDOWN_SECONDS`, key `chat-command:cooldown:<server>:<player>:<command>`). Calls inside the window write nothing to `automation_runs`, `audit_log`, `chat_command_invocations` or the RCON stream. Tests: `test/automation-chat.test.ts`, `test/chat-commands.test.ts`.
+- #62 (ReDoS): banned-name regex rules ran on the event loop with no bound, so a rule such as `^(a|a)*$` and a crafted nickname could block ingestion for every server. Each regex rule now runs in a `node:vm` sandbox with a 50 ms budget (`REGEX_MATCH_TIMEOUT_MS`); a rule that runs over is treated as not matching, logged as `banned-name regex rule exceeded its time budget`, and the rules after it are still evaluated. Test: `test/banname-matcher.test.ts`.
+- #62: a victim named by the log without ids was matched to an arbitrary player sharing the name. See [flows.md](flows.md#combat--vehicle-events-dossier-2) for the roster-based resolution and the `NULL` fallback. The attacker identity backfill no longer throws on a unique-index collision when the EOS id and SteamID belong to two rows, which used to drop every combat event of that attacker. Test: `test/combat-identity.regression.test.ts`.
+- #62: `persistEventEnvelope` no longer writes a `processed_events` row per persisted event; the `events` primary key already makes the insert idempotent, and the extra row grew an unpruned table. Test: `test/event-store.test.ts`.
+
 ## 2026-09-27
 
 ### Fixed
@@ -7,6 +23,9 @@
 - [#19](https://github.com/seregatipich/squad-admin-panel/issues/19): the AUTO-3 alert engine (`src/alerts/engine.ts`) was never called, so `server_crashed`, `unusual_activity`, `admin_login_new_ip` and log-derived `custom` rules created in «Настройки → Алерты» never fired. `src/alerts/store.ts` now evaluates the enabled rules for every parsed event and writes `alert_events` (details in [api.md](api.md#alert-rules-alert_events)). Stored rule configs are validated with zod instead of an unchecked cast, and the `AlertRuleConfig` union no longer includes `Record<string, unknown>`.
 
 - `match_players.squad_name` (and `team`) were always `null`: `handleMatchClose` looked them up in `rcon.players_polled` rows of `events`, but worker-rcon only XADDs that event and nothing persists it. Match close now reads worker-rcon's `rcon:roster:{id}` + `rcon:squads:{id}` snapshots and stores the squad's name (not its number). Players who left before the close keep `null`. Snapshots outside the match window (+120 s) are ignored, and a Redis outage no longer affects whether the roster is written. `handleMatchClose` / `computeMatchRoster` / `computeOpenMatchRoster` take the Redis client as their second argument. Regression test: `test/match-roster-store.test.ts`.
+
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 930): the benign-noise filter ran unanchored regexes over the whole raw line before parsing, so a nickname such as `LogRedpointEOS: Verbose: ` dropped the player's own `Join succeeded` line (no `player.connected`, so no alt-ban / banned-name / external-ban connect checks), and chat text containing a noise marker vanished from the chat archive, flag detector, automations and `!report`. `isBenignNoise` now takes the parsed line and matches `category`, `verbosity` and the start of `message`. Regression tests: `test/patterns.test.ts`.
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 1332): a container tail whose bridge stream ended on its own (bridge restart, socket drop, Docker restarting the container without a status change) stayed registered in `TailManager`, so `reconcile()` never re-dialled it and ingest silently stopped until a worker restart. The tail factory now receives an `onDead` callback; a `stream-end` / `stream-error` stop forgets the tail and the next reconcile (≤15 s) starts a fresh one. Regression tests: `test/manager.test.ts`.
 
 ## 2026-09-09
 

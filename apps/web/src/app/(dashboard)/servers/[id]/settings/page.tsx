@@ -34,13 +34,6 @@ interface Settings {
   max_players: number;
   tickrate: number;
   multihome: string | null;
-  extra_args: string;
-  cpu_affinity: string | null;
-  cpu_weight: number | null;
-  niceness: number | null;
-  memory_high_mb: number | null;
-  memory_max_mb: number | null;
-  io_weight: number | null;
   seed_live_at: number;
   seed_hysteresis: number;
   chat_commands_enabled: boolean;
@@ -63,15 +56,6 @@ const PORT_FIELDS = [
   ['query_port', 'Порт запросов'],
   ['beacon_port', 'Порт маяка'],
   ['rcon_port', 'Порт RCON'],
-] as const;
-
-/** Лимиты ресурсов контейнера: ключ настройки, подпись строки и минимум. */
-const RESOURCE_FIELDS = [
-  ['memory_high_mb', 'Память, мягкий предел (МБ)', 2048],
-  ['memory_max_mb', 'Память, жёсткий предел (МБ)', 2048],
-  ['cpu_weight', 'Вес CPU', 1],
-  ['io_weight', 'Вес ввода-вывода', 10],
-  ['niceness', 'Приоритет (nice)', -20],
 ] as const;
 
 interface ServerInfo {
@@ -178,35 +162,45 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [logSourceDirty, setLogSourceDirty] = useState(false);
   const [logSourceBusy, setLogSourceBusy] = useState(false);
   const [logSourceErr, setLogSourceErr] = useState<string | null>(null);
+  const [logSourceLoadFailed, setLogSourceLoadFailed] = useState(false);
   const [logSourceSaved, setLogSourceSaved] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setServerInfo({
-        status: data.server.status,
-        display_name: data.server.display_name,
-        tags: data.server.tags ?? [],
-        runtime: data.server.runtime ?? 'container',
-        connection: data.connection ?? null,
-      });
-      setTags(data.server.tags ?? []);
-      const lic = (data.server.license ?? null) as LicenseState | null;
-      setLicense(lic);
-      setLicenseId(lic?.license_id ?? '');
-      setContainer(
-        data.container
-          ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
-          : null,
-      );
-      setSettings(data.settings);
-      setDraft({});
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, [id]);
+  // `resetDraft` is false for a reload triggered by an unrelated save (license
+  // attach/detach) — those must not discard other fields' unsaved edits, only
+  // refresh what the server now reports (#652).
+  const load = useCallback(
+    async (resetDraft = true) => {
+      try {
+        const r = await fetch(`/api/v1/servers/${id}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        setServerInfo({
+          status: data.server.status,
+          display_name: data.server.display_name,
+          tags: data.server.tags ?? [],
+          runtime: data.server.runtime ?? 'container',
+          connection: data.connection ?? null,
+        });
+        setTags(data.server.tags ?? []);
+        const lic = (data.server.license ?? null) as LicenseState | null;
+        setLicense(lic);
+        setLicenseId(lic?.license_id ?? '');
+        setContainer(
+          data.container
+            ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
+            : null,
+        );
+        setSettings(data.settings);
+        if (resetDraft) setDraft({});
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    },
+    [id],
+  );
 
   useEffect(() => {
     void load();
@@ -224,7 +218,8 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           credentials: 'include',
           cache: 'no-store',
         });
-        if (!res.ok || cancelled) return;
+        if (cancelled) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as LogSourceView;
         if (cancelled) return;
         setLogSource(data);
@@ -237,8 +232,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             enabled: data.enabled ?? true,
           });
         }
-      } catch {
-        // best-effort: the section shows the empty form
+      } catch (e) {
+        if (cancelled) return;
+        // Пустая форма без блокировки перезаписала бы уже настроенный источник значениями по умолчанию.
+        setLogSourceLoadFailed(true);
+        setLogSourceErr(`Не удалось загрузить источник логов: ${(e as Error).message}`);
       }
     })();
     return () => {
@@ -341,7 +339,10 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     };
   }, [id]);
 
-  const isRunning = serverInfo && !['stopped', 'ready', 'pending'].includes(serverInfo.status);
+  // Mirrors the API's PORT_CHANGEABLE_STATUSES (apps/api/src/routes/server-settings.ts) —
+  // 'failed' also allows port edits there, so the UI must not disable them for it.
+  const isRunning =
+    serverInfo && !['stopped', 'ready', 'pending', 'failed'].includes(serverInfo.status);
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -464,7 +465,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
       }
       setLicenseKey('');
-      await load();
+      await load(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -490,7 +491,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       }
       setLicenseId('');
       setLicenseKey('');
-      await load();
+      await load(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -503,7 +504,20 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   if (!settings) {
     return (
       <PageContainer width="reading">
-        <Skeleton variant="card" count={4} label="Настройки сервера загружаются" />
+        {err ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить настройки сервера"
+            description={err}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : (
+          <Skeleton variant="card" count={4} label="Настройки сервера загружаются" />
+        )}
       </PageContainer>
     );
   }
@@ -514,6 +528,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const dirty = Object.keys(draft).length > 0;
   const external = serverInfo?.runtime === 'external';
   const connectionDirty = Object.keys(connectionDraft).length > 0;
+  const restartRequired = licenseRestartRequired(
+    license?.updated_at ?? null,
+    container?.running ?? false,
+    container?.started_at ?? null,
+  );
 
   return (
     <PageContainer width="reading">
@@ -527,16 +546,22 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           <TagInput
             tags={tags}
             onChange={async (newTags) => {
+              const previousTags = tags;
               setTags(newTags);
               try {
-                await fetch(`/api/v1/servers/${id}`, {
+                const res = await fetch(`/api/v1/servers/${id}`, {
                   method: 'PATCH',
                   credentials: 'include',
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ tags: newTags }),
                 });
-              } catch {
-                /* best effort */
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({}));
+                  throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+                }
+              } catch (e) {
+                setTags(previousTags);
+                setErr(`Не удалось сохранить теги: ${(e as Error).message}`);
               }
             }}
           />
@@ -786,7 +811,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             ) : null}
             <Button
               variant="primary"
-              disabled={!logSourceDirty && !!logSource?.configured}
+              disabled={logSourceLoadFailed || (!logSourceDirty && !!logSource?.configured)}
               loading={logSourceBusy}
               onClick={() => saveLogSource(false)}
             >
@@ -1012,66 +1037,18 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       ) : null}
 
       {external ? null : (
-        <GroupedList title="Ресурсы" footnote="Применяется при следующем запуске.">
-          {RESOURCE_FIELDS.map(([key, label, min]) => (
-            <GroupedRow
-              key={key}
-              label={label}
-              control={
-                <div className="w-32">
-                  <TextInput
-                    type="number"
-                    aria-label={label}
-                    value={(val(key) as number | null) ?? ''}
-                    onChange={(e) =>
-                      setField(key, e.target.value === '' ? null : Number(e.target.value))
-                    }
-                    min={min}
-                    placeholder="Нет лимита"
-                  />
-                </div>
-              }
-            />
-          ))}
-          <GroupedRow
-            label="Привязка к ядрам (CPU affinity)"
-            control={
-              <div className="w-32">
-                <TextInput
-                  aria-label="Привязка к ядрам (CPU affinity)"
-                  value={(val('cpu_affinity') as string | null) ?? ''}
-                  onChange={(e) =>
-                    setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
-                  }
-                  placeholder="Нет ограничения"
-                />
-              </div>
-            }
-          />
-        </GroupedList>
-      )}
-
-      {external ? null : (
         <div className="space-y-3">
           <GroupedList
             title="Лицензия"
             footnote={
-              licenseRestartRequired(
-                license?.updated_at ?? null,
-                container?.running ?? false,
-                container?.started_at ?? null,
-              )
+              restartRequired
                 ? 'Лицензия сохранена и применится после перезапуска сервера.'
                 : license?.configured
                   ? 'Лицензия привязана и применена.'
                   : 'License.cfg записывается панелью; применяется после перезапуска сервера.'
             }
           >
-            {licenseRestartRequired(
-              license?.updated_at ?? null,
-              container?.running ?? false,
-              container?.started_at ?? null,
-            ) ? (
+            {restartRequired ? (
               <GroupedRow
                 label="Нужен перезапуск"
                 description="Лицензия сохранена и применится после перезапуска сервера"

@@ -8,7 +8,6 @@ import {
   kitLabel,
   type RosterPlayer,
   type RosterSquadMeta,
-  shortEos,
   sortRoster,
   squadLabel,
   teamLabel,
@@ -55,16 +54,6 @@ describe('formatTimeOnServer', () => {
 
   it('never returns a negative duration when the clock is behind', () => {
     expect(formatTimeOnServer('2026-07-05T10:00:10.000Z', base)).toBe('0с');
-  });
-});
-
-describe('shortEos', () => {
-  it('truncates a full EOS id', () => {
-    expect(shortEos('abcdef0123456789abcdef0123456789')).toBe('abcdef01…6789');
-  });
-
-  it('leaves short ids untouched', () => {
-    expect(shortEos('abcd')).toBe('abcd');
   });
 });
 

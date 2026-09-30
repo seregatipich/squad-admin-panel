@@ -3,7 +3,6 @@ import {
   enqueueAdminsCfgSyncForAllServers,
   enqueueAdminsCfgSyncForServer,
 } from '@squad/db';
-import type Redis from 'ioredis';
 
 export const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
 export const ADMINS_CFG_SYNC_GROUP = 'config-sync';
@@ -58,25 +57,4 @@ export async function publishAdminsCfgSyncForServer(
   event: AdminsCfgSyncEvent,
 ): Promise<void> {
   await enqueueAdminsCfgSyncForServer(db, serverId, event);
-}
-
-/**
- * Used by the worker on startup to make sure every active server's stream
- * has the consumer group registered. Called from the worker, but kept here
- * so the API can also pre-register the group when a brand-new server is
- * created (avoids the very first XREADGROUP call having to MKSTREAM).
- */
-export async function ensureAdminsCfgSyncGroup(redis: Redis, serverId: string): Promise<void> {
-  try {
-    await redis.xgroup(
-      'CREATE',
-      `${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`,
-      ADMINS_CFG_SYNC_GROUP,
-      '0',
-      'MKSTREAM',
-    );
-  } catch (err) {
-    if ((err as Error).message?.includes('BUSYGROUP')) return;
-    throw err;
-  }
 }

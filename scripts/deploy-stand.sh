@@ -10,6 +10,9 @@
 # only what differs from the running release:
 #
 #   nothing differs (docs, tests)  -> exit before any Docker call
+#
+# A missing REDIS_PASSWORD or REDIS_SIDECAR_PASSWORD is generated into
+# .env.stand first (see ensure_env_secret).
 #   an image differs               -> pull that image, unless already present
 #   packages/db/drizzle differs    -> pg_dump into $BACKUP_DIR, then run the
 #                                     migrator; a failure stops the deploy
@@ -60,6 +63,18 @@ app_domain="${app_domain//[\"\']/}"
 if [[ ! "$app_domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
   fatal "APP_DOMAIN in $APP_DIR/$ENV_FILE must be the stand's host name (got '${app_domain}')"
 fi
+# docker/compose.stand.yml refuses to start without these; fail here with a
+# clear message before any image is pulled or container touched.
+for required in ACME_EMAIL DUCKDNS_TOKEN; do
+  value="$(sed -n "s/^${required}=//p" "$ENV_FILE" | tail -n 1)"
+  value="${value//[\"\']/}"
+  if [[ -z "$value" ]]; then
+    fatal "$required in $APP_DIR/$ENV_FILE must be set (Let's Encrypt contact email / DuckDNS API token for the stand's TLS)"
+  fi
+done
+if [[ "$(sed -n 's/^ACME_EMAIL=//p' "$ENV_FILE" | tail -n 1)" == *@example.com ]]; then
+  fatal "ACME_EMAIL in $APP_DIR/$ENV_FILE must be a real address: Let's Encrypt rejects example.com"
+fi
 if [[ ! "${RELEASE_SHA:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   fatal "RELEASE_SHA must name the release (got '${RELEASE_SHA:-}')"
 fi
@@ -78,6 +93,26 @@ unset APP_VERSION CADDYFILE_SHA
 for dependency in packages/db/drizzle docker/Caddyfile.stand "$COMPOSE_FILE"; do
   [[ -e "$dependency" ]] || fatal "$APP_DIR/$dependency is missing"
 done
+
+# Redis requires a password for the panel and one for the rnsquadjs sidecar's
+# ACL user (#32), and compose refuses to start without them. A .env.stand from
+# before that gets them generated once (hex, since they are embedded in
+# redis:// URLs); an existing value is never rotated.
+ensure_env_secret() {
+  local key="$1" value
+  grep -qE "^${key}=.+" "$ENV_FILE" && return 0
+  value="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  if grep -qE "^${key}=$" "$ENV_FILE"; then
+    sed -i "s/^${key}=\$/${key}=${value}/" "$ENV_FILE"
+  else
+    # Never glue the new line onto a last line that lacks its newline.
+    [[ -z "$(tail -c 1 "$ENV_FILE")" ]] || echo >> "$ENV_FILE"
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+  echo "==> generated ${key} in ${ENV_FILE}"
+}
+ensure_env_secret REDIS_PASSWORD
+ensure_env_secret REDIS_SIDECAR_PASSWORD
 
 # Prints KEY's value from a release file, or nothing. The files are data this
 # script writes, so they are read rather than sourced.

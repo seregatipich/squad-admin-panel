@@ -4,7 +4,3 @@ packages:
   - 'packages/*'
   - 'docker/rnsquadjs/plugins/*'
 
-onlyBuiltDependencies:
-  - '@biomejs/biome'
-  - '@node-rs/argon2'
-  - esbuild

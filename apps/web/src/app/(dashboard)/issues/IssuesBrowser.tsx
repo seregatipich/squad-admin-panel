@@ -91,6 +91,7 @@ export function IssuesBrowser() {
   const [showCreate, setShowCreate] = useState(false);
   const [assigneeName, setAssigneeName] = useState<string | null>(null);
   const idsRef = useRef<Set<string>>(new Set());
+  const loadRequestId = useRef(0);
 
   const navigate = useCallback(
     (partial: Partial<IssueFilters>) => {
@@ -119,6 +120,7 @@ export function IssuesBrowser() {
   }, []);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setError(null);
     try {
@@ -126,8 +128,10 @@ export function IssuesBrowser() {
         credentials: 'include',
         cache: 'no-store',
       });
+      if (requestId !== loadRequestId.current) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as IssueListResponse;
+      if (requestId !== loadRequestId.current) return;
       idsRef.current = new Set(data.items.map((issue) => issue.id));
       setIssues(data.items);
       setTotal(data.total);
@@ -137,9 +141,9 @@ export function IssuesBrowser() {
         : null;
       if (assigned) setAssigneeName(assigned.name);
     } catch (e) {
-      setError((e as Error).message);
+      if (requestId === loadRequestId.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [filters]);
 
@@ -151,8 +155,15 @@ export function IssuesBrowser() {
     (event: { data: { issue: IssueView } }) => {
       if (filters.page !== 1) return;
       const issue = event.data.issue;
-      const matches = issueMatchesFilters(issue, filters);
       const existed = idsRef.current.has(issue.id);
+      // `issueMatchesFilters` only checks state/assignee/label — it cannot
+      // evaluate the server's `search_vector @@ websearch_to_tsquery(q)`
+      // match client-side. With an active search, a ticket the viewer has
+      // not already seen must not be inserted just because it happens to
+      // satisfy the other filters: it might not match `q` at all, and would
+      // silently pollute the search results (ISSUES-558). A ticket already
+      // shown can still be updated or removed as usual.
+      const matches = issueMatchesFilters(issue, filters) && (!filters.q || existed);
       if (matches && !existed) {
         idsRef.current.add(issue.id);
         setTotal((t) => t + 1);

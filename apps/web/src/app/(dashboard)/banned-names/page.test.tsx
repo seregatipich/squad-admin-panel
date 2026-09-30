@@ -132,6 +132,56 @@ describe('BannedNamesPage', () => {
   });
 });
 
+describe('BannedNamesPage loading', () => {
+  it('clears the error banner once a retry succeeds', async () => {
+    const ok = mockListFetch();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('boom', { status: 500 }))
+      .mockImplementation(ok);
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<BannedNamesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Повторить' }));
+
+    await screen.findByText('AdolfHitler');
+    expect(screen.queryByText('Не удалось выполнить запрос')).not.toBeInTheDocument();
+  });
+
+  it('ignores a slow response that belongs to an outdated search', async () => {
+    const listBody = (name: string) =>
+      new Response(
+        JSON.stringify({
+          items: [{ ...RULE, id: name, pattern: name }],
+          total: 1,
+          page: 1,
+          page_size: 50,
+          can_mutate: true,
+        }),
+        { status: 200 },
+      );
+    let releaseStale: (res: Response) => void = () => {};
+    const fetchSpy = vi.fn((url: string) => {
+      if (!url.includes('search=')) {
+        return new Promise<Response>((resolve) => {
+          releaseStale = resolve;
+        });
+      }
+      return Promise.resolve(listBody('FreshRule'));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<BannedNamesPage />);
+
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'fresh' } });
+    await screen.findByText('FreshRule');
+    releaseStale(listBody('StaleRule'));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('StaleRule')).not.toBeInTheDocument();
+    expect(screen.getByText('FreshRule')).toBeInTheDocument();
+  });
+});
+
 describe('live preview matching (all three types)', () => {
   it('exact: case-insensitive full match only', () => {
     expect(matchBannedName('AdolfHitler', 'exact', 'adolfhitler')).toBe(true);

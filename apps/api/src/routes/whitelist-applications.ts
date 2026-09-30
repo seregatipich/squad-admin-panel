@@ -1,5 +1,5 @@
 import { panelMeta, players, roles, whitelistApplications } from '@squad/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -25,7 +25,11 @@ const PG_UNIQUE_VIOLATION = '23505';
 const statusEnum = z.enum(['pending', 'approved', 'rejected']);
 
 const submitBody = z.object({
-  steam_id64: z.string().regex(STEAM_ID64_RE),
+  /**
+   * Optional and never trusted: the applicant is the Steam-verified session's
+   * SteamID64 (#375). When sent, it must match that SteamID64.
+   */
+  steam_id64: z.string().regex(STEAM_ID64_RE).optional(),
   body: z.string().trim().min(1).max(BODY_MAX),
   contact: z.string().trim().max(CONTACT_MAX).optional(),
 });
@@ -72,6 +76,7 @@ interface ApplicationRow {
   grantedRoleName: string | null;
   grantedUntil: Date | null;
   source: string;
+  verified: boolean;
   createdAt: Date;
   decidedAt: Date | null;
 }
@@ -94,6 +99,7 @@ function serializeApplication(row: ApplicationRow) {
     granted_role_name: row.grantedRoleName,
     granted_until: row.grantedUntil ? row.grantedUntil.toISOString() : null,
     source: row.source,
+    verified: row.verified,
     created_at: row.createdAt.toISOString(),
     decided_at: row.decidedAt ? row.decidedAt.toISOString() : null,
   };
@@ -108,9 +114,10 @@ function actorFrom(req: FastifyRequest): AuditActor {
 /**
  * Public whitelist/VIP application portal + panel approval workflow (WL-3, #67).
  *
- * The public half (`/api/v1/public/whitelist/*`) is unauthenticated and rate
- * limited: anyone can read whether the portal is open and submit one pending
- * application per SteamID64. The panel half (`/api/v1/whitelist/applications*`)
+ * The public half (`/api/v1/public/whitelist/*`) is rate limited: anyone can
+ * read whether the portal is open, and a player signed in through Steam
+ * OpenID (a `self_service` session is enough) submits one pending application
+ * for their own SteamID64 — never for a SteamID64 they merely typed in (#375). The panel half (`/api/v1/whitelist/applications*`)
  * is gated on `whitelist:view`/`whitelist:edit` and drives the review queue.
  *
  * Approving a pending application grants the resolved role to the matching
@@ -164,6 +171,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         grantedRoleName: grantedRole.name,
         grantedUntil: whitelistApplications.grantedUntil,
         source: whitelistApplications.source,
+        verified: whitelistApplications.verified,
         createdAt: whitelistApplications.createdAt,
         decidedAt: whitelistApplications.decidedAt,
       })
@@ -197,8 +205,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: submitBody },
       config: {
-        audit: false,
+        audit: 'manual',
+        // `public` so an anonymous caller gets the explicit 401 below;
+        // `selfService` so a Steam login without panel access is honoured.
         public: true,
+        selfService: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
     },
@@ -209,17 +220,23 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'applications_disabled' };
       }
 
-      const steamId64 = BigInt(req.body.steam_id64);
+      // Ownership of the SteamID64 is proven by the Steam OpenID login behind
+      // the session; a typed-in SteamID64 let anyone file (and block) an
+      // application in someone else's name (#375).
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'steam_login_required' };
+      }
+      const steamId64 = req.user.steamId64;
+      if (steamId64 === null) {
+        reply.code(403);
+        return { error: 'steam_account_required' };
+      }
+      if (req.body.steam_id64 !== undefined && BigInt(req.body.steam_id64) !== steamId64) {
+        reply.code(403);
+        return { error: 'steam_id_mismatch' };
+      }
       const contact = req.body.contact?.trim() || null;
-
-      // Best-effort applicant resolution — the portal accepts submissions for
-      // SteamIDs the panel has never seen (a first-time joiner); approval later
-      // requires a real players row.
-      const [player] = await app.db
-        .select({ id: players.id })
-        .from(players)
-        .where(eq(players.steamId64, steamId64))
-        .limit(1);
 
       let created: ApplicationRow;
       try {
@@ -227,11 +244,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
           .insert(whitelistApplications)
           .values({
             steamId64,
-            playerId: player?.id ?? null,
+            playerId: req.user.playerId,
             contact,
             body: req.body.body,
             source: 'public',
             status: 'pending',
+            verified: true,
           })
           .returning({ id: whitelistApplications.id });
         // biome-ignore lint/style/noNonNullAssertion: insert...returning yields the row
@@ -277,7 +295,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/settings',
     {
       schema: { body: settingsBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req) => {
       const before = await loadSettings();
@@ -343,7 +361,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/:id',
     {
       schema: { params: idParam, body: patchBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: whitelist:edit gate guarantees req.user
@@ -362,7 +380,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
 
       if (req.body.status === 'rejected') {
         const now = new Date();
-        await app.db
+        const decided = await app.db
           .update(whitelistApplications)
           .set({
             status: 'rejected',
@@ -370,7 +388,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             reviewNote: req.body.review_note ?? null,
             decidedAt: now,
           })
-          .where(eq(whitelistApplications.id, existing.id));
+          .where(stillPending(existing.id))
+          .returning({ id: whitelistApplications.id });
+        if (decided.length === 0) {
+          reply.code(409);
+          return { error: 'application_not_pending' };
+        }
         const updated = await loadApplication(existing.id);
         // biome-ignore lint/style/noNonNullAssertion: row exists, just updated
         const after = serializeApplication(updated!);
@@ -456,12 +479,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
 
       const roleComment = req.body.review_note?.trim() || 'whitelist application';
 
-      await app.db.transaction(async (tx) => {
-        await tx
-          .update(players)
-          .set({ roleId: resolvedRoleId, roleExpiresAt: grantedUntil, roleComment })
-          .where(eq(players.id, applicant.id));
-        await tx
+      const approved = await app.db.transaction(async (tx) => {
+        // Claim the application first: only the decision that flips it out of
+        // `pending` goes on to grant the role, so a concurrent approve/reject
+        // or a double click can never both land (#374).
+        const decided = await tx
           .update(whitelistApplications)
           .set({
             status: 'approved',
@@ -471,14 +493,25 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             grantedUntil,
             decidedAt: now,
           })
-          .where(eq(whitelistApplications.id, existing.id));
+          .where(stillPending(existing.id))
+          .returning({ id: whitelistApplications.id });
+        if (decided.length === 0) return false;
+        await tx
+          .update(players)
+          .set({ roleId: resolvedRoleId, roleExpiresAt: grantedUntil, roleComment })
+          .where(eq(players.id, applicant.id));
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'whitelist.application.approve',
           actor_player_id: reviewerPlayerId,
           enqueued_at: now.toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!approved) {
+        reply.code(409);
+        return { error: 'application_not_pending' };
+      }
 
       invalidatePermissionCache(applicant.id);
       if (!role.panelAccess) {
@@ -509,6 +542,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       return after;
     },
   );
+
+  /** Matches the application only while it is still undecided. */
+  function stillPending(id: string) {
+    return and(eq(whitelistApplications.id, id), eq(whitelistApplications.status, 'pending'));
+  }
 
   async function loadWhitelistRoleId(): Promise<string | null> {
     const rows = await app.db

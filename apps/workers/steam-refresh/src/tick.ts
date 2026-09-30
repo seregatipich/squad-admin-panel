@@ -44,6 +44,15 @@ export interface SteamRefreshTickDeps {
   fetchBans(ids: readonly bigint[]): Promise<Map<string, SteamBanInfo> | null>;
   fetchOwnedGames(id: bigint): Promise<SteamOwnedGames | null>;
   saveSnapshot(playerId: string, snapshot: SteamRefreshSnapshot): Promise<void>;
+  /**
+   * Touches `steamCheckedAt` for a candidate that failed this tick, without
+   * changing any profile data (#1026). `findCandidates` orders by
+   * `steamCheckedAt ASC NULLS FIRST`, so a permanently-unresolvable SteamID
+   * (deleted/nonexistent account — `GetPlayerSummaries` silently omits it)
+   * would otherwise sort first in every batch forever, starving the refresh
+   * of every other stale player once ~100 such records accumulate.
+   */
+  markAttempted(playerId: string, attemptedAt: Date): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -130,14 +139,18 @@ export async function runSteamRefreshTick(
 
   try {
     const ids = candidates.map((candidate) => candidate.steamId64);
-    const [profiles, bans, ownedGames] = await Promise.all([
-      deps.fetchProfiles(ids),
-      deps.fetchBans(ids),
-      mapWithConcurrency(candidates, OWNED_GAMES_CONCURRENCY, (candidate) =>
-        deps.fetchOwnedGames(candidate.steamId64),
-      ),
-    ]);
+    const [profiles, bans] = await Promise.all([deps.fetchProfiles(ids), deps.fetchBans(ids)]);
+    // The per-player owned-games calls are the expensive part of the quota, so
+    // they only start once both shared batch requests have succeeded.
     if (!profiles || !bans) throw new Error('Steam batch request failed');
+    const ownedGames = await mapWithConcurrency(candidates, OWNED_GAMES_CONCURRENCY, (candidate) =>
+      // A single candidate's network/JSON error must not reject the whole batch
+      // and discard the already-fetched profiles/bans (#1027) — it is counted
+      // as `failed` below instead.
+      deps
+        .fetchOwnedGames(candidate.steamId64)
+        .catch(() => null),
+    );
 
     let updated = 0;
     let failed = 0;
@@ -148,6 +161,7 @@ export async function runSteamRefreshTick(
       const owned = ownedGames[index] ?? null;
       if (!profile || !ban || !owned) {
         failed++;
+        await deps.markAttempted(candidate.playerId, now);
         continue;
       }
       await deps.saveSnapshot(candidate.playerId, buildSnapshot(profile, ban, owned, now));
@@ -211,6 +225,9 @@ export function createSteamRefreshDeps(
     fetchOwnedGames: (id) => fetchSteamOwnedGames(id, apiDeps),
     saveSnapshot: async (playerId, snapshot) => {
       await db.update(players).set(snapshot).where(eq(players.id, playerId));
+    },
+    markAttempted: async (playerId, attemptedAt) => {
+      await db.update(players).set({ steamCheckedAt: attemptedAt }).where(eq(players.id, playerId));
     },
   };
 }

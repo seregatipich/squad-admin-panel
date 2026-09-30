@@ -27,6 +27,7 @@ function makePublisher() {
 function makeReport(overrides: Partial<ParsedReport> = {}): ParsedReport {
   return {
     ts: new Date().toISOString(),
+    tick: 100,
     channel: 'ChatAll',
     reporterEos: REPORTER_EOS,
     reporterSteam: null,
@@ -197,6 +198,75 @@ describe('handleReport', () => {
 
     const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
     expect(eventRows).toHaveLength(2);
+  });
+
+  // Regression for #63 finding 940: playerReports.id used to be an
+  // unconditional uuidv7(), unlike the rest of the ingestor's uuidv5-based
+  // idempotency scheme. A replayed tail (reconnect re-reading the last N
+  // lines) reprocessed the same !report line as brand-new input, re-
+  // appending its body or creating a duplicate pending report.
+  it('replaying the exact same log line is a no-op, not a re-append or a duplicate row', async () => {
+    const report = makeReport({ body: 'first line', ts: new Date().toISOString(), tick: 555 });
+    const first = await handleReport(db, makePublisher(), { serverId: SERVER_ID, report });
+    const replay = await handleReport(db, makePublisher(), { serverId: SERVER_ID, report });
+
+    expect(replay.reportId).toBe(first.reportId);
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].body).toBe('first line');
+
+    const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
+    expect(eventRows).toHaveLength(1);
+  });
+
+  it('replaying a line that was appended to a duplicate row does not append it twice', async () => {
+    await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: makeReport({ body: 'first line' }),
+    });
+    const appended = makeReport({ body: 'second line', ts: new Date().toISOString(), tick: 777 });
+    const first = await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: appended,
+    });
+    const replay = await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: appended,
+    });
+
+    expect(replay.reportId).toBe(first.reportId);
+    expect(replay.deduped).toBe(true);
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].body).toBe('first line\nsecond line');
+    const eventRows = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
+    expect(eventRows).toHaveLength(2);
+  });
+
+  // Regression for #63 finding 941: the dedup append used to read the
+  // duplicate row's body once in JS, then write `${read}\n${new}` — two
+  // concurrent duplicate reports racing that read-then-write could lose one
+  // body to the other's overwrite. The append must happen in SQL against the
+  // row's live value so no concurrent append is lost.
+  it('loses no line when concurrent duplicate reports race the dedup append', async () => {
+    await handleReport(db, makePublisher(), {
+      serverId: SERVER_ID,
+      report: makeReport({ body: 'first line' }),
+    });
+
+    const concurrentLines = Array.from({ length: 8 }, (_, i) => `concurrent-${i}`);
+    await Promise.all(
+      concurrentLines.map((body) =>
+        handleReport(db, makePublisher(), { serverId: SERVER_ID, report: makeReport({ body }) }),
+      ),
+    );
+
+    const rows = await db.select().from(playerReports).where(eq(playerReports.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    const lines = rows[0].body.split('\n');
+    expect(lines).toContain('first line');
+    for (const body of concurrentLines) expect(lines).toContain(body);
+    expect(lines).toHaveLength(1 + concurrentLines.length);
   });
 
   it('creates a new row when the previous report is older than the dedup window', async () => {

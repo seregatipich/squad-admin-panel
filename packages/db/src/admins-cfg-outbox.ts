@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, notInArray } from 'drizzle-orm';
 import type { DatabaseClient } from './client.js';
 import { adminsCfgSyncOutbox } from './schema/admins-cfg-sync-outbox.js';
 import { servers } from './schema/servers.js';
@@ -58,10 +58,14 @@ export async function markAdminsCfgSyncFailed(db: ApplicationDb, id: string, cod
  * server snapshot. External servers (`runtime='external'`) are skipped: their
  * `Admins.cfg` is not under the panel's config tree, so there is nothing the
  * config-sync worker could write.
+ *
+ * @param payload - The sync event; must be a JSON object (its fields are
+ *   spread into the stream entry next to `_outbox_id`). The relay refuses a row
+ *   whose payload is not an object.
  */
 export async function enqueueAdminsCfgSyncForAllServers(
   db: EnqueueDb,
-  payload: unknown,
+  payload: object,
   serverIds?: readonly string[],
   correlationId?: string,
 ): Promise<{ enqueued: number }> {
@@ -80,11 +84,16 @@ export async function enqueueAdminsCfgSyncForAllServers(
   return { enqueued: inserted.length };
 }
 
-/** Insert one durable task for an already validated server. */
+/**
+ * Insert one durable task for an already validated server.
+ *
+ * @param payload - The sync event; a JSON object, as for
+ *   {@link enqueueAdminsCfgSyncForAllServers}.
+ */
 export async function enqueueAdminsCfgSyncForServer(
   db: Pick<DatabaseClient, 'insert'>,
   serverId: string,
-  payload: unknown,
+  payload: object,
   correlationId?: string,
 ): Promise<void> {
   await db.insert(adminsCfgSyncOutbox).values({ serverId, payload, correlationId });
@@ -102,10 +111,14 @@ export interface OutboxRelayRedis {
 export interface RelayAdminsCfgSyncOutboxOptions {
   /** Stream key prefix, e.g. `events:admins-cfg-sync:` (server id is appended). */
   streamPrefix: string;
-  /** Rows claimed per transaction. Defaults to 200. */
-  batchSize?: number;
-  /** Maximum wait for one Redis XADD before rolling the DB transaction back. */
+  /** Maximum wait for one Redis XADD before that row's transaction rolls back. */
   xaddTimeoutMs?: number;
+  /**
+   * Failed rows in a row after which the run stops early (Redis is most likely
+   * down, so waiting out every remaining row would only add timeouts).
+   * Defaults to 3.
+   */
+  maxConsecutiveFailures?: number;
 }
 
 export interface RelayAdminsCfgSyncOutboxResult {
@@ -114,18 +127,35 @@ export interface RelayAdminsCfgSyncOutboxResult {
 
 type RelayDb = Pick<DatabaseClient, 'transaction'>;
 
+type RelayStep =
+  | { kind: 'drained' }
+  | { kind: 'relayed' }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; id: string; error: Error };
+
 /**
  * Drain pending Admins.cfg outbox rows onto their per-server Redis stream.
  *
- * Each batch is claimed with `FOR UPDATE SKIP LOCKED` inside a transaction,
- * published with `XADD`, and stamped `relayed_at` before the transaction
- * commits. Delivery is **at-least-once**: if the process dies after the `XADD`
- * but before commit, the rows stay pending and are re-published on the next
- * run — a duplicate stream entry with the same `_outbox_id`. The worker either
- * completes that durable row or, if already applied, only ACKs/deletes the
- * duplicate without touching the file or RCON. A re-run over already-relayed rows publishes nothing
- * (they no longer match `relayed_at IS NULL`), so effects are never duplicated
- * by the relay itself.
+ * Rows are relayed oldest first, **one row per transaction**: the row is
+ * claimed with `FOR UPDATE SKIP LOCKED`, published with `XADD` and stamped
+ * `relayed_at`, and that transaction commits before the next row is claimed.
+ * A transaction therefore holds at most one row lock for at most one bounded
+ * `XADD`, and a failure never rolls back rows that were already published.
+ *
+ * A row whose publish fails (Redis error, timeout, missing stream id, or a
+ * payload that is not a JSON object) stays pending and is skipped for the rest
+ * of the run, so one poisoned server stream cannot block the queue for every
+ * other server. After `maxConsecutiveFailures` failures in a row the run stops
+ * early. When any row failed, the run rejects with the first failure once the
+ * other rows are done; the failed rows are retried by the next run.
+ *
+ * Delivery is **at-least-once**: if the process dies after the `XADD` but
+ * before commit — or a timed-out `XADD` still lands later — the row stays
+ * pending and is re-published on the next run, a duplicate stream entry with
+ * the same `_outbox_id`. The worker either completes that durable row or, if
+ * already applied, only ACKs/deletes the duplicate without touching the file
+ * or RCON. Already-relayed rows no longer match `relayed_at IS NULL`, so the
+ * relay itself never re-publishes them.
  *
  * Rows whose server has been **soft-deleted** (`servers.deleted_at IS NOT
  * NULL`) are never published — an `XADD` would recreate the very stream the
@@ -135,21 +165,26 @@ type RelayDb = Pick<DatabaseClient, 'transaction'>;
  * server join uses `FOR UPDATE OF admins_cfg_sync_outbox` so only the outbox
  * rows are locked, never the `servers` rows.
  *
- * @returns the number of rows published to a stream across all batches
- *   (soft-deleted rows that were cancelled without publishing are not counted).
+ * @returns the number of rows published to a stream (soft-deleted rows that
+ *   were cancelled without publishing are not counted).
+ * @throws The first publish failure of the run, after every other claimable
+ *   row was relayed; database errors propagate immediately.
  */
 export async function relayAdminsCfgSyncOutbox(
   db: RelayDb,
   redis: OutboxRelayRedis,
   opts: RelayAdminsCfgSyncOutboxOptions,
 ): Promise<RelayAdminsCfgSyncOutboxResult> {
-  const batchSize = opts.batchSize ?? 200;
   const xaddTimeoutMs = opts.xaddTimeoutMs ?? 5_000;
+  const maxConsecutiveFailures = opts.maxConsecutiveFailures ?? 3;
+  const failedIds: string[] = [];
+  let firstFailure: Error | null = null;
+  let consecutiveFailures = 0;
   let relayed = 0;
 
-  for (;;) {
-    const drained = await db.transaction(async (tx) => {
-      const rows = await tx
+  while (consecutiveFailures < maxConsecutiveFailures) {
+    const step = await db.transaction(async (tx): Promise<RelayStep> => {
+      const [row] = await tx
         .select({
           id: adminsCfgSyncOutbox.id,
           serverId: adminsCfgSyncOutbox.serverId,
@@ -158,62 +193,98 @@ export async function relayAdminsCfgSyncOutbox(
         })
         .from(adminsCfgSyncOutbox)
         .innerJoin(servers, eq(servers.id, adminsCfgSyncOutbox.serverId))
-        .where(isNull(adminsCfgSyncOutbox.relayedAt))
+        .where(
+          and(
+            isNull(adminsCfgSyncOutbox.relayedAt),
+            failedIds.length > 0 ? notInArray(adminsCfgSyncOutbox.id, failedIds) : undefined,
+          ),
+        )
         .orderBy(asc(adminsCfgSyncOutbox.createdAt))
-        .limit(batchSize)
+        .limit(1)
         .for('update', { of: adminsCfgSyncOutbox, skipLocked: true });
 
-      if (rows.length === 0) return true;
+      if (!row) return { kind: 'drained' };
 
-      for (const row of rows) {
-        if (row.serverDeletedAt !== null) {
-          // Server soft-deleted: drain the row without publishing so the
-          // torn-down stream is never resurrected (SYNC-5).
-          await tx
-            .update(adminsCfgSyncOutbox)
-            .set({
-              relayedAt: new Date(),
-              appliedAt: new Date(),
-              reloadOutcome: 'server_removed',
-              lastError: null,
-            })
-            .where(eq(adminsCfgSyncOutbox.id, row.id));
-          continue;
-        }
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const streamId = await Promise.race([
-          redis.xadd(
-            `${opts.streamPrefix}${row.serverId}`,
-            '*',
-            'event',
-            JSON.stringify({
-              ...(row.payload as Record<string, unknown>),
-              _outbox_id: row.id,
-            }),
-          ),
-          new Promise<never>((_, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error('admins_cfg_outbox_xadd_timeout')),
-              xaddTimeoutMs,
-            );
-          }),
-        ]).finally(() => {
-          if (timeout) clearTimeout(timeout);
-        });
-        if (!streamId) throw new Error('admins_cfg_outbox_xadd_missing_stream_id');
+      if (row.serverDeletedAt !== null) {
+        // Server soft-deleted: drain the row without publishing so the
+        // torn-down stream is never resurrected (SYNC-5).
         await tx
           .update(adminsCfgSyncOutbox)
-          .set({ relayedAt: new Date(), streamId: streamId ?? null })
+          .set({
+            relayedAt: new Date(),
+            appliedAt: new Date(),
+            reloadOutcome: 'server_removed',
+            lastError: null,
+          })
           .where(eq(adminsCfgSyncOutbox.id, row.id));
-        relayed += 1;
+        return { kind: 'cancelled' };
       }
 
-      // Fewer rows than the batch size means the pending queue is drained.
-      return rows.length < batchSize;
+      let streamId: string;
+      try {
+        streamId = await publishRow(redis, opts.streamPrefix, row, xaddTimeoutMs);
+      } catch (err) {
+        return { kind: 'failed', id: row.id, error: err as Error };
+      }
+      await tx
+        .update(adminsCfgSyncOutbox)
+        .set({ relayedAt: new Date(), streamId })
+        .where(eq(adminsCfgSyncOutbox.id, row.id));
+      return { kind: 'relayed' };
     });
 
-    if (drained) break;
+    if (step.kind === 'drained') break;
+    if (step.kind === 'failed') {
+      failedIds.push(step.id);
+      firstFailure ??= step.error;
+      consecutiveFailures += 1;
+      continue;
+    }
+    consecutiveFailures = 0;
+    if (step.kind === 'relayed') relayed += 1;
   }
 
+  if (firstFailure) throw firstFailure;
   return { relayed };
+}
+
+/**
+ * Publishes one outbox row with a bounded `XADD`.
+ *
+ * @returns The stream entry id Redis assigned.
+ * @throws When the payload is not a JSON object, the `XADD` fails, times out,
+ *   or returns no id.
+ */
+async function publishRow(
+  redis: OutboxRelayRedis,
+  streamPrefix: string,
+  row: { id: string; serverId: string; payload: unknown },
+  xaddTimeoutMs: number,
+): Promise<string> {
+  if (!isJsonObject(row.payload)) {
+    throw new Error('admins_cfg_outbox_invalid_payload');
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const streamId = await Promise.race([
+    redis.xadd(
+      `${streamPrefix}${row.serverId}`,
+      '*',
+      'event',
+      JSON.stringify({ ...row.payload, _outbox_id: row.id }),
+    ),
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error('admins_cfg_outbox_xadd_timeout')),
+        xaddTimeoutMs,
+      );
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+  if (!streamId) throw new Error('admins_cfg_outbox_xadd_missing_stream_id');
+  return streamId;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

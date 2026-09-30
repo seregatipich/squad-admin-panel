@@ -33,6 +33,10 @@ function makeSettings(): EconomySettings {
     seed_threshold: 40,
     economy_enabled: false,
     privilege_costs: {},
+    seed_reward_threshold_hours_per_month: 0,
+    seed_reward_role_id: null,
+    vip_expiry_windows_days: [7, 3, 1],
+    vip_expiry_warn_in_game: true,
     updated_at: null,
     updated_by_player_id: null,
   };
@@ -45,6 +49,7 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
     role_id: overrides.role_id ?? 'role-1',
     description: 'description' in overrides ? (overrides.description ?? null) : null,
     default_days: 'default_days' in overrides ? (overrides.default_days ?? null) : 30,
+    price_bonuses: 'price_bonuses' in overrides ? (overrides.price_bonuses ?? null) : null,
     sort_order: overrides.sort_order ?? 0,
     is_active: overrides.is_active ?? true,
     created_at: overrides.created_at ?? '2026-07-01T00:00:00.000Z',
@@ -60,9 +65,12 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
  */
 function stubFetch(opts: {
   tiers?: VipTier[];
+  roles?: Array<{ id: string; name: string; panel_access: boolean; is_system_role: boolean }>;
   permissions?: string[];
   canManageEconomy?: boolean;
   settingsStatus?: number;
+  meStatus?: number;
+  refreshNetworkError?: boolean;
   onPost?: (body: Record<string, unknown>) => void;
   onPut?: (url: string, body: Record<string, unknown>) => void;
   onDelete?: (url: string) => void;
@@ -83,6 +91,7 @@ function stubFetch(opts: {
     const url = String(input);
     const method = init?.method ?? 'GET';
     if (url.endsWith('/api/v1/settings/economy') && method === 'GET') {
+      if (opts.refreshNetworkError) return Promise.reject(new Error('offline'));
       return Promise.resolve(
         new Response(JSON.stringify(makeSettings()), { status: opts.settingsStatus ?? 200 }),
       );
@@ -104,6 +113,13 @@ function stubFetch(opts: {
       );
     }
     if (url.endsWith('/api/v1/me')) {
+      if (opts.meStatus && opts.meStatus !== 200) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: opts.meStatus,
+          }),
+        );
+      }
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -117,10 +133,12 @@ function stubFetch(opts: {
     if (url.endsWith('/api/v1/roles') && method === 'GET') {
       return Promise.resolve(
         new Response(
-          JSON.stringify([
-            { id: 'role-1', name: 'VIP Role' },
-            { id: 'role-2', name: 'Premium Role' },
-          ]),
+          JSON.stringify(
+            opts.roles ?? [
+              { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
+              { id: 'role-2', name: 'Premium Role', panel_access: false, is_system_role: false },
+            ],
+          ),
           { status: 200 },
         ),
       );
@@ -189,6 +207,26 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     // default_days renders via formatTierDuration.
     expect(scope.getByText('30 дн.')).toBeInTheDocument();
     expect(scope.getByText('бессрочно')).toBeInTheDocument();
+  });
+
+  it('disables roles with panel access or that are system roles in the tier role select (#690)', async () => {
+    stubFetch({
+      tiers: [],
+      roles: [
+        { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
+        { id: 'role-2', name: 'Panel Role', panel_access: true, is_system_role: false },
+        { id: 'role-3', name: 'Owner', panel_access: false, is_system_role: true },
+      ],
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /добавить тир/i }));
+
+    const select = within(section).getByLabelText('Роль') as HTMLSelectElement;
+    const options = Array.from(select.options);
+    expect(options.find((o) => o.value === 'role-1')?.disabled).toBe(false);
+    expect(options.find((o) => o.value === 'role-2')?.disabled).toBe(true);
+    expect(options.find((o) => o.value === 'role-3')?.disabled).toBe(true);
   });
 
   it('hides VIP tiers section without role:edit permission', async () => {
@@ -358,6 +396,27 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     expect(scope.getByText('Новый тир')).toBeInTheDocument();
   });
 
+  it('maps role_grants_panel_access to a friendly message', async () => {
+    stubFetch({
+      tiers: [],
+      tierMutationError: { status: 403, body: { error: 'role_grants_panel_access' } },
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    const scope = within(section);
+
+    fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
+    fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
+
+    expect(
+      await scope.findByText(
+        'Ошибка сохранения тира: Тир нельзя привязать к системной роли или роли с доступом к панели.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('falls back to the raw error code for unknown tier save errors', async () => {
     stubFetch({
       tiers: [],
@@ -406,6 +465,54 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     ).toBeInTheDocument();
   });
 
+  it('maps vip_tier_has_subscriptions on delete (#365)', async () => {
+    stubFetch({
+      tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
+      tierMutationError: { status: 409, body: { error: 'vip_tier_has_subscriptions' } },
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
+
+    expect(
+      await within(section).findByText(
+        'Ошибка удаления тира: Нельзя удалить тир: на него оформлялись подписки. Отключите тир вместо удаления.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a network error when the tier delete request fails (#689)', async () => {
+    stubFetch({
+      tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
+      tierMutationError: 'network',
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
+
+    expect(await within(section).findByText('Ошибка сети: offline')).toBeInTheDocument();
+  });
+
+  it('keeps unsaved economy form edits after a tier is saved (#688)', async () => {
+    stubFetch({ tiers: [] });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    const toggle = screen.getByLabelText('Экономика включена');
+    fireEvent.click(toggle);
+    expect(screen.getByText('Начисления активны')).toBeInTheDocument();
+
+    const scope = within(section);
+    fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
+    fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
+
+    await waitFor(() => expect(scope.queryByLabelText('Название')).not.toBeInTheDocument());
+    expect(screen.getByText('Начисления активны')).toBeInTheDocument();
+  });
+
   it('shows the HTTP status when a delete error has no code', async () => {
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
@@ -443,6 +550,21 @@ describe('EconomySettingsPage — economy settings form', () => {
     expect(await screen.findByText('Не удалось загрузить настройки: 500')).toBeInTheDocument();
     expect(screen.getByText('Загрузка настроек экономики')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Сохранить' })).not.toBeInTheDocument();
+  });
+
+  it('shows a network-error banner with a retry action instead of failing silently', async () => {
+    stubFetch({ refreshNetworkError: true });
+    render(<EconomySettingsPage />);
+    expect(await screen.findByText(/Ошибка сети: offline/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+  });
+
+  it('surfaces a failed /api/v1/me response instead of hanging on the skeleton', async () => {
+    stubFetch({ meStatus: 500 });
+    render(<EconomySettingsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить данные пользователя: 500'),
+    ).toBeInTheDocument();
   });
 
   it('shows read-only notice and no save button without manage permission', async () => {

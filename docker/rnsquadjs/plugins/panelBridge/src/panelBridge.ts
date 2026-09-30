@@ -1,4 +1,5 @@
 import type { EventEmitter } from 'node:events';
+import type { PlayerLookup } from './eventMap';
 import { startPanelBridge } from './index';
 
 interface UpstreamRconEmitter {
@@ -12,6 +13,8 @@ interface UpstreamState {
   logger?: { log: (...text: string[]) => void };
   id?: unknown;
   rcon?: { rconEmitter?: UpstreamRconEmitter };
+  /** RNSquadJS `TPlayer[]`, replaced wholesale on every ListPlayers poll. */
+  players?: Array<{ name?: unknown; eosID?: unknown; steamID?: unknown }>;
 }
 
 const resolveServerId = (state: UpstreamState): string => {
@@ -73,11 +76,24 @@ export const panelBridge = (state: UpstreamState, _options: Record<string, unkno
     };
   };
 
+  // Reads state.players at call time: upstream reassigns the array on every
+  // poll, and refreshes it before forwarding PLAYER_CONNECTED.
+  const findPlayer: PlayerLookup = (eosId) => {
+    const player = state.players?.find(
+      (p) => typeof p.eosID === 'string' && p.eosID.toLowerCase() === eosId,
+    );
+    if (!player || typeof player.steamID !== 'string' || typeof player.name !== 'string') {
+      return undefined;
+    }
+    return { steamID: player.steamID, name: player.name };
+  };
+
   const bridgePromise = startPanelBridge({
     serverId,
     emitter: state.listener,
     rconExec,
     onStatus,
+    findPlayer,
   });
   activeBridges.set(serverId, bridgePromise);
   bridgePromise.catch((error: unknown) => {

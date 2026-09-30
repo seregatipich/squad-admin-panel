@@ -26,7 +26,7 @@
 2. Only `stream === 'stdout'` frames are processed; stderr is discarded.
 3. Bytes are appended to a line buffer; newline-split lines are dispatched to `onLine`.
 4. Byte and line rate are logged as `debug` every 60 s.
-5. On bridge stream end or error: log `warn 'tail dropped → restart'`, then call `onStopped({ reason })` with `'stream-end'` or `'stream-error'` (with `error: errorMessage`). The reconcile loop will reattach on the next tick.
+5. On bridge stream end or error: log `warn 'tail dropped → restart'`, then call `onStopped({ reason })` with `'stream-end'` or `'stream-error'` (with `error: errorMessage`). The worker's `onStopped` handler calls the `TailManager` factory's `onDead` callback for any reason other than `'aborted'`, which forgets the tail so the reconcile loop reattaches on its next tick.
 6. On explicit abort (`return () => { aborted = true; ... }`): the trailing `onStopped({ reason: 'aborted' })` fires from the IIFE's terminating branch.
 
 The worker translates each `onStopped` into a `tail.stopped` diag emit carrying `{ container, reason, error? }`.
@@ -62,9 +62,9 @@ On success the worker logs `deleted_count`, `deleted_bytes`, `archived_count`, `
 
 For each line:
 
-1. `isBenignNoise(line)` → drop if true (no diag emit).
+1. `parseLine(line)`, then `isBenignNoise(parsed)` → drop if true (no diag emit). Noise rules match the parsed `category`, `verbosity` and the start of `message`, never the raw line, so a nickname or chat text containing a noise marker cannot suppress its own line (#930).
 2. `detectSquadFatal(line)` → if it matches `LogExit:`, `Fatal error:`, or `Assertion failed: … [File:… Line:…]`, fire-and-forget `diag.emit({ kind: 'squad.log.fatal', severity: 'fatal' })` with `{ ts, file, line, raw }`. Detection runs **before** the prefix parser so Assertion lines (which lack the timestamp prefix) still surface. No de-dupe — every matching line emits one diag event.
-3. `parseLine(line)` → extract `category`, `message`, `ts`. If it returns null AND the line started with `[` AND `detectSquadFatal` did not match, fire-and-forget `diag.emit({ kind: 'parser_error', severity: 'warn' })` with `{ lineSample, regex: 'PREFIX', errorMessage }`. Otherwise drop silently.
+3. If `parseLine` returned null AND the line started with `[` AND `detectSquadFatal` did not match, fire-and-forget `diag.emit({ kind: 'parser_error', severity: 'warn' })` with `{ lineSample, regex: 'PREFIX', errorMessage }`. Otherwise drop silently.
 4. `LogIngestor.handleMessage(category, message, ts)` → returns zero or more `EventEnvelope` objects. Wrapped in try/catch — any throw becomes a `parser_error` diag emit with `regex` set to the failing category name.
 5. For each envelope: `publish(redis, envelope)` — dedup check then `XADD`.
 
@@ -78,6 +78,14 @@ For each command:
 
 1. Resolve (or create) the attacker/victim `players` rows, detect teamkill from the
    RCON roster cache, and resolve the open `matches` row — all before the transaction.
+   The log names a victim without ids, so its ids come from the `rcon:roster:{id}`
+   snapshot when exactly one roster member carries that name; several roster
+   members with the name, two players currently holding it, or (with no current
+   holder) two players with it in their name history leave the victim `NULL`
+   instead of guessing (#62). When an EOS id and a SteamID resolve to two
+   different `players` rows the EOS row is used and no identity backfill is
+   attempted; a backfill that loses a race on the unique index is skipped, so
+   the event is still recorded.
 2. In one `db.transaction`:
    - Insert the generic `events` envelope (`onConflictDoNothing` on `(event_id, occurred_at)`).
    - **Only if that insert actually inserted:** insert the typed `combat_events` row
@@ -86,7 +94,8 @@ For each command:
      `vehicle_damage→damage`), then fold it into the dossier aggregates with
      `applyCombatEventToDossier(tx, …)`.
 3. After the transaction commits, if the envelope was newly inserted, publish the
-   `combat.event` / `combat.vehicle` frame on the `live-bus` Redis channel.
+   `combat.event` / `combat.vehicle` frame on the `live-bus` Redis channel. The API
+   delivers every `combat.*` frame only to sockets with `combat:view`.
 
 Idempotency: on offset replay the envelope conflicts, `wasInserted` is false, and
 the `combat_events` insert, the aggregate fold **and** the live-bus publish are all

@@ -14,10 +14,30 @@
       "development": "./src/admins-config.ts",
       "default": "./dist/admins-config.js"
     },
+    "./discord-template": {
+      "types": "./dist/discord-template.d.ts",
+      "development": "./src/discord-template.ts",
+      "default": "./dist/discord-template.js"
+    },
+    "./mark-types": {
+      "types": "./dist/mark-types.d.ts",
+      "development": "./src/mark-types.ts",
+      "default": "./dist/mark-types.js"
+    },
+    "./ban-length": {
+      "types": "./dist/ban-length.d.ts",
+      "development": "./src/ban-length.ts",
+      "default": "./dist/ban-length.js"
+    },
     "./banned-names": {
       "types": "./dist/banned-names.d.ts",
       "development": "./src/banned-names.ts",
       "default": "./dist/banned-names.js"
+    },
+    "./metrics-pack": {
+      "types": "./dist/metrics-pack.d.ts",
+      "development": "./src/metrics-pack.ts",
+      "default": "./dist/metrics-pack.js"
     },
     "./role-colors": {
       "types": "./dist/role-colors.d.ts",
@@ -33,6 +53,16 @@
       "types": "./dist/squad-permissions.d.ts",
       "development": "./src/squad-permissions.ts",
       "default": "./dist/squad-permissions.js"
+    },
+    "./log-stream": {
+      "types": "./dist/log-stream.d.ts",
+      "development": "./src/log-stream.ts",
+      "default": "./dist/log-stream.js"
+    },
+    "./heartbeat": {
+      "types": "./dist/heartbeat.d.ts",
+      "development": "./src/heartbeat.ts",
+      "default": "./dist/heartbeat.js"
     }
   },
   "scripts": {

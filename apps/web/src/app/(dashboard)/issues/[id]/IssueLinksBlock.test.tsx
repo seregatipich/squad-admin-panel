@@ -203,7 +203,9 @@ describe('IssueLinksBlock', () => {
       );
 
       fireEvent.click(await screen.findByRole('button', { name: 'Удалить связь: Mine' }));
-      await screen.findByText('Недостаточно прав: нужно can_manage_issues.');
+      await screen.findByText(
+        'Недостаточно прав: связи меняет автор тикета или can_manage_issues.',
+      );
     },
     TEST_TIMEOUT_MS,
   );
@@ -262,7 +264,7 @@ describe('IssueLinksBlock', () => {
         [
           [/\/api\/v1\/issues\/issue-1\/links$/, { status: 201, body: { id: 'new-link' } }],
           [
-            /\/api\/v1\/players\?q=/,
+            /\/api\/v1\/players\/search\?q=/,
             { status: 200, body: { items: [{ id: 'p-7', canonical_name: 'Vasya Pupkin' }] } },
           ],
           SERVERS_OK,
@@ -295,7 +297,7 @@ describe('IssueLinksBlock', () => {
         [
           [/\/api\/v1\/issues\/issue-1\/links$/, { status: 201, body: { id: 'new-link' } }],
           [
-            /\/api\/v1\/players\?q=/,
+            /\/api\/v1\/players\/search\?q=/,
             {
               status: 200,
               body: {
@@ -333,6 +335,67 @@ describe('IssueLinksBlock', () => {
       await waitFor(() => expect(onChanged).toHaveBeenCalled());
       const post = calls.find((c) => c.method === 'POST');
       expect(post?.body).toBe(JSON.stringify({ entity_type: 'player', entity_id: 'p-2' }));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the same server be re-picked after an earlier attach (select resets to the placeholder)',
+    async () => {
+      const calls: Array<{ url: string; method?: string; body?: string }> = [];
+      stubRoutes(
+        [
+          [/\/api\/v1\/issues\/issue-1\/links$/, { status: 201, body: { id: 'new-link' } }],
+          SERVERS_OK,
+        ],
+        (url, init) =>
+          calls.push({ url, method: init?.method, body: init?.body as string | undefined }),
+      );
+      const onChanged = vi.fn();
+      render(<IssueLinksBlock issueId="issue-1" links={[]} viewer={null} onChanged={onChanged} />);
+
+      const typeSelect = await screen.findByLabelText('Тип объекта');
+      await waitFor(() => expect(typeSelect.querySelectorAll('option')).toHaveLength(2));
+      fireEvent.change(typeSelect, { target: { value: 'server' } });
+
+      const serverSelect = await screen.findByLabelText('Сервер для связи');
+      fireEvent.change(serverSelect, { target: { value: 'srv-1' } });
+      await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+      // The select must fall back to the placeholder so picking the same
+      // server again still fires a change event instead of being a no-op.
+      await waitFor(() => expect(serverSelect).toHaveValue(''));
+
+      fireEvent.change(serverSelect, { target: { value: 'srv-1' } });
+      await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+
+      const posts = calls.filter((c) => c.method === 'POST');
+      expect(posts).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'disables prefetch on links that point at an API stream route',
+    async () => {
+      stubRoutes([SERVERS_OK]);
+      render(
+        <IssueLinksBlock
+          issueId="issue-1"
+          links={[
+            link({
+              id: 'link-media',
+              entity_type: 'player',
+              label: 'Запись',
+              ref: '/api/v1/media/media-1/stream',
+            }),
+          ]}
+          viewer={null}
+          onChanged={vi.fn()}
+        />,
+      );
+
+      const mediaLink = await screen.findByRole('link', { name: 'Запись' });
+      expect(mediaLink).toHaveAttribute('href', '/api/v1/media/media-1/stream');
     },
     TEST_TIMEOUT_MS,
   );

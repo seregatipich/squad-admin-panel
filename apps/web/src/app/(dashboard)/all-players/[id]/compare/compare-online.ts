@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { isArrayOf, isFiniteNumber, isNullableString, isRecord } from '@/lib/json-guards';
 
 import {
   buildWeekGrid,
@@ -33,6 +34,61 @@ export interface CompareOnlineResponse {
     concurrent_count: number;
     intervals: CompareOverlapInterval[];
   };
+}
+
+function isComparePlayer(value: unknown): value is ComparePlayer {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.canonical_name === 'string' &&
+    isNullableString(value.steam_id64)
+  );
+}
+
+function isCompareSession(value: unknown): value is CompareSession {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.mode === 'string' &&
+    typeof value.connected_at === 'string' &&
+    isNullableString(value.disconnected_at)
+  );
+}
+
+function isOverlapInterval(value: unknown): value is CompareOverlapInterval {
+  return isRecord(value) && typeof value.from === 'string' && typeof value.to === 'string';
+}
+
+/**
+ * Validates a decoded `/compare-online` body, returning `null` for any shape
+ * mismatch so the view reports an error instead of crashing on
+ * `players[1].id` (#471).
+ */
+export function parseCompareOnlineResponse(json: unknown): CompareOnlineResponse | null {
+  if (!isRecord(json)) return null;
+  const { window, players, sessions, overlap } = json;
+  if (!isRecord(window) || typeof window.from !== 'string' || typeof window.to !== 'string') {
+    return null;
+  }
+  if (!Array.isArray(players) || players.length !== 2 || !players.every(isComparePlayer)) {
+    return null;
+  }
+  if (
+    !isRecord(sessions) ||
+    !isArrayOf(sessions.a, isCompareSession) ||
+    !isArrayOf(sessions.b, isCompareSession)
+  ) {
+    return null;
+  }
+  if (
+    !isRecord(overlap) ||
+    !isFiniteNumber(overlap.total_seconds) ||
+    !isFiniteNumber(overlap.concurrent_count) ||
+    !isArrayOf(overlap.intervals, isOverlapInterval)
+  ) {
+    return null;
+  }
+  return json as unknown as CompareOnlineResponse;
 }
 
 /** One 1-hour cell of the co-presence week grid. */

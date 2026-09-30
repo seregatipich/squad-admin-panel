@@ -114,7 +114,7 @@ export async function recordMapVoteVersion(
     .limit(1);
 
   const tip = previous[0];
-  if (tip && Buffer.from(tip.sha256 as unknown as Buffer).equals(sha)) {
+  if (tip && Buffer.from(tip.sha256).equals(sha)) {
     return { versionId: null, unchanged: true, sha256: sha.toString('hex') };
   }
 

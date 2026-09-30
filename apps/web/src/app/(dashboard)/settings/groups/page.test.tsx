@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
+import { SQUAD_PERMISSIONS } from '@squad/shared-config/squad-permissions';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +22,7 @@ interface RoleFixture {
   is_system_role?: boolean;
   panel_access?: boolean;
   can_view_ips?: boolean;
+  can_manage_infrastructure?: boolean;
 }
 
 function makeRole(f: RoleFixture) {
@@ -37,6 +39,10 @@ function makeRole(f: RoleFixture) {
     can_manage_ban_sources: false,
     can_manage_clans: false,
     can_manage_economy: false,
+    can_manage_infrastructure: f.can_manage_infrastructure ?? false,
+    can_manage_issues: false,
+    can_manage_integrations: false,
+    can_handle_reports: false,
     squad_permissions: f.squad_permissions,
     assigned_users_count: f.assigned_users_count ?? 0,
   };
@@ -111,6 +117,58 @@ describe('GroupsPage', () => {
   it('is a valid React component', () => {
     expect(GroupsPage).toBeDefined();
     expect(typeof GroupsPage).toBe('function');
+  });
+});
+
+describe('load failures (#696)', () => {
+  it('shows an error banner with a retry button instead of an endless skeleton on a 403', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/api/v1/roles')) {
+          return Promise.resolve(new Response(null, { status: 403 }));
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: [] }), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }),
+    );
+    render(<GroupsPage />);
+    expect(await screen.findByText('Не удалось загрузить список ролей: 403')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+  });
+
+  it('shows an error banner instead of an unhandled rejection on a network failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('network down'))),
+    );
+    render(<GroupsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить список ролей: ошибка сети.'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('Owner banner text (#702)', () => {
+  it('derives the flag and permission counts instead of hardcoding them', async () => {
+    stubFetch({
+      roles: [
+        makeRole({ id: 'r-owner', name: 'Owner', squad_permissions: [], is_system_role: true }),
+      ],
+    });
+    render(<GroupsPage />);
+    const banner = await screen.findByText(/Owner всегда имеет все \d+ флагов доступа/);
+    const flagCount = within(
+      screen.getByRole('heading', { name: 'Доступ к панели' }).closest('section') as HTMLElement,
+    ).getAllByRole('switch').length;
+    expect(banner).toHaveTextContent(
+      `Owner всегда имеет все ${flagCount} флагов доступа и все ${SQUAD_PERMISSIONS.length} Squad permissions.`,
+    );
   });
 });
 
@@ -237,7 +295,211 @@ describe('access flags — real switches (§6)', () => {
     fireEvent.click(await screen.findByRole('switch', { name: 'Доступ к панели' }));
 
     await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
-    expect(puts[0]).toMatchObject({ panel_access: false, can_view_ips: false });
+    expect(puts[0]).toMatchObject({
+      panel_access: false,
+      can_view_ips: false,
+      can_manage_issues: false,
+      can_manage_integrations: false,
+      can_handle_reports: false,
+    });
+  });
+
+  it('shows switches for the issues/integrations/reports flags stored by the API', async () => {
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+    });
+    render(<GroupsPage />);
+
+    expect(
+      await screen.findByRole('switch', { name: 'Может управлять обращениями (issues)' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: 'Может управлять интеграциями' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Может обрабатывать жалобы' })).toBeInTheDocument();
+  });
+});
+
+describe('overlapping saves do not lose an interleaved edit (#694)', () => {
+  it('keeps a permission toggled while an earlier PUT for the same role is still in flight', async () => {
+    try {
+      const role = makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] });
+      const puts: Record<string, unknown>[] = [];
+      // Two PUT requests are resolved out of order: the first (older) request's
+      // response arrives only after the second (newer) request has already
+      // been sent, mirroring the interleaved-edit race from the finding.
+      const resolvers: Array<(body: Record<string, unknown>) => void> = [];
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permissions: ALL_PERMS }), { status: 200 }),
+          );
+        }
+        if (url.endsWith('/api/v1/roles') && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify([role]), { status: 200 }));
+        }
+        if (/\/api\/v1\/roles\/[^/]+$/.test(url) && method === 'PUT') {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          puts.push(body);
+          return new Promise<Response>((resolve) => {
+            resolvers.push((fresh) =>
+              resolve(new Response(JSON.stringify(fresh), { status: 200 })),
+            );
+          });
+        }
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<GroupsPage />);
+      const card = (await screen.findByRole('heading', { name: 'Admin' })).closest('section');
+      const scope = within(card as HTMLElement);
+
+      vi.useFakeTimers();
+      fireEvent.click(scope.getByLabelText('startvote'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(puts).toHaveLength(1);
+      expect(puts[0]).toEqual({ squad_permissions: ['startvote'] });
+
+      fireEvent.click(scope.getByLabelText('pause'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(puts).toHaveLength(2);
+      expect(puts[1]).toEqual({ squad_permissions: ['startvote', 'pause'] });
+
+      // The first (stale) request resolves with only `startvote` recorded server-side.
+      expect(resolvers[0]).toBeDefined();
+      await act(async () => {
+        resolvers[0]?.({ ...role, squad_permissions: ['startvote'] });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The interleaved `changemap` edit must survive the stale overwrite.
+      expect(scope.getByLabelText('pause')).toBeChecked();
+      expect(scope.getByLabelText('startvote')).toBeChecked();
+
+      await act(async () => {
+        resolvers[1]?.({ ...role, squad_permissions: ['startvote', 'pause'] });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(scope.getByLabelText('pause')).toBeChecked();
+      expect(scope.getByLabelText('startvote')).toBeChecked();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('infrastructure flag (#36)', () => {
+  it('saves can_manage_infrastructure from its own switch', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [
+        makeRole({ id: 'r-mod', name: 'Moderator', squad_permissions: [], panel_access: true }),
+      ],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const flag = await screen.findByRole('switch', { name: 'Может управлять инфраструктурой' });
+    expect(flag).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(flag);
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ can_manage_infrastructure: true });
+  });
+
+  it('clears it together with panel access', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [
+        makeRole({
+          id: 'r-admin',
+          name: 'Admin',
+          squad_permissions: [],
+          panel_access: true,
+          can_manage_infrastructure: true,
+        }),
+      ],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Доступ к панели' }));
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toMatchObject({ panel_access: false, can_manage_infrastructure: false });
+  });
+
+  it('creates new roles without it', async () => {
+    const posted: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPost: (b) => posted.push(b),
+    });
+    render(<GroupsPage />);
+    await screen.findByLabelText('Скопировать права из роли');
+    fireEvent.click(screen.getByRole('button', { name: /создать роль/i }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.can_manage_infrastructure).toBe(false);
+  });
+});
+
+describe('role name editing (#695)', () => {
+  it('does not send an empty name to the server while the field is cleared', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const nameInput = (await screen.findByLabelText('Название')) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: '' } });
+    expect(nameInput.value).toBe('');
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(puts).toHaveLength(0);
+  });
+
+  it('saves a valid name once it is retyped', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const nameInput = (await screen.findByLabelText('Название')) as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: '' } });
+    fireEvent.change(nameInput, { target: { value: 'Moderator' } });
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ name: 'Moderator' });
+  });
+});
+
+describe('role color editing (#703)', () => {
+  it('persists a palette color name typed into the HEX field', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const hexInput = (await screen.findByLabelText('HEX')) as HTMLInputElement;
+    fireEvent.change(hexInput, { target: { value: 'red' } });
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ color: 'red' });
   });
 });
 

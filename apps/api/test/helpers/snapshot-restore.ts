@@ -35,6 +35,7 @@ export async function maskLiveOwners(
   snapshot: LiveStateSnapshot,
 ): Promise<void> {
   for (const sid of snapshot.ownerSteamIds) {
+    if (sid === null) continue;
     await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
   }
   await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
@@ -45,6 +46,7 @@ export async function restoreLiveOwners(
   snapshot: LiveStateSnapshot,
 ): Promise<void> {
   for (const sid of snapshot.ownerSteamIds) {
+    if (sid === null) continue;
     await db
       .update(players)
       .set({ roleId: snapshot.ownerRoleId })

@@ -14,9 +14,7 @@ The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis,
 
 | Kind | Severity | Trigger | Payload fields |
 |---|---|---|---|
-| `audit_archiver.started` | `info` | Right after `startHeartbeat`, before the first `runArchiverCycle` | `pid: number` |
-| `audit_archiver.run_ok` | `info` | A successful archiver cycle (every 60 min). The P0 stub always emits this; Phase 1 will run real archive logic. | `{}` |
-| `audit_archiver.run_failed` | `error` | The archiver cycle threw (P0 stub does not throw; reserved for Phase 1 archive failure surface). | `err: string` |
+| `audit_archiver.started` | `info` | Right after `startHeartbeat` | `pid: number` |
 | `audit_archiver.stopped` | `info` | Inside the SIGTERM/SIGINT handler before `process.exit(0)`. | `sig: 'SIGTERM' \| 'SIGINT'` |
 
 ## Planned Phase 1 surface

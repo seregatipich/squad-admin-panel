@@ -77,6 +77,8 @@ interface BlameLine {
 interface BlameResponse {
   lines: BlameLine[];
   authors: Record<string, string>;
+  /** Older history was cut off; its lines are attributed to the oldest version shown. */
+  truncated?: boolean;
 }
 
 // CFG-2 (#64): generic drift status for the non-managed config files.
@@ -263,9 +265,16 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [driftBusy, setDriftBusy] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
 
+  // A hard failure (the list route 404s, or containerOnlyPreHandler answers
+  // 409 external_server for a server with no config tree at all) means every
+  // future poll will fail the same way — stop instead of re-banner-ing every
+  // POLL_MS forever (#609).
+  const filesStoppedRef = useRef(false);
+
   const refreshFiles = useCallback(async () => {
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
+      if (r.status === 404 || r.status === 409) filesStoppedRef.current = true;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { items: FileItem[] };
       setFiles(j.items);
@@ -274,13 +283,21 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }, [id]);
 
+  // #1335: the list reads every allowlisted file through the bridge, so it is
+  // refreshed on mount, after writes and when the tab comes back — not on the
+  // poll. Drift and the open file poll only while the tab is visible.
   useEffect(() => {
+    filesStoppedRef.current = false;
     void refreshFiles();
-    const t = setInterval(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || filesStoppedRef.current) return;
       void refreshFiles();
-    }, POLL_MS);
-    return () => clearInterval(t);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [refreshFiles]);
+
+  const driftStoppedRef = useRef(false);
 
   const refreshDrift = useCallback(async () => {
     try {
@@ -288,6 +305,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         credentials: 'include',
         cache: 'no-store',
       });
+      if (r.status === 404 || r.status === 409) driftStoppedRef.current = true;
       if (!r.ok) return;
       const j = (await r.json()) as { items: DriftItem[] };
       setDriftItems(j.items.filter((i) => i.state === 'drift'));
@@ -297,8 +315,10 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   }, [id]);
 
   useEffect(() => {
+    driftStoppedRef.current = false;
     void refreshDrift();
     const t = setInterval(() => {
+      if (document.visibilityState !== 'visible' || driftStoppedRef.current) return;
       void refreshDrift();
     }, POLL_MS);
     return () => clearInterval(t);
@@ -307,14 +327,18 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
+    let stopped = false;
     async function poll() {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (stopped) return;
       const target = selectedRef.current;
-      if (!target) return;
+      if (!target || document.visibilityState !== 'visible') return;
       try {
         const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
           credentials: 'include',
           cache: 'no-store',
         });
+        if (r.status === 404 || r.status === 409) stopped = true;
         if (!r.ok) return;
         const j = (await r.json()) as { content: string; sha256: string | null };
         if (cancelled || selectedRef.current !== target) return;
@@ -395,12 +419,17 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { content: string; sha256: string | null };
+        // The operator may have clicked another file while this request was in
+        // flight; an out-of-order response must not land under the wrong
+        // file's editor (#607) — same guard the drift poller already uses.
+        if (selectedRef.current !== name) return;
         setContent(j.content);
         setServerContent(j.content);
         setServerSha(j.sha256);
         setDirty(false);
         setCommitMessage('');
       } catch (e) {
+        if (selectedRef.current !== name) return;
         setErr((e as Error).message);
       }
     },
@@ -460,19 +489,43 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   async function save() {
     if (!selected) return;
+    // Captured up front: if the operator switches files while the request is
+    // in flight, the response must not be applied to whatever file happens
+    // to be open when it resolves (#607).
+    const target = selected;
+    const savedContent = content;
     setSaving(true);
     setErr(null);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${selected}`, {
+      const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content, message: commitMessage || undefined }),
+        // base_sha256 lets the API refuse the write with 409 if the file
+        // changed on disk since this content was loaded (#608 — otherwise a
+        // concurrent edit, worker write, or manual SSH change is silently
+        // clobbered).
+        body: JSON.stringify({
+          content: savedContent,
+          message: commitMessage || undefined,
+          base_sha256: serverShaRef.current ?? undefined,
+        }),
       });
+      if (r.status === 409) {
+        const j = (await r.json()) as { current_sha256?: string | null };
+        if (selectedRef.current === target) {
+          setErr(
+            'Файл изменён на диске с момента открытия. Перезагрузите его (кнопка «Повторить» или переоткройте файл) и повторите правку.',
+          );
+          if (j.current_sha256) setServerSha(j.current_sha256);
+        }
+        return;
+      }
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       const j = (await r.json()) as { behavior: string; unchanged?: boolean; sha256?: string };
-      setServerContent(content);
+      if (selectedRef.current !== target) return;
+      setServerContent(savedContent);
       if (j.sha256) setServerSha(j.sha256);
       setDirty(false);
       setEditing(false);
@@ -489,6 +542,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       );
       void refreshFiles();
     } catch (e) {
+      if (selectedRef.current !== target) return;
       setErr((e as Error).message);
     } finally {
       setSaving(false);
@@ -1248,42 +1302,51 @@ function BlameView({ blame }: { blame: BlameResponse | null }) {
     );
   }
   return (
-    <Table dense layout="fixed" maxHeight="68vh" ariaLabel="Авторство строк файла">
-      <TableHead>
-        <TableRow>
-          <Th width="7rem">Версия</Th>
-          <Th width="10rem">Автор</Th>
-          <Th width="9rem">Когда</Th>
-          <Th width="4rem" align="right">
-            Строка
-          </Th>
-          <Th>Текст</Th>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {blame.lines.map((l, i) => {
-          const email = l.author_user_id ? (blame.authors[l.author_user_id] ?? '?') : '—';
-          return (
-            <TableRow key={`${l.version_id}-${i}`}>
-              <Td truncate className="font-mono text-ink-3">
-                {l.version_id.slice(0, 8)}
-              </Td>
-              <Td truncate className="text-ink-2">
-                {email}
-              </Td>
-              <Td className="whitespace-nowrap tabular-nums text-ink-3">
-                <time dateTime={l.created_at} suppressHydrationWarning>
-                  {new Date(l.created_at).toLocaleDateString(locale)}
-                </time>
-              </Td>
-              <Td numeric className="text-ink-3">
-                {i + 1}
-              </Td>
-              <Td className="whitespace-pre font-mono">{l.text || ' '}</Td>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+    <>
+      {blame.truncated ? (
+        <InlineBanner
+          tone="info"
+          title="Показаны только последние версии файла"
+          description="Строки из более ранних правок приписаны самой старой из показанных версий."
+        />
+      ) : null}
+      <Table dense layout="fixed" maxHeight="68vh" ariaLabel="Авторство строк файла">
+        <TableHead>
+          <TableRow>
+            <Th width="7rem">Версия</Th>
+            <Th width="10rem">Автор</Th>
+            <Th width="9rem">Когда</Th>
+            <Th width="4rem" align="right">
+              Строка
+            </Th>
+            <Th>Текст</Th>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {blame.lines.map((l, i) => {
+            const email = l.author_user_id ? (blame.authors[l.author_user_id] ?? '?') : '—';
+            return (
+              <TableRow key={`${l.version_id}-${i}`}>
+                <Td truncate className="font-mono text-ink-3">
+                  {l.version_id.slice(0, 8)}
+                </Td>
+                <Td truncate className="text-ink-2">
+                  {email}
+                </Td>
+                <Td className="whitespace-nowrap tabular-nums text-ink-3">
+                  <time dateTime={l.created_at} suppressHydrationWarning>
+                    {new Date(l.created_at).toLocaleDateString(locale)}
+                  </time>
+                </Td>
+                <Td numeric className="text-ink-3">
+                  {i + 1}
+                </Td>
+                <Td className="whitespace-pre font-mono">{l.text || ' '}</Td>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </>
   );
 }

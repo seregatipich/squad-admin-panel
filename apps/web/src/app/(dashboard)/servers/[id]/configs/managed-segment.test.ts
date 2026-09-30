@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { managedSegmentLineRange, managedSegmentText } from './managed-segment';
+import { managedSegmentLineRange } from './managed-segment';
 
 const BEGIN = '//SQUAD-PANEL BEGIN — не редактировать вручную';
 const END = '//SQUAD-PANEL END';
@@ -32,25 +32,13 @@ describe('managedSegmentLineRange', () => {
     expect(managedSegmentLineRange(content)).toEqual({ startLine: 3, endLine: 5 });
   });
 
-  it('returns null when BEGIN is present without END', () => {
+  it('extends an orphaned BEGIN to the end of the file, as the config-sync splice replaces it', () => {
     const content = crlf(['// header', BEGIN, 'Group=Admin:foo']);
-    expect(managedSegmentLineRange(content)).toBeNull();
+    expect(managedSegmentLineRange(content)).toEqual({ startLine: 2, endLine: 3 });
   });
 
   it('returns null when no markers are present', () => {
     const content = crlf(['[SquadName]', 'Name=Test Server']);
     expect(managedSegmentLineRange(content)).toBeNull();
-  });
-});
-
-describe('managedSegmentText', () => {
-  it('returns the full segment (markers included) for CRLF content', () => {
-    const content = crlf(['// header', BEGIN, 'Group=Admin:foo', END, '// tail']);
-    expect(managedSegmentText(content)).toBe(crlf([BEGIN, 'Group=Admin:foo', END]));
-  });
-
-  it('returns null when no complete marker pair is present', () => {
-    expect(managedSegmentText(crlf(['// header', BEGIN]))).toBeNull();
-    expect(managedSegmentText('plain content')).toBeNull();
   });
 });

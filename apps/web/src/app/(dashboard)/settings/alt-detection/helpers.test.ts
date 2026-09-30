@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCidr, isValidIpOrCidr, validateAltDetectionSettingsForm } from './helpers';
+import { isValidIpOrCidr, validateAltDetectionSettingsForm } from './helpers';
 
 describe('isValidIpOrCidr', () => {
   it('accepts a bare IPv4 address', () => {
@@ -34,11 +34,10 @@ describe('isValidIpOrCidr', () => {
     expect(isValidIpOrCidr('10.0.0.0/33')).toBe(false);
     expect(isValidIpOrCidr('2001:db8::/129')).toBe(false);
   });
-});
 
-describe('formatCidr', () => {
-  it('trims whitespace and lowercases the value', () => {
-    expect(formatCidr('  2001:DB8::/32  ')).toBe('2001:db8::/32');
+  it('accepts an IPv6 address with an embedded IPv4 literal, matching node:net.isIP', () => {
+    expect(isValidIpOrCidr('::ffff:192.0.2.1')).toBe(true);
+    expect(isValidIpOrCidr('::ffff:192.0.2.1/128')).toBe(true);
   });
 });
 
@@ -48,10 +47,24 @@ describe('validateAltDetectionSettingsForm', () => {
     weight_shared_name: 25,
     weight_young_account: 15,
     weight_steamid_proximity: 10,
+    weight_coplay_overlap: 30,
     steamid_delta_threshold: 10_000,
     medium_threshold: 50,
     high_threshold: 75,
+    coplay_overlap_threshold_seconds: 36_000,
   };
+
+  it('rejects a negative weight_coplay_overlap (#669)', () => {
+    expect(
+      validateAltDetectionSettingsForm({ ...baseForm, weight_coplay_overlap: -1 }),
+    ).not.toBeNull();
+  });
+
+  it('rejects a non-integer coplay_overlap_threshold_seconds (#669)', () => {
+    expect(
+      validateAltDetectionSettingsForm({ ...baseForm, coplay_overlap_threshold_seconds: 1.5 }),
+    ).not.toBeNull();
+  });
 
   it('accepts a valid form', () => {
     expect(validateAltDetectionSettingsForm(baseForm)).toBeNull();

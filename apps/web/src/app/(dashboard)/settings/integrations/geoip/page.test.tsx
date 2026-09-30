@@ -48,6 +48,31 @@ describe('GeoipIntegrationPage', () => {
   );
 
   it(
+    'warns that the stored key downloads nothing while the database is missing (#161)',
+    async () => {
+      stubFetch({ db_present: false, last_refreshed_at: null });
+      render(<GeoipIntegrationPage />);
+
+      expect(await screen.findByText('База GeoLite2-City не загружена')).toBeInTheDocument();
+      expect(screen.getByText(/панель пока не скачивает базу автоматически/i)).toBeInTheDocument();
+      expect(screen.queryByText(/панель скачает базу/i)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows no missing-database warning once the database is present',
+    async () => {
+      stubFetch();
+      render(<GeoipIntegrationPage />);
+
+      await screen.findByText('Загружена');
+      expect(screen.queryByText('База GeoLite2-City не загружена')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'reports a failed load with a retry action',
     async () => {
       const fn = vi.fn(() => Promise.resolve(new Response('{}', { status: 500 })));
@@ -57,6 +82,27 @@ describe('GeoipIntegrationPage', () => {
       await screen.findByText('Не удалось загрузить настройки GeoIP');
       fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
       await waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'disables Save (and never sends a PUT) while settings failed to load (#713)',
+    async () => {
+      const fn = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+        Promise.resolve(new Response('{}', { status: 500 })),
+      );
+      vi.stubGlobal('fetch', fn);
+      render(<GeoipIntegrationPage />);
+
+      await screen.findByText('Не удалось загрузить настройки GeoIP');
+      const saveButton = screen.getByRole('button', { name: 'Сохранить' });
+      expect(saveButton).toBeDisabled();
+
+      fireEvent.click(saveButton);
+      // Only the initial GET (and the reload it never triggered) should have
+      // been made — no PUT slipped through a disabled button.
+      expect(fn.mock.calls.filter((call) => call[1]?.method === 'PUT')).toHaveLength(0);
     },
     TEST_TIMEOUT_MS,
   );

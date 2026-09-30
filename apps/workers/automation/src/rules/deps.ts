@@ -10,12 +10,13 @@ import type {
   RunMatchDeps,
 } from '@squad/shared-types';
 import { rconCommandRequestSchema, rconCommandStream } from '@squad/shared-types';
-import { eq, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 
 const RCON_STREAM_MAXLEN = 500;
+const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 /** Loads the enabled automation rules the worker evaluates against events. */
 export async function loadEnabledAutomationRules(
@@ -114,25 +115,32 @@ export async function resolvePlayerFlags(
   ref: { steamId64: string | null; eosId: string | null },
 ): Promise<string[]> {
   const filters = [];
-  if (ref.steamId64) filters.push(eq(players.steamId64, BigInt(ref.steamId64)));
+  // A payload value that is not a SteamID64 must not throw in BigInt() and
+  // discard the whole envelope; it just stops being a lookup key.
+  if (ref.steamId64 && STEAM_ID64_PATTERN.test(ref.steamId64)) {
+    filters.push(eq(players.steamId64, BigInt(ref.steamId64)));
+  }
   if (ref.eosId) filters.push(eq(players.eosId, ref.eosId));
-  if (filters.length === 0) return [];
-  const rows = await db
-    .select({
-      steamEosConflict: players.steamEosConflict,
-      roleId: players.roleId,
-      roleExpiresAt: players.roleExpiresAt,
-    })
-    .from(players)
-    .where(filters.length === 1 ? filters[0] : or(...filters))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return [];
-  const flags: string[] = [];
-  if (row.steamEosConflict) flags.push('steam_eos_conflict');
-  if (row.roleId) flags.push('has_role');
-  if (row.roleExpiresAt && row.roleExpiresAt.getTime() < Date.now()) flags.push('role_expired');
-  return flags;
+  // Steam is tried before EOS, so a steam/eos conflict resolves to the same row every time.
+  for (const filter of filters) {
+    const rows = await db
+      .select({
+        steamEosConflict: players.steamEosConflict,
+        roleId: players.roleId,
+        roleExpiresAt: players.roleExpiresAt,
+      })
+      .from(players)
+      .where(filter)
+      .limit(1);
+    const row = rows[0];
+    if (!row) continue;
+    const flags: string[] = [];
+    if (row.steamEosConflict) flags.push('steam_eos_conflict');
+    if (row.roleId) flags.push('has_role');
+    if (row.roleExpiresAt && row.roleExpiresAt.getTime() < Date.now()) flags.push('role_expired');
+    return flags;
+  }
+  return [];
 }
 
 /**

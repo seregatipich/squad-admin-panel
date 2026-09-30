@@ -6,7 +6,6 @@ import {
   parseSeedContribution,
   type SeedContributionResponse,
   type SeedServerContribution,
-  serverLabel,
   sortServersBySeedSeconds,
 } from './seed-contribution';
 
@@ -92,20 +91,6 @@ describe('parseSeedContribution', () => {
   it('accepts an empty by_server/series (player with no presence)', () => {
     const payload = validPayload({ total_seed_seconds: 0, by_server: [], series: [] });
     expect(parseSeedContribution(payload)).toEqual(payload);
-  });
-});
-
-describe('serverLabel', () => {
-  it('prefers the slug over the display name', () => {
-    expect(serverLabel({ server_slug: 'srv-1', server_name: 'Server One' })).toBe('srv-1');
-  });
-
-  it('falls back to the display name when the slug is null', () => {
-    expect(serverLabel({ server_slug: null, server_name: 'Server One' })).toBe('Server One');
-  });
-
-  it('falls back to an em dash when both are null', () => {
-    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
   });
 });
 

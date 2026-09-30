@@ -1,5 +1,5 @@
 import { clanMembers, clans, playerDailyPresence, players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -16,12 +16,15 @@ import {
 const OWNER_STEAM = testSteamId(892001);
 const MANAGER_STEAM = testSteamId(892002);
 const NOBODY_STEAM = testSteamId(892005);
+const PANEL_NOBODY_STEAM = testSteamId(892006);
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let managerCookie: string;
 let nobodyCookie: string;
+/** A `panel_access` player who neither holds `can_manage_clans` nor belongs to the clan under test. */
+let panelNobodyCookie: string;
 
 let serverId: string;
 let unaffiliatedId: string;
@@ -42,6 +45,29 @@ async function seedPlayer(name: string): Promise<string> {
       steamId64: testSteamId(playerSeq),
       canonicalName: name,
       canonicalNameNormalized: name.toLowerCase(),
+    })
+    .returning({ id: players.id });
+  if (!row) throw new Error(`failed to seed player ${name}`);
+  return row.id;
+}
+
+let panelOnlyRoleId: string;
+
+/**
+ * A player with `panel_access` but no `can_manage_clans` — an ordinary panel
+ * user who happens to also be a clan member/leader/deputy in-game. GET
+ * /clans/:id/members itself only requires panel_access (`clanManageLevel`,
+ * the thing viewer_manage_level reports, is a separate, finer gate).
+ */
+async function seedPanelPlayer(name: string): Promise<string> {
+  playerSeq += 1;
+  const [row] = await h.db
+    .insert(players)
+    .values({
+      steamId64: testSteamId(playerSeq),
+      canonicalName: name,
+      canonicalNameNormalized: name.toLowerCase(),
+      roleId: panelOnlyRoleId,
     })
     .returning({ id: players.id });
   if (!row) throw new Error(`failed to seed player ${name}`);
@@ -104,9 +130,9 @@ async function seedClan(): Promise<SeededClan> {
   await h.db.insert(clans).values({ id: clanId, name: `Ростер-клан-${clanSeq}`, tags: [] });
   const leaderName = `ЛидерРостера${clanSeq}`;
   const memberName = `РядовойРостера${clanSeq}`;
-  const leaderId = await seedPlayer(leaderName);
-  const deputyId = await seedPlayer(`ЗамРостера${clanSeq}`);
-  const memberId = await seedPlayer(memberName);
+  const leaderId = await seedPanelPlayer(leaderName);
+  const deputyId = await seedPanelPlayer(`ЗамРостера${clanSeq}`);
+  const memberId = await seedPanelPlayer(memberName);
   await h.db.insert(clanMembers).values([
     { clanId, playerId: leaderId, memberRole: 'leader', hasPriority: true },
     { clanId, playerId: deputyId, memberRole: 'deputy', hasPriority: false },
@@ -153,11 +179,29 @@ beforeAll(async () => {
     canonicalName: 'НиктоРостера',
   });
 
+  const panelNobodyId = await seedRoleWithPlayer({
+    roleName: 'RosterPanelNobodyRole',
+    steamId64: PANEL_NOBODY_STEAM,
+    canManageClans: false,
+    panelAccess: true,
+    canonicalName: 'ПанельНикто',
+  });
+
+  panelOnlyRoleId = uuidv7();
+  await h.db.insert(roles).values({
+    id: panelOnlyRoleId,
+    name: 'RosterPanelOnlyRole',
+    color: '#3366AA',
+    panelAccess: true,
+    canManageClans: false,
+  });
+
   unaffiliatedName = 'ЗапаснойИгрок';
   unaffiliatedId = await seedPlayer(unaffiliatedName);
 
   managerCookie = await makeCookieFor(managerId);
   nobodyCookie = await makeCookieFor(nobodyId);
+  panelNobodyCookie = await makeCookieFor(panelNobodyId);
 }, 60_000);
 
 afterAll(async () => {
@@ -211,6 +255,19 @@ describeIfDb('GET /api/v1/clans/:id/members', () => {
     expect(body.items[0]?.player_id).toBe(clan.memberId);
   });
 
+  it('treats LIKE wildcards in the roster search literally (#131)', async () => {
+    const clan = await seedClan();
+    for (const q of ['%', '_']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans/${clan.clanId}/members?q=${encodeURIComponent(q)}`,
+        headers: { cookie: managerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { total: number }).total).toBe(0);
+    }
+  });
+
   it('rejects a user without panel access with 403', async () => {
     const clan = await seedClan();
     const res = await h.app.inject({
@@ -218,7 +275,56 @@ describeIfDb('GET /api/v1/clans/:id/members', () => {
       url: `/api/v1/clans/${clan.clanId}/members`,
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('reports the viewer_manage_level for a global manager, a leader, a deputy and a rank-and-file member', async () => {
+    const clan = await seedClan();
+    const managerRes = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clan.clanId}/members`,
+      headers: { cookie: managerCookie },
+    });
+    expect((managerRes.json() as { viewer_manage_level: string | null }).viewer_manage_level).toBe(
+      'full',
+    );
+
+    const leaderRes = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clan.clanId}/members`,
+      headers: { cookie: clan.leaderCookie },
+    });
+    expect((leaderRes.json() as { viewer_manage_level: string | null }).viewer_manage_level).toBe(
+      'full',
+    );
+
+    const deputyRes = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clan.clanId}/members`,
+      headers: { cookie: clan.deputyCookie },
+    });
+    expect((deputyRes.json() as { viewer_manage_level: string | null }).viewer_manage_level).toBe(
+      'deputy',
+    );
+  });
+
+  it('still reports the leader\'s own viewer_manage_level as "full" when their row is paginated off the current page (#509)', async () => {
+    const clan = await seedClan();
+    // limit=1 sorted by role puts the deputy or member row first — never
+    // the leader's own row — yet the leader must still get full manage
+    // capabilities: the client must not derive them from searching `items`.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clan.clanId}/members?limit=1&sort=role&order=asc`,
+      headers: { cookie: clan.leaderCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      viewer_manage_level: string | null;
+      items: Array<{ player_id: string }>;
+    };
+    expect(body.items.some((m) => m.player_id === clan.leaderId)).toBe(false);
+    expect(body.viewer_manage_level).toBe('full');
   });
 });
 
@@ -265,6 +371,43 @@ describeIfDb('POST /api/v1/clans/:id/members', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // #14 follow-up: the first member of an empty clan is always forced to
+  // 'leader' regardless of the requested role. The response must flag this
+  // override so the UI can show a hint instead of silently reporting success
+  // for a role that was not honored.
+  it('flags role_overridden when the requested role is silently forced to leader for the first member', async () => {
+    clanSeq += 1;
+    const emptyClanId = uuidv7();
+    await h.db.insert(clans).values({ id: emptyClanId, name: `Пустой-клан-${clanSeq}`, tags: [] });
+    const target = await seedPlayer(`ПерваяЛидер${clanSeq}`);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/clans/${emptyClanId}/members`,
+      headers: jsonHeaders(managerCookie),
+      payload: JSON.stringify({ player_id: target, member_role: 'member' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ member_role: string; role_overridden: boolean }>();
+    expect(body.member_role).toBe('leader');
+    expect(body.role_overridden).toBe(true);
+  });
+
+  it('does not flag role_overridden when the requested role is honored (non-empty clan)', async () => {
+    const clan = await seedClan();
+    const target = await seedPlayer('НеПереопределён');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/clans/${clan.clanId}/members`,
+      headers: jsonHeaders(managerCookie),
+      payload: JSON.stringify({ player_id: target, member_role: 'member' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ member_role: string; role_overridden: boolean }>();
+    expect(body.member_role).toBe('member');
+    expect(body.role_overridden).toBe(false);
+  });
+
   it('returns 404 when adding an unknown player', async () => {
     const clan = await seedClan();
     const res = await h.app.inject({
@@ -283,7 +426,7 @@ describeIfDb('POST /api/v1/clans/:id/members', () => {
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/clans/${clan.clanId}/members`,
-      headers: jsonHeaders(nobodyCookie),
+      headers: jsonHeaders(panelNobodyCookie),
       payload: JSON.stringify({ player_id: target }),
     });
     expect(res.statusCode).toBe(403);
@@ -429,7 +572,7 @@ describeIfDb('DELETE /api/v1/clans/:id/members/:playerId', () => {
     const res = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}`,
-      headers: { cookie: nobodyCookie },
+      headers: { cookie: panelNobodyCookie },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -462,6 +605,35 @@ describeIfDb('POST /api/v1/clans/:id/transfer-leadership', () => {
       resource: 'clan',
       targetId: clan.clanId,
     });
+  });
+
+  it('serialises concurrent transfers instead of failing one with a 500 (#130)', async () => {
+    const clan = await seedClan();
+    const transfer = (playerId: string) =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/clans/${clan.clanId}/transfer-leadership`,
+        headers: jsonHeaders(managerCookie),
+        payload: JSON.stringify({ player_id: playerId }),
+      });
+    // Hold the roster rows so both requests read the same current leader and
+    // then queue on the row update; releasing the lock lets them race to commit.
+    let pending: Promise<Array<{ statusCode: number }>> = Promise.resolve([]);
+    await h.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT player_id FROM clan_members WHERE clan_id = ${clan.clanId} FOR UPDATE`,
+      );
+      pending = Promise.all([transfer(clan.deputyId), transfer(clan.memberId)]);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+    const responses = await pending;
+    for (const res of responses) expect([200, 409]).toContain(res.statusCode);
+
+    const rows = await h.db
+      .select({ playerId: clanMembers.playerId, role: clanMembers.memberRole })
+      .from(clanMembers)
+      .where(eq(clanMembers.clanId, clan.clanId));
+    expect(rows.filter((r) => r.role === 'leader')).toHaveLength(1);
   });
 
   it('rejects transferring to a non-member with 404', async () => {
@@ -531,6 +703,6 @@ describeIfDb('GET /api/v1/players/search', () => {
       url: '/api/v1/players/search?q=Ростер',
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });

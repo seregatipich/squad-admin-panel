@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Badge,
   Button,
   Card,
   CardBody,
@@ -10,10 +11,12 @@ import {
   EmptyState,
   FieldRow,
   InlineBanner,
+  Pagination,
   SegmentedControl,
   Select,
   TextInput,
 } from '@/components/ui';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 
 interface ApplicationSettings {
   enabled: boolean;
@@ -35,6 +38,8 @@ interface ApplicationItem {
   granted_role_name: string | null;
   granted_until: string | null;
   source: string;
+  /** True when submitted from a Steam login for this SteamID64 (ownership proven). */
+  verified: boolean;
   created_at: string;
   decided_at: string | null;
 }
@@ -66,6 +71,8 @@ const TERM_PRESETS: { value: string; label: string; days: number | null | 'defau
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Mirrors PAGE_SIZE_DEFAULT in apps/api/src/routes/whitelist-applications.ts. */
+const PAGE_SIZE = 20;
 
 /** Russian text for the approval refusals of the whitelist role guard (#8). */
 const DECISION_ERROR_TEXT: Record<string, string> = {
@@ -108,6 +115,8 @@ export function ApplicationsSection({
   const [enabled, setEnabled] = useState(false);
   const [defaultDays, setDefaultDays] = useState('');
   const [items, setItems] = useState<ApplicationItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
   const [savingSettings, setSavingSettings] = useState(false);
@@ -120,18 +129,36 @@ export function ApplicationsSection({
   const [termPick, setTermPick] = useState<Record<string, string>>({});
   const [notePick, setNotePick] = useState<Record<string, string>>({});
 
-  const loadList = useCallback(async (status: StatusFilter) => {
-    const res = await fetch(`/api/v1/whitelist/applications?status=${status}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { items: ApplicationItem[] };
-    setItems(body.items);
+  // Bumped by every list request: a slow answer for a previous tab or page is dropped.
+  const listGeneration = useRef(0);
+
+  const loadList = useCallback(async (status: StatusFilter, requestedPage: number) => {
+    listGeneration.current += 1;
+    const generation = listGeneration.current;
+    try {
+      const params = new URLSearchParams({
+        status,
+        page: String(requestedPage),
+        page_size: String(PAGE_SIZE),
+      });
+      const res = await fetch(`/api/v1/whitelist/applications?${params.toString()}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as { items: ApplicationItem[]; total: number };
+      if (generation === listGeneration.current) {
+        setItems(body.items);
+        setTotal(body.total);
+      }
+    } catch (e) {
+      if (generation === listGeneration.current) {
+        setError(`Не удалось загрузить заявки: ${describeLoadError(e)}`);
+      }
+    }
   }, []);
 
-  const refresh = useCallback(async () => {
-    setError(null);
+  const loadSettings = useCallback(async () => {
     try {
       const [settingsRes, rolesRes] = await Promise.all([
         fetch('/api/v1/whitelist/applications/settings', {
@@ -140,24 +167,32 @@ export function ApplicationsSection({
         }),
         fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
       ]);
-      if (settingsRes.ok) {
-        const loaded = (await settingsRes.json()) as ApplicationSettings;
-        setSettings(loaded);
-        setEnabled(loaded.enabled);
-        setDefaultDays(loaded.default_days == null ? '' : String(loaded.default_days));
-      } else {
-        throw new Error(`HTTP ${settingsRes.status}`);
-      }
+      if (!settingsRes.ok) throw new Error(`HTTP ${settingsRes.status}`);
+      const loaded = (await settingsRes.json()) as ApplicationSettings;
+      setSettings(loaded);
+      setEnabled(loaded.enabled);
+      setDefaultDays(loaded.default_days == null ? '' : String(loaded.default_days));
       if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-      await loadList(statusFilter);
     } catch (e) {
-      setError(`Не удалось загрузить заявки: ${(e as Error).message}`);
+      setError(`Не удалось загрузить заявки: ${describeLoadError(e)}`);
     }
-  }, [loadList, statusFilter]);
+  }, []);
+
+  // Настройки портала и роли не зависят от вкладки статуса: их повторная загрузка
+  // затирала бы несохранённые правки формы.
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadList(statusFilter, page);
+  }, [loadList, statusFilter, page]);
+
+  function retry() {
+    setError(null);
+    void loadSettings();
+    void loadList(statusFilter, page);
+  }
 
   async function saveSettings() {
     if (!canEdit) return;
@@ -177,15 +212,14 @@ export function ApplicationsSection({
         body: JSON.stringify({ enabled, default_days: parsedDays }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setError(`Ошибка сохранения: ${e.error ?? res.status}`);
+        setError(`Ошибка сохранения: ${describeHttpStatus(res.status)}`);
         return;
       }
       const fresh = (await res.json()) as ApplicationSettings;
       setSettings(fresh);
       setNotice('Настройки портала сохранены.');
-    } catch (e) {
-      setError(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setError(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setSavingSettings(false);
     }
@@ -207,8 +241,9 @@ export function ApplicationsSection({
       const payload: Record<string, unknown> = { status };
       if (status === 'approved') {
         // The role select defaults to the requested role; mirror that displayed
-        // choice into the payload (an explicit blank pick sends nothing, letting
-        // the API fall back to the configured whitelist role).
+        // choice into the payload. A blank pick sends nothing, and the API then
+        // falls back to the applicant's requested role, or to the configured
+        // whitelist role when none was requested.
         const requestedRoleId = items.find((a) => a.id === id)?.requested_role_id ?? '';
         const roleId = rolePick[id] ?? requestedRoleId;
         if (canManageRoles && roleId) payload.role_id = roleId;
@@ -226,14 +261,14 @@ export function ApplicationsSection({
       });
       if (!res.ok) {
         const e = (await res.json().catch(() => ({}))) as { error?: string };
-        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) ?? e.error ?? res.status;
+        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) || describeHttpStatus(res.status);
         setError(`Не удалось обработать заявку: ${reason}`);
         return;
       }
       setNotice(status === 'approved' ? 'Заявка одобрена.' : 'Заявка отклонена.');
-      await loadList(statusFilter);
-    } catch (e) {
-      setError(`Ошибка сети: ${(e as Error).message}`);
+      await loadList(statusFilter, page);
+    } catch {
+      setError(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setBusyId(null);
     }
@@ -249,7 +284,7 @@ export function ApplicationsSection({
     <Card padding="none">
       <CardHeader
         title="Заявки на whitelist"
-        count={items.length}
+        count={total}
         description={
           <>
             Публичный портал <code>/public/whitelist</code>: любой игрок оставляет заявку, а вы
@@ -266,7 +301,7 @@ export function ApplicationsSection({
             title="Не удалось выполнить запрос"
             description={error}
             action={
-              <Button size="sm" onClick={() => void refresh()}>
+              <Button size="sm" onClick={retry}>
                 Повторить
               </Button>
             }
@@ -314,7 +349,13 @@ export function ApplicationsSection({
           ariaLabel="Статус заявок"
           items={STATUS_FILTERS}
           value={statusFilter}
-          onChange={(next) => setStatusFilter(next as StatusFilter)}
+          onChange={(next) => {
+            // A status change starts a fresh listing — otherwise a page
+            // number carried over from a longer queue could ask for a page
+            // past the end of a shorter one (#722).
+            setStatusFilter(next as StatusFilter);
+            setPage(1);
+          }}
         />
 
         {items.length === 0 ? (
@@ -332,7 +373,18 @@ export function ApplicationsSection({
             {items.map((app) => (
               <li key={app.id} className="space-y-2 rounded-card border border-line bg-raised p-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="font-mono text-[13px]">{app.steam_id64}</span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-[13px]">{app.steam_id64}</span>
+                    {app.verified ? (
+                      <Badge tone="good" size="sm">
+                        SteamID подтверждён входом через Steam
+                      </Badge>
+                    ) : (
+                      <Badge tone="warn" size="sm">
+                        SteamID не подтверждён
+                      </Badge>
+                    )}
+                  </span>
                   <span className="text-xs text-ink-3">{formatDate(app.created_at)}</span>
                 </div>
                 <div className="text-xs text-ink-3">
@@ -412,6 +464,22 @@ export function ApplicationsSection({
             ))}
           </ul>
         )}
+
+        {total > PAGE_SIZE ? (
+          <div className="flex justify-end">
+            <Pagination
+              page={page}
+              pageCount={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+              onChange={setPage}
+              allowJump
+              labels={{
+                previous: 'Назад',
+                next: 'Вперёд',
+                page: (current, of) => `Стр. ${current} из ${of}`,
+              }}
+            />
+          </div>
+        ) : null}
       </CardBody>
     </Card>
   );

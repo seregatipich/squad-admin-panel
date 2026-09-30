@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -15,7 +19,7 @@ const log = pino({
   base: { service: 'worker-steam-refresh' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.STEAM_REFRESH_INTERVAL_MS ?? 60 * 60 * 1000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.STEAM_REFRESH_INTERVAL_MS, 60 * 60 * 1000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -81,7 +85,13 @@ async function main(): Promise<void> {
     message: 'steam-refresh started',
     payload: { intervalMs: TICK_INTERVAL_MS, configured: Boolean(process.env.STEAM_API_KEY) },
   });
-  await tick();
+  // A first-tick failure (e.g. a Steam outage) must not reject main() and
+  // exit the process (#1027) — `restart: unless-stopped` would just crash-
+  // loop it back into the same outage. Handled the same way the interval's
+  // ticks are below.
+  await tick().catch((error) =>
+    log.error({ error: (error as Error).message }, 'steam-refresh tick failed'),
+  );
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
 

@@ -4,6 +4,7 @@ import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { softDeleteServer } from '../src/lib/server-delete.js';
+import { raceAgainstOpenTransaction } from './helpers/row-lock.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -114,12 +115,42 @@ describe('GET /api/v1/servers/archive', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      items: Array<{ id: string; slug: string; deleted_at: string | null }>;
+      items: Array<{
+        id: string;
+        slug: string;
+        deleted_at: string | null;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      }>;
       total: number;
     };
     expect(body.total).toBe(2);
     expect(body.items.map((i) => i.slug)).toEqual(['archived-b', 'archived-a']);
     expect(body.items[0]?.id).toBe(b.id);
+  });
+
+  // #661: the list previously only ever returned `deleted_by_player_id`
+  // (an internal UUID) while the web archive pages read
+  // `deleted_by_steam_id64`, which was always undefined.
+  it("includes the deleting admin's steam_id64, joined from deleted_by_player_id", async () => {
+    const a = await seedAndSoftDelete(h, 'archived-steamid');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/servers/archive',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{
+        id: string;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      }>;
+    };
+    const row = body.items.find((i) => i.id === a.id);
+    expect(row?.deleted_by_player_id).toBe(h.seed.ownerPlayerId);
+    expect(row?.deleted_by_steam_id64).toBe(OWNER_STEAM_ID.toString());
   });
 });
 
@@ -145,10 +176,19 @@ describe('GET /api/v1/servers/archive/:id', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      server: { id: string; slug: string; deleted_at: string | null };
+      server: {
+        id: string;
+        slug: string;
+        deleted_at: string | null;
+        deleted_by_player_id: string | null;
+        deleted_by_steam_id64: string | null;
+      };
       backups: Array<{ filename: string; sha256_hex: string }>;
     };
     expect(body.server.id).toBe(archived.id);
+    // #661: same fix as the list endpoint above.
+    expect(body.server.deleted_by_player_id).toBe(h.seed.ownerPlayerId);
+    expect(body.server.deleted_by_steam_id64).toBe(OWNER_STEAM_ID.toString());
     const filenames = body.backups.map((b) => b.filename);
     expect(filenames).toContain('Admins.cfg');
     expect(filenames).toContain('Server.cfg');
@@ -207,6 +247,68 @@ describe('POST /api/v1/servers/archive/:id/restore', () => {
     expect(res.statusCode).toBe(409);
     const body = res.json() as { error: string };
     expect(body.error).toBe('slug_in_use');
+  });
+
+  it('rejects with 409 port_conflict when an active server now holds the archived ports (#269)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-ports');
+    // seedServer reuses the archived server's game/query/beacon/rcon ports.
+    await seedServer(h, { slug: 'port-squatter' });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/archive/${archived.id}/restore`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { slug: 'restored-ports' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('port_conflict');
+    const created = await h.db.query.servers.findFirst({
+      where: and(eq(servers.slug, 'restored-ports'), isNull(servers.deletedAt)),
+    });
+    expect(created).toBeUndefined();
+  });
+
+  it('restores next to an active server when the request picks free ports (#269)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-free-ports');
+    await seedServer(h, { slug: 'port-holder' });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/archive/${archived.id}/restore`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: {
+        slug: 'restored-free-ports',
+        game_port: 7797,
+        query_port: 27175,
+        beacon_port: 15010,
+        rcon_port: 21124,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('answers 409 slug_in_use when a concurrent create takes the slug mid-restore (#270)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-race');
+    const cookie = await loginAsOwner(h);
+    const res = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx
+          .insert(servers)
+          .values({ id: uuidv7(), displayName: 'Concurrent', slug: 'raced-slug' });
+      },
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: `/api/v1/servers/archive/${archived.id}/restore`,
+          headers: { cookie },
+          payload: { slug: 'raced-slug' },
+        }),
+    );
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('slug_in_use');
   });
 
   it('creates a new pending server and returns next_steps', async () => {
@@ -314,6 +416,98 @@ describe('POST /api/v1/servers/:newId/restore-configs', () => {
     expect(restoredRows.length).toBe(ALLOWED_CONFIG_FILES.length - 2);
     expect(restoredRows.find((r) => r.filename === 'Rcon.cfg')).toBeUndefined();
     expect(restoredRows.find((r) => r.filename === 'License.cfg')).toBeUndefined();
+  });
+
+  it('never restores a user-written row that merely carries the backup message prefix (#66)', async () => {
+    const forgedFile = 'MOTD.cfg';
+    const seeded = await seedServer(h, { slug: 'forged-backup-source' });
+    // Everything but MOTD.cfg is on disk, so the real backup has no MOTD.cfg row.
+    for (const file of ALLOWED_CONFIG_FILES) {
+      if (file === forgedFile) continue;
+      h.bridge.files.set(
+        `/var/lib/squad-panel/configs/${seeded.id}/ServerConfig/${file}`,
+        Buffer.from(`# ${file}\n`, 'utf-8'),
+      );
+    }
+    // A config:edit user can pick any version message, including the prefix.
+    await h.db.insert(configVersions).values({
+      serverId: seeded.id,
+      filename: forgedFile,
+      content: 'FORGED',
+      sha256: Buffer.alloc(32, 7),
+      authorPlayerId: h.seed.ownerPlayerId,
+      message: 'deletion-backup-marker forged',
+    });
+    await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        actorPlayerId: h.seed.ownerPlayerId ?? null,
+        actorIp: '127.0.0.1',
+        actorLabel: 'test',
+      },
+      seeded.id,
+    );
+
+    const newId = uuidv7();
+    await h.db
+      .insert(servers)
+      .values({ id: newId, displayName: 'Restored', slug: 'forged-target', status: 'ready' });
+    const writes: string[] = [];
+    h.bridge.fileAtomicWrite = vi.fn(
+      async ({ path, content }: { path: string; content: string }) => {
+        writes.push(`${path}=${content}`);
+        return { status: 'ok' };
+      },
+    );
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${newId}/restore-configs`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { from_archive_id: seeded.id },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { files_missing: string[] }).files_missing).toEqual([forgedFile]);
+    expect(writes.some((w) => w.includes('FORGED'))).toBe(false);
+
+    const archived = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/archive/${seeded.id}/configs/${forgedFile}`,
+      headers: { cookie },
+    });
+    expect(archived.statusCode).toBe(404);
+  });
+
+  it('rejects an external-runtime target with 409 external_server and writes nothing (#271)', async () => {
+    const archived = await seedAndSoftDelete(h, 'archived-external-target');
+    const externalId = uuidv7();
+    await h.db.insert(servers).values({
+      id: externalId,
+      displayName: 'Remote box',
+      slug: 'external-restore-target',
+      status: 'running',
+      runtime: 'external',
+    });
+    const fileAtomicWrite = vi.fn(async () => ({ status: 'ok' }));
+    h.bridge.fileAtomicWrite = fileAtomicWrite;
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${externalId}/restore-configs`,
+      headers: { cookie: await loginAsOwner(h) },
+      payload: { from_archive_id: archived.id },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('external_server');
+    expect(fileAtomicWrite).not.toHaveBeenCalled();
+    const rows = await h.db
+      .select({ id: configVersions.id })
+      .from(configVersions)
+      .where(eq(configVersions.serverId, externalId));
+    expect(rows).toHaveLength(0);
   });
 
   it('returns 404 when from_archive_id is not soft-deleted', async () => {

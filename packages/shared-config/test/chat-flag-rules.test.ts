@@ -82,6 +82,50 @@ describe('validateChatFlagPattern', () => {
     }
   });
 
+  // #344 — ambiguity the nested-quantifier scan missed: each of these took
+  // seconds to minutes on a short run of repeated characters.
+  it('rejects ambiguous alternation under a repeating quantifier', () => {
+    for (const evil of ['(a|a)*b', '(\\w|\\d)+$', '(a|ab)*c', '(?:x|x){1,50}y', '((a|a))+b']) {
+      const result = validateChatFlagPattern(evil, 'regex');
+      expect(result, `expected ${evil} to be rejected`).toEqual({
+        ok: false,
+        error: 'ambiguous_alternation',
+      });
+    }
+  });
+
+  it('rejects any quantifier nested inside a repeated group', () => {
+    for (const evil of ['(ab?)+c', '(a?a)+b', '(a{1,3}){1,50}b', '(ab|c?d)+', '(a+){2,5}']) {
+      const result = validateChatFlagPattern(evil, 'regex');
+      expect(result, `expected ${evil} to be rejected`).toEqual({
+        ok: false,
+        error: 'nested_quantifier',
+      });
+    }
+  });
+
+  it('rejects chains of overlapping unbounded quantifiers (polynomial backtracking)', () => {
+    for (const evil of [
+      '\\w*\\w*\\w*!',
+      '\\w*\\w*\\w*\\w*\\w*!',
+      'a+a+a+b',
+      '.*x.*y.*z',
+      '\\d+\\w*\\d+x',
+    ]) {
+      const result = validateChatFlagPattern(evil, 'regex');
+      expect(result, `expected ${evil} to be rejected`).toEqual({
+        ok: false,
+        error: 'overlapping_quantifiers',
+      });
+    }
+  });
+
+  it('keeps accepting unambiguous repetition and distinct-literal chains', () => {
+    for (const safe of ['f+u+c+k', '(bad|worse)+', '(?:ab|cd){1,5}', '\\s*bad\\s*', 'сук[аи]+']) {
+      expect(validateChatFlagPattern(safe, 'regex'), safe).toEqual({ ok: true });
+    }
+  });
+
   it('rejects oversized bounded repetition', () => {
     const result = validateChatFlagPattern('a{500}', 'regex');
     expect(result).toEqual({ ok: false, error: 'repeat_too_large' });
@@ -114,6 +158,20 @@ describe('compileChatFlagRule + detectChatFlag', () => {
       { id: 'second', pattern: 'word', patternType: 'word' },
     ]);
     expect(detectChatFlag('bad word', compiled)).toBe('first');
+  });
+
+  it('drops stored regex rules that fail the ReDoS scan instead of running them (#344)', () => {
+    expect(
+      compileChatFlagRule({ id: 'evil', pattern: '(a|a)*b', patternType: 'regex' }),
+    ).toBeNull();
+    const compiled = compileChatFlagRules([
+      { id: 'evil', pattern: '(a|a)*b', patternType: 'regex' },
+      { id: 'ok', pattern: 'f+u+c+k', patternType: 'regex' },
+    ]);
+    expect(compiled.map((rule) => rule.id)).toEqual(['ok']);
+    const started = Date.now();
+    expect(detectChatFlag(`${'a'.repeat(40)}`, compiled)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(50);
   });
 
   it('drops rules whose pattern is blank or uncompilable', () => {

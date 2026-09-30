@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
 import {
   Badge,
@@ -98,6 +98,11 @@ export function ChatArchive() {
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [canBan, setCanBan] = useState(false);
+  // Tracks the most recently started load()/loadMore() request; a response is
+  // applied only if it is still the current one, so a filter change (a new
+  // load()) can never be clobbered by a slower loadMore() (or an even older
+  // load()) that resolves after it — see finding #504.
+  const requestIdRef = useRef(0);
 
   const serverNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -146,6 +151,7 @@ export function ChatArchive() {
   }, []);
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     setLiveRows([]);
@@ -156,14 +162,16 @@ export function ChatArchive() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ChatListResponse;
+      if (requestIdRef.current !== requestId) return;
       setPageRows(data.items.map(apiItemToRow));
       setCursor(data.next_cursor);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError((err as Error).message);
       setPageRows([]);
       setCursor(null);
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [filters]);
 
@@ -173,6 +181,7 @@ export function ChatArchive() {
 
   const loadMore = useCallback(async () => {
     if (!cursor) return;
+    const requestId = ++requestIdRef.current;
     setLoadingMore(true);
     try {
       const res = await fetch(`/api/v1/chat/messages?${buildApiQuery(filters, cursor)}`, {
@@ -181,12 +190,14 @@ export function ChatArchive() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ChatListResponse;
+      if (requestIdRef.current !== requestId) return;
       setPageRows((prev) => [...prev, ...data.items.map(apiItemToRow)]);
       setCursor(data.next_cursor);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError((err as Error).message);
     } finally {
-      setLoadingMore(false);
+      if (requestIdRef.current === requestId) setLoadingMore(false);
     }
   }, [cursor, filters]);
 

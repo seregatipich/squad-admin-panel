@@ -24,7 +24,9 @@
  *     2026-09-07 and handled the same way SquadJS's core/rcon.js does.
  *     Left in the stream, those 7 trailing bytes parse as a size-256 header
  *     and every later response is mis-framed (`invalid RCON packet size`
- *     errors, exec timeouts, a reconnect loop).
+ *     errors, exec timeouts, a reconnect loop). A chat packet can carry the
+ *     same 7 leading bytes, so `RconPacketStream` strips them only right
+ *     after that second echo.
  */
 
 export const SERVERDATA_AUTH = 3;
@@ -64,39 +66,54 @@ export function encodePacket(packet: RconPacket): Buffer {
  * the 7 bytes that follow the two null terminators of a size-10 frame.
  */
 export const SQUAD_BROKEN_PROBE_TAIL = Buffer.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
-const BROKEN_PROBE_FRAME_LENGTH = 21;
 
+/**
+ * Largest packet `size` field the decoder accepts. Valve RCON bodies are at
+ * most 4096 bytes and Squad's multi-packet ListPlayers replies stay well under
+ * that per frame; 1 MiB leaves ample headroom while a corrupted length can no
+ * longer make the decoder buffer gigabytes waiting for a frame that never ends.
+ */
+export const MAX_RCON_PACKET_SIZE = 1024 * 1024;
+
+/** Wire size of an empty frame: id + type + two null terminators. */
+const EMPTY_FRAME_SIZE = 10;
+
+/**
+ * Splits a TCP byte stream into RCON packets.
+ *
+ * The broken-probe tail is recognised by context, never by its bytes alone:
+ * a server-pushed chat packet (`SERVERDATA_CHAT_VALUE`, id 0) with a 246-byte
+ * body has size 256 and starts with exactly the same 7 bytes (#977). The tail
+ * is only expected right after Squad's *second* empty echo of a probe — an
+ * empty `SERVERDATA_RESPONSE_VALUE` whose id repeats the previous empty
+ * response's id — and only there is it stripped (or waited for, when the TCP
+ * chunking splits it). Anywhere else those bytes are parsed as a frame.
+ */
 export class RconPacketStream {
   private buf: Buffer = Buffer.alloc(0);
+  private lastEmptyResponseId: number | null = null;
+  private expectProbeTail = false;
 
   push(chunk: Buffer): RconPacket[] {
     this.buf = Buffer.concat([this.buf, chunk]);
     const out: RconPacket[] = [];
-    while (this.buf.byteLength >= 4) {
-      // The broken probe reply's 7 trailing bytes may sit at the head of the
-      // buffer on their own when the TCP chunking split the 21-byte frame
-      // after its first 14 bytes. A genuine frame can never start with them:
-      // that would be size 256 with a packet id below 256, and every id this
-      // client issues is >= 1000.
-      if (this.startsWithBrokenProbeTail()) {
-        this.buf = this.buf.subarray(SQUAD_BROKEN_PROBE_TAIL.byteLength);
-        continue;
+    while (this.buf.byteLength > 0) {
+      if (this.expectProbeTail) {
+        const n = Math.min(this.buf.byteLength, SQUAD_BROKEN_PROBE_TAIL.byteLength);
+        if (!this.buf.subarray(0, n).equals(SQUAD_BROKEN_PROBE_TAIL.subarray(0, n))) {
+          this.expectProbeTail = false;
+        } else if (n < SQUAD_BROKEN_PROBE_TAIL.byteLength) {
+          break;
+        } else {
+          this.buf = this.buf.subarray(n);
+          this.expectProbeTail = false;
+          continue;
+        }
       }
-      if (this.isBrokenProbeTailPrefix()) break;
+      if (this.buf.byteLength < 4) break;
       const size = this.buf.readInt32LE(0);
-      if (size < 10) {
+      if (size < EMPTY_FRAME_SIZE || size > MAX_RCON_PACKET_SIZE) {
         throw new Error(`invalid RCON packet size: ${size}`);
-      }
-      // The whole 21-byte broken frame in one go: a size-10 empty packet
-      // immediately followed by the 7-byte tail. Drop it entirely; the
-      // legitimate probe echo was the size-10 frame before it.
-      if (
-        size === 10 &&
-        this.buf.byteLength >= BROKEN_PROBE_FRAME_LENGTH &&
-        this.buf.subarray(14, BROKEN_PROBE_FRAME_LENGTH).equals(SQUAD_BROKEN_PROBE_TAIL)
-      ) {
-        this.buf = this.buf.subarray(BROKEN_PROBE_FRAME_LENGTH);
-        continue;
       }
       if (this.buf.byteLength - 4 < size) break;
       const id = this.buf.readInt32LE(4);
@@ -105,23 +122,19 @@ export class RconPacketStream {
       const body = this.buf.subarray(12, bodyEnd).toString('utf-8');
       out.push({ id, type, body });
       this.buf = this.buf.subarray(4 + size);
+      this.trackProbeEcho(id, type, size);
     }
     return out;
   }
 
-  private startsWithBrokenProbeTail(): boolean {
-    return (
-      this.buf.byteLength >= SQUAD_BROKEN_PROBE_TAIL.byteLength &&
-      this.buf.subarray(0, SQUAD_BROKEN_PROBE_TAIL.byteLength).equals(SQUAD_BROKEN_PROBE_TAIL)
-    );
-  }
-
-  /** A strict prefix of the tail: wait for the rest instead of mis-reading a size. */
-  private isBrokenProbeTailPrefix(): boolean {
-    const n = this.buf.byteLength;
-    return (
-      n < SQUAD_BROKEN_PROBE_TAIL.byteLength &&
-      this.buf.equals(SQUAD_BROKEN_PROBE_TAIL.subarray(0, n))
-    );
+  /** Arms tail stripping after the second empty response with the same id. */
+  private trackProbeEcho(id: number, type: number, size: number): void {
+    if (type !== SERVERDATA_RESPONSE_VALUE || size !== EMPTY_FRAME_SIZE) return;
+    if (this.lastEmptyResponseId === id) {
+      this.expectProbeTail = true;
+      this.lastEmptyResponseId = null;
+      return;
+    }
+    this.lastEmptyResponseId = id;
   }
 }

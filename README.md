@@ -26,7 +26,6 @@ Default domain is `squad-panel.lan`. For production, edit `.env` before starting
 APP_DOMAIN=admin.example.com
 TLS_ISSUER=acme
 ACME_EMAIL=you@example.com
-COOKIE_SECURE=true
 ```
 
 Open `https://<APP_DOMAIN>/` — the first Steam login claims the Owner role automatically.
@@ -159,11 +158,15 @@ pnpm verify:audit-chain                      # validate audit log integrity
 ### Uninstall
 
 ```bash
-sudo ./scripts/uninstall.sh                  # removes host bridge + systemd units
-docker compose down -v --remove-orphans      # drops DB, Redis, Caddy volumes
-docker volume rm squad-depot                 # drops the SteamCMD cache (~12 GB)
-sudo rm -rf /var/lib/squad-panel             # drops per-server configs + saves
+sudo ./scripts/uninstall.sh                  # interactive; confirms every destructive step
 ```
+
+`uninstall.sh` asks separately before removing the host bridge and systemd units, the
+`/var/lib/squad-panel` symlink, the `squad-depot` volume (the SteamCMD cache, ~12 GB),
+the `data/` tree and the `panel` group. Removing `data/` first stops the stack with
+`docker compose --profile backup down -v --remove-orphans`; the restic repository
+(`data/backup-repo/`) and dump staging (`data/backup-dump/`) are kept unless you
+confirm their deletion in an extra step.
 
 ### Environment variables
 

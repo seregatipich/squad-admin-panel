@@ -1,11 +1,12 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { serverPatch, serverSettingsUpdate } from '@squad/shared-types';
-import { and, eq, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { syncLicenseCfg } from '../lib/license-cfg.js';
+import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -17,6 +18,83 @@ const PORT_CHANGEABLE_STATUSES = new Set(['stopped', 'ready', 'pending', 'failed
 const PORT_FIELDS = ['game_port', 'query_port', 'beacon_port', 'rcon_port'] as const;
 type PortField = (typeof PORT_FIELDS)[number];
 
+/** Firewall protocol of each port field. */
+const PORT_PROTO: Record<PortField, 'udp' | 'tcp'> = {
+  game_port: 'udp',
+  query_port: 'udp',
+  beacon_port: 'udp',
+  rcon_port: 'tcp',
+};
+
+/** Port column of each port field. */
+const PORT_COLUMN = {
+  game_port: 'gamePort',
+  query_port: 'queryPort',
+  beacon_port: 'beaconPort',
+  rcon_port: 'rconPort',
+} as const satisfies Record<PortField, keyof typeof serverSettings.$inferSelect>;
+
+/** One UFW rule as the bridge `ufw_rule` call takes it (minus the action). */
+interface UfwRuleSpec {
+  port: number;
+  proto: 'udp' | 'tcp';
+}
+
+/**
+ * Rules a port change must add and remove. A rule both the old and the new
+ * port set need (a port moved from one field to another with the same
+ * protocol) is neither added nor removed, so closing the old ports never
+ * closes one the server still uses and a rollback never closes a rule that
+ * existed before.
+ *
+ * @param current - The settings row before the change.
+ * @param portChange - Fields whose port actually changes, with the new value.
+ */
+function ufwRuleChanges(
+  current: typeof serverSettings.$inferSelect,
+  portChange: Partial<Record<PortField, number>>,
+): { toAdd: UfwRuleSpec[]; toRemove: UfwRuleSpec[] } {
+  const key = (rule: UfwRuleSpec) => `${rule.port}/${rule.proto}`;
+  const oldRules = PORT_FIELDS.map((field) => ({
+    port: current[PORT_COLUMN[field]],
+    proto: PORT_PROTO[field],
+  }));
+  const newRules = PORT_FIELDS.map((field) => ({
+    port: portChange[field] ?? current[PORT_COLUMN[field]],
+    proto: PORT_PROTO[field],
+  }));
+  const oldKeys = new Set(oldRules.map(key));
+  const newKeys = new Set(newRules.map(key));
+  return {
+    toAdd: newRules.filter((rule) => !oldKeys.has(key(rule))),
+    toRemove: oldRules.filter((rule) => !newKeys.has(key(rule))),
+  };
+}
+
+function serializeSettings(row: typeof serverSettings.$inferSelect) {
+  return {
+    server_id: row.serverId,
+    install_path: row.installPath,
+    game_port: row.gamePort,
+    query_port: row.queryPort,
+    beacon_port: row.beaconPort,
+    rcon_port: row.rconPort,
+    max_players: row.maxPlayers,
+    tickrate: row.tickrate,
+    multihome: row.multihome,
+    extra_args: row.extraArgs,
+    cpu_affinity: row.cpuAffinity,
+    cpu_weight: row.cpuWeight,
+    niceness: row.niceness,
+    memory_high_mb: row.memoryHighMb,
+    memory_max_mb: row.memoryMaxMb,
+    io_weight: row.ioWeight,
+    chat_commands_enabled: row.chatCommandsEnabled,
+    rules_text: row.rulesText,
+    archive_logs_to_backup: row.archiveLogsToBackup,
+  };
+}
+
 const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -24,11 +102,16 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
    * PUT /api/v1/servers/:id/settings
    * Partially updates the server_settings row.
    * - Port changes only allowed when server is stopped/ready/pending/failed.
-   * - Resource-limit fields (cpu_affinity, cpu_weight, niceness, memory_high_mb,
-   *   memory_max_mb, io_weight) may be changed at any time.
+   * - `multihome` must be a bare IP literal (it becomes a launch argument).
+   * - Launch-arg and cgroup knobs (extra_args, cpu_affinity, cpu_weight,
+   *   niceness, memory_high_mb, memory_max_mb, io_weight) are rejected with
+   *   400 unless unset (''/null, then ignored): the container is never started
+   *   with them (#53). The stored columns are still echoed back read-only.
    * - New ports must not conflict with other active servers' ports.
    * - Same-server ports (across all four port fields) must all be distinct.
-   * - If ports change, UFW rules are updated via the bridge.
+   * - If ports change, the new UFW rules are added first (a failure rolls
+   *   them back and answers 502 `ufw_update_failed` with nothing saved), then
+   *   the row is saved, then the old rules are removed.
    */
   fast.put(
     '/api/v1/servers/:id/settings',
@@ -64,19 +147,8 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       const portChange: Partial<Record<PortField, number>> = {};
       for (const field of PORT_FIELDS) {
         const newVal = body[field];
-        if (newVal !== undefined) {
-          const currentVal = currentSettings[
-            field === 'game_port'
-              ? 'gamePort'
-              : field === 'query_port'
-                ? 'queryPort'
-                : field === 'beacon_port'
-                  ? 'beaconPort'
-                  : 'rconPort'
-          ] as number;
-          if (newVal !== currentVal) {
-            portChange[field] = newVal;
-          }
+        if (newVal !== undefined && newVal !== currentSettings[PORT_COLUMN[field]]) {
+          portChange[field] = newVal;
         }
       }
 
@@ -123,30 +195,7 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
 
         // cross-server conflict: any port that changed must not exist on another server
         const changedPortValues = Object.values(portChange);
-        const conflictRows = await app.db
-          .select({ serverId: serverSettings.serverId })
-          .from(serverSettings)
-          .innerJoin(servers, eq(serverSettings.serverId, servers.id))
-          .where(
-            and(
-              ne(serverSettings.serverId, id),
-              isNull(servers.deletedAt),
-              eq(servers.runtime, 'container'),
-              or(
-                ...changedPortValues.map((p) =>
-                  or(
-                    eq(serverSettings.gamePort, p),
-                    eq(serverSettings.queryPort, p),
-                    eq(serverSettings.beaconPort, p),
-                    eq(serverSettings.rconPort, p),
-                  ),
-                ),
-              ),
-            ),
-          )
-          .limit(1);
-
-        if (conflictRows.length > 0) {
+        if (await hasContainerPortConflict(app.db, changedPortValues, id)) {
           reply.code(409);
           return {
             error: 'port_conflict',
@@ -165,56 +214,45 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if (body.max_players !== undefined) updateSet.maxPlayers = body.max_players;
       if (body.tickrate !== undefined) updateSet.tickrate = body.tickrate;
       if (body.multihome !== undefined) updateSet.multihome = body.multihome ?? null;
-      if (body.extra_args !== undefined) updateSet.extraArgs = body.extra_args;
-      if ('cpu_affinity' in body) updateSet.cpuAffinity = body.cpu_affinity ?? null;
-      if ('cpu_weight' in body) updateSet.cpuWeight = body.cpu_weight ?? null;
-      if ('niceness' in body) updateSet.niceness = body.niceness ?? null;
-      if ('memory_high_mb' in body) updateSet.memoryHighMb = body.memory_high_mb ?? null;
-      if ('memory_max_mb' in body) updateSet.memoryMaxMb = body.memory_max_mb ?? null;
-      if ('io_weight' in body) updateSet.ioWeight = body.io_weight ?? null;
       if (body.chat_commands_enabled !== undefined)
         updateSet.chatCommandsEnabled = body.chat_commands_enabled;
       if ('rules_text' in body) updateSet.rulesText = body.rules_text ?? null;
       if (body.archive_logs_to_backup !== undefined)
         updateSet.archiveLogsToBackup = body.archive_logs_to_backup;
 
-      // --- apply UFW rule updates for changed ports (remove old, add new) ---
-      if (hasPortChange) {
-        // Remove old port rules for changed ports
-        const portToProto: Record<PortField, 'udp' | 'tcp'> = {
-          game_port: 'udp',
-          query_port: 'udp',
-          beacon_port: 'udp',
-          rcon_port: 'tcp',
+      // --- open new ports, persist, then close old ports ---
+      // Order matters: until the DB points at the new ports the old ones must
+      // stay open, and a failed `add` must leave host and DB as they were.
+      const { toAdd, toRemove } = ufwRuleChanges(currentSettings, portChange);
+      const added: UfwRuleSpec[] = [];
+      try {
+        for (const rule of toAdd) {
+          await app.bridge.ufwRule({ action: 'add', ...rule });
+          added.push(rule);
+        }
+      } catch (err) {
+        for (const rule of added) {
+          await app.bridge.ufwRule({ action: 'remove', ...rule }).catch((rollbackErr) => {
+            req.log.warn({ err: rollbackErr, rule }, 'ufw rollback of added rule failed');
+          });
+        }
+        req.log.error({ err, id }, 'ufw rule add failed; port change aborted');
+        reply.code(502);
+        return {
+          error: 'ufw_update_failed',
+          message: 'Opening the new ports failed; the previous ports are unchanged.',
         };
-        for (const field of PORT_FIELDS) {
-          if (portChange[field] !== undefined) {
-            const oldPort =
-              field === 'game_port'
-                ? currentSettings.gamePort
-                : field === 'query_port'
-                  ? currentSettings.queryPort
-                  : field === 'beacon_port'
-                    ? currentSettings.beaconPort
-                    : currentSettings.rconPort;
-            await app.bridge.ufwRule({
-              action: 'remove',
-              port: oldPort,
-              proto: portToProto[field],
-            });
-          }
-        }
-        // Add new port rules for changed ports
-        for (const field of PORT_FIELDS) {
-          const newPort = portChange[field];
-          if (newPort !== undefined) {
-            await app.bridge.ufwRule({ action: 'add', port: newPort, proto: portToProto[field] });
-          }
-        }
       }
 
-      // --- persist ---
       await app.db.update(serverSettings).set(updateSet).where(eq(serverSettings.serverId, id));
+
+      for (const rule of toRemove) {
+        await app.bridge.ufwRule({ action: 'remove', ...rule }).catch((err) => {
+          // The server already uses the new ports; a leftover rule only keeps
+          // an unused port open, which must not fail the saved change.
+          req.log.warn({ err, rule, id }, 'ufw removal of old port rule failed');
+        });
+      }
 
       // --- return updated settings ---
       const updated = await app.db.query.serverSettings.findFirst({
@@ -225,27 +263,18 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'settings_read_failed' };
       }
 
-      return {
-        server_id: updated.serverId,
-        install_path: updated.installPath,
-        game_port: updated.gamePort,
-        query_port: updated.queryPort,
-        beacon_port: updated.beaconPort,
-        rcon_port: updated.rconPort,
-        max_players: updated.maxPlayers,
-        tickrate: updated.tickrate,
-        multihome: updated.multihome,
-        extra_args: updated.extraArgs,
-        cpu_affinity: updated.cpuAffinity,
-        cpu_weight: updated.cpuWeight,
-        niceness: updated.niceness,
-        memory_high_mb: updated.memoryHighMb,
-        memory_max_mb: updated.memoryMaxMb,
-        io_weight: updated.ioWeight,
-        chat_commands_enabled: updated.chatCommandsEnabled,
-        rules_text: updated.rulesText,
-        archive_logs_to_backup: updated.archiveLogsToBackup,
+      // #331: config.audit-based routes write only the action, not what
+      // changed — for security-sensitive fields (ports, UFW, resource
+      // limits) there was no way to reconstruct the before/after from
+      // audit_log alone. serializeSettings() never touches secrets (no
+      // license fields live on server_settings), so the full before/after
+      // is safe to record as-is.
+      req.auditSnapshots = {
+        before: serializeSettings(currentSettings),
+        after: serializeSettings(updated),
       };
+
+      return serializeSettings(updated);
     },
   );
 
@@ -288,6 +317,22 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+
+      // #331: config.audit records only the action by default; capture
+      // before/after here so audit_log can show what a PATCH actually
+      // changed. The license key itself is never recorded, only whether a
+      // key ends up present — the same redaction PUT /settings' sibling
+      // license flows apply elsewhere.
+      const licenseBefore = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, id),
+      });
+      const auditBefore = {
+        display_name: server.displayName,
+        description: server.description,
+        tags: server.tags,
+        license_id: licenseBefore?.licenseId ?? null,
+        has_license_key: licenseBefore?.licenseKeyEncrypted != null,
+      };
 
       const updateSet: Partial<typeof servers.$inferInsert> = {
         updatedAt: new Date(),
@@ -335,6 +380,20 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'server_read_failed' };
       }
+
+      const licenseAfter = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, id),
+      });
+      req.auditSnapshots = {
+        before: auditBefore,
+        after: {
+          display_name: updated.displayName,
+          description: updated.description,
+          tags: updated.tags,
+          license_id: licenseAfter?.licenseId ?? null,
+          has_license_key: licenseAfter?.licenseKeyEncrypted != null,
+        },
+      };
 
       return {
         id: updated.id,

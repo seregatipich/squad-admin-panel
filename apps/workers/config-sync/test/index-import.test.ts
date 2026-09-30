@@ -34,6 +34,7 @@ vi.mock('@squad/db', () => ({
 }));
 
 const redisMock = vi.hoisted(() => ({
+  xgroup: vi.fn().mockResolvedValue('OK'),
   xreadgroup: vi
     .fn()
     .mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(null), 50))),
@@ -43,7 +44,7 @@ vi.mock('ioredis', () => ({
   default: vi.fn(() => ({
     on: vi.fn(),
     quit: vi.fn().mockReturnValue(Promise.resolve('OK')),
-    xgroup: vi.fn().mockResolvedValue('OK'),
+    xgroup: redisMock.xgroup,
     xreadgroup: redisMock.xreadgroup,
     xautoclaim: vi.fn().mockResolvedValue(['0-0', [], []]),
     xack: vi.fn().mockResolvedValue(1),
@@ -172,9 +173,35 @@ describe('config-sync index.ts', () => {
     // refreshServerList() re-queried the DB in direct response to the NOGROUP.
     expect(selectMock.mock.calls.length).toBeGreaterThan(selectCallsBefore);
 
-    // The run loop kept polling afterwards — the read recovered rather than stalling.
+    // The run loop resumes polling after its 1 s NOGROUP pause (#873) — the
+    // read recovered rather than stalling.
     const readsAfter = redisMock.xreadgroup.mock.calls.length;
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 1_200));
     expect(redisMock.xreadgroup.mock.calls.length).toBeGreaterThan(readsAfter);
+  });
+
+  it('re-creates the lost group of a still-active server and pauses instead of spinning (#873)', async () => {
+    // Redis lost the group (or the whole stream) of a server that is still
+    // active: the refreshed server list is unchanged, so only an explicit
+    // re-create brings the reads back.
+    const defaultRead = redisMock.xreadgroup.getMockImplementation();
+    redisMock.xreadgroup.mockImplementation(() =>
+      Promise.reject(new Error(`NOGROUP No such key 'events:admins-cfg-sync:${SERVER_ID}'`)),
+    );
+    const groupCallsBefore = redisMock.xgroup.mock.calls.length;
+    const readsBefore = redisMock.xreadgroup.mock.calls.length;
+
+    await new Promise((r) => setTimeout(r, 1_500));
+    const readsDuringOutage = redisMock.xreadgroup.mock.calls.length - readsBefore;
+    redisMock.xreadgroup.mockImplementation(defaultRead as never);
+
+    expect(redisMock.xgroup.mock.calls.slice(groupCallsBefore)).toContainEqual([
+      'CREATE',
+      `events:admins-cfg-sync:${SERVER_ID}`,
+      'config-sync',
+      '0',
+      'MKSTREAM',
+    ]);
+    expect(readsDuringOutage).toBeLessThanOrEqual(2);
   });
 });

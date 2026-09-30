@@ -222,11 +222,11 @@ describeIfDb('GET /api/v1/analytics/dashboard', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a role without panel_access with 403', async () => {
+  it('rejects a role without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchDashboard(`?from=${WINDOW_FROM}&to=${WINDOW_TO}`, cookie);
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('aggregates matches, outcomes and popular maps/layers across all servers', async () => {

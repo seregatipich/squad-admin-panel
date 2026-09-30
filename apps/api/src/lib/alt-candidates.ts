@@ -1,0 +1,392 @@
+import type { DatabaseClient } from '@squad/db';
+import { COPLAY_WINDOW_DAYS } from '@squad/db';
+import {
+  ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS,
+  altDetectionSettings,
+} from '@squad/db/schema';
+import { eq, sql } from 'drizzle-orm';
+import {
+  type AltConfidence,
+  computeAltScore,
+  confidenceFor,
+  DEFAULT_ALT_SCORE_WEIGHTS,
+} from './alt-score.js';
+import { loadModerationBanStates } from './moderation-ban-state.js';
+import { uuidArrayParam } from './sql-params.js';
+
+/**
+ * ALT-1 candidate scoring shared by `GET /api/v1/players/:playerId/alt-candidates`
+ * and the ALT-7 pre-ban warning (`ban-alt-warning.ts`), so both read the same
+ * signals and settings without an in-process HTTP round-trip. The route's JSDoc
+ * documents the signals, the ban convention and the `link` annotation.
+ */
+
+/** Caps `matches[]` per candidate (smallest time-delta first) to bound response size for CGNAT-heavy targets. */
+const MATCHES_PER_CANDIDATE_CAP = 20;
+/**
+ * Caps how many candidates one request scores. A target behind CGNAT or a
+ * shared server IP can share an address with tens of thousands of players;
+ * the candidates with the most non-ignored shared IPs (then the smallest
+ * time delta) are kept, since the rest cannot outscore them on that signal.
+ */
+const CANDIDATE_CAP = 1000;
+const DAY_MS = 86_400_000;
+
+interface MatchAggRow {
+  candidate_id: string;
+  shared_ip_count: string | number;
+  ignored_shared_ip_count: string | number;
+  min_time_delta_seconds: string | number | null;
+  matches: unknown;
+}
+
+interface SharedNameRow {
+  candidate_id: string;
+  shared_names: string[] | null;
+}
+
+interface CandidateInfoRow {
+  candidate_id: string;
+  current_name: string;
+  steam_id64: string | null;
+  created_at: Date | string;
+  has_active_external_ban: boolean;
+  has_permanent_external_ban: boolean;
+}
+
+interface CandidateMatch {
+  ip: string;
+  geo: { country_code: string | null; country_name: string | null; city: string | null };
+  owner_seen_at: string;
+  candidate_seen_at: string;
+  ignored: boolean;
+}
+
+interface LinkRow {
+  id: string;
+  player_a_id: string;
+  player_b_id: string;
+  link_type: string;
+  status: string;
+  note: string | null;
+  updated_at: Date | string;
+  decided_by_name: string | null;
+}
+
+interface CandidateLink {
+  id: string;
+  link_type: string;
+  status: string;
+  note: string | null;
+  decided_by_name: string | null;
+  decided_at: string;
+}
+
+/** One scored ALT-1 candidate, in the route's response shape. */
+export interface AltCandidateView {
+  player_id: string;
+  current_name: string | null;
+  steam_id64: string | null;
+  shared_ip_count: number;
+  ignored_shared_ip_count: number;
+  min_time_delta_seconds: number | null;
+  matches: CandidateMatch[];
+  signals: {
+    shared_ips: { value: number; weight: number };
+    shared_names: { value: string[]; weight: number };
+    young_account: { value: boolean; weight: number };
+    steamid_proximity: { value: boolean; weight: number };
+    coplay_overlap: { value: number; threshold_seconds: number; weight: number };
+  };
+  score: number;
+  confidence: AltConfidence;
+  has_active_ban: boolean;
+  has_permanent_ban: boolean;
+  link: CandidateLink | null;
+}
+
+/** The player whose alts are being looked for. */
+export interface AltCandidateTarget {
+  id: string;
+  steamId64: bigint | null;
+}
+
+/**
+ * Scores every player that shares an IP with `target`, sorted by descending
+ * score (ties by player id). Reads `alt_detection_settings` (falling back to
+ * the defaults) on every call. Performs no permission check: callers must
+ * already hold `player:view_ips`, because the result carries IPs.
+ *
+ * @param db - Database client.
+ * @param target - The target player's id and SteamID64.
+ * @returns All candidates, unpaginated.
+ */
+export async function computeAltCandidates(
+  db: DatabaseClient,
+  target: AltCandidateTarget,
+): Promise<AltCandidateView[]> {
+  const [settingsRow] = await db
+    .select()
+    .from(altDetectionSettings)
+    .where(eq(altDetectionSettings.id, 1))
+    .limit(1);
+  const weights = settingsRow
+    ? {
+        weightSharedIp: settingsRow.weightSharedIp,
+        weightSharedName: settingsRow.weightSharedName,
+        weightYoungAccount: settingsRow.weightYoungAccount,
+        weightSteamidProximity: settingsRow.weightSteamidProximity,
+        weightCoplayOverlap: settingsRow.weightCoplayOverlap,
+      }
+    : DEFAULT_ALT_SCORE_WEIGHTS;
+  const steamidDeltaThreshold = BigInt(settingsRow?.steamidDeltaThreshold ?? 10_000);
+  const thresholds = {
+    mediumThreshold: settingsRow?.mediumThreshold ?? 50,
+    highThreshold: settingsRow?.highThreshold ?? 75,
+  };
+  const coplayOverlapThresholdSeconds =
+    settingsRow?.coplayOverlapThresholdSeconds ??
+    ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS;
+
+  const matchRows = (await db.execute(sql`
+    WITH matches AS (
+      SELECT
+        b.player_id AS candidate_id,
+        a.ip AS ip,
+        a.country_code,
+        a.country_name,
+        a.city,
+        a.last_seen_at AS owner_seen_at,
+        b.last_seen_at AS candidate_seen_at,
+        EXISTS (
+          SELECT 1 FROM alt_ignored_ips i WHERE a.ip <<= i.cidr
+        ) AS ignored,
+        ABS(EXTRACT(EPOCH FROM (a.last_seen_at - b.last_seen_at))) AS delta_seconds
+      FROM player_ip_history a
+      JOIN player_ip_history b ON b.ip = a.ip AND b.player_id <> a.player_id
+      WHERE a.player_id = ${target.id}
+    ),
+    ranked AS (
+      SELECT *, row_number() OVER (PARTITION BY candidate_id ORDER BY delta_seconds ASC) AS rn
+      FROM matches
+    )
+    SELECT
+      candidate_id,
+      COUNT(*) FILTER (WHERE NOT ignored) AS shared_ip_count,
+      COUNT(*) FILTER (WHERE ignored) AS ignored_shared_ip_count,
+      MIN(delta_seconds) FILTER (WHERE NOT ignored) AS min_time_delta_seconds,
+      json_agg(
+        json_build_object(
+          'ip', host(ip),
+          'geo', json_build_object(
+            'country_code', country_code,
+            'country_name', country_name,
+            'city', city
+          ),
+          'owner_seen_at', owner_seen_at,
+          'candidate_seen_at', candidate_seen_at,
+          'ignored', ignored
+        ) ORDER BY delta_seconds ASC
+      ) FILTER (WHERE rn <= ${MATCHES_PER_CANDIDATE_CAP}) AS matches
+    FROM ranked
+    GROUP BY candidate_id
+    ORDER BY
+      COUNT(*) FILTER (WHERE NOT ignored) DESC,
+      MIN(delta_seconds) FILTER (WHERE NOT ignored) ASC NULLS LAST,
+      candidate_id
+    LIMIT ${CANDIDATE_CAP}
+  `)) as unknown as MatchAggRow[];
+
+  if (matchRows.length === 0) return [];
+
+  const candidateIds = matchRows.map((row) => row.candidate_id);
+  const candidateIdArray = uuidArrayParam(candidateIds);
+
+  const nameRows = (await db.execute(sql`
+    SELECT
+      h2.player_id AS candidate_id,
+      array_agg(DISTINCT h1.name_normalized) AS shared_names
+    FROM player_name_history h1
+    JOIN player_name_history h2
+      ON h2.name_normalized = h1.name_normalized AND h2.player_id <> h1.player_id
+    WHERE h1.player_id = ${target.id} AND h2.player_id = ANY(${candidateIdArray})
+    GROUP BY h2.player_id
+  `)) as unknown as SharedNameRow[];
+  const sharedNamesByCandidate = new Map(
+    nameRows.map((row) => [row.candidate_id, row.shared_names ?? []]),
+  );
+
+  // ALT-3 anti-signal: sum each candidate's rolling-window overlap with the
+  // target from `player_coplay` (same COPLAY_WINDOW_DAYS window as the
+  // `/coplay` route, so the two endpoints never disagree on which pairs
+  // count as high-overlap). `player_coplay` stores one row per unordered
+  // pair with `player_a_id < player_b_id`, so both directions are queried.
+  const toDay = new Date().toISOString().slice(0, 10);
+  const fromDay = new Date(Date.parse(`${toDay}T00:00:00.000Z`) - (COPLAY_WINDOW_DAYS - 1) * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  const coplayRows = (await db.execute(sql`
+    SELECT
+      CASE WHEN pc.player_a_id = ${target.id} THEN pc.player_b_id ELSE pc.player_a_id END
+        AS candidate_id,
+      SUM(pc.overlap_seconds)::bigint AS overlap_seconds
+    FROM player_coplay pc
+    WHERE (
+      (pc.player_a_id = ${target.id} AND pc.player_b_id = ANY(${candidateIdArray}))
+      OR (pc.player_b_id = ${target.id} AND pc.player_a_id = ANY(${candidateIdArray}))
+    )
+      AND pc.window_start >= ${fromDay}::date
+    GROUP BY candidate_id
+  `)) as unknown as Array<{ candidate_id: string; overlap_seconds: string | number }>;
+  const coplayOverlapByCandidate = new Map(
+    coplayRows.map((row) => [row.candidate_id, Number(row.overlap_seconds)]),
+  );
+
+  const [lastBanRow] = (await db.execute(sql`
+    SELECT MAX(created_at) AS last_ban_at
+    FROM moderation_actions
+    WHERE player_id = ${target.id}
+      AND action_type = 'ban'
+      AND reverted_at IS NULL
+  `)) as unknown as Array<{ last_ban_at: Date | string | null }>;
+  const lastBanAt = lastBanRow?.last_ban_at ? new Date(lastBanRow.last_ban_at) : null;
+
+  const linkRows = (await db.execute(sql`
+    SELECT
+      pl.id,
+      pl.player_a_id,
+      pl.player_b_id,
+      pl.link_type,
+      pl.status,
+      pl.note,
+      pl.updated_at,
+      creator.canonical_name AS decided_by_name
+    FROM player_links pl
+    LEFT JOIN players creator ON creator.id = pl.created_by
+    WHERE pl.player_a_id = ${target.id} OR pl.player_b_id = ${target.id}
+  `)) as unknown as LinkRow[];
+  const linkByCandidate = new Map<string, CandidateLink>(
+    linkRows.map((row) => {
+      const counterpartId = row.player_a_id === target.id ? row.player_b_id : row.player_a_id;
+      return [
+        counterpartId,
+        {
+          id: row.id,
+          link_type: row.link_type,
+          status: row.status,
+          note: row.note,
+          decided_by_name: row.decided_by_name,
+          decided_at: new Date(row.updated_at).toISOString(),
+        },
+      ];
+    }),
+  );
+
+  const infoRows = (await db.execute(sql`
+    SELECT
+      p.id AS candidate_id,
+      p.canonical_name AS current_name,
+      p.steam_id64::text AS steam_id64,
+      p.created_at,
+      EXISTS (
+        SELECT 1 FROM external_bans eb
+        WHERE eb.steam_id64 = p.steam_id64::text AND eb.revoked_at IS NULL
+          AND (eb.expires_at IS NULL OR eb.expires_at > now())
+      ) AS has_active_external_ban,
+      EXISTS (
+        SELECT 1 FROM external_bans eb
+        WHERE eb.steam_id64 = p.steam_id64::text AND eb.revoked_at IS NULL
+          AND eb.expires_at IS NULL
+      ) AS has_permanent_external_ban
+    FROM players p
+    WHERE p.id = ANY(${candidateIdArray})
+  `)) as unknown as CandidateInfoRow[];
+  const infoByCandidate = new Map(infoRows.map((row) => [row.candidate_id, row]));
+  const modBanByCandidate = await loadModerationBanStates(db, candidateIds);
+
+  return matchRows
+    .map((row) => {
+      const info = infoByCandidate.get(row.candidate_id);
+      const sharedNames = sharedNamesByCandidate.get(row.candidate_id) ?? [];
+      const sharedIpCount = Number(row.shared_ip_count);
+      const candidateSteamId64 = info?.steam_id64 != null ? BigInt(info.steam_id64) : null;
+      const steamidClose =
+        target.steamId64 != null &&
+        candidateSteamId64 != null &&
+        (target.steamId64 > candidateSteamId64
+          ? target.steamId64 - candidateSteamId64
+          : candidateSteamId64 - target.steamId64) < steamidDeltaThreshold;
+      const youngAccount =
+        lastBanAt != null && info != null && new Date(info.created_at) > lastBanAt;
+      const coplayOverlapSeconds = coplayOverlapByCandidate.get(row.candidate_id) ?? 0;
+      const coplayOverlap = coplayOverlapSeconds >= coplayOverlapThresholdSeconds;
+      const modBan = modBanByCandidate.get(row.candidate_id);
+
+      const score = computeAltScore(
+        {
+          sharedIpCount,
+          sharedNameCount: sharedNames.length,
+          youngAccount,
+          steamidClose,
+          coplayOverlap,
+        },
+        weights,
+      );
+      const confidence: AltConfidence = confidenceFor(score, thresholds);
+
+      return {
+        player_id: row.candidate_id,
+        current_name: info?.current_name ?? null,
+        steam_id64: candidateSteamId64 != null ? candidateSteamId64.toString() : null,
+        shared_ip_count: sharedIpCount,
+        ignored_shared_ip_count: Number(row.ignored_shared_ip_count),
+        min_time_delta_seconds:
+          row.min_time_delta_seconds != null ? Number(row.min_time_delta_seconds) : null,
+        matches: (row.matches as CandidateMatch[] | null) ?? [],
+        signals: {
+          shared_ips: { value: sharedIpCount, weight: weights.weightSharedIp },
+          shared_names: { value: sharedNames, weight: weights.weightSharedName },
+          young_account: { value: youngAccount, weight: weights.weightYoungAccount },
+          steamid_proximity: { value: steamidClose, weight: weights.weightSteamidProximity },
+          coplay_overlap: {
+            value: coplayOverlapSeconds,
+            threshold_seconds: coplayOverlapThresholdSeconds,
+            weight: -weights.weightCoplayOverlap,
+          },
+        },
+        score,
+        confidence,
+        has_active_ban: Boolean(modBan?.active || info?.has_active_external_ban),
+        has_permanent_ban: Boolean(modBan?.permanent || info?.has_permanent_external_ban),
+        link: linkByCandidate.get(row.candidate_id) ?? null,
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.player_id.localeCompare(b.player_id));
+}
+
+/**
+ * The evidence a `player_links` row stores for a pair (#461): the ALT-1 score,
+ * confidence and signals the server computes at decision time, so a decision
+ * stays auditable after the candidate later scores differently and no client
+ * can store fabricated evidence. `null` when `otherPlayerId` is not an ALT-1
+ * candidate of `target` (a link recorded without any shared IP).
+ *
+ * @param db - Database client.
+ * @param target - The player the link is created from.
+ * @param otherPlayerId - The other end of the link.
+ */
+export async function altEvidenceSnapshot(
+  db: DatabaseClient,
+  target: AltCandidateTarget,
+  otherPlayerId: string,
+): Promise<Record<string, unknown> | null> {
+  const candidates = await computeAltCandidates(db, target);
+  const candidate = candidates.find((entry) => entry.player_id === otherPlayerId);
+  if (!candidate) return null;
+  return {
+    score: candidate.score,
+    confidence: candidate.confidence,
+    shared_ip_count: candidate.shared_ip_count,
+    signals: candidate.signals,
+  };
+}

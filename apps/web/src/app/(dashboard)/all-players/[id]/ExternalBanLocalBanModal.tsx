@@ -16,6 +16,31 @@ interface ServerSummary {
   display_name: string;
 }
 
+/**
+ * Russian messages for the local-ban route's stable error codes (#443): the
+ * UI is Russian-only, and `body.error` values like `external_ban_inactive`
+ * or Fastify's generic `Bad Request` are neither.
+ */
+const LOCAL_BAN_ERROR_MESSAGES_RU: Record<string, string> = {
+  player_not_found: 'Игрок не найден.',
+  external_ban_not_found: 'Внешний бан не найден или уже не относится к этому игроку.',
+  external_ban_inactive: 'Внешний бан уже неактивен.',
+  server_not_found: 'Выбранный сервер не найден.',
+  target_identity_missing: 'У игрока нет SteamID или EOS ID для отправки команды.',
+  action_failed: 'Сервер не выполнил команду AdminBan.',
+};
+
+/** Turns a `POST .../local-ban` error response into a Russian message. */
+function describeLocalBanError(
+  status: number,
+  body: { error?: string; message?: string } | null,
+): string {
+  if (status === 400) return body?.message ?? 'Некорректные данные формы.';
+  const code = body?.error;
+  if (code && code in LOCAL_BAN_ERROR_MESSAGES_RU) return LOCAL_BAN_ERROR_MESSAGES_RU[code];
+  return `Ошибка сервера (HTTP ${status}).`;
+}
+
 interface ServersResponse {
   items: ServerSummary[];
 }
@@ -78,8 +103,11 @@ export function ExternalBanLocalBanModal({
       })
       .then((body) => {
         if (cancelled) return;
+        // No server is preselected (#442): AdminBan is destructive, and the
+        // docstring's "requires an explicit server choice" only holds if the
+        // operator has to pick one — the confirm button stays disabled via
+        // `!serverId` until they do.
         setServers(body.items);
-        setServerId(body.items[0]?.id ?? '');
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(`Не удалось загрузить серверы: ${(cause as Error).message}`);
@@ -115,8 +143,11 @@ export function ExternalBanLocalBanModal({
         },
       );
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error ?? `HTTP ${response.status}`);
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+          message?: string;
+        } | null;
+        throw new Error(describeLocalBanError(response.status, body));
       }
       const serverName = servers.find((server) => server.id === serverId)?.display_name ?? serverId;
       onBanned(serverName);
@@ -161,7 +192,13 @@ export function ExternalBanLocalBanModal({
             disabled={loadingServers || servers.length === 0 || submitting}
             required
           >
-            {servers.length === 0 ? <option value="">Серверы недоступны</option> : null}
+            {servers.length === 0 ? (
+              <option value="">Серверы недоступны</option>
+            ) : (
+              <option value="" disabled>
+                Выберите сервер
+              </option>
+            )}
             {servers.map((server) => (
               <option key={server.id} value={server.id}>
                 {server.display_name}

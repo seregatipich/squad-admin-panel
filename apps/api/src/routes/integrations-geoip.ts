@@ -4,10 +4,9 @@ import {
   geoipSettings,
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { encrypt, serialize } from '../lib/crypto.js';
 
 const INTEGRATION_PERMISSION = 'integration:manage' as const;
@@ -48,28 +47,25 @@ function geoipView(
   };
 }
 
-function auditActor(req: FastifyRequest): AuditActor {
-  return req.user
-    ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
-    : { kind: 'system', label: 'http-anonymous' };
-}
-
-const isForbidden = (req: FastifyRequest, reply: FastifyReply): boolean => {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  return false;
-};
-
+/**
+ * MaxMind GeoIP credentials (singleton row). Authentication is the global
+ * `plugins/auth.ts` hook and authorization is `config.permissions`; the PUT
+ * declares `config.audit` and fills `req.auditSnapshots`, so every attempt —
+ * refusals included — is audited with the license key masked.
+ *
+ * Only the credentials and the switch are stored here: no worker downloads the
+ * database yet (packages/db/src/geoip/refresh.ts and mmdb.ts have no runtime
+ * caller — tracked in #51 and #64), so `db_path` and `last_refreshed_at` stay
+ * null and the settings page warns that the key is not used while `db_present`
+ * is false.
+ */
 const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   fast.get(
     '/api/v1/integrations/geoip',
     { config: { permissions: [INTEGRATION_PERMISSION], audit: false } },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
+    async () => {
       const rows = await app.db
         .select()
         .from(geoipSettings)
@@ -83,67 +79,53 @@ const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/geoip',
     {
       schema: { body: putGeoipBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: {
+        permissions: [INTEGRATION_PERMISSION],
+        audit: { action: 'integration.geoip.update', resource: 'geoip_settings' },
+      },
     },
-    async (req, reply) => {
-      if (isForbidden(req, reply)) return;
-      const existingRows = await app.db
-        .select()
-        .from(geoipSettings)
-        .where(eq(geoipSettings.id, GEOIP_SETTINGS_SINGLETON_ID))
-        .limit(1);
-      const existing = existingRows[0] ?? null;
-      const before = geoipView(existing);
+    async (req) => {
+      const licenseKey = req.body.license_key;
+      const encryptedKey =
+        typeof licenseKey === 'string' ? serialize(encrypt(app.encryptionKey, licenseKey)) : null;
 
-      const accountId =
-        req.body.account_id !== undefined ? req.body.account_id : (existing?.accountId ?? null);
-      const enabled =
-        req.body.enabled !== undefined ? req.body.enabled : (existing?.enabled ?? false);
-      let licenseKeyEncrypted: Buffer | null =
-        existing?.licenseKeyEncrypted != null
-          ? Buffer.from(existing.licenseKeyEncrypted as unknown as Buffer)
-          : null;
-      if (req.body.license_key === null) {
-        licenseKeyEncrypted = null;
-      } else if (typeof req.body.license_key === 'string') {
-        licenseKeyEncrypted = serialize(encrypt(app.encryptionKey, req.body.license_key));
-      }
+      // Same singleton pattern as PUT /integrations/discord: ensure the row,
+      // lock it, then update from the locked state, so concurrent first-time
+      // PUTs neither 500 on the primary key nor lose each other's fields.
+      const { created, existing, updated } = await app.db.transaction(async (tx) => {
+        const inserted = await tx
+          .insert(geoipSettings)
+          .values({ id: GEOIP_SETTINGS_SINGLETON_ID })
+          .onConflictDoNothing()
+          .returning({ id: geoipSettings.id });
+        const [current] = await tx
+          .select()
+          .from(geoipSettings)
+          .where(eq(geoipSettings.id, GEOIP_SETTINGS_SINGLETON_ID))
+          .for('update');
+        if (!current) throw new Error('geoip_settings singleton missing after upsert');
 
-      const now = new Date();
-      if (existing) {
-        await app.db
+        const [row] = await tx
           .update(geoipSettings)
-          .set({ accountId, enabled, licenseKeyEncrypted, updatedAt: now })
-          .where(eq(geoipSettings.id, GEOIP_SETTINGS_SINGLETON_ID));
-      } else {
-        await app.db.insert(geoipSettings).values({
-          id: GEOIP_SETTINGS_SINGLETON_ID,
-          accountId,
-          enabled,
-          licenseKeyEncrypted,
-          updatedAt: now,
-        });
-      }
+          .set({
+            accountId: req.body.account_id !== undefined ? req.body.account_id : current.accountId,
+            enabled: req.body.enabled ?? current.enabled,
+            licenseKeyEncrypted:
+              licenseKey === undefined ? current.licenseKeyEncrypted : encryptedKey,
+            updatedAt: new Date(),
+          })
+          .where(eq(geoipSettings.id, GEOIP_SETTINGS_SINGLETON_ID))
+          .returning();
+        if (!row) throw new Error('geoip_settings singleton update returned no row');
+        return { created: inserted.length > 0, existing: current, updated: row };
+      });
 
-      const after = geoipView({
-        accountId,
-        licenseKeyEncrypted,
-        enabled,
-        dbPath: existing?.dbPath ?? null,
-        lastRefreshedAt: existing?.lastRefreshedAt ?? null,
-        updatedAt: now,
-      });
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'integration.geoip.update',
-        targetType: 'geoip_settings',
-        targetId: GEOIP_SETTINGS_SINGLETON_ID,
-        before,
+      const after = geoipView(updated);
+      req.auditSnapshots = {
+        before: geoipView(created ? null : existing),
         after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+        targetId: GEOIP_SETTINGS_SINGLETON_ID,
+      };
       return after;
     },
   );

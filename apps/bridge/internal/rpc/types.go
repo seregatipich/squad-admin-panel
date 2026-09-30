@@ -20,7 +20,8 @@ type Response struct {
 	Error  *ErrorObject    `json:"error,omitempty"`
 }
 
-// StreamFrame is produced by streaming methods (steamcmd_run, journalctl_follow).
+// StreamFrame is produced by the streaming methods (container_logs_follow,
+// file_read_stream, depot_update, docker_prune, backup_run, backup_restore).
 // It is written as a standalone frame on the same socket between the
 // request and the final Response. Consumers see the frames interleaved.
 type StreamFrame struct {
@@ -31,15 +32,19 @@ type StreamFrame struct {
 
 // ErrorObject maps application-level errors (not transport).
 type ErrorObject struct {
-	Code    string          `json:"code"` // forbidden | invalid_args | runtime_error | timeout | internal
+	Code    string          `json:"code"` // forbidden | invalid_args | not_found | runtime_error | timeout | internal
 	Message string          `json:"message"`
 	Detail  json.RawMessage `json:"detail,omitempty"`
 }
 
 // Well-known error codes.
 const (
-	CodeForbidden    = "forbidden"
-	CodeInvalidArgs  = "invalid_args"
+	CodeForbidden   = "forbidden"
+	CodeInvalidArgs = "invalid_args"
+	// CodeNotFound reports that a file a read targeted does not exist, so
+	// callers can tell "absent" from a real I/O failure without parsing the
+	// OS error text.
+	CodeNotFound     = "not_found"
 	CodeRuntimeError = "runtime_error"
 	CodeTimeout      = "timeout"
 	CodeInternal     = "internal"

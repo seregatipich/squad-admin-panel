@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -28,6 +28,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { announcesMatchBoundary } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendMatchPage,
@@ -152,6 +153,11 @@ export function MatchesBrowser() {
     const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
+    // Invalidates any loadMore/refreshHead started under the previous
+    // filters/sort immediately, instead of waiting for this request to
+    // resolve: their stale cursor or off-filter rows must never reach the
+    // list this new first page is about to replace (MATCHES-582).
+    setNextCursor(null);
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -187,9 +193,13 @@ export function MatchesBrowser() {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
+      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
       .then((data) => {
-        if (!cancelled) setTotal(data.total);
+        // A failed count request leaves `total` at `null` ("…") rather than
+        // folding into 0 — a real 0 and "unknown" are different facts, and
+        // showing "всего: 0" for a request that never actually counted
+        // anything is misleading.
+        if (!cancelled && data) setTotal(data.total);
       })
       .catch(() => {});
     return () => {
@@ -226,6 +236,7 @@ export function MatchesBrowser() {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    const requestId = listRequestRef.current;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -234,12 +245,18 @@ export function MatchesBrowser() {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as MatchListResponse;
+      // filters/sort changed (a new first page started) while this request
+      // was in flight: its cursor and rows belong to the superseded query
+      // and must not be spliced onto the list loadFirstPage already replaced
+      // (MATCHES-582).
+      if (listRequestRef.current !== requestId) return;
       setItems((prev) => appendMatchPage(prev, data.items));
       setNextCursor(data.next_cursor);
     } catch (err) {
+      if (listRequestRef.current !== requestId) return;
       setError((err as Error).message);
     } finally {
-      setLoadingMore(false);
+      if (listRequestRef.current === requestId) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore]);
 
@@ -272,6 +289,7 @@ export function MatchesBrowser() {
         nextCursor !== null,
       ) &&
       !loadingMore &&
+      !error &&
       scrollRestoreLoadAttemptsRef.current < 20
     ) {
       scrollRestoreLoadAttemptsRef.current += 1;
@@ -289,10 +307,11 @@ export function MatchesBrowser() {
       restoredScrollHrefRef.current = currentListHref;
       scrollRestoreFrameRef.current = null;
     });
-  }, [currentListHref, loadMore, loading, loadingMore, nextCursor]);
+  }, [currentListHref, error, loadMore, loading, loadingMore, nextCursor]);
 
   const refreshHead = useCallback(() => {
     if (filters.sort !== 'started_at' || filters.order !== 'desc') return;
+    const requestId = listRequestRef.current;
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -300,12 +319,28 @@ export function MatchesBrowser() {
       .then(async (res) => (res.ok ? ((await res.json()) as MatchListResponse) : null))
       .then((data) => {
         if (!data) return;
+        // filters/sort changed while this refresh was in flight: it must not
+        // add rows from the superseded query onto the list loadFirstPage
+        // already replaced (MATCHES-582).
+        if (listRequestRef.current !== requestId) return;
         setItems((prev) => mergeMatchPage(data.items, prev));
       })
       .catch(() => {});
   }, [filters]);
-  useLiveSubscription('match.started', refreshHead);
-  useLiveSubscription('match.ended', refreshHead);
+  /*
+   * There is no `match.started`/`match.ended` live-bus event: nothing
+   * publishes it (log-ingest only writes match.* rows to Redis Streams and
+   * the `events` table), so subscribing to it here was a dead listener
+   * (MATCHES-1296). New matches do reach the browser as
+   * `server.events.appended` batches, the same signal EventsBrowser uses.
+   */
+  const onEventsAppended = useCallback(
+    (event: { data: { server_id: string | null; kinds: string[] } }) => {
+      if (announcesMatchBoundary(event.data)) refreshHead();
+    },
+    [refreshHead],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   const serverOptions = useMemo(() => {
     const merged = new Map<string, ServerOption>();
@@ -622,56 +657,85 @@ function MatchTable({
         </tr>
       </TableHead>
       <TableBody>
-        {items.map((match) => {
-          const open = isOpenMatch(match);
-          const duration = open
-            ? liveDurationSeconds(match.started_at, now)
-            : match.duration_seconds;
-          return (
-            <TableRow key={match.id} interactive>
-              <Td>
-                <Link
-                  href={buildMatchDetailHref(match.id, listHref)}
-                  onClick={() => onOpen(match.id)}
-                  title={match.server_name ?? undefined}
-                  className="font-medium text-accent no-underline hover:brightness-110"
-                >
-                  {shortServerName(match)}
-                </Link>
-              </Td>
-              <Td>{match.layer ?? '—'}</Td>
-              <Td className="text-xs text-ink-3">{formatDateTime(match.started_at)}</Td>
-              <Td className="text-xs text-ink-3">
-                {open ? (
-                  <StatusBadge state="good" label="Идёт" pulse />
-                ) : (
-                  formatDateTime(match.ended_at)
-                )}
-              </Td>
-              <Td>
-                <TicketBadge
-                  team={1}
-                  faction={match.team1_faction}
-                  tickets={match.team1_tickets}
-                  winner={match.winner}
-                />
-              </Td>
-              <Td>
-                <TicketBadge
-                  team={2}
-                  faction={match.team2_faction}
-                  tickets={match.team2_tickets}
-                  winner={match.winner}
-                />
-              </Td>
-              <Td numeric className="text-xs">
-                {formatDuration(duration)}
-              </Td>
-              <Td className="text-xs">{winnerLabel(match)}</Td>
-            </TableRow>
-          );
-        })}
+        {items.map((match) => (
+          <MatchRow key={match.id} match={match} now={now} onOpen={onOpen} listHref={listHref} />
+        ))}
       </TableBody>
     </Table>
   );
 }
+
+/**
+ * One row of {@link MatchTable}, split out and memoized so the once-a-second
+ * `now` tick (kept alive while any match is still open) only re-renders the
+ * open match's own row instead of the whole table — a closed match's row
+ * never reads `now`, so its rendered output cannot change when it ticks.
+ */
+const MatchRow = memo(
+  function MatchRow({
+    match,
+    now,
+    onOpen,
+    listHref,
+  }: {
+    match: MatchListItem;
+    now: Date;
+    onOpen: (id: string) => void;
+    listHref: string;
+  }) {
+    const open = isOpenMatch(match);
+    const duration = open ? liveDurationSeconds(match.started_at, now) : match.duration_seconds;
+    return (
+      <TableRow interactive>
+        <Td>
+          <Link
+            href={buildMatchDetailHref(match.id, listHref)}
+            onClick={() => onOpen(match.id)}
+            title={match.server_name ?? undefined}
+            className="font-medium text-accent no-underline hover:brightness-110"
+          >
+            {shortServerName(match)}
+          </Link>
+        </Td>
+        <Td>{match.layer ?? '—'}</Td>
+        <Td className="text-xs text-ink-3">{formatDateTime(match.started_at)}</Td>
+        <Td className="text-xs text-ink-3">
+          {open ? <StatusBadge state="good" label="Идёт" pulse /> : formatDateTime(match.ended_at)}
+        </Td>
+        <Td>
+          <TicketBadge
+            team={1}
+            faction={match.team1_faction}
+            tickets={match.team1_tickets}
+            winner={match.winner}
+          />
+        </Td>
+        <Td>
+          <TicketBadge
+            team={2}
+            faction={match.team2_faction}
+            tickets={match.team2_tickets}
+            winner={match.winner}
+          />
+        </Td>
+        <Td numeric className="text-xs">
+          {formatDuration(duration)}
+        </Td>
+        <Td className="text-xs">{winnerLabel(match)}</Td>
+      </TableRow>
+    );
+  },
+  (prev, next) => {
+    if (
+      prev.match !== next.match ||
+      prev.onOpen !== next.onOpen ||
+      prev.listHref !== next.listHref
+    ) {
+      return false;
+    }
+    // A closed match's cells never depend on `now` — only an open one's
+    // "Идёт"/duration cell does, so only that row needs to re-render on tick.
+    if (!isOpenMatch(next.match)) return true;
+    return prev.now.getTime() === next.now.getTime();
+  },
+);

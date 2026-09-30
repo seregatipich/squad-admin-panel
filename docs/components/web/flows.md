@@ -64,32 +64,6 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 
 ---
 
-## Role editor — create
-
-1. Admin opens `/roles` (requires `role:view`) and clicks "Создать роль" (requires `role:create`).
-2. Browser navigates to `/roles/new`.
-3. `RoleEditor` renders with empty defaults. `GET /api/v1/permissions` loads the full permission registry.
-4. Admin fills in name, picks a color, optionally writes a description, checks permissions.
-5. Admin clicks "Создать".
-6. `POST /api/v1/roles` fires with `{name, color, description, permissions}`.
-7. On 409 (name taken): error message shown inline.
-8. On 201: `router.push('/roles')`.
-
----
-
-## Role editor — edit
-
-1. Admin opens `/roles` and clicks "Редактировать" on a role.
-2. Browser navigates to `/roles/:id`.
-3. Page fetches `GET /api/v1/roles/:id`; `RoleEditor` pre-fills with the fetched data.
-4. If the role is the system Owner role, `isOwner: true` is passed → the form is read-only, only a Back button is shown.
-5. For non-Owner roles: admin edits fields, clicks "Сохранить".
-6. `PUT /api/v1/roles/:id` fires.
-7. On 409 (name taken) or 400 (Owner protected): error shown inline.
-8. On 200: `router.push('/roles')`.
-
----
-
 ## Server delete + archive + restore
 
 ### Delete (from `/servers/[id]`)
@@ -170,10 +144,10 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 1. Admin opens `/servers/:id` and clicks "Настройки →" in the header action links.
 2. Browser navigates to `/servers/:id/settings`.
 3. `GET /api/v1/servers/:id` fires; the response populates `serverInfo` (status, display_name, tags) and `settings` (ports, game params, resource limits).
-4. The page renders three sections:
+4. The page renders two sections:
    - **Сеть** — `game_port`, `query_port`, `beacon_port`, `rcon_port`. All four inputs are disabled when `isRunning` is true (server status is not `stopped`, `ready`, or `pending`). An amber warning "Остановите сервер для изменения портов" appears.
    - **Игра** — `max_players` (1–100), `tickrate` (10–60).
-   - **Ресурсы** — `memory_high_mb`, `memory_max_mb`, `cpu_weight`, `io_weight`, `niceness` (all nullable number inputs with "Нет лимита" placeholder), `cpu_affinity` (nullable text input with "Нет ограничения" placeholder). A note reads "Применяется при следующем запуске".
+   - Resource limits and `cpu_affinity` are not shown: the API stores them but nothing applies them to the container (#43).
 5. Editing any field adds it to a `draft` object; the "Сохранить" button is disabled until `draft` is non-empty.
 6. On save: `PUT /api/v1/servers/:id/settings` fires with only the changed fields. On success the response replaces the local `settings` state, the draft resets, and a green "Сохранено" banner appears for 2 seconds. On error an error banner shows the API message.
 

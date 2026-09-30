@@ -41,6 +41,32 @@ describe('planMerge', () => {
     expect(plan.toRevokeIds).toHaveLength(0);
   });
 
+  it('treats raw that differs only in key order (jsonb round-trip) as unchanged (#34)', () => {
+    const plan = planMerge(
+      [existingRow({ raw: { id: 'b1', meta: { a: 1, zz: [{ x: 1, y: 2 }] }, reason: 'aimbot' } })],
+      [ban({ raw: { reason: 'aimbot', meta: { zz: [{ y: 2, x: 1 }], a: 1 }, id: 'b1' } })],
+    );
+    expect(plan.toUpdate).toHaveLength(0);
+  });
+
+  it('treats a missing incoming raw as the stored {} default', () => {
+    const plan = planMerge([existingRow({ raw: {} })], [ban({ raw: undefined })]);
+    expect(plan.toUpdate).toHaveLength(0);
+  });
+
+  it('still updates when a raw value (or array order) really changes', () => {
+    const changedValue = planMerge(
+      [existingRow({ raw: { id: 'b1', tags: ['a', 'b'] } })],
+      [ban({ raw: { id: 'b2', tags: ['a', 'b'] } })],
+    );
+    expect(changedValue.toUpdate).toHaveLength(1);
+    const reordered = planMerge(
+      [existingRow({ raw: { id: 'b1', tags: ['a', 'b'] } })],
+      [ban({ raw: { id: 'b1', tags: ['b', 'a'] } })],
+    );
+    expect(reordered.toUpdate).toHaveLength(1);
+  });
+
   it('does not update an identical record on a repeat sync (0 added / 0 updated)', () => {
     const plan = planMerge([existingRow()], [ban()]);
     expect(plan.toInsert).toHaveLength(0);

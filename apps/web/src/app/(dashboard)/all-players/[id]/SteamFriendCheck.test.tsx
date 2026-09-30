@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SteamFriendCheck } from './SteamFriendCheck';
+import { parseSteamFriendCheck, SteamFriendCheck } from './SteamFriendCheck';
 
 afterEach(() => {
   cleanup();
@@ -37,6 +37,13 @@ describe('SteamFriendCheck', () => {
   it('explains that a private profile cannot be checked', async () => {
     renderCheck({ in_friend: null, reason: 'private_profile', cached: false });
     expect(await screen.findByText('Steam: Профиль скрыт')).toBeInTheDocument();
+  });
+
+  it('asks to retry when Steam is temporarily unavailable', async () => {
+    renderCheck({ in_friend: null, reason: 'steam_unavailable', cached: false });
+    expect(
+      await screen.findByText('Steam: Steam не отвечает — повторите позже'),
+    ).toBeInTheDocument();
   });
 
   it('shows a negative cached result', async () => {
@@ -79,5 +86,79 @@ describe('SteamFriendCheck', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Проверить друзей' }));
     await screen.findByText('Steam: В друзьях');
     expect(onResult).toHaveBeenCalledWith({ in_friend: true, reason: null, cached: false });
+  });
+
+  // Regression (#467): an error was final — no way to try again.
+  it('offers a retry after a failed check', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ in_friend: false, reason: null, cached: false }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SteamFriendCheck playerId="player-a" otherPlayerId="player-b" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить друзей' }));
+
+    await screen.findByText('Ошибка Steam: HTTP 503');
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    expect(await screen.findByText('Steam: Не найдено в друзьях')).toBeInTheDocument();
+  });
+
+  it('lets a shown result be checked again', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ in_friend: false, reason: null, cached: true }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ in_friend: true, reason: null, cached: false }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SteamFriendCheck playerId="player-a" otherPlayerId="player-b" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить друзей' }));
+
+    await screen.findByText('Steam: Не найдено в друзьях');
+    fireEvent.click(screen.getByRole('button', { name: 'Перепроверить' }));
+
+    expect(await screen.findByText('Steam: В друзьях')).toBeInTheDocument();
+  });
+
+  it('reports an unexpected body instead of presenting it as «unavailable»', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })),
+    );
+    render(<SteamFriendCheck playerId="player-a" otherPlayerId="player-b" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить друзей' }));
+
+    expect(await screen.findByText('Ошибка Steam: некорректный ответ сервера')).toBeInTheDocument();
+  });
+});
+
+describe('parseSteamFriendCheck', () => {
+  it('accepts the documented shapes', () => {
+    expect(parseSteamFriendCheck({ in_friend: true, reason: null, cached: false })).toEqual({
+      in_friend: true,
+      reason: null,
+      cached: false,
+    });
+    expect(
+      parseSteamFriendCheck({ in_friend: null, reason: 'private_profile', cached: true }),
+    ).toEqual({ in_friend: null, reason: 'private_profile', cached: true });
+  });
+
+  it('rejects an unknown reason or a missing field', () => {
+    expect(parseSteamFriendCheck({ in_friend: null, reason: 'nope', cached: false })).toBeNull();
+    expect(parseSteamFriendCheck({ in_friend: 'yes', reason: null, cached: false })).toBeNull();
+    expect(parseSteamFriendCheck({ in_friend: true, reason: null })).toBeNull();
+    expect(parseSteamFriendCheck(null)).toBeNull();
   });
 });

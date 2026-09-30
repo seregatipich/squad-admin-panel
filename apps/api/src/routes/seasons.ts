@@ -1,9 +1,11 @@
 import { type SeasonRow, seasons } from '@squad/db/schema';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
+import { uniqueViolationConstraint } from '../lib/pg-errors.js';
 
 const NAME_MAX = 120;
 
@@ -74,40 +76,12 @@ function editRolesGuard(
   return null;
 }
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
-/**
- * Resolves the constraint a unique violation broke.
- *
- * drizzle-orm 0.45.2 wraps driver errors: the wrapper carries only a
- * "Failed query: ..." message, while SQLSTATE and `constraint_name` sit on
- * `err.cause`. Both season conflicts are 23505, so the constraint name is the
- * only way to tell "second active season" from "duplicate name" — matching on
- * the message would silently mislabel one as the other.
- */
-function uniqueViolationConstraint(err: unknown): string | null {
-  let current: unknown = err;
-  for (let depth = 0; depth < 6 && current; depth += 1) {
-    const candidate = current as { code?: string; constraint_name?: string; cause?: unknown };
-    if (candidate.code === '23505') return candidate.constraint_name ?? '';
-    current = candidate.cause;
-  }
-  return null;
-}
-
 function conflictFor(constraint: string): { code: number; error: string } {
   if (constraint === 'seasons_one_active') return { code: 409, error: 'active_season_exists' };
   if (constraint === 'seasons_name_key') return { code: 409, error: 'season_name_taken' };
+  // #576: two seasons cannot start on the same UTC day — the leaderboards
+  // route and the web UI both resolve a season by that day alone.
+  if (constraint === 'seasons_start_day_key') return { code: 409, error: 'season_start_day_taken' };
   return { code: 409, error: 'season_conflict' };
 }
 
@@ -238,14 +212,27 @@ const seasonsRoutes: FastifyPluginAsync = async (app) => {
       if (body.ends_at !== undefined) updates.endsAt = nextEndsAt;
       if (body.status !== undefined) updates.status = body.status;
 
+      // `finalized = false` in the WHERE closes the race with the scheduler's
+      // finalize tick: a season finalized after the check above is left alone
+      // instead of being reopened as active + finalized, a state that would pin
+      // the seasons_one_active slot with no API path to undo it.
+      let updatedRows: Array<{ id: string }>;
       try {
-        await app.db.update(seasons).set(updates).where(eq(seasons.id, req.params.id));
+        updatedRows = await app.db
+          .update(seasons)
+          .set(updates)
+          .where(and(eq(seasons.id, req.params.id), eq(seasons.finalized, false)))
+          .returning({ id: seasons.id });
       } catch (err) {
         const constraint = uniqueViolationConstraint(err);
         if (constraint === null) throw err;
         const conflict = conflictFor(constraint);
         reply.code(conflict.code);
         return { error: conflict.error };
+      }
+      if (updatedRows.length === 0) {
+        reply.code(422);
+        return { error: 'season_finalized' };
       }
 
       const after = await loadRow(req.params.id);

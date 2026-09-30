@@ -1,5 +1,5 @@
+import { fetchSteamProfile } from '@squad/steam-api';
 import { describe, expect, it, vi } from 'vitest';
-import { fetchSteamProfile } from '../src/lib/steam-profile.js';
 
 const fakeRedis = () => {
   const store = new Map<string, string>();

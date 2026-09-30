@@ -82,6 +82,20 @@ export function planVipGrant(
 }
 
 /**
+ * How long before a subscriber's role expires the subscription is billed (#364).
+ *
+ * The role-expiry tick runs every minute and the renewal tick every hour, so a
+ * billing date equal to the role expiry let the role lapse — and Admins.cfg
+ * drop the player — for up to an hour before each renewal. Billing this far
+ * ahead (several renewal ticks, and well under the shortest one-day period)
+ * keeps the renewed period contiguous: `planVipGrant` extends an unexpired role
+ * from its current expiry. {@link nextRenewalAfter} preserves the lead for
+ * every later period. Migration 0129 applies the same offset to subscriptions
+ * created before this lead existed.
+ */
+export const VIP_RENEWAL_LEAD_MS = 6 * 60 * 60 * 1000;
+
+/**
  * Advances a subscription's billing date by one period.
  *
  * Anchored on the date that was due, not on the wall clock, so a worker

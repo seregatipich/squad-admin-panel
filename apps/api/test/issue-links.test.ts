@@ -1,5 +1,14 @@
 import type { DatabaseClient } from '@squad/db';
-import { auditLog, mediaFiles, moderationActions, players, roles, servers } from '@squad/db/schema';
+import {
+  auditLog,
+  issueLinks,
+  issues,
+  mediaFiles,
+  moderationActions,
+  players,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -157,14 +166,34 @@ async function addLink(
   });
 }
 
-async function latestAudit(db: DatabaseClient, action: string, targetId: string) {
-  const rows = await db
-    .select()
-    .from(auditLog)
-    .where(and(eq(auditLog.actionType, action), eq(auditLog.targetId, targetId)))
-    .orderBy(desc(auditLog.id))
-    .limit(1);
-  return rows[0] ?? null;
+/**
+ * Newest audit row for `action` on `targetId`, optionally with `statusCode`.
+ * Polls briefly: the declarative audit hook writes in `onResponse`, which can
+ * complete just after `inject` resolves.
+ */
+async function latestAudit(
+  db: DatabaseClient,
+  action: string,
+  targetId: string,
+  statusCode?: number,
+) {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    const rows = await db
+      .select()
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.actionType, action),
+          eq(auditLog.targetId, targetId),
+          ...(statusCode === undefined ? [] : [eq(auditLog.statusCode, statusCode)]),
+        ),
+      )
+      .orderBy(desc(auditLog.id))
+      .limit(1);
+    if (rows[0] || Date.now() > deadline) return rows[0] ?? null;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 describeIfDb('issue links API — attach, detach, expansion (ISSUE-3 #156)', () => {
@@ -404,6 +433,41 @@ describeIfDb('issue links API — attach, detach, expansion (ISSUE-3 #156)', () 
     expect(detail.links[0]?.ref).toBeNull();
   });
 
+  it('refuses to link an entity to someone else’s ticket without can_manage_issues, and audits the refusal', async () => {
+    const author = await seedPlayer(h.db, { name: 'LinkTicketAuthor' });
+    const stranger = await seedPlayer(h.db, { name: 'LinkTicketStranger' });
+    const issue = await createIssue(h, await loginAs(h, author), {
+      title: 'not yours to link',
+      body: 'b',
+    });
+    const serverId = await seedServer(h.db, 'Stranger Link Server');
+
+    const res = await addLink(h, await loginAs(h, stranger), issue.id, 'server', serverId);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'forbidden', required: 'can_manage_issues' });
+
+    const detail = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issue.id}`,
+      headers: { cookie: await loginAs(h, author) },
+    });
+    expect((detail.json() as { links: LinkView[] }).links).toHaveLength(0);
+
+    const audit = await latestAudit(h.db, 'issue.link.create', issue.id, 403);
+    expect(audit?.actorPlayerId).toBe(stranger);
+  });
+
+  it('lets a manager with can_manage_issues link an entity to someone else’s ticket', async () => {
+    const author = await seedPlayer(h.db, { name: 'ManagedTicketAuthor' });
+    const managerRoleId = await seedRole(h.db, { canManageIssues: true });
+    const manager = await seedPlayer(h.db, { name: 'LinkManager', roleId: managerRoleId });
+    const issue = await createIssue(h, await loginAs(h, author), { title: 'managed', body: 'b' });
+    const serverId = await seedServer(h.db, 'Managed Link Server');
+
+    const res = await addLink(h, await loginAs(h, manager), issue.id, 'server', serverId);
+    expect(res.statusCode).toBe(201);
+  });
+
   it('lets the link author delete their own link (AC3)', async () => {
     const author = await seedPlayer(h.db, { name: 'OwnLinkAuthor' });
     const cookie = await loginAs(h, author);
@@ -556,6 +620,39 @@ describeIfDb('issue links API — player card and auto-ticket (ISSUE-3 #156)', (
     expect(body.items[0]?.state).toBe('open');
   });
 
+  it('counts every open linked ticket in open_count even beyond the 50 listed items', async () => {
+    const author = await seedPlayer(h.db, { name: 'BulkCardAuthor' });
+    const offender = await seedPlayer(h.db, { name: 'BulkCardOffender' });
+    const total = 53;
+    const issueRows = Array.from({ length: total }, (_, i) => ({
+      id: uuidv7(),
+      authorPlayerId: author,
+      title: `bulk ${i}`,
+      body: 'b',
+      state: 'open' as const,
+    }));
+    await h.db.insert(issues).values(issueRows);
+    await h.db.insert(issueLinks).values(
+      issueRows.map((row) => ({
+        id: uuidv7(),
+        issueId: row.id,
+        entityType: 'player',
+        entityId: offender,
+        createdBy: author,
+      })),
+    );
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${offender}/issues`,
+      headers: { cookie: await loginAs(h, author) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { open_count: number; items: unknown[] };
+    expect(body.items).toHaveLength(50);
+    expect(body.open_count).toBe(total);
+  });
+
   it('gates the player-card endpoint on panel_access', async () => {
     const offender = await seedPlayer(h.db, { name: 'GatedOffender' });
 
@@ -570,7 +667,7 @@ describeIfDb('issue links API — player card and auto-ticket (ISSUE-3 #156)', (
       url: `/api/v1/players/${offender}/issues`,
       headers: { cookie: outsiderCookie },
     });
-    expect(denied.statusCode).toBe(403);
+    expect(denied.statusCode).toBe(401);
   });
 
   it('creates a ticket and its links atomically — auto-ticket from a moderation action (AC5)', async () => {

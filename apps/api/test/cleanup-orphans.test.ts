@@ -8,7 +8,9 @@ const NOT_UUID = 'not-a-valid-uuid-string';
 
 function makeDb(knownIds: string[]) {
   return {
-    execute: vi.fn().mockResolvedValue(knownIds.map((id) => ({ id }))),
+    select: vi.fn(() => ({
+      from: vi.fn().mockResolvedValue(knownIds.map((id) => ({ id }))),
+    })),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
   };
 }
@@ -18,6 +20,8 @@ function makeBridge(
     configs?: string[];
     saved?: string[];
     containers?: string[];
+    sidecarDirs?: string[];
+    sidecarContainers?: string[];
     directoryDeleteResult?: { removed: boolean };
     directoryDeleteError?: Error;
     containerRmError?: Error;
@@ -27,9 +31,11 @@ function makeBridge(
     listPanelDirs: vi.fn().mockResolvedValue({
       configs: overrides.configs ?? [],
       saved: overrides.saved ?? [],
+      sidecars: overrides.sidecarDirs ?? [],
     }),
     listSquadContainers: vi.fn().mockResolvedValue({
       containers: (overrides.containers ?? []).map((id) => `squad-${id}`),
+      sidecars: (overrides.sidecarContainers ?? []).map((id) => `rnsquadjs-${id}`),
     }),
     directoryDelete: vi.fn(async () => {
       if (overrides.directoryDeleteError) throw overrides.directoryDeleteError;
@@ -177,5 +183,52 @@ describe('cleanupOrphans — dryRun=false', () => {
     expect(result.orphans_containers).toEqual([]);
     expect(result.removed_configs).toEqual([]);
     expect(bridge.directoryDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('cleanupOrphans — RNSquadJS sidecars (#66)', () => {
+  it('reports orphan sidecar containers and config dirs in a dry run', async () => {
+    const db = makeDb([KNOWN_UUID]);
+    const bridge = makeBridge({
+      sidecarDirs: [KNOWN_UUID, ORPHAN_UUID, NOT_UUID],
+      sidecarContainers: [KNOWN_UUID, ORPHAN_UUID],
+    });
+
+    const result = await cleanupOrphans(makeCtx(db, bridge, { dryRun: true }));
+
+    expect(result.orphans_sidecar_dirs).toEqual([ORPHAN_UUID]);
+    expect(result.orphans_sidecar_containers).toEqual([ORPHAN_UUID]);
+    expect(bridge.containerRm).not.toHaveBeenCalled();
+    expect(bridge.directoryDelete).not.toHaveBeenCalled();
+  });
+
+  it('stops and removes an orphan sidecar and deletes its RCON-password config dir', async () => {
+    const db = makeDb([KNOWN_UUID]);
+    const bridge = makeBridge({ sidecarDirs: [ORPHAN_UUID], sidecarContainers: [ORPHAN_UUID] });
+
+    const result = await cleanupOrphans(makeCtx(db, bridge));
+
+    expect(bridge.containerStop).toHaveBeenCalledWith({
+      name: `rnsquadjs-${ORPHAN_UUID}`,
+      timeout_sec: 10,
+    });
+    expect(bridge.containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${ORPHAN_UUID}` });
+    expect(bridge.directoryDelete).toHaveBeenCalledWith({
+      path: `/run/squad-panel/rnsquadjs/${ORPHAN_UUID}`,
+    });
+    expect(result.removed_sidecar_containers).toEqual([ORPHAN_UUID]);
+    expect(result.removed_sidecar_dirs).toEqual([ORPHAN_UUID]);
+  });
+
+  it('treats a bridge that predates sidecar listing as having no sidecars', async () => {
+    const db = makeDb([]);
+    const bridge = makeBridge();
+    bridge.listPanelDirs.mockResolvedValue({ configs: [], saved: [] } as never);
+    bridge.listSquadContainers.mockResolvedValue({ containers: [] } as never);
+
+    const result = await cleanupOrphans(makeCtx(db, bridge));
+
+    expect(result.orphans_sidecar_dirs).toEqual([]);
+    expect(result.orphans_sidecar_containers).toEqual([]);
   });
 });

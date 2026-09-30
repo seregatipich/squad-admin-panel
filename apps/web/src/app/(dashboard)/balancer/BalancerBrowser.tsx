@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -110,13 +110,38 @@ const DEFAULT_SETTINGS: SettingsView = {
   player_level_enabled: false,
 };
 
-const NUMBER_FIELDS: ReadonlyArray<{ key: keyof SettingsView; label: string; hint: string }> = [
-  { key: 'win_streak_threshold', label: 'Серия побед', hint: 'от 1' },
-  { key: 'ticket_diff_threshold', label: 'Разница тикетов', hint: 'от 0' },
-  { key: 'one_sided_rounds_threshold', label: 'Односторонних раундов', hint: 'от 1' },
-  { key: 'quorum', label: 'Кворум голосования', hint: 'от 0' },
-  { key: 'pass_threshold_pct', label: 'Порог прохождения, %', hint: '0–100' },
+/** Границы совпадают со схемой `putBody` в `apps/api/src/routes/balancer.ts`. */
+const NUMBER_FIELDS: ReadonlyArray<{
+  key: keyof SettingsView;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+}> = [
+  { key: 'win_streak_threshold', label: 'Серия побед', hint: 'от 1 до 100', min: 1, max: 100 },
+  {
+    key: 'ticket_diff_threshold',
+    label: 'Разница тикетов',
+    hint: 'от 0 до 10000',
+    min: 0,
+    max: 10_000,
+  },
+  {
+    key: 'one_sided_rounds_threshold',
+    label: 'Односторонних раундов',
+    hint: 'от 1 до 100',
+    min: 1,
+    max: 100,
+  },
+  { key: 'quorum', label: 'Кворум голосования', hint: 'от 0 до 100', min: 0, max: 100 },
+  { key: 'pass_threshold_pct', label: 'Порог прохождения, %', hint: '0–100', min: 0, max: 100 },
 ];
+
+/** Русские тексты для кодов ошибок решения; неизвестный код показывается статусом HTTP. */
+const DECISION_ERROR_MESSAGES: Record<string, string> = {
+  veto_reason_required: 'Для вето нужен комментарий',
+  unauthenticated: 'Сессия истекла, войдите заново',
+};
 
 const FLAG_FIELDS: ReadonlyArray<{ key: keyof SettingsView; label: string }> = [
   { key: 'enabled', label: 'Балансировщик включён' },
@@ -192,6 +217,9 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
   const [failure, setFailure] = useState<string | null>(null);
   const [vetoReasonKind, setVetoReasonKind] = useState('other');
   const [vetoReason, setVetoReason] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+  const proposalsRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const loadSettings = useCallback(async () => {
     const res = await fetch('/api/v1/balancer/settings', {
@@ -204,41 +232,67 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
   }, []);
 
   const loadProposals = useCallback(async () => {
+    const requestId = ++proposalsRequestRef.current;
     const res = await fetch(`/api/v1/balancer/proposals?${buildProposalsQuery(filters)}`, {
       credentials: 'include',
       cache: 'no-store',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { items: ProposalItem[] };
+    const body = (await res.json()) as { items: ProposalItem[]; next_cursor: string | null };
+    // Ответ на устаревший фильтр не должен перезаписать список нового.
+    if (requestId !== proposalsRequestRef.current) return;
     setItems(body.items);
+    setHasMore(body.next_cursor !== null);
   }, [filters]);
 
+  // Settings back the rules-edit form below (`settings` is the same state the
+  // form binds to). Only proposals are polled: re-polling settings every
+  // POLL_INTERVAL_MS silently overwrote whatever the operator was mid-editing
+  // — an edit older than 8s vanished with no warning (#493). Settings are
+  // loaded once up front and refreshed explicitly after a save.
   const refresh = useCallback(async () => {
     try {
-      await Promise.all([loadSettings(), loadProposals()]);
+      await loadProposals();
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [loadSettings, loadProposals]);
+  }, [loadProposals]);
+
+  useEffect(() => {
+    loadSettings().catch((e) => setError((e as Error).message));
+  }, [loadSettings]);
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      void refresh();
+    }, POLL_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [refresh]);
 
   const openDetail = useCallback(async (id: string) => {
     setFailure(null);
+    const requestId = ++detailRequestRef.current;
     try {
       const res = await fetch(`/api/v1/balancer/proposals/${id}`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setDetail((await res.json()) as ProposalDetail);
+      const body = (await res.json()) as ProposalDetail;
+      if (requestId !== detailRequestRef.current) return;
+      setDetail(body);
     } catch (e) {
       setFailure((e as Error).message);
     }
@@ -247,6 +301,14 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
   async function saveSettings() {
     setNotice(null);
     setFailure(null);
+    const invalid = NUMBER_FIELDS.find((field) => {
+      const value = settings[field.key] as number;
+      return !Number.isInteger(value) || value < field.min || value > field.max;
+    });
+    if (invalid) {
+      setFailure(`Поле «${invalid.label}»: допустимо ${invalid.hint}`);
+      return;
+    }
     try {
       const res = await fetch('/api/v1/balancer/settings', {
         method: 'PUT',
@@ -268,6 +330,12 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
     if (!detail) return;
     setNotice(null);
     setFailure(null);
+    const isVeto = decision === 'veto';
+    const comment = vetoReason.trim();
+    if (isVeto && !comment) {
+      setFailure(DECISION_ERROR_MESSAGES.veto_reason_required);
+      return;
+    }
     try {
       const res = await fetch(`/api/v1/balancer/proposals/${detail.id}/decision`, {
         method: 'POST',
@@ -275,12 +343,16 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           decision,
-          veto_reason_kind: vetoReasonKind,
-          veto_reason: vetoReason.trim() || undefined,
+          veto_reason_kind: isVeto ? vetoReasonKind : undefined,
+          veto_reason: isVeto ? comment : undefined,
         }),
       });
-      const body = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(
+          (body.error && DECISION_ERROR_MESSAGES[body.error]) || `HTTP ${res.status}`,
+        );
+      }
       setNotice(`Решение сохранено: ${decisionLabel(decision)}`);
       setVetoReason('');
       await Promise.all([loadProposals(), openDetail(detail.id)]);
@@ -315,6 +387,8 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
               <FieldRow key={field.key} label={field.label} hint={field.hint}>
                 <TextInput
                   type="number"
+                  min={field.min}
+                  max={field.max}
                   disabled={!canEdit}
                   value={String(settings[field.key])}
                   onChange={(e) =>
@@ -387,6 +461,13 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
           }
           summary="Обновление каждые 8 с"
         />
+
+        {hasMore ? (
+          <p className="text-xs text-ink-3">
+            Показаны последние {filters.limit} снимков. Чтобы увидеть более старые, сузьте список
+            фильтром по статусу.
+          </p>
+        ) : null}
 
         {VIEW_STATE_NOTES[viewState] ? (
           <p className="text-xs text-ink-3">{VIEW_STATE_NOTES[viewState]}</p>

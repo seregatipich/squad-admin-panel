@@ -10,7 +10,9 @@
 -- cannot express.
 --
 -- The whole file is idempotent (IF NOT EXISTS everywhere) so it can be
--- re-applied without error.
+-- re-applied without error. It assumes `chat_flag_rules` exists (migration
+-- 0028), which `matched_rule_id` references, and matches the column set and
+-- the `source` values of migrations 0028 and 0114.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -25,11 +27,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   message    text        NOT NULL,
   source     text        NOT NULL DEFAULT 'log',
   is_flagged boolean     NOT NULL DEFAULT false,
+  matched_rule_id uuid   REFERENCES chat_flag_rules(id) ON DELETE SET NULL,
   CONSTRAINT chat_messages_pkey PRIMARY KEY (id, sent_at),
   CONSTRAINT chat_messages_scope_chk
     CHECK (scope IN ('all','team','squad','admin','broadcast','direct')),
   CONSTRAINT chat_messages_source_chk
-    CHECK (source IN ('log','panel'))
+    CHECK (source IN ('log','panel','rcon'))
 ) PARTITION BY RANGE (sent_at);
 
 CREATE INDEX IF NOT EXISTS chat_messages_player_sent_idx
@@ -38,6 +41,9 @@ CREATE INDEX IF NOT EXISTS chat_messages_server_sent_idx
   ON chat_messages (server_id, sent_at DESC);
 CREATE INDEX IF NOT EXISTS chat_messages_message_trgm_idx
   ON chat_messages USING gin (message gin_trgm_ops);
+-- Keyset walks ORDER BY sent_at, id (chat-flag reindex, migration 0128).
+CREATE INDEX IF NOT EXISTS chat_messages_sent_id_idx
+  ON chat_messages (sent_at, id);
 CREATE INDEX IF NOT EXISTS chat_messages_sent_at_brin_idx
   ON chat_messages USING brin (sent_at) WITH (pages_per_range = 32);
 

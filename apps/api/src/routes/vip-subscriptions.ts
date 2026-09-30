@@ -1,4 +1,4 @@
-import { type ApplyVipGrantResult, applyVipGrant } from '@squad/db';
+import { type ApplyVipGrantResult, applyVipGrant, VIP_RENEWAL_LEAD_MS } from '@squad/db';
 import {
   bonusTransactions,
   economySettings,
@@ -14,9 +14,10 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isUniqueViolation } from '../lib/pg-errors.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 
-const DAY_MS = 86_400_000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const MAX_PERIOD_DAYS = 3650;
@@ -80,18 +81,6 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
     return req.user!.playerId;
   }
 
-  function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-    if (!req.user) {
-      reply.code(401);
-      return { error: 'unauthenticated' };
-    }
-    if (!req.user.permissions.panelAccess) {
-      reply.code(403);
-      return { error: 'forbidden' };
-    }
-    return null;
-  }
-
   /**
    * Admin grant guard. Mirrors `purchaseGuard` in `economy.ts`: the operation
    * spends the ledger AND grants an RBAC role, so `can_manage_economy` alone
@@ -133,13 +122,15 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
         priceBonuses: vipTiers.priceBonuses,
         rolePanelAccess: roles.panelAccess,
         roleIsSystem: roles.isSystemRole,
+        isActive: vipTiers.isActive,
       })
       .from(vipTiers)
       .innerJoin(roles, eq(roles.id, vipTiers.roleId))
       .where(eq(vipTiers.id, tierId))
       .limit(1);
     if (!tier) return { ok: false, reason: 'tier_not_found' };
-    if (tier.priceBonuses == null || tier.defaultDays == null) {
+    // A deactivated tier is off sale everywhere, not just hidden from /me/tiers (#363).
+    if (!tier.isActive || tier.priceBonuses == null || tier.defaultDays == null) {
       return { ok: false, reason: 'tier_not_purchasable' };
     }
     if (tier.rolePanelAccess || tier.roleIsSystem) {
@@ -557,7 +548,7 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
             status: 'active',
             renewsEveryDays: input.tier.days,
             priceBonuses: input.tier.price,
-            nextRenewalAt: new Date(Date.now() + input.tier.days * DAY_MS),
+            nextRenewalAt: new Date(applied.roleExpiresAt.getTime() - VIP_RENEWAL_LEAD_MS),
           })
           .returning();
         const subscription = inserted[0];
@@ -592,13 +583,5 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
  * transaction that can collide: the ledger's idempotency key contains a fresh
  * uuidv7 reference id.
  */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 export default vipSubscriptionRoutes;

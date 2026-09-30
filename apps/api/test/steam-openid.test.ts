@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildLoginRedirectUrl,
   parseClaimedSteamId64,
+  STEAM_OPENID_TIMEOUT_MS,
   verifyWithSteam,
 } from '../src/lib/steam-openid.js';
 
@@ -189,5 +190,40 @@ describe('verifyWithSteam', () => {
         { fetch: fetchMock as unknown as typeof fetch },
       ),
     ).rejects.toThrow(/HTTP 500/);
+  });
+
+  it('aborts a hung Steam check_authentication after the timeout (#69)', async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: unknown, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    await expect(
+      verifyWithSteam(
+        {
+          'openid.claimed_id': 'https://steamcommunity.com/openid/id/76561198000000002',
+          'openid.response_nonce': 'x',
+        },
+        { fetch: fetchMock as unknown as typeof fetch, timeoutMs: 20 },
+      ),
+    ).rejects.toThrow(/timed out|abort/i);
+  });
+
+  it('bounds the Steam call with a default timeout signal (#69)', async () => {
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation(async (_url: unknown, init: RequestInit) => {
+      signal = init.signal ?? undefined;
+      return { ok: true, text: async () => 'is_valid:true\n' };
+    });
+    await verifyWithSteam(
+      {
+        'openid.claimed_id': 'https://steamcommunity.com/openid/id/76561198000000002',
+        'openid.response_nonce': 'x',
+      },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(STEAM_OPENID_TIMEOUT_MS).toBe(10_000);
   });
 });

@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishDiscordRoleSync, readDiscordRoleSyncStatus } from '../lib/discord-role-sync.js';
+import { hasPgErrorCode, PG_UNIQUE_VIOLATION } from '../lib/pg-errors.js';
 
 const INTEGRATION_PERMISSION = 'integration:manage' as const;
 
@@ -35,22 +36,6 @@ const updateBody = z.object({
 
 const idParam = z.object({ id: z.string().uuid() });
 
-/**
- * drizzle-orm 0.45 wraps the driver error, so the postgres `23505` lands on
- * `err.cause` rather than on the thrown object — the flat `err.code === '23505'`
- * check copied around this codebase silently misses it. Walk the chain.
- */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current != null && depth < 5; depth++) {
-    if (typeof current === 'object' && (current as { code?: unknown }).code === '23505') {
-      return true;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
 function serialize(row: DiscordRoleMappingRow, roleName: string | null) {
   return {
     id: row.id,
@@ -68,7 +53,9 @@ function serialize(row: DiscordRoleMappingRow, roleName: string | null) {
  * CRUD over `discord_role_mappings` plus the manual reconcile trigger
  * (DISCORD-5, #152). Every route is gated on the existing catalogue key
  * `integration:manage`; mutations declare `config.audit` so `plugins/audit.ts`
- * persists them. Kept out of `integrations-discord.ts` so the mutating routes
+ * persists them, and set `req.auditSnapshots` so the row's before/after state
+ * (which panel role maps to which Discord role) survives in the audit log even
+ * after a delete. Kept out of `integrations-discord.ts` so the mutating routes
  * fall under the `audit-coverage` static guard's import list.
  */
 const integrationsDiscordRoleMappingsRoutes: FastifyPluginAsync = async (app) => {
@@ -125,31 +112,33 @@ const integrationsDiscordRoleMappingsRoutes: FastifyPluginAsync = async (app) =>
       }
 
       const id = uuidv7();
+      req.auditSnapshots = { targetId: id };
+      let created: DiscordRoleMappingRow | undefined;
       try {
-        await app.db.insert(discordRoleMappings).values({
-          id,
-          roleId: req.body.role_id,
-          discordRoleId: req.body.discord_role_id,
-          enabled: req.body.enabled ?? true,
-        });
+        [created] = await app.db
+          .insert(discordRoleMappings)
+          .values({
+            id,
+            roleId: req.body.role_id,
+            discordRoleId: req.body.discord_role_id,
+            enabled: req.body.enabled ?? true,
+          })
+          .returning();
       } catch (err) {
-        if (isUniqueViolation(err)) {
+        if (hasPgErrorCode(err, PG_UNIQUE_VIOLATION)) {
           reply.code(409);
           return { error: 'role_mapping_exists' };
         }
         throw err;
       }
-
-      const created = await findMapping(id);
-      if (!created) {
-        reply.code(500);
-        return { error: 'mapping_create_failed' };
-      }
+      if (!created) throw new Error('discord_role_mappings insert returned no row');
+      const view = serialize(created, name);
+      req.auditSnapshots = { after: view, targetId: id };
       // A new mapping changes what every holder of the panel role should have
       // in Discord, so re-derive everyone rather than guess.
       await publishDiscordRoleSync(app.redis, null, 'role_mapping.create', app.log);
       reply.code(201);
-      return serialize(created, name);
+      return view;
     },
   );
 
@@ -168,23 +157,27 @@ const integrationsDiscordRoleMappingsRoutes: FastifyPluginAsync = async (app) =>
         reply.code(404);
         return { error: 'mapping_not_found' };
       }
+      const name = await roleName(existing.roleId);
+      const before = serialize(existing, name);
+      req.auditSnapshots = { before };
 
-      await app.db
+      const [updated] = await app.db
         .update(discordRoleMappings)
         .set({
           discordRoleId: req.body.discord_role_id ?? existing.discordRoleId,
           enabled: req.body.enabled ?? existing.enabled,
           updatedAt: new Date(),
         })
-        .where(eq(discordRoleMappings.id, req.params.id));
-
-      const updated = await findMapping(req.params.id);
+        .where(eq(discordRoleMappings.id, req.params.id))
+        .returning();
       if (!updated) {
         reply.code(404);
         return { error: 'mapping_not_found' };
       }
+      const after = serialize(updated, name);
+      req.auditSnapshots = { before, after };
       await publishDiscordRoleSync(app.redis, null, 'role_mapping.update', app.log);
-      return serialize(updated, await roleName(updated.roleId));
+      return after;
     },
   );
 
@@ -198,12 +191,15 @@ const integrationsDiscordRoleMappingsRoutes: FastifyPluginAsync = async (app) =>
       },
     },
     async (req, reply) => {
-      const existing = await findMapping(req.params.id);
-      if (!existing) {
+      const [deleted] = await app.db
+        .delete(discordRoleMappings)
+        .where(eq(discordRoleMappings.id, req.params.id))
+        .returning();
+      if (!deleted) {
         reply.code(404);
         return { error: 'mapping_not_found' };
       }
-      await app.db.delete(discordRoleMappings).where(eq(discordRoleMappings.id, req.params.id));
+      req.auditSnapshots = { before: serialize(deleted, await roleName(deleted.roleId)) };
       // Deliberately does NOT strip the Discord role: once the mapping is gone
       // the panel no longer manages that Discord role, so reconcile must leave
       // it alone rather than mass-revoke it from every holder.

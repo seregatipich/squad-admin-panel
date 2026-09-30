@@ -31,6 +31,7 @@ import {
   formatTeamkillCount,
   formatTeamkillDate,
   parseTeamkillFilters,
+  TEAMKILL_SUMMARY_LIMIT,
   type TeamkillFilters,
   type TeamkillSort,
   type TeamkillSummaryResponse,
@@ -86,26 +87,32 @@ export function TeamkillsBrowser() {
 
   // Отдельная функция, а не тело эффекта: тот же запрос повторяет кнопка
   // «Повторить» в полосе ошибки, и фильтры при этом не меняются.
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/v1/moderation/teamkills?${buildTeamkillSummaryApiQuery(filters)}`,
-        { credentials: 'include', cache: 'no-store' },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as TeamkillSummaryResponse);
-    } catch (err) {
-      setData(null);
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/moderation/teamkills?${buildTeamkillSummaryApiQuery(filters)}`,
+          { credentials: 'include', cache: 'no-store', signal },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setData((await res.json()) as TeamkillSummaryResponse);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setData(null);
+        setError((err as Error).message);
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [filters],
+  );
 
   useEffect(() => {
-    void load();
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
   }, [load]);
 
   const rows = data?.rows ?? [];
@@ -138,7 +145,13 @@ export function TeamkillsBrowser() {
             ))}
           </Select>
         }
-        summary={rows.length > 0 ? `Найдено: ${formatTeamkillCount(rows.length)}` : undefined}
+        summary={
+          rows.length > 0
+            ? rows.length >= TEAMKILL_SUMMARY_LIMIT
+              ? `Показаны первые ${formatTeamkillCount(rows.length)} — возможно, есть ещё`
+              : `Показано: ${formatTeamkillCount(rows.length)}`
+            : undefined
+        }
       />
 
       {error ? (

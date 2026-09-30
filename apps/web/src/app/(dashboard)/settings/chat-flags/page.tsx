@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -37,10 +37,6 @@ import {
   summarizeReindex,
 } from '@/lib/chatFlags';
 
-interface Me {
-  permissions: string[];
-}
-
 interface DraftForm {
   pattern: string;
   patternType: ChatFlagPatternType;
@@ -55,47 +51,46 @@ const EMPTY_DRAFT: DraftForm = {
   enabled: true,
 };
 
+/** Приводит сырой ввод поля «Дней назад» к целому числу в диапазоне 1..365. */
+function clampReindexDays(raw: string): number {
+  return Math.min(365, Math.max(1, Math.trunc(Number(raw) || 1)));
+}
+
 export default function ChatFlagsPage() {
   const [rules, setRules] = useState<ChatFlagRule[]>([]);
-  const [me, setMe] = useState<Me | null>(null);
+  const [canEdit, setCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [reindexDays, setReindexDays] = useState(7);
+  const [reindexDaysInput, setReindexDaysInput] = useState('7');
   const [pendingDelete, setPendingDelete] = useState<ChatFlagRule | null>(null);
 
   const patternId = useId();
-  const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
 
-  async function loadRules() {
+  const loadRules = useCallback(async () => {
     const res = await fetch('/api/v1/settings/chat-flag-rules', {
       credentials: 'include',
       cache: 'no-store',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setRules((await res.json()).items as ChatFlagRule[]);
-  }
+    const body = await res.json();
+    setRules(body.items as ChatFlagRule[]);
+    setCanEdit(Boolean(body.can_mutate));
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [meRes, rulesRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/settings/chat-flag-rules', { credentials: 'include', cache: 'no-store' }),
-      ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!rulesRes.ok) throw new Error(`HTTP ${rulesRes.status}`);
-      setMe((await meRes.json()) as Me);
-      setRules((await rulesRes.json()).items as ChatFlagRule[]);
+      await loadRules();
       setMsg(null);
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadRules]);
 
   useEffect(() => {
     void loadAll();
@@ -211,8 +206,11 @@ export default function ChatFlagsPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ days: reindexDays }),
+        body: JSON.stringify({ days: clampReindexDays(reindexDaysInput) }),
       });
+      if (res.status === 409) {
+        throw new Error('Переиндексация уже выполняется — дождитесь её завершения.');
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const summary = (await res.json()) as ReindexSummary;
       setMsg({ kind: 'ok', text: summarizeReindex(summary) });
@@ -389,7 +387,7 @@ export default function ChatFlagsPage() {
         <Card padding="none">
           <CardHeader
             title="Переиндексация"
-            description="Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам. Операция идемпотентна — повторный запуск не меняет уже согласованные строки."
+            description="Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам. Удаление, отключение или смена паттерна правила сразу снимает его прежние пометки, а новое или изменённое правило применяется к истории только после переиндексации. Операция идемпотентна; одновременно выполняется только одна переиндексация."
           />
           <CardBody>
             <div className="flex flex-wrap items-end gap-3">
@@ -399,10 +397,9 @@ export default function ChatFlagsPage() {
                   type="number"
                   min={1}
                   max={365}
-                  value={reindexDays}
-                  onChange={(e) =>
-                    setReindexDays(Math.min(365, Math.max(1, Number(e.target.value) || 1)))
-                  }
+                  value={reindexDaysInput}
+                  onChange={(e) => setReindexDaysInput(e.target.value)}
+                  onBlur={() => setReindexDaysInput(String(clampReindexDays(reindexDaysInput)))}
                 />
               </FieldRow>
               <Button loading={busy} onClick={() => void runReindex()}>

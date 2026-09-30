@@ -220,14 +220,14 @@ describeIfDb('GET /api/v1/players/:id/bonus-balance', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${balancePlayerId}/bonus-balance`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 
   it('returns 404 for an unknown player', async () => {
@@ -399,6 +399,44 @@ describeIfDb('POST /api/v1/players/:id/bonus-adjustments', () => {
     expect(res.json()).toEqual({ error: 'player_not_found' });
   });
 
+  it('rolls the balance change back when the audit write fails (audit is atomic with the ledger)', async () => {
+    const playerId = await seedPlayer(820090, 'EconAuditFail');
+    const fn = `econ_audit_fail_${playerId.replaceAll('-', '')}`;
+    // Scoped to this player's adjust row so parallel suites sharing audit_log are unaffected.
+    await h.db.execute(
+      sql.raw(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.action_type = 'player.bonus.adjust' AND NEW.target_id = '${playerId}' THEN
+            RAISE EXCEPTION 'simulated audit failure';
+          END IF;
+          RETURN NEW;
+        END $$`),
+    );
+    await h.db.execute(
+      sql.raw(
+        `CREATE TRIGGER ${fn} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
+      ),
+    );
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${playerId}/bonus-adjustments`,
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ amount: 40, comment: 'must not stick' }),
+      });
+      expect(res.statusCode).toBe(500);
+    } finally {
+      await h.db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${fn} ON audit_log`));
+      await h.db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${fn}()`));
+    }
+    expect(await storedBalance(playerId)).toBe(0);
+    const ledger = await h.db
+      .select({ id: bonusTransactions.id })
+      .from(bonusTransactions)
+      .where(eq(bonusTransactions.playerId, playerId));
+    expect(ledger).toEqual([]);
+  });
+
   it('adjusts an EOS-only player (steam_id64 NULL) without error', async () => {
     const res = await h.app.inject({
       method: 'POST',
@@ -552,13 +590,13 @@ describeIfDb('GET /api/v1/players/:id/bonus-transactions', () => {
     expect((filtered.json() as { count: number }).count).toBe(3);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${pagePlayerId}/bonus-transactions`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 

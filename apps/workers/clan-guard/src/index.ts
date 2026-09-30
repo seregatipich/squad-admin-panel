@@ -9,6 +9,7 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
 import { createClanGuardDeps } from './deps.js';
+import { positiveIntEnv } from './env.js';
 import { runClanGuardTick } from './tick.js';
 
 const log = pino({
@@ -16,7 +17,7 @@ const log = pino({
   base: { service: 'worker-clan-guard' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.CLAN_GUARD_INTERVAL_MS ?? 120_000);
+const TICK_INTERVAL_MS = positiveIntEnv('CLAN_GUARD_INTERVAL_MS', 120_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -47,9 +48,21 @@ async function main() {
   });
   const runtimeDeps = createClanGuardDeps(db, redis);
 
+  // A tick can outlast the interval; overlapping passes would both miss the
+  // other's warn and send duplicate AdminWarn commands and ledger rows.
+  let tickInFlight = false;
   async function tick(): Promise<void> {
-    const result = await runClanGuardTick({ ...runtimeDeps, diag });
-    log.info(result, 'clan-guard tick');
+    if (tickInFlight) {
+      log.warn('previous clan-guard tick still running; skipping');
+      return;
+    }
+    tickInFlight = true;
+    try {
+      const result = await runClanGuardTick({ ...runtimeDeps, diag });
+      log.info(result, 'clan-guard tick');
+    } finally {
+      tickInFlight = false;
+    }
   }
 
   let interval: NodeJS.Timeout | null = null;

@@ -181,6 +181,23 @@ describe('AlertsPage', () => {
   );
 
   it(
+    'shows a system rule as immutable: no active switch and no delete button',
+    async () => {
+      mockFetch({
+        rules: [{ ...RULE, id: 'rule-sys', name: 'Истечение VIP', type: 'role_expiring' }],
+      });
+      render(<AlertsPage />);
+
+      expect(
+        await screen.findByRole('switch', { name: 'Включить правило Истечение VIP' }),
+      ).toBeDisabled();
+      expect(screen.getByText('Системное')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Удалить правило Истечение VIP' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'refuses to create a rule without a name',
     async () => {
       const { calls } = mockFetch();
@@ -229,6 +246,50 @@ describe('AlertsPage', () => {
       expect(await screen.findByText('Не удалось загрузить оповещения')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
       await waitFor(() => expect(fn.mock.calls.length).toBeGreaterThan(3));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // #670: a partial failure (one of the three legs 500s) must not leave the
+  // page skeleton-only forever — the retry banner has to actually be visible
+  // alongside whatever data did load, not hidden behind a permanent skeleton.
+  it(
+    'shows the retry banner without getting stuck on the skeleton when only one leg fails',
+    async () => {
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/alerts')) {
+          return Promise.resolve(new Response('{}', { status: 500 }));
+        }
+        if (url.startsWith('/api/v1/alert-rules')) {
+          return Promise.resolve(new Response(JSON.stringify([RULE]), { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ permissions: ['role:edit'] }), {
+            status: 200,
+          }),
+        );
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<AlertsPage />);
+
+      expect(await screen.findByText('Не удалось загрузить оповещения')).toBeInTheDocument();
+      // The rules table (which DID load) must render — not a skeleton forever.
+      expect(await screen.findByText('Падение боевого')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // #670: a network-level rejection (not an HTTP error status) previously
+  // was an unhandled promise rejection with no error/retry UI at all.
+  it(
+    'surfaces the retry banner on a network-level rejection, not just an HTTP error',
+    async () => {
+      const fn = vi.fn(() => Promise.reject(new Error('network down')));
+      vi.stubGlobal('fetch', fn);
+      render(<AlertsPage />);
+
+      expect(await screen.findByText('Не удалось загрузить оповещения')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

@@ -16,6 +16,13 @@ import {
 
 interface Viewer {
   player_id: string;
+  permissions: string[];
+}
+
+/** An unlink call in flight: which endpoint, so a failure banner can retry it. */
+interface UnlinkAttempt {
+  url: string;
+  isForce: boolean;
 }
 
 /**
@@ -24,10 +31,12 @@ interface Viewer {
  * the API answers 401/403, so the whole block self-hides for viewers without
  * `player:view`.
  *
- * The forced-unlink button is gated the same way, at the response level:
- * `GET /api/v1/me` deliberately does not expose `can_assign_roles`, so the
- * button is rendered optimistically and removed the first time the API
- * answers 403.
+ * The forced-unlink button is gated by `me.permissions` (`user:manage_roles`,
+ * granted only when the viewer's role can assign roles — see
+ * `PANEL_PERMS_GATED_BY_ASSIGN` in `apps/api/src/lib/rbac.ts`), the same
+ * permission `BonusSection` uses for its own manage/assign gates. A stale
+ * `forceForbidden` fallback still hides the button on a live 403, in case the
+ * viewer's permissions changed since `me` was loaded.
  */
 export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Viewer | null }) {
   const locale = useIntlLocale();
@@ -35,6 +44,10 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{
+    message: string;
+    attempt: UnlinkAttempt;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [forceForbidden, setForceForbidden] = useState(false);
 
@@ -80,14 +93,25 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
   if (hidden) return null;
 
   const isSelf = me !== null && me.player_id === playerId;
+  const canForceUnlink = me !== null && !isSelf && me.permissions.includes('user:manage_roles');
 
-  async function unlink(url: string): Promise<void> {
+  async function unlink(attempt: UnlinkAttempt): Promise<void> {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
-      const res = await fetch(url, { method: 'DELETE', credentials: 'include' });
+      const res = await fetch(attempt.url, { method: 'DELETE', credentials: 'include' });
       if (res.status === 403) {
-        setForceForbidden(true);
+        if (attempt.isForce) {
+          setForceForbidden(true);
+          return;
+        }
+        setActionError({ message: 'Недостаточно прав для отвязки.', attempt });
+        return;
+      }
+      // The link was already removed elsewhere (another tab, another
+      // operator): re-sync instead of showing an error for a stale state.
+      if (res.status === 404) {
+        load();
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -98,7 +122,7 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
         linked_at: null,
       });
     } catch (err) {
-      setError((err as Error).message);
+      setActionError({ message: (err as Error).message, attempt });
     } finally {
       setBusy(false);
     }
@@ -120,6 +144,18 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
           />
         ) : null}
 
+        {actionError ? (
+          <InlineBanner
+            tone="crit"
+            title={`Не удалось отвязать Discord: ${actionError.message}`}
+            action={
+              <Button size="sm" onClick={() => void unlink(actionError.attempt)}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
+
         {forceForbidden ? (
           <InlineBanner tone="warn" title="Недостаточно прав для принудительной отвязки." />
         ) : null}
@@ -135,15 +171,19 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
               </div>
             </div>
             {isSelf ? (
-              <Button size="sm" disabled={busy} onClick={() => void unlink(SELF_UNLINK_URL)}>
-                Отвязать
-              </Button>
-            ) : null}
-            {me !== null && !isSelf && !forceForbidden ? (
               <Button
                 size="sm"
                 disabled={busy}
-                onClick={() => void unlink(buildForceUnlinkUrl(playerId))}
+                onClick={() => void unlink({ url: SELF_UNLINK_URL, isForce: false })}
+              >
+                Отвязать
+              </Button>
+            ) : null}
+            {canForceUnlink && !forceForbidden ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void unlink({ url: buildForceUnlinkUrl(playerId), isForce: true })}
               >
                 Отвязать принудительно
               </Button>

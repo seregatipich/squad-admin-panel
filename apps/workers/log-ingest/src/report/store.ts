@@ -1,12 +1,33 @@
 import { type DatabaseClient, events, playerNameHistory, playerReports, players } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { type EventEnvelope, playerReportPayload, STREAM_NAME } from '@squad/shared-types';
-import { and, desc, eq, gte, isNull, or } from 'drizzle-orm';
-import { v7 as uuidv7 } from 'uuid';
+import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
+import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import type { ParsedReport } from '../parser/report.js';
 
 export const REPORT_DEDUP_WINDOW_MS = 5 * 60 * 1000;
 export const LIVE_BUS_CHANNEL = 'live-bus';
+
+// Matches the deterministic-id idempotency scheme used elsewhere in the
+// ingestor (e.g. combat/store.ts's COMBAT_EVENT_NAMESPACE): a report row's id
+// is derived from the fields that make one `!report` log line unique, so a
+// replayed tail (reconnect re-reading the last N lines) resolves to the same
+// id instead of reprocessing the line as new input (#63 finding 940).
+const REPORT_NAMESPACE = '6a5c9c9e-9e0a-5c1a-9b7b-9b6a2b8e4b7a';
+
+function deterministicReportId(serverId: string, report: ParsedReport): string {
+  const key = [
+    serverId,
+    report.ts,
+    report.tick,
+    report.reporterEos ?? '',
+    report.reporterSteam ?? '',
+    report.reporterName,
+    report.targetRaw,
+    report.body,
+  ].join('|');
+  return uuidv5(key, REPORT_NAMESPACE);
+}
 
 const EOS_FORM = /^[0-9a-f]{32}$/i;
 const STEAM_FORM = /^\d{17}$/;
@@ -51,6 +72,7 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
     .select({ id: players.id })
     .from(players)
     .where(eq(players.canonicalNameNormalized, normalized))
+    .orderBy(desc(players.lastSeenAt))
     .limit(1);
   if (direct[0]) return direct[0].id;
   const historical = await db
@@ -114,8 +136,9 @@ async function findPendingDuplicate(
 }
 
 async function writeEvent(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   params: {
+    eventId?: string;
     serverId: string;
     reportId: string;
     occurredAt: Date;
@@ -135,7 +158,7 @@ async function writeEvent(
     source: 'ingame',
   });
   const envelope: EventEnvelope = {
-    event_id: uuidv7(),
+    event_id: params.eventId ?? uuidv7(),
     server_id: params.serverId,
     version: 1,
     type: 'player_report',
@@ -177,6 +200,47 @@ export async function handleReport(
   { serverId, report }: HandleReportParams,
 ): Promise<HandleReportResult> {
   const occurredAt = new Date(report.ts);
+  const deterministicId = deterministicReportId(serverId, report);
+  const replayed = await db
+    .select({
+      id: playerReports.id,
+      reporterPlayerId: playerReports.reporterPlayerId,
+      targetPlayerId: playerReports.targetPlayerId,
+    })
+    .from(playerReports)
+    .where(eq(playerReports.id, deterministicId))
+    .limit(1);
+  const appendedBefore = replayed[0]
+    ? []
+    : await db
+        .select({ reportId: events.correlationId })
+        .from(events)
+        .where(and(eq(events.eventId, deterministicId), eq(events.occurredAt, occurredAt)))
+        .limit(1);
+  if (appendedBefore[0]?.reportId) {
+    // An earlier pass appended this line to an existing pending report; the
+    // append's event carries the line's deterministic id as its event_id, so
+    // its presence proves the body is already in the row.
+    return {
+      reportId: appendedBefore[0].reportId,
+      deduped: true,
+      reporterPlayerId: null,
+      targetPlayerId: null,
+    };
+  }
+  if (replayed[0]) {
+    // The exact same log line was already turned into this report row
+    // (or its append) in an earlier pass; treat this call as a no-op
+    // rather than re-appending the body or creating a duplicate pending
+    // report.
+    return {
+      reportId: replayed[0].id,
+      deduped: true,
+      reporterPlayerId: replayed[0].reporterPlayerId,
+      targetPlayerId: replayed[0].targetPlayerId,
+    };
+  }
+
   const reporterPlayerId = await resolveReporter(db, report);
   const targetPlayerId = await resolveTarget(db, report.targetRaw);
 
@@ -189,23 +253,33 @@ export async function handleReport(
   });
 
   if (duplicate) {
-    await db
-      .update(playerReports)
-      .set({ body: `${duplicate.body}\n${report.body}` })
-      .where(eq(playerReports.id, duplicate.id));
-    const envelope = await writeEvent(db, {
-      serverId,
-      reportId: duplicate.id,
-      occurredAt,
-      reporterPlayerId,
-      targetPlayerId,
-      report,
+    // Appended in SQL against the row's current value, not the JS-side
+    // `duplicate.body` snapshot: two concurrent duplicate reports doing a
+    // read-then-write string concatenation here could otherwise lose one
+    // body to the other's overwrite (#63 finding 941).
+    // The append and its event (whose event_id is the line's deterministic
+    // id, the replay marker) commit together, so a crash cannot leave the
+    // body appended without the marker.
+    const envelope = await db.transaction(async (tx) => {
+      await tx
+        .update(playerReports)
+        .set({ body: sql`${playerReports.body} || ${`\n${report.body}`}` })
+        .where(eq(playerReports.id, duplicate.id));
+      return writeEvent(tx, {
+        eventId: deterministicId,
+        serverId,
+        reportId: duplicate.id,
+        occurredAt,
+        reporterPlayerId,
+        targetPlayerId,
+        report,
+      });
     });
     await publishEvent(redis, envelope);
     return { reportId: duplicate.id, deduped: true, reporterPlayerId, targetPlayerId };
   }
 
-  const reportId = uuidv7();
+  const reportId = deterministicId;
   await db.insert(playerReports).values({
     id: reportId,
     serverId,

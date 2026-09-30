@@ -20,11 +20,13 @@ Blocked by `check-command`:
 - `git merge <work-branch>` while on `master` (only `dev` may be merged there);
 - pushing a SHA to `master` that is **not reachable from `dev`** (`git merge-base --is-ancestor`) — the exact definition of "master only receives what went through dev";
 - creating work branches from `master`/`origin/master` (they must come from `dev`);
-- force-pushing or deleting `master`/`dev`, and `git push --all/--mirror`.
+- force-pushing or deleting `master`/`dev` — including through the symbolic refspecs `HEAD`, `@`, `+HEAD` and `+@`, which resolve to the checked-out branch — and `git push --all/--mirror`.
+
+`check-push` also denies a non-fast-forward update of `master`/`dev`, and fails closed when the remote tip is missing from the local clone: a fast-forward always builds on the old tip, so an unknown tip means the push would rewrite history (run `git fetch` first).
 
 Deliberately **not** blocked: `--no-verify`. The pre-push test gate is environment-dependent (DB/Redis/Linux-only bridge tests), and CI is the source of truth per `CLAUDE.md`; the agent-layer hooks and GitHub rulesets still check every command and every push regardless.
 
-Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `git branch --contains …`) are **not** blocked — only create/rename/checkout/push of a `main` ref is. Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 69 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
+Read-only `git branch` query forms (`git branch --list main`, `git branch -a`, `git branch --contains …`) are **not** blocked — only create/rename/checkout/push of a `main` ref is. Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 81 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
 
 ## Layer 1 — Claude Code
 
@@ -61,7 +63,7 @@ The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and 
 scripts/apply-rulesets.sh   # requires gh with admin access
 ```
 
-> **Not applied yet (checked 2026-09-26):** the repository is public, so GitHub accepts rulesets on it, but `gh api repos/seregatipich/squad-admin-panel/rulesets` returns `[]` — `scripts/apply-rulesets.sh` has not been run since the move to this repository (the former private organization repository could not have rulesets without GitHub Pro/Team). Until it is run, the client hooks and the `branch-guard` audit are the only enforcement.
+> **Applied (2026-09-28):** `scripts/apply-rulesets.sh` has been run against this repository — `gh api repos/seregatipich/squad-admin-panel/rulesets` now lists `block-main`, `protect-dev` and `protect-master`, all `enforcement: active`. Re-run the script after editing any file under `.github/rulesets/` to push the change (idempotent create-or-update by name).
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
@@ -89,9 +91,11 @@ the `stand` environment, or when the job graph described below drifts.
 **Outside code must never reach a deploy secret.** Both workflows accept only trusted
 `push` events and explicit dispatches — never `pull_request`.
 [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) enforces
-that no workflow combines a `pull_request`/`pull_request_target` trigger with a
-self-hosted job, recognising the bare label, inline and block label lists, and runner
-groups, and it checks its own detector against fixtures first (#217, #286). That guard
+that no workflow (`.yml` or `.yaml`) combines a `pull_request`, `pull_request_target`
+or `workflow_run` trigger — written as a scalar, an inline or block list, or a map key —
+with a self-hosted job, recognising the bare label, inline and block label lists, and
+runner groups, and it checks its own detector against fixtures first, failing on any
+fixture it misreads (#217, #286). That guard
 only sees workflow files already in the repository: a fork's pull request can bring its
 own workflow file. Two repository settings close that gap and must stay on — Settings →
 Actions → General → *Require approval for all outside collaborators*, and *Workflow

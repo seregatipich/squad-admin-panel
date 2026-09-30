@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, rolePermissions } from '@squad/db/schema';
+import { players, rolePermissions, roleSquadPermissions, roles } from '@squad/db/schema';
 import {
   isPermissionKey,
   PERMISSION_KEYS,
@@ -30,8 +30,35 @@ export interface PermissionContext {
   isOwner: boolean;
 }
 
+/**
+ * Process-local permission cache keyed by player id. Entries live {@link TTL_MS};
+ * changes made outside this process (workers editing `players.role_id`) are
+ * therefore picked up within that window. Bounded twice so it cannot grow with
+ * every player who ever logged in: expired entries are swept when an entry is
+ * stored, and past {@link PERMISSION_CACHE_MAX_ENTRIES} the oldest entry is
+ * evicted. Every store re-inserts its key, so Map iteration order (insertion
+ * order) is also expiry order and both sweeps stop at the first live entry.
+ */
 const cache = new Map<string, { value: PermissionContext; expiresAt: number }>();
 const TTL_MS = 30_000;
+
+/** Upper bound on cached permission contexts. */
+export const PERMISSION_CACHE_MAX_ENTRIES = 5_000;
+
+function cachePermissions(playerId: string, value: PermissionContext): void {
+  const now = Date.now();
+  cache.delete(playerId);
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt > now && cache.size < PERMISSION_CACHE_MAX_ENTRIES) break;
+    cache.delete(key);
+  }
+  cache.set(playerId, { value, expiresAt: now + TTL_MS });
+}
+
+/** Number of cached permission contexts; exposed for tests and diagnostics. */
+export function permissionCacheSize(): number {
+  return cache.size;
+}
 
 const PANEL_PERMS_GATED_BY_ASSIGN: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'user:manage_roles',
@@ -41,11 +68,37 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
   'role:edit',
   'role:delete',
 ]);
+/**
+ * Automation rules run RCON actions as the system actor on every server
+ * (#111), so `trigger:edit` is never handed to every `panel_access` user.
+ * Role editors keep it (the rules used to be gated by `role:edit`); any other
+ * role gets it only through an explicit `role_permissions` row, and an API
+ * token only when `trigger:edit` itself is a delegated scope.
+ */
+const PANEL_PERMS_GATED_BY_TRIGGER_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'trigger:edit',
+]);
+/**
+ * Message templates were edited under `role:edit` before they had their own
+ * key, so a role holds `message_template:manage` implicitly only while it may
+ * edit roles; any other role gets it through an explicit `role_permissions`
+ * grant, without receiving role management with it.
+ */
+const PANEL_PERMS_GATED_BY_EDIT_OR_GRANT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'message_template:manage',
+]);
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
 const PANEL_PERMS_GATED_BY_VIEW_IPS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'player:view_ips',
+]);
+// Tuning alt detection (weights, thresholds, ignored IP ranges) can switch a
+// panel-wide security check off, so IP-history read access alone must not
+// grant it: it takes both `can_view_ips` and `can_edit_roles`. Kept out of the
+// two sets above so token narrowing of those flags is unchanged.
+const PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'player:manage_alt_detection',
 ]);
 const PANEL_PERMS_GATED_BY_SQUAD_KICK: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'mod:kick',
@@ -56,39 +109,115 @@ const PANEL_PERMS_GATED_BY_SQUAD_BAN: ReadonlySet<PermissionKey> = new Set<Permi
   'mod:ban_perm',
   'mod:unban',
 ]);
+/**
+ * Keys that change the host or the servers' files rather than moderate
+ * players: the privileged host daemon, the server lifecycle, config and
+ * Admins.cfg writes, and API-token minting. `panel_access` alone does not
+ * grant them; the role also needs `can_manage_infrastructure` (#36).
+ */
+export const PANEL_PERMS_GATED_BY_INFRASTRUCTURE: ReadonlySet<PermissionKey> =
+  new Set<PermissionKey>([
+    'host:manage',
+    'server:install',
+    'server:delete',
+    'server:force_stop',
+    'server:update',
+    'config:edit',
+    'config:rollback',
+    'admin_group:edit',
+    'api_token:create',
+    'backup:restore',
+  ]);
+
+/**
+ * Every key that needs a role flag on top of `panel_access`. Each `dangerous`
+ * catalogue key must be in here; `rbac-infrastructure-gate.test.ts` fails when
+ * a new dangerous key is added without a gate.
+ */
+export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  ...PANEL_PERMS_GATED_BY_ASSIGN,
+  ...PANEL_PERMS_GATED_BY_EDIT,
+  ...PANEL_PERMS_GATED_BY_TRIGGER_EDIT,
+  ...PANEL_PERMS_GATED_BY_EDIT_OR_GRANT,
+  ...PANEL_PERMS_GATED_BY_INTEGRATIONS,
+  ...PANEL_PERMS_GATED_BY_VIEW_IPS,
+  ...PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT,
+  ...PANEL_PERMS_GATED_BY_SQUAD_KICK,
+  ...PANEL_PERMS_GATED_BY_SQUAD_BAN,
+  ...PANEL_PERMS_GATED_BY_INFRASTRUCTURE,
+]);
+
 const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
 
 /**
- * Derives the panel permission keys a role grants, gating certain catalogue
- * keys on the role's finer-grained sub-permissions.
+ * Flag-gated keys a role may also hold through an explicit `role_permissions`
+ * row, without the flag that derives them.
+ */
+const EXPLICITLY_GRANTABLE_GATED_KEYS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  ...PANEL_PERMS_GATED_BY_TRIGGER_EDIT,
+  ...PANEL_PERMS_GATED_BY_EDIT_OR_GRANT,
+]);
+
+/** The role flags {@link keyPassesFlagGates} checks a key against. */
+interface RoleFlagGates {
+  canAssignRoles: boolean;
+  canEditRoles: boolean;
+  canManageIntegrations: boolean;
+  canViewIps: boolean;
+  canManageInfrastructure: boolean;
+  squadPermissions: ReadonlySet<string>;
+}
+
+/**
+ * Whether a role's flags allow it to hold `key` at all, whatever the source
+ * of the key (derived from `panel_access` or an explicit `role_permissions`
+ * row).
  *
- * `squadPermissions` closes the RBAC gap where `mod:kick`/`mod:warn`/
+ * The live-Squad gate closes the RBAC gap where `mod:kick`/`mod:warn`/
  * `mod:ban_temp`/`mod:ban_perm`/`mod:unban` would otherwise be handed to
  * every `panel_access` user: those five keys additionally require the
  * role's live-Squad `kick`/`ban` permission (`role_squad_permissions`),
  * mirroring the enforcement already applied to `POST
  * /api/v1/external-bans` (`localBanGuard` in `external-bans.ts`).
  */
+function keyPassesFlagGates(key: PermissionKey, flags: RoleFlagGates): boolean {
+  if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !flags.canAssignRoles) return false;
+  if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_TRIGGER_EDIT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_EDIT_OR_GRANT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !flags.canManageIntegrations) return false;
+  if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !flags.canViewIps) return false;
+  if (
+    PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT.has(key) &&
+    !(flags.canViewIps && flags.canEditRoles)
+  ) {
+    return false;
+  }
+  if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !flags.squadPermissions.has('kick')) {
+    return false;
+  }
+  if (PANEL_PERMS_GATED_BY_SQUAD_BAN.has(key) && !flags.squadPermissions.has('ban')) return false;
+  if (PANEL_PERMS_GATED_BY_INFRASTRUCTURE.has(key) && !flags.canManageInfrastructure) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Derives the panel permission keys a role grants: every catalogue key for
+ * Owner, nothing without `panel_access`, otherwise every key that passes
+ * {@link keyPassesFlagGates}.
+ */
 function derivePanelPermissions(
   panelAccess: boolean,
-  canAssignRoles: boolean,
-  canEditRoles: boolean,
-  canManageIntegrations: boolean,
-  canViewIps: boolean,
   isOwner: boolean,
-  squadPermissions: ReadonlySet<string>,
+  flags: RoleFlagGates,
 ): Set<PermissionKey> {
   if (isOwner) return new Set(ALL_PANEL_PERMS);
   if (!panelAccess) return new Set();
   const out = new Set<PermissionKey>();
   for (const key of ALL_PANEL_PERMS) {
-    if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
-    if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
-    if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
-    if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
-    if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !squadPermissions.has('kick')) continue;
-    if (PANEL_PERMS_GATED_BY_SQUAD_BAN.has(key) && !squadPermissions.has('ban')) continue;
-    out.add(key);
+    if (keyPassesFlagGates(key, flags)) out.add(key);
   }
   return out;
 }
@@ -108,6 +237,7 @@ interface RoleContextRow extends Record<string, unknown> {
   can_manage_economy: boolean | null;
   can_manage_media: boolean | null;
   can_handle_reports: boolean | null;
+  can_manage_infrastructure: boolean | null;
   combat_view: boolean | null;
   squad_permissions: string[] | null;
 }
@@ -118,6 +248,7 @@ export async function loadUserPermissions(
 ): Promise<PermissionContext> {
   const hit = cache.get(playerId);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
+  if (hit) cache.delete(playerId);
 
   const rows = await db.execute<RoleContextRow>(sql`
     SELECT
@@ -135,6 +266,7 @@ export async function loadUserPermissions(
       r.can_manage_economy,
       r.can_manage_media,
       r.can_handle_reports,
+      r.can_manage_infrastructure,
       r.combat_view,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
@@ -170,68 +302,201 @@ export async function loadUserPermissions(
       combatView: false,
       isOwner: false,
     };
-    cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
+    cachePermissions(playerId, empty);
     return empty;
   }
-
-  const isOwner = row.role_name === 'Owner' && row.is_system_role === true;
-  const panelAccess = isOwner ? true : (row.panel_access ?? false);
-  const canViewIps = isOwner ? true : (row.can_view_ips ?? false);
-  const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
-  const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
-  const canManageIssues = isOwner ? true : (row.can_manage_issues ?? false);
-  const canManageBanSources = isOwner ? true : panelAccess && (row.can_manage_ban_sources ?? false);
-  const canManageIntegrations = isOwner ? true : (row.can_manage_integrations ?? false);
-  const canManageClans = isOwner ? true : (row.can_manage_clans ?? false);
-  const canManageEconomy = isOwner ? true : panelAccess && (row.can_manage_economy ?? false);
-  const canManageMedia = isOwner ? true : panelAccess && (row.can_manage_media ?? false);
-  const canHandleReports = isOwner ? true : (row.can_handle_reports ?? false);
-  const combatView = isOwner ? true : panelAccess && (row.combat_view ?? false);
-  const squadPermissions = isOwner
-    ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
-    : new Set<SquadPermissionKey>(
-        ((row.squad_permissions ?? []) as SquadPermissionKey[]).filter(Boolean),
-      );
 
   const explicit = await db
     .select({ key: rolePermissions.permissionKey })
     .from(rolePermissions)
     .where(eq(rolePermissions.roleId, row.role_id));
 
-  const permissions = derivePanelPermissions(
-    panelAccess,
+  const value = buildRolePermissionContext(
+    row.role_id,
+    {
+      name: row.role_name ?? '',
+      isSystemRole: row.is_system_role ?? false,
+      panelAccess: row.panel_access ?? false,
+      canViewIps: row.can_view_ips ?? false,
+      canAssignRoles: row.can_assign_roles ?? false,
+      canEditRoles: row.can_edit_roles ?? false,
+      canManageIssues: row.can_manage_issues ?? false,
+      canManageBanSources: row.can_manage_ban_sources ?? false,
+      canManageIntegrations: row.can_manage_integrations ?? false,
+      canManageClans: row.can_manage_clans ?? false,
+      canManageEconomy: row.can_manage_economy ?? false,
+      canManageMedia: row.can_manage_media ?? false,
+      canHandleReports: row.can_handle_reports ?? false,
+      canManageInfrastructure: row.can_manage_infrastructure ?? false,
+      combatView: row.combat_view ?? false,
+      squadPermissions: row.squad_permissions ?? [],
+    },
+    explicit.map((entry) => entry.key),
+  );
+  cachePermissions(playerId, value);
+  return value;
+}
+
+/**
+ * The grant-bearing columns of a `roles` row plus its live-Squad permissions
+ * (`role_squad_permissions`). A drizzle `select()` of `roles` satisfies every
+ * field but `squadPermissions`.
+ */
+export interface RoleGrantDefinition {
+  name: string;
+  isSystemRole: boolean;
+  panelAccess: boolean;
+  canViewIps: boolean;
+  canAssignRoles: boolean;
+  canEditRoles: boolean;
+  canManageIssues: boolean;
+  canManageBanSources: boolean;
+  canManageIntegrations: boolean;
+  canManageClans: boolean;
+  canManageEconomy: boolean;
+  canManageMedia: boolean;
+  canHandleReports: boolean;
+  canManageInfrastructure: boolean;
+  combatView: boolean;
+  squadPermissions: readonly string[];
+}
+
+/**
+ * Derives the permission context every holder of a role receives — the same
+ * derivation {@link loadUserPermissions} applies to a player's live role, so
+ * callers can evaluate a role that is only proposed (e.g. the result of an
+ * edit that has not been written yet).
+ *
+ * @param roleId - The role's id, copied into the context.
+ * @param role - The role's flags and live-Squad permissions.
+ * @param explicitKeys - The role's `role_permissions` keys; unknown keys are ignored.
+ * @returns A fresh context; nothing is cached.
+ */
+export function buildRolePermissionContext(
+  roleId: string,
+  role: RoleGrantDefinition,
+  explicitKeys: readonly string[],
+): PermissionContext {
+  const isOwner = role.name === 'Owner' && role.isSystemRole;
+  const panelAccess = isOwner || role.panelAccess;
+  const canViewIps = isOwner || role.canViewIps;
+  const canAssignRoles = isOwner || role.canAssignRoles;
+  const canEditRoles = isOwner || role.canEditRoles;
+  const canManageIntegrations = isOwner || role.canManageIntegrations;
+  const squadPermissions = isOwner
+    ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
+    : new Set<SquadPermissionKey>((role.squadPermissions as SquadPermissionKey[]).filter(Boolean));
+
+  const flags: RoleFlagGates = {
     canAssignRoles,
     canEditRoles,
     canManageIntegrations,
     canViewIps,
-    isOwner,
+    canManageInfrastructure: isOwner || role.canManageInfrastructure,
     squadPermissions,
-  );
-  for (const entry of explicit) {
-    if (isPermissionKey(entry.key)) permissions.add(entry.key);
+  };
+
+  const permissions = derivePanelPermissions(panelAccess, isOwner, flags);
+  // Explicit rows pass the same flag gates as the derived set, so a stray row
+  // can never grant a key the role's flags withhold (#36). The two keys whose
+  // gate is documented as "or an explicit grant" — `trigger:edit` (#111) and
+  // `message_template:manage` (#70) — are the exception: an explicit row is
+  // their intended way to reach a role without also handing it role editing.
+  for (const key of explicitKeys) {
+    if (!isPermissionKey(key)) continue;
+    if (EXPLICITLY_GRANTABLE_GATED_KEYS.has(key) || keyPassesFlagGates(key, flags)) {
+      permissions.add(key);
+    }
   }
 
-  const value: PermissionContext = {
+  return {
     permissions,
     squadPermissions,
-    roleId: row.role_id,
-    roleName: row.role_name,
+    roleId,
+    roleName: role.name,
     panelAccess,
     canViewIps,
     canAssignRoles,
     canEditRoles,
-    canManageIssues,
-    canManageBanSources,
+    canManageIssues: isOwner || role.canManageIssues,
+    canManageBanSources: isOwner || (panelAccess && role.canManageBanSources),
     canManageIntegrations,
-    canManageClans,
-    canManageEconomy,
-    canManageMedia,
-    canHandleReports,
-    combatView,
+    canManageClans: isOwner || role.canManageClans,
+    canManageEconomy: isOwner || (panelAccess && role.canManageEconomy),
+    canManageMedia: isOwner || (panelAccess && role.canManageMedia),
+    canHandleReports: isOwner || role.canHandleReports,
+    combatView: isOwner || (panelAccess && role.combatView),
     isOwner,
   };
-  cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
-  return value;
+}
+
+/**
+ * Loads the permission context a role grants its holders, uncached.
+ *
+ * @param db - Database client.
+ * @param roleId - The role to evaluate.
+ * @returns The context, or `null` when the role does not exist.
+ */
+export async function loadRolePermissions(
+  db: DatabaseClient,
+  roleId: string,
+): Promise<PermissionContext | null> {
+  const [role] = await db.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+  if (!role) return null;
+  const squad = await db
+    .select({ key: roleSquadPermissions.squadPermissionKey })
+    .from(roleSquadPermissions)
+    .where(eq(roleSquadPermissions.roleId, roleId));
+  const explicit = await db
+    .select({ key: rolePermissions.permissionKey })
+    .from(rolePermissions)
+    .where(eq(rolePermissions.roleId, roleId));
+  return buildRolePermissionContext(
+    roleId,
+    { ...role, squadPermissions: squad.map((entry) => entry.key) },
+    explicit.map((entry) => entry.key),
+  );
+}
+
+const HIERARCHY_FLAGS = [
+  ['isOwner', 'owner'],
+  ['panelAccess', 'panel_access'],
+  ['canViewIps', 'can_view_ips'],
+  ['canAssignRoles', 'can_assign_roles'],
+  ['canEditRoles', 'can_edit_roles'],
+  ['canManageIssues', 'can_manage_issues'],
+  ['canManageBanSources', 'can_manage_ban_sources'],
+  ['canManageIntegrations', 'can_manage_integrations'],
+  ['canManageClans', 'can_manage_clans'],
+  ['canManageEconomy', 'can_manage_economy'],
+  ['canManageMedia', 'can_manage_media'],
+  ['canHandleReports', 'can_handle_reports'],
+  ['combatView', 'combat_view'],
+] as const satisfies ReadonlyArray<readonly [keyof PermissionContext, string]>;
+
+/**
+ * Lists every grant `target` carries that `actor` lacks — the role-hierarchy
+ * check behind role assignment and role editing (#30): a non-Owner may only
+ * hand out, edit or take away a role that fits entirely inside their own
+ * permissions, so no chain of assignments or edits can widen what they hold.
+ *
+ * @param actor - The acting user's context (token-narrowed when applicable).
+ * @param target - The role's context, e.g. from {@link loadRolePermissions}.
+ * @returns Stable identifiers of the missing grants (`can_view_ips`,
+ *   `permission:role:edit`, `squad:ban`, …); empty when `target` ⊆ `actor`.
+ */
+export function grantsBeyond(actor: PermissionContext, target: PermissionContext): string[] {
+  const missing: string[] = [];
+  for (const [field, label] of HIERARCHY_FLAGS) {
+    if (target[field] && !actor[field]) missing.push(label);
+  }
+  for (const key of target.permissions) {
+    if (!actor.permissions.has(key)) missing.push(`permission:${key}`);
+  }
+  for (const key of target.squadPermissions) {
+    if (!actor.squadPermissions.has(key)) missing.push(`squad:${key}`);
+  }
+  return missing;
 }
 
 /**

@@ -46,10 +46,12 @@ export async function ensureViewerFixture(db: DatabaseClient): Promise<string> {
         color: 'neutral',
         description: 'Test fixture — narrow read-only role.',
         isSystemRole: false,
-        // Note: panel_access stays false; the role's panel reach is via
-        // the explicit role_permissions rows below (legacy union path
-        // in apps/api/src/lib/rbac.ts).
-        panelAccess: false,
+        // A session of a role without panel_access is dropped to anonymous
+        // (#33 / finding #1079), so the fixture is a real panel role. Its
+        // panel_access derives every key outside the flag gates
+        // (apps/api/src/lib/rbac.ts); the explicit rows below stay for
+        // fixtures that read them directly.
+        panelAccess: true,
         canAssignRoles: false,
         canEditRoles: false,
       })

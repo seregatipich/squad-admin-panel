@@ -59,13 +59,6 @@ func TestFileReadStream_RejectsSymlinkEscapingRoot(t *testing.T) {
 	assertNoSecret(t, resp, len(chunks))
 }
 
-func TestFileReadTail_RejectsSymlinkEscapingRoot(t *testing.T) {
-	_, link, _ := depotRootWithEscapingLink(t, "SquadGame-evil.log")
-	params, _ := json.Marshal(map[string]any{"path": link})
-	resp := (&Dispatcher{}).Handle(context.Background(), &rpc.Request{ID: "req-symlink-tail", Method: "file_read_tail", Params: params}, func(rpc.StreamFrame) {})
-	assertNoSecret(t, resp, 0)
-}
-
 func TestFileRead_RejectsSymlinkEscapingRoot(t *testing.T) {
 	_, link, _ := depotRootWithEscapingLink(t, "Server.cfg")
 	params, _ := json.Marshal(map[string]any{"path": link})
@@ -257,5 +250,21 @@ func TestReadableTrustRoot_ConfinesEachAllowlistEntry(t *testing.T) {
 	}
 	if _, _, err := readableTrustRoot("/etc/shadow"); err == nil {
 		t.Fatal("readableTrustRoot accepted a path outside every readable root")
+	}
+}
+
+// A missing file must be reported with the structured not_found code so the
+// API can tell "absent" from a real read failure without matching OS text
+// (issue #37, finding #50).
+func TestFileRead_MissingFileReturnsNotFound(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", root)
+	params, _ := json.Marshal(map[string]any{"path": filepath.Join(root, "ServerConfig", "Server.cfg")})
+	resp := (&Dispatcher{}).Handle(context.Background(), &rpc.Request{ID: "req-read-missing", Method: "file_read", Params: params}, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected an error for a missing file, got success: %s", resp.Result)
+	}
+	if resp.Error.Code != rpc.CodeNotFound {
+		t.Fatalf("code = %q, want %q (message %q)", resp.Error.Code, rpc.CodeNotFound, resp.Error.Message)
 	}
 }

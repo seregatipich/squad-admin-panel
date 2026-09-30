@@ -26,14 +26,11 @@ describe('bridge methods constants', () => {
       'host_info',
       'host_metrics',
       'file_read',
-      'file_read_tail',
-      'file_write',
       'file_atomic_write',
       'directory_delete',
       'list_panel_dirs',
       'list_squad_containers',
       'ufw_rule',
-      'process_info',
       'container_run',
       'container_run_rnsquadjs',
       'container_start',
@@ -53,6 +50,14 @@ describe('bridge methods constants', () => {
       'file_read_stream',
       'host_agent_restart',
     ]);
+  });
+
+  // Regression for #45 (findings #1342, #400): these RPCs had no production
+  // caller and only widened the root bridge's attack surface.
+  it('does not allow the removed process_info, file_read_tail and file_write RPCs', () => {
+    for (const removed of ['process_info', 'file_read_tail', 'file_write']) {
+      expect(BRIDGE_METHODS as readonly string[]).not.toContain(removed);
+    }
   });
 
   it('exposes the streaming subset that the multiplexer must serialize', () => {

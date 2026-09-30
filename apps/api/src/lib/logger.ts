@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Writable } from 'node:stream';
 import { createDiscordRedactingStream } from '@squad/shared-config';
 import pino, { type DestinationStream, multistream } from 'pino';
+import { DISCORD_CALLBACK_PATH } from './discord-oauth.js';
 
 export interface RequestContext {
   requestId: string;
@@ -12,8 +13,71 @@ export interface RequestContext {
 
 export const als = new AsyncLocalStorage<RequestContext>();
 
+/**
+ * Auth callbacks whose query string carries one-time credentials: the Steam
+ * OpenID assertion and the Discord OAuth `code`/`state`.
+ */
+const SENSITIVE_AUTH_CALLBACK_PATHS: ReadonlySet<string> = new Set([
+  '/api/v1/auth/steam/callback',
+  DISCORD_CALLBACK_PATH,
+]);
+
+/**
+ * Fastify `disableRequestLogging` predicate: suppresses the automatic
+ * request/response log lines (which include the full URL) for the sensitive
+ * auth callbacks, so their credentials never reach stdout or the `panel:logs`
+ * stream.
+ *
+ * @param request - the incoming request; only `url` is read.
+ * @returns `true` when the path, ignoring the query string, is a sensitive callback.
+ */
 export function shouldDisableSensitiveAuthRequestLogging(request: { url: string }): boolean {
-  return request.url.split('?', 1)[0] === '/api/v1/auth/steam/callback';
+  return SENSITIVE_AUTH_CALLBACK_PATHS.has(request.url.split('?', 1)[0] ?? '');
+}
+
+const REDACTED = '[redacted]';
+/** Query parameters that carry a bearer credential (the public upload token). */
+const SENSITIVE_QUERY_PARAM_RE = /([?&]token=)[^&#]*/gi;
+/** Path segments that are themselves a credential (appeal tracking tokens). */
+const SENSITIVE_PATH_RE = /^(\/api\/v1\/public\/appeals\/)[^/?#]+/;
+
+/**
+ * Masks credentials that travel in a request URL — `?token=` (the one-time
+ * media upload token) and the `/api/v1/public/appeals/:token` tracking token —
+ * so request logs, which reach the panel's log stream and export, never carry
+ * a usable token.
+ */
+export function redactSensitiveUrl(url: string): string {
+  return url
+    .replace(SENSITIVE_PATH_RE, `$1${REDACTED}`)
+    .replace(SENSITIVE_QUERY_PARAM_RE, `$1${REDACTED}`);
+}
+
+interface LoggedRequest {
+  method?: string;
+  url?: unknown;
+  headers?: Record<string, unknown>;
+  host?: string;
+  ip?: string;
+  socket?: { remotePort?: number };
+}
+
+/**
+ * Fastify's default `req` serializer with the URL passed through
+ * {@link redactSensitiveUrl}. Fastify prefers a `loggerInstance`'s own
+ * serializers over its defaults, so this governs "incoming request" and error
+ * logs. Anything that is not a request (no string `url`) is logged as given.
+ */
+function serializeRequest(req: LoggedRequest): unknown {
+  if (!req || typeof req.url !== 'string') return req;
+  return {
+    method: req.method,
+    url: redactSensitiveUrl(req.url),
+    version: req.headers?.['accept-version'],
+    host: req.host,
+    remoteAddress: req.ip,
+    remotePort: req.socket?.remotePort,
+  };
 }
 
 class LateSink {
@@ -45,6 +109,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
   };
   const mixin = () => als.getStore() ?? {};
   const base = { service: 'api' };
+  const serializers = { req: serializeRequest };
   const lateSink = new LateSink();
   const sinkStream: DestinationStream = createDiscordRedactingStream(lateSink);
   if (isDev) {
@@ -53,7 +118,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
       options: { colorize: true, singleLine: true, translateTime: 'SYS:HH:MM:ss' },
     });
     const logger = pino(
-      { level, base, redact, mixin },
+      { level, base, redact, mixin, serializers },
       multistream([
         { level: level as pino.Level, stream: createDiscordRedactingStream(pretty) },
         { level: level as pino.Level, stream: sinkStream },
@@ -62,7 +127,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
     return { logger, lateSink };
   }
   const logger = pino(
-    { level, base, redact, mixin },
+    { level, base, redact, mixin, serializers },
     multistream([
       { level: level as pino.Level, stream: createDiscordRedactingStream(process.stdout) },
       { level: level as pino.Level, stream: sinkStream },

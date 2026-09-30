@@ -13,6 +13,12 @@ data
 **/playwright-report
 **/*.tsbuildinfo
 *.log
+# Dockerfiles COPY whole directories (packages, apps/web, apps/workers) into
+# the build context; a local .env would otherwise land in an image layer and
+# in the release artifact. Keep the example file so it stays documented.
+**/.env
+**/.env.*
+!**/.env.example
 # Nothing an image builds or runs. Leaving tests and docs out of the context
 # also keeps a test- or docs-only commit from invalidating any image layer, so
 # it rebuilds to the same image and the stand deploy has nothing to change.

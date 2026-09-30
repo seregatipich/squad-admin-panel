@@ -27,6 +27,7 @@ const OPERATIONS_SCRIPTS = [
   'scripts/deploy-entry.sh',
   'scripts/install-host-bridge.sh',
   'scripts/rebuild.sh',
+  'scripts/restore.sh',
   'scripts/uninstall.sh',
   'scripts/verify-bridge.sh',
 ] as const;
@@ -359,7 +360,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
       `pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`,
       'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain|--filter=@fixture/db-worker',
@@ -591,7 +592,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
     ]);
   });
@@ -606,7 +607,7 @@ describe('local pre-push checklist and git hooks', () => {
       'pnpm|turbo|run|typecheck',
       'pnpm|exec|biome|check|.',
       'pnpm|turbo|run|build',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       'pnpm|test:scripts',
       'pnpm|test:cov',
       'pnpm|turbo|run|test:mutation',
@@ -870,6 +871,71 @@ describe('bootstrap and host-bridge preflight boundaries', () => {
     assert.deepEqual(logLines(log), []);
   });
 
+  it('install-host-bridge provisions every bind-mounted data directory, media included', () => {
+    const { root, script } = copyScript('scripts/install-host-bridge.sh');
+    const binary = path.join(root, 'apps/bridge/bin/panel-host-bridge');
+    mkdirSync(path.dirname(binary), { recursive: true });
+    executable(binary, 'exit 0');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    executable(
+      path.join(shims, 'grep'),
+      `if [[ "\${1:-}" == '-qE' ]]; then exit 0; fi; exec /usr/bin/grep "$@"`,
+    );
+    loggingShim(
+      shims,
+      'id',
+      "if [[ \"$*\" == '-u squad' ]]; then printf '1001\\n'; else printf '0\\n'; fi; exit 0",
+    );
+    executable(path.join(shims, 'getent'), "printf 'panel:x:1234:\\n'; exit 0");
+    // Every host mutation is logged, never performed; the data-tree mkdir is
+    // the last step this test needs, so it ends the run there.
+    loggingShim(shims, 'mkdir', `if [[ "$*" == *'/data/postgres'* ]]; then exit 44; fi; exit 0`);
+    for (const command of ['chown', 'chmod', 'install', 'systemctl', 'systemd-tmpfiles', 'rm']) {
+      loggingShim(shims, command);
+    }
+    const result = run('/bin/bash', [script], {
+      env: { OPS_LOG: log, PATH: `${shims}:/usr/bin:/bin` },
+    });
+    assert.equal(result.status, 44, result.stderr);
+    const dataTree = logLines(log).find((line) => line.includes('/data/postgres'));
+    assert.ok(dataTree, 'the data-tree mkdir never ran');
+    const created = dataTree.split('|').slice(2);
+    for (const subdirectory of [
+      'postgres',
+      'redis',
+      'caddy-data',
+      'caddy-config',
+      'backup-repo',
+      'backup-dump',
+      'depot',
+      'media',
+    ]) {
+      assert.ok(created.includes(path.join(root, 'data', subdirectory)), `missing ${subdirectory}`);
+    }
+  });
+
+  it('every bind-mounted DATA_DIR path in docker/compose.yml is provisioned, checked and rebuilt', () => {
+    const compose = readFileSync(path.join(REPOSITORY_ROOT, 'docker/compose.yml'), 'utf8');
+    const devices = [...compose.matchAll(/device: \$\{DATA_DIR\}\/([a-z0-9-]+)/g)].map(
+      (match) => match[1] as string,
+    );
+    assert.ok(devices.includes('media'), devices.join(','));
+    const installer = readFileSync(
+      path.join(REPOSITORY_ROOT, 'scripts/install-host-bridge.sh'),
+      'utf8',
+    );
+    const bootstrap = readFileSync(path.join(REPOSITORY_ROOT, 'scripts/bootstrap.sh'), 'utf8');
+    const rebuild = readFileSync(path.join(REPOSITORY_ROOT, 'scripts/rebuild.sh'), 'utf8');
+    const inventory = bootstrap.match(/^for sub in ([^;]+); do$/m)?.[1]?.split(' ') ?? [];
+    const rebuilt = rebuild.match(/^for sub in ([^;]+); do$/m)?.[1]?.split(' ') ?? [];
+    for (const device of devices) {
+      assert.match(installer, new RegExp(`"\\$\\{DATA_DIR\\}/${device}"`), `installer: ${device}`);
+      assert.ok(inventory.includes(device), `bootstrap inventory: ${device}`);
+      assert.ok(rebuilt.includes(device), `rebuild: ${device}`);
+    }
+  });
+
   it('install-host-bridge stops at the first binary install failure', () => {
     const { root, script } = copyScript('scripts/install-host-bridge.sh');
     const binary = path.join(root, 'apps/bridge/bin/panel-host-bridge');
@@ -1009,7 +1075,10 @@ interface DeployFixture {
 /** An app directory with the files the deploy hashes, and host tool shims. */
 function deployFixture(): DeployFixture {
   const { root, script } = copyScript('scripts/deploy-stand.sh');
-  writeFileSync(path.join(root, '.env.stand'), 'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\n');
+  writeFileSync(
+    path.join(root, '.env.stand'),
+    'SAFE_TEST_VALUE=1\nAPP_DOMAIN=stand.example\nACME_EMAIL=ops@stand.example\nDUCKDNS_TOKEN=token-value\n',
+  );
   mkdirSync(path.join(root, 'docker'));
   writeFileSync(path.join(root, 'docker/compose.stand.yml'), 'services: {}\n');
   writeFileSync(path.join(root, 'docker/Caddyfile.stand'), '{$APP_DOMAIN} {}\n');
@@ -1098,6 +1167,58 @@ describe('the stand host release deploy', { concurrency: true }, () => {
       const result = await deploy(fixture);
       assert.equal(result.status, 1, content);
       assert.match(result.stderr, /APP_DOMAIN in .*\.env\.stand must be the stand's host name/);
+      assert.deepEqual(logLines(fixture.log), [], content);
+    }
+  });
+
+  it('generates missing Redis secrets into .env.stand once and never rotates them', async () => {
+    const fixture = deployFixture();
+    const envFile = path.join(fixture.root, '.env.stand');
+    writeFileSync(
+      envFile,
+      'SAFE_TEST_VALUE=1\nREDIS_SIDECAR_PASSWORD=\nACME_EMAIL=ops@stand.example\nDUCKDNS_TOKEN=token-value\nAPP_DOMAIN=stand.example',
+    );
+    const secrets = () =>
+      Object.fromEntries(
+        readFileSync(envFile, 'utf8')
+          .split('\n')
+          .filter((line) => /^REDIS_(SIDECAR_)?PASSWORD=/.test(line))
+          .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+      );
+    const env = { DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a2,web w2,caddy c2,worker-rcon k2' };
+
+    const first = await deploy(fixture, env);
+    assert.equal(first.status, 0, first.stderr);
+    const generated = secrets();
+    assert.match(generated.REDIS_PASSWORD ?? '', /^[0-9a-f]{64}$/);
+    assert.match(generated.REDIS_SIDECAR_PASSWORD ?? '', /^[0-9a-f]{64}$/);
+    assert.notEqual(generated.REDIS_PASSWORD, generated.REDIS_SIDECAR_PASSWORD);
+    const lines = readFileSync(envFile, 'utf8').split('\n');
+    assert.ok(lines.includes('APP_DOMAIN=stand.example'), 'the last line kept its value');
+    assert.equal(lines.filter((line) => line.startsWith('REDIS_SIDECAR_PASSWORD=')).length, 1);
+
+    const second = await deploy(fixture, env);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(secrets(), generated);
+    assert.doesNotMatch(second.stdout, /generated REDIS/);
+  });
+
+  it('refuses to start without a real ACME_EMAIL and a DUCKDNS_TOKEN in .env.stand', async () => {
+    const base = 'APP_DOMAIN=stand.example\n';
+    const cases: Array<[string, RegExp]> = [
+      [`${base}DUCKDNS_TOKEN=t\n`, /ACME_EMAIL in .*\.env\.stand must be set/],
+      [`${base}ACME_EMAIL=ops@stand.example\n`, /DUCKDNS_TOKEN in .*\.env\.stand must be set/],
+      [
+        `${base}ACME_EMAIL=admin@example.com\nDUCKDNS_TOKEN=t\n`,
+        /ACME_EMAIL .* must be a real address/,
+      ],
+    ];
+    for (const [content, message] of cases) {
+      const fixture = deployFixture();
+      writeFileSync(path.join(fixture.root, '.env.stand'), content);
+      const result = await deploy(fixture);
+      assert.equal(result.status, 1, content);
+      assert.match(result.stderr, message);
       assert.deepEqual(logLines(fixture.log), [], content);
     }
   });
@@ -1504,6 +1625,35 @@ describe('the stand host rollback', { concurrency: true }, () => {
     assert.match(onto.stderr, /already the running release/);
     assert.deepEqual(logLines(same.log), []);
   });
+
+  it('warns instead of silently redeploying a release it just rolled back away from (#76)', async () => {
+    const fixture = rollbackFixture();
+    assert.equal((await deploy(fixture)).status, 0);
+    const second = releaseImages('2');
+    assert.equal((await deploy(fixture, { ...second, RELEASE_SHA: NEXT_SHA })).status, 0);
+
+    // Roll back NEXT_SHA -> RELEASE_SHA. deploy-stand.sh's unconditional
+    // release-file swap now leaves .release.prev.env holding NEXT_SHA (the
+    // release just left), so a follow-up rollback would read it straight
+    // back out with no signal that it was ever rolled away from.
+    const first = await deploy(
+      fixture,
+      { DOCKER_PRESENT: Object.values(second).join(',') },
+      fixture.rollback,
+    );
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(releaseFile(fixture, '.release.bad.env'), { RELEASE_SHA: NEXT_SHA });
+
+    // A second rollback (the documented, tested round trip) targets
+    // .release.prev.env, which now holds NEXT_SHA — exactly the release
+    // .release.bad.env just recorded. It must still succeed (this round
+    // trip is intended), but it must no longer be silent about redeploying
+    // a release this script itself rolled away from.
+    const second_rollback = await deploy(fixture, {}, fixture.rollback);
+    assert.equal(second_rollback.status, 0, second_rollback.stderr);
+    assert.match(second_rollback.stderr, /rolled back away from previously/);
+    assert.deepEqual(releaseFile(fixture).APP_VERSION, NEXT_SHA);
+  });
 });
 
 describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
@@ -1718,6 +1868,7 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'backup-repo',
       'backup-dump',
       'depot',
+      'media',
       'servers',
     ]) {
       const directory = path.join(root, 'data', subdirectory);
@@ -1733,6 +1884,10 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'docker',
       [
         `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit "\${FAIL_CODE:-45}"; fi`,
+        // rebuild.sh resolves each compose service's container id by name
+        // (docker compose ps -q <service>) rather than guessing a
+        // project-prefixed container name.
+        'if [[ "$1" == \'compose\' && "$2" == \'ps\' ]]; then printf \'fake-%s-id\\n\' "$4"; exit 0; fi',
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'Health.Status'* ]]; then printf 'healthy\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.Status'* ]]; then printf 'exited\\n'; fi",
         "if [[ \"$1\" == 'inspect' && \"$*\" == *'.State.ExitCode'* ]]; then printf '0\\n'; fi",
@@ -1790,6 +1945,7 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'backup-repo',
       'backup-dump',
       'depot',
+      'media',
     ]) {
       assert.equal(existsSync(path.join(fixture.root, 'data', subdirectory)), true);
       assert.equal(existsSync(path.join(fixture.root, 'data', subdirectory, 'sentinel')), false);
@@ -1800,13 +1956,55 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
       'APP_DOMAIN=panel.test\nSECRET=preserved\n',
     );
     assert.deepEqual(
-      logLines(fixture.log).filter((line) => line.startsWith('docker|compose|')),
+      logLines(fixture.log)
+        .filter((line) => line.startsWith('docker|compose|'))
+        .slice(0, 4),
       [
         'docker|compose|down|--remove-orphans',
         'docker|compose|down|-v',
         'docker|compose|build|--no-cache|--progress=plain',
         'docker|compose|up|-d',
       ],
+    );
+    // Health polling resolves each service's container id by name (docker
+    // compose ps -q <service>) instead of guessing a project-prefixed
+    // container name.
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|api'));
+    assert.ok(logLines(fixture.log).some((line) => line === 'docker|compose|ps|-q|migrator'));
+  });
+
+  it('re-binds squad-depot to data/depot and recreates every bind-mounted data directory', () => {
+    const fixture = rebuildFixture();
+    // An install that predates the media volume has no data/media yet; the
+    // compose bind mount fails to start the api without it (#48).
+    rmSync(path.join(fixture.root, 'data/media'), { recursive: true, force: true });
+    const result = run('/bin/bash', [fixture.script], {
+      env: fixture.env,
+      input: 'rebuild\n',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const subdirectory of ['media', 'depot', 'backup-dump']) {
+      assert.equal(existsSync(path.join(fixture.root, 'data', subdirectory)), true, subdirectory);
+    }
+    const commands = logLines(fixture.log);
+    const removed = commands.indexOf('docker|volume|rm|squad-depot');
+    const created = commands.indexOf(
+      `docker|volume|create|--driver|local|--opt|type=none|--opt|o=bind|--opt|device=${path.join(fixture.root, 'data/depot')}|squad-depot`,
+    );
+    const started = commands.indexOf('docker|compose|up|-d');
+    assert.ok(removed >= 0 && removed < created && created < started, commands.join('\n'));
+  });
+
+  it('stops before building when squad-depot cannot be re-bound', () => {
+    const fixture = rebuildFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, FAIL_DOCKER_MATCH: 'volume create', FAIL_CODE: '47' },
+      input: 'rebuild\n',
+    });
+    assert.equal(result.status, 47);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.startsWith('docker|compose|build')),
+      false,
     );
   });
 
@@ -1824,6 +2022,263 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
   });
 });
 
+/**
+ * `scripts/restore.sh --apply` against stand-in tools (#48). The `docker` shim
+ * answers the compose queries, emulates the backup container's staging run by
+ * writing the dumps into the fixture's backup-dump volume, and runs the Redis
+ * conversion script for real under `sh` with fake `redis-server`/`redis-cli`,
+ * so the bounded waits are exercised as shipped. Multi-line `-c` scripts are
+ * logged as `SCRIPT:<kind>` and saved whole under `scripts/<n>.sh`.
+ */
+describe('restore apply: staging, worker pause, transactional pg_restore, Redis rollback', () => {
+  function restoreFixture(): {
+    root: string;
+    script: string;
+    log: string;
+    dataDir: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const { root, script } = copyScript('scripts/restore.sh');
+    const dataDir = path.join(root, 'data');
+    mkdirSync(path.join(dataDir, 'redis/appendonlydir'), { recursive: true });
+    writeFileSync(path.join(dataDir, 'redis/appendonlydir/live.aof'), 'live aof');
+    writeFileSync(path.join(dataDir, 'redis/dump.rdb'), 'live rdb');
+    mkdirSync(path.join(dataDir, 'backup-dump'), { recursive: true });
+    writeFileSync(path.join(root, '.env'), `DATA_DIR=${dataDir}\nPOSTGRES_PASSWORD=x\n`);
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    const savedScripts = path.join(root, 'scripts-run');
+    mkdirSync(savedScripts);
+    executable(
+      path.join(shims, 'docker'),
+      [
+        'body=""',
+        'line=docker',
+        'previous=""',
+        'for argument in "$@"; do',
+        '  if [[ "$previous" == "-c" ]]; then',
+        '    body=$argument',
+        '    case "$argument" in',
+        "      *'restic restore'*) kind=stage ;;",
+        '      *pg_restore*) kind=pg_restore ;;',
+        '      *redis-server*) kind=redis ;;',
+        '      */data/pre-restore\\ ]*) kind=redis_guard ;;',
+        '      *) kind=other ;;',
+        '    esac',
+        '    argument="SCRIPT:$kind"',
+        '  fi',
+        '  line="$line|$argument"',
+        '  previous=$argument',
+        'done',
+        `printf "%s\\n" "$line" >> "\${OPS_LOG:?}"`,
+        'if [[ -n "$body" ]]; then',
+        '  printf "%s" "$body" > "$OPS_SCRIPTS/$(grep -c . "$OPS_LOG").sh"',
+        'fi',
+        'case "$line" in',
+        "  *'|ps|--format|'*) printf 'postgres healthy\\nredis healthy\\n' ;;",
+        "  *'|ps|--services|--status|running'*) printf 'caddy\\napi\\nworker-rcon\\npostgres\\nredis\\nworker-log-ingest\\n' ;;",
+        '  *SCRIPT:stage*)',
+        `    [[ "\${STAGE_EXIT:-0}" == 0 ]] || exit "$STAGE_EXIT"`,
+        '    mkdir -p "$OPS_DATA/backup-dump/restore"',
+        '    printf "restored pg" > "$OPS_DATA/backup-dump/restore/admin.dump"',
+        `    [[ -n "\${STAGE_NO_RDB:-}" ]] || printf "restored rdb" > "$OPS_DATA/backup-dump/restore/dump.rdb"`,
+        '    ;;',
+        `  *SCRIPT:pg_restore*) exit "\${PG_RESTORE_EXIT:-0}" ;;`,
+        '  *SCRIPT:redis_guard*) [[ ! -e "$OPS_DATA/redis/pre-restore" ]] || exit 1 ;;',
+        // Stands in for the one-off container: its /data is the redis volume
+        // and /restore the staged dumps. The fixture path contains spaces, so
+        // the script sees both through space-free symlinks.
+        '  *SCRIPT:redis*)',
+        '    view=$(mktemp -d /tmp/ops-redis-view.XXXXXX)',
+        '    ln -s "$OPS_DATA/redis" "$view/data"',
+        '    ln -s "$OPS_DATA/backup-dump/restore" "$view/restore"',
+        '    status=0',
+        '    sh -c "$(printf "%s" "$body" | sed -e "s#/restore#$view/restore#g" -e "s#/data#$view/data#g")" || status=$?',
+        '    rm -rf "$view"',
+        '    exit "$status"',
+        '    ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'),
+    );
+    const serverPid = path.join(root, 'redis-server.pid');
+    executable(
+      path.join(shims, 'redis-server'),
+      [
+        `printf '%s' "$$" > '${serverPid}'`,
+        `if [[ -n "\${REDIS_SERVER_CRASH:-}" ]]; then exit 1; fi`,
+        'exec /bin/sleep 30',
+      ].join('\n'),
+    );
+    executable(
+      path.join(shims, 'redis-cli'),
+      [
+        'case "$1" in',
+        `  ping) [[ -n "\${REDIS_NO_PONG:-}\${REDIS_SERVER_CRASH:-}" ]] || printf "PONG\\n" ;;`,
+        "  info) printf 'aof_rewrite_in_progress:0\\r\\naof_last_bgrewrite_status:ok\\r\\n' ;;",
+        `  shutdown) kill "$(cat '${serverPid}')" 2>/dev/null ;;`,
+        'esac',
+        'exit 0',
+      ].join('\n'),
+    );
+    executable(path.join(shims, 'sleep'), 'exit 0');
+    return {
+      root,
+      script,
+      log,
+      dataDir,
+      env: {
+        OPS_LOG: log,
+        OPS_DATA: dataDir,
+        OPS_SCRIPTS: savedScripts,
+        PATH: `${shims}:/usr/bin:/bin`,
+      },
+    };
+  }
+
+  const apply = (fixture: ReturnType<typeof restoreFixture>, env: NodeJS.ProcessEnv = {}) =>
+    run('/bin/bash', [fixture.script, '--apply'], {
+      cwd: fixture.root,
+      env: { ...fixture.env, ...env },
+    });
+
+  const indexOf = (commands: string[], pattern: RegExp): number =>
+    commands.findIndex((line) => pattern.test(line));
+
+  it('stages both dumps first, pauses only the workers, restores Postgres in one transaction', () => {
+    const fixture = restoreFixture();
+    const result = apply(fixture);
+    assert.equal(result.status, 0, result.stderr);
+    const commands = logLines(fixture.log);
+
+    const stage = indexOf(commands, /SCRIPT:stage/);
+    const stopWorkers = commands.indexOf(
+      'docker|compose|--profile|backup|stop|worker-rcon|worker-log-ingest',
+    );
+    const pgRestore = indexOf(commands, /SCRIPT:pg_restore/);
+    const stopRedis = commands.indexOf('docker|compose|--profile|backup|stop|redis');
+    const startWorkers = commands.indexOf(
+      'docker|compose|--profile|backup|start|worker-rcon|worker-log-ingest',
+    );
+    assert.ok(stage >= 0 && stage < stopWorkers, commands.join('\n'));
+    assert.ok(stopWorkers < pgRestore && pgRestore < stopRedis, commands.join('\n'));
+    assert.equal(startWorkers, commands.length - 1, commands.join('\n'));
+    // The api holds the bridge connection that keeps this script alive.
+    assert.equal(
+      commands.some((line) => /\|stop\|.*\b(api|web|caddy|postgres)\b/.test(line)),
+      false,
+    );
+
+    const pgScript = readFileSync(
+      path.join(fixture.root, 'scripts-run', `${pgRestore + 1}.sh`),
+      'utf8',
+    );
+    assert.match(pgScript, /pg_restore --single-transaction --exit-on-error --clean --if-exists/);
+
+    assert.equal(
+      readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'),
+      'restored rdb',
+    );
+    assert.equal(existsSync(path.join(fixture.dataDir, 'redis/appendonlydir')), false);
+    assert.equal(existsSync(path.join(fixture.dataDir, 'redis/pre-restore')), false);
+    assert.equal(existsSync(path.join(fixture.dataDir, 'backup-dump/restore')), false);
+    assert.ok(commands.includes('docker|compose|--profile|backup|up|-d|redis'));
+  });
+
+  it('checks the staged dump.rdb before touching Postgres, the workers or Redis', () => {
+    const fixture = restoreFixture();
+    const result = apply(fixture, { STAGE_NO_RDB: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /staged dump\.rdb missing/);
+    const commands = logLines(fixture.log);
+    assert.equal(indexOf(commands, /SCRIPT:pg_restore/), -1, commands.join('\n'));
+    assert.equal(indexOf(commands, /\|stop\|/), -1, commands.join('\n'));
+    assert.equal(readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'), 'live rdb');
+    assert.equal(
+      readFileSync(path.join(fixture.dataDir, 'redis/appendonlydir/live.aof'), 'utf8'),
+      'live aof',
+    );
+  });
+
+  it('starts the workers again and leaves Redis alone when pg_restore fails', () => {
+    const fixture = restoreFixture();
+    const result = apply(fixture, { PG_RESTORE_EXIT: '3' });
+    assert.equal(result.status, 3);
+    const commands = logLines(fixture.log);
+    assert.equal(commands.includes('docker|compose|--profile|backup|stop|redis'), false);
+    assert.equal(
+      commands.at(-1),
+      'docker|compose|--profile|backup|start|worker-rcon|worker-log-ingest',
+    );
+    assert.equal(readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'), 'live rdb');
+    assert.equal(existsSync(path.join(fixture.dataDir, 'backup-dump/restore')), false);
+  });
+
+  it('puts the previous Redis dataset back and restarts redis when the RDB will not load', () => {
+    const fixture = restoreFixture();
+    const result = apply(fixture, { REDIS_SERVER_CRASH: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /redis-server exited while loading dump\.rdb/);
+    assert.equal(readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'), 'live rdb');
+    assert.equal(
+      readFileSync(path.join(fixture.dataDir, 'redis/appendonlydir/live.aof'), 'utf8'),
+      'live aof',
+    );
+    assert.equal(existsSync(path.join(fixture.dataDir, 'redis/pre-restore')), false);
+    const commands = logLines(fixture.log);
+    const upRedis = commands.lastIndexOf('docker|compose|--profile|backup|up|-d|redis');
+    assert.ok(upRedis > indexOf(commands, /SCRIPT:redis/), commands.join('\n'));
+    assert.equal(
+      commands.at(-1),
+      'docker|compose|--profile|backup|start|worker-rcon|worker-log-ingest',
+    );
+  });
+
+  it('gives up on a redis-server that never answers instead of waiting forever', () => {
+    const fixture = restoreFixture();
+    const result = apply(fixture, { REDIS_NO_PONG: '1', REDIS_READY_ATTEMPTS: '5' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /did not answer PING after 5 attempts/);
+    assert.equal(readFileSync(path.join(fixture.dataDir, 'redis/dump.rdb'), 'utf8'), 'live rdb');
+  });
+
+  it('passes an ENV_FILE override to compose unless the bridge set COMPOSE_ENV_FILES', () => {
+    const fixture = restoreFixture();
+    writeFileSync(path.join(fixture.root, '.env.stand'), `DATA_DIR=${fixture.dataDir}\n`);
+    const composeCalls = (env: NodeJS.ProcessEnv): string[] => {
+      const result = run('/bin/bash', [fixture.script], {
+        cwd: fixture.root,
+        env: { ...fixture.env, ...env },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return logLines(fixture.log).filter((line) => line.startsWith('docker|compose'));
+    };
+
+    const override = composeCalls({ ENV_FILE: '.env.stand', COMPOSE_ENV_FILES: '' });
+    assert.ok(
+      override.length > 0 && override.every((line) => line.includes('|--env-file|.env.stand|')),
+    );
+    writeFileSync(fixture.log, '');
+    // --env-file would replace COMPOSE_ENV_FILES and drop the stand's .release.env.
+    const bridge = composeCalls({
+      ENV_FILE: '.env.stand',
+      COMPOSE_ENV_FILES: '.env.stand,.release.env',
+    });
+    assert.ok(bridge.length > 0 && bridge.every((line) => !line.includes('--env-file')));
+  });
+
+  it('refuses to run over the moved-aside dataset of an interrupted restore', () => {
+    const fixture = restoreFixture();
+    mkdirSync(path.join(fixture.dataDir, 'redis/pre-restore'));
+    const result = apply(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /interrupted restore/);
+    const commands = logLines(fixture.log);
+    assert.equal(indexOf(commands, /SCRIPT:stage/), -1, commands.join('\n'));
+    assert.equal(indexOf(commands, /\|stop\|/), -1, commands.join('\n'));
+  });
+});
+
 describe('uninstall safety and cleanup boundaries', () => {
   function uninstallFixture(): {
     root: string;
@@ -1832,8 +2287,14 @@ describe('uninstall safety and cleanup boundaries', () => {
     log: string;
   } {
     const { root, script } = copyScript('scripts/uninstall.sh');
-    mkdirSync(path.join(root, 'data'), { recursive: true });
+    mkdirSync(path.join(root, 'data/postgres'), { recursive: true });
+    mkdirSync(path.join(root, 'data/backup-repo'), { recursive: true });
+    mkdirSync(path.join(root, 'data/backup-dump'), { recursive: true });
     writeFileSync(path.join(root, 'data/sentinel'), 'safe temporary data');
+    writeFileSync(path.join(root, 'data/.hidden'), 'dot file');
+    writeFileSync(path.join(root, 'data/postgres/PG_VERSION'), '16');
+    writeFileSync(path.join(root, 'data/backup-repo/config'), 'restic repository');
+    writeFileSync(path.join(root, 'data/backup-dump/admin.dump'), 'logical dump');
     const shims = shimDirectory();
     const log = path.join(root, 'commands.log');
     loggingShim(shims, 'id', "printf '0\\n'; exit 0");
@@ -1854,7 +2315,11 @@ describe('uninstall safety and cleanup boundaries', () => {
         'exit 0',
       ].join('\n'),
     );
-    loggingShim(shims, 'docker');
+    loggingShim(
+      shims,
+      'docker',
+      `if [[ -n "\${FAIL_DOCKER_MATCH:-}" && "$*" == *"$FAIL_DOCKER_MATCH"* ]]; then exit 51; fi; exit 0`,
+    );
     loggingShim(shims, 'groupdel');
     return {
       root,
@@ -1864,11 +2329,13 @@ describe('uninstall safety and cleanup boundaries', () => {
     };
   }
 
+  const composeDown = 'docker|compose|--profile|backup|down|-v|--remove-orphans';
+
   it('executes confirmed cleanup in order while remapping host mutations', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: fixture.env,
-      input: 'y\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(path.join(fixture.root, 'data')), false);
@@ -1879,16 +2346,70 @@ describe('uninstall safety and cleanup boundaries', () => {
     );
     assert.ok(
       commands.findIndex((line) => line.startsWith('docker|volume|rm')) <
-        commands.indexOf(`rm|-rf|${path.join(fixture.root, 'data')}`),
+        commands.indexOf(composeDown),
+    );
+    assert.ok(
+      commands.indexOf(composeDown) < commands.indexOf(`rm|-rf|${path.join(fixture.root, 'data')}`),
     );
     assert.equal(commands.at(-1), 'groupdel|panel');
+  });
+
+  it('names the backups in the data prompt and keeps them unless separately confirmed', () => {
+    const fixture = uninstallFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: fixture.env,
+      input: 'y\ny\ny\ny\ny\nn\ny\n',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    // `read -p` only shows its prompt on a terminal, so the warning is logged.
+    assert.match(result.stdout, /restic backup repository \(backup-repo\/\)/);
+    assert.match(
+      readFileSync(fixture.script, 'utf8'),
+      /confirm "Remove data tree .*backups in backup-repo\/ and backup-dump\/ are kept/,
+    );
+    const data = path.join(fixture.root, 'data');
+    assert.deepEqual(readdirSync(data).sort(), ['backup-dump', 'backup-repo']);
+    assert.equal(readFileSync(path.join(data, 'backup-repo/config'), 'utf8'), 'restic repository');
+    assert.equal(readFileSync(path.join(data, 'backup-dump/admin.dump'), 'utf8'), 'logical dump');
+    assert.ok(logLines(fixture.log).includes(composeDown));
+  });
+
+  it('stops the compose stack before deleting any data and aborts when that fails', () => {
+    const fixture = uninstallFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, FAIL_DOCKER_MATCH: 'down' },
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /could not stop the compose stack/);
+    const commands = logLines(fixture.log);
+    assert.equal(
+      commands.some((line) => line.startsWith(`rm|-rf|${path.join(fixture.root, 'data')}`)),
+      false,
+    );
+    assert.equal(existsSync(path.join(fixture.root, 'data/postgres/PG_VERSION')), true);
+    assert.equal(commands.includes('groupdel|panel'), false);
+  });
+
+  it('leaves the stack and data alone when the data step is declined', () => {
+    const fixture = uninstallFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: fixture.env,
+      input: 'n\nn\nn\nn\nn\nn\nn\n',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      logLines(fixture.log).some((line) => line.startsWith('docker|')),
+      false,
+    );
+    assert.equal(existsSync(path.join(fixture.root, 'data/postgres/PG_VERSION')), true);
   });
 
   it('stops at daemon-reload failure and leaves later resources untouched', () => {
     const fixture = uninstallFixture();
     const result = run('/bin/bash', [fixture.script], {
       env: { ...fixture.env, FAIL_SYSTEMCTL_MATCH: 'daemon-reload', FAIL_CODE: '48' },
-      input: 'y\ny\ny\ny\ny\n',
+      input: 'y\ny\ny\ny\ny\ny\ny\n',
     });
     assert.equal(result.status, 48);
     const commands = logLines(fixture.log);
@@ -1905,9 +2426,27 @@ describe('uninstall safety and cleanup boundaries', () => {
 });
 
 describe('verify-bridge framed Unix-socket smoke test', () => {
+  type BridgeReply = Record<string, unknown> | 'close';
+  type BridgeResponder = (request: Record<string, unknown>) => BridgeReply;
+
+  /** Replies like the real bridge: the allowlist probes are refused, the rest succeed. */
+  const faithfulBridge: BridgeResponder = (request) => {
+    const refusals: Record<string, string> = {
+      file_read: 'forbidden: path "/etc/shadow" outside allowed roots',
+      file_atomic_write:
+        'forbidden: path "/opt/squad-servers/verify-bridge.tmp" outside allowed roots',
+      container_run: 'forbidden: image "alpine:latest" not in allowlist',
+    };
+    const refusal = refusals[String(request.method)];
+    if (refusal) {
+      return { id: request.id, ok: false, error: { code: 'forbidden', message: refusal } };
+    }
+    return { id: request.id, ok: true, result: { method: request.method } };
+  };
+
   async function bridgeServer(
     socketPath: string,
-    closeOnMethod?: string,
+    respond: BridgeResponder = faithfulBridge,
   ): Promise<{ server: net.Server; requests: Array<Record<string, unknown>> }> {
     const requests: Array<Record<string, unknown>> = [];
     const server = net.createServer((socket) => {
@@ -1923,13 +2462,12 @@ describe('verify-bridge framed Unix-socket smoke test', () => {
           unknown
         >;
         requests.push(request);
-        if (request.method === closeOnMethod) {
+        const reply = respond(request);
+        if (reply === 'close') {
           socket.end();
           return;
         }
-        const payload = Buffer.from(
-          JSON.stringify({ id: request.id, ok: true, result: { method: request.method } }),
-        );
+        const payload = Buffer.from(JSON.stringify(reply));
         const frame = Buffer.alloc(payload.length + 4);
         frame.writeUInt32BE(payload.length, 0);
         payload.copy(frame, 4);
@@ -1939,6 +2477,25 @@ describe('verify-bridge framed Unix-socket smoke test', () => {
     server.listen(socketPath);
     await once(server, 'listening');
     return { server, requests };
+  }
+
+  async function runAgainst(
+    prefix: string,
+    respond?: BridgeResponder,
+  ): Promise<{ result: CommandResult; requests: Array<Record<string, unknown>> }> {
+    const socketPath = path.join(temporaryRoot(prefix), 'bridge.sock');
+    const fixture = await bridgeServer(socketPath, respond);
+    try {
+      const result = await runAsync(
+        '/bin/bash',
+        [path.join(REPOSITORY_ROOT, 'scripts/verify-bridge.sh')],
+        { env: { BRIDGE_SOCKET: socketPath } },
+      );
+      return { result, requests: fixture.requests };
+    } finally {
+      fixture.server.close();
+      await once(fixture.server, 'close');
+    }
   }
 
   it('fails before Python when the configured socket does not exist', () => {
@@ -1951,67 +2508,98 @@ describe('verify-bridge framed Unix-socket smoke test', () => {
   });
 
   it('sends all eight exact method and parameter frames through a temporary socket', async () => {
-    const socketPath = path.join(temporaryRoot('verify-bridge'), 'bridge.sock');
-    const fixture = await bridgeServer(socketPath);
-    try {
-      const result = await runAsync(
-        '/bin/bash',
-        [path.join(REPOSITORY_ROOT, 'scripts/verify-bridge.sh')],
-        { env: { BRIDGE_SOCKET: socketPath } },
-      );
-      assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /\[verify-bridge\].*done/);
-      assert.deepEqual(
-        fixture.requests.map((request) => request.method),
-        [
-          'ping',
-          'host_info',
-          'host_metrics',
-          'process_info',
-          'file_read',
-          'file_atomic_write',
-          'container_inspect',
-          'container_run',
-        ],
-      );
-      const processId = (fixture.requests[3]?.params as { pid?: number }).pid;
-      assert.equal(Number.isInteger(processId) && (processId ?? 0) > 0, true);
-      assert.deepEqual(fixture.requests[4]?.params, { path: '/etc/shadow' });
-      assert.deepEqual(fixture.requests[5]?.params, {
-        path: '/opt/squad-servers/verify-bridge.tmp',
-        content: 'verify-bridge ok\n',
-        mode: 420,
-      });
-      assert.deepEqual(fixture.requests[7]?.params, {
-        name: 'squad-00000000-0000-0000-0000-000000000000',
-        image: 'alpine:latest',
-        networkMode: 'host',
-      });
-    } finally {
-      fixture.server.close();
-      await once(fixture.server, 'close');
-    }
+    const { result, requests } = await runAgainst('verify-bridge');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /\[verify-bridge\].*done/);
+    assert.deepEqual(
+      requests.map((request) => request.method),
+      [
+        'ping',
+        'host_info',
+        'host_metrics',
+        'list_panel_dirs',
+        'file_read',
+        'file_atomic_write',
+        'container_inspect',
+        'container_run',
+      ],
+    );
+    assert.equal(requests[3]?.params, null);
+    assert.deepEqual(requests[4]?.params, { path: '/etc/shadow' });
+    assert.deepEqual(requests[5]?.params, {
+      path: '/opt/squad-servers/verify-bridge.tmp',
+      content: 'verify-bridge ok\n',
+      mode: 420,
+    });
+    // A valid server_id makes the image allowlist, not the UUID check, the
+    // rule that refuses this probe.
+    assert.deepEqual(requests[7]?.params, {
+      server_id: '00000000-0000-0000-0000-000000000000',
+      image: 'alpine:latest',
+    });
   });
 
   it('propagates a missing response and sends no calls after the failed boundary', async () => {
-    const socketPath = path.join(temporaryRoot('verify-bridge-failure'), 'bridge.sock');
-    const fixture = await bridgeServer(socketPath, 'host_metrics');
-    try {
-      const result = await runAsync(
-        '/bin/bash',
-        [path.join(REPOSITORY_ROOT, 'scripts/verify-bridge.sh')],
-        { env: { BRIDGE_SOCKET: socketPath } },
-      );
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /\(no response\)/);
-      assert.deepEqual(
-        fixture.requests.map((request) => request.method),
-        ['ping', 'host_info', 'host_metrics'],
-      );
-    } finally {
-      fixture.server.close();
-      await once(fixture.server, 'close');
-    }
+    const { result, requests } = await runAgainst('verify-bridge-failure', (request) =>
+      request.method === 'host_metrics' ? 'close' : faithfulBridge(request),
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /\(no response\)/);
+    assert.deepEqual(
+      requests.map((request) => request.method),
+      ['ping', 'host_info', 'host_metrics'],
+    );
+  });
+
+  it('fails without printing the body when a must-be-forbidden probe succeeds', async () => {
+    const { result, requests } = await runAgainst('verify-bridge-open-allowlist', (request) =>
+      request.method === 'file_read'
+        ? { id: request.id, ok: true, result: { content: 'root:SECRET-SHADOW-HASH:19000' } }
+        : faithfulBridge(request),
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /file_read.*expected a forbidden refusal/);
+    assert.doesNotMatch(result.stdout + result.stderr, /SECRET-SHADOW-HASH/);
+    assert.doesNotMatch(result.stdout, /done/);
+    assert.equal(requests.at(-1)?.method, 'file_read');
+  });
+
+  it('fails when a probe is refused for a reason other than the allowlist', async () => {
+    const { result } = await runAgainst('verify-bridge-wrong-code', (request) =>
+      request.method === 'file_atomic_write'
+        ? { id: request.id, ok: false, error: { code: 'runtime_error', message: 'disk full' } }
+        : faithfulBridge(request),
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /file_atomic_write.*expected a forbidden refusal.*runtime_error/);
+  });
+
+  it('fails when container_run is refused by a rule other than the image allowlist', async () => {
+    const { result } = await runAgainst('verify-bridge-wrong-rule', (request) =>
+      request.method === 'container_run'
+        ? {
+            id: request.id,
+            ok: false,
+            error: { code: 'forbidden', message: 'forbidden: uuid "" is not a UUID' },
+          }
+        : faithfulBridge(request),
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /container_run.*not in allowlist/);
+  });
+
+  it('fails when a probe that must succeed returns an error', async () => {
+    const { result, requests } = await runAgainst('verify-bridge-ping-error', (request) =>
+      request.method === 'ping'
+        ? { id: request.id, ok: false, error: { code: 'internal', message: 'boom' } }
+        : faithfulBridge(request),
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /ping.*expected ok.*internal/);
+    assert.deepEqual(
+      requests.map((request) => request.method),
+      ['ping'],
+    );
   });
 });
 
@@ -2119,5 +2707,156 @@ describe('backup-restore postgres readiness (#291)', () => {
       7,
       'expected the attempt budget to be honoured',
     );
+  });
+});
+
+describe('infra hardening contracts (#47)', () => {
+  const read = (relativePath: string) =>
+    readFileSync(path.join(REPOSITORY_ROOT, relativePath), 'utf8');
+
+  it('install-host-bridge points the bridge backup RPCs at the deploy directory and its compose file', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    const dropIn = installer.slice(
+      installer.indexOf('panel-host-bridge.service.d/install.conf" <<EOF'),
+    );
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_DIR=\$\{REPO_DIR\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_FILE=\$\{PANEL_COMPOSE_FILE\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_ENV_FILES=\$\{PANEL_COMPOSE_ENV_FILES\}\n/);
+    assert.match(installer, /PANEL_COMPOSE_FILE="\$\{PANEL_COMPOSE_FILE:-docker\/compose\.yml\}"/);
+    assert.match(installer, /PANEL_COMPOSE_ENV_FILES="\$\{PANEL_COMPOSE_ENV_FILES:-\.env\}"/);
+  });
+
+  it('install-host-bridge creates the media directory the api and media-publisher bind', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    assert.match(installer, /"\$\{DATA_DIR\}\/media" \\/);
+  });
+
+  it('bootstrap generates the restic password and the least-privilege database login', () => {
+    const bootstrap = read('scripts/bootstrap.sh');
+    const envBlock = bootstrap.slice(bootstrap.indexOf('cat > "${REPO}/.env" <<EOF'));
+    assert.match(envBlock, /\nRESTIC_PASSWORD=\$\{RESTIC_PW\}\n/);
+    assert.match(envBlock, /\nPANEL_DB_USER=panel_app\n/);
+    assert.match(envBlock, /\nPANEL_DB_PASSWORD=\$\{APP_DB_PW\}\n/);
+    assert.match(bootstrap, /RESTIC_PW=\$\(openssl rand -hex 32\)/);
+    assert.match(bootstrap, /APP_DB_PW=\$\(openssl rand -hex 32\)/);
+  });
+
+  it('restore.sh loads the restored RDB into a one-off server that takes the redis password', () => {
+    const restore = read('scripts/restore.sh');
+    assert.match(
+      restore,
+      /redis-server --dir \/data --dbfilename dump\.rdb --appendonly no --save "" --requirepass "\$REDISCLI_AUTH" &/,
+    );
+  });
+});
+
+/**
+ * `scripts/test-fullstack-down-v.sh` destroys the postgres/redis bind trees to
+ * make the data loss real before restoring. It used to `rm -rf dir/* 2>/dev/null
+ * || true`: a permission error, a mis-parsed quoted DATA_DIR or dot files left
+ * the data in place and the run still printed PASS without a restore ever
+ * being exercised. The helpers are extracted from the real script so the test
+ * cannot drift from it.
+ */
+function fullstackHelpers(): string {
+  const source = readFileSync(
+    path.join(REPOSITORY_ROOT, 'scripts/test-fullstack-down-v.sh'),
+    'utf8',
+  );
+  const helpers = ['resolve_data_dir', 'wipe_bind_dir'].map((name) => {
+    const body = source.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm'))?.[0];
+    assert.ok(body, `could not extract ${name}() from scripts/test-fullstack-down-v.sh`);
+    return body;
+  });
+  return helpers.join('\n');
+}
+
+function fullstackHarness(root: string, body: string): string {
+  const script = path.join(root, 'harness.sh');
+  writeFileSync(
+    script,
+    [
+      '#!/usr/bin/env bash',
+      'set -Eeuo pipefail',
+      'fail() { echo "FAIL: $*" >&2; exit 9; }',
+      fullstackHelpers(),
+      body,
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return script;
+}
+
+describe('full-stack down -v data wipe', () => {
+  it('removes regular and dot files and leaves the bind empty', () => {
+    const root = temporaryRoot('fullstack-wipe');
+    const bind = path.join(root, 'postgres');
+    mkdirSync(path.join(bind, 'base'), { recursive: true });
+    writeFileSync(path.join(bind, 'PG_VERSION'), '16');
+    writeFileSync(path.join(bind, '.s.PGSQL.lock'), 'lock');
+    writeFileSync(path.join(bind, 'base/1'), 'rows');
+    const result = run('/bin/bash', [fullstackHarness(root, `wipe_bind_dir "${bind}"`)]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readdirSync(bind), []);
+  });
+
+  it('fails when the bind directory does not exist', () => {
+    const root = temporaryRoot('fullstack-wipe-missing');
+    const result = run('/bin/bash', [
+      fullstackHarness(root, `wipe_bind_dir "${path.join(root, 'absent')}"`),
+    ]);
+    assert.equal(result.status, 9);
+    assert.match(result.stderr, /does not exist/);
+  });
+
+  it(
+    'fails instead of passing when a file cannot be removed',
+    { skip: process.getuid?.() === 0 ? 'root can delete anything' : false },
+    () => {
+      const root = temporaryRoot('fullstack-wipe-denied');
+      const bind = path.join(root, 'redis');
+      mkdirSync(path.join(bind, 'locked'), { recursive: true });
+      writeFileSync(path.join(bind, 'locked/dump.rdb'), 'data');
+      chmodSync(path.join(bind, 'locked'), 0o500);
+      try {
+        const result = run('/bin/bash', [fullstackHarness(root, `wipe_bind_dir "${bind}"`)]);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /could not wipe/);
+      } finally {
+        chmodSync(path.join(bind, 'locked'), 0o700);
+      }
+    },
+  );
+
+  it('fails when the bind is still not empty after the wipe', () => {
+    const root = temporaryRoot('fullstack-wipe-noop');
+    const bind = path.join(root, 'postgres');
+    mkdirSync(bind, { recursive: true });
+    writeFileSync(path.join(bind, 'PG_VERSION'), '16');
+    const shims = shimDirectory();
+    executable(path.join(shims, 'find'), 'exit 0');
+    const result = run('/bin/bash', [fullstackHarness(root, `wipe_bind_dir "${bind}"`)], {
+      env: { PATH: `${shims}:/usr/bin:/bin` },
+    });
+    assert.equal(result.status, 9);
+    assert.match(result.stderr, /still not empty/);
+  });
+
+  it('strips quotes from DATA_DIR and resolves it against the repository', () => {
+    const root = temporaryRoot('fullstack-data-dir');
+    const cases: Array<[string, string]> = [
+      ['DATA_DIR="./data"\n', path.join(root, 'data')],
+      ["DATA_DIR='/srv/panel data'\n", '/srv/panel data'],
+      ['OTHER=1\n', path.join(root, 'data')],
+      ['DATA_DIR=./one\nDATA_DIR=/srv/two # host data\n', '/srv/two'],
+    ];
+    for (const [envFile, expected] of cases) {
+      writeFileSync(path.join(root, '.env'), envFile);
+      const result = run('/bin/bash', [
+        fullstackHarness(root, `REPO="${root}"; resolve_data_dir "${path.join(root, '.env')}"`),
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), expected, envFile);
+    }
   });
 });

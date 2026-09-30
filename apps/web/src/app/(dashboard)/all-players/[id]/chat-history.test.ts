@@ -4,9 +4,7 @@ import {
   buildChatQuery,
   type ChatFilters,
   type ChatMsg,
-  dateInputToIso,
   EMPTY_CHAT_FILTERS,
-  formatChatTs,
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
@@ -69,8 +67,8 @@ describe('buildChatQuery', () => {
     expect(params.get('scope')).toBe('admin');
     expect(params.get('source')).toBe('panel');
     expect(params.get('text')).toBe('flank');
-    expect(params.get('from')).toBe('2026-07-01T00:00:00.000Z');
-    expect(params.get('to')).toBe('2026-07-02T23:59:59.999Z');
+    expect(params.get('from')).toBe(new Date(2026, 6, 1, 0, 0, 0, 0).toISOString());
+    expect(params.get('to')).toBe(new Date(2026, 6, 2, 23, 59, 59, 999).toISOString());
   });
 
   it('omits whitespace-only text', () => {
@@ -92,21 +90,6 @@ describe('thirtyDayCountQuery', () => {
     expect(params.get('playerId')).toBe(PLAYER);
     expect(params.get('from')).toBe('2026-07-01T00:00:00.000Z');
     expect(params.has('to')).toBe(false);
-  });
-});
-
-describe('dateInputToIso', () => {
-  it('returns null for an empty value', () => {
-    expect(dateInputToIso('', false)).toBeNull();
-  });
-
-  it('maps to start or end of the UTC day', () => {
-    expect(dateInputToIso('2026-07-01', false)).toBe('2026-07-01T00:00:00.000Z');
-    expect(dateInputToIso('2026-07-01', true)).toBe('2026-07-01T23:59:59.999Z');
-  });
-
-  it('returns null for a malformed value', () => {
-    expect(dateInputToIso('not-a-date', false)).toBeNull();
   });
 });
 
@@ -135,9 +118,13 @@ describe('prependLiveMessage', () => {
 });
 
 describe('liveToChatMsg', () => {
+  // Real live-bus frames carry a uuidv7 id (packages/chat-ingest/src/store.ts),
+  // never the archive row's numeric bigserial id — the fixture below uses a
+  // realistic uuidv7-shaped id instead of the old `'42'` stand-in that hid
+  // the NaN bug (#432, #470).
   function live(overrides: Partial<LiveChatMessage> = {}): LiveChatMessage {
     return {
-      id: '42',
+      id: '0192c1e4-9b2a-7c31-8f2e-5a1d3b6e7c90',
       server_id: 'srv-1',
       ts: '2026-07-05T10:00:00.000Z',
       channel: 'ChatTeam',
@@ -146,14 +133,15 @@ describe('liveToChatMsg', () => {
       steam_id64: null,
       eos_id: null,
       message: 'moving up',
+      source: 'log',
       ...overrides,
     };
   }
 
-  it('maps a live channel event into a table row', () => {
+  it('maps a live channel event into a table row, keyed by a live: prefix rather than a numeric id', () => {
     const row = liveToChatMsg(live());
     expect(row).toEqual({
-      id: 42,
+      id: 'live:0192c1e4-9b2a-7c31-8f2e-5a1d3b6e7c90',
       serverId: 'srv-1',
       scope: 'team',
       message: 'moving up',
@@ -166,12 +154,13 @@ describe('liveToChatMsg', () => {
     });
   });
 
-  it('drops events without a resolved player', () => {
-    expect(liveToChatMsg(live({ player_id: null }))).toBeNull();
+  it('carries the frame source through instead of hardcoding "log" (#470)', () => {
+    const row = liveToChatMsg(live({ source: 'rcon' }));
+    expect(row?.source).toBe('rcon');
   });
 
-  it('drops events with a non-numeric id', () => {
-    expect(liveToChatMsg(live({ id: 'not-a-number' }))).toBeNull();
+  it('drops events without a resolved player', () => {
+    expect(liveToChatMsg(live({ player_id: null }))).toBeNull();
   });
 });
 
@@ -207,10 +196,5 @@ describe('labels and formatting', () => {
     expect(scopeLabel('unknown')).toBe('unknown');
     expect(sourceLabel('panel')).toBe('Панель');
     expect(sourceLabel('rcon')).toBe('Игра (RCON)');
-  });
-
-  it('formats a timestamp and falls back on garbage input', () => {
-    expect(formatChatTs('nonsense')).toBe('nonsense');
-    expect(formatChatTs('2026-07-01T12:00:00.000Z')).toContain('2026');
   });
 });

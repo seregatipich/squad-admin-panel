@@ -1,35 +1,32 @@
 import type { DatabaseClient } from '@squad/db';
 import { markTypes } from '@squad/db/schema';
+import {
+  MARK_TYPE_ICONS,
+  MARK_TYPE_SEVERITY_MAX,
+  MARK_TYPE_SEVERITY_MIN,
+  type MarkTypeIcon,
+} from '@squad/shared-config/mark-types';
 
-export const MARK_TYPE_ICONS = [
-  'scan-eye',
-  'crosshair',
-  'gauge',
-  'boxes',
-  'refresh-cw',
-  'skull',
-  'file-warning',
-  'message-square-warning',
-  'flag',
-  'shield-alert',
-  'bug',
-  'ban',
-  'alert-triangle',
-  'eye-off',
-  'radar',
-  'zap',
-] as const;
-
-export type MarkTypeIcon = (typeof MARK_TYPE_ICONS)[number];
+export { MARK_TYPE_ICONS, MARK_TYPE_SEVERITY_MAX, MARK_TYPE_SEVERITY_MIN, type MarkTypeIcon };
 
 const MARK_TYPE_ICON_SET: ReadonlySet<string> = new Set(MARK_TYPE_ICONS);
-
-export const MARK_TYPE_SEVERITY_MIN = 1;
-export const MARK_TYPE_SEVERITY_MAX = 5;
 
 export function isMarkTypeIcon(value: string): value is MarkTypeIcon {
   return MARK_TYPE_ICON_SET.has(value);
 }
+
+/**
+ * Ids `1..MARK_TYPE_SEED_ID_CEILING` are reserved for {@link MARK_TYPE_SEEDS};
+ * operator-created types are numbered above it, so a seed added by a later
+ * release never collides with a custom type's id.
+ */
+export const MARK_TYPE_SEED_ID_CEILING = 100;
+
+/** Unique index on `mark_types.slug`; tells a slug clash from any other 23505. */
+export const MARK_TYPE_SLUG_CONSTRAINT = 'mark_types_slug_key';
+
+/** `pg_advisory_xact_lock` key that serialises `POST /api/v1/mark-types`. */
+export const MARK_TYPE_CREATE_LOCK = 'mark_types_create';
 
 export interface MarkTypeSeed {
   id: number;
@@ -116,6 +113,11 @@ export const MARK_TYPE_SEEDS: readonly MarkTypeSeed[] = [
   },
 ];
 
+/**
+ * Inserts any missing {@link MARK_TYPE_SEEDS}. Rows that already exist — by id
+ * or by slug — are left untouched, so operator edits survive restarts and a
+ * slug an operator already used never aborts API startup.
+ */
 export async function ensureMarkTypes(db: DatabaseClient): Promise<void> {
   await db
     .insert(markTypes)
@@ -130,5 +132,5 @@ export async function ensureMarkTypes(db: DatabaseClient): Promise<void> {
         sortOrder: seed.sortOrder,
       })),
     )
-    .onConflictDoNothing({ target: markTypes.id });
+    .onConflictDoNothing();
 }

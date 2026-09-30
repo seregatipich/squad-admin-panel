@@ -23,10 +23,12 @@ const CHANNEL_MESSAGE = 4;
 const ADMIN_STEAM = testSteamId(992010);
 const NOACCESS_STEAM = testSteamId(992011);
 const TARGET_STEAM = testSteamId(992012);
+const EXPIRED_STEAM = testSteamId(992013);
 
 const ADMIN_DISCORD_ID = '800000000000000101';
 const NOACCESS_DISCORD_ID = '800000000000000102';
 const UNLINKED_DISCORD_ID = '800000000000000103';
+const EXPIRED_DISCORD_ID = '800000000000000104';
 
 const URL = '/api/v1/integrations/discord/interactions';
 
@@ -102,12 +104,37 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
       .returning({ id: players.id });
     targetPlayerId = target?.id as string;
 
+    // A panel-access role whose grant already lapsed but that the role-expirer
+    // tick has not stripped yet: RBAC treats it as no role at all (#140).
+    const expiredRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: expiredRoleId,
+      name: 'discord-cmd-expired-admin',
+      color: 'sky',
+      panelAccess: true,
+    });
+    const [expired] = await h.db
+      .insert(players)
+      .values({
+        steamId64: EXPIRED_STEAM,
+        canonicalName: 'DiscordCmdExpired',
+        canonicalNameNormalized: 'discordcmdexpired',
+        roleId: expiredRoleId,
+        roleExpiresAt: new Date(Date.now() - 60_000),
+      })
+      .returning({ id: players.id });
+
     await h.db.insert(playerDiscordLinks).values([
       { playerId: adminPlayerId, discordUserId: ADMIN_DISCORD_ID, discordUsername: 'admin#1' },
       {
         playerId: noAccess?.id as string,
         discordUserId: NOACCESS_DISCORD_ID,
         discordUsername: 'noaccess#1',
+      },
+      {
+        playerId: expired?.id as string,
+        discordUserId: EXPIRED_DISCORD_ID,
+        discordUsername: 'expired#1',
       },
     ]);
 
@@ -143,6 +170,18 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('rejects a validly signed interaction whose timestamp is stale (#141)', async () => {
+    const stale = String(Math.floor(Date.now() / 1000) - 10 * 60);
+    const res = await signedInject({ type: 1 }, { timestamp: stale });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'stale_timestamp' });
+  });
+
+  it('rejects a signed interaction whose timestamp is not a unix time (#141)', async () => {
+    const res = await signedInject({ type: 1 }, { timestamp: 'not-a-number' });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('rejects an interaction with no signature headers at all', async () => {
     const res = await h.app.inject({
       method: 'POST',
@@ -169,6 +208,17 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
     const body = res.json() as { data: { content: string; flags: number } };
     expect(body.data.flags).toBe(EPHEMERAL);
     expect(body.data.content).toContain('доступ');
+  });
+
+  it('refuses every command from a linked player whose panel-access role has expired', async () => {
+    for (const name of ['status', 'player', 'online-admins']) {
+      const res = await signedInject(
+        command(name, EXPIRED_DISCORD_ID, [{ name: 'query', value: 'DiscordCmdTarget' }]),
+      );
+      const body = res.json() as { data: { content: string; flags: number } };
+      expect(body.data.flags).toBe(EPHEMERAL);
+      expect(body.data.content, name).toContain('нет доступа');
+    }
   });
 
   it('answers /status with the live map, players and queue, ephemerally', async () => {
@@ -215,6 +265,16 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
     expect(body.data.content).toContain(`https://panel.test/players/${targetPlayerId}`);
   });
 
+  it('treats LIKE wildcards in a /player query literally instead of matching anyone', async () => {
+    for (const wildcard of ['%', '_', '%_%']) {
+      const res = await signedInject(
+        command('player', ADMIN_DISCORD_ID, [{ name: 'query', value: wildcard }]),
+      );
+      const body = res.json() as { data: { content: string } };
+      expect(body.data.content, wildcard).toContain('не найден');
+    }
+  });
+
   it('reports no match for an unknown player query', async () => {
     const res = await signedInject(
       command('player', ADMIN_DISCORD_ID, [{ name: 'query', value: 'nobody-by-that-name-xyz' }]),
@@ -245,6 +305,28 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
     expect(body.data.flags).toBe(EPHEMERAL);
     expect(body.data.content).toContain('AdminOnline');
     expect(body.data.content).not.toContain('DiscordCmdTarget');
+  });
+
+  it('does not list a roster player whose panel-access role has expired for /online-admins', async () => {
+    await h.redis.set(
+      `rcon:roster:${serverId}`,
+      JSON.stringify({
+        server_id: serverId,
+        polled_at: new Date().toISOString(),
+        players: [
+          { steam_id64: ADMIN_STEAM.toString(), name: 'AdminOnline' },
+          { steam_id64: EXPIRED_STEAM.toString(), name: 'ExpiredAdminOnline' },
+        ],
+      }),
+      'EX',
+      90,
+    );
+
+    const res = await signedInject(command('online-admins', ADMIN_DISCORD_ID));
+
+    const body = res.json() as { data: { content: string } };
+    expect(body.data.content).toContain('AdminOnline');
+    expect(body.data.content).not.toContain('ExpiredAdminOnline');
   });
 
   it('writes an audit row with the linked player as actor for every command', async () => {

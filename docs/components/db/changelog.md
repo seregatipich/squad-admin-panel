@@ -4,7 +4,139 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-30
+
+### Audit-wave migrations consolidated into 0119–0135
+
+The audit branches each added migrations independently and collided on 0119–0123 and 0130–0132. None had been applied to any database, so they were merged into one contiguous series; the entries below still cite the pre-consolidation names. The mapping (final file <- original files):
+
+| Final migration | Original migrations |
+|---|---|
+| `0119_message_templates_seed_once` | `0119_message_templates_seed_once` |
+| `0120_automation_kick_default_reason` | `0119_automation_kick_default_reason` |
+| `0121_role_can_manage_infrastructure` | `0120_role_can_manage_infrastructure` |
+| `0122_role_permissions_legacy_wipe` | `0121_role_permissions_legacy_wipe` |
+| `0123_whitelist_application_verified` | `0120_whitelist_application_verified` |
+| `0124_seasons_start_day_unique` | `0119_seasons_start_day_unique` |
+| `0125_clan_tags_normalized_uniqueness` | `0121_clan_tags_normalized_uniqueness` |
+| `0126_player_search_and_report_indexes` | `0119_player_name_trgm_indexes`, `0120_player_name_trgm_indexes`, `0119_player_search_trgm_and_report_created_idx`, `0119_search_and_retention_indexes` (trigram and report indexes) |
+| `0127_events_indexes` | `0119_events_feed_indexes`, `0119_events_seeding_kind_idx` |
+| `0128_list_query_indexes` | `0119_list_query_indexes`, `0119_api_route_audit_indexes` (indexes), `0123_chat_messages_sent_id_idx`, `0119_search_and_retention_indexes` (`processed_events`) |
+| `0129_vip_subscription_renewal_lead` | `0119_api_route_audit_indexes` (data fix) |
+| `0130_media_publication_upload_session` | `0130_media_publication_upload_session` |
+| `0131_combat_events_match_uuid` | `0131_combat_events_match_uuid` |
+| `0132_events_notify_per_statement` | `0120_events_notify_per_statement`, `0119_schema_integrity_hardening` (section 7) |
+| `0133_schema_integrity_hardening` | `0119_schema_integrity_hardening` (FKs, `config_versions` parent, indexes) |
+| `0134_appeal_token_hash_and_api_token_index` | `0119_appeal_token_hash_and_api_token_index`, `0119_schema_integrity_hardening` (section 6) |
+| `0135_audit_log_chain_v2` | `0119_audit_log_id_in_chain_order`, `0122_audit_log_chain_order`, `0119_schema_integrity_hardening` (section 2), `0132_audit_log_chain_v2` |
+
+`audit_log_created_at_text()` (from the integrity migration) was dropped: new rows are hashed with the v2 form, which renders `created_at` inside the trigger, and v1 rows are verified with `created_at::text` in a UTC session. The appeal token keeps the hex sha256 design and the expand-only legacy `tracking_token` column; the base64url variant was abandoned.
+
+---
+
+## 2026-09-28
+
+### Индексы поиска и хранения, подтверждённые заявки whitelist (migrations 0119, 0120, #52)
+
+**Files:** `packages/db/drizzle/0119_search_and_retention_indexes.sql`, `packages/db/drizzle/0120_whitelist_application_verified.sql`, `packages/db/src/schema/{players,player-name-history,player-reports,events,whitelist-applications}.ts`, `packages/db/test/search-and-retention-indexes.migration.test.ts`
+
+- 0119: триграммные GIN-индексы `players_canonical_name_normalized_trgm_idx` и `player_name_history_name_normalized_trgm_idx` для поиска ников `LIKE '%…%'` (B-tree такой поиск не обслуживает); `player_reports_reporter_created_idx (reporter_player_id, created_at)` и `player_reports_handler_player_idx`; `processed_events_processed_at_idx` под удаление по сроку хранения вместо неиспользуемого `processed_events_group_idx`.
+- 0120: `whitelist_applications.verified boolean NOT NULL DEFAULT false`; уникальность «одна ожидающая заявка на SteamID64» теперь отдельно для подтверждённых и неподтверждённых заявок, так что анонимная заявка на чужой SteamID больше не блокирует владельца.
+- Обе миграции совместимы с предыдущим релизом: меняются только индексы и добавляется столбец со значением по умолчанию.
+
+### `recomputeServerDailyStats`: онлайн и администраторы (#52)
+
+- Онлайн — это все подключённые сессии (`online`, `boost`, `seed`); раньше игроки в режиме сидинга и boost выпадали из `avg_online`, `peak_online`, `online_seconds`. Очередь (`queue`) по-прежнему считается отдельно.
+- Роль только с `reserve` (VIP, `QueuePriority`) больше не делает игрока администратором в `avg_admins`, `peak_admins`.
+- Уже посчитанные дни не пересчитываются: воркер переписывает только окно «вчера + сегодня».
+
+### `seed-demo` только для локальной базы (#52)
+
+- Скрипт отказывается работать при `NODE_ENV=production` и с хостом `DATABASE_URL`, отличным от `localhost`, `127.0.0.1`, `::1`, `postgres` (разрешить удалённую тестовую базу: `SEED_DEMO_ALLOW_REMOTE=1`). Он исключён из сборки (`tsconfig.build.json`) и не попадает в `dist/` и образ API. Демо-SteamID лежат ниже диапазона реальных аккаунтов; существующее название организации не затирается.
+
+### Trigram indexes for player-name substring search (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_player_name_trgm_indexes.sql`, `packages/db/src/schema/{players,player-name-history}.ts`, `packages/db/test/player-name-trgm-indexes.migration.test.ts`
+
+Issue #69 (finding #180). Name search (`GET /api/v1/leaderboards?search=`, the events player filter) matches `canonical_name_normalized` and `player_name_history.name_normalized` with `LIKE '%q%'`, which the existing btree indexes cannot serve. The migration adds `players_canonical_name_normalized_trgm_idx` and `player_name_history_name_normalized_trgm_idx` (`USING gin (… gin_trgm_ops)`); `pg_trgm` is already enabled since 0025. Rollback-safe: additive indexes only.
+
+---
+
+### Trigram indexes for player search, created_at index for report analytics (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_player_search_trgm_and_report_created_idx.sql`, `packages/db/src/schema/{players,player-name-history,player-reports}.ts`, `packages/db/test/migrations.regression.test.ts`
+
+Issue #71. The player search (`/api/v1/players?q=`, `/players/search`) and the role-member search match `LIKE '%…%'`, which the btree indexes on the normalized names cannot serve. The migration adds GIN `gin_trgm_ops` indexes `players_canonical_name_normalized_trgm_idx` and `player_name_history_name_normalized_trgm_idx` (pg_trgm has been installed since 0025), and `player_reports_created_at_idx` for the report-analytics date window. Rollback-safe: indexes only.
+
+### Schema integrity and storage hardening (migration 0119)
+
+**Files:** `packages/db/drizzle/0119_schema_integrity_hardening.sql`, `packages/db/src/schema/{audit-log,config-versions,ban-appeals,rotation-schedule,seed-schedule,matches,game-votes,role-squad-permissions,player-kit-time,media-links,issue-links,automation-rules,layers}.ts`, `packages/db/test/schema-integrity.migration.test.ts`
+
+Issue #77.
+
+- `audit_log.actor_player_id`, `audit_log.actor_token_id` and `config_versions.author_player_id` are NO ACTION instead of `ON DELETE SET NULL`. The SET NULL action is an UPDATE, which the append-only triggers and the actor CHECK constraints reject, so deleting a referenced player or token already failed — now with an explicit foreign-key violation (#1069, #1076).
+- `audit_log_append()` assigns the row id after taking its advisory lock and the `id` column default is dropped, so ids follow the chain order even when a session drew its id before another took the lock (#1066). The canonical timestamp is `audit_log_created_at_text(created_at)`, a function pinned to `TimeZone = 'UTC'` and `DateStyle = 'ISO, MDY'`; the API route `GET /api/v1/audit/verify-chain` and `scripts/verify-audit-chain.ts` use it too, so neither writer nor verifier depends on its session settings (#1067). Existing rows were hashed in UTC and still verify.
+- `config_versions.parent_version_id` references `config_versions(id)` again (lost when 0008 recreated the table), added `NOT VALID` and validated when no orphan exists (#1070).
+- Dropped `matches_server_started_idx`, `game_votes_server_started_idx`, `role_squad_permissions_role_idx`, `player_kit_time_player_id_idx`, `media_links_media_idx`, `issue_links_issue_idx` and `automation_rules_enabled_idx` (#1077, #1082).
+- New partial indexes `rotation_schedule_pending_idx` and `seed_schedule_active_idx` match the scheduler's reads, which now skip executed one-off entries in SQL (#1083).
+- `ban_appeals.tracking_token_hash` (sha256 hex, unique, NOT NULL) replaces the plaintext bearer token; existing tokens are hashed and cleared, and a trigger hashes any plaintext the previous release writes (#1084).
+- `trg_events_notify_appended` fires once per statement over a transition table and notifies each distinct `(server_id, kind)`; channel and payload are unchanged (#1089).
+- `packages/db/sql/chat-messages.sql` gains `matched_rule_id` and the `'rcon'` source; `player-coplay.sql` cites `0036_player_coplay.sql` (#1092).
+- `pnpm db:generate` now fails with a pointer to the hand-written workflow, and the stale `meta/0008_snapshot.json` is gone (#1090). `scripts/test-migration-lint.sh` (CI) rejects explicit `BEGIN;`/`COMMIT;` in new migrations and CHECK constraints on large partitioned tables added without `NOT VALID` (#1068, #1330).
+
+Rollback: the previous release does not delete players or tokens, never sets `audit_log.id`, verifies the chain in a UTC session, and works without the dropped indexes. Its appeal status page looks tokens up in plaintext, so it answers "not found" until the next roll forward; submissions keep working.
+
+### `relayAdminsCfgSyncOutbox` relays one row per transaction; ALT-7 alert frames are classifiable (no migration)
+
+**Files:** `packages/db/src/admins-cfg-outbox.ts`, `packages/db/src/admins-cfg-sync.ts`, `packages/db/src/alt-ban.ts`
+
+- The outbox relay commits each published row on its own, so a Redis stall holds one row lock for at most one bounded `XADD` and a failure never re-publishes rows already relayed. A failing row is skipped for the rest of the run instead of blocking every server behind it, the run stops after `maxConsecutiveFailures` (default 3) failures in a row and then rejects with the first failure. The unused `batchSize` option is replaced by `maxConsecutiveFailures`. A payload that is not a JSON object is refused (`admins_cfg_outbox_invalid_payload`); the enqueue helpers take `payload: object` (#1096, #1100).
+- `snapshotRolesAndAdmins` reads the typed `execute()` rows without `as unknown as` casts (#1099).
+- `raiseAltBanAlert` writes all matching `alert_events` in one insert before publishing, and each `alert.triggered` frame carries `event_kind: 'alt.ban_evasion_suspected'`, `alert_event_id`, `rule_id`, `severity`, `trigger` (and `server_id` on connect) instead of the raw payload with player ids (#1095).
+
+---
+
+## 2026-09-28
+
+Issue [#50](https://github.com/seregatipich/squad-admin-panel/issues/50).
+
+### Audit chain v2 and TRUNCATE guards (migration 0132)
+
+**Files:** `packages/db/drizzle/0132_audit_log_chain_v2.sql`, `packages/db/src/schema/audit-log.ts`, `apps/api/src/lib/audit-chain.ts`, `packages/db/test/audit-integrity.test.ts`
+
+`audit_log_append()` hashed only `action|target|context::text|created_at::text`, so actor, IP, snapshots and status code could be rewritten undetected, and `TRUNCATE audit_log` bypassed the row-level deny triggers (an empty chain verified as intact). New rows get `hash_version = 2` and a length-prefixed canonical form over every column with a UTC timestamp; BEFORE TRUNCATE statement triggers now refuse TRUNCATE on `audit_log` and `config_versions`. v1 rows still verify with the old form.
+
+
+
+### combat_events.match_uuid (migration 0131)
+
+**Files:** `packages/db/drizzle/0131_combat_events_match_uuid.sql`, `packages/db/sql/combat-events.sql`, `packages/db/src/schema/combat-events.ts`
+
+`match_id` was bigint while `matches.id` is uuid, so it was never written. `match_uuid` references `matches(id)`; `match_id` is deprecated and dropped in a later release.
+
+### Accrual runs serialized per day (no migration)
+
+**Files:** `packages/db/src/economy/accrual.ts`, `packages/db/test/economy-accrual.test.ts`
+
+`bonus_transactions_accrual_idempotency_idx` includes the partition key `created_at`, so it never rejects a duplicate. `accrueDailyBonuses` now takes a `bonus_accrual:<day>` transaction advisory lock instead of relying on the incidental row locks of the `seed_seconds` reset.
+
+### 0115 is not rollback-compatible (docs)
+
+`0115_remove_bss_integration` dropped columns the previous release still selects; see "Two-phase removal" in `docs/operations/migrations.md`.
+
 ## 2026-09-27
+
+### Audit fixes from #36 (migrations 0119–0123)
+
+**Files:** `packages/db/drizzle/0119_message_templates_seed_once.sql`, `0120_role_can_manage_infrastructure.sql`, `0121_role_permissions_legacy_wipe.sql`, `0122_audit_log_chain_order.sql`, `0123_chat_messages_sent_id_idx.sql`, `packages/db/src/schema/{roles,audit-log,chat-messages}.ts`, `packages/db/sql/chat-messages.sql`
+
+- **0119** seeds the 16 built-in `message_templates` once (`ON CONFLICT (id) DO NOTHING`). The API no longer re-inserts them on every read, so a deleted template stays deleted.
+- **0120** adds `roles.can_manage_infrastructure boolean NOT NULL DEFAULT false` and sets it for Owner, the seeded Admin role and every role with `can_edit_roles`. `rbac.ts` withholds the host/server-lifecycle/config/Admins.cfg/API-token keys without it.
+- **0121** deletes every row of `role_permissions`. No route has written the table since 0015, and the leftover 0009-era rows granted keys that the roles UI could not show.
+- **0122** redefines `audit_log_append()`: it draws `NEW.id` from the column's sequence after taking the chain lock and runs with `SET TimeZone = 'UTC'`. The migration also drops the `audit_log.id` default, so id order is chain order and the hashed `created_at::text` no longer depends on the writer's session. Rows written by the default UTC sessions verify unchanged.
+- **0123** adds `chat_messages_sent_id_idx` btree `(sent_at, id)` on the partitioned parent, which covers every partition, for the chat-flag reindex keyset.
+
+All five are rollback-safe: the previous release ignores the new column and index, never supplies `audit_log.id`, and reads `role_permissions` and `message_templates` as ordinary data.
 
 ### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)
 

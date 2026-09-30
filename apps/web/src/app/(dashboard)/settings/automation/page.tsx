@@ -29,6 +29,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { sampleFor as sampleForCondition } from './helpers';
 
 interface AutomationRule {
   id: string;
@@ -175,25 +176,7 @@ function buildAction(form: Form): Record<string, unknown> {
 
 /** A representative sample for the dry-run, derived from the rule's condition. */
 function sampleFor(rule: AutomationRule): Record<string, unknown> {
-  const condition = rule.condition;
-  switch (rule.condition_type) {
-    case 'chat_keyword':
-      return {
-        chat_message: String(condition.keyword ?? ''),
-        player: { steam_id64: '76561190000000001', name: 'DryRunPlayer' },
-      };
-    case 'player_count':
-      return { player_count: Number(condition.threshold ?? 0) };
-    case 'time_of_day':
-      return { now: new Date().toISOString() };
-    case 'player_flag':
-      return {
-        player_flags: [String(condition.flag ?? '')],
-        player: { steam_id64: '76561190000000001', name: 'DryRunPlayer' },
-      };
-    default:
-      return {};
-  }
+  return sampleForCondition(rule.condition_type, rule.condition);
 }
 
 export default function AutomationPage() {
@@ -209,22 +192,26 @@ export default function AutomationPage() {
   const [pendingDelete, setPendingDelete] = useState<AutomationRule | null>(null);
 
   const refresh = useCallback(async () => {
-    const [rulesRes, runsRes, meRes] = await Promise.all([
-      fetch('/api/v1/automation-rules', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/automation-runs', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (rulesRes.ok) setRules((await rulesRes.json()) as AutomationRule[]);
-    if (runsRes.ok) setRuns((await runsRes.json()) as AutomationRun[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
-    setLoadFailed(!rulesRes.ok || !runsRes.ok || !meRes.ok);
+    try {
+      const [rulesRes, runsRes, meRes] = await Promise.all([
+        fetch('/api/v1/automation-rules', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/automation-runs', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (rulesRes.ok) setRules((await rulesRes.json()) as AutomationRule[]);
+      if (runsRes.ok) setRuns((await runsRes.json()) as AutomationRun[]);
+      if (meRes.ok) setMe((await meRes.json()) as Me);
+      setLoadFailed(!rulesRes.ok || !runsRes.ok || !meRes.ok);
+    } catch {
+      setLoadFailed(true);
+    }
   }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const canManage = me?.permissions.includes('role:edit') ?? false;
+  const canManage = me?.permissions.includes('trigger:edit') ?? false;
 
   async function createRule(event: React.FormEvent) {
     event.preventDefault();
@@ -250,7 +237,7 @@ export default function AutomationPage() {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.error ?? res.status));
+        throw new Error(String(body.message ?? body.error ?? res.status));
       }
       setForm({ ...EMPTY_FORM });
       await refresh();
@@ -361,14 +348,16 @@ export default function AutomationPage() {
       {notice ? <InlineBanner tone="info" title={notice} /> : null}
 
       {loading ? (
-        <>
-          <Card>
-            <Skeleton variant="row" count={3} label="Загрузка правил автоматизации" />
-          </Card>
-          <Card padding="sm">
-            <SkeletonTable rows={4} cols={5} />
-          </Card>
-        </>
+        loadFailed ? null : (
+          <>
+            <Card>
+              <Skeleton variant="row" count={3} label="Загрузка правил автоматизации" />
+            </Card>
+            <Card padding="sm">
+              <SkeletonTable rows={4} cols={5} />
+            </Card>
+          </>
+        )
       ) : (
         <>
           {canManage ? (

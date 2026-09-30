@@ -66,6 +66,69 @@ WL-2 is a structural duplicate of the model the panel already ships. **No new sc
 - **Build a per-server whitelist-group template.** Rejected — duplicates the global-role model and its existing all-servers fan-out; see the 2026-04-25 "Panel RBAC" and 2026-05-01 "Roles unified" decisions.
 - **Close the issue with no artifact.** Rejected — the decision needs a durable record (this ADR) and a test that prevents silent regression of the "one action → all servers" property the task cared about.
 
+## 2026-07-09 — ROT-1 (#144): panel-managed map rotation instead of Squad's native rotation/voting
+
+Status: accepted. Referenced by ROT-2, ROT-4 and GAME-1, and by migrations `0042_layers_catalog` and `0090_map_vote` (whose comments still cite its original path, `ai_docs/adr/2026-07-09-map-rotation-managed-vs-native.md`, removed with `ai_docs/` in `d6c3cbad`; recovered here in issue #77).
+
+### Context
+
+Squad servers pick their next layer through one of two native mechanisms, both driven by files the dedicated server reads on startup / between matches:
+
+1. **`LayerRotation.cfg`** — an ordered pool of layers the server cycles through sequentially (optionally with `Vote` markers that trigger Squad's own end-of-match vote among the following N entries).
+2. **`LayerVoting.cfg` / `LayerVotingRandomization.cfg`** — configure Squad's built-in end-of-match voting UI: which candidate layers are eligible, how many are offered, and randomization weighting.
+
+Everything the panel wants to offer around rotations depends on which of these two mechanisms is treated as the source of truth:
+
+- **ROT-2** (rotation pool editor with drag-and-drop ordering) needs to read/write an ordered list the server will actually consume.
+- **ROT-3** (current/next-map widget with "Set next" / "Change now" actions) needs to reason about "what layer plays next" independent of whatever the server's own rotation pointer is doing.
+- **ROT-4** (rotation calendar, weekly day-of-week profiles) needs to *schedule* layer changes at specific times — something neither `LayerRotation.cfg` nor Squad's voting files can express; they have no concept of a clock.
+- **GAME-1** (map-voting automation) needs to either drive Squad's built-in voting config or replace voting entirely with panel-issued `AdminSetNextLayer` calls.
+
+Two designs were considered:
+
+#### Option A — Configure Squad's native mechanisms directly
+The panel would be a smarter editor *for* `LayerRotation.cfg` and `LayerVoting*.cfg`: reorder the pool, toggle which layers are vote-eligible, and rely on Squad's own engine to advance through the rotation and run votes. `AdminSetNextLayer` / `AdminChangeLayer` (RCON-1) would only be used for one-off manual overrides.
+
+#### Option B — Panel-managed rotation on top of a minimal native config
+`LayerRotation.cfg` becomes a single always-present managed segment (SYNC-3 managed-segment mechanics, same pattern as `Admins.cfg`) that the panel keeps in sync with whatever *it* decides should play next — driven by panel-side schedules (`rotation_schedule` / weekly profiles in ROT-4), seed-window logic (SEED-1/SEED-3), and admin actions (ROT-3). Squad's built-in end-of-match voting (`LayerVoting*.cfg`) is disabled or reduced to a fixed, panel-curated candidate set; the panel is free to implement its *own* voting/automation on top (GAME-1) using `AdminSetNextLayer` at the moment a match ends, informed by `match.started`/`match.ended` events (EVT-1).
+
+### Decision
+
+**We adopt Option B: a panel-managed rotation.**
+
+The panel owns the scheduling and decision-making for "what layer plays next"; `LayerRotation.cfg` is treated as a *write target* the panel keeps synchronized with its own state, not as an independent source of truth the server advances through on its own. Squad's native end-of-match voting is not used as the primary mechanism — `GAME-1`'s automation issues `AdminSetNextLayer` directly, informed by the same layer catalog (this table) and the same scheduling primitives ROT-4 introduces.
+
+Concretely, this means:
+
+- `ROT-2` writes an ordered layer list into `LayerRotation.cfg`'s managed segment (read-modify-write via SYNC-3), but the panel does not depend on the server's own pointer through that list to know what plays next — it always resolves "next" through RCON (`ShowNextMap`, ROT-3) and/or its own schedule.
+- `ROT-4`'s calendar/weekly-profile scheduling has nowhere to live in Squad's native config (no concept of time), so it must be panel-side regardless; making the rotation panel-managed end-to-end avoids having two competing sources of truth (native sequential rotation *and* a panel calendar layered on top of it).
+- `GAME-1`'s "automatic voting" is reframed as panel-driven candidate selection + `AdminSetNextLayer`, not configuration of `LayerVoting*.cfg`. This ADR is the shared decision point referenced by GAME-1 so the two features don't independently pick contradictory answers.
+- Manual admin actions (ROT-3: "Set next", "Change now", "End match") remain thin wrappers over RCON commands and always win over any pending schedule — the panel reconciles its managed segment / next pick after every such action.
+
+### Consequences
+
+**Positive**
+
+- Single source of truth for "what plays next": the panel's own schedule/state, queried via RCON + the `layers` catalog — no need to reconcile Squad's internal rotation pointer with panel intent.
+- Enables features Squad's native config cannot express at all: day-of-week rotation profiles (ROT-4), seed-window scheduling (SEED-1/SEED-3) that must interrupt normal rotation and resume afterward, and depot-update-aware scheduling — all without fighting the server's own advancement logic.
+- `LayerRotation.cfg`'s managed segment stays a simple, panel-owned artifact (same mental model as `Admins.cfg`), consistent with the existing managed-segment pattern (CFG-1/SYNC-3) instead of a bespoke voting-config diff/merge.
+
+**Negative / accepted trade-offs**
+
+- The panel must implement its own end-of-match automation (GAME-1) instead of leaning on Squad's built-in voting UI — more code, but avoids maintaining two rotation authorities.
+- If the panel/worker is down when a match ends, "what's next" falls back to whatever static list is currently in `LayerRotation.cfg`'s managed segment (last synced state) rather than a live decision — acceptable given RCON-1/EVT-1 already require the bridge to be up for most other panel functions.
+- Admins who prefer Squad's native voting UI lose it; `LayerVoting*.cfg` is expected to be set to a minimal/disabled configuration by the managed segment once ROT-2 ships.
+
+### Follow-up not covered by this issue
+
+This issue (`ROT-1`) ships the `layers` catalog and `GET /api/v1/layers` against a **static fallback dataset** for the current Squad version (`depot_version`, see `packages/db/src/schema/layers.ts`). It intentionally does not implement live depot sync. The follow-up worker is expected to:
+
+1. After a depot update, read the installed server's available layers via the bridge (`file_read` over the relevant pak/config listing — exact source file(s) to be confirmed when implemented).
+2. Upsert rows by `name` (the RCON-facing identifier), refreshing `map`/`gamemode`/`version`/`teams`/`depot_version`.
+3. Mark rows that disappear from the new listing as `deprecated = true` rather than deleting them, so historical references (`matches.layer`, rotation history) keep resolving.
+
+`ROT-2`, `ROT-4`, and `GAME-1` build on the decision above; they should link back to this ADR rather than re-litigating managed-vs-native.
+
 ## 2026-05-01 — Roles unified with Squad permissions; Admins.cfg synthesized from DB
 
 ### Context
@@ -74,7 +137,7 @@ The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parall
 
 ### Decision
 
-1. **Roles carry both axes.** Add three boolean access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) to `roles`. Add a separate M2M `role_squad_permissions(role_id, squad_permission_key)` for the 21 in-game keys. Hex colors for spec roles; back-compat with palette names for existing rows. Single Owner system role hardcoded to all flags + all 21 squad perms. `Никаких отдельных panel-permissions, никаких clearance levels` per the spec — panel permissions are derived from the flags by `loadUserPermissions`. Legacy rows in `role_permissions` remain honoured (unioned with the derived set) so existing tests and fine-grained overrides keep working.
+1. **Roles carry both axes.** Add three boolean access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) to `roles`. Add a separate M2M `role_squad_permissions(role_id, squad_permission_key)` for the 21 in-game keys. Hex colors for spec roles; back-compat with palette names for existing rows. Single Owner system role hardcoded to all flags + all 21 squad perms. `Никаких отдельных panel-permissions, никаких clearance levels` per the spec — panel permissions are derived from the flags by `loadUserPermissions`. Legacy rows in `role_permissions` remain honoured (unioned with the derived set) so existing tests and fine-grained overrides keep working. *Superseded in part by #36:* explicit rows now pass the same flag gates as the derived set, the stored legacy rows were deleted by migration 0121, and a fourth-axis flag `can_manage_infrastructure` (0120) gates the host/server-lifecycle/config keys that `panel_access` used to grant.
 
 2. **Login gate flips to `panel_access`.** The Steam OpenID callback used to redirect to `/no-access` when `permissions.size === 0`; it now redirects when `panelAccess === false`. A role like `QueuePriority` (only `reserve`, no panel access) can be assigned to a player and lands them in `Admins.cfg` without granting them panel login.
 
@@ -120,7 +183,7 @@ The user requirement was that the panel own the destructive lifecycle end-to-end
 
 1. **Soft-delete, not hard-delete.** Add `servers.deleted_at`, `servers.deleted_by_steam_id64`, `servers.deletion_backup_marker_id`. Replace the global unique slug index with a partial unique on `slug WHERE deleted_at IS NULL` so deleted slugs can be reused. All active-server queries get `WHERE deleted_at IS NULL`.
 
-2. **Backup is mandatory and uses the existing `config_versions` table.** The orchestrator (`apps/api/src/lib/server-delete.ts`) reads each `.cfg` via the bridge, then inserts a row per file tagged `message LIKE 'deletion-backup-marker%'`. If zero files could be backed up, the deletion aborts and the server stays alive. `Rcon.cfg` is backed up with its real password (it has to be — otherwise restore can't reproduce a working RCON setup).
+2. **Backup is mandatory and uses the existing `config_versions` table.** The orchestrator (`apps/api/src/lib/server-delete.ts`) reads each `.cfg` via the bridge, then inserts a row per file tagged `message LIKE 'deletion-backup-marker%'`. If any file fails to read for a reason other than the bridge's `not_found`, the deletion aborts and the server stays alive (#37). `Rcon.cfg` is backed up with its real password (it has to be — otherwise restore can't reproduce a working RCON setup).
 
 3. **Best-effort destructive phases after the backup.** Container stop+rm, `directory_delete configs`, `directory_delete saved`, ufw rule cleanup. Each phase records its own success/error in the response body and audit context. The DB soft-delete commits regardless — operators see exactly what succeeded and can finish the cleanup manually.
 
@@ -245,7 +308,7 @@ Two new capped Redis Streams plus a pino multistream sink that fans every log li
 - **`panel:logs`** (`MAXLEN ~ 100000`, ≈ 10 MB) — every pino line from api + every worker + every bridge `onLog` event, encoded with single-letter field names (`s` source code, `l` level code, `i` server uuid optional, `m` message, `c` ctx json optional). The Redis stream-id millisecond prefix is the timestamp, so `ts` is never duplicated. Source codes `B/R/L/W/D/I/A`. Encoder/decoder in [`packages/shared-config/src/log-stream.ts`](../../packages/shared-config/src/log-stream.ts), pino multistream `Writable` in [`log-stream-sink.ts`](../../packages/shared-config/src/log-stream-sink.ts).
 - **`host:metrics`** (`MAXLEN ~ 5760` = 24 h × 4/min, ≈ 300 KB) — packed 8-int tuple per sample, written every 15 s by the new `worker-metrics-sampler`. Helpers in [`metrics-pack.ts`](../../packages/shared-config/src/metrics-pack.ts).
 
-GET endpoints on top: `/api/v1/logs` (filter + cursor pagination), `/api/v1/logs/export` (gzip-streamed sectioned bundle, gated by `host:metrics`), `/api/v1/host/metrics/history` (paired arrays). UI: `/logs` page with live-tail polling and an export button, click-to-expand `MetricHistoryModal` on the four dashboard cards.
+GET endpoints on top: `/api/v1/logs` (filter + cursor pagination), `/api/v1/logs/export` (gzip-streamed sectioned bundle, originally gated by `host:metrics`; since #70 it requires `host:view` + `host:metrics` + `audit:view` + `server:download_logs`, one key per section it contains), `/api/v1/host/metrics/history` (paired arrays). UI: `/logs` page with live-tail polling and an export button, click-to-expand `MetricHistoryModal` on the four dashboard cards.
 
 ### Rationale
 
@@ -323,7 +386,7 @@ The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel
 ### Consequences
 
 - Steam Web API key (`STEAM_API_KEY`) is optional. Without it, persona is `Player <last 4 of steam_id64>`; the player can update their canonical name when they next play on a server (RCON ListPlayers updates).
-- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`.
+- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`. *Superseded for new rows by migration 0119 (issue #50): the v2 form hashes every column, actor fields included; v1 rows keep verifying with the old form.*
 - e2e tests cannot fully exercise the OpenID 2.0 verifier without a real Steam account; they verify post-login state via `PANEL_TEST_COOKIE` env. The cookie-supply pattern is documented in `docs/components/api/testing.md`.
 
 ### Alternatives considered

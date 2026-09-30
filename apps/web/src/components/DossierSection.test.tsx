@@ -577,6 +577,49 @@ describe('DossierSection', () => {
   );
 
   it(
+    'ignores the late answer of a retried request after the server filter changed',
+    async () => {
+      const freshServer = '22222222-2222-2222-2222-222222222222';
+      let dossierCalls = 0;
+      let resolveStale: (response: Response) => void = () => undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.startsWith('/api/v1/servers')) {
+            return Promise.resolve(new Response(JSON.stringify({ items: SERVERS })));
+          }
+          dossierCalls += 1;
+          if (dossierCalls === 1) return Promise.resolve(new Response('{}', { status: 500 }));
+          if (url.includes(freshServer)) {
+            return Promise.resolve(
+              new Response(JSON.stringify(payload({ skill: { ...FULL.skill, kills: 777 } }))),
+            );
+          }
+          return new Promise<Response>((resolve) => {
+            resolveStale = resolve;
+          });
+        }),
+      );
+      render(<DossierSection playerId={PLAYER_ID} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Повторить' }));
+      await waitFor(() => expect(dossierCalls).toBe(2));
+      fireEvent.change(await screen.findByLabelText('Сервер'), { target: { value: freshServer } });
+      await screen.findByText('777');
+
+      resolveStale(
+        new Response(JSON.stringify(payload({ skill: { ...FULL.skill, kills: 1200 } }))),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(screen.getByText('777')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'hides the server selector when the servers route is unavailable',
     async () => {
       stubFetch({ serversStatus: 403 });

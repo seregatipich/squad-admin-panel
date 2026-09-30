@@ -1,5 +1,9 @@
 'use client';
 
+// Sources and their wire codes come from the shared table, never a local copy:
+// a hand-copied list once lacked config-sync, whose entries then vanished as
+// soon as any source box was unchecked (#781).
+import { LOG_SOURCES, type LogSource, sourceCode } from '@squad/shared-config/log-stream';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
@@ -8,6 +12,7 @@ import {
   Card,
   Checkbox,
   EmptyState,
+  InlineBanner,
   SearchField,
   Select,
   SkeletonTable,
@@ -22,17 +27,6 @@ import {
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type Level = (typeof LEVELS)[number];
-
-const SOURCE_LIST = ['bridge', 'rcon', 'log-ingest', 'worker', 'depot', 'install', 'api'] as const;
-const SOURCE_CODES: Record<(typeof SOURCE_LIST)[number], string> = {
-  bridge: 'B',
-  rcon: 'R',
-  'log-ingest': 'L',
-  worker: 'W',
-  depot: 'D',
-  install: 'I',
-  api: 'A',
-};
 
 const DEFAULT_LEVEL: Level = 'info';
 
@@ -62,14 +56,43 @@ interface Entry {
   ctx?: Record<string, unknown>;
 }
 
+/** `GET /api/v1/logs` response; the scanned ids are cursors past filtered-out entries. */
+interface LogsResponse {
+  entries: Entry[];
+  newest_scanned_id?: string | null;
+  oldest_scanned_id?: string | null;
+}
+
+/** Wall-clock time with milliseconds in the operator's zone, like the rest of the panel. */
+function formatLogTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString('ru-RU', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+  });
+}
+
 interface ServersResponse {
   items: Array<{ id: string; display_name: string }>;
 }
 
-export function LogList(props: { servers: Array<{ id: string; display_name: string }> }) {
+/**
+ * Live panel log table.
+ *
+ * `canExport` mirrors the `host:metrics` permission that `GET /api/v1/logs/export` requires;
+ * without it the download link is not rendered.
+ */
+export function LogList(props: {
+  servers: Array<{ id: string; display_name: string }>;
+  canExport: boolean;
+}) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [src, setSrc] = useState<Set<string>>(new Set(SOURCE_LIST));
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [src, setSrc] = useState<Set<string>>(new Set(LOG_SOURCES));
   const [lvl, setLvl] = useState<Level>(DEFAULT_LEVEL);
   const [srv, setSrv] = useState<string>('');
   const [q, setQ] = useState<string>('');
@@ -80,54 +103,65 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
   const buildUrl = useCallback(
     (extra: Record<string, string> = {}) => {
       const p = new URLSearchParams();
-      if (src.size > 0 && src.size < SOURCE_LIST.length) {
-        const codes = Array.from(src)
-          .map((s) => SOURCE_CODES[s as (typeof SOURCE_LIST)[number]])
-          .filter(Boolean);
+      if (src.size > 0 && src.size < LOG_SOURCES.length) {
+        const codes = Array.from(src).map((s) => sourceCode(s as LogSource));
         if (codes.length) p.set('src', codes.join(','));
       }
       p.set('lvl', lvl);
       if (srv) p.set('srv', srv);
       if (q) p.set('q', q);
+      // Matches the "последние 1000 записей" subtitle promise: the API
+      // defaults to 500 (`GET /api/v1/logs` in apps/api/src/routes/logs.ts).
+      p.set('limit', '1000');
       for (const [k, v] of Object.entries(extra)) p.set(k, v);
       return `/api/v1/logs?${p.toString()}`;
     },
     [src, lvl, srv, q],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the initial load on «Повторить».
   useEffect(() => {
     setEntries([]);
     setLoaded(false);
+    setLoadFailed(false);
     lastIdRef.current = null;
     const controller = new AbortController();
     void (async () => {
       try {
         const r = await fetch(buildUrl(), { credentials: 'include', signal: controller.signal });
-        if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        if (!r.ok) {
+          setLoadFailed(true);
+          return;
+        }
+        const body = (await r.json()) as LogsResponse;
         setEntries(body.entries);
         setLoaded(true);
-        if (body.entries.length > 0) lastIdRef.current = body.entries[0]?.id ?? null;
+        // Tail from the newest entry the server scanned, not the newest match:
+        // otherwise a run of non-matching entries is re-read on every poll.
+        // An empty stream tails from its very beginning.
+        lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? '0-0';
       } catch {
-        // swallowed (likely AbortError)
+        if (!controller.signal.aborted) setLoadFailed(true);
       }
     })();
     return () => controller.abort();
-  }, [buildUrl]);
+  }, [buildUrl, attempt]);
 
   useEffect(() => {
     if (paused) return;
     const t = setInterval(async () => {
       if (typeof document !== 'undefined' && document.hidden) return;
       const after = lastIdRef.current;
-      if (!after) return;
+      // No cursor yet (the initial load returned zero entries) must not stop
+      // polling forever — fall back to the plain query so the first log to
+      // appear is still picked up, matching the "в реальном времени" promise.
       try {
-        const r = await fetch(buildUrl({ after }), { credentials: 'include' });
+        const r = await fetch(buildUrl(after ? { after } : {}), { credentials: 'include' });
         if (!r.ok) return;
-        const body = (await r.json()) as { entries: Entry[] };
+        const body = (await r.json()) as LogsResponse;
+        lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? after;
         if (body.entries.length === 0) return;
-        lastIdRef.current = body.entries[0]?.id ?? after;
-        setEntries((prev) => [...body.entries, ...prev].slice(0, 1000));
+        setEntries((prev) => (after ? [...body.entries, ...prev] : body.entries).slice(0, 1000));
       } catch {
         // ignore transient errors
       }
@@ -150,10 +184,10 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
   };
 
   const filtered =
-    q !== '' || srv !== '' || lvl !== DEFAULT_LEVEL || src.size !== SOURCE_LIST.length;
+    q !== '' || srv !== '' || lvl !== DEFAULT_LEVEL || src.size !== LOG_SOURCES.length;
 
   const resetFilters = () => {
-    setSrc(new Set(SOURCE_LIST));
+    setSrc(new Set(LOG_SOURCES));
     setLvl(DEFAULT_LEVEL);
     setSrv('');
     setQ('');
@@ -200,9 +234,11 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
         <Button size="sm" onClick={() => setPaused((p) => !p)} aria-pressed={paused}>
           {paused ? 'Возобновить' : 'Пауза'}
         </Button>
-        <a href="/api/v1/logs/export" download className={DOWNLOAD_LINK_CLASS}>
-          Экспорт
-        </a>
+        {props.canExport ? (
+          <a href="/api/v1/logs/export" download className={DOWNLOAD_LINK_CLASS}>
+            Экспорт
+          </a>
+        ) : null}
       </>
     ),
   };
@@ -218,7 +254,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       <fieldset>
         <legend className="text-2xs uppercase tracking-[0.06em] text-ink-3">Источники</legend>
         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-          {SOURCE_LIST.map((s) => (
+          {LOG_SOURCES.map((s) => (
             <Checkbox
               key={s}
               label={s}
@@ -230,7 +266,19 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       </fieldset>
 
       <Card padding="none">
-        {!loaded && entries.length === 0 ? (
+        {loadFailed ? (
+          <div className="p-4">
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить записи"
+              action={
+                <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                  Повторить
+                </Button>
+              }
+            />
+          </div>
+        ) : !loaded && entries.length === 0 ? (
           <div className="p-4">
             <SkeletonTable rows={10} cols={5} label="Записи загружаются" />
           </div>
@@ -271,7 +319,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
                   <Fragment key={e.id}>
                     <TableRow interactive>
                       <Td className="whitespace-nowrap font-mono text-xs tabular-nums text-ink-3">
-                        {new Date(e.ts).toISOString().slice(11, 23)}
+                        {formatLogTime(e.ts)}
                       </Td>
                       <Td>
                         <Badge tone={LEVEL_TONE[e.level]} size="sm">

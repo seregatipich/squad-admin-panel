@@ -66,6 +66,29 @@ describe('RconClient', () => {
     expect(() => new RconClient(makeOpts())).not.toThrow();
   });
 
+  it('refuses a password with CR, LF or NUL before opening a socket (#34)', async () => {
+    const received: Buffer[] = [];
+    let connections = 0;
+    const server = createServer((sock) => {
+      connections++;
+      sock.on('data', (chunk) => received.push(chunk));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      for (const password of ['x\r\nSET session:forged 1', 'x\ny', 'x\u0000y']) {
+        const client = new RconClient(makeOpts({ port, password }));
+        await expect(client.connect()).rejects.toThrow(/line break or NUL/);
+        await client.close();
+      }
+      await sleep(50);
+      expect(connections).toBe(0);
+      expect(received).toHaveLength(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('exec() throws "rcon not connected" when not connected', async () => {
     const client = new RconClient(makeOpts());
     await expect(client.exec('ShowServerInfo')).rejects.toThrow('rcon not connected');
@@ -290,6 +313,50 @@ describe("RconClient against Squad's broken probe reply", () => {
       expect((log as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
     } finally {
       await client.close();
+      await closeServer(server);
+    }
+  });
+});
+
+describe('RconClient restricted-address guard (#30, finding #333)', () => {
+  async function listenOnLoopback(): Promise<{
+    server: Server;
+    port: number;
+    accepted: () => number;
+  }> {
+    let accepted = 0;
+    const server = createServer((sock) => {
+      accepted += 1;
+      sock.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return { server, port: (server.address() as AddressInfo).port, accepted: () => accepted };
+  }
+
+  it('refuses a loopback literal without opening a socket', async () => {
+    const { server, port, accepted } = await listenOnLoopback();
+    try {
+      const client = new RconClient(
+        makeOpts({ host: '127.0.0.1', port, refuseRestrictedAddresses: true }),
+      );
+      await expect(client.connect()).rejects.toThrow(/restricted address/);
+      await sleep(20);
+      expect(accepted()).toBe(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('refuses a hostname that resolves to loopback (DNS rebinding)', async () => {
+    const { server, port, accepted } = await listenOnLoopback();
+    try {
+      const client = new RconClient(
+        makeOpts({ host: 'localhost', port, refuseRestrictedAddresses: true }),
+      );
+      await expect(client.connect()).rejects.toThrow(/restricted address/);
+      await sleep(20);
+      expect(accepted()).toBe(0);
+    } finally {
       await closeServer(server);
     }
   });

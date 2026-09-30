@@ -12,6 +12,14 @@
  * substituted without escaping. An unknown/missing placeholder renders as an
  * empty string and invokes {@link RenderOptions.onMissingPlaceholder} (used for
  * a warn log) — a missing value never throws, so delivery is never dropped.
+ * Only the context's own string properties are values: `{constructor}` or
+ * `{__proto__}` are missing placeholders, never inherited object members.
+ *
+ * The rendered embed always satisfies Discord's embed limits
+ * ({@link DISCORD_EMBED_LIMITS}, https://discord.com/developers/docs/resources/message#embed-object-embed-limits):
+ * a field left blank by a missing value shows {@link DISCORD_EMPTY_FIELD_VALUE},
+ * and text grown past a limit by substitution and escaping is truncated, so a
+ * valid template never turns into an HTTP 400 at delivery time.
  */
 
 /** The Discord event types that own an editable template. */
@@ -83,6 +91,21 @@ export interface RenderOptions {
   onMissingPlaceholder?: (placeholder: string) => void;
 }
 
+/** Discord's embed length limits, in characters. */
+export const DISCORD_EMBED_LIMITS = {
+  title: 256,
+  description: 4096,
+  fieldName: 256,
+  fieldValue: 1024,
+  /** Sum of title, description and every field name and value. */
+  total: 6000,
+} as const;
+
+/** Shown in place of a field name or value that renders blank; Discord rejects empty ones. */
+export const DISCORD_EMPTY_FIELD_VALUE = '—';
+
+const TRUNCATION_MARK = '…';
+
 const PLACEHOLDER_PATTERN = /\{([a-z0-9_]+)\}/gi;
 const MARKDOWN_ESCAPE_PATTERN = /[\\*_~`|>[\]()@#-]/g;
 
@@ -101,8 +124,8 @@ function substitute(
   onMissing?: (placeholder: string) => void,
 ): string {
   return input.replace(PLACEHOLDER_PATTERN, (_match, token: string) => {
-    const raw = context[token];
-    if (raw === undefined || raw === null) {
+    const raw = Object.hasOwn(context, token) ? context[token] : undefined;
+    if (typeof raw !== 'string') {
       onMissing?.(token);
       return '';
     }
@@ -110,10 +133,46 @@ function substitute(
   });
 }
 
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  if (max <= 0) return '';
+  return `${value.slice(0, max - TRUNCATION_MARK.length)}${TRUNCATION_MARK}`;
+}
+
+function fieldText(value: string, max: number): string {
+  return value.trim() === '' ? DISCORD_EMPTY_FIELD_VALUE : truncate(value, max);
+}
+
+/**
+ * Brings a rendered embed within {@link DISCORD_EMBED_LIMITS.total}: the
+ * description is shortened first, then trailing fields are dropped, so the
+ * title and the leading fields (the template's most important data) survive.
+ */
+function fitTotalLength(embed: DiscordEmbedTemplate): void {
+  const fieldsLength = () =>
+    embed.fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+  const overflow =
+    embed.title.length + embed.description.length + fieldsLength() - DISCORD_EMBED_LIMITS.total;
+  if (overflow <= 0) return;
+  embed.description = truncate(embed.description, embed.description.length - overflow);
+  while (
+    embed.fields.length > 0 &&
+    embed.title.length + embed.description.length + fieldsLength() > DISCORD_EMBED_LIMITS.total
+  ) {
+    embed.fields.pop();
+  }
+}
+
 /**
  * Render an editable template into a concrete Discord embed by substituting
  * placeholders from `context`. Text fields are markdown-escaped; the `url`
- * field is substituted verbatim. Never throws on a missing placeholder.
+ * field is substituted verbatim. Never throws on a missing placeholder, and
+ * the result always fits Discord's embed limits (see the module description).
+ *
+ * @param template The stored or default template.
+ * @param context Placeholder values; only own string properties are used.
+ * @param options Optional missing-placeholder callback.
+ * @returns The embed to deliver or preview.
  */
 export function renderDiscordTemplate(
   template: DiscordEmbedTemplate,
@@ -122,15 +181,28 @@ export function renderDiscordTemplate(
 ): DiscordEmbedTemplate {
   const onMissing = options.onMissingPlaceholder;
   const rendered: DiscordEmbedTemplate = {
-    title: substitute(template.title, context, true, onMissing),
-    description: substitute(template.description, context, true, onMissing),
+    title: truncate(
+      substitute(template.title, context, true, onMissing),
+      DISCORD_EMBED_LIMITS.title,
+    ),
+    description: truncate(
+      substitute(template.description, context, true, onMissing),
+      DISCORD_EMBED_LIMITS.description,
+    ),
     color: template.color,
     fields: template.fields.map((field) => ({
-      name: substitute(field.name, context, true, onMissing),
-      value: substitute(field.value, context, true, onMissing),
+      name: fieldText(
+        substitute(field.name, context, true, onMissing),
+        DISCORD_EMBED_LIMITS.fieldName,
+      ),
+      value: fieldText(
+        substitute(field.value, context, true, onMissing),
+        DISCORD_EMBED_LIMITS.fieldValue,
+      ),
       inline: field.inline,
     })),
   };
+  fitTotalLength(rendered);
   if (template.url != null && template.url !== '') {
     const url = substitute(template.url, context, false, onMissing);
     rendered.url = url === '' ? null : url;

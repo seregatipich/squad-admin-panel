@@ -27,6 +27,6 @@ Until the integration row is enabled and carries both values,
 `loadDiscordBotContext` (`role-sync.ts`, called by both `role-sync-consume.ts`
 and `status-channel-loop.ts`) returns `null` and each loop ticks/consumes
 requests without touching Discord — the same degraded-idle gate
-`apps/api/src/lib/steam-profile.ts` uses for a missing Steam API key. The
+`fetchSteamProfile` (`packages/steam-api`) uses for a missing Steam API key. The
 credentials are re-read every cycle, so finishing the setup takes effect
 without a restart.

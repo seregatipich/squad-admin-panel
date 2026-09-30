@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto';
 import { auditLog, playerIpHistory, playerLinks, players } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { PLAYER_LINKS_LIMIT } from '../../src/routes/player-links.js';
+import { withFailingAuditInsert } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -28,6 +31,7 @@ async function seedPlayer(steamId64: bigint | null, name: string): Promise<strin
       canonicalNameNormalized: name.toLowerCase(),
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -113,7 +117,7 @@ describe('POST /api/v1/players/:playerId/links', () => {
         ),
       );
     expect(rows).toHaveLength(1);
-    expect(rows[0].playerAId < rows[0].playerBId).toBe(true);
+    expect(String(rows[0]?.playerAId) < String(rows[0]?.playerBId)).toBe(true);
   });
 
   it('creates a rejected link that then marks the pair in the full ALT-1 candidate output', async () => {
@@ -257,7 +261,66 @@ describe('POST /api/v1/players/:playerId/links', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('writes an audit_log entry with the evidence_snapshot on create', async () => {
+  // Regression (#461): the «audit» snapshot was whatever the browser sent,
+  // so a forged score or confidence was stored as evidence. The audit entry
+  // carries the snapshot's hash, not its body (#70).
+  it('stores the ALT-1 evidence computed by the server, ignoring a client-sent snapshot', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.20' },
+      { playerId: idB, ip: '203.0.113.20' },
+    ]);
+    const cookie = await loginAsOwner(h);
+
+    const candidates = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    const engine = (
+      candidates.json() as {
+        candidates: Array<{ player_id: string; score: number; confidence: string }>;
+      }
+    ).candidates.find((c) => c.player_id === idB);
+    expect(engine).toBeDefined();
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        other_player_id: idB,
+        link_type: 'alt',
+        evidence_snapshot: { score: 999, confidence: 'high', shared_ip_count: 50, forged: 'x' },
+      }),
+    });
+    expect(created.statusCode).toBe(201);
+    const linkId = (created.json() as { id: string }).id;
+
+    const [row] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    const stored = row?.evidenceSnapshot as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      score: engine?.score,
+      confidence: engine?.confidence,
+      shared_ip_count: 1,
+    });
+    expect(stored).not.toHaveProperty('forged');
+    expect(stored).not.toHaveProperty('shared_names');
+    expect(stored.signals).toMatchObject({ shared_ips: { value: 1 } });
+
+    const auditRows = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]?.beforeSnapshot).toBeNull();
+    const expectedHash = createHash('sha256').update(JSON.stringify(stored)).digest('hex');
+    expect(auditRows[0]?.afterSnapshot).toMatchObject({ evidenceSnapshotSha256: expectedHash });
+    expect(auditRows[0]?.afterSnapshot).not.toHaveProperty('evidenceSnapshot');
+  });
+
+  it('stores no evidence for a pair the ALT-1 engine does not list', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
     const cookie = await loginAsOwner(h);
@@ -269,21 +332,14 @@ describe('POST /api/v1/players/:playerId/links', () => {
       payload: JSON.stringify({
         other_player_id: idB,
         link_type: 'alt',
-        evidence_snapshot: { score: 75, confidence: 'high', shared_ip_count: 2 },
+        evidence_snapshot: { blob: 'x'.repeat(100_000) },
       }),
     });
     expect(created.statusCode).toBe(201);
     const linkId = (created.json() as { id: string }).id;
 
-    const auditRows = await h.db
-      .select()
-      .from(auditLog)
-      .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].beforeSnapshot).toBeNull();
-    expect(auditRows[0].afterSnapshot).toMatchObject({
-      evidenceSnapshot: { score: 75, confidence: 'high', shared_ip_count: 2 },
-    });
+    const [row] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    expect(row?.evidenceSnapshot).toBeNull();
   });
 });
 
@@ -318,7 +374,9 @@ describe('PATCH /api/v1/player-links/:linkId', () => {
     expect(body.link_type).toBe('unrelated');
 
     const [after] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
-    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(after?.updatedAt.getTime()).toBeGreaterThan(
+      before?.updatedAt.getTime() ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it('returns 404 for an unknown link id', async () => {
@@ -373,8 +431,8 @@ describe('PATCH /api/v1/player-links/:linkId', () => {
         ),
       );
     expect(auditRows).toHaveLength(1);
-    const before = auditRows[0].beforeSnapshot as { status: string };
-    const after = auditRows[0].afterSnapshot as { status: string };
+    const before = auditRows[0]?.beforeSnapshot as { status: string };
+    const after = auditRows[0]?.afterSnapshot as { status: string };
     expect(before.status).toBe('confirmed');
     expect(after.status).toBe('rejected');
   });
@@ -407,8 +465,8 @@ describe('GET /api/v1/players/:playerId/links', () => {
     const bodyB = fromB.json() as { links: Array<{ other_player: { id: string } }> };
     expect(bodyA.links).toHaveLength(1);
     expect(bodyB.links).toHaveLength(1);
-    expect(bodyA.links[0].other_player.id).toBe(idB);
-    expect(bodyB.links[0].other_player.id).toBe(idA);
+    expect(bodyA.links[0]?.other_player.id).toBe(idB);
+    expect(bodyB.links[0]?.other_player.id).toBe(idA);
   });
 
   it('rejects an unauthenticated request', async () => {
@@ -436,7 +494,91 @@ describe('link annotation on GET /api/v1/players/:playerId/alt-candidates', () =
     expect(res.statusCode).toBe(200);
     const body = res.json() as { candidates: Array<{ player_id: string; link: unknown }> };
     expect(body.candidates).toHaveLength(1);
-    expect(body.candidates[0].player_id).toBe(idC);
-    expect(body.candidates[0].link).toBeNull();
+    expect(body.candidates[0]?.player_id).toBe(idC);
+    expect(body.candidates[0]?.link).toBeNull();
+  });
+});
+
+describe('audit #71: player links query shape and mutation atomicity', () => {
+  it('caps GET /players/:id/links at PLAYER_LINKS_LIMIT and flags truncation (#231)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'LinkHub');
+    const others = await h.db
+      .insert(players)
+      .values(
+        Array.from({ length: PLAYER_LINKS_LIMIT + 1 }, (_, index) => ({
+          steamId64: null,
+          eosId: `links-cap-${index}`,
+          canonicalName: `LinkedAlt${index}`,
+          canonicalNameNormalized: `linkedalt${index}`,
+        })),
+      )
+      .returning({ id: players.id });
+    await h.db.insert(playerLinks).values(
+      others.map((other) => {
+        const [playerAId, playerBId] = idA < other.id ? [idA, other.id] : [other.id, idA];
+        return { playerAId, playerBId, linkType: 'alt' as const, status: 'confirmed' as const };
+      }),
+    );
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      links: Array<{ other_player: { id: string } | null }>;
+      truncated: boolean;
+    };
+    expect(body.links).toHaveLength(PLAYER_LINKS_LIMIT);
+    expect(body.truncated).toBe(true);
+    expect(body.links.every((link) => link.other_player !== null)).toBe(true);
+  });
+
+  it('rolls a PATCH back when its audit row cannot be written (#229)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'AtomicA');
+    const idB = await seedPlayer(PLAYER_B, 'AtomicB');
+    const cookie = await loginAsOwner(h);
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie },
+      payload: { other_player_id: idB, link_type: 'alt' },
+    });
+    const linkId = (created.json() as { id: string }).id;
+
+    const res = await withFailingAuditInsert(h.db, 'player_link.update', () =>
+      h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/player-links/${linkId}`,
+        headers: { cookie },
+        payload: { status: 'rejected' },
+      }),
+    );
+    expect(res.statusCode).toBe(500);
+    const [stored] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    expect(stored?.status).toBe('confirmed');
+  });
+
+  it('rolls a POST back when its audit row cannot be written (#229)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'AtomicPostA');
+    const idB = await seedPlayer(PLAYER_B, 'AtomicPostB');
+    const cookie = await loginAsOwner(h);
+
+    const res = await withFailingAuditInsert(h.db, 'player_link.create', () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${idA}/links`,
+        headers: { cookie },
+        payload: { other_player_id: idB, link_type: 'alt' },
+      }),
+    );
+    expect(res.statusCode).toBe(500);
+    const rows = await h.db
+      .select()
+      .from(playerLinks)
+      .where(inArray(playerLinks.playerAId, [idA, idB]));
+    expect(rows).toHaveLength(0);
   });
 });

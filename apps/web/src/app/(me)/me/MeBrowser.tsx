@@ -22,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { describeLoadError } from '@/lib/load-error';
 import {
   activeSubscription,
   bonusTypeLabel,
@@ -59,6 +60,14 @@ async function readError(res: Response): Promise<string> {
  * or touch anybody else's data. It is reachable by a session with no panel
  * access, which is why it does not reuse any `(dashboard)` section.
  */
+/**
+ * Text for a caught failure: errors built from an API answer already carry Russian
+ * text, while a rejected `fetch` (a `TypeError` such as `Failed to fetch`) does not.
+ */
+function failureText(err: unknown): string {
+  return err instanceof Error && !(err instanceof TypeError) ? err.message : describeLoadError(err);
+}
+
 export function MeBrowser({ displayName }: { displayName: string }) {
   const [balance, setBalance] = useState<MeBalance | null>(null);
   const [tiers, setTiers] = useState<MeTier[]>([]);
@@ -99,7 +108,7 @@ export function MeBrowser({ displayName }: { displayName: string }) {
       setHistory(page.items);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError((err as Error).message);
+      setError(failureText(err));
     } finally {
       setLoading(false);
     }
@@ -122,7 +131,7 @@ export function MeBrowser({ displayName }: { displayName: string }) {
       setHistory((prev) => mergeBonusPage(prev, page.items));
       setCursor(page.next_cursor);
     } catch (err) {
-      setError((err as Error).message);
+      setError(failureText(err));
     } finally {
       setBusy(false);
     }
@@ -141,7 +150,7 @@ export function MeBrowser({ displayName }: { displayName: string }) {
       setNotice(successMessage);
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(failureText(err));
     } finally {
       setBusy(false);
     }

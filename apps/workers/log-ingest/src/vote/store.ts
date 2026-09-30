@@ -47,6 +47,7 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
     .select({ id: players.id })
     .from(players)
     .where(eq(players.canonicalNameNormalized, normalized))
+    .orderBy(desc(players.lastSeenAt))
     .limit(1);
   if (direct[0]) return direct[0].id;
   const historical = await db
@@ -67,8 +68,10 @@ async function resolvePlayer(db: DatabaseClient, identity: VoteIdentity): Promis
   return resolveByName(db, identity.name);
 }
 
+type VoteWriter = Pick<DatabaseClient, 'insert'>;
+
 async function writeVoteEvent(
-  db: DatabaseClient,
+  db: VoteWriter,
   params: {
     serverId: string;
     voteId: string;
@@ -113,31 +116,7 @@ export async function handleVote(
   const initiatorPlayerId = command.initiator ? await resolvePlayer(db, command.initiator) : null;
 
   const voteId = uuidv7();
-  const inserted = await db
-    .insert(gameVotes)
-    .values({
-      id: voteId,
-      serverId: command.serverId,
-      initiatorPlayerId,
-      voteType: command.voteType,
-      mapCurrent: command.mapCurrent,
-      mapNext: command.mapNext,
-      mapTarget: command.mapTarget,
-      votesCollected: command.votesCollected,
-      votesRequired: command.votesRequired,
-      result: command.result,
-      durationSeconds,
-      startedAt,
-      endedAt,
-    })
-    .onConflictDoNothing({ target: [gameVotes.serverId, gameVotes.startedAt] })
-    .returning({ id: gameVotes.id });
-
-  if (inserted.length === 0) {
-    return { voteId: null, inserted: false, initiatorPlayerId, ballotCount: 0 };
-  }
-
-  const ballotRows = [];
+  const ballotRows: Array<typeof gameVoteBallots.$inferInsert> = [];
   for (const ballot of command.ballots) {
     const playerId = await resolvePlayer(db, ballot.voter);
     if (!playerId) continue;
@@ -148,29 +127,61 @@ export async function handleVote(
       votedAt: new Date(ballot.votedAt),
     });
   }
-  if (ballotRows.length > 0) {
-    await db
-      .insert(gameVoteBallots)
-      .values(ballotRows)
-      .onConflictDoNothing({ target: [gameVoteBallots.voteId, gameVoteBallots.playerId] });
-  }
 
-  await writeVoteEvent(db, {
-    serverId: command.serverId,
-    voteId,
-    kind: 'vote_started',
-    occurredAt: startedAt,
-    initiatorPlayerId,
-    command,
+  // The vote row, its ballots and both events commit together: a failure part
+  // way through must not leave a game_votes row that blocks the re-read of the
+  // same log line (conflict on server_id + started_at) from completing them.
+  const inserted = await db.transaction(async (tx) => {
+    const votes = await tx
+      .insert(gameVotes)
+      .values({
+        id: voteId,
+        serverId: command.serverId,
+        initiatorPlayerId,
+        voteType: command.voteType,
+        mapCurrent: command.mapCurrent,
+        mapNext: command.mapNext,
+        mapTarget: command.mapTarget,
+        votesCollected: command.votesCollected,
+        votesRequired: command.votesRequired,
+        result: command.result,
+        durationSeconds,
+        startedAt,
+        endedAt,
+      })
+      .onConflictDoNothing({ target: [gameVotes.serverId, gameVotes.startedAt] })
+      .returning({ id: gameVotes.id });
+    if (votes.length === 0) return false;
+
+    if (ballotRows.length > 0) {
+      await tx
+        .insert(gameVoteBallots)
+        .values(ballotRows)
+        .onConflictDoNothing({ target: [gameVoteBallots.voteId, gameVoteBallots.playerId] });
+    }
+
+    await writeVoteEvent(tx, {
+      serverId: command.serverId,
+      voteId,
+      kind: 'vote_started',
+      occurredAt: startedAt,
+      initiatorPlayerId,
+      command,
+    });
+    await writeVoteEvent(tx, {
+      serverId: command.serverId,
+      voteId,
+      kind: 'vote_ended',
+      occurredAt: endedAt,
+      initiatorPlayerId,
+      command,
+    });
+    return true;
   });
-  await writeVoteEvent(db, {
-    serverId: command.serverId,
-    voteId,
-    kind: 'vote_ended',
-    occurredAt: endedAt,
-    initiatorPlayerId,
-    command,
-  });
+
+  if (!inserted) {
+    return { voteId: null, inserted: false, initiatorPlayerId, ballotCount: 0 };
+  }
 
   if (redis) {
     const frame = JSON.stringify({

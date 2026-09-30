@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -20,12 +20,12 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   type BanStatusLike,
   banStatusBadge,
   buildApiQuery,
   buildQueryString,
-  formatDate,
   identityLabel,
   parseFilters,
   trustLevelLabel,
@@ -68,6 +68,19 @@ interface BanSourceOption {
   name: string;
 }
 
+function isBanSourceOptionArray(value: unknown): value is BanSourceOption[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as Record<string, unknown>).id === 'string' &&
+        typeof (item as Record<string, unknown>).name === 'string',
+    )
+  );
+}
+
 /** Доверие к источнику — категория, а не состояние системы: пилюля, а не цвет строки. */
 const TRUST_TONE: Record<string, BadgeTone> = {
   trusted: 'good',
@@ -93,17 +106,22 @@ export function ExternalBansBrowser() {
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<BanSourceOption[]>([]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/ban-sources', { credentials: 'include', cache: 'no-store' })
+    const controller = new AbortController();
+    fetch('/api/v1/ban-sources', {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : []))
-      .then((body: BanSourceOption[]) => {
-        if (!cancelled) setSources(body);
+      .then((body: unknown) => {
+        setSources(isBanSourceOptionArray(body) ? body : []);
       })
       .catch(() => {});
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -124,6 +142,7 @@ export function ExternalBansBrowser() {
   );
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setError(null);
     try {
@@ -131,14 +150,16 @@ export function ExternalBansBrowser() {
         credentials: 'include',
         cache: 'no-store',
       });
+      if (requestId !== loadRequestId.current) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as RegistryResponse;
+      if (requestId !== loadRequestId.current) return;
       setRows(data.rows);
       setTotal(data.total);
     } catch (e) {
-      setError((e as Error).message);
+      if (requestId === loadRequestId.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [filters]);
 
@@ -286,8 +307,8 @@ export function ExternalBansBrowser() {
                               </Badge>
                             </div>
                             <span className="text-ink-3">
-                              {formatDate(ban.issued_at)}
-                              {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
+                              {formatDateTimeRu(ban.issued_at)}
+                              {ban.expires_at ? ` → ${formatDateTimeRu(ban.expires_at)}` : ''}
                             </span>
                           </div>
                           {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}

@@ -64,6 +64,7 @@ function deps(overrides: Partial<SteamRefreshTickDeps> = {}): SteamRefreshTickDe
     ),
     fetchOwnedGames: vi.fn().mockResolvedValueOnce(owned(600)).mockResolvedValueOnce(owned(1200)),
     saveSnapshot: vi.fn().mockResolvedValue(undefined),
+    markAttempted: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
     ...overrides,
   };
@@ -115,7 +116,7 @@ describe('runSteamRefreshTick', () => {
     });
   });
 
-  it('leaves incomplete players stale so a later tick can retry them', async () => {
+  it('does not save a profile snapshot for an incomplete player, but does mark it attempted (#1026)', async () => {
     const testDeps = deps({
       fetchOwnedGames: vi.fn().mockResolvedValueOnce(owned(600)).mockResolvedValueOnce(null),
     });
@@ -128,9 +129,13 @@ describe('runSteamRefreshTick', () => {
     });
     expect(testDeps.saveSnapshot).toHaveBeenCalledOnce();
     expect(testDeps.saveSnapshot).toHaveBeenCalledWith('player-a', expect.any(Object));
+    // player-b failed (missing owned games) — its steamCheckedAt is still
+    // touched so it does not permanently sort first in every future batch
+    // (findCandidates orders by steamCheckedAt ASC NULLS FIRST).
+    expect(testDeps.markAttempted).toHaveBeenCalledExactlyOnceWith('player-b', NOW);
   });
 
-  it('does not turn an omitted ban response into a false clean record', async () => {
+  it('does not turn an omitted ban response into a false clean record, and marks the omitted player attempted', async () => {
     const testDeps = deps({
       fetchBans: vi
         .fn()
@@ -145,6 +150,26 @@ describe('runSteamRefreshTick', () => {
     });
     expect(testDeps.saveSnapshot).toHaveBeenCalledOnce();
     expect(testDeps.saveSnapshot).toHaveBeenCalledWith('player-a', expect.any(Object));
+    expect(testDeps.markAttempted).toHaveBeenCalledExactlyOnceWith('player-b', NOW);
+  });
+
+  it('does not reject the whole batch when a single fetchOwnedGames call throws (#1027)', async () => {
+    const testDeps = deps({
+      fetchOwnedGames: vi
+        .fn()
+        .mockResolvedValueOnce(owned(600))
+        .mockRejectedValueOnce(new Error('ECONNRESET')),
+    });
+
+    await expect(runSteamRefreshTick(testDeps)).resolves.toEqual({
+      disabled: false,
+      selected: 2,
+      updated: 1,
+      failed: 1,
+    });
+    expect(testDeps.saveSnapshot).toHaveBeenCalledOnce();
+    expect(testDeps.saveSnapshot).toHaveBeenCalledWith('player-a', expect.any(Object));
+    expect(testDeps.markAttempted).toHaveBeenCalledExactlyOnceWith('player-b', NOW);
   });
 
   it('fails the tick without writes when a shared batch request fails', async () => {
@@ -152,6 +177,7 @@ describe('runSteamRefreshTick', () => {
 
     await expect(runSteamRefreshTick(testDeps)).rejects.toThrow('Steam batch request failed');
     expect(testDeps.saveSnapshot).not.toHaveBeenCalled();
+    expect(testDeps.fetchOwnedGames).not.toHaveBeenCalled();
     expect(testDeps.diag.emit).toHaveBeenLastCalledWith(
       expect.objectContaining({ kind: 'steam_refresh.run_failed', severity: 'error' }),
     );

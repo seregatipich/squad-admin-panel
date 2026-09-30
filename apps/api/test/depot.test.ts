@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { auditLog, players, roles } from '@squad/db/schema';
+import { auditLog, players, roles, servers } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -173,9 +173,7 @@ describe('GET /api/v1/depot', () => {
 
 describe('POST /api/v1/depot/update', () => {
   it('Owner starts a depot update and gets status=started with audit row', async () => {
-    let _depotCalled = false;
     h.bridge.depotUpdate = async (_onStream) => {
-      _depotCalled = true;
       return { exit_code: 0 };
     };
 
@@ -308,7 +306,11 @@ describe('POST /api/v1/depot/update', () => {
 
   it('reports depot:last_update=failed when a SteamCMD progress line silently fails to persist', async () => {
     h.bridge.depotUpdate = async (onStream) => {
-      onStream({ stream: 'stdout', data: 'Update state (0x5) verifying install…' });
+      onStream({
+        id: 'depot-progress',
+        stream: 'stdout',
+        data: 'Update state (0x5) verifying install…',
+      });
       return { exit_code: 0 };
     };
     const xaddSpy = vi.spyOn(h.redis, 'xadd').mockRejectedValueOnce(new Error('redis unavailable'));
@@ -338,6 +340,74 @@ describe('POST /api/v1/depot/update', () => {
     }
   });
 
+  it('refuses with 409 servers_running when a live container server is not in server_ids (#20 follow-up)', async () => {
+    const liveServerId = randomUUID();
+    await h.db.insert(servers).values({
+      id: liveServerId,
+      displayName: 'Live Server',
+      slug: `depot-live-${liveServerId}`,
+      runtime: 'container',
+      status: 'running',
+    });
+    let depotCalled = false;
+    h.bridge.depotUpdate = async () => {
+      depotCalled = true;
+      return { exit_code: 0 };
+    };
+
+    try {
+      const cookie = await loginAsOwner(h);
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/depot/update',
+        headers: { cookie },
+        // Default server_ids: [] — the live server above is not listed.
+        payload: {},
+      });
+      expect(resp.statusCode).toBe(409);
+      const body = resp.json();
+      expect(body.error).toBe('servers_running');
+      expect(body.server_ids).toEqual([liveServerId]);
+      expect(await h.redis.get('depot:updating')).toBeNull();
+      expect(depotCalled).toBe(false);
+    } finally {
+      await h.db.delete(servers).where(eq(servers.id, liveServerId));
+    }
+  });
+
+  it('proceeds when every live container server is listed in server_ids', async () => {
+    const liveServerId = randomUUID();
+    await h.db.insert(servers).values({
+      id: liveServerId,
+      displayName: 'Live Server 2',
+      slug: `depot-live-listed-${liveServerId}`,
+      runtime: 'container',
+      status: 'running',
+    });
+    let depotCalled = false;
+    h.bridge.depotUpdate = async () => {
+      depotCalled = true;
+      return { exit_code: 0 };
+    };
+    h.bridge.containerStop = async () => ({ status: 'ok' });
+    h.bridge.containerStart = async () => ({ status: 'ok' });
+
+    try {
+      const cookie = await loginAsOwner(h);
+      const resp = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/depot/update',
+        headers: { cookie },
+        payload: { server_ids: [liveServerId] },
+      });
+      expect(resp.statusCode).toBe(200);
+      expect(resp.json().status).toBe('started');
+      await vi.waitFor(() => expect(depotCalled).toBe(true));
+    } finally {
+      await h.db.delete(servers).where(eq(servers.id, liveServerId));
+    }
+  });
+
   it('clears depot:updating key after background task completes', async () => {
     h.bridge.depotUpdate = async () => ({ exit_code: 0 });
 
@@ -359,5 +429,53 @@ describe('POST /api/v1/depot/update', () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(cleared).toBe(true);
+  });
+
+  // Regression (#43 finding 321): a non-zero steamcmd exit code was reported as ok.
+  it('background task writes depot:last_update=failed on a non-zero steamcmd exit code', async () => {
+    h.bridge.depotUpdate = async () => ({ exit_code: 5 });
+
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+    });
+
+    const deadline = Date.now() + 2000;
+    let lastUpdate: string | null = null;
+    while (Date.now() < deadline) {
+      lastUpdate = await h.redis.get('depot:last_update');
+      if (lastUpdate) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!lastUpdate) throw new Error('depot:last_update never set');
+    const parsed = JSON.parse(lastUpdate);
+    expect(parsed.status).toBe('failed');
+    expect(parsed.error).toContain('exit code 5');
+  });
+
+  // Regression (#43 finding 322): the job deleted depot:updating even when
+  // another update owned it by then.
+  it('does not release a depot lock another update owns by the time it finishes', async () => {
+    h.bridge.depotUpdate = async () => {
+      await h.redis.set('depot:updating', 'other-holder');
+      return { exit_code: 0 };
+    };
+
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+    });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !(await h.redis.get('depot:last_update'))) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // The lock is released in `finally`, after depot:last_update is written.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await h.redis.get('depot:updating')).toBe('other-holder');
   });
 });

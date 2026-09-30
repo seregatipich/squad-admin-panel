@@ -6,7 +6,7 @@ vi.mock('next/server', () => {
       return { type: 'redirect', url: url.toString() };
     }
     static next() {
-      return { type: 'next' };
+      return { type: 'next', headers: new Headers() };
     }
   }
   return { NextResponse: MockNextResponse };
@@ -16,6 +16,7 @@ import { config, middleware } from './middleware';
 
 function makeRequest(pathname: string, hasCookie: boolean) {
   return {
+    headers: new Headers(),
     cookies: { has: (name: string) => (name === '__Host-sid' ? hasCookie : false) },
     nextUrl: {
       pathname,
@@ -32,6 +33,7 @@ describe('middleware', () => {
     const res = middleware(makeRequest('/dashboard', false));
     expect(res.type).toBe('redirect');
     expect(res.url).toContain('/login');
+    expect(res.url).not.toContain('next=');
   });
 
   it('passes through authenticated requests', () => {

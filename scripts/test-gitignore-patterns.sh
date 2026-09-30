@@ -21,22 +21,18 @@ cd "$repo_root"
 
 failures=()
 checked=0
-created=()
 
-cleanup() {
-  for path in "${created[@]}"; do
-    rm -f "$path"
-  done
-}
-trap cleanup EXIT
-
+# git check-ignore matches pure path strings against the ignore rules — it
+# needs neither the file nor its parent directories to exist. The previous
+# version touched real paths under tracked package directories (e.g.
+# packages/shared-config/reports/mutation/mutation.html) and blindly rm -f'd
+# them in cleanup, which deleted a developer's real Stryker mutation report
+# if one already existed there, and left any mkdir -p'd directories behind.
+# --no-index also makes this work outside a git worktree / before `git add`.
 check_ignored() {
   local path=$1
   checked=$((checked + 1))
-  mkdir -p "$(dirname "$path")"
-  touch "$path"
-  created+=("$path")
-  if ! git check-ignore -q "$path"; then
+  if ! git check-ignore --no-index -q "$path"; then
     failures+=("expected '$path' to be ignored, but it is not")
   fi
 }
@@ -44,7 +40,7 @@ check_ignored() {
 check_not_ignored() {
   local path=$1
   checked=$((checked + 1))
-  if git check-ignore -q "$path"; then
+  if git check-ignore --no-index -q "$path"; then
     failures+=("expected '$path' to NOT be ignored, but it is")
   fi
 }

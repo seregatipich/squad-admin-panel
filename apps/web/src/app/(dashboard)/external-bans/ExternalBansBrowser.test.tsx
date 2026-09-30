@@ -124,4 +124,22 @@ describe('ExternalBansBrowser', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось загрузить реестр');
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
+
+  it('ignores a malformed /api/v1/ban-sources response instead of crashing', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/ban-sources')) {
+        return Promise.resolve(new Response(JSON.stringify({ not: 'an array' }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ rows: [ROW], total: 1, limit: 25, offset: 0 }), {
+          status: 200,
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ExternalBansBrowser />);
+
+    expect(await screen.findByRole('link', { name: 'Читер' })).toBeInTheDocument();
+  });
 });

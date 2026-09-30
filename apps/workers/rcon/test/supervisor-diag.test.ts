@@ -87,10 +87,16 @@ describe('RconSupervisor diag emits', () => {
       log: makeLogger(),
       diag,
     });
+    // Each supervisor's own connect attempt fails and emits 'rcon.disconnected'
+    // independently of the reconcile-level events under test, so filter by kind.
+    const targetsChanged = () =>
+      diag.emit.mock.calls
+        .map((c) => c[0] as DiagEvent)
+        .filter((e) => e.kind === 'rcon.targets.changed');
 
     await supervisor.reconcile([targetA]);
-    expect(diag.emit).toHaveBeenCalledTimes(1);
-    const firstCall = diag.emit.mock.calls[0]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(1);
+    const firstCall = targetsChanged()[0] as DiagEvent;
     expect(firstCall.kind).toBe('rcon.targets.changed');
     expect(firstCall.component).toBe('worker-rcon');
     expect(firstCall.severity).toBe('info');
@@ -101,8 +107,8 @@ describe('RconSupervisor diag emits', () => {
     });
 
     await supervisor.reconcile([targetA, targetB]);
-    expect(diag.emit).toHaveBeenCalledTimes(2);
-    const secondCall = diag.emit.mock.calls[1]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(2);
+    const secondCall = targetsChanged()[1] as DiagEvent;
     expect(secondCall.payload).toMatchObject({
       added: ['srv-bbb'],
       removed: [],
@@ -110,8 +116,8 @@ describe('RconSupervisor diag emits', () => {
     });
 
     await supervisor.reconcile([targetB]);
-    expect(diag.emit).toHaveBeenCalledTimes(3);
-    const thirdCall = diag.emit.mock.calls[2]?.[0] as DiagEvent;
+    expect(targetsChanged()).toHaveLength(3);
+    const thirdCall = targetsChanged()[2] as DiagEvent;
     expect(thirdCall.payload).toMatchObject({
       added: [],
       removed: ['srv-aaa'],
@@ -226,6 +232,53 @@ describe('RconSupervisor connect lifecycle diag emits', () => {
     expect(authFailedEvent?.severity).toBe('error');
     expect(authFailedEvent?.serverId).toBe('srv-bad-auth');
     expect(authFailedEvent?.payload).toMatchObject({ host: '127.0.0.1', port });
+
+    await supervisor.stop();
+    await new Promise<void>((r) => server.close(() => r()));
+  }, 10_000);
+});
+
+describe('RconSupervisor external-server address guard (#30, finding #333)', () => {
+  it('never dials a loopback host for a target flagged as operator-supplied', async () => {
+    const { server, port } = await fakeRconServer({ acceptAuth: true });
+    let accepted = 0;
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    const diag = makeDiag();
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: makeLogger(),
+      diag,
+      initialBackoffMs: 60_000,
+      maxBackoffMs: 60_000,
+      pollIntervalMs: 60_000,
+    });
+
+    await supervisor.reconcile([
+      {
+        serverId: 'srv-external-loopback',
+        host: '127.0.0.1',
+        port,
+        password: 'pw',
+        refuseRestrictedAddresses: true,
+      },
+    ]);
+
+    const deadline = Date.now() + 5_000;
+    let disconnected: DiagEvent | undefined;
+    while (Date.now() < deadline && !disconnected) {
+      await sleep(20);
+      disconnected = diag.emit.mock.calls
+        .map((c) => c[0] as DiagEvent)
+        .find((e) => e.kind === 'rcon.disconnected');
+    }
+
+    expect(disconnected?.payload).toMatchObject({
+      reason: expect.stringMatching(/restricted address/),
+    });
+    expect(accepted).toBe(0);
 
     await supervisor.stop();
     await new Promise<void>((r) => server.close(() => r()));

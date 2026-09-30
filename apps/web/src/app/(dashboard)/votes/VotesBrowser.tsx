@@ -24,6 +24,7 @@ import {
   StatusDot,
   TextInput,
 } from '@/components/ui';
+import { describeLoadError } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendVotePage,
@@ -33,6 +34,7 @@ import {
   DATE_PRESETS,
   formatDateTime,
   formatDuration,
+  INITIATOR_QUERY_MAX_LENGTH,
   mapChain,
   mergeVotePage,
   PAGE_LIMIT,
@@ -108,6 +110,15 @@ export function VotesBrowser() {
     const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
+    // Reset synchronously, not only once the response lands (#750): a
+    // filter change with the sentinel already visible would otherwise still
+    // fire loadMore with the previous filters' cursor, and the previous
+    // filters' rows would sit on screen with no loading indicator while the
+    // new page is in flight.
+    setNextCursor(null);
+    setItems([]);
+    // A stale in-flight loadMore no longer clears this itself.
+    setLoadingMore(false);
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
@@ -122,7 +133,7 @@ export function VotesBrowser() {
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (current()) setError(describeLoadError(err));
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -136,22 +147,26 @@ export function VotesBrowser() {
     };
   }, [loadFirstPage]);
 
-  useEffect(() => {
+  const loadTotal = useCallback(() => {
     let cancelled = false;
-    setTotal(null);
     fetch(`/api/v1/votes/count?${buildCountApiQuery(filters)}`, {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
+      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
       .then((data) => {
-        if (!cancelled) setTotal(data.total);
+        if (!cancelled && data) setTotal(data.total);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [filters]);
+
+  useEffect(() => {
+    setTotal(null);
+    return loadTotal();
+  }, [loadTotal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +190,13 @@ export function VotesBrowser() {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    // Captured before the request goes out: if loadFirstPage bumps this
+    // (a filter change, or the effect's own cleanup on unmount) while this
+    // fetch is in flight, its response is for a cursor/filters pairing that
+    // no longer applies and must not be appended or override nextCursor
+    // (#750).
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -183,12 +205,13 @@ export function VotesBrowser() {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as VoteListResponse;
+      if (!current()) return;
       setItems((prev) => appendVotePage(prev, data.items));
       setNextCursor(data.next_cursor);
     } catch (err) {
-      setError((err as Error).message);
+      if (current()) setError(describeLoadError(err));
     } finally {
-      setLoadingMore(false);
+      if (current()) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore]);
 
@@ -204,18 +227,24 @@ export function VotesBrowser() {
   }, [loadMore, nextCursor]);
 
   const refreshHead = useCallback(() => {
+    loadTotal();
     if (filters.order !== 'desc') return;
+    // Same staleness guard as loadMore (#750): a `vote.ended` push can land
+    // while a filter change's own first-page load is in flight, and this
+    // request was built from the filters in effect when it fired.
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
       cache: 'no-store',
     })
       .then(async (res) => (res.ok ? ((await res.json()) as VoteListResponse) : null))
       .then((data) => {
-        if (!data) return;
+        if (!data || !current()) return;
         setItems((prev) => mergeVotePage(data.items, prev));
       })
       .catch(() => {});
-  }, [filters]);
+  }, [filters, loadTotal]);
   useLiveSubscription('vote.ended', refreshHead);
 
   const serverOptions = useMemo(() => {
@@ -325,7 +354,9 @@ function FilterPanel({
       <FieldRow label="Инициатор">
         <SearchField
           value={filters.initiatorQuery}
-          onCommit={(value) => onChange({ initiatorQuery: value.trim() })}
+          onCommit={(value) =>
+            onChange({ initiatorQuery: value.trim().slice(0, INITIATOR_QUERY_MAX_LENGTH) })
+          }
           label="Поиск по инициатору"
           placeholder="Ник инициатора"
           clearLabel="Очистить поиск по инициатору"

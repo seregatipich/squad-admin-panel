@@ -11,8 +11,8 @@ Every Fastify API log line, worker log line, and bridge log line is written to t
 ### Viewing logs
 
 - **UI**: `/logs` page — filterable by source, level, server, and free text. Paginated, live-polling.
-- **API**: `GET /api/v1/logs` — query params: `src`, `lvl`, `srv`, `q`, `before`, `after`, `limit` (max 2000). Requires `host:view` permission.
-- **Export**: `GET /api/v1/logs/export` — streams a gzip-compressed bundle (recent entries + latest audit slice). Requires `host:metrics` permission. Attach to support requests.
+- **API**: `GET /api/v1/logs` — query params: `src`, `lvl`, `srv`, `q`, `before`, `after`, `limit` (max 2000). Returns `{ entries, cursor }`; tail with `after=<cursor>`. Requires `host:view` permission.
+- **Export**: `GET /api/v1/logs/export` — streams a gzip-compressed bundle (recent entries + latest audit slice). Requires `host:view`, `host:metrics`, `audit:view` and `server:download_logs` together, because the bundle carries panel logs, the audit slice and game-server stdout tails (player IPs); an API token needs all four scopes. Attach to support requests.
 
 Source codes: `B` = bridge, `R` = rcon, `L` = log-ingest, `W` = worker, `D` = depot, `I` = install, `A` = api.
 
@@ -86,8 +86,12 @@ sudo journalctl -u panel-host-bridge -n 100
 The `/ready` endpoint also probes the bridge:
 
 ```bash
-curl -sk https://${APP_DOMAIN}/ready | jq .checks.bridge
+docker compose exec api wget -qO- http://localhost:3000/ready | jq .checks.bridge
 ```
+
+`/ready` is public, so each check reports only `ok` or `fail` and every probe gives up after 3 s. The reason for a `fail` (connection error, bridge socket path, timeout) is logged by the API as `readiness check failed` with the check name.
+
+The dashboard reads the same checks (without the reason for a failure) from the authenticated `GET /api/v1/health/dependencies` (`host:view`), because the proxy hides `/ready`.
 
 ## Audit log
 
@@ -108,7 +112,7 @@ Do not use `audit_log` for diagnostic log noise. It covers only POST/PUT/PATCH/D
 | `/logs` page empty | `XLEN panel:logs` in Redis. If zero, the pino sink may not have wired up — check `docker compose logs api --since 2m` for boot errors. |
 | RCON status `not_polled` | Expected when the server is stopped. Only starts polling when `servers.status = 'running'`. |
 | RCON status `error` | `docker compose logs worker-rcon --since 5m` — look for `ECONNREFUSED`. Check that the Squad container is running and RCON port is correct. |
-| `/ready` returns 503 | `curl -sk .../ready | jq .checks` — which check failed? Restart the relevant service or the bridge. |
+| `/ready` returns 503 | `docker compose exec api wget -qO- http://localhost:3000/ready` — which check is `fail`? The api log line `readiness check failed` carries the reason. Restart the relevant service or the bridge. |
 
 ## No external monitoring (design choice)
 

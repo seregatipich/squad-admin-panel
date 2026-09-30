@@ -28,6 +28,7 @@ import {
   TableRow,
   Td,
 } from '@/components/ui';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   buildMatchCombatLogHref,
   buildMatchDetailHref,
@@ -84,6 +85,11 @@ const EVENT_TONE: Record<string, BadgeTone> = {
   wound: 'warn',
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Mirrors MATCH_TIMELINE_LIMIT in apps/api/src/routes/matches.ts. */
+const MATCH_TIMELINE_LIMIT = 30;
+
 export function MatchCard({
   matchId,
   backHref = '/matches',
@@ -108,7 +114,20 @@ export function MatchCard({
     const current = () => requestRef.current === requestId;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/matches/${matchId}`, { credentials: 'include', cache: 'no-store' })
+    // Route params are decoded by Next.js before this ever runs — a route
+    // segment can smuggle an encoded slash, so a raw `matchId` must never
+    // reach a fetch path (it could then address an unrelated same-origin API
+    // route). The API rejects anything but a UUID here anyway (`idParam` in
+    // apps/api/src/routes/matches.ts), so an invalid id is refused up front.
+    if (!UUID_RE.test(matchId)) {
+      setError('Некорректный идентификатор матча');
+      setLoading(false);
+      return;
+    }
+    fetch(`/api/v1/matches/${encodeURIComponent(matchId)}`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
       .then(async (res) => {
         if (res.status === 404) throw new Error('Матч не найден');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -137,6 +156,22 @@ export function MatchCard({
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, [match]);
+
+  // Without this, a match that ends while its own card is open keeps showing
+  // "Идёт" (only the local `now` ticker runs) until a manual reload. The API
+  // announces a match end as a `match.ended` kind inside `server.events.appended`
+  // (#1315), which names the server but not the match, so refetch on this
+  // match's server only.
+  const serverId = match?.server_id;
+  const onEventsAppended = useCallback(
+    (event: { data: { server_id: string | null; kinds?: string[] } }) => {
+      if (!event.data.kinds?.includes('match.ended')) return;
+      if (serverId === undefined || event.data.server_id !== serverId) return;
+      load();
+    },
+    [load, serverId],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   if (loading) {
     return (
@@ -449,6 +484,11 @@ export function MatchTimeline({
     <Card padding="none">
       <CardHeader
         title="Боевые события"
+        description={
+          events && events.length > 0
+            ? `Показаны последние ${MATCH_TIMELINE_LIMIT} — полная запись в боевом логе.`
+            : undefined
+        }
         actions={
           <Link
             href={combatLogHref}

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -22,7 +22,8 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
-import type { BadgeTone as PriorityTone } from '../helpers';
+import { formatMatchDuration } from '@/lib/format';
+import type { MeResponse, BadgeTone as PriorityTone, ServerOption } from '../helpers';
 import { priorityBadge } from '../helpers';
 import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
@@ -42,21 +43,18 @@ interface ClanDetail {
   primary_server_id: string | null;
 }
 
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
-
-interface MeResponse {
-  can_manage_clans: boolean;
-}
-
 /** Тон срока приоритета из `helpers.ts` в тонах дизайн-системы. */
 const PRIORITY_TONE: Record<PriorityTone, BadgeTone> = {
   neutral: 'neutral',
   danger: 'crit',
   warning: 'warn',
 };
+
+// Путь клана в URL решает роутер, но `clanId` подставляется прямо в путь
+// fetch-запросов всех панелей ниже (`/api/v1/clans/${clanId}/...`). Без этой
+// проверки значение вроде `..%2F..%2Fadmin` из адресной строки ушло бы в
+// произвольный same-origin путь API вместе с сессионными cookie.
+const CLAN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface OnlineMember {
   player_id: string;
@@ -119,17 +117,6 @@ const ROLE_LABELS: Record<string, string> = {
   member: 'Участник',
 };
 
-function formatMatchDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
-  const total = Math.floor(seconds);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours > 0) return `${hours}ч ${minutes}м`;
-  if (minutes > 0) return `${minutes}м ${secs}с`;
-  return `${secs}с`;
-}
-
 function formatMatchStart(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
@@ -182,6 +169,7 @@ function formatSessionDuration(startedAt: string, nowMs: number): string {
 
 export default function ClanDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: clanId } = use(params);
+  const clanIdValid = CLAN_ID_RE.test(clanId);
   const [clan, setClan] = useState<ClanDetail | null>(null);
   const [online, setOnline] = useState<OnlineResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -195,8 +183,16 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [serverOptions, setServerOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [allServers, setAllServers] = useState<ServerOption[]>([]);
   const [canManageClans, setCanManageClans] = useState(false);
+  // Tracks the most recently started loadMatches() request; a response is
+  // applied only if it is still current, so a slower "Показать ещё" request
+  // can never overwrite a fresher server-filter change (see finding #519).
+  const matchesRequestIdRef = useRef(0);
 
   const loadClan = useCallback(async () => {
+    if (!clanIdValid) {
+      setErr('Клан не найден.');
+      return;
+    }
     try {
       const res = await fetch(`/api/v1/clans/${clanId}`, {
         credentials: 'include',
@@ -212,9 +208,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [clanId]);
+  }, [clanId, clanIdValid]);
 
   const loadOnline = useCallback(async () => {
+    if (!clanIdValid) return;
     try {
       const res = await fetch(`/api/v1/clans/${clanId}/online`, {
         credentials: 'include',
@@ -225,10 +222,12 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     } catch {
       /* keep the previous snapshot on transient failures */
     }
-  }, [clanId]);
+  }, [clanId, clanIdValid]);
 
   const loadMatches = useCallback(
     async (cursor: string | null, serverId: string, replace: boolean) => {
+      if (!clanIdValid) return;
+      const requestId = ++matchesRequestIdRef.current;
       setMatchesLoading(true);
       try {
         const query = new URLSearchParams({ limit: String(MATCHES_PAGE_LIMIT) });
@@ -240,6 +239,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         });
         if (!res.ok) return;
         const body = (await res.json()) as ClanMatchesResponse;
+        if (matchesRequestIdRef.current !== requestId) return;
         setMatchRows((prev) => (replace ? body.items : [...prev, ...body.items]));
         setMatchCursor(body.next_cursor);
         setMatchesLoaded(true);
@@ -258,10 +258,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       } catch {
         /* keep the current match list on transient failures */
       } finally {
-        setMatchesLoading(false);
+        if (matchesRequestIdRef.current === requestId) setMatchesLoading(false);
       }
     },
-    [clanId],
+    [clanId, clanIdValid],
   );
 
   useEffect(() => {
@@ -295,18 +295,33 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     void loadMatches(null, matchServerFilter, true);
   }, [loadMatches, matchServerFilter]);
 
+  const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+
   useEffect(() => {
     void loadOnline();
-    const poll = setInterval(() => void loadOnline(), ONLINE_POLL_MS);
+    // Скрытая вкладка не бьёт в API каждые ONLINE_POLL_MS — только читает
+    // актуальное состояние, когда вернётся на передний план (см. эффект ниже).
+    const poll = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadOnline();
+    }, ONLINE_POLL_MS);
     return () => clearInterval(poll);
   }, [loadOnline]);
 
   useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void loadOnline();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [loadOnline]);
+
+  useEffect(() => {
+    // Секундный тик нужен только строке «В сессии» — без единого участника
+    // онлайн таймер лишь перерисовывает всё дерево страницы впустую.
+    if (onlineCount === 0) return;
     const tick = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(tick);
-  }, []);
-
-  const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+  }, [onlineCount]);
   // Стабильная ссылка между секундными тиками `nowMs`: новая — только после
   // перезагрузки клана.
   const settingsInitial = useMemo<ClanSettingsInitial | null>(
@@ -328,6 +343,17 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
     () => (clan ? priorityBadge(clan.priority_expires_at) : null),
     [clan],
   );
+
+  if (!clanIdValid) {
+    return (
+      <PageContainer width="wide">
+        <PageHeader title="Клан" backHref="/clans" backLabel="Все кланы" />
+        <Card padding="none">
+          <EmptyState title="Клан не найден" description="Некорректный идентификатор клана." />
+        </Card>
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer width="wide">
@@ -440,7 +466,13 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
 
       <ClanStatsPanel clanId={clanId} />
 
-      {clan ? <TagProtectionCard clanId={clanId} initialProtected={clan.is_tag_protected} /> : null}
+      {clan ? (
+        <TagProtectionCard
+          clanId={clanId}
+          initialProtected={clan.is_tag_protected}
+          canToggle={canManageClans}
+        />
+      ) : null}
 
       {settingsInitial && canManageClans ? (
         <ClanSettingsPanel

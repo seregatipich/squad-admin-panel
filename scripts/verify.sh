@@ -42,20 +42,35 @@ run_step "typecheck" pnpm turbo run typecheck
 run_step "biome" pnpm exec biome check .
 
 if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then
-  echo "… provisioning an isolated test DB via scripts/new-test-db.sh"
-  eval "$(bash scripts/new-test-db.sh verify 2>/dev/null)" || true
+  # A fixed slug ("verify") always resolves to the same database
+  # (new-test-db.sh is idempotent by design), which is exactly wrong here:
+  # verify.sh is meant to be run by any agent/wave from any worktree, and a
+  # shared, never-dropped test_verify database means migrations from one
+  # branch and leftover data from a previous run bleed into the next
+  # invocation — the cross-contamination new-test-db.sh exists to prevent.
+  # Scope the slug to this worktree and process, and drop it on exit.
+  verify_slug="verify_$(basename "$PWD" | cut -c1-40)_$$"
+  echo "… provisioning an isolated test DB via scripts/new-test-db.sh $verify_slug"
+  if eval "$(bash scripts/new-test-db.sh "$verify_slug" 2>/dev/null)"; then
+    trap 'bash scripts/new-test-db.sh --drop "$verify_slug" >/dev/null 2>&1 || true' EXIT
+  else
+    echo "   scripts/new-test-db.sh $verify_slug failed — run it by hand to see why" >&2
+  fi
 fi
 
 if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && command -v psql >/dev/null 2>&1; then
-  _pw="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n1)"
+  _pw="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
   if [ -n "$_pw" ] && PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
     _db="test_verify_$$"
     echo "… provisioning an isolated test DB on the native Postgres ($_db)"
     if PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "CREATE DATABASE \"$_db\"" >/dev/null 2>&1; then
       export DATABASE_URL="postgres://admin:${_pw}@127.0.0.1:5432/${_db}"
       export TEST_DATABASE_URL="$DATABASE_URL"
-      pnpm --filter @squad/db migrate >/dev/null 2>&1 || true
       trap 'PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "DROP DATABASE IF EXISTS \"$_db\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+      if ! pnpm --filter @squad/db migrate >/dev/null 2>&1; then
+        echo "   pnpm --filter @squad/db migrate failed against ${_db} — run it by hand to see the error" >&2
+        unset DATABASE_URL TEST_DATABASE_URL
+      fi
     fi
   fi
 fi

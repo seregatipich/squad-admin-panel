@@ -2,6 +2,7 @@ import { discordMessageTemplates, players, roles } from '@squad/db/schema';
 import {
   DEFAULT_DISCORD_TEMPLATES,
   type DiscordEmbedTemplate,
+  defaultDiscordTemplate,
   renderDiscordTemplate,
 } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
@@ -235,6 +236,27 @@ describeIfDb('Discord templates — edit, render, reset', () => {
       resource: 'discord_message_template',
       targetId: 'ban_issued',
     });
+  });
+
+  it('serves the code default when the stored template no longer matches the embed schema', async () => {
+    await h.db
+      .update(discordMessageTemplates)
+      .set({ template: { title: 42, fields: 'not-an-array' } })
+      .where(eq(discordMessageTemplates.eventType, 'kick'));
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/integrations/discord/templates/kick',
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().template).toEqual(defaultDiscordTemplate('kick')?.template);
+    } finally {
+      await h.db
+        .update(discordMessageTemplates)
+        .set({ template: defaultDiscordTemplate('kick')?.template })
+        .where(eq(discordMessageTemplates.eventType, 'kick'));
+    }
   });
 
   it('rejects an unknown event type with a 400 validation error', async () => {

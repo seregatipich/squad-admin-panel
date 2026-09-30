@@ -9,7 +9,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | Table | Source file | Purpose |
 |---|---|---|
 | [`audit_log`](#audit_log) | `audit-log.ts` | Append-only, hash-chained action log |
-| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 anonymous ban-appeal portal queue |
+| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 ban-appeal portal queue (Steam-verified submissions) |
 | [`balancer_settings`](#balancer-tables-game-2) | `balancer-settings.ts` | GAME-2 singleton team-balancer rules/thresholds |
 | [`balancer_proposals`](#balancer-tables-game-2) | `balancer-proposals.ts` | GAME-2 cache of dry-run balance snapshots from the SquadJS exporter |
 | [`balancer_decisions`](#balancer-tables-game-2) | `balancer-decisions.ts` | GAME-2 append-only operator decisions on a snapshot |
@@ -38,7 +38,9 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 
 ## `audit_log`
 
-Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash` and `row_hash` on every INSERT. UPDATE and DELETE raise `audit_log is append-only`.
+Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash`, `row_hash` and `hash_version` on every INSERT. UPDATE, DELETE and TRUNCATE (statement trigger `trg_audit_log_no_truncate`, since migration 0135) raise `audit_log is append-only`.
+
+Since migration 0135 (issue #50) rows are hashed with the **v2** canonical form: `'v2'` followed by every column (`id`, `created_at` rendered in UTC with microseconds, all actor columns, `action_type`, `target_*`, both snapshots, `context`, `status_code`, `duration_ms`), each as a `|<utf-8 byte length>:<::text value>` field (`|-` for NULL). Older rows keep `hash_version = 1` (`action_type|target_type|target_id|context::text|created_at::text`) and are still verified with that form; a v1 row after the first v2 row is a `hash_version` break. The verifier is `apps/api/src/lib/audit-chain.ts`.
 
 **Columns**
 
@@ -60,7 +62,8 @@ Immutable, hash-chained record of every state-mutating API action. The DB trigge
 | `status_code` | `integer` | YES | NULL | HTTP status code that the API returned |
 | `duration_ms` | `integer` | YES | NULL | Handler wall-clock time |
 | `prev_hash` | `bytea` | YES | NULL | SHA-256 of the previous row's `row_hash`; NULL on the first row |
-| `row_hash` | `bytea` | NO | — | `sha256(prev_hash ∥ canonical_json(row))` written by trigger |
+| `row_hash` | `bytea` | NO | — | `sha256(prev_hash ∥ canonical(row))` written by trigger (canonical form per `hash_version`) |
+| `hash_version` | `smallint` | NO | `1` | Canonical form of `row_hash`: `1` before migration 0135, `2` since; set by the trigger |
 
 **Indexes**
 
@@ -79,15 +82,18 @@ Immutable, hash-chained record of every state-mutating API action. The DB trigge
 
 | Trigger | Event | Function | Effect |
 |---|---|---|---|
-| `trg_audit_log_ins` | `BEFORE INSERT` | `audit_log_append()` | Acquires advisory xact lock `hashtextextended('audit_log', 0)`, reads last `row_hash`, sets `prev_hash`, computes and sets `row_hash` |
+| `trg_audit_log_ins` | `BEFORE INSERT` | `audit_log_append()` | Acquires advisory xact lock `hashtextextended('audit_log', 0)`, assigns `id`, reads last `row_hash`, sets `prev_hash`, `hash_version` and `row_hash` |
 | `trg_audit_log_no_upd` | `BEFORE UPDATE` | `audit_log_deny()` | Raises `audit_log is append-only` |
 | `trg_audit_log_no_del` | `BEFORE DELETE` | `audit_log_deny()` | Raises `audit_log is append-only` |
 
 **Hash canonical form** (same as `scripts/verify-audit-chain.ts`):
 
 ```
-sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | created_at::text ) )
+v1 (rows with hash_version = 1): sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | created_at::text ) )
+v2 (hash_version = 2):           sha256( prev_hash || utf8( 'v2' || field(id) || field(created_at UTC) || ... every column ) )
 ```
+
+The trigger pins `TimeZone = 'UTC'` on itself (migration 0135), so the hash does not depend on the writer's session settings; verifiers read `created_at::text` under a UTC session. The trigger also assigns `id` itself, after taking the advisory lock; the column has no default.
 
 **Example row:**
 
@@ -288,7 +294,9 @@ Monthly-partitioned table for Squad event envelopes produced by `worker-rcon` an
 
 ## `processed_events`
 
-Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group.
+Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group. Rows older than 30 days are deleted hourly by `worker-event-partition` (`pruneProcessedEvents`, issue #50).
+
+Retention: `worker-event-partition` deletes rows whose `processed_at` falls before the `events` retention cutoff (24 months, UTC month boundary), served by `processed_events_processed_at_idx` (migration 0128, which also dropped the never-queried `processed_events_group_idx`).
 
 **Columns**
 
@@ -355,6 +363,7 @@ Programmatic bearer tokens for automation scripts and external integrations. The
 | Name | Columns |
 |---|---|
 | `player_api_tokens_steam_id64_idx` | `steam_id64` |
+| `player_api_tokens_token_hash_key` | `token_hash` (UNIQUE; serves the Bearer-token lookup on every authenticated request) |
 
 **Example row:**
 
@@ -419,6 +428,7 @@ Deduplicated log of observed `(player_id, name_normalized)` pairs. Normalization
 |---|---|---|
 | `player_name_history_player_name_key` | `(player_id, name_normalized)` | UNIQUE |
 | `player_name_history_name_normalized_idx` | `name_normalized` | plain |
+| `player_name_history_name_normalized_trgm_idx` | `name_normalized gin_trgm_ops` | GIN (migration 0126) — serves `LIKE '%…%'` nickname search |
 | `player_name_history_last_seen_at_idx` | `last_seen_at` | plain |
 
 ---
@@ -467,6 +477,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 |---|---|---|
 | `players_eos_id_unique_idx` | `eos_id` | `eos_id IS NOT NULL` |
 | `players_canonical_name_normalized_idx` | `canonical_name_normalized` | — |
+| `players_canonical_name_normalized_trgm_idx` | GIN `canonical_name_normalized gin_trgm_ops` (migration 0126) — serves `LIKE '%…%'` nickname search | — |
 | `players_last_seen_at_idx` | `last_seen_at` | — |
 | `players_role_id_idx` | `role_id` | `role_id IS NOT NULL` |
 | `players_steam_checked_at_idx` | `steam_checked_at NULLS FIRST` | `steam_id64 IS NOT NULL` |
@@ -494,7 +505,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 
 ## `role_permissions`
 
-M:N join table mapping roles to permission key strings. A player with `players.role_id = X` is granted every `permission_key` in the set `{ rp.permission_key | rp.role_id = X }`.
+M:N join table mapping roles to permission key strings. **Legacy**: no API route writes it since the flag model (0015), and migration 0122 deleted every stored row (#36). `loadUserPermissions` still honours a row, but only when the role's flags allow that key (the same gates as the flag-derived set), so it can never grant more than the role editor shows.
 
 **Columns**
 
@@ -585,14 +596,24 @@ One row per server; primary key mirrors `servers.id`. Stores Docker-level and Sq
 | `max_players` | `integer` | NO | `100` | |
 | `tickrate` | `integer` | NO | `50` | |
 | `multihome` | `inet` | YES | NULL | Bind to a specific NIC |
-| `extra_args` | `text` | NO | `''` | Appended to the Squad launch command |
+| `extra_args` | `text` | NO | `''` | Stored only: no `container_run` call passes it (#43) |
 | `launch_args_override` | `text` | YES | NULL | Completely replaces the default arg set when non-NULL |
-| `cpu_affinity` | `text` | YES | NULL | `taskset` mask |
-| `cpu_weight` | `integer` | YES | NULL | cgroup `CPUWeight` (100–10000) |
-| `niceness` | `integer` | YES | NULL | Process nice value (-20 to 19) |
-| `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB |
-| `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB |
-| `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000) |
+| `cpu_affinity` | `text` | YES | NULL | `taskset` mask. Stored only, not applied (#43) |
+| `cpu_weight` | `integer` | YES | NULL | cgroup `CPUWeight` (100–10000). Stored only, not applied (#43) |
+| `niceness` | `integer` | YES | NULL | Process nice value (-20 to 19). Stored only, not applied (#43) |
+| `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB. Stored only, not applied (#43) |
+| `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB. Stored only, not applied (#43) |
+| `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000). Stored only, not applied (#43) |
+
+| `multihome` | `inet` | YES | NULL | Bind to a specific NIC; passed as `RCONIP=`/`MULTIHOME=` (IP literal, validated by API and bridge) |
+| `extra_args` | `text` | NO | `''` | **Inert** (#53): never passed to the container; the API no longer writes it |
+| `launch_args_override` | `text` | YES | NULL | **Inert** (#53) |
+| `cpu_affinity` | `text` | YES | NULL | **Inert** (#53): no cgroup/cpuset is applied |
+| `cpu_weight` | `integer` | YES | NULL | **Inert** (#53) |
+| `niceness` | `integer` | YES | NULL | **Inert** (#53) |
+| `memory_high_mb` | `integer` | YES | NULL | **Inert** (#53) |
+| `memory_max_mb` | `integer` | YES | NULL | **Inert** (#53): the container runs without a memory limit |
+| `io_weight` | `integer` | YES | NULL | **Inert** (#53) |
 | `chat_commands_enabled` | `boolean` | NO | `true` | AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands (`!stats`/`!rules`/`!report`); disable where an RNSquadJS sidecar runs its own `chatCommands` |
 | `rules_text` | `text` | YES | NULL | AUTO-4 (#75): text returned in-game for `!rules` (capped to the RCON single-message limit) |
 
@@ -771,7 +792,7 @@ see [api/api.md](../api/api.md#players)).
 ---
 ## `whitelist_applications`
 
-WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pending** application per SteamID64 via the public portal; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
+WL-3 (#67) public whitelist/VIP application queue. Anyone may submit an application via the public portal; one signed in with Steam files a `verified` application for their own SteamID64, and each SteamID64 has at most one **pending** application per verification state (#52), so an anonymous application for someone else's SteamID never blocks the owner; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
 
 **Columns**
 
@@ -789,6 +810,7 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 | `granted_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL; role granted on approval |
 | `granted_until` | `timestamptz` | YES | `null` | Mirrors `players.role_expires_at`; `null` = permanent |
 | `source` | `text` | NO | `'public'` | CHECK IN (`public`,`panel`) |
+| `verified` | `boolean` | NO | `false` | Submitted from a Steam login for this same SteamID64 (migration 0123) |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `decided_at` | `timestamptz` | YES | `null` | Set when approved/rejected |
 
@@ -796,12 +818,13 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 
 - `whitelist_applications_status_created_idx` on `(status, created_at)`
 - `whitelist_applications_steam_id64_idx` on `(steam_id64)`
-- `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
+- `whitelist_applications_pending_verified_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending' AND verified`
+- `whitelist_applications_pending_unverified_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending' AND NOT verified` — together: one open application per SteamID64 per verification state (migration 0120 replaced the single `whitelist_applications_pending_steam_unique_idx`)
 
 ---
 ## `ban_appeals`
 
-MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so rows are created by the **anonymous** `POST /api/v1/public/appeals` and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
+MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/appeals` for the Steam account the submitter signed in with (a banned player gets a `self_service` session; #40) and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
 
 `player_id` is **nullable on purpose**: the portal accepts a submission for any SteamID64, including one the panel has never seen, so its response cannot be walked to discover who is banned. The anti-spam partial unique index therefore keys on `steam_id64`, which is always present — a `player_id` index would not collide on NULLs.
 
@@ -820,8 +843,9 @@ MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so ro
 | `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
 | `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
 | `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
-| `tracking_token` | `text` | NO | | `randomBytes(24).toString('base64url')`; returned once, the applicant's only handle |
-| `submitter_ip` | `inet` | YES | `null` | Abuse forensics |
+| `tracking_token` | `text` | YES | `null` | Legacy plaintext column, always NULL since migration 0134 (a trigger hashes and clears any value written); to be dropped in a later release |
+| `tracking_token_hash` | `text` | NO | | sha256 hex of the `randomBytes(24).toString('base64url')` token, which is returned once and is the applicant's only handle; unique |
+| `submitter_ip` | `inet` | YES | `null` | Abuse forensics; cleared by `worker-event-partition` 30 days after the decision, 90 days after submission at the latest |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 | `decided_at` | `timestamptz` | YES | `null` | Set on `approved`/`rejected` |
@@ -829,11 +853,31 @@ MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so ro
 **Indexes**
 
 - `ban_appeals_number_key` UNIQUE on `(number)`
-- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)`
+- `ban_appeals_tracking_token_hash_key` UNIQUE on `(tracking_token_hash)` (added in migration 0134; the legacy `ban_appeals_tracking_token_key` stays until the plaintext column is dropped in a later release)
 - `ban_appeals_status_created_idx` on `(status, created_at)`
 - `ban_appeals_player_idx` on `(player_id)`
 - `ban_appeals_action_idx` on `(moderation_action_id)`
 - `ban_appeals_open_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status IN ('pending','in_review')` — one open appeal per SteamID64
+
+## `geoip_settings`
+
+Singleton row (`id = 00000000-0000-0000-0000-0000006e01ff`, `GEOIP_SETTINGS_SINGLETON_ID`) holding the MaxMind GeoLite2 configuration, managed through `GET`/`PUT /api/v1/integrations/geoip` (`integration:manage`; an unauthenticated request gets `401`).
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | | Singleton id |
+| `account_id` | `text` | YES | `null` | MaxMind account id. **Required for refresh**: the download endpoint (`https://download.maxmind.com/geoip/databases/GeoLite2-City/download`) authenticates with HTTP Basic (account id + license key), so a license key without an account id is treated as no credentials |
+| `license_key_encrypted` | `bytea` | YES | `null` | License key, AES-256-GCM; sent only in the `Authorization` header, never in the URL |
+| `db_path` | `text` | YES | `null` | Where the refreshed MMDB was stored |
+| `last_refreshed_at` | `timestamptz` | YES | `null` | Last successful refresh |
+| `enabled` | `boolean` | NO | `false` | |
+| `key_version` | `integer` | NO | `1` | |
+| `country_switch_window_hours` | `integer` | NO | `24` | Geo-anomaly threshold |
+| `multi_country_threshold` | `integer` | NO | `3` | Geo-anomaly threshold |
+| `updated_at` | `timestamptz` | NO | `now()` | |
+
+`refreshGeoLite2Db` (`packages/db/src/geoip/refresh.ts`) returns one of `skipped_no_key` (account id or license key missing), `download_failed` (non-2xx HTTP status), `archive_too_large` (the archive exceeds `GEOIP_MAX_ARCHIVE_BYTES`, 200 MiB, by `Content-Length` or after buffering) or `ok`. The request aborts after `GEOIP_DOWNLOAD_TIMEOUT_MS` (30 s).
+
 ## Balancer tables (GAME-2)
 
 GAME-2 (#81) team balancer, migration `0103_balancer`. The panel is a **review
@@ -871,7 +915,11 @@ One row per dry-run snapshot delivered by
 `generated_at timestamptz NOT NULL`, `signals jsonb NOT NULL DEFAULT '{}'`,
 `proposal jsonb NOT NULL DEFAULT '[]'`,
 `status text NOT NULL DEFAULT 'open'` (CHECK IN `open`,`reviewed`,`dismissed`,`superseded`),
-`received_at`, `created_at`.
+`received_at`, `created_at`. Indexes: unique `source_snapshot_id`,
+`(server_id, generated_at DESC)`, `(status, generated_at DESC)` and
+`(generated_at DESC, id DESC)` for the unfiltered keyset listing (migration
+`0128`). Retention: each newly ingested snapshot deletes that server's
+`superseded`/`dismissed` rows received more than 30 days earlier.
 
 `signals` and `proposal` are stored verbatim and versioned by `schema_version`,
 so a change in the exporter's payload is a value change rather than a

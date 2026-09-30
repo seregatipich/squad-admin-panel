@@ -1,5 +1,5 @@
 import { playerNameHistory, playerNotes, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -299,5 +299,64 @@ describe('global notes feed', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body).not.toContain('will be deleted');
     });
+  });
+});
+
+describe('global notes feed edge cases (#70)', () => {
+  let h: IntegrationHarness;
+  let ownerCookie: string;
+  let subject: string;
+  let author: string;
+  let newer: string;
+  let older: string;
+
+  beforeAll(async () => {
+    h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+    ownerCookie = await loginAsOwner(h);
+    subject = await seedPlayer(h, null, '=1+1');
+    author = await seedPlayer(h, 'Admin', '@SUM(A1)');
+    newer = uuidv7();
+    older = uuidv7();
+    // Same millisecond, different microseconds: the cursor's epoch-ms value
+    // alone cannot tell them apart.
+    await h.db.execute(sql`
+      INSERT INTO player_notes (id, player_id, author_id, body, created_at) VALUES
+        (${newer}, ${subject}, ${author}, 'newer', '2026-01-01T00:00:00.000500Z'),
+        (${older}, ${subject}, ${author}, 'older', '2026-01-01T00:00:00.000200Z')
+    `);
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  it('does not skip a note that shares the cursor row millisecond', async () => {
+    const page1 = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/notes?limit=1',
+      headers: { cookie: ownerCookie },
+    });
+    const body1 = page1.json() as FeedResponse;
+    expect(body1.items.map((n) => n.id)).toEqual([newer]);
+    const page2 = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/notes?limit=1&cursor=${encodeURIComponent(body1.next_cursor ?? '')}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(page2.statusCode).toBe(200);
+    expect((page2.json() as FeedResponse).items.map((n) => n.id)).toEqual([older]);
+  });
+
+  it('neutralises formula-like player names in the CSV export', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/notes/export',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const cells = res.body.trim().split('\r\n').slice(1).join(',').split(',');
+    expect(cells).toContain(`"'=1+1"`);
+    expect(cells).toContain(`"'@SUM(A1)"`);
+    expect(cells).not.toContain('=1+1');
   });
 });

@@ -4,14 +4,16 @@
 
 ### `players`
 
-Upserted on every `ListPlayers` poll via `persist.ts:upsertPlayers`.
+Upserted on every `ListPlayers` poll via `persist.ts:upsertPlayers`, one transaction per player. The row is found by `eos_id` or `steam_id64` (the eos match wins); a player whose transaction fails is logged (`player upsert failed`) and the rest of the poll continues. A new row is inserted with `ON CONFLICT DO NOTHING` and, if log-ingest created it first, the worker re-reads and updates that row.
 
 | Column | Type | Notes |
 |---|---|---|
-| `steam_id64` | `bigint` PK | Conflict target for upsert |
+| `id` | `uuid` PK | UUIDv7 for rows created here |
+| `eos_id` | `text` | Back-filled when the matched row has none |
+| `steam_id64` | `bigint` | Back-filled when the matched row has none (audit `player.steam_linked`, written after the UPDATE) — unless another row already holds that steam id |
+| `steam_eos_conflict` | `boolean` | Set when the eos row and the steam row are different `players` rows (split identity, #967); audit `player.eos_steam_conflict` is written once, when the flag is raised |
 | `canonical_name` | `text` | Latest name seen |
 | `canonical_name_normalized` | `text` | `normalizePlayerName` (`@squad/shared-config`): lowercase + strip leading clan tags and non-letter chars |
-| `eos_id` | `text` | `COALESCE(excluded.eos_id, players.eos_id)` — never overwrites a known value with null |
 | `last_seen_at` | `timestamptz` | Updated on every upsert |
 | `updated_at` | `timestamptz` | Updated on every upsert |
 
@@ -85,6 +87,7 @@ Worker-rcon owns consumer group `worker-rcon:commands:v1`.
 | Field | Type | Notes |
 |---|---|---|
 | `request` | JSON | `request_id`, `command`, optional `args`, optional `actor_player_id`, optional `enqueued_at` |
+| `deadline_at` | ISO-8601, optional | Set by the API producer to the end of its result wait (`RCON_COMMAND_DEADLINE_FIELD`). Past it the worker does not execute the command, stores an `ok:false` result with `error: "expired"` and `XACK`s (#36). Kept outside `request` so an older worker's strict schema still parses the request. |
 
 Allowed `command` values: `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`.
 

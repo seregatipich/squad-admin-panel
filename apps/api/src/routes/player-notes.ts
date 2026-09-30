@@ -1,10 +1,10 @@
-import { playerNotes, players, roles } from '@squad/db/schema';
+import { type PlayerNoteRow, playerNotes, players, roles } from '@squad/db/schema';
 import { and, desc, eq, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 
 const BODY_MAX = 2000;
 const PAGE_SIZE_DEFAULT = 50;
@@ -51,17 +51,26 @@ function toDto(row: NoteRow): NoteDto {
   };
 }
 
-function encodeCursor(row: { createdAt: Date; id: string }): string {
-  return `${row.createdAt.getTime()}_${row.id}`;
+/**
+ * Keyset cursor: `<created_at as UTC ISO-8601 with microseconds>_<id>`.
+ *
+ * `created_at` is stored with microsecond precision, so the cursor must carry
+ * all six fractional digits — a millisecond cursor made the `(created_at, id)`
+ * keyset skip notes written within the same millisecond as a page's last row.
+ * The timestamp text is rendered by Postgres (see `cursorTs` in
+ * `noteRowsQuery`) because a JS `Date` cannot hold microseconds.
+ */
+const CURSOR_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z)_([0-9a-f-]{36})$/i;
+
+function encodeCursor(row: { cursorTs: string; id: string }): string {
+  return `${row.cursorTs}_${row.id}`;
 }
 
-function parseCursor(raw: string): { createdAt: Date; id: string } | null {
-  const sep = raw.indexOf('_');
-  if (sep === -1) return null;
-  const millis = Number(raw.slice(0, sep));
-  const id = raw.slice(sep + 1);
-  if (!Number.isFinite(millis) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
-  return { createdAt: new Date(millis), id };
+function parseCursor(raw: string): { createdAt: string; id: string } | null {
+  const match = CURSOR_RE.exec(raw);
+  if (!match?.[1] || !match[2]) return null;
+  if (Number.isNaN(Date.parse(match[1]))) return null;
+  return { createdAt: match[1], id: match[2] };
 }
 
 const playerNotesRoutes: FastifyPluginAsync = async (app) => {
@@ -78,18 +87,14 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
         body: playerNotes.body,
         createdAt: playerNotes.createdAt,
         updatedAt: playerNotes.updatedAt,
+        cursorTs: sql<string>`to_char(${playerNotes.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       })
       .from(playerNotes)
       .innerJoin(players, eq(players.id, playerNotes.authorId))
       .leftJoin(roles, eq(roles.id, players.roleId));
   }
 
-  async function loadNoteRaw(noteId: string) {
-    const rows = await app.db.select().from(playerNotes).where(eq(playerNotes.id, noteId)).limit(1);
-    return rows[0] ?? null;
-  }
-
-  function snapshot(row: NonNullable<Awaited<ReturnType<typeof loadNoteRaw>>>) {
+  function snapshot(row: PlayerNoteRow) {
     return {
       id: row.id,
       player_id: row.playerId,
@@ -102,18 +107,22 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     };
   }
 
+  function auditActorId(req: FastifyRequest): string {
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view permission gate
+    return req.user!.playerId;
+  }
+
+  function auditActor(req: FastifyRequest): AuditActor {
+    return { kind: 'steam', playerId: auditActorId(req), tokenId: req.apiTokenId ?? null };
+  }
+
   fast.get(
     '/api/v1/players/:playerId/notes',
-    { schema: { params: playerIdParams, querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: listQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
-        reply.code(403);
-        return { error: 'forbidden' };
-      }
       const playerId = req.params.playerId;
       const limit = req.query.limit ?? PAGE_SIZE_DEFAULT;
 
@@ -124,9 +133,10 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           reply.code(400);
           return { error: 'invalid_cursor' };
         }
+        const cursorCreatedAt = sql`${parsed.createdAt}::timestamptz`;
         keyset = or(
-          lt(playerNotes.createdAt, parsed.createdAt),
-          and(eq(playerNotes.createdAt, parsed.createdAt), lt(playerNotes.id, parsed.id)),
+          sql`${playerNotes.createdAt} < ${cursorCreatedAt}`,
+          and(sql`${playerNotes.createdAt} = ${cursorCreatedAt}`, lt(playerNotes.id, parsed.id)),
         );
       }
 
@@ -155,16 +165,11 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/players/:playerId/notes',
-    { schema: { params: playerIdParams, body: noteBody }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, body: noteBody },
+      config: { permissions: ['player:view'], audit: 'manual' },
+    },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
-        reply.code(403);
-        return { error: 'forbidden' };
-      }
       const playerId = req.params.playerId;
       const target = await app.db
         .select({ id: players.id })
@@ -177,32 +182,31 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const id = uuidv7();
-      await app.db.insert(playerNotes).values({
-        id,
-        playerId,
-        authorId: req.user.playerId,
-        body: req.body.body,
+      await app.db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(playerNotes)
+          .values({ id, playerId, authorId: auditActorId(req), body: req.body.body })
+          .returning();
+        if (!inserted) throw new Error('player_notes insert returned no row');
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'player_note.create',
+          targetType: 'player_note',
+          targetId: id,
+          before: null,
+          after: snapshot(inserted),
+          context: { requestId: req.id, method: req.method, url: req.url, playerId },
+        });
       });
 
-      const raw = await loadNoteRaw(id);
       const dtoRows = await noteRowsQuery().where(eq(playerNotes.id, id)).limit(1);
       const row = dtoRows[0];
-      if (!raw || !row) {
+      if (!row) {
         reply.code(500);
         return { error: 'insert_failed' };
       }
       const dto = toDto(row);
-
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player_note.create',
-        targetType: 'player_note',
-        targetId: id,
-        before: null,
-        after: snapshot(raw),
-        context: { requestId: req.id, method: req.method, url: req.url, playerId },
-      });
 
       app.liveBus.publish({
         type: 'note.created',
@@ -215,100 +219,124 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  /*
+   * PATCH and DELETE lock the note row (`FOR UPDATE`) before checking it, and
+   * write the mutation and its audit row in that same transaction: a note
+   * deleted concurrently can no longer be edited or deleted a second time,
+   * and a failed audit insert rolls the mutation back instead of leaving it
+   * unaudited.
+   */
   fast.patch(
     '/api/v1/notes/:noteId',
-    { schema: { params: noteIdParams, body: noteBody }, config: { audit: false } },
+    {
+      schema: { params: noteIdParams, body: noteBody },
+      config: { permissions: ['player:view'], audit: 'manual' },
+    },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
-        reply.code(403);
-        return { error: 'forbidden' };
-      }
       const noteId = req.params.noteId;
-      const existing = await loadNoteRaw(noteId);
-      if (!existing || existing.deletedAt) {
-        reply.code(404);
-        return { error: 'note_not_found' };
-      }
-      if (existing.authorId !== req.user.playerId) {
-        reply.code(403);
-        return { error: 'forbidden' };
+      const actorId = auditActorId(req);
+      const outcome = await app.db.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(playerNotes)
+          .where(eq(playerNotes.id, noteId))
+          .limit(1)
+          .for('update');
+        if (!existing || existing.deletedAt) return { code: 404, error: 'note_not_found' } as const;
+        if (existing.authorId !== actorId) return { code: 403, error: 'forbidden' } as const;
+
+        const [updated] = await tx
+          .update(playerNotes)
+          .set({ body: req.body.body, updatedAt: new Date() })
+          .where(and(eq(playerNotes.id, noteId), isNull(playerNotes.deletedAt)))
+          .returning();
+        if (!updated) return { code: 404, error: 'note_not_found' } as const;
+
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'player_note.update',
+          targetType: 'player_note',
+          targetId: noteId,
+          before: snapshot(existing),
+          after: snapshot(updated),
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
+        return { playerId: existing.playerId, code: 200 } as const;
+      });
+      if ('error' in outcome) {
+        reply.code(outcome.code);
+        return { error: outcome.error };
       }
 
-      const before = snapshot(existing);
-      await app.db
-        .update(playerNotes)
-        .set({ body: req.body.body, updatedAt: new Date() })
-        .where(eq(playerNotes.id, noteId));
-
-      const raw = await loadNoteRaw(noteId);
       const dtoRows = await noteRowsQuery().where(eq(playerNotes.id, noteId)).limit(1);
       const row = dtoRows[0];
-      if (!raw || !row) {
+      if (!row) {
         reply.code(500);
         return { error: 'update_failed' };
       }
-
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player_note.update',
-        targetType: 'player_note',
-        targetId: noteId,
-        before,
-        after: snapshot(raw),
-        context: { requestId: req.id, method: req.method, url: req.url },
+      const dto = toDto(row);
+      app.liveBus.publish({
+        type: 'note.updated',
+        ts: new Date().toISOString(),
+        data: { player_id: outcome.playerId, note: dto },
       });
-
-      return toDto(row);
+      return dto;
     },
   );
 
   fast.delete(
     '/api/v1/notes/:noteId',
-    { schema: { params: noteIdParams }, config: { audit: false } },
+    {
+      schema: { params: noteIdParams },
+      config: { permissions: ['player:view'], audit: 'manual' },
+    },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
-        reply.code(403);
-        return { error: 'forbidden' };
-      }
       const noteId = req.params.noteId;
-      const existing = await loadNoteRaw(noteId);
-      if (!existing || existing.deletedAt) {
-        reply.code(404);
-        return { error: 'note_not_found' };
-      }
-      const isAuthor = existing.authorId === req.user.playerId;
-      if (!isAuthor && !req.user.permissions.canEditRoles) {
-        reply.code(403);
-        return { error: 'forbidden' };
-      }
+      const actorId = auditActorId(req);
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view permission gate
+      const canDeleteOthers = req.user!.permissions.canEditRoles;
+      const outcome = await app.db.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(playerNotes)
+          .where(eq(playerNotes.id, noteId))
+          .limit(1)
+          .for('update');
+        if (!existing || existing.deletedAt) return { code: 404, error: 'note_not_found' } as const;
+        if (existing.authorId !== actorId && !canDeleteOthers) {
+          return { code: 403, error: 'forbidden' } as const;
+        }
 
-      const before = snapshot(existing);
-      await app.db
-        .update(playerNotes)
-        .set({ deletedAt: new Date(), deletedBy: req.user.playerId })
-        .where(eq(playerNotes.id, noteId));
+        const [deleted] = await tx
+          .update(playerNotes)
+          .set({ deletedAt: new Date(), deletedBy: actorId })
+          .where(and(eq(playerNotes.id, noteId), isNull(playerNotes.deletedAt)))
+          .returning();
+        if (!deleted) return { code: 404, error: 'note_not_found' } as const;
 
-      const raw = await loadNoteRaw(noteId);
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player_note.delete',
-        targetType: 'player_note',
-        targetId: noteId,
-        before,
-        after: raw ? snapshot(raw) : null,
-        context: { requestId: req.id, method: req.method, url: req.url },
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'player_note.delete',
+          targetType: 'player_note',
+          targetId: noteId,
+          before: snapshot(existing),
+          after: snapshot(deleted),
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
+        return { playerId: existing.playerId, code: 200 } as const;
       });
+      if ('error' in outcome) {
+        reply.code(outcome.code);
+        return { error: outcome.error };
+      }
 
+      app.liveBus.publish({
+        type: 'note.deleted',
+        ts: new Date().toISOString(),
+        data: { player_id: outcome.playerId, note_id: noteId },
+      });
       return { ok: true };
     },
   );

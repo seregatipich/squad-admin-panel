@@ -52,15 +52,19 @@ export function PlayerSearchSelect({
     const needle = query.trim();
     if (needle.length < 2) {
       setResults([]);
+      setLoading(false);
+      setOpen(false);
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/v1/players?q=${encodeURIComponent(needle)}`, {
+        const res = await fetch(`/api/v1/players/search?q=${encodeURIComponent(needle)}`, {
           credentials: 'include',
           cache: 'no-store',
+          signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as PlayersResponse;
@@ -79,6 +83,7 @@ export function PlayerSearchSelect({
     }, 250);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [query]);

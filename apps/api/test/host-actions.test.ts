@@ -139,6 +139,41 @@ describe('POST /api/v1/host/restart', () => {
   });
 });
 
+describe('POST /api/v1/host/docker-prune', () => {
+  it('returns the reclaimed space when docker prune succeeds', async () => {
+    h.bridge.dockerPrune = async () => ({
+      exit_code: 0,
+      reclaimed_bytes: 2048,
+      reclaimed_human: '2kB',
+    });
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/host/docker-prune',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      exit_code: 0,
+      reclaimed_bytes: 2048,
+      reclaimed_human: '2kB',
+    });
+  });
+
+  it('reports a prune that exits non-zero as a 502 failure (#150)', async () => {
+    h.bridge.dockerPrune = async () => ({ exit_code: 1, reclaimed_bytes: 0, reclaimed_human: '' });
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/host/docker-prune',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'docker_prune_failed', exit_code: 1 });
+  });
+});
+
 describe('GET /api/v1/host/info', () => {
   it('returns host info for a user with host:view permission', async () => {
     const cookie = await loginAsOwner(h);
@@ -166,7 +201,7 @@ describe('GET /api/v1/host/info', () => {
       url: '/api/v1/host/info',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 });
 
@@ -217,6 +252,6 @@ describe('GET /api/v1/host/metrics/history', () => {
       url: '/api/v1/host/metrics/history',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 });

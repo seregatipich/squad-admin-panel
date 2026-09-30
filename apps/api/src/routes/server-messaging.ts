@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { auditMapLikeAction } from '../lib/map-guards.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { parseStoredRoster } from '../lib/roster.js';
 
@@ -42,23 +42,11 @@ function hasChatPermission(req: FastifyRequest): boolean {
 const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function auditMessagingAction(
+  const auditMessagingAction = (
     req: FastifyRequest,
     reply: FastifyReply,
     input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> {
-    if (!req.user) return;
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: input.actionType,
-      targetType: 'server',
-      targetId: input.serverId,
-      after: input.after,
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-  }
+  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
 
   /**
    * Sends a server-wide message via RCON `AdminBroadcast`, routed through the
@@ -70,7 +58,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/broadcast',
     {
       schema: { params: serverIdParams, body: messageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -133,7 +121,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/squads/:squadId/message',
     {
       schema: { params: squadParams, querystring: squadQuery, body: messageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -154,26 +142,43 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
         (entry) => entry.squad_id === squadId && entry.team_id === team_id,
       );
 
-      const recipients: RecipientOutcome[] = [];
-      for (const member of members) {
-        const target = member.eos_id || member.steam_id64 || member.name;
-        const viaWorker = await sendRconCommandViaWorker(app.redis, {
-          serverId,
-          command: 'AdminWarn',
-          args: [target, message],
-          actorPlayerId: req.user.playerId,
-        });
-        recipients.push({
-          target,
-          name: member.name,
-          ok: viaWorker.attempted && viaWorker.ok,
-          reason: viaWorker.attempted
-            ? viaWorker.ok
-              ? undefined
-              : viaWorker.reason
-            : viaWorker.reason,
-        });
-      }
+      // #303: the worker-rcon queue serializes these regardless, so sending
+      // sequentially only added each recipient's up-to-4s Redis poll to the
+      // total request time (a 9-member squad could hold the HTTP request for
+      // ~36s). Sending concurrently keeps the same queue ordering but lets
+      // the polls overlap.
+      const actorPlayerId = req.user.playerId;
+      const recipients: RecipientOutcome[] = await Promise.all(
+        members.map(async (member) => {
+          const target = member.eos_id || member.steam_id64 || member.name;
+          const viaWorker = await sendRconCommandViaWorker(app.redis, {
+            serverId,
+            command: 'AdminWarn',
+            args: [target, message],
+            actorPlayerId,
+          });
+          return {
+            target,
+            name: member.name,
+            ok: viaWorker.attempted && viaWorker.ok,
+            reason: viaWorker.attempted
+              ? viaWorker.ok
+                ? undefined
+                : viaWorker.reason
+              : viaWorker.reason,
+          };
+        }),
+      );
+
+      // #303: this used to always answer 200 {ok:true} even when every
+      // recipient failed (e.g. worker_not_connected), unlike /broadcast and
+      // /players/:id/message, which answer 502 on a full failure. An empty
+      // squad is not a delivery failure, so it stays ok:true. The status is
+      // set before the audit write so audit_log records what was actually
+      // sent to the client (see #316: statusCode must reflect reply.code()).
+      const delivered = recipients.some((r) => r.ok);
+      const fullyFailed = recipients.length > 0 && !delivered;
+      if (fullyFailed) reply.code(502);
 
       await auditMessagingAction(req, reply, {
         actionType: 'server.squad_message',
@@ -181,6 +186,9 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
         after: { squad_id: squadId, team_id, message, recipients },
       });
 
+      if (fullyFailed) {
+        return { error: 'squad_message_failed', squad_id: squadId, team_id, recipients };
+      }
       return { ok: true, squad_id: squadId, team_id, recipients };
     },
   );
@@ -199,7 +207,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/players/:playerId/message',
     {
       schema: { params: playerMessageParams, body: playerMessageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {

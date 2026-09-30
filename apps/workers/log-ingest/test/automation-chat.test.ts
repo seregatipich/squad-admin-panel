@@ -51,6 +51,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const cooldownKeys = await redis.keys(`automation:chat-cooldown:${ruleId}:*`);
+  if (cooldownKeys.length > 0) await redis.del(...cooldownKeys);
   if (ruleId) await db.delete(automationRules).where(eq(automationRules.id, ruleId));
   await redis.del(rconCommandStream(SERVER_ID)).catch(() => undefined);
   await redis.quit().catch(() => undefined);
@@ -93,5 +95,25 @@ describe('handleAutomationChat (AUTO-1 chat_keyword)', () => {
     expect(drafts).toHaveLength(0);
     const requests = await readRconRequests(SERVER_ID);
     expect(requests).toHaveLength(0);
+  });
+
+  it('fires a rule at most once per player per cooldown window, however often the keyword is repeated (#62)', async () => {
+    await redis.del(rconCommandStream(SERVER_ID));
+    const chat = parseChatLine(chatLine('76561198012349999 Spammer', `${KEYWORD} ${KEYWORD}`));
+    expect(chat).not.toBeNull();
+
+    const results = [];
+    for (let i = 0; i < 5; i++) {
+      results.push(
+        await handleAutomationChat(db, redis, { serverId: SERVER_ID, chat: chat as never }),
+      );
+    }
+
+    expect(results[0]?.some((d) => d.ruleId === ruleId)).toBe(true);
+    expect(results.slice(1).every((drafts) => drafts.length === 0)).toBe(true);
+    const warns = (await readRconRequests(SERVER_ID)).filter(
+      (r) => r.command === 'AdminWarn' && r.args[0] === '76561198012349999',
+    );
+    expect(warns).toHaveLength(1);
   });
 });

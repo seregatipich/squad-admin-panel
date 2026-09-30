@@ -4,7 +4,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
+import { useLiveSubscription } from '@/lib/use-live-bus';
 import { MapWidget } from './map-widget';
+
+/**
+ * Hands a live frame to the handler from the widget's latest render: the mock
+ * records one call per render, and only the newest handler is subscribed.
+ */
+function emitLive(type: string, data: unknown) {
+  const handler = vi
+    .mocked(useLiveSubscription)
+    .mock.calls.findLast(([subscribed]) => subscribed === type)?.[1];
+  if (!handler) throw new Error(`MapWidget не подписан на ${type}`);
+  (handler as (event: { data: unknown }) => void)({ data });
+}
+
+function mapFetchCount(fetchMock: ReturnType<typeof mockFetch>): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/map')).length;
+}
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -60,6 +77,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.mocked(useLiveSubscription).mockClear();
 });
 
 describe('MapWidget', () => {
@@ -244,4 +262,44 @@ describe('MapWidget', () => {
     },
     TEST_TIMEOUT_MS,
   );
+  describe('live match boundaries', () => {
+    // #1315: the widget listened for `match.started`/`match.ended` frames the API
+    // never publishes. A match boundary arrives as `server.events.appended`.
+    it(
+      'reloads the map when the events feed announces a match boundary for this server',
+      async () => {
+        const fetchMock = mockFetch();
+        vi.stubGlobal('fetch', fetchMock);
+        render(<MapWidget serverId="srv-1" canChangeMap={false} />);
+        await screen.findByText('По ротации');
+        const before = mapFetchCount(fetchMock);
+
+        act(() =>
+          emitLive('server.events.appended', { server_id: 'srv-1', kinds: ['match.started'] }),
+        );
+
+        await waitFor(() => expect(mapFetchCount(fetchMock)).toBe(before + 1));
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    it(
+      'ignores appended events that are not a match boundary or belong to another server',
+      async () => {
+        const fetchMock = mockFetch();
+        vi.stubGlobal('fetch', fetchMock);
+        render(<MapWidget serverId="srv-1" canChangeMap={false} />);
+        await screen.findByText('По ротации');
+        const before = mapFetchCount(fetchMock);
+
+        act(() => {
+          emitLive('server.events.appended', { server_id: 'srv-1', kinds: ['player.joined'] });
+          emitLive('server.events.appended', { server_id: 'srv-2', kinds: ['match.ended'] });
+        });
+
+        expect(mapFetchCount(fetchMock)).toBe(before);
+      },
+      TEST_TIMEOUT_MS,
+    );
+  });
 });

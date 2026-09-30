@@ -27,14 +27,25 @@ function pendingItem(over: Partial<Record<string, unknown>> = {}) {
     granted_role_name: null,
     granted_until: null,
     source: 'public',
+    verified: false,
     created_at: '2026-07-20T10:00:00.000Z',
     decided_at: null,
     ...over,
   };
 }
 
-function mockFetch(opts: { items?: unknown[]; patchStatus?: number } = {}) {
+function mockFetch(
+  opts: {
+    items?: unknown[];
+    patchStatus?: number;
+    /** Total rows the API reports — may exceed `items.length` for a single page. */
+    total?: number;
+    /** Serves a different page's items keyed by the requested `page` param. */
+    pages?: Record<string, unknown[]>;
+  } = {},
+) {
   const items = opts.items ?? [pendingItem()];
+  const total = opts.total ?? items.length;
   const patchStatus = opts.patchStatus ?? 200;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -55,10 +66,13 @@ function mockFetch(opts: { items?: unknown[]; patchStatus?: number } = {}) {
       return Promise.resolve(new Response(body, { status }));
     }
     if (url.includes('/api/v1/whitelist/applications')) {
+      const requestedPage = new URL(url, 'http://localhost').searchParams.get('page') ?? '1';
+      const pageItems = opts.pages?.[requestedPage] ?? items;
       return Promise.resolve(
-        new Response(JSON.stringify({ items, total: items.length, page: 1, page_size: 20 }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ items: pageItems, total, page: Number(requestedPage), page_size: 20 }),
+          { status: 200 },
+        ),
       );
     }
     if (url.endsWith('/api/v1/roles')) {
@@ -88,12 +102,63 @@ describe('ApplicationsSection', () => {
   );
 
   it(
+    'marks whether the applicant proved ownership of the SteamID64 (#52)',
+    async () => {
+      const { fn } = mockFetch({
+        items: [
+          pendingItem(),
+          pendingItem({ id: 'app-2', steam_id64: '76561198000000002', verified: true }),
+        ],
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000002');
+      expect(screen.getByText('SteamID не подтверждён')).toBeInTheDocument();
+      expect(screen.getByText('SteamID подтверждён входом через Steam')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'renders the empty state when there are no applications',
     async () => {
       const { fn } = mockFetch({ items: [] });
       vi.stubGlobal('fetch', fn);
       render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
       expect(await screen.findByText(/заявок нет/i)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows the true total, not just the current page size, and paginates beyond the first page (#722)',
+    async () => {
+      const firstPage = Array.from({ length: 20 }, (_, i) =>
+        pendingItem({
+          id: `app-${i + 1}`,
+          steam_id64: `7656119800000${String(i + 1).padStart(4, '0')}`,
+        }),
+      );
+      const secondPageItem = pendingItem({ id: 'app-21', steam_id64: '76561198000099999' });
+      const { fn, calls } = mockFetch({
+        items: firstPage,
+        total: 21,
+        pages: { '1': firstPage, '2': [secondPageItem] },
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+
+      // The header count must reflect the API's `total`, not `items.length`
+      // (which is capped at the page size).
+      expect(await screen.findByText('21')).toBeInTheDocument();
+      expect(screen.queryByText('76561198000099999')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+
+      expect(await screen.findByText('76561198000099999')).toBeInTheDocument();
+      const listCalls = calls.filter((c) => c.url.includes('/api/v1/whitelist/applications?'));
+      expect(listCalls.at(-1)?.url).toContain('page=2');
+      expect(listCalls.at(-1)?.url).toContain('page_size=20');
     },
     TEST_TIMEOUT_MS,
   );
@@ -190,6 +255,46 @@ describe('ApplicationsSection', () => {
       const payload = JSON.parse(String(patch?.init?.body)) as Record<string, unknown>;
       expect(payload.status).toBe('approved');
       expect(payload.role_id).toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps unsaved portal settings and skips refetching them when the status tab changes',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000001');
+
+      const days = screen.getByDisplayValue('30');
+      fireEvent.change(days, { target: { value: '45' } });
+      fireEvent.click(screen.getByRole('tab', { name: 'Одобренные' }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.url.includes('/applications?status=approved'))).toBe(true),
+      );
+
+      expect(screen.getByDisplayValue('45')).toBeInTheDocument();
+      const settingsGets = calls.filter(
+        (c) => c.url.includes('/applications/settings') && c.init?.method !== 'PUT',
+      );
+      expect(settingsGets).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows Russian text, not the raw API code, when a decision fails',
+    async () => {
+      const { fn } = mockFetch({ patchStatus: 500 });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000001');
+
+      fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
+
+      expect(await screen.findByText(/Сервер вернул ошибку \(код 500\)/)).toBeInTheDocument();
+      expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

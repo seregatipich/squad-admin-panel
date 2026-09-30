@@ -42,7 +42,8 @@ export interface LayerTeams {
  *
  * Populated from the static fallback dataset below (`LAYERS_SEED`) so the
  * catalog works without a live depot sync. The depot-sync worker described in
- * the ADR is a follow-up: it will upsert rows by `name`, refresh
+ * the 2026-07-09 map-rotation ADR (docs/architecture/decisions.md) is a
+ * follow-up: it will upsert rows by `name`, refresh
  * `depot_version`, and flip `deprecated = true` for layers that disappear
  * from the installed server's layer list after an update.
  */

@@ -27,6 +27,18 @@ afterEach(() => {
 
 describe('AppealStatusPage', () => {
   it(
+    'treats a malformed tracking token (400) as a missing appeal, not an outage',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch(400, { error: 'validation_error' }));
+      render(<AppealStatusPage />);
+
+      expect(await screen.findByText('Апелляция не найдена.')).toBeInTheDocument();
+      expect(screen.queryByText('Повторить')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'renders a pending appeal without any decision',
     async () => {
       vi.stubGlobal(

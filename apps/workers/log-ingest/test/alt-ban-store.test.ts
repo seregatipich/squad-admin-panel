@@ -22,6 +22,7 @@ if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the ALT-7 test da
 const db = createDatabaseClient(DATABASE_URL);
 const SERVER_ID = '00000000-0000-7000-8000-000000000125';
 const RULE_ID = '00000000-0000-7000-8000-000000001125';
+const SECOND_RULE_ID = '00000000-0000-7000-8000-000000002125';
 const BANNED_STEAM = 76561198125000001n;
 const CONNECTING_STEAM = 76561198125000002n;
 
@@ -76,13 +77,18 @@ async function seedLink(status: 'confirmed' | 'rejected'): Promise<void> {
   });
 }
 
-async function seedBan(revertedAt: Date | null = null): Promise<void> {
+async function seedBan(
+  revertedAt: Date | null = null,
+  expiresAt: Date | null = null,
+): Promise<void> {
   await db.insert(moderationActions).values({
     playerId: bannedPlayerId,
     actionType: 'ban',
     authorSystemLabel: 'alt-ban-test',
     reason: 'ALT-7 active ban',
     revertedAt,
+    // Same shape apps/api/src/lib/moderation-enforce.ts writes for a temp ban.
+    context: { expires_at: expiresAt ? expiresAt.toISOString() : null },
   });
 }
 
@@ -129,7 +135,7 @@ afterEach(async () => {
     await db.delete(processedEvents).where(inArray(processedEvents.eventId, eventIds));
   }
   await db.delete(events).where(eq(events.serverId, SERVER_ID));
-  await db.delete(alertRules).where(eq(alertRules.id, RULE_ID));
+  await db.delete(alertRules).where(inArray(alertRules.id, [RULE_ID, SECOND_RULE_ID]));
   await db.delete(players).where(inArray(players.steamId64, [BANNED_STEAM, CONNECTING_STEAM]));
 });
 
@@ -177,6 +183,75 @@ describe('handleAltBanConnect', () => {
     );
   });
 
+  it('publishes one classifiable frame per stored alert, without player ids', async () => {
+    await seedRule();
+    await db.insert(alertRules).values({
+      id: SECOND_RULE_ID,
+      name: 'ALT-7 ban evasion (second)',
+      type: 'custom',
+      config: { eventKind: 'alt.ban_evasion_suspected' },
+      channels: ['webpush'],
+      enabled: true,
+    });
+    await seedLink('confirmed');
+    await seedBan();
+    const redis = makeRedis();
+
+    const result = await handleAltBanConnect(db, redis, connectEvent());
+
+    expect(result).toMatchObject({ outcome: 'detected', alertsRaised: 2 });
+    const alerts = await db
+      .select({ id: alertEvents.id, ruleId: alertEvents.ruleId, severity: alertEvents.severity })
+      .from(alertEvents)
+      .where(inArray(alertEvents.ruleId, [RULE_ID, SECOND_RULE_ID]));
+    expect(alerts).toHaveLength(2);
+    const frames = redis.publish.mock.calls
+      .filter((call) => call[0] === 'live-bus')
+      .map((call) => JSON.parse(String(call[1])) as { type: string; data: Record<string, unknown> })
+      .filter((frame) => frame.type === 'alert.triggered');
+    expect(
+      frames
+        .map((frame) => frame.data)
+        .sort((a, b) => String(a.rule_id).localeCompare(String(b.rule_id))),
+    ).toEqual(
+      [...alerts]
+        .sort((a, b) => a.ruleId.localeCompare(b.ruleId))
+        .map((alert) => ({
+          event_kind: 'alt.ban_evasion_suspected',
+          alert_event_id: alert.id,
+          rule_id: alert.ruleId,
+          severity: alert.severity,
+          trigger: 'player_connected',
+          server_id: SERVER_ID,
+        })),
+    );
+    expect(alerts.find((alert) => alert.ruleId === SECOND_RULE_ID)?.severity).toBe('warning');
+  });
+
+  it('stores every matching alert even when the live publish fails', async () => {
+    await seedRule();
+    await db.insert(alertRules).values({
+      id: SECOND_RULE_ID,
+      name: 'ALT-7 ban evasion (second)',
+      type: 'custom',
+      config: { eventKind: 'alt.ban_evasion_suspected' },
+      channels: ['webpush'],
+      enabled: true,
+    });
+    await seedLink('confirmed');
+    await seedBan();
+    const redis = makeRedis();
+    redis.publish.mockRejectedValue(new Error('redis down'));
+
+    await handleAltBanConnect(db, redis, connectEvent()).catch(() => undefined);
+
+    const alerts = await db
+      .select({ id: alertEvents.id })
+      .from(alertEvents)
+      .where(inArray(alertEvents.ruleId, [RULE_ID, SECOND_RULE_ID]));
+    expect(alerts).toHaveLength(2);
+  });
+
   it('does not raise the signal when the linked account has no active ban', async () => {
     await seedRule();
     await seedLink('confirmed');
@@ -217,5 +292,26 @@ describe('handleAltBanConnect', () => {
     expect(await db.select().from(alertEvents).where(eq(alertEvents.ruleId, RULE_ID))).toHaveLength(
       0,
     );
+  });
+
+  it('ignores a temporary ban that has already expired (#901)', async () => {
+    await seedRule();
+    await seedLink('confirmed');
+    await seedBan(null, new Date(Date.now() - 24 * 3600 * 1000));
+
+    const result = await handleAltBanConnect(db, makeRedis(), connectEvent());
+
+    expect(result).toMatchObject({ outcome: 'no_active_ban', connectingPlayerId });
+    expect(await db.select().from(events).where(eq(events.serverId, SERVER_ID))).toHaveLength(0);
+  });
+
+  it('still raises the signal for a temporary ban that has not expired yet (#901)', async () => {
+    await seedRule();
+    await seedLink('confirmed');
+    await seedBan(null, new Date(Date.now() + 24 * 3600 * 1000));
+
+    const result = await handleAltBanConnect(db, makeRedis(), connectEvent());
+
+    expect(result).toMatchObject({ outcome: 'detected', bannedPlayerIds: [bannedPlayerId] });
   });
 });

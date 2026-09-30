@@ -6,7 +6,7 @@ import {
   type MediaUploadMimeType,
   publicMediaUploadQuery,
 } from '@squad/shared-types';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -43,11 +43,13 @@ function isUploadMimeType(value: string): value is MediaUploadMimeType {
  *  - every rejection of a bad, spent, or expired token is the same `410` with
  *    the same body, so the endpoint cannot be used to probe which tokens exist;
  *  - the token is burned only after the bytes are safely on disk, by the
- *    conditional `UPDATE` in `redeemUploadToken` — an aborted or rejected
- *    upload leaves the link usable, while two concurrent uploads can never
- *    both succeed;
- *  - the raw token never reaches the database, the audit trail, or the
- *    response; the stored row records only `upload_token_id`.
+ *    conditional `UPDATE` in `redeemUploadToken`, in the same transaction as
+ *    the `media_files`/`media_links` rows and the audit entry — an aborted,
+ *    rejected, or unpersisted upload leaves the link usable, while two
+ *    concurrent uploads can never both succeed;
+ *  - the raw token never reaches the database, the audit trail, the response,
+ *    or the request logs (`redactSensitiveUrl` in `lib/logger.ts` masks
+ *    `?token=`); the stored row records only `upload_token_id`.
  *
  * The per-IP limiter is a manual Redis `INCR`/`EXPIRE` (the `leaderboards.ts`
  * pattern) rather than the declarative `@fastify/rate-limit` config, because
@@ -59,7 +61,7 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/public/media',
-    { schema: { querystring: publicMediaUploadQuery }, config: { audit: false, public: true } },
+    { schema: { querystring: publicMediaUploadQuery }, config: { audit: 'manual', public: true } },
     async (req, reply) => {
       const rateKey = `${PUBLIC_MEDIA_RATE_LIMIT_PREFIX}${req.ip}`;
       const hits = await app.redis.incr(rateKey).catch(() => 0);
@@ -114,67 +116,93 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      const claimed = await redeemUploadToken(app.db, token.id);
-      if (!claimed) {
+      // Redemption, the dedup lookup, both inserts and the audit row commit as
+      // one transaction: if any of them fails the token is not burned and the
+      // freshly written file is removed, so the sender can simply retry.
+      const targetType = token.targetEntityType as MediaLinkEntityType | null;
+      let persisted: { claimed: false } | { claimed: true; dedupPath: string | null | undefined };
+      try {
+        persisted = await app.db.transaction(async (tx) => {
+          if (!(await redeemUploadToken(tx, token.id))) return { claimed: false } as const;
+
+          // Same content-hash dedup as the authenticated upload route:
+          // identical bytes reuse the existing storage_path instead of being
+          // written twice.
+          const existing = await tx
+            .select({ storagePath: mediaFiles.storagePath })
+            .from(mediaFiles)
+            .where(and(eq(mediaFiles.sha256, stored.sha256), isNull(mediaFiles.deletedAt)))
+            .limit(1);
+          let dedupPath = existing[0]?.storagePath;
+          if (dedupPath) {
+            // Same per-storage_path lock worker-media-publisher's
+            // releaseIfEnabled takes, then re-check the row is still live:
+            // a concurrent release could otherwise delete the bytes this row
+            // is about to reference (#63 finding 944).
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${dedupPath}))`);
+            const stillLive = await tx
+              .select({ id: mediaFiles.id })
+              .from(mediaFiles)
+              .where(and(eq(mediaFiles.storagePath, dedupPath), isNull(mediaFiles.deletedAt)))
+              .limit(1);
+            if (stillLive.length === 0) dedupPath = null;
+          }
+
+          await tx.insert(mediaFiles).values({
+            id,
+            uploaderPlayerId: null,
+            uploadTokenId: token.id,
+            kind: mimeType.startsWith('video/') ? 'video' : 'image',
+            originalFilename: filePart.filename,
+            mimeType,
+            sizeBytes: stored.sizeBytes,
+            sha256: stored.sha256,
+            storagePath: dedupPath ?? stored.relativePath,
+            externalUrl: null,
+            title: null,
+            description: null,
+          });
+
+          if (targetType && token.targetEntityId) {
+            await tx.insert(mediaLinks).values({
+              id: uuidv7(),
+              mediaId: id,
+              entityType: targetType,
+              entityId: token.targetEntityId,
+              linkedByPlayerId: token.issuedByPlayerId,
+            });
+          }
+
+          await writeAuditEntry(tx, {
+            actor: { kind: 'system', label: PUBLIC_UPLOAD_ACTOR_LABEL },
+            actorIp: req.ip ?? null,
+            actionType: 'media.public_upload',
+            targetType: 'media_file',
+            targetId: id,
+            after: {
+              id,
+              upload_token_id: token.id,
+              size_bytes: stored.sizeBytes,
+              mime_type: mimeType,
+              target_entity_type: targetType,
+              target_entity_id: token.targetEntityId,
+            },
+            context: { request_id: req.id, token_id: token.id, deduped: Boolean(dedupPath) },
+            statusCode: 201,
+          });
+          return { claimed: true, dedupPath } as const;
+        });
+      } catch (err) {
+        await rm(stored.absolutePath, { force: true });
+        throw err;
+      }
+
+      if (!persisted.claimed) {
         await rm(stored.absolutePath, { force: true });
         reply.code(410);
         return { error: 'token_used_or_expired' };
       }
-
-      // Same content-hash dedup as the authenticated upload route: identical
-      // bytes reuse the existing storage_path instead of being written twice.
-      const existing = await app.db
-        .select({ storagePath: mediaFiles.storagePath })
-        .from(mediaFiles)
-        .where(and(eq(mediaFiles.sha256, stored.sha256), isNull(mediaFiles.deletedAt)))
-        .limit(1);
-      const dedupPath = existing[0]?.storagePath;
-      const storagePath = dedupPath ?? stored.relativePath;
-      if (dedupPath) await rm(stored.absolutePath, { force: true });
-
-      await app.db.insert(mediaFiles).values({
-        id,
-        uploaderPlayerId: null,
-        uploadTokenId: token.id,
-        kind: mimeType.startsWith('video/') ? 'video' : 'image',
-        originalFilename: filePart.filename,
-        mimeType,
-        sizeBytes: stored.sizeBytes,
-        sha256: stored.sha256,
-        storagePath,
-        externalUrl: null,
-        title: null,
-        description: null,
-      });
-
-      const targetType = token.targetEntityType as MediaLinkEntityType | null;
-      if (targetType && token.targetEntityId) {
-        await app.db.insert(mediaLinks).values({
-          id: uuidv7(),
-          mediaId: id,
-          entityType: targetType,
-          entityId: token.targetEntityId,
-          linkedByPlayerId: token.issuedByPlayerId,
-        });
-      }
-
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'system', label: PUBLIC_UPLOAD_ACTOR_LABEL },
-        actorIp: req.ip ?? null,
-        actionType: 'media.public_upload',
-        targetType: 'media_file',
-        targetId: id,
-        after: {
-          id,
-          upload_token_id: token.id,
-          size_bytes: stored.sizeBytes,
-          mime_type: mimeType,
-          target_entity_type: targetType,
-          target_entity_id: token.targetEntityId,
-        },
-        context: { request_id: req.id, token_id: token.id, deduped: Boolean(dedupPath) },
-        statusCode: 201,
-      });
+      if (persisted.dedupPath) await rm(stored.absolutePath, { force: true });
 
       app.liveBus.publish({
         type: 'media.uploaded',

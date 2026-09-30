@@ -22,6 +22,7 @@ describe('TagInput', () => {
   it.each([
     { name: 'empty input', tags: ['one'], maxTags: 20, value: '   ' },
     { name: 'a case-normalized duplicate', tags: ['duplicate'], maxTags: 20, value: ' DUPLICATE ' },
+    { name: 'a tag longer than the limit', tags: ['one'], maxTags: 20, value: 'x'.repeat(51) },
     { name: 'the configured tag limit', tags: ['one', 'two'], maxTags: 2, value: 'three' },
   ])('rejects $name', ({ tags, maxTags, value }) => {
     const onChange = vi.fn();

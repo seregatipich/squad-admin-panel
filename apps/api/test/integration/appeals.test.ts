@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   banAppeals,
   discordWebhooks,
@@ -155,11 +156,42 @@ async function seedBannedPlayer(
   return { playerId, actionId: action.id };
 }
 
-async function submitAppeal(payload: Record<string, unknown>) {
+/**
+ * A Steam-login session for the seeded player owning `steamId64`, scoped
+ * `self_service` like the one a banned player (no panel role) gets after the
+ * Steam OpenID round trip.
+ */
+async function steamSessionCookie(steamId64: bigint): Promise<string> {
+  const [row] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!row) throw new Error(`no player seeded for ${steamId64}`);
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: row.id,
+    ip: null,
+    userAgent: 'appeals-test-steam',
+    ttlMs: 21_600_000,
+    scope: 'self_service',
+  });
+  return `__Host-sid=${token}`;
+}
+
+/**
+ * Submits an appeal as the Steam-verified owner of `payload.steam_id64`, or
+ * with the given session cookie (`null` submits with no session at all).
+ */
+async function submitAppeal(payload: Record<string, unknown>, cookie?: string | null) {
+  const sessionCookie =
+    cookie === undefined ? await steamSessionCookie(BigInt(String(payload.steam_id64))) : cookie;
   return h.app.inject({
     method: 'POST',
     url: '/api/v1/public/appeals',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
+    },
     payload: JSON.stringify(payload),
   });
 }
@@ -217,8 +249,8 @@ beforeEach(async () => {
   if (keys.length > 0) await h.redis.del(...keys);
 });
 
-describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
-  it('creates a pending appeal without any session and returns a tracking token', async () => {
+describeIfDb('POST /api/v1/public/appeals (Steam-verified submission)', () => {
+  it('creates a pending appeal for the Steam-verified player and returns a tracking token', async () => {
     const steamId64 = testSteamId(987100);
     await seedBannedPlayer(steamId64, 'AppealTarget100');
 
@@ -245,7 +277,14 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
       .where(eq(banAppeals.steamId64, steamId64))
       .limit(1);
     expect(row?.status).toBe('pending');
-    expect(row?.trackingToken).toBe(body.tracking_token);
+    // Only the sha256 of the bearer token is at rest (#1084).
+    expect(row?.trackingToken).toBeNull();
+    expect(row?.trackingTokenHash).toBe(
+      createHash('sha256').update(body.tracking_token).digest('hex'),
+    );
+    expect(
+      JSON.stringify(row, (_key, value) => (typeof value === 'bigint' ? String(value) : value)),
+    ).not.toContain(body.tracking_token);
     expect(row?.submitterIp).toBe('127.0.0.1');
   });
 
@@ -268,26 +307,65 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
     expect(row?.moderationActionId).toBe(actionId);
   });
 
-  it('answers identically for an unknown SteamID so it cannot enumerate bans', async () => {
-    const bannedSteam = testSteamId(987102);
-    const unknownSteam = testSteamId(987103);
-    await seedBannedPlayer(bannedSteam, 'AppealTarget102');
+  // Regression (#40, #234): the portal accepted any steam_id64 anonymously,
+  // so anyone could open (and hold the tracking token of) a victim's appeal,
+  // block the victim's own submission with 409 and burn their daily quota.
+  it('rejects a submission without a Steam login with 401 and stores nothing', async () => {
+    const steamId64 = testSteamId(987102);
+    await seedBannedPlayer(steamId64, 'AppealTarget102');
 
-    const banned = await submitAppeal({
-      steam_id64: String(bannedSteam),
-      body: 'Прошу пересмотреть мой бан, это была ошибка.',
-    });
-    const unknown = await submitAppeal({
-      steam_id64: String(unknownSteam),
-      body: 'Прошу пересмотреть мой бан, это была ошибка.',
-    });
-
-    expect(banned.statusCode).toBe(201);
-    expect(unknown.statusCode).toBe(201);
-    expect(Object.keys(unknown.json() as object).sort()).toEqual(
-      Object.keys(banned.json() as object).sort(),
+    const res = await submitAppeal(
+      { steam_id64: String(steamId64), body: 'Прошу пересмотреть мой бан, это была ошибка.' },
+      null,
     );
-    expect(unknown.json()).toMatchObject({ status: 'pending' });
+
+    expect(res.statusCode).toBe(401);
+    const rows = await h.db.select().from(banAppeals).where(eq(banAppeals.steamId64, steamId64));
+    expect(rows).toHaveLength(0);
+    expect(await h.redis.get(`appeal-rl:steam:${steamId64}`)).toBeNull();
+  });
+
+  it("refuses to file an appeal for somebody else's SteamID and leaves the victim's slot free", async () => {
+    const victimSteam = testSteamId(987103);
+    const attackerSteam = testSteamId(987110);
+    await seedBannedPlayer(victimSteam, 'AppealVictim103');
+    await seedPlayer(attackerSteam, 'AppealAttacker110');
+
+    const forged = await submitAppeal(
+      {
+        steam_id64: String(victimSteam),
+        body: 'Поддельная апелляция от чужого имени, прошу снять.',
+      },
+      await steamSessionCookie(attackerSteam),
+    );
+    expect(forged.statusCode).toBe(403);
+    expect(forged.json()).toEqual({ error: 'steam_id_mismatch' });
+
+    const genuine = await submitAppeal({
+      steam_id64: String(victimSteam),
+      body: 'Настоящая апелляция владельца аккаунта, прошу рассмотреть.',
+    });
+    expect(genuine.statusCode).toBe(201);
+    const rows = await h.db.select().from(banAppeals).where(eq(banAppeals.steamId64, victimSteam));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('files the appeal under the Steam login when steam_id64 is omitted', async () => {
+    const steamId64 = testSteamId(987111);
+    const { playerId } = await seedBannedPlayer(steamId64, 'AppealTarget111');
+
+    const res = await submitAppeal(
+      { body: 'Апелляция без явного SteamID, берётся из входа через Steam.' },
+      await steamSessionCookie(steamId64),
+    );
+
+    expect(res.statusCode).toBe(201);
+    const [row] = await h.db
+      .select()
+      .from(banAppeals)
+      .where(eq(banAppeals.steamId64, steamId64))
+      .limit(1);
+    expect(row?.playerId).toBe(playerId);
   });
 
   it('answers identically for a player whose ban is already reverted', async () => {
@@ -353,14 +431,16 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
   });
 
   it('rejects a malformed steam_id64', async () => {
-    const res = await submitAppeal({
-      steam_id64: '123',
-      body: 'Нормальное тело апелляции достаточной длины.',
-    });
+    const steamId64 = testSteamId(987112);
+    await seedPlayer(steamId64, 'AppealTarget112');
+    const res = await submitAppeal(
+      { steam_id64: '123', body: 'Нормальное тело апелляции достаточной длины.' },
+      await steamSessionCookie(steamId64),
+    );
     expect(res.statusCode).toBe(400);
   });
 
-  it('writes an appeal.create audit row with a system actor and the submitter IP', async () => {
+  it('writes an appeal.create audit row with the Steam-verified actor and the submitter IP', async () => {
     const steamId64 = testSteamId(987107);
     await seedBannedPlayer(steamId64, 'AppealTarget107');
 
@@ -376,9 +456,13 @@ describeIfDb('POST /api/v1/public/appeals (anonymous submission)', () => {
       resource: 'ban_appeal',
       targetId: appealId,
     });
-    expect(row.actorKind).toBe('system');
-    expect(row.actorSystemLabel).toBe('http-anonymous');
-    expect(row.actorPlayerId).toBeNull();
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    expect(row.actorKind).toBe('steam');
+    expect(row.actorPlayerId).toBe(player?.id);
     expect(row.actorIp).toBe('127.0.0.1');
   });
 
@@ -734,6 +818,45 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     expect(cfg).toContain(`Banned:${otherSteam}:`);
   });
 
+  // Regression (#40, #206): an unreadable Bans.cfg used to count as empty,
+  // so approval unbanned in the ledger while the player stayed banned in game.
+  it('approving answers 502 and keeps the appeal open when Bans.cfg cannot be read', async () => {
+    const steamId64 = testSteamId(987195);
+    const appealId = await openAppeal(steamId64, 'AppealTarget195');
+
+    const readSpy = vi
+      .spyOn(h.bridge, 'fileRead')
+      .mockRejectedValue(Object.assign(new Error('bridge timeout'), { code: 'transport' }));
+    let res: Awaited<ReturnType<typeof patch>>;
+    try {
+      res = await patch(appealId, { status: 'approved' });
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'bans_cfg_unavailable', partial_revert: null });
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    expect(appeal?.status).toBe('pending');
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    const ledger = await h.db
+      .select({
+        actionType: moderationActions.actionType,
+        revertedAt: moderationActions.revertedAt,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, player?.id ?? ''));
+    expect(ledger).toEqual([{ actionType: 'ban', revertedAt: null }]);
+  });
+
   it('approving inserts an unban ledger row referencing the appeal', async () => {
     const steamId64 = testSteamId(987188);
     const appealId = await openAppeal(steamId64, 'AppealTarget188');
@@ -789,6 +912,74 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     expect(
       (unbanAudit.context as { reverted_action_ids?: string[] }).reverted_action_ids,
     ).toBeTruthy();
+  });
+
+  it('reports and audits a partial revert when a later server conflicts (#93)', async () => {
+    const steamId64 = testSteamId(987196);
+    const appealId = await openAppeal(steamId64, 'AppealTarget196');
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    if (!player) throw new Error('appellant player missing');
+
+    const conflictServerId = uuidv7();
+    await h.db.insert(servers).values({
+      id: conflictServerId,
+      displayName: 'Appeal Conflict Server',
+      slug: `appeals-conflict-${conflictServerId}`,
+    });
+    await h.db.insert(moderationActions).values({
+      playerId: player.id,
+      serverId: conflictServerId,
+      actionType: 'ban',
+      authorPlayerId: unbannerId,
+      reason: 'второй сервер',
+      context: { ban_length: '0' },
+    });
+    // A concurrent editor keeps restoring the ban line on the second server,
+    // so every read-verify-write attempt there loses the race.
+    const conflictPath = bansCfgPath(conflictServerId);
+    const originalRead = h.bridge.fileRead;
+    const readSpy = vi
+      .spyOn(h.bridge, 'fileRead')
+      .mockImplementation(async (p) =>
+        p.path === conflictPath
+          ? { content: `Banned:${steamId64}:0 // AppealTarget195\n` }
+          : originalRead(p),
+      );
+
+    try {
+      const res = await patch(appealId, { status: 'approved' });
+      expect(res.statusCode).toBe(409);
+      const body = res.json() as {
+        error: string;
+        partial_revert: { reverted_action_ids: string[]; unban_action_ids: string[] };
+      };
+      expect(body.error).toBe('bans_cfg_conflict');
+      expect(body.partial_revert.reverted_action_ids).toHaveLength(1);
+      expect(body.partial_revert.unban_action_ids).toHaveLength(1);
+
+      const [appeal] = await h.db
+        .select({ status: banAppeals.status })
+        .from(banAppeals)
+        .where(eq(banAppeals.id, appealId));
+      expect(appeal?.status).toBe('pending');
+
+      const audit = await assertAuditRow(h, {
+        action: 'appeal.unban_partial',
+        resource: 'ban_appeal',
+        targetId: appealId,
+      });
+      expect(audit.context).toMatchObject({
+        reverted_action_ids: body.partial_revert.reverted_action_ids,
+        unban_action_ids: body.partial_revert.unban_action_ids,
+        conflict_server_id: conflictServerId,
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it('publishes the decision to the applicant status page', async () => {
@@ -852,6 +1043,167 @@ describeIfDb('approve removes the player from the published banlist', () => {
     });
     expect(afterRes.statusCode).toBe(200);
     expect(afterRes.body).not.toContain(String(steamId64));
+  });
+});
+
+describeIfDb('concurrent decisions on one appeal (#37)', () => {
+  it('lets exactly one of two simultaneous decisions win and keeps bans consistent with it', async () => {
+    const steamId64 = testSteamId(987220);
+    const { playerId } = await seedBannedPlayer(steamId64, 'AppealTarget220');
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция, которую два модератора решают одновременно.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    const decide = (status: 'approved' | 'rejected') =>
+      h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/appeals/${appealId}`,
+        headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status }),
+      });
+    const [approve, reject] = await Promise.all([decide('approved'), decide('rejected')]);
+
+    const codes = [approve.statusCode, reject.statusCode].sort();
+    expect(codes).toEqual([200, 409]);
+    const loser = approve.statusCode === 409 ? approve : reject;
+    expect(loser.json()).toEqual({ error: 'appeal_already_decided' });
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    const [ban] = await h.db
+      .select({ revertedAt: moderationActions.revertedAt })
+      .from(moderationActions)
+      .where(and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'ban')))
+      .limit(1);
+    if (appeal?.status === 'approved') {
+      expect(ban?.revertedAt).not.toBeNull();
+    } else {
+      expect(appeal?.status).toBe('rejected');
+      expect(ban?.revertedAt).toBeNull();
+    }
+    const unbans = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(
+        and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'unban')),
+      );
+    expect(unbans).toHaveLength(appeal?.status === 'approved' ? 1 : 0);
+  });
+});
+
+describeIfDb('approve that cannot edit Bans.cfg (#37)', () => {
+  it('answers 409 bans_cfg_conflict and hands the appeal back undecided with the ban intact', async () => {
+    const steamId64 = testSteamId(987240);
+    const { actionId } = await seedBannedPlayer(steamId64, 'AppealTarget240');
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция, одобрение которой не может отредактировать Bans.cfg.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    // Every read returns the original file, so the write never verifies and
+    // the unban gives up with bans_cfg_conflict.
+    const path = bansCfgPath(serverId);
+    const frozen = h.bridge.files.get(path)?.toString('utf-8') ?? '';
+    const stockFileRead = h.bridge.fileRead;
+    h.bridge.fileRead = async (params) =>
+      params.path === path ? { content: frozen } : stockFileRead(params);
+    try {
+      const res = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/appeals/${appealId}`,
+        headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status: 'approved', decision_note: 'снимаю бан' }),
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'bans_cfg_conflict', partial_revert: null });
+    } finally {
+      h.bridge.fileRead = stockFileRead;
+    }
+
+    const [appeal] = await h.db
+      .select({ status: banAppeals.status, decidedAt: banAppeals.decidedAt })
+      .from(banAppeals)
+      .where(eq(banAppeals.id, appealId))
+      .limit(1);
+    expect(appeal).toEqual({ status: 'pending', decidedAt: null });
+    const [ban] = await h.db
+      .select({ revertedAt: moderationActions.revertedAt })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, actionId))
+      .limit(1);
+    expect(ban?.revertedAt).toBeNull();
+  });
+});
+
+describeIfDb('approve reverts bans whose server was deleted (#37)', () => {
+  it('reverts a ban with server_id NULL and drops it from the public banlist', async () => {
+    const steamId64 = testSteamId(987230);
+    const { playerId, actionId } = await seedBannedPlayer(steamId64, 'AppealTarget230');
+    // Deleting a server sets moderation_actions.server_id to NULL (on delete
+    // set null); the ban itself stays active.
+    await h.db
+      .update(moderationActions)
+      .set({ serverId: null })
+      .where(eq(moderationActions.id, actionId));
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция по бану с удалённого сервера, прошу снять.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    const enable = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/banlist-publication',
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ enabled: true, publish_scope: 'all_active' }),
+    });
+    expect(enable.statusCode).toBe(200);
+
+    const patched = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/appeals/${appealId}`,
+      headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ status: 'approved' }),
+    });
+    expect(patched.statusCode).toBe(200);
+    const body = patched.json() as {
+      revert: { reverted_action_ids: string[]; unban_action_ids: string[] };
+    };
+    expect(body.revert.reverted_action_ids).toContain(actionId);
+    expect(body.revert.unban_action_ids).toHaveLength(1);
+
+    const [ban] = await h.db
+      .select({
+        revertedAt: moderationActions.revertedAt,
+        revertedBy: moderationActions.revertedBy,
+      })
+      .from(moderationActions)
+      .where(eq(moderationActions.id, actionId))
+      .limit(1);
+    expect(ban?.revertedAt).not.toBeNull();
+    expect(ban?.revertedBy).toBe(unbannerId);
+    const [unban] = await h.db
+      .select({ serverId: moderationActions.serverId })
+      .from(moderationActions)
+      .where(
+        and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'unban')),
+      )
+      .limit(1);
+    expect(unban).toEqual({ serverId: null });
+
+    const banlist = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/public/banlist?format=json',
+      headers: { cookie: ownerCookie },
+    });
+    expect(banlist.statusCode).toBe(200);
+    expect(banlist.body).not.toContain(String(steamId64));
   });
 });
 

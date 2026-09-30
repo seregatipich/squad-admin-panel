@@ -1,5 +1,9 @@
 'use client';
 
+import {
+  DISCORD_TEMPLATE_LOCALES,
+  type DiscordTemplatePlaceholder,
+} from '@squad/shared-config/discord-template';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Badge,
@@ -17,13 +21,11 @@ import {
   TextInput,
   TrashIcon,
 } from '@/components/ui';
-import { eventLabel } from './discord-events';
+import { describeApiError, eventLabel } from './discord-events';
 
 const PREVIEW_DEBOUNCE_MS = 300;
 
-const LOCALES = ['en', 'ru'] as const;
-
-type TemplateLocale = (typeof LOCALES)[number];
+type TemplateLocale = (typeof DISCORD_TEMPLATE_LOCALES)[number];
 
 /**
  * Sample values for every token of `DISCORD_TEMPLATE_PLACEHOLDERS`, sent with
@@ -31,7 +33,7 @@ type TemplateLocale = (typeof LOCALES)[number];
  * `missing_placeholders` in the response means the operator typed a token the
  * renderer does not know — which is exactly what the warning reports.
  */
-const PREVIEW_CONTEXT: Record<string, string> = {
+const PREVIEW_CONTEXT: Record<DiscordTemplatePlaceholder, string> = {
   player_name: 'Тестовый Игрок',
   player_id: '00000000-0000-0000-0000-000000000000',
   player_url: '/all-players/00000000-0000-0000-0000-000000000000',
@@ -224,7 +226,7 @@ export default function DiscordTemplatesSection() {
         const res = await request();
         if (!res.ok) {
           const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(`${failure}: ${body.error ?? res.status}`);
+          setError(`${failure}: ${describeApiError(res.status, body.error)}`);
           return;
         }
         applyRow((await res.json()) as TemplateRow);
@@ -304,7 +306,7 @@ export default function DiscordTemplatesSection() {
                   value={form.locale}
                   onChange={(e) => patch({ locale: e.target.value as TemplateLocale })}
                 >
-                  {LOCALES.map((locale) => (
+                  {DISCORD_TEMPLATE_LOCALES.map((locale) => (
                     <option key={locale} value={locale}>
                       {locale}
                     </option>
@@ -453,8 +455,10 @@ export default function DiscordTemplatesSection() {
                     {preview.embed.description}
                   </p>
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    {preview.embed.fields.map((field) => (
-                      <div key={`${field.name}|${field.value}`}>
+                    {preview.embed.fields.map((field, index) => (
+                      // Preview fields mirror form.fields one to one, and empty or repeated
+                      // fields make name/value useless as a key.
+                      <div key={form.fields[index]?.id ?? index}>
                         <p className="text-xs font-medium text-ink">{field.name}</p>
                         <p className="text-xs text-ink-3">{field.value}</p>
                       </div>

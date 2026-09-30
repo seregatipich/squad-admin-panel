@@ -1,11 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { playerReports, players, reportEvidence, roles, servers } from '@squad/db/schema';
+import {
+  mediaFiles,
+  playerReports,
+  players,
+  reportEvidence,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
+import { raceAgainstOpenTransaction } from './helpers/row-lock.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -173,7 +181,7 @@ describeIfDb('POST /api/v1/reports', () => {
       headers: { cookie: await loginAsSteam(NO_PANEL_STEAM), 'content-type': 'application/json' },
       payload: JSON.stringify({ server_id: serverId, target_player_id: targetId, body: 'x' }),
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('creates a source=ui pending report and returns it in the queue', async () => {
@@ -517,5 +525,33 @@ describeIfDb('POST /api/v1/reports', () => {
     expect(res.statusCode).toBe(201);
     const body = res.json() as { reporter_player_id: string | null };
     expect(body.reporter_player_id).toBe(reporterId);
+  });
+
+  it('inserts no report when attaching its evidence fails (audit #71, #260)', async () => {
+    const cookie = await loginAsOwner(h);
+    const mediaId = await createMediaLink(cookie, 'https://example.com/vanishing-evidence');
+    const body = `evidence vanishes mid-request ${uuidv7()}`;
+
+    const res = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx.delete(mediaFiles).where(eq(mediaFiles.id, mediaId));
+      },
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { cookie },
+          payload: {
+            server_id: serverId,
+            target_player_id: targetId,
+            body,
+            evidence_media_ids: [mediaId],
+          },
+        }),
+    );
+    expect(res.statusCode).toBe(500);
+    const orphans = await h.db.select().from(playerReports).where(eq(playerReports.body, body));
+    expect(orphans).toHaveLength(0);
   });
 });

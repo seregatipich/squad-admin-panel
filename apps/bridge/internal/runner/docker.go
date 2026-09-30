@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
@@ -22,12 +24,21 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
-	// ComposeDir is the panel deploy directory that holds docker/compose.yml,
-	// .env and scripts/restore.sh. The backup RPCs run `docker compose` (and the
-	// restore script) from here so they inherit RESTIC_PASSWORD/POSTGRES_PASSWORD
-	// from .env instead of the bridge having to hold those secrets. Empty falls
-	// back to the PANEL_COMPOSE_DIR env var; it is never accepted from RPC
-	// params. Tests inject a t.TempDir.
+	// SavedRoot overrides the per-server saved-data root the sidecar's Logs
+	// bind is resolved under (production default validate.PanelSavedRoot).
+	// Tests point it at a temp dir.
+	SavedRoot string
+	// ComposeDir is the panel deploy directory that holds the compose file,
+	// its env files and scripts/restore.sh. The backup RPCs run `docker compose`
+	// (and the restore script) from here so they inherit RESTIC_PASSWORD/
+	// POSTGRES_PASSWORD from the env files instead of the bridge having to hold
+	// those secrets. Empty falls back to the PANEL_COMPOSE_DIR env var; it is
+	// never accepted from RPC params. Tests inject a t.TempDir.
+	//
+	// The compose file and env files inside it come from PANEL_COMPOSE_FILE
+	// (default docker/compose.yml) and PANEL_COMPOSE_ENV_FILES (comma-separated,
+	// default .env), which the install-host-bridge.sh drop-in writes: the stand
+	// runs docker/compose.stand.yml with .env.stand,.release.env.
 	ComposeDir string
 }
 
@@ -45,7 +56,6 @@ type ContainerRunSpec struct {
 	MaxPlayers   int
 	Tickrate     int
 	Multihome    string
-	ExtraArgs    []string
 	ConfigsHost  string
 	SavedHost    string
 	DepotVolume  string
@@ -63,20 +73,38 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	if err := validate.ContainerName(name); err != nil {
 		return "", err
 	}
-	if _, err := validate.PanelConfigsPath(spec.ConfigsHost); err != nil {
+	configsHost, err := validate.ServerConfigsMount(spec.ConfigsHost, spec.ServerID)
+	if err != nil {
 		return "", fmt.Errorf("configs mount: %w", err)
 	}
-	if _, err := validate.PanelSavedPath(spec.SavedHost); err != nil {
+	savedHost, err := validate.ServerSavedMount(spec.SavedHost, spec.ServerID)
+	if err != nil {
 		return "", fmt.Errorf("saved mount: %w", err)
 	}
 	if spec.DepotVolume != validate.DepotVolumeName {
 		return "", fmt.Errorf("%w: depot volume %q not in allowlist", validate.ErrForbidden, spec.DepotVolume)
+	}
+	for _, port := range []struct {
+		name  string
+		value int
+	}{
+		{"game", spec.GamePort},
+		{"query", spec.QueryPort},
+		{"beacon", spec.BeaconPort},
+		{"rcon", spec.RCONPort},
+	} {
+		if err := validate.ServerPort(port.value); err != nil {
+			return "", fmt.Errorf("%s port: %w", port.name, err)
+		}
 	}
 	if spec.UlimitNofile <= 0 {
 		spec.UlimitNofile = 65536
 	}
 	if spec.Multihome == "" {
 		spec.Multihome = "0.0.0.0"
+	}
+	if err := validate.Multihome(spec.Multihome); err != nil {
+		return "", err
 	}
 	if spec.MaxPlayers <= 0 {
 		spec.MaxPlayers = 100
@@ -89,20 +117,38 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	// entrypoint itself (runuser), NOT the docker --user flag.
 	// Rootfs must be writable because runc creates mount points for the
 	// bind mounts inside it before the container process starts.
+	//
+	// Capabilities are dropped to what the root entrypoint needs before it
+	// drops to uid 1001 (docker/squad-server-entrypoint.sh): CHOWN,
+	// DAC_OVERRIDE and FOWNER for `chown -R` / `chmod` over the bind mounts,
+	// SETUID/SETGID for runuser, and KILL so tini (root, PID 1) can forward
+	// SIGTERM to the uid-1001 game process on `docker stop`. The game process
+	// itself runs unprivileged, so every capability is lost at the uid switch.
 	args := []string{
 		"run", "-d",
 		"--pull", "never",
 		"--name", name,
 		"--restart", "unless-stopped",
 		"--network", "host",
-		"-v", spec.DepotVolume + ":/squad:ro",
-		"-v", spec.ConfigsHost + ":/squad/SquadGame/ServerConfig:rw",
-		"-v", spec.SavedHost + ":/squad/SquadGame/Saved:rw",
+		"--cap-drop", "ALL",
+		"--cap-add", "CHOWN",
+		"--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "FOWNER",
+		"--cap-add", "SETUID",
+		"--cap-add", "SETGID",
+		"--cap-add", "KILL",
+		"--security-opt", "no-new-privileges",
+	}
+	args = append(args, containerLogRotationArgs...)
+	args = append(args,
+		"-v", spec.DepotVolume+":/squad:ro",
+		"-v", configsHost+":/squad/SquadGame/ServerConfig:rw",
+		"-v", savedHost+":/squad/SquadGame/Saved:rw",
 		"--ulimit", fmt.Sprintf("nofile=%d:%d", spec.UlimitNofile, spec.UlimitNofile),
-		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.server_id="+spec.ServerID,
 		"--label", "panel.kind=squad-server",
 		spec.Image,
-	}
+	)
 	squadArgs := []string{
 		"RANDOM=ALWAYS",
 		fmt.Sprintf("Port=%d", spec.GamePort),
@@ -115,7 +161,6 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 		fmt.Sprintf("MULTIHOME=%s", spec.Multihome),
 		"-log",
 	}
-	squadArgs = append(squadArgs, spec.ExtraArgs...)
 	args = append(args, squadArgs...)
 	var out string
 	// `docker run` failing at the OCI-runtime-create stage (the class this
@@ -126,7 +171,7 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	beforeRetry := func() {
 		_, _, _, _ = d.R.Run(ctx, d.Bin, []string{"rm", "-f", name}, nil)
 	}
-	err := retryTransientDockerFailures(ctx, beforeRetry, func() error {
+	err = retryTransientDockerFailures(ctx, beforeRetry, func() error {
 		so, se, exit, runErr := d.R.Run(ctx, d.Bin, args, nil)
 		out = strings.TrimSpace(string(so))
 		if runErr != nil {
@@ -268,6 +313,18 @@ func (d *DockerRunner) socketRoot() string {
 	return validate.PanelSocketRoot
 }
 
+// containerLogRotationArgs caps the json-file logs of every container the
+// bridge starts with `docker run`, matching the compose services' x-logging
+// (10 MiB x 5 files). Without it the host's default unbounded json-file
+// driver lets a long-running game server fill the disk. Docker applies log
+// options at container creation, so existing containers keep their old
+// settings until they are recreated.
+var containerLogRotationArgs = []string{
+	"--log-driver", "json-file",
+	"--log-opt", "max-size=10m",
+	"--log-opt", "max-file=5",
+}
+
 func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, error) {
 	if err := validate.ServerUUID(spec.ServerID); err != nil {
 		return nil, err
@@ -280,7 +337,7 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		return nil, err
 	}
 	serverDir := d.socketRoot() + "/" + spec.ServerID
-	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	logsBind := d.sidecarLogsDir(spec.ServerID) + ":/squad/Logs:ro"
 	socketBind := fmt.Sprintf("%s/sock:/run/panelBridge:rw", serverDir)
 	configBind := fmt.Sprintf("%s/config.json:/app/config.json:ro", serverDir)
 
@@ -290,14 +347,22 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		"--name", name,
 		"--label", "panel.server_id=" + spec.ServerID,
 		"--label", "panel.kind=rnsquadjs",
+		// Spares a stopped sidecar (and so its --pull never image) from
+		// SystemPrune's label!=panel.preserve=true filter.
+		"--label", "panel.preserve=true",
 		"--network", "host",
 		"--user", "1001:1001",
 		"--read-only",
+		// The sidecar (node, uid 1001) needs no capabilities at all.
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pids-limit", "512",
 		"--restart", "unless-stopped",
 		"-v", logsBind,
 		"-v", socketBind,
 		"-v", configBind,
 	}
+	args = append(args, containerLogRotationArgs...)
 	keys := make([]string, 0, len(spec.Env))
 	for k := range spec.Env {
 		keys = append(keys, k)
@@ -308,6 +373,83 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 	}
 	args = append(args, validate.RNSquadJSImage)
 	return args, nil
+}
+
+// savedRoot returns the configured per-server saved-data root, defaulting to
+// the production constant when SavedRoot is unset.
+func (d *DockerRunner) savedRoot() string {
+	if d.SavedRoot != "" {
+		return d.SavedRoot
+	}
+	return validate.PanelSavedRoot
+}
+
+// sidecarLogsComponents is the path of the Squad Logs directory below
+// <savedRoot>/<serverID>, one component per element.
+var sidecarLogsComponents = []string{"SquadGame", "Saved", "Logs"}
+
+// sidecarLogsDir is the host directory bound read-only at /squad/Logs.
+func (d *DockerRunner) sidecarLogsDir(serverID string) string {
+	return d.savedRoot() + "/" + serverID + "/" + strings.Join(sidecarLogsComponents, "/")
+}
+
+// ensureSidecarLogsDir verifies that every component of the sidecar's Logs
+// bind source below the saved root — <id>, SquadGame, Saved, Logs — is a
+// real directory, never a symlink. That tree is owned by the game server
+// (uid 1001, which runs third-party mods), and docker (root) resolves
+// symlinks in a bind source, so a planted symlink would otherwise mount an
+// arbitrary host directory into the sidecar. Each level is opened
+// O_NOFOLLOW|O_DIRECTORY relative to its parent fd; a missing level is
+// created (0o755, chowned to the game uid) instead of being left for docker
+// to create through whatever the path resolves to. The saved root itself is
+// root-owned and may legitimately be reached through a symlink (hosts link
+// /var/lib/squad-panel to their data directory), so it is opened normally.
+//
+// The residual check-to-bind race (a swap after this verification but before
+// dockerd resolves the path) can at worst expose, read-only, a directory the
+// uid-1001 process could already read.
+func (d *DockerRunner) ensureSidecarLogsDir(serverID string) error {
+	root := d.savedRoot()
+	rootFd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open saved root %q: %w", root, err)
+	}
+	parentFd := rootFd
+	defer func() { unix.Close(parentFd) }()
+	for _, name := range append([]string{serverID}, sidecarLogsComponents...) {
+		fd, err := openOrCreateGameDir(parentFd, name)
+		if err != nil {
+			return err
+		}
+		unix.Close(parentFd)
+		parentFd = fd
+	}
+	return nil
+}
+
+// openOrCreateGameDir opens name under parentFd as a real directory
+// (O_NOFOLLOW|O_DIRECTORY), creating it first when absent. A created
+// directory is chowned to the game uid so the game server can write into it;
+// a non-root caller (dev/test) hits EPERM, which is tolerated.
+func openOrCreateGameDir(parentFd int, name string) (int, error) {
+	const flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_DIRECTORY | unix.O_CLOEXEC
+	fd, err := unix.Openat(parentFd, name, flags, 0)
+	if errors.Is(err, unix.ENOENT) {
+		if mkErr := unix.Mkdirat(parentFd, name, 0o755); mkErr != nil && !errors.Is(mkErr, unix.EEXIST) {
+			return -1, fmt.Errorf("create logs dir component %q: %w", name, mkErr)
+		}
+		fd, err = unix.Openat(parentFd, name, flags, 0)
+		if err == nil {
+			if chErr := unix.Fchown(fd, sidecarUID, sidecarUID); chErr != nil && !(errors.Is(chErr, unix.EPERM) && os.Geteuid() != 0) {
+				unix.Close(fd)
+				return -1, fmt.Errorf("chown logs dir component %q: %w", name, chErr)
+			}
+		}
+	}
+	if err != nil {
+		return -1, forbidNonDir("sidecar logs path", name, err)
+	}
+	return fd, nil
 }
 
 // ensureSidecarDir builds the two-level per-server tree the sidecar needs:
@@ -336,23 +478,23 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 			return err
 		}
 	}
-	rootFd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	rootFd, err := unix.Open(root, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return forbidNonDir("sidecar root", root, err)
 	}
-	defer syscall.Close(rootFd)
+	defer unix.Close(rootFd)
 
 	idFd, err := openVerifiedSidecarDir(rootFd, serverID, sidecarServerDirModeRaw, false)
 	if err != nil {
 		return err
 	}
-	defer syscall.Close(idFd)
+	defer unix.Close(idFd)
 
 	sockFd, err := openVerifiedSidecarDir(idFd, "sock", sidecarSockModeRaw, true)
 	if err != nil {
 		return err
 	}
-	return syscall.Close(sockFd)
+	return unix.Close(sockFd)
 }
 
 // openVerifiedSidecarDir creates name under parentFd (tolerating an existing
@@ -366,25 +508,25 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 // caller (dev/test) hits EPERM, tolerated because a non-root bridge cannot
 // drive containers anyway. Returns the open fd; the caller owns closing it.
 func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
-	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
+	if err := unix.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
 	}
-	fd, err := syscall.Openat(parentFd, name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	fd, err := unix.Openat(parentFd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, forbidNonDir("sidecar path", name, err)
 	}
-	if err := syscall.Fchmod(fd, mode); err != nil {
-		syscall.Close(fd)
+	if err := unix.Fchmod(fd, mode); err != nil {
+		unix.Close(fd)
 		return -1, fmt.Errorf("chmod sidecar dir %q: %w", name, err)
 	}
 	if !chownToSidecar {
 		return fd, nil
 	}
-	if err := syscall.Fchown(fd, sidecarUID, -1); err != nil {
-		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
+	if err := unix.Fchown(fd, sidecarUID, -1); err != nil {
+		if errors.Is(err, unix.EPERM) && os.Geteuid() != 0 {
 			return fd, nil
 		}
-		syscall.Close(fd)
+		unix.Close(fd)
 		return -1, fmt.Errorf("chown sidecar dir %q: %w", name, err)
 	}
 	return fd, nil
@@ -395,7 +537,7 @@ func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidec
 // O_DIRECTORY) onto validate.ErrForbidden so callers can match the policy
 // error, and wraps any other open failure verbatim.
 func forbidNonDir(what, path string, err error) error {
-	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
 		return fmt.Errorf("%w: %s %q is not a real directory", validate.ErrForbidden, what, path)
 	}
 	return fmt.Errorf("open %s %q: %w", what, path, err)
@@ -407,6 +549,9 @@ func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) 
 		return "", err
 	}
 	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
+		return "", err
+	}
+	if err := d.ensureSidecarLogsDir(spec.ServerID); err != nil {
 		return "", err
 	}
 	// config.json is rendered by the API into the (root-owned) server dir. If it
@@ -490,13 +635,18 @@ func (d *DockerRunner) Rm(ctx context.Context, name string) error {
 }
 
 type InspectResult struct {
-	Name       string            `json:"name"`
-	State      string            `json:"state"`
-	Running    bool              `json:"running"`
-	Pid        int               `json:"pid"`
-	StartedAt  string            `json:"started_at"`
-	FinishedAt string            `json:"finished_at"`
-	ExitCode   int               `json:"exit_code"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Running    bool   `json:"running"`
+	Pid        int    `json:"pid"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	ExitCode   int    `json:"exit_code"`
+	// OOMKilled is docker's State.OOMKilled: the kernel OOM killer ended
+	// the container's main process.
+	OOMKilled bool `json:"oom_killed"`
+	// Error is docker's State.Error (e.g. a failed start), omitted when empty.
+	Error      string            `json:"error,omitempty"`
 	Image      string            `json:"image"`
 	RestartCnt int               `json:"restart_count"`
 	Labels     map[string]string `json:"labels"`
@@ -527,6 +677,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 			Running    bool   `json:"Running"`
 			Pid        int    `json:"Pid"`
 			ExitCode   int    `json:"ExitCode"`
+			OOMKilled  bool   `json:"OOMKilled"`
+			Error      string `json:"Error"`
 			StartedAt  string `json:"StartedAt"`
 			FinishedAt string `json:"FinishedAt"`
 		} `json:"State"`
@@ -547,6 +699,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 		StartedAt:  raw.State.StartedAt,
 		FinishedAt: raw.State.FinishedAt,
 		ExitCode:   raw.State.ExitCode,
+		OOMKilled:  raw.State.OOMKilled,
+		Error:      raw.State.Error,
 		Image:      raw.Config.Image,
 		RestartCnt: raw.RestartCount,
 		Labels:     raw.Config.Labels,
@@ -664,6 +818,13 @@ func parseSize(s string) int64 {
 	return int64(n * float64(mul))
 }
 
+// LogsFollowMaxTail caps the backfill a log follow may request; the API
+// clamps ?lines= to the same bound.
+const LogsFollowMaxTail = 5000
+
+// LogsFollow streams `docker logs --follow` for a panel container. --tail is
+// always passed: tail<=0 means "no backfill" (never the whole history) and
+// values above LogsFollowMaxTail are clamped.
 func (d *DockerRunner) LogsFollow(
 	ctx context.Context,
 	name string,
@@ -673,11 +834,8 @@ func (d *DockerRunner) LogsFollow(
 	if err := validate.ContainerName(name); err != nil {
 		return 0, err
 	}
-	args := []string{"logs", "--follow", "--timestamps"}
-	if tail > 0 {
-		args = append(args, "--tail", fmt.Sprintf("%d", tail))
-	}
-	args = append(args, name)
+	tail = max(0, min(tail, LogsFollowMaxTail))
+	args := []string{"logs", "--follow", "--timestamps", "--tail", strconv.Itoa(tail), name}
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
 
@@ -727,8 +885,21 @@ func (d *DockerRunner) DepotUpdate(
 // matches the per-server `squad-{uuid}` regex, regardless of running
 // state (so the API can detect orphans whose UUID is no longer in DB).
 func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error) {
+	return d.listContainersNamed(ctx, "squad-")
+}
+
+// ListSidecarContainers returns the names of every RNSquadJS sidecar
+// container (`rnsquadjs-{uuid}`), regardless of running state, so the API
+// can remove a sidecar whose server no longer exists.
+func (d *DockerRunner) ListSidecarContainers(ctx context.Context) ([]string, error) {
+	return d.listContainersNamed(ctx, "rnsquadjs-")
+}
+
+// listContainersNamed lists every container whose name starts with prefix
+// and passes the strict validate.ContainerName allowlist.
+func (d *DockerRunner) listContainersNamed(ctx context.Context, prefix string) ([]string, error) {
 	so, se, exit, err := d.R.Run(ctx, d.Bin,
-		[]string{"ps", "-a", "--no-trunc", "--filter", "name=^squad-", "--format", "{{.Names}}"}, nil)
+		[]string{"ps", "-a", "--no-trunc", "--filter", "name=^" + prefix, "--format", "{{.Names}}"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -741,9 +912,9 @@ func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error
 		if line == "" {
 			continue
 		}
-		// docker ps `name=^squad-` is a substring match (no real anchor),
-		// so revalidate against the strict squad-<uuid> regex.
-		if validate.ContainerName(line) == nil {
+		// docker ps `name=^…` is not a reliable anchor, so revalidate the
+		// prefix and the strict <prefix><uuid> allowlist regex.
+		if strings.HasPrefix(line, prefix) && validate.ContainerName(line) == nil {
 			out = append(out, line)
 		}
 	}
@@ -754,6 +925,9 @@ func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error
 // cache. Volumes are deliberately NOT pruned — the panel's persistent
 // state lives in the squad-depot volume and any per-server saved/configs
 // volumes that should be cleaned via directory_delete + soft-delete.
+// Images labelled panel.preserve=true are spared: the squad-server and
+// depot-init images, and every panel release image (api, web, workers,
+// caddy), so the previous release stays loaded for a rollback.
 //
 // Streams stdout/stderr live like DepotUpdate; callers can use it to
 // drive a progress UI. Returns the docker exit code.
@@ -772,36 +946,82 @@ func (d *DockerRunner) SystemPrune(
 
 // --- restic backup / restore (INFRA-8-P1) ---
 
-// composeDir resolves the panel deploy directory the backup RPCs shell out in.
-// It must be an absolute path, from the ComposeDir field or PANEL_COMPOSE_DIR;
-// an unset or relative value is a policy error (ErrForbidden) so the RPC fails
-// closed rather than running `docker compose` from an unexpected cwd.
-func (d *DockerRunner) composeDir() (string, error) {
+// Defaults for the compose target when the host sets neither
+// PANEL_COMPOSE_FILE nor PANEL_COMPOSE_ENV_FILES: the base install layout.
+const (
+	defaultComposeFile     = "docker/compose.yml"
+	defaultComposeEnvFiles = ".env"
+)
+
+// composeTarget is the compose file and env files the backup RPCs run
+// against, all as absolute paths inside the deploy directory.
+type composeTarget struct {
+	dir      string
+	file     string
+	envFiles []string
+}
+
+// composeTarget resolves the deploy directory from the ComposeDir field or
+// PANEL_COMPOSE_DIR, and the compose file and env files inside it from
+// PANEL_COMPOSE_FILE / PANEL_COMPOSE_ENV_FILES. The directory must be
+// absolute and every file a local path inside it; anything else (unset
+// directory, a relative directory, an absolute or `..`-escaping file, an empty
+// list entry) is a policy error (ErrForbidden), so the RPC fails closed
+// rather than running `docker compose` against an unexpected file.
+func (d *DockerRunner) composeTarget() (composeTarget, error) {
 	dir := d.ComposeDir
 	if dir == "" {
 		dir = os.Getenv("PANEL_COMPOSE_DIR")
 	}
 	if dir == "" {
-		return "", fmt.Errorf("%w: compose directory not configured (set PANEL_COMPOSE_DIR)", validate.ErrForbidden)
+		return composeTarget{}, fmt.Errorf("%w: compose directory not configured (set PANEL_COMPOSE_DIR)", validate.ErrForbidden)
 	}
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("%w: compose directory %q must be absolute", validate.ErrForbidden, dir)
+		return composeTarget{}, fmt.Errorf("%w: compose directory %q must be absolute", validate.ErrForbidden, dir)
 	}
-	return dir, nil
+	file := os.Getenv("PANEL_COMPOSE_FILE")
+	if file == "" {
+		file = defaultComposeFile
+	}
+	envList := os.Getenv("PANEL_COMPOSE_ENV_FILES")
+	if envList == "" {
+		envList = defaultComposeEnvFiles
+	}
+	target := composeTarget{dir: dir}
+	for _, rel := range append([]string{file}, strings.Split(envList, ",")...) {
+		if !filepath.IsLocal(rel) {
+			return composeTarget{}, fmt.Errorf("%w: compose path %q must be a relative path inside %s", validate.ErrForbidden, rel, dir)
+		}
+	}
+	target.file = filepath.Join(dir, file)
+	for _, rel := range strings.Split(envList, ",") {
+		target.envFiles = append(target.envFiles, filepath.Join(dir, rel))
+	}
+	return target, nil
 }
 
 // composeBackupArgs builds the `docker compose` prefix that targets the
-// backup-profile service from the resolved deploy directory. The compose file
-// and .env are pinned explicitly so the invocation is independent of the
-// bridge's cwd; the file resolves its own paths from docker/ and pins the
-// project name, so no --project-directory is needed.
-func composeBackupArgs(dir string) []string {
-	return []string{
-		"compose",
-		"-f", filepath.Join(dir, "docker", "compose.yml"),
-		"--env-file", filepath.Join(dir, ".env"),
-		"--profile", "backup",
+// backup-profile service. The compose file and env files are pinned
+// explicitly so the invocation is independent of the bridge's cwd; the file
+// resolves its own paths from its directory and pins the project name, so no
+// --project-directory is needed.
+func composeBackupArgs(target composeTarget) []string {
+	args := []string{"compose", "-f", target.file}
+	for _, envFile := range target.envFiles {
+		args = append(args, "--env-file", envFile)
 	}
+	return append(args, "--profile", "backup")
+}
+
+// restoreEnv is the bridge environment plus the compose target, in the
+// variables scripts/restore.sh and docker compose read: COMPOSE_FILE,
+// COMPOSE_ENV_FILES, and ENV_FILE (the first env file, which holds DATA_DIR).
+func restoreEnv(target composeTarget) []string {
+	return append(os.Environ(),
+		"COMPOSE_FILE="+target.file,
+		"COMPOSE_ENV_FILES="+strings.Join(target.envFiles, ","),
+		"ENV_FILE="+target.envFiles[0],
+	)
 }
 
 // BackupSnapshot is one restic snapshot as surfaced to the panel UI. It is the
@@ -821,11 +1041,11 @@ type BackupSnapshot struct {
 // resticker entrypoint is overridden so the args are not treated as a restic
 // subcommand). An empty repository yields an empty slice, not an error.
 func (d *DockerRunner) BackupSnapshots(ctx context.Context) ([]BackupSnapshot, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return nil, err
 	}
-	args := append(composeBackupArgs(dir),
+	args := append(composeBackupArgs(target),
 		"run", "--rm", "--no-TTY",
 		"--entrypoint", "/bin/sh", "backup",
 		"-c", "restic snapshots --json",
@@ -857,11 +1077,11 @@ func (d *DockerRunner) BackupRun(
 	ctx context.Context,
 	onStdout, onStderr func([]byte),
 ) (int, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return 0, err
 	}
-	args := append(composeBackupArgs(dir), "run", "--rm", "backup", "backup")
+	args := append(composeBackupArgs(target), "run", "--rm", "backup", "backup")
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
 
@@ -869,21 +1089,22 @@ func (d *DockerRunner) BackupRun(
 // snapshot by invoking the proven scripts/restore.sh from the deploy directory
 // with --apply. This is DESTRUCTIVE: it overwrites the live database and Redis
 // dataset. The snapshot id is validated to a restic id (or "latest") before it
-// reaches the shell, so it cannot smuggle extra arguments. Streams progress;
-// returns the script exit code.
+// reaches the shell, so it cannot smuggle extra arguments. The script gets the
+// same compose file and env files as the other backup RPCs (see restoreEnv).
+// Streams progress; returns the script exit code.
 func (d *DockerRunner) BackupRestore(
 	ctx context.Context,
 	snapshotID string,
 	onStdout, onStderr func([]byte),
 ) (int, error) {
-	dir, err := d.composeDir()
+	target, err := d.composeTarget()
 	if err != nil {
 		return 0, err
 	}
 	if err := validate.ResticSnapshotID(snapshotID); err != nil {
 		return 0, err
 	}
-	script := filepath.Join(dir, "scripts", "restore.sh")
+	script := filepath.Join(target.dir, "scripts", "restore.sh")
 	args := []string{script, "--apply", "--snapshot", snapshotID}
-	return d.R.Stream(ctx, "bash", args, nil, onStdout, onStderr)
+	return d.R.Stream(ctx, "bash", args, restoreEnv(target), onStdout, onStderr)
 }

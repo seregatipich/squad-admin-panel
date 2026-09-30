@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -107,11 +108,13 @@ export function LeaderboardsBrowser() {
       .then((body) => {
         if (cancelled) return;
         setServers(
-          body.items.map((entry) => ({
-            id: entry.id,
-            display_name: entry.display_name,
-            slug: entry.slug,
-          })),
+          Array.isArray(body.items)
+            ? body.items.map((entry) => ({
+                id: entry.id,
+                display_name: entry.display_name,
+                slug: entry.slug,
+              }))
+            : [],
         );
       })
       .catch(() => {});
@@ -128,7 +131,7 @@ export function LeaderboardsBrowser() {
     fetch('/api/v1/seasons', { credentials: 'include', cache: 'no-store' })
       .then(async (res) => (res.ok ? ((await res.json()) as SeasonsResponse) : { items: [] }))
       .then((body) => {
-        if (!cancelled) setSeasons(body.items);
+        if (!cancelled) setSeasons(Array.isArray(body.items) ? body.items : []);
       })
       .catch(() => {});
     return () => {
@@ -147,14 +150,24 @@ export function LeaderboardsBrowser() {
       cache: 'no-store',
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string | { code?: string; message?: string };
+          };
+          const message =
+            typeof body.error === 'string' ? body.error : (body.error?.message ?? body.error?.code);
+          throw new Error(message ?? `HTTP ${res.status}`);
+        }
         return (await res.json()) as LeaderboardBody;
       })
       .then((body) => {
         if (current()) setData(body);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (current()) {
+          setError((err as Error).message);
+          setData(null);
+        }
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -168,13 +181,17 @@ export function LeaderboardsBrowser() {
     };
   }, [load]);
 
-  const combatAvailable = data?.combat_available ?? false;
+  // The API always answers `combat_available: true` today (COMBAT_STATS_AVAILABLE
+  // in apps/api/src/routes/leaderboards.ts) — defaulting to `true` here too
+  // avoids flashing the "недоступны" banner during the initial load or after
+  // a transient fetch error, before `data` has ever been set.
+  const combatAvailable = data?.combat_available ?? true;
   const economyAvailable = data?.economy_enabled ?? false;
   const columns = useMemo(
     () => visibleColumns(combatAvailable, economyAvailable),
     [combatAvailable, economyAvailable],
   );
-  const rows = data?.rows ?? [];
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
   const totalRows = data?.total_rows ?? 0;
   const totalPages = Math.max(1, data?.total_pages ?? 1);
   const filtersApplied = filters.search !== '' || filters.serverId !== 'all';
@@ -438,9 +455,14 @@ function LeaderboardTable({
                 label={column.label}
                 directionText={SORT_DIRECTION_TEXT}
                 align={column.align === 'left' ? 'left' : 'right'}
+                title={column.tooltip}
               />
             ) : (
-              <Th key={column.key} align={column.align === 'left' ? 'left' : 'right'}>
+              <Th
+                key={column.key}
+                align={column.align === 'left' ? 'left' : 'right'}
+                title={column.tooltip}
+              >
                 {column.label}
               </Th>
             ),
@@ -493,12 +515,12 @@ function CellContent({
   }
   if (column === 'player') {
     return (
-      <a
+      <Link
         href={`/all-players/${row.player_id}`}
         className="font-medium text-accent no-underline hover:brightness-110"
       >
         {row.current_name}
-      </a>
+      </Link>
     );
   }
   const metric = column as Metric;
@@ -518,11 +540,21 @@ function metricValue(row: LeaderboardRow, metric: Metric): number {
       return row.secondary.deaths;
     case 'kd':
       return row.secondary.kd;
+    case 'revives':
+      return row.secondary.revives;
+    case 'teamkills':
+      return row.secondary.teamkills;
     case 'bonus':
-      return row.secondary.bonus_points ?? row.metric_value;
+      return row.secondary.bonus_points ?? 0;
     case 'boost':
-      return row.secondary.boost_seconds ?? row.metric_value;
-    default:
-      return row.metric_value;
+      return row.secondary.boost_seconds ?? 0;
+    default: {
+      // Exhaustive: a column whose metric isn't handled above must not
+      // silently fall back to `row.metric_value` (LEAD-572) — the value of
+      // whichever metric the table is currently sorted by, shown under an
+      // unrelated column's label.
+      const exhaustive: never = metric;
+      throw new Error(`Unhandled leaderboard metric: ${String(exhaustive)}`);
+    }
   }
 }

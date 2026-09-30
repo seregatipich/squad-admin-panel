@@ -10,7 +10,7 @@ Every frame (request, response, stream chunk) is:
 4-byte big-endian uint32 length  |  UTF-8 JSON payload
 ```
 
-`MaxFrame = 16 MiB` (`BRIDGE_MAX_FRAME_BYTES`). Anything larger drops the connection.
+`MaxFrame = 16 MiB` (`BRIDGE_MAX_FRAME_BYTES`) caps every **encoded** frame. An incoming frame above it drops the connection. A response whose encoding would exceed it (e.g. a `file_read` of a ~10 MiB file whose bytes expand under JSON escaping) is replaced by a `runtime_error` response for the same `id`; use `file_read_stream` for large files. A stream frame that cannot be sent closes the connection. Each frame is written with a single `write(2)`, so concurrent responses on one connection never interleave.
 
 ```json
 // request
@@ -25,7 +25,7 @@ Every frame (request, response, stream chunk) is:
 { "id": "req-uuid-v7", "ok": false, "code": "forbidden", "message": "image not in allowlist" }
 ```
 
-Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
+Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. `docker_prune` runs `docker system prune -a -f --filter label!=panel.preserve=true`; every panel-built image (`docker/*.Dockerfile`) carries `LABEL panel.preserve=true`, so unused panel images — the stopped rnsquadjs/restic sidecars' images and the previous release's images that `scripts/rollback-tk104.sh` restarts — survive it. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
 
 ## Authentication
 
@@ -37,6 +37,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 |---|---|
 | `forbidden` | Argument violated the allowlist (path, image, container name, etc.). |
 | `invalid_args` | Parameter validation failed (missing required field, wrong shape). |
+| `not_found` | The file or directory a read targeted does not exist (`file_read`, `file_read_stream`, `file_read_tail`). |
 | `runtime_error` | External command exited non-zero, timed out, or OS error. |
 | `timeout` | Client-side timeout before reply arrived. |
 | `internal` | Unexpected bridge bug — logged with full context. |
@@ -44,7 +45,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 25 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 27 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -71,11 +72,7 @@ Static host snapshot.
 
 #### `host_metrics()` → `HostMetrics`
 
-Live sample. Internally takes two short-interval samples so CPU% and net rates are non-zero on first call.
-
-#### `process_info({ pid })` → `ProcessInfoResult`
-
-Reads `/proc/<pid>/{status,cmdline}`. The bridge does not require the pid to belong to a panel-managed container; the API layer ties `process_info` calls to the server owning that pid.
+Live sample. CPU% and net rates are deltas against the previous `host_metrics` call's cached counters (the first call, or one within 200 ms of the previous, reports 0). Net rates sum only physical interfaces — `lo`, `veth*`, `docker*` and `br-*` are skipped so container traffic is not counted several times — and an interface that appeared, disappeared or reset its counters contributes 0 instead of wrapping around. `cpu_percent` is clamped to 0–100.
 
 ### Files
 
@@ -92,47 +89,11 @@ Allowed cfg filenames are pinned by `ALLOWED_CONFIG_FILES` in `shared-config` (1
 
 Up to 16 MiB. Anything outside the allowlist returns `forbidden`.
 
-#### `file_read_tail({ path, max_bytes? })` → `{ content, offset, size, truncated }`
-
-Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read starts at the next `\n` after the truncation point so the caller never sees a partial first line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `string` | Required. Same allowlist as `file_read` (configs / saved / depot RO / sentinel). |
-| `max_bytes` | `number` | Optional. Clamp semantics: `<= 0` (or unset) defaults to `65536` (64 KiB); values in `(0, 1048576]` (1 MiB) are honored as-is; values `> 1048576` are clamped down to the 1 MiB ceiling. |
-
-| Result field | Type | Description |
-|---|---|---|
-| `content` | `string` | Tail bytes after the newline-snap. Empty when the file is empty or the tail window contained no newline. |
-| `offset` | `number` | Byte offset where `content` begins in the source file (0 when the whole file fits, otherwise the position of the byte immediately after the snap newline). |
-| `size` | `number` | Total size of the file in bytes at read time. |
-| `truncated` | `boolean` | `true` iff `size > max_bytes` (i.e. some prefix of the file was skipped). |
-
-Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `runtime_error` (open / stat / seek failed).
-
-```json
-// request
-{ "id": "req-1", "method": "file_read_tail", "params": {
-  "path": "/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log",
-  "max_bytes": 65536
-} }
-
-// response (file is 12 MiB)
-{ "id": "req-1", "ok": true, "result": {
-  "content": "[2026.04.28-10.00.00:000][000]LogNet: ...\n...",
-  "offset": 12516352,
-  "size": 12582912,
-  "truncated": true
-} }
-```
-
-#### `file_write({ path, content, mode? })` → `{ status: 'written' }`
-
-Non-atomic. Use only when atomicity is not required.
-
 #### `file_atomic_write({ path, content, mode? })` → `{ status: 'written' }`
 
-Writes a sibling `.new`, fsyncs, then `rename(2)` into place. Existing file is renamed to `.bak` first. `MkdirAll`s up through the allowed root.
+Writes a unique hidden sibling temp file (`os.CreateTemp`, `.<name>.*.tmp`), fsyncs, chmods it to `mode`, then `rename(2)`s it over the target, so concurrent writers of one path never interleave (the last rename wins). Missing parent directories are created at `0755`; directories that already exist keep their mode (the installer's `0750` on `configs/` and `saved/` is never widened).
+
+`mode` is optional: omitted or `0` means `0644`; only `0644`, `0640` and `0600` are accepted, anything else (world-writable, setuid/setgid/sticky bits, bits above the permission mask) is rejected with `forbidden`.
 
 #### `directory_delete({ path })` → `{ removed: boolean }`
 
@@ -160,7 +121,7 @@ Where `{uuid}` matches the canonical UUID v4/v7 regex. No trailing slash, no tra
 
 #### `ufw_rule({ action, proto, port, comment? })` → `{ output, status }`
 
-Adds/removes a panel-managed firewall rule. Only ports ≥ 1024 are accepted; `proto` is `tcp` | `udp`.
+Adds/removes a panel-managed firewall rule. Only ports ≥ 1024 are accepted; `proto` is `tcp` | `udp`. `comment` is optional; when present it must match `^[a-z][a-z0-9-]{0,63}$` (the panel's own `squad-<kind>-<8 hex>` tags), otherwise `forbidden`.
 
 ### Containers
 
@@ -172,17 +133,23 @@ The bridge composes (for a Squad server):
 
 ```
 docker run -d --network host --user 1001:1001 --read-only \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v squad-depot:/squad:ro \
   -v /var/lib/squad-panel/configs/{uuid}/ServerConfig:/squad/SquadGame/ServerConfig:rw \
   -v /var/lib/squad-panel/saved/{uuid}:/squad/SquadGame/Saved:rw \
-  squad-server:latest
+  squad-server:latest RANDOM=ALWAYS Port=… QueryPort=… … -log [extra_args…]
 ```
+
+Both `container_run` and `container_run_rnsquadjs` cap container logs at 10 MiB x 5 files, like the compose services' `x-logging`. Docker fixes log options at creation, so containers created before this change keep unbounded logs until they are recreated (reinstall or remove + start the server). The sidecar also gets `--label panel.preserve=true` so `docker_prune` spares it and its `--pull never` image.
 
 `forbidden` on:
 
 - image outside allowlist
 - name not matching `SERVER_CONTAINER_REGEX`
-- mount source outside the allowed roots
+- `configs_host` other than exactly `/var/lib/squad-panel/configs/{server_id}/ServerConfig`, or `saved_host` other than exactly `/var/lib/squad-panel/saved/{server_id}` (the cleaned path is what gets mounted)
+- any port outside `1024..65535`
+- `multihome` that is not a literal IPv4/IPv6 address
+- an `extra_args` token that is not `-?Name[=value]` (no whitespace, quotes, `:` or `[`), or that names `ExecCmds`/`Exec` or a setting the bridge derives itself (`Port`, `QueryPort`, `BeaconPort`, `RCONPORT`, `RCONIP`, `MULTIHOME`, `FIXEDMAXPLAYERS`, `FIXEDMAXTICKRATE`)
 
 #### `container_start({ name })` → `{ status: 'started' }`
 
@@ -194,15 +161,17 @@ Sends SIGTERM, waits up to `timeout` seconds, then SIGKILL.
 
 #### `container_inspect({ name })` → `ContainerInspectResult`
 
-Wraps `docker inspect <name>`. Returns `{ exists: false }` when the container is gone (not an error).
+Wraps `docker inspect <name>`. Returns `state: "not_found"` when the container is gone (not an error). Includes `oom_killed` (Docker `State.OOMKilled`) and, when non-empty, `error` (Docker `State.Error`), which the API's crash diagnostics read.
 
 #### `container_stats({ name })` → `{ cpu_pct, mem_bytes, net_rx_bytes, net_tx_bytes }`
 
 One-shot sample. The status-reconciler uses this every 4 s.
 
-#### `container_logs_follow({ name, since?, lines? })` → streams stdout/stderr, returns `{ exit_code }`
+#### `container_logs_follow({ name, tail? })` → streams stdout/stderr, returns `{ exit_code }`
 
-Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBridgeClient()`), not the shared `app.bridge`.
+Backfill is `tail` lines (0 = none, clamped to 5000); the bridge never follows without `--tail`, so the whole log history is never replayed. Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBridgeClient()`), not the shared `app.bridge`.
+
+At most 64 follows run at once per bridge process; past that the call fails with `runtime_error` `too many concurrent log follows (limit 64)` instead of spawning another root `docker logs --follow` (#1298).
 
 ### Depot
 
@@ -214,13 +183,13 @@ Spawns a transient `squad-panel/depot-init` container that runs `steamcmd +app_u
 
 #### `panel_disk_usage({ force? })` → `PanelDiskUsageResult`
 
-Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced.
+Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced. Only one computation runs at a time: calls that arrive while one is in flight wait for its result instead of starting another walk, and calls the cache can answer never wait behind it. Every `du`/`docker` probe runs under a 2-minute deadline, and a `docker volume inspect` failure other than "no such volume" fails the request instead of being reported as a missing volume.
 
 Optional params:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`). The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
+| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`), unless the cached result is younger than 30 s (rate limit), in which case the cache answers. The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
 
 The wire input has no caller-controlled paths, so there is no path allowlist. The method's allowlist is internal:
 
@@ -233,7 +202,7 @@ Response shape:
 | Field | Type | Description |
 |---|---|---|
 | `configs_bytes` | int64 | `du -sb /var/lib/squad-panel/configs` |
-| `saved_total_bytes` | int64 | `du -sb /var/lib/squad-panel/saved` |
+| `saved_total_bytes` | int64 | Sum of `saved_per_server` (the saved tree is walked once, per server; loose files directly under `saved/` are not counted) |
 | `saved_per_server` | array of `{ uuid, bytes }` | Per-server `du` of each immediate subdir of `saved/`. Empty array when `saved/` is missing or has no children. |
 | `depot_volume_bytes` | int64 | Bytes attributed to the `squad-depot` Docker named volume. Already included in `docker_volumes`; surfaced separately for convenience. **Not added to `total_panel_bytes` to avoid double-counting.** |
 | `docker_volumes` | array of `{ name, bytes }` | Panel-owned Docker volume sizes. Always a non-null JSON array. |

@@ -19,6 +19,7 @@ let h: IntegrationHarness;
  */
 async function connectUnauthenticated(
   path: string,
+  origin?: string,
 ): Promise<{ opened: true } | { opened: false; statusCode: number }> {
   if (!h.app.server.listening) {
     await h.app.listen({ port: 0, host: '127.0.0.1' });
@@ -26,7 +27,7 @@ async function connectUnauthenticated(
   const address = h.app.server.address();
   if (!address || typeof address === 'string') throw new Error('integration app has no TCP port');
 
-  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${path}`);
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${path}`, { origin });
   return new Promise((resolve, reject) => {
     socket.once('open', () => {
       socket.close();
@@ -74,6 +75,18 @@ describeIfDb('WS auth boundary (#250)', () => {
 
   it('rejects an unauthenticated upgrade to GET /api/v1/depot/progress/ws with 401 before a connection is established', async () => {
     const result = await connectUnauthenticated('/api/v1/depot/progress/ws');
+    expect(result.opened).toBe(false);
+    expect((result as { statusCode: number }).statusCode).toBe(401);
+  });
+
+  it('rejects an upgrade from a foreign Origin with 403 before auth runs (#70)', async () => {
+    const result = await connectUnauthenticated('/api/v1/ws/live', 'https://evil.panel.test');
+    expect(result.opened).toBe(false);
+    expect((result as { statusCode: number }).statusCode).toBe(403);
+  });
+
+  it('lets an upgrade from the panel Origin through to the auth hook (#70)', async () => {
+    const result = await connectUnauthenticated('/api/v1/ws/live', 'https://panel.test');
     expect(result.opened).toBe(false);
     expect((result as { statusCode: number }).statusCode).toBe(401);
   });

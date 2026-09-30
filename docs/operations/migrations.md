@@ -17,6 +17,8 @@ All migrations are **forward-only**. There is no `down` migration path.
 
 - **Pre-launch**: destructive DDL (DROP TABLE, ALTER COLUMN DROP NOT NULL) is acceptable because no production data exists.
 - **Post-launch**: every migration must preserve existing data. Add columns with defaults, create new tables, never drop columns in use by running code.
+- **Two-phase removal.** `scripts/rollback-stand.sh` and redeploying an older SHA never undo migrations, so every migration must work with the release before it. Dropping a column or table takes two releases: the first stops reading and writing it (removes it from the Drizzle schema, which otherwise names every column in `SELECT`s), the next one drops it. Keep data you may still need: archive a table before dropping it.
+- **Known exception: 0115.** `0115_remove_bss_integration` dropped `players.role_lifecycle_event_id`, `panel_meta.vip_lifecycle_strict` and `vip_lifecycle_events` in the same release that removed them from the schema (commit `10134844`). No release before `10134844` can run against a database that applied 0115, and the `vip_lifecycle_events` history survives only in the `pg_dump` taken before it (issue #50; see "Интеграция bss.games удалена" in [deployment.md](./deployment.md)).
 
 If a migration shipped to production must be reverted, the path is:
 1. Write a new migration that undoes the structural change at the SQL level.
@@ -46,17 +48,45 @@ If a migration shipped to production must be reverted, the path is:
 | 0116 | `0116_events_appended_notify` | Adds `events_notify_appended()` and the AFTER INSERT row trigger `trg_events_notify_appended` on `events` (cloned onto every partition): `pg_notify('events_appended', {server_id, kind})`. The API LISTENs to push `server.events.appended` to open event lists. Additive, rollback-safe. |
 | 0117 | `0117_monthly_partition_defaults` | Issue #6: adds DEFAULT partitions `chat_messages_default` and `bonus_transactions_default`, and creates the current UTC month and three months ahead for `chat_messages`, `bonus_transactions` and `combat_events` (each missing month is built with `LIKE`, receives the DEFAULT partition's rows for its range, then is attached). `worker-event-partition` keeps rotating them from then on. Additive, rollback-safe. |
 | 0118 | `0118_clan_members_release_disbanded` | Data-only: deletes `clan_members` rows of soft-deleted (disbanded) clans, which blocked those players from joining any other clan through the global `clan_members_player_unique_idx` (#14). Disband now removes the roster itself. No schema change, rollback-safe. |
+| 0119 | `0119_message_templates_seed_once` | Issue #36: seeds the built-in message templates once (`ON CONFLICT (id) DO NOTHING`); the API no longer re-seeds on read, so a deleted template stays deleted. Data only, rollback-safe (the previous release still re-seeds on read). |
+| 0120 | `0120_automation_kick_default_reason` | Issue #53: backfills a reason on `kick` automation rules saved with the old empty default, which worker-rcon refuses. Data only, rollback-safe. |
+| 0121 | `0121_role_can_manage_infrastructure` | Issue #36: adds `roles.can_manage_infrastructure boolean NOT NULL DEFAULT false` and grants it to Owner, the seeded Admin and every role that can edit roles. The previous release ignores the column. |
+| 0122 | `0122_role_permissions_legacy_wipe` | Issue #36: deletes the legacy explicit grants in `role_permissions`. Data only; the previous release finds no extra grants, i.e. a stricter permission set. Runs after 0121 because `rbac.ts` now gates explicit rows by the flags. |
+| 0123 | `0123_whitelist_application_verified` | Issue #52: adds `whitelist_applications.verified` (default false) and splits the one-pending-per-SteamID unique index into a verified and an unverified partial index. The previous release's inserts get `verified = false` and still hit the unverified index on a duplicate. |
+| 0124 | `0124_seasons_start_day_unique` | Issues #84/#576: unique index on the UTC start day of `seasons`. Additive. |
+| 0125 | `0125_clan_tags_normalized_uniqueness` | Issue #1088: `clans_normalize_tag()` and `clans_enforce_unique_tags()` compare normalised clan tags under a transaction advisory lock. Function bodies only, rollback-safe. |
+| 0126 | `0126_player_search_and_report_indexes` | Issues #40, #71, #117: trigram GIN indexes on `players.canonical_name_normalized` and `player_name_history.name_normalized`; `player_reports` indexes on `created_at`, `(reporter_player_id, created_at)` and `handler_player_id`. Indexes only. |
+| 0127 | `0127_events_indexes` | Issues #39, #1324: `events (occurred_at DESC, event_id DESC)`, the `payload->>'rule_id'` partial index and the seeding-kind partial index. Indexes only. |
+| 0128 | `0128_list_query_indexes` | Issues #44, #52, #68: indexes for the chat flag reindex and rule cleanup, closed player sessions, balancer proposals, active external bans and `processed_events (processed_at)`; drops the unused `processed_events_group_idx`. |
+| 0129 | `0129_vip_subscription_renewal_lead` | Issue #364: moves `next_renewal_at` of active VIP subscriptions to `VIP_RENEWAL_LEAD` before their role expires. Data only. |
+| 0130 | `0130_media_publication_upload_session` | Adds nullable `media_publications.upload_session_url` so a retried YouTube upload resumes its session. Add-only. |
+| 0131 | `0131_combat_events_match_uuid` | Issue #50: `combat_events.match_uuid` (FK to `matches.id` ON DELETE SET NULL, partial index). The bigint `match_id` stays for the previous release and is dropped later. |
+| 0132 | `0132_events_notify_per_statement` | Issues #1089, #1327: replaces the row trigger `trg_events_notify_appended` with a statement trigger over a transition table, announcing each distinct `(server_id, kind)` once. Channel and payload unchanged. |
+| 0133 | `0133_schema_integrity_hardening` | Issue #77: `audit_log`/`config_versions` actor and author FKs become NO ACTION (SET NULL was unreachable behind the append-only triggers); `config_versions.parent_version_id` gets its FK back (NOT VALID, validated when no orphans exist); seven redundant indexes are dropped; partial indexes back the scheduler's pending-entry reads. |
+| 0134 | `0134_appeal_token_hash_and_api_token_index` | Issues #78, #1084: unique index on `player_api_tokens.token_hash`; `ban_appeals.tracking_token_hash` (sha256 hex, NOT NULL, unique) backfilled from and replacing the plaintext `tracking_token`, which stays as a nullable legacy column while a BEFORE INSERT/UPDATE trigger hashes and clears any plaintext the previous release writes. Rollback-safe except that the previous release's appeal status page cannot find tokens (it looks up plaintext) until the next roll forward. |
+| 0135 | `0135_audit_log_chain_v2` | Issues #36, #49, #1064, #1066, #1067, #1251: the single definition of `audit_log_append()`: id drawn after the chain lock (the column default is dropped), TimeZone pinned to UTC, `hash_version` (default 1) and the v2 all-column length-prefixed hash form; BEFORE TRUNCATE triggers on `audit_log` and `config_versions`. Additive; the previous release's verifier reports v2 rows as broken, writes are unaffected. |
 | 0020 | `0020_uuid_player_id` | Data-preserving identity migration: gives `players` a UUID primary key, keeps `steam_id64` as a nullable unique external identity, migrates all child FKs to UUID player IDs, and adds setup-wizard metadata. |
 
 ## Adding a migration
 
-1. Edit the relevant schema TS file under `packages/db/src/schema/`.
-2. Run `pnpm db:generate`. Drizzle creates `packages/db/drizzle/NNNN_slug.sql` and updates `_journal.json`.
-3. **Inspect the generated SQL.** Drizzle cannot generate: audit triggers, `pg_trigger_depth()` guards, monthly partition DDL, `ON CONFLICT` clauses, advisory locks. Add hand-written DDL inside the generated file where needed.
-4. Apply locally: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate`.
+Migrations are **hand-written**. `drizzle-kit generate` cannot be used: the only snapshot it could diff against was from migration 0008, and it numbers files by journal index, which no longer matches the file numbers. `pnpm db:generate` therefore fails on purpose.
+
+1. Edit the relevant schema TS file under `packages/db/src/schema/` so the Drizzle schema matches the database after the migration.
+2. Write `packages/db/drizzle/NNNN_short_descriptive_slug.sql` (next free number, lowercase, underscores) with an opening ticket comment. Separate statements with `--> statement-breakpoint` and keep them idempotent (`IF NOT EXISTS`, `DROP … IF EXISTS` before `ADD`).
+3. Append the entry to `packages/db/drizzle/meta/_journal.json`: next `idx`, `"version": "7"`, a `when` later than the previous entry's, the file name without `.sql` as `tag`, `"breakpoints": true`.
+4. Apply locally: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate`, and cover the change with a test under `packages/db/test/`.
 5. Stage both the schema change and the migration file in the same commit.
 
-Naming convention: `NNNN_short_descriptive_slug.sql` (lowercase, underscores). The `NNNN` prefix is assigned by Drizzle from the journal sequence — never renumber existing files.
+Never renumber or edit an applied migration file — not even a comment.
+
+### Writing a migration
+
+`bash scripts/test-migration-lint.sh` (run in CI) enforces the first two rules:
+
+- **No `BEGIN;` / `COMMIT;`.** `drizzle-orm`'s `migrate()` runs every pending migration in one transaction. An explicit `COMMIT` ends it early, and every later migration then runs in autocommit, so a failure half-way leaves a partially applied schema and no journal row. Migrations 0008–0020 predate this rule and are grandfathered.
+- **CHECK constraints on large partitioned tables are added `NOT VALID`** (`events`, `chat_messages`, `combat_events`, `diagnostic_events`, `bonus_transactions`, `player_sessions`), followed by `VALIDATE CONSTRAINT` in its own statement. A plain `ADD CONSTRAINT … CHECK` scans every partition under an ACCESS EXCLUSIVE lock that is held until the migration transaction commits; `VALIDATE` only takes SHARE UPDATE EXCLUSIVE. The same applies to foreign keys on large tables.
+- **Indexes on large partitioned tables** are built per partition: `CREATE INDEX … ON ONLY parent`, one index per partition, then `ALTER INDEX … ATTACH PARTITION`.
+- **Stay compatible with the previous release**, which keeps running against the new schema after a rollback: add first, drop what it still reads only in a later release.
 
 ### Hand-written constraint DDL
 

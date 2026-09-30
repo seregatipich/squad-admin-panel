@@ -235,6 +235,21 @@ describeIfDb('server map-vote routes', () => {
     ]);
   });
 
+  // #305: unlike PUT /settings and POST /restore, this route used to skip
+  // checking the server exists, so an unknown UUID hit the
+  // map_vote_candidates.server_id FK and 500ed instead of 404ing cleanly.
+  it('PUT candidates for a nonexistent server → 404 settings_not_found, not a 500', async () => {
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${uuidv7()}/map-vote/candidates`,
+      headers: { cookie },
+      payload: { candidates: [{ layer: LAYER_A, weight: 1, enabled: true }] },
+    });
+    expect(resp.statusCode).toBe(404);
+    expect(resp.json()).toEqual({ error: 'settings_not_found' });
+  });
+
   it('PUT candidates with unknown layer → 404 unknown_layer', async () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
     const resp = await putCandidates(cookie, [{ layer: LAYER_UNKNOWN, weight: 1, enabled: true }]);
@@ -354,6 +369,28 @@ describeIfDb('server map-vote routes', () => {
     expect(second.json()).toEqual(body);
   });
 
+  it('#301: preview ignores a layer-less match for cooldowns, like the scheduler tick', async () => {
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    // The scheduler's loadRecentMatchesForMapVote drops a match whose layer is
+    // empty, so its map must not put LAYER_A on map cooldown in the preview.
+    await h.db.insert(matches).values({
+      serverId,
+      layer: '',
+      map: 'MV1 Test Map A',
+      gameMode: 'RAAS',
+      startedAt: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/map-vote/preview`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode, resp.body).toBe(200);
+    expect(resp.json()).toMatchObject({ excluded: [], would_pick: LAYER_A });
+  });
+
   it('GET picks returns recorded picks newest first', async () => {
     const cookie = await asRoleWithSquadPermissions([]);
     const matchId = uuidv7();
@@ -405,7 +442,7 @@ describeIfDb('server map-vote routes', () => {
       url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie: noPanelCookie },
     });
-    expect(forbiddenGet.statusCode).toBe(403);
+    expect(forbiddenGet.statusCode).toBe(401);
 
     const noChangemapCookie = await asRoleWithSquadPermissions([]);
     const forbiddenPut = await h.app.inject({

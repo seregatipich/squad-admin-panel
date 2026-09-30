@@ -22,7 +22,7 @@ import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { eq, isNull } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { relaunchSidecar } from '../src/lib/rnsquadjs.js';
-import { markServerRunningAndEnqueue } from '../src/routes/server-install.js';
+import { INSTALL_HEARTBEAT_MS, markServerRunningAndEnqueue } from '../src/routes/server-install.js';
 import {
   buildIntegrationApp,
   type FakeBridge,
@@ -291,24 +291,36 @@ describe('server install depot seeding', () => {
       seedDepotFiles(bridge, depotRoot);
     });
 
-    it('launches the sidecar for the assigned engine and seeds the ro Logs bind source', async () => {
+    it('launches the sidecar through a bridge that enforces the Go write allowlist (#1352)', async () => {
       vi.mocked(relaunchSidecar).mockClear();
+      // Mirror apps/bridge validateWritablePath: file_atomic_write accepts only
+      // configs/{uuid}/ServerConfig/*.cfg and the first-owner sentinel. The
+      // permissive fake used to hide that install wrote a saved/ path the real
+      // bridge refuses, which skipped the sidecar launch on every install.
+      const permissive = bridge.fileAtomicWrite;
+      bridge.fileAtomicWrite = async (params) => {
+        if (
+          !/^\/var\/lib\/squad-panel\/configs\/[0-9a-f-]{36}\/ServerConfig\/[A-Za-z]+\.cfg$/.test(
+            params.path,
+          )
+        ) {
+          throw new Error(`forbidden: path "${params.path}" not in writable allowlist`);
+        }
+        return permissive(params);
+      };
+      try {
+        const cookie = await loginAs(h);
+        const serverId = await createServer(h, cookie);
+        const lines = await runInstallAndWaitForDone(h, cookie, serverId);
 
-      const cookie = await loginAs(h);
-      const serverId = await createServer(h, cookie);
-      await runInstallAndWaitForDone(h, cookie, serverId);
-
-      // A fresh id is in neither the engine set nor the cutover set, so install
-      // takes the RNSquadJS path in shadow mode.
-      expect(relaunchSidecar).toHaveBeenCalledTimes(1);
-      expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), serverId);
-
-      // The bridge bind-mounts <saved>/<id>/SquadGame/Saved/Logs read-only;
-      // install must create that dir (via a .keep file) before the sidecar
-      // starts, otherwise the ro bind has no source.
-      expect(
-        bridge.files.get(`/var/lib/squad-panel/saved/${serverId}/SquadGame/Saved/Logs/.keep`),
-      ).toBeDefined();
+        // A fresh id is in neither the engine set nor the cutover set, so install
+        // takes the RNSquadJS path in shadow mode.
+        expect(relaunchSidecar).toHaveBeenCalledTimes(1);
+        expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), serverId);
+        expect(lines.some((l) => l.message.includes('sidecar launch failed'))).toBe(false);
+      } finally {
+        bridge.fileAtomicWrite = permissive;
+      }
     });
 
     it('completes the install even when the sidecar launch rejects (non-fatal)', async () => {
@@ -374,6 +386,143 @@ describe('server install depot seeding', () => {
         .where(eq(adminsCfgSyncOutbox.serverId, serverId));
       expect(server).toMatchObject({ status: 'installing', containerId: null });
       expect(tasks).toHaveLength(0);
+    });
+  });
+
+  describe('F) install is a single atomic claim on a pending or failed server (#290, #292)', () => {
+    const depotRoot = '/opt/panel-data/depot';
+
+    beforeEach(() => {
+      vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
+      seedDepotFiles(bridge, depotRoot);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function postInstall(cookie: string, serverId: string) {
+      return h.app.inject({
+        method: 'POST',
+        url: `/api/v1/servers/${serverId}/install`,
+        headers: { cookie },
+      });
+    }
+
+    it('refuses to re-install over an installed server and leaves its configs alone', async () => {
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      await h.db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId));
+      const write = vi.spyOn(bridge, 'fileAtomicWrite');
+
+      const res = await postInstall(cookie, serverId);
+
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'server_not_installable', status: 'running' });
+      await new Promise((r) => setTimeout(r, 100));
+      expect(write).not.toHaveBeenCalled();
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
+      expect(row?.status).toBe('running');
+      write.mockRestore();
+    });
+
+    it('lets exactly one of two concurrent POSTs start the install', async () => {
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      const containerRun = vi.spyOn(bridge, 'containerRun');
+
+      const [a, b] = await Promise.all([
+        postInstall(cookie, serverId),
+        postInstall(cookie, serverId),
+      ]);
+
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      expect([a, b].find((r) => r.statusCode === 409)?.json()).toMatchObject({
+        error: 'install_in_progress',
+      });
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const lines = h.app.installProgress.snapshot(serverId);
+        if (lines.some((l) => l.step === 'done' || l.step === 'error')) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(containerRun).toHaveBeenCalledTimes(1);
+      const initial = await h.db
+        .select({ id: configVersions.id })
+        .from(configVersions)
+        .where(eq(configVersions.serverId, serverId));
+      expect(initial).toHaveLength(19);
+      containerRun.mockRestore();
+    });
+
+    it('a retry after a failed install starts from a clean progress buffer', async () => {
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      h.app.installProgress.publish(serverId, {
+        ts: new Date().toISOString(),
+        step: 'error',
+        message: 'previous attempt failed',
+      });
+      await h.db.update(servers).set({ status: 'failed' }).where(eq(servers.id, serverId));
+
+      const res = await postInstall(cookie, serverId);
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(
+        h.app.installProgress
+          .snapshot(serverId)
+          .some((l) => l.message === 'previous attempt failed'),
+      ).toBe(false);
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const lines = h.app.installProgress.snapshot(serverId);
+        if (lines.some((l) => l.step === 'done' || l.step === 'error')) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    });
+
+    it('keeps updated_at fresh while a long depot update runs, so the watchdog spares it', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      // An unpopulated depot forces the depot_update step, which hangs here.
+      bridge.files.delete(`${depotRoot}/SquadGameServer.sh`);
+      let releaseDepot: () => void = () => undefined;
+      const depotDone = new Promise<void>((resolve) => {
+        releaseDepot = resolve;
+      });
+      let depotEntered: () => void = () => undefined;
+      const depotStarted = new Promise<void>((resolve) => {
+        depotEntered = resolve;
+      });
+      const depotUpdate = bridge.depotUpdate;
+      bridge.depotUpdate = async () => {
+        depotEntered();
+        await depotDone;
+        return { exit_code: 0 };
+      };
+      try {
+        const cookie = await loginAs(h);
+        const serverId = await createServer(h, cookie);
+        const res = await postInstall(cookie, serverId);
+        expect(res.statusCode, res.body).toBe(200);
+        await depotStarted;
+
+        const stale = new Date(Date.now() - 60 * 60_000);
+        await h.db.update(servers).set({ updatedAt: stale }).where(eq(servers.id, serverId));
+        vi.advanceTimersByTime(INSTALL_HEARTBEAT_MS);
+
+        let fresh = false;
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline && !fresh) {
+          const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
+          fresh =
+            (row?.updatedAt?.getTime() ?? 0) > stale.getTime() && row?.status === 'installing';
+          if (!fresh) await new Promise((r) => setTimeout(r, 25));
+        }
+        expect(fresh).toBe(true);
+      } finally {
+        releaseDepot();
+        bridge.depotUpdate = depotUpdate;
+      }
     });
   });
 });

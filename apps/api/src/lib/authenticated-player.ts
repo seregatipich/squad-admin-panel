@@ -1,7 +1,10 @@
 import { players } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { SESSION_COOKIE } from '../plugins/auth.js';
+import { HOST_COOKIE_ATTRIBUTES, SESSION_COOKIE } from '../plugins/auth.js';
+import { claimFirstOwner } from './first-owner.js';
+import { loadUserPermissions } from './rbac.js';
+import { createSession } from './sessions.js';
 
 export type AuthenticatedPlayerSessionResult =
   | { ok: true; scope: 'panel' | 'self_service' }
@@ -14,16 +17,22 @@ export interface PlayerIdentity {
   avatarUrl: string | null;
 }
 
-import { claimFirstOwner } from './first-owner.js';
-import { loadUserPermissions } from './rbac.js';
-import { createSession } from './sessions.js';
-
+/**
+ * Upserts the player behind a proven external identity, opens a session for
+ * them and redirects the browser.
+ *
+ * @param options.sendErrorResponse - Whether failures also send the error
+ *   response (default true).
+ * @param options.redirectTo - A same-origin path to land on after login; the
+ *   caller must have allow-listed it. Defaults to `/` for a panel session and
+ *   `/me` for a self-service one.
+ */
 export async function establishAuthenticatedPlayerSession(
   app: FastifyInstance,
   req: FastifyRequest,
   reply: FastifyReply,
   identity: PlayerIdentity,
-  options: { sendErrorResponse?: boolean } = {},
+  options: { sendErrorResponse?: boolean; redirectTo?: string } = {},
 ): Promise<AuthenticatedPlayerSessionResult> {
   const sendErrorResponse = options.sendErrorResponse ?? true;
   const canonicalName = identity.canonicalName.trim();
@@ -55,8 +64,7 @@ export async function establishAuthenticatedPlayerSession(
     return { ok: false, error: 'identity_persist_failed' };
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: SentinelBridge structural subtype
-  const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, identity.steamId64);
+  const claim = await claimFirstOwner(app.db, app.bridge, playerId, identity.steamId64);
   if (claim === 'no_owner_role') {
     req.log.error('Owner role missing — system roles not seeded?');
     if (sendErrorResponse) reply.code(500).send({ error: 'owner_role_missing' });
@@ -73,12 +81,9 @@ export async function establishAuthenticatedPlayerSession(
     scope,
   });
   reply.setCookie(SESSION_COOKIE, token, {
-    path: '/',
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
+    ...HOST_COOKIE_ATTRIBUTES,
     maxAge: app.config.SESSION_TTL_SECONDS,
   });
-  reply.redirect(scope === 'panel' ? '/' : '/me', 302);
+  reply.redirect(options.redirectTo ?? (scope === 'panel' ? '/' : '/me'), 302);
   return { ok: true, scope };
 }

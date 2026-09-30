@@ -393,13 +393,17 @@ describeIfDb('bonus/boost accrual (LEAD-4)', () => {
     const rollup = rows.find((r) => r.server_id === null && r.player_id === PLAYER_A);
 
     expect(server1?.boost_seconds).toBe(600);
-    // bonus = k_online * online + k_boost * boost = 1*3600 + 2*600
-    expect(server1?.bonus_points).toBe(4800);
-    expect(server2?.bonus_points).toBe(1800 + 2 * 300);
+    // bonus_points mirrors the real ledger's units (accrual.ts:
+    // round(k * seconds / 3600), k in points-per-hour), not raw
+    // points-per-second: round((1*3600 + 2*600) / 3600) = round(4800/3600) = 1.
+    expect(server1?.bonus_points).toBe(1);
+    // round((1*1800 + 2*300) / 3600) = round(2400/3600) = 1.
+    expect(server2?.bonus_points).toBe(1);
 
-    // rollup sums both servers for boost and bonus.
+    // rollup sums the seconds first, then applies the same hourly formula —
+    // round((1*5400 + 2*900) / 3600) = round(7200/3600) = 2.
     expect(rollup?.boost_seconds).toBe(900);
-    expect(rollup?.bonus_points).toBe(4800 + 2400);
+    expect(rollup?.bonus_points).toBe(2);
   });
 
   it('applies changed coefficients only when a period is recomputed (frozen otherwise)', async () => {
@@ -409,18 +413,20 @@ describeIfDb('bonus/boost accrual (LEAD-4)', () => {
 
     const before = await statRows('day', '2026-07-05');
     const beforeRow = before.find((r) => r.server_id === SERVER_1);
-    expect(beforeRow?.bonus_points).toBe(1000 + 2 * 100);
+    // round((1*1000 + 2*100) / 3600) = round(1200/3600) = 0.
+    expect(beforeRow?.bonus_points).toBe(0);
 
     // Owner raises the boost multiplier. Until the period is recomputed, the stored
     // bonus stays frozen — closed periods are never re-passed to the aggregator.
     await setEconomyCoefficients(1, 10);
     const frozen = await statRows('day', '2026-07-05');
-    expect(frozen.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1200);
+    expect(frozen.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(0);
 
     // Recomputing the (still open) period applies the new coefficient to future accruals.
+    // round((1*1000 + 10*100) / 3600) = round(2000/3600) = 1.
     await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
     const after = await statRows('day', '2026-07-05');
-    expect(after.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1000 + 10 * 100);
+    expect(after.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1);
   });
 });
 
@@ -488,8 +494,8 @@ describeIfDb('seeding contribution (LEAD-6)', () => {
     const rows = await statRows('day', '2026-07-05');
     const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
     expect(server1?.seeding_seconds).toBe(1200);
-    // bonus = k_online*online + k_boost*boost + k_seed*seed = 1*3600 + 2*600 + 3*1200
-    expect(server1?.bonus_points).toBe(1 * 3600 + 2 * 600 + 3 * 1200);
+    // round((1*3600 + 2*600 + 3*1200) / 3600) = round(8400/3600) = 2.
+    expect(server1?.bonus_points).toBe(2);
   });
 
   it('freezes seeding_seconds and its bonus until the period is recomputed', async () => {
@@ -499,16 +505,18 @@ describeIfDb('seeding contribution (LEAD-6)', () => {
 
     const before = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
     expect(before?.seeding_seconds).toBe(1000);
-    expect(before?.bonus_points).toBe(3 * 1000);
+    // round((3*1000) / 3600) = round(3000/3600) = 1.
+    expect(before?.bonus_points).toBe(1);
 
     // Owner raises k_seed; the stored row stays frozen until an explicit recompute.
     await setEconomyCoefficients(1, 2, 9);
     const frozen = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
-    expect(frozen?.bonus_points).toBe(3 * 1000);
+    expect(frozen?.bonus_points).toBe(1);
 
     await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
     const after = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
-    expect(after?.bonus_points).toBe(9 * 1000);
+    // round((9*1000) / 3600) = round(9000/3600) = round(2.5) = 3.
+    expect(after?.bonus_points).toBe(3);
     // seeding_seconds is sourced from presence and is unaffected by k_seed.
     expect(after?.seeding_seconds).toBe(1000);
   });

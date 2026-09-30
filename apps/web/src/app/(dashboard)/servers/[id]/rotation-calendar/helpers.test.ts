@@ -12,7 +12,7 @@ describe('rotation calendar helpers', () => {
     );
   });
 
-  it('filters disabled entries and entries outside the visible week', () => {
+  it('filters entries outside the visible week, but keeps disabled ones inside it (#634)', () => {
     const from = new Date('2026-07-13T00:00:00Z');
     const to = new Date('2026-07-19T23:59:00Z');
     expect(
@@ -31,7 +31,7 @@ describe('rotation calendar helpers', () => {
             updated_at: '',
           },
           {
-            id: 'disabled',
+            id: 'disabled-but-inside',
             server_id: 'server',
             scheduled_at: '2026-07-14T11:00:00Z',
             layer: 'Gorodok RAAS v1',
@@ -42,10 +42,22 @@ describe('rotation calendar helpers', () => {
             created_at: '',
             updated_at: '',
           },
+          {
+            id: 'outside',
+            server_id: 'server',
+            scheduled_at: '2026-07-20T11:00:00Z',
+            layer: 'Yehorivka RAAS v1',
+            mode: 'force_change',
+            enabled: true,
+            created_by: null,
+            last_executed_at: null,
+            created_at: '',
+            updated_at: '',
+          },
         ],
         from,
         to,
       ).map((entry) => entry.id),
-    ).toEqual(['inside']);
+    ).toEqual(['inside', 'disabled-but-inside']);
   });
 });

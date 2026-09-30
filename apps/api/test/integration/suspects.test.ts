@@ -5,7 +5,7 @@ import {
   players,
   roles,
 } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -113,15 +113,15 @@ describeIfDb('GET /api/v1/suspects', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/suspects',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 
   it('rejects an invalid mark_type_ids param with 400', async () => {
@@ -138,6 +138,33 @@ describeIfDb('GET /api/v1/suspects', () => {
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/suspects?cursor=not-a-cursor',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
+  // Regression tests for finding #353: both shapes below used to slip past
+  // parseCursor's old checks and 500 inside Postgres/the driver instead of
+  // being turned into a 400 invalid_cursor.
+  it('rejects a cursor whose id is 36 hex/dash characters but not a real UUID with 400', async () => {
+    // 36 dashes: matches the old /^[0-9a-f-]{36}$/ but is not a UUID shape,
+    // so Postgres would reject it with "invalid input syntax for type uuid".
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/suspects?cursor=${Date.now()}_${'-'.repeat(36)}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
+  it('rejects a cursor with an out-of-range millis timestamp with 400', async () => {
+    // The cursor key is microseconds since the epoch. 9e18 µs is past year
+    // 9999 (and close to the bigint limit), so Postgres would fail on it.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/suspects?cursor=9000000000000000000_019dbac8-ceb0-77ab-859b-bfa9a282ee2c`,
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(400);
@@ -263,6 +290,41 @@ describeIfDb('GET /api/v1/suspects', () => {
 
     for (const id of seededIds) {
       expect(seen.has(id)).toBe(true);
+    }
+  });
+  it('keeps keyset pages exact when last_seen_at carries microseconds (#352)', async () => {
+    const seededIds: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const steamId64 = testSteamId(811060 + i);
+      const playerId = await seedPlayer(811060 + i, `SuspectMicro${i}`);
+      await setMark(playerId, 7, ownerCookie);
+      // Two pairs share one sub-millisecond timestamp, as rows written by one
+      // transaction's DEFAULT now() do.
+      const lastSeen = i < 2 ? '2026-01-01 00:00:00.123456+00' : '2026-01-01 00:00:00.123789+00';
+      await h.db.execute(
+        sql`UPDATE players SET last_seen_at = ${lastSeen}::timestamptz WHERE steam_id64 = ${steamId64.toString()}::bigint`,
+      );
+      seededIds.push(playerId);
+    }
+
+    for (const sort of ['last_seen_asc', 'last_seen_desc']) {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let guard = 0;
+      do {
+        const base = `/api/v1/suspects?q=SuspectMicro&sort=${sort}&limit=1`;
+        const url: string = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
+        const res = await h.app.inject({ method: 'GET', url, headers: { cookie: ownerCookie } });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { items: Array<{ id: string }>; next_cursor: string | null };
+        seen.push(...body.items.map((item) => item.id));
+        cursor = body.next_cursor;
+        guard += 1;
+      } while (cursor && guard < 10);
+
+      expect(seen, sort).toHaveLength(4);
+      expect(new Set(seen).size, sort).toBe(4);
+      expect([...seen].sort(), sort).toEqual([...seededIds].sort());
     }
   });
 });

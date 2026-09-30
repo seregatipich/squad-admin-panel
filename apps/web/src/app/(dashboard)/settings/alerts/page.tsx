@@ -102,6 +102,11 @@ const READONLY_TYPE_LABELS: Record<string, string> = {
   role_expiring: 'Истечение VIP',
 };
 
+/** System-seeded rules are immutable: the API answers 409 to any PUT or DELETE on them. */
+function isSystemRule(rule: AlertRule): boolean {
+  return rule.type in READONLY_TYPE_LABELS;
+}
+
 function typeLabel(type: string): string {
   return (
     TYPE_OPTIONS.find((option) => option.value === type)?.label ??
@@ -148,15 +153,32 @@ export default function AlertsPage() {
   const [pendingDelete, setPendingDelete] = useState<AlertRule | null>(null);
 
   const refresh = useCallback(async () => {
-    const [rulesRes, eventsRes, meRes] = await Promise.all([
-      fetch('/api/v1/alert-rules', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/alerts', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
-    if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
-    setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
+    try {
+      const [rulesRes, eventsRes, meRes] = await Promise.all([
+        fetch('/api/v1/alert-rules', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/alerts', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      // A failed leg falls back to whatever was already loaded (or an empty
+      // list on the very first load) instead of leaving its state null
+      // forever — otherwise `loading` below never clears and the retry
+      // banner sits behind a permanent skeleton (#670).
+      if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
+      else setRules((prev) => prev ?? []);
+      if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
+      else setEvents((prev) => prev ?? []);
+      if (meRes.ok) setMe((await meRes.json()) as Me);
+      else setMe((prev) => prev ?? { permissions: [] });
+      setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
+    } catch {
+      // Network-level failure (offline, DNS, aborted): still surface the
+      // retry banner instead of leaving the page an unhandled rejection
+      // with no error UI at all.
+      setRules((prev) => prev ?? []);
+      setEvents((prev) => prev ?? []);
+      setMe((prev) => prev ?? { permissions: [] });
+      setLoadFailed(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -201,7 +223,7 @@ export default function AlertsPage() {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.error ?? res.status));
+        throw new Error(String(body.message ?? body.error ?? res.status));
       }
       setForm({ ...EMPTY_FORM });
       await refresh();
@@ -442,10 +464,12 @@ export default function AlertsPage() {
                         <Switch
                           label={`Включить правило ${rule.name}`}
                           checked={rule.enabled}
-                          disabled={!canManage || busyId === rule.id}
+                          disabled={!canManage || isSystemRule(rule) || busyId === rule.id}
                           onChange={() => void toggleEnabled(rule)}
                         />
-                        {canManage ? (
+                        {isSystemRule(rule) ? (
+                          <Badge size="sm">Системное</Badge>
+                        ) : canManage ? (
                           <IconButton
                             icon={<TrashIcon />}
                             label={`Удалить правило ${rule.name}`}

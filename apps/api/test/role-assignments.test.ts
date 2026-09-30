@@ -2,6 +2,7 @@ import { players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { ROLE_ASSIGNMENTS_LIMIT_MAX } from '../src/routes/role-assignments.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -14,6 +15,7 @@ const OWNER_STEAM = testSteamId(720001);
 const VIEWER_STEAM = testSteamId(720002);
 const NO_ROLE_STEAM = testSteamId(720003);
 const EXPIRING_SOON_EOS_ID = 'eos-role-assignments-test-720005';
+const ALREADY_EXPIRED_EOS_ID = 'eos-role-assignments-test-720006';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -77,6 +79,17 @@ describeIfDb('GET /api/v1/role-assignments', () => {
       roleExpiresAt: new Date(Date.now() + 2 * ONE_DAY_MS),
       roleComment: null,
     });
+
+    // A grant whose expiry already passed but the expiry worker has not swept.
+    await h.db.insert(players).values({
+      steamId64: null,
+      eosId: ALREADY_EXPIRED_EOS_ID,
+      canonicalName: 'EosOnlyExpired',
+      canonicalNameNormalized: 'eosonlyexpired',
+      roleId: viewerRoleId,
+      roleExpiresAt: new Date(Date.now() - ONE_DAY_MS),
+      roleComment: null,
+    });
   });
 
   beforeEach(async () => {
@@ -115,7 +128,7 @@ describeIfDb('GET /api/v1/role-assignments', () => {
       url: '/api/v1/role-assignments',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('only returns players with an assigned role, across roles', async () => {
@@ -202,5 +215,49 @@ describeIfDb('GET /api/v1/role-assignments', () => {
     expect(body.some((r) => r.steam_id64 === String(VIEWER_STEAM))).toBe(false);
     // The Owner's default seed assignment has no expiry either.
     expect(body.some((r) => r.steam_id64 === String(OWNER_STEAM))).toBe(false);
+  });
+
+  it('expiring_soon=true leaves out grants that already expired (#265)', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/role-assignments?expiring_soon=true',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ eos_id: string | null }>;
+    expect(body.some((r) => r.eos_id === EXPIRING_SOON_EOS_ID)).toBe(true);
+    expect(body.some((r) => r.eos_id === ALREADY_EXPIRED_EOS_ID)).toBe(false);
+  });
+
+  it('pages with limit/offset and reports the full count in x-total-count (#265)', async () => {
+    const cookie = await loginAsOwner(h);
+    const all = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/role-assignments',
+      headers: { cookie },
+    });
+    const everyone = all.json() as Array<{ id: string }>;
+    expect(all.headers['x-total-count']).toBe(String(everyone.length));
+    expect(everyone.length).toBeGreaterThanOrEqual(3);
+
+    const page = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/role-assignments?limit=1&offset=1',
+      headers: { cookie },
+    });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers['x-total-count']).toBe(String(everyone.length));
+    expect((page.json() as Array<{ id: string }>).map((r) => r.id)).toEqual([everyone[1]?.id]);
+  });
+
+  it('rejects a limit above ROLE_ASSIGNMENTS_LIMIT_MAX (#265)', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/role-assignments?limit=${ROLE_ASSIGNMENTS_LIMIT_MAX + 1}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

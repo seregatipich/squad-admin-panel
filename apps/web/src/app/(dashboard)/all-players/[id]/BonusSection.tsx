@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import {
   Badge,
@@ -24,6 +24,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   BONUS_TYPE_OPTIONS,
   type BonusFilters,
@@ -33,8 +34,8 @@ import {
   canAfford,
   EMPTY_BONUS_FILTERS,
   formatAmount,
-  formatBonusTs,
   isCredit,
+  matchesFilters,
   mergeBonusPage,
   prependTransaction,
   purchaseErrorText,
@@ -57,10 +58,18 @@ interface PurchaseResponse {
   role_expires_at: string;
 }
 
-export function BonusSection({ playerId }: { playerId: string }) {
+export function BonusSection({
+  playerId,
+  canManage,
+  canAssign,
+}: {
+  playerId: string;
+  /** `me.can_manage_economy`, already loaded by the player card (#435). */
+  canManage: boolean;
+  /** `me.permissions.includes('user:manage_roles')`, ditto. */
+  canAssign: boolean;
+}) {
   const [balance, setBalance] = useState<number | null>(null);
-  const [canManage, setCanManage] = useState(false);
-  const [canAssign, setCanAssign] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [filters, setFilters] = useState<BonusFilters>(EMPTY_BONUS_FILTERS);
   const [applied, setApplied] = useState<BonusFilters>(EMPTY_BONUS_FILTERS);
@@ -70,6 +79,10 @@ export function BonusSection({ playerId }: { playerId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  // Tracks the most recently started load()/loadMore() request; a response is
+  // applied only if it is still current, so a slower loadMore() can never
+  // overwrite a fresher filter-driven load() (see finding #433).
+  const requestIdRef = useRef(0);
   const typeFilterId = useId();
   const fromFilterId = useId();
   const toFilterId = useId();
@@ -84,17 +97,11 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   useEffect(() => {
     void loadBalance();
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { can_manage_economy?: boolean; permissions?: string[] } | null) => {
-        setCanManage(body?.can_manage_economy ?? false);
-        setCanAssign(body?.permissions?.includes('user:manage_roles') ?? false);
-      })
-      .catch(() => {});
   }, [loadBalance]);
 
   const load = useCallback(
     async (next: BonusFilters) => {
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -104,12 +111,14 @@ export function BonusSection({ playerId }: { playerId: string }) {
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const page = (await res.json()) as BonusPage;
+        if (requestIdRef.current !== requestId) return;
         setTransactions(mergeBonusPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
+        if (requestIdRef.current !== requestId) return;
         setError((e as Error).message);
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === requestId) setLoading(false);
       }
     },
     [playerId],
@@ -123,6 +132,7 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   async function loadMore() {
     if (nextCursor == null || busy) return;
+    const requestId = ++requestIdRef.current;
     setBusy(true);
     try {
       const res = await fetch(
@@ -131,12 +141,14 @@ export function BonusSection({ playerId }: { playerId: string }) {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const page = (await res.json()) as BonusPage;
+      if (requestIdRef.current !== requestId) return;
       setTransactions((prev) => mergeBonusPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (requestIdRef.current === requestId) setBusy(false);
     }
   }
 
@@ -153,7 +165,12 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   function onAdjusted(result: AdjustResponse) {
     setBalance(result.balance);
-    setTransactions((prev) => prependTransaction(prev, result.transaction));
+    // Only splice the new row into the visible table when it would survive
+    // the current filters (#437); otherwise a "Списание"/date-range filter
+    // would show a row that a reload immediately drops again.
+    if (matchesFilters(result.transaction, applied)) {
+      setTransactions((prev) => prependTransaction(prev, result.transaction));
+    }
     setModalOpen(false);
   }
 
@@ -304,7 +321,7 @@ export function BonusSection({ playerId }: { playerId: string }) {
               {transactions.map((tx) => (
                 <TableRow key={tx.id}>
                   <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
-                    {formatBonusTs(tx.created_at)}
+                    {formatDateTimeRu(tx.created_at, tx.created_at)}
                   </Td>
                   <Td>
                     <Badge size="sm">{typeLabel(tx.type)}</Badge>

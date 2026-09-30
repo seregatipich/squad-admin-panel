@@ -14,6 +14,13 @@ describe('URL builders', () => {
     expect(buildDiscordLinkUrl('player-alpha')).toBe('/api/v1/players/player-alpha/discord');
   });
 
+  // Regression (#472): the route segment went into the path unencoded, so a
+  // crafted `[id]` could make the request climb to another endpoint.
+  it('encodes the player id so it cannot leave the player path', () => {
+    expect(buildDiscordLinkUrl('../../admin?')).toBe('/api/v1/players/..%2F..%2Fadmin%3F/discord');
+    expect(buildForceUnlinkUrl('../x')).toBe('/api/v1/players/..%2Fx/discord/link');
+  });
+
   it('builds the force-unlink path for a player card', () => {
     expect(buildForceUnlinkUrl('player-alpha')).toBe('/api/v1/players/player-alpha/discord/link');
   });

@@ -1,4 +1,5 @@
 import {
+  RCON_COMMAND_DEADLINE_FIELD,
   type RconOperatorCommandName,
   rconCommandRequestSchema,
   rconCommandResultKey,
@@ -36,20 +37,40 @@ export interface SendRconCommandViaWorkerOptions {
   pollIntervalMs?: number;
 }
 
+/**
+ * Hands one whitelisted RCON command to worker-rcon over Redis and waits for
+ * its result. Never throws on a Redis fault:
+ * - before the command is enqueued (status check, XADD) a fault is
+ *   `{ attempted: false, reason: 'worker_unavailable' }` — nothing was sent;
+ * - after enqueue a failed result poll is `{ attempted: true, reason: 'timeout' }`
+ *   with the fault in `detail`, because the worker may still run the command
+ *   and the caller must not retry it through another path.
+ */
 export async function sendRconCommandViaWorker(
   redis: Redis,
   opts: SendRconCommandViaWorkerOptions,
 ): Promise<WorkerRconCommandOutcome> {
-  const connected = await isWorkerRconConnected(redis, opts.serverId);
+  let connected: boolean;
+  try {
+    connected = await isWorkerRconConnected(redis, opts.serverId);
+  } catch (err) {
+    return { attempted: false, reason: 'worker_unavailable', detail: (err as Error).message };
+  }
   if (!connected) return { attempted: false, reason: 'worker_not_connected' };
 
+  const enqueuedAt = Date.now();
+  const timeoutMs = opts.timeoutMs ?? 4000;
   const request = rconCommandRequestSchema.parse({
     request_id: opts.requestId ?? uuidv7(),
     command: opts.command,
     args: opts.args ?? [],
     actor_player_id: opts.actorPlayerId ?? null,
-    enqueued_at: new Date().toISOString(),
+    enqueued_at: new Date(enqueuedAt).toISOString(),
   });
+  // The worker refuses to start the command once this wait is over, so a
+  // command reported here as `timeout` cannot run later without an audit row
+  // or a ledger entry, nor run twice when the operator retries (#36).
+  const deadline = enqueuedAt + timeoutMs;
   try {
     await redis.xadd(
       rconCommandStream(opts.serverId),
@@ -59,6 +80,8 @@ export async function sendRconCommandViaWorker(
       '*',
       'request',
       JSON.stringify(request),
+      RCON_COMMAND_DEADLINE_FIELD,
+      new Date(deadline).toISOString(),
     );
   } catch (err) {
     return {
@@ -69,11 +92,16 @@ export async function sendRconCommandViaWorker(
   }
 
   const resultKey = rconCommandResultKey(request.request_id);
-  const timeoutMs = opts.timeoutMs ?? 4000;
   const pollIntervalMs = opts.pollIntervalMs ?? 100;
-  const deadline = Date.now() + timeoutMs;
+  let pollError: string | undefined;
   while (Date.now() <= deadline) {
-    const raw = await redis.get(resultKey);
+    let raw: string | null;
+    try {
+      raw = await redis.get(resultKey);
+    } catch (err) {
+      pollError = (err as Error).message;
+      raw = null;
+    }
     if (raw) {
       await redis.del(resultKey).catch(() => undefined);
       let resultPayload: unknown;
@@ -130,6 +158,7 @@ export async function sendRconCommandViaWorker(
     ok: false,
     requestId: request.request_id,
     reason: 'timeout',
+    ...(pollError === undefined ? {} : { detail: pollError }),
     via: 'worker-rcon',
   };
 }

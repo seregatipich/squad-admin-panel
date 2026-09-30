@@ -1,0 +1,86 @@
+/**
+ * Postgres error-code detection that survives driver wrapping.
+ *
+ * drizzle-orm wraps the postgres-js error, so the SQLSTATE (`23505`, `23503`,
+ * …) can sit on `err.cause` — or deeper, when another layer wraps again —
+ * rather than on the thrown object. A flat `err.code === '23505'` check then
+ * silently misses it and the route answers 500 instead of its intended 4xx.
+ *
+ * @see https://www.postgresql.org/docs/current/errcodes-appendix.html
+ */
+
+/** Unique-constraint violation. */
+export const PG_UNIQUE_VIOLATION = '23505';
+/** Foreign-key violation. */
+export const PG_FOREIGN_KEY_VIOLATION = '23503';
+
+/** How many `cause` links are followed before giving up. */
+const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * Whether `err`, or any error in its `cause` chain, carries SQLSTATE `code`.
+ *
+ * @param err - Anything thrown by a database call.
+ * @param code - The five-character SQLSTATE to look for.
+ * @returns `true` when a matching `code` is found within the first
+ *   {@link MAX_CAUSE_DEPTH} links of the chain.
+ */
+export function hasPgErrorCode(err: unknown, code: string): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+    if (typeof current === 'object' && (current as { code?: unknown }).code === code) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Whether a database error is a Postgres unique-constraint violation
+ * (SQLSTATE 23505), on the error itself or a few `cause` links down.
+ *
+ * @param err - Whatever a query rejected with.
+ * @param constraint - When given, only a violation of this named constraint
+ *   matches, so callers can tell e.g. a slug conflict from a primary-key one.
+ * @returns True for a matching unique violation in the first five links.
+ */
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+    if (typeof current === 'object') {
+      const pgError = current as {
+        code?: unknown;
+        constraint_name?: unknown;
+        constraint?: unknown;
+        cause?: unknown;
+      };
+      if (pgError.code === PG_UNIQUE_VIOLATION) {
+        if (constraint === undefined) return true;
+        if ((pgError.constraint_name ?? pgError.constraint) === constraint) return true;
+      }
+      current = pgError.cause;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Resolves the constraint a unique violation (SQLSTATE `23505`) broke, or
+ * `null` when `err` is not a unique violation.
+ *
+ * drizzle-orm wraps driver errors: the wrapper carries only a
+ * "Failed query: ..." message, while SQLSTATE and `constraint_name` sit on
+ * `err.cause`, so the cause chain is walked. For a unique index the
+ * constraint name is the index name. Returns `''` for a unique violation that
+ * names no constraint.
+ */
+export function uniqueViolationConstraint(err: unknown): string | null {
+  let current: unknown = err;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current; depth += 1) {
+    const candidate = current as { code?: string; constraint_name?: string; cause?: unknown };
+    if (candidate.code === PG_UNIQUE_VIOLATION) return candidate.constraint_name ?? '';
+    current = candidate.cause;
+  }
+  return null;
+}

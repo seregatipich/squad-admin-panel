@@ -9,9 +9,25 @@ import {
   looksLikeApiToken,
 } from '../lib/api-tokens.js';
 import { loadUserPermissions, narrowToTokenScopes } from '../lib/rbac.js';
-import { resolveSession, touchSession } from '../lib/sessions.js';
+import { invalidateSessionCache, resolveSession, touchSession } from '../lib/sessions.js';
 
 export const SESSION_COOKIE = '__Host-sid';
+
+/**
+ * Attributes every panel `__Host-` cookie is set AND cleared with.
+ *
+ * A browser only accepts a `__Host-`-prefixed cookie that is `Secure`, has
+ * `Path=/` and no `Domain` (RFC 6265bis §4.1.3.2). That applies to the
+ * expiring `Set-Cookie` a logout sends too: a deletion without `Secure` is
+ * dropped whole, so the dead cookie would stay on the client (#1233). Pass
+ * this object to `reply.clearCookie` and spread it into `reply.setCookie`.
+ */
+export const HOST_COOKIE_ATTRIBUTES = {
+  path: '/',
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax',
+} as const;
 
 export default fp(async (app) => {
   const ttlSeconds = app.config.SESSION_TTL_SECONDS;
@@ -52,14 +68,13 @@ export default fp(async (app) => {
                 .update(sessionsTable)
                 .set({ expiresAt, lastActivityAt: lastActivity })
                 .where(eq(sessionsTable.id, session.id));
+              // The cached entry still carries the pre-touch deadline (#52).
+              await invalidateSessionCache(app.redis, session.id);
             },
           });
           if (touched) {
             reply.setCookie(SESSION_COOKIE, cookieToken, {
-              path: '/',
-              httpOnly: true,
-              secure: true,
-              sameSite: 'lax',
+              ...HOST_COOKIE_ATTRIBUTES,
               maxAge: ttlSeconds,
             });
           }
@@ -114,15 +129,16 @@ export default fp(async (app) => {
       }
     }
 
-    // VIPSUB-5 (#171) — self-service session scope.
+    // VIPSUB-5 (#171) — session without live panel access.
     //
     // `auth-steam.ts` mints a session for a player whose role has no
     // `panel_access` so they can manage their own VIP on `/me`. That session is
-    // scoped `self_service` and is honoured ONLY on routes that opt in with
+    // scoped `self_service`; a `panel` session whose owner later lost
+    // `panel_access` is treated the same way. Both are honoured ONLY on routes that opt in with
     // `config.selfService`; anywhere else the request is downgraded to
     // anonymous. Deny-by-default is required here rather than trusting the
-    // permission set, because `loadUserPermissions` adds explicit
-    // `role_permissions` rows on top of the derived set, and because routes
+    // permission set, because `loadUserPermissions` still honours explicit
+    // `role_permissions` rows (flag-gated, #36), and because routes
     // authorise on `req.user` alone (`message-templates.ts`, …) or on
     // `squadPermissions`, which `rbac.ts` does not gate on `panel_access`.
     // Downgrading instead of answering 403 keeps genuinely public routes
@@ -131,7 +147,7 @@ export default fp(async (app) => {
     // The scope never over-restricts a real admin: once the player actually
     // holds `panel_access` the gate lifts without re-login.
     if (
-      req.session?.scope === 'self_service' &&
+      req.session &&
       !req.user?.permissions.panelAccess &&
       req.routeOptions?.config?.selfService !== true
     ) {
@@ -163,13 +179,7 @@ export default fp(async (app) => {
 
 async function touchApiTokenLastUsed(app: FastifyInstance, tokenId: string): Promise<void> {
   const lockKey = `api-token-touch:${tokenId}`;
-  const ok = await app.redis.set(
-    lockKey,
-    '1',
-    'EX' as never,
-    API_TOKEN_TOUCH_THROTTLE_SECONDS as never,
-    'NX' as never,
-  );
+  const ok = await app.redis.set(lockKey, '1', 'EX', API_TOKEN_TOUCH_THROTTLE_SECONDS, 'NX');
   if (ok !== 'OK') return;
   await app.db
     .update(playerApiTokens)

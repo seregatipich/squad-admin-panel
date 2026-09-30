@@ -1,5 +1,12 @@
 import { diffArrays } from 'diff';
 
+/**
+ * Most versions of one file the blame route diffs. Older history is folded
+ * into the oldest version inside the window, which bounds the synchronous
+ * Myers-diff work per request (#36).
+ */
+export const BLAME_MAX_VERSIONS = 200;
+
 export interface BlameVersion {
   id: string;
   content: string;
@@ -16,7 +23,11 @@ export interface BlameLine {
 }
 
 /**
- * Walk the version chain from oldest to newest. For each version we
+ * Walk the version chain from oldest to newest. `versions` MUST already be in
+ * that order: callers sort in SQL on the full-precision `created_at` (plus
+ * `id` as a tie-break), because the ISO strings here are truncated to
+ * milliseconds and two saves within one millisecond would otherwise compare
+ * equal and keep whatever order the query returned (#36). For each version we
  * compute the line-level diff against its predecessor and carry forward
  * the attribution for unchanged lines; changed / inserted lines get
  * assigned to the current version's author. The final blame array has
@@ -25,18 +36,26 @@ export interface BlameLine {
  * Deleted lines fall off naturally (they aren't present in the next
  * version's array). We use the `diff` library's Myers-based `diffArrays`
  * on per-line arrays so whitespace / newline handling is explicit.
+ *
+ * Myers runs synchronously in O((N+M)·D), so two large unrelated versions
+ * would block the event loop for minutes (#283). All pairwise diffs share one
+ * `timeoutMs` budget; when it runs out the walk is abandoned.
+ *
+ * @param versions - The versions to attribute, in any order.
+ * @param opts.timeoutMs - Wall-clock budget for every diff together.
+ * @returns One entry per tip line, or `undefined` when the budget ran out.
  */
-export function computeBlame(versions: BlameVersion[]): BlameLine[] {
+export function computeBlame(
+  versions: BlameVersion[],
+  opts: { timeoutMs: number },
+): BlameLine[] | undefined {
   if (versions.length === 0) return [];
+  const deadline = Date.now() + opts.timeoutMs;
 
-  const sorted = [...versions].sort((a, b) =>
-    a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
-  );
-
-  // Initial version: every line attributed to it. sorted[0] is defined
+  // Initial version: every line attributed to it. versions[0] is defined
   // because we returned early on empty input; the non-null assertion
   // is safe here.
-  const first = sorted[0] as BlameVersion;
+  const first = versions[0] as BlameVersion;
   let current: BlameLine[] = splitLines(first.content).map((text) => ({
     text,
     version_id: first.id,
@@ -44,12 +63,15 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
     created_at: first.created_at,
   }));
 
-  for (let i = 1; i < sorted.length; i++) {
-    // i < sorted.length by the loop condition, so this index is always in bounds.
-    const v = sorted[i] as BlameVersion;
+  for (let i = 1; i < versions.length; i++) {
+    // i < versions.length by the loop condition, so this index is always in bounds.
+    const v = versions[i] as BlameVersion;
     const prev = current.map((l) => l.text);
     const next = splitLines(v.content);
-    const parts = diffArrays(prev, next);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return undefined;
+    const parts = diffArrays(prev, next, { timeout: remainingMs });
+    if (!parts) return undefined;
     const out: BlameLine[] = [];
     let prevCursor = 0;
     for (const part of parts) {

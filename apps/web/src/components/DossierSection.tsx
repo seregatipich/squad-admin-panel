@@ -71,12 +71,13 @@ export function DossierSection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const serverSelectId = useId();
 
   /**
-   * Загрузка досье. Возвращает отмену — та же функция служит и эффектом
-   * монтирования, и обработчиком «Повторить», поэтому повторная попытка
-   * повторяет ровно тот же запрос.
+   * Загрузка досье. Возвращает отмену, которую вызывает эффект при смене
+   * параметров или размонтировании. «Повторить» увеличивает `attempt`, поэтому
+   * повторный запрос проходит через тот же эффект и отменяет предыдущий.
    */
   const load = useCallback(() => {
     let cancelled = false;
@@ -111,7 +112,8 @@ export function DossierSection({
     };
   }, [playerId, serverId, monthsBack]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the load on «Повторить».
+  useEffect(() => load(), [load, attempt]);
 
   useEffect(() => {
     if (!serverFilter) return;
@@ -177,7 +179,7 @@ export function DossierSection({
             title="Не удалось загрузить досье"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
                 Повторить
               </Button>
             }

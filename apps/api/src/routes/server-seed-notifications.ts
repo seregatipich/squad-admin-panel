@@ -2,16 +2,19 @@ import {
   events,
   notifySeedSubscribers,
   seedSubscriptions,
+  serverCredentials,
   serverSettings,
   servers,
 } from '@squad/db';
 import { type EventEnvelope, STREAM_NAME, seedCallSentPayload } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { isExternalRuntime } from '../lib/server-runtime.js';
 
 export const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
 const SEED_CHANNELS = ['email', 'webpush'] as const;
@@ -21,18 +24,6 @@ const subscriptionBody = z.object({
   channel: z.enum(SEED_CHANNELS),
   enabled: z.boolean(),
 });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401);
-    return true;
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return true;
-  }
-  return false;
-}
 
 function canCallSeeders(req: FastifyRequest): boolean {
   return (
@@ -51,31 +42,6 @@ async function retryAfter(
 ): Promise<number> {
   const ttl = await redis.ttl(cooldownKey(serverId));
   return Math.max(1, ttl > 0 ? ttl : SEED_CALL_COOLDOWN_SECONDS);
-}
-
-async function loadServerContext(app: FastifyInstance, serverId: string) {
-  const server = await app.db.query.servers.findFirst({
-    where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
-  });
-  if (!server) return null;
-  const settings = await app.db.query.serverSettings.findFirst({
-    where: eq(serverSettings.serverId, serverId),
-  });
-  if (!settings) return { server, settings: null, host: null };
-
-  let host: Awaited<ReturnType<FastifyInstance['bridge']['hostInfo']>>;
-  try {
-    host = await app.bridge.hostInfo();
-  } catch {
-    return { server, settings, host: null };
-  }
-  const address = host.hostname || host.ip_addresses[0];
-  if (!address) return { server, settings, host: null };
-  return {
-    server,
-    settings,
-    host: { address, joinLink: `steam://connect/${address}:${settings.gamePort}` },
-  };
 }
 
 async function publishSeedCallEvent(
@@ -118,11 +84,70 @@ async function publishSeedCallEvent(
   return envelope;
 }
 
+/** How long the panel host's address is reused before `host_info` is asked again. */
+const HOST_INFO_TTL_MS = 60_000;
+
 const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
+  let panelHostCache: { address: string; at: number } | null = null;
+
+  /**
+   * Address players use to reach a panel-hosted server: the host's name, else
+   * its first IP. Cached for `HOST_INFO_TTL_MS`; null when the bridge cannot
+   * answer.
+   */
+  async function panelHostAddress(): Promise<string | null> {
+    if (panelHostCache && Date.now() - panelHostCache.at < HOST_INFO_TTL_MS) {
+      return panelHostCache.address;
+    }
+    let host: Awaited<ReturnType<FastifyInstance['bridge']['hostInfo']>>;
+    try {
+      host = await app.bridge.hostInfo();
+    } catch {
+      return null;
+    }
+    const address = host.hostname || host.ip_addresses[0];
+    if (!address) return null;
+    panelHostCache = { address, at: Date.now() };
+    return address;
+  }
+
+  /**
+   * Loads the server, its settings and the address in its join link. An
+   * external server runs elsewhere, so its address is its RCON host rather
+   * than the panel's; `host` is null when no address is known.
+   */
+  async function loadServerContext(serverId: string) {
+    const server = await app.db.query.servers.findFirst({
+      where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
+    });
+    if (!server) return null;
+    const settings = await app.db.query.serverSettings.findFirst({
+      where: eq(serverSettings.serverId, serverId),
+    });
+    if (!settings) return { server, settings: null, host: null };
+
+    let address: string | null;
+    if (isExternalRuntime(server.runtime)) {
+      const credentials = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, serverId),
+      });
+      address = credentials?.rconHost ?? null;
+    } else {
+      address = await panelHostAddress();
+    }
+    if (!address) return { server, settings, host: null };
+    return {
+      server,
+      settings,
+      host: { address, joinLink: `steam://connect/${address}:${settings.gamePort}` },
+    };
+  }
+
   fast.get('/api/v1/seed-subscriptions', { config: { audit: false } }, async (req, reply) => {
-    if (panelGuard(req, reply)) return;
+    const denied = panelGuard(req, reply);
+    if (denied) return denied;
     const rows = await app.db
       .select({
         server_id: seedSubscriptions.serverId,
@@ -139,9 +164,10 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/seed-subscription',
-    { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (panelGuard(req, reply)) return;
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });
@@ -186,8 +212,9 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/seed-call',
     { schema: { params: serverIdParams }, config: { audit: false } },
     async (req, reply) => {
-      if (panelGuard(req, reply)) return;
-      const context = await loadServerContext(app, req.params.id);
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const context = await loadServerContext(req.params.id);
       if (!context) {
         reply.code(404);
         return { error: 'not_found' };
@@ -203,7 +230,7 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/seed-call',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -214,7 +241,7 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'forbidden', required_squad_permissions: ['chat', 'manageserver'] };
       }
 
-      const context = await loadServerContext(app, req.params.id);
+      const context = await loadServerContext(req.params.id);
       if (!context) {
         reply.code(404);
         return { error: 'not_found' };
@@ -249,12 +276,21 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
         source: 'manual' as const,
         message: 'Нужен сид',
       };
-      const envelope = await publishSeedCallEvent(app, req.params.id, req.user.playerId, payload);
-      const notified = await notifySeedSubscribers(app.db, app.redis, {
-        serverId: req.params.id,
-        eventKind: 'seed.call_sent',
-        payload,
-      });
+      let envelope: EventEnvelope;
+      let notified: number;
+      try {
+        envelope = await publishSeedCallEvent(app, req.params.id, req.user.playerId, payload);
+        notified = await notifySeedSubscribers(app.db, app.redis, {
+          serverId: req.params.id,
+          eventKind: 'seed.call_sent',
+          payload,
+        });
+      } catch (err) {
+        // Nothing reached the seeders: give the call back instead of locking
+        // every admin out for the full cooldown.
+        await app.redis.del(cooldownKey(req.params.id)).catch(() => undefined);
+        throw err;
+      }
       await writeAuditEntry(app.db, {
         actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
         actorIp: req.ip ?? null,

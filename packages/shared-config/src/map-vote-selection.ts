@@ -60,9 +60,17 @@ function seededRandom(seed: string): number {
  * using the seeded RNG; `least_recently_played` picks the eligible layer
  * whose last non-seed play is oldest (never played wins, ties break
  * alphabetically). Pure — no I/O, no ambient randomness.
+ *
+ * The weighted draw walks the pool in order, so candidates are sorted by
+ * layer first: callers load them in different orders (the preview sorted, the
+ * scheduler in table order), and the same seed must give the same pick (#301).
+ * `eligible` and `excluded` come back in that layer order too.
  */
 export function selectNextLayer(input: MapVoteSelectionInput): MapVoteSelectionResult {
-  const { candidates, settings } = input;
+  const { settings } = input;
+  const candidates = [...input.candidates].sort((a, b) =>
+    a.layer < b.layer ? -1 : a.layer > b.layer ? 1 : 0,
+  );
   const nonSeed = input.recentMatches.filter((m) => !m.isSeed);
   const recentLayers = new Set(
     nonSeed.slice(0, Math.max(0, settings.layerCooldown)).map((m) => m.layer),

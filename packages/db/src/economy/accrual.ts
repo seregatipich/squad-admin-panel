@@ -1,4 +1,5 @@
 import type postgres from 'postgres';
+import { SESSION_PRUNE_LOOKBACK_SECONDS } from '../session-window.js';
 
 const SECONDS_PER_HOUR = 3600;
 const DAY_SECONDS = 86_400;
@@ -315,6 +316,13 @@ export async function accrueDailyBonuses(
   const dayEndSec = dayStartSec + DAY_SECONDS;
 
   return sql.begin(async (tx) => {
+    // Serialize concurrent accrual runs for the same day (e.g. presence-daily's
+    // regular tick racing a one-off `COPLAY_FULL_REBUILD=1` re-run): without
+    // this, two transactions can both DELETE-then-INSERT before either commits,
+    // each computing its own `removedSum` against a stale view of the ledger
+    // and double-accruing the day's bonus (#1102).
+    await tx`SELECT pg_advisory_xact_lock(hashtext('economy-accrual:' || ${day}))`;
+
     const [settings] = await tx<SettingsRow[]>`
       SELECT k_online, k_boost, k_seed, seed_threshold, economy_enabled
       FROM economy_settings
@@ -333,6 +341,8 @@ export async function accrueDailyBonuses(
       WHERE COALESCE(mode, 'online') <> 'queue'
         AND connected_at < to_timestamp(${dayEndSec})
         AND COALESCE(disconnected_at, ${now}::timestamptz) > to_timestamp(${dayStartSec})
+        AND (connected_at >= to_timestamp(${dayStartSec - SESSION_PRUNE_LOOKBACK_SECONDS})
+             OR disconnected_at IS NULL)
     `;
 
     const intervals: SeedSessionInterval[] = sessions.map((s) => ({
@@ -400,15 +410,25 @@ export async function accrueDailyBonuses(
     }
 
     await tx`UPDATE player_daily_presence SET seed_seconds = 0 WHERE day = ${day}::date`;
-    for (const [key, seconds] of seedByKey) {
-      const [playerId, serverId] = key.split('|');
-      if (!playerId || !serverId) continue;
+    // One set-based UPDATE instead of one round-trip per (player, server) key
+    // (#1107): a busy day can have thousands of entries in `seedByKey`.
+    const seedRows = [...seedByKey]
+      .map(([key, seconds]) => {
+        const [playerId, serverId] = key.split('|');
+        return playerId && serverId ? { player_id: playerId, server_id: serverId, seconds } : null;
+      })
+      .filter(
+        (row): row is { player_id: string; server_id: string; seconds: number } => row !== null,
+      );
+    if (seedRows.length > 0) {
       await tx`
-        UPDATE player_daily_presence
-        SET seed_seconds = ${seconds}
-        WHERE day = ${day}::date
-          AND player_id = ${playerId}::uuid
-          AND server_id = ${serverId}::uuid
+        UPDATE player_daily_presence pdp
+        SET seed_seconds = updates.seconds
+        FROM jsonb_to_recordset(${tx.json(seedRows)})
+          AS updates(player_id uuid, server_id uuid, seconds int)
+        WHERE pdp.day = ${day}::date
+          AND pdp.player_id = updates.player_id
+          AND pdp.server_id = updates.server_id
       `;
     }
 
@@ -475,9 +495,10 @@ export async function accrueDailyBonuses(
         if (amount === 0) continue;
         await tx`
           INSERT INTO bonus_transactions
-            (player_id, amount, type, reference_type, reference_id)
+            (player_id, amount, type, reference_type, reference_id, created_at)
           VALUES
-            (${playerId}::uuid, ${amount}, ${type}, ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day})
+            (${playerId}::uuid, ${amount}, ${type}, ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
+             to_timestamp(${dayStartSec}))
         `;
         addedSum += amount;
         transactionsWritten += 1;
@@ -499,10 +520,10 @@ export async function accrueDailyBonuses(
       if (shortfall > 0) {
         await tx`
           INSERT INTO bonus_transactions
-            (player_id, amount, type, reference_type, reference_id, comment)
+            (player_id, amount, type, reference_type, reference_id, comment, created_at)
           VALUES
             (${playerId}::uuid, ${shortfall}, 'adjust', ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
-             ${SHORTFALL_ADJUST_COMMENT})
+             ${SHORTFALL_ADJUST_COMMENT}, to_timestamp(${dayStartSec}))
         `;
         shortfallForgiven += shortfall;
       }

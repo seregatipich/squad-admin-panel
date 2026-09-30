@@ -1,8 +1,8 @@
+import { MARK_TYPE_ICONS } from '@squad/shared-config/mark-types';
 import { describe, expect, it } from 'vitest';
 import {
   isSameOrder,
   isValidSlug,
-  MARK_TYPE_ICONS,
   type MarkType,
   moveItem,
   severityLabel,

@@ -98,6 +98,20 @@ describeIfDb('clan model constraints', () => {
     );
   });
 
+  it('rejects a case- and bracket-variant of a taken tag (#1088)', async () => {
+    // worker-clan-guard's matchProtectedTag treats "ABC", "[abc]" and "(abc)"
+    // as the same protected tag, so the DB must too — otherwise a second clan
+    // could register a variant the exact-match check let through, and the
+    // guard would then flag one clan's own members as impostors of the other.
+    await newClan({ name: 'Alpha', tags: ['ABC'] });
+    await expect(newClan({ name: 'Bravo', tags: ['[abc]'] })).rejects.toThrow(
+      /tag ".+" already belongs to another clan/,
+    );
+    await expect(newClan({ name: 'Charlie', tags: ['(ABC)'] })).rejects.toThrow(
+      /tag ".+" already belongs to another clan/,
+    );
+  });
+
   it('rejects taking a taken tag via update', async () => {
     await newClan({ name: 'Alpha', tags: ['ALPHA'] });
     const clanB = await newClan({ name: 'Bravo', tags: ['BRAVO'] });

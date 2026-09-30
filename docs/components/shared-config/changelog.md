@@ -1,5 +1,41 @@
 # `shared-config` — changelog
 
+## 2026-09-27 — Аудит маршрутов API (#38)
+
+### Added
+
+- `outbound-url.ts`: `checkOutboundUrl()` и `isPublicUnicastAddress()` — политика исходящих запросов для URL источников банов (аудит #100). API проверяет URL при записи, `worker-ban-sync` — перед каждым запросом, каждым редиректом и при каждом подключении.
+- Право `ban_source:view` (категория `moderation`) для чтения `/api/v1/ban-sources`.
+- `isSafeBannedNameRegex()` и `BANNED_NAME_NICK_MAX = 64` (аудит #115): `validateBannedNamePattern` отклоняет regex с повторяемой группой, внутри которой есть квантификатор или `|`, и с обратными ссылками (`pattern_unsafe_regex`); `matchBannedName` и матчер `worker-log-ingest` не исполняют такие правила, даже если они сохранены раньше.
+
+### Changed
+
+- `trigger:view` больше не помечено `unimplemented`: им защищены `GET /api/v1/automation-rules` и `GET /api/v1/automation-runs`.
+
+
+## 2026-09-28
+
+### Fixed
+
+- `selectNextLayer` сортирует кандидатов по слою перед взвешенным выбором: выбор при одном seed больше не зависит от порядка кандидатов, и предпросмотр совпадает с тиком scheduler (#301).
+
+## 2026-09-28
+
+### Removed
+
+- `process_info`, `file_read_tail` and `file_write` from `BRIDGE_METHODS` (#45) — no production caller; `process_info` exposed any host process's command line. The allowlist now has 27 methods.
+
+## 2026-09-28 (#52)
+
+### Security
+
+- Новый `regex-safety.ts`: `detectDangerousRegex(pattern)` отклоняет вложенные квантификаторы переменной длины (`(a+)+`, `(.*a){20}`, `(a{1,100}){1,100}`), повторяемую альтернацию с пересекающимися ветвями (`(a|aa)+`, `(\w|\d)+`; допускается только альтернация литералов без общих префиксов вроде `(bad|worse)+`) и повторы больше 100. Коды ошибок: `nested_quantifier`, `alternation_under_quantifier`, `repeat_too_large`.
+- `validateBannedNamePattern` теперь проверяет regex-правила ников этим сканером (раньше — только компиляцию), `validateChatFlagPattern` использует общий сканер. `matchBannedName` и `compileChatFlagRule` не исполняют опасный шаблон, сохранённый до проверки.
+
+### Fixed
+
+- `renderDiscordTemplate`: значения берутся только из собственных строковых свойств контекста — `{constructor}`, `{__proto__}` и т. п. считаются отсутствующими и больше не роняют рендер. Пустые имя или значение поля заменяются на `—` (`DISCORD_EMPTY_FIELD_VALUE`), текст обрезается до лимитов Discord (`DISCORD_EMBED_LIMITS`, суммарно 6000 символов), чтобы Discord не отвечал 400.
+
 ## 2026-07-27
 
 ### Added

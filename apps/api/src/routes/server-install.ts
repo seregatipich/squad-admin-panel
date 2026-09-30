@@ -9,7 +9,7 @@ import {
   PANEL_SAVED_ROOT,
   SERVER_IMAGE,
 } from '@squad/shared-config';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -21,6 +21,21 @@ import { relaunchSidecar } from '../lib/rnsquadjs.js';
 import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * Statuses an install may start from (#290): a new or restored server
+ * (`pending`) or a failed attempt. Installing over a server that already has
+ * a container would re-seed every config file over the operator's edits.
+ */
+const INSTALLABLE_STATUSES = ['pending', 'failed'] as const;
+
+/**
+ * How often a running install refreshes `servers.updated_at` (#290). The
+ * status reconciler fails an `installing` row whose `updated_at` is older than
+ * `STALE_INSTALL_AFTER_MS` (30 min), and a first depot download alone can take
+ * about 25 min, so a live install must keep proving it is alive.
+ */
+export const INSTALL_HEARTBEAT_MS = 60_000;
 
 // For bind-mounted squad-depot volumes, Docker does not populate the
 // /var/lib/docker/volumes/${name}/_data stub directory, so reads through
@@ -82,7 +97,7 @@ async function ensureDepot(app: FastifyInstance, sink: Sink): Promise<void> {
     step: 'depot',
     message: `populating ${DEPOT_VOLUME_NAME} via depot-init container`,
   });
-  await app.bridge.depotUpdate((frame) => {
+  const { exit_code: exitCode } = await app.bridge.depotUpdate((frame) => {
     const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
     sink({
       ts: new Date().toISOString(),
@@ -91,6 +106,8 @@ async function ensureDepot(app: FastifyInstance, sink: Sink): Promise<void> {
       stream: frame.stream === 'stderr' ? 'stderr' : 'stdout',
     });
   });
+  // The bridge reports a failed SteamCMD run as a normal reply.
+  if (exitCode !== 0) throw new Error(`steamcmd failed with exit code ${exitCode}`);
 }
 
 async function seedConfigs(
@@ -197,16 +214,11 @@ async function runInstall(
   });
   if (!creds) throw new Error('server_credentials_missing');
 
-  await app.db
-    .update(servers)
-    .set({ status: 'installing', updatedAt: new Date() })
-    .where(eq(servers.id, serverId));
-
   await ensureDepot(app, sink);
 
   const rconPassword = decryptString(
     app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    deserialize(Buffer.from(creds.rconPasswordEncrypted)),
   );
   const seedT0 = Date.now();
   const { seededCount } = await seedConfigs(
@@ -242,7 +254,7 @@ async function runInstall(
       const r = await app.bridge.ufwRule({
         action: 'add',
         proto,
-        port: port as number,
+        port,
         comment: `${comment}-${serverId.slice(0, 8)}`,
       });
       emit('ufw', `${proto}/${port} ${r.status}`, 'stdout');
@@ -327,13 +339,10 @@ async function runInstall(
   // to. A shadow sidecar is not load-bearing for
   // the install, so any failure here is logged to the progress stream and
   // swallowed — the server is already running and the install must succeed.
+  // The sidecar's read-only Logs bind source needs no preparation: `docker run
+  // -v` creates a missing source directory, exactly as on start/restart
+  // (servers.ts). The bridge refuses file writes under saved/ (#1352).
   try {
-    // The bridge bind-mounts <saved>/<id>/SquadGame/Saved/Logs read-only;
-    // touch a .keep so that directory exists before the sidecar starts.
-    await app.bridge.fileAtomicWrite({
-      path: `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs/.keep`,
-      content: '',
-    });
     const sidecar = await relaunchSidecar(app, serverId);
     emit('sidecar', `rnsquadjs sidecar ${sidecar.containerId} started (${sidecar.mode})`);
   } catch (err) {
@@ -365,6 +374,11 @@ export function rewriteRconCfg(existing: string, opts: { port: number; password:
 }
 
 export function rewriteServerCfg(existing: string, displayName: string): string {
+  // #293: display_name is validated (no quotes/CR/LF) at the zod schema, but
+  // this is the last line of defense before it becomes a raw Server.cfg
+  // directive — strip anything that could break out of the ServerName value
+  // or inject additional lines.
+  const safeName = displayName.replace(/[\r\n"]/g, '');
   const lines = existing.split(/\r?\n/);
   const result: string[] = [];
   let seenName = false;
@@ -372,12 +386,12 @@ export function rewriteServerCfg(existing: string, displayName: string): string 
     const m = /^\s*ServerName\s*=/i.exec(raw);
     if (m) {
       seenName = true;
-      result.push(`ServerName="${displayName}"`);
+      result.push(`ServerName="${safeName}"`);
     } else {
       result.push(raw);
     }
   }
-  if (!seenName) result.push(`ServerName="${displayName}"`);
+  if (!seenName) result.push(`ServerName="${safeName}"`);
   return result.join('\n').replace(/\n+$/, '\n');
 }
 
@@ -413,6 +427,36 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'depot_update_in_progress' };
       }
+      // #290: claim the server with one conditional UPDATE, so a double click
+      // or a retrying client cannot start two installs, and an installed
+      // server is never re-seeded over its operator's config edits.
+      const claimed = await app.db
+        .update(servers)
+        .set({ status: 'installing', updatedAt: new Date() })
+        .where(
+          and(
+            eq(servers.id, id),
+            isNull(servers.deletedAt),
+            inArray(servers.status, [...INSTALLABLE_STATUSES]),
+          ),
+        )
+        .returning({ id: servers.id });
+      if (claimed.length === 0) {
+        const current = await app.db.query.servers.findFirst({
+          where: and(eq(servers.id, id), isNull(servers.deletedAt)),
+          columns: { status: true },
+        });
+        if (!current) {
+          reply.code(404);
+          return { error: 'not_found' };
+        }
+        reply.code(409);
+        return current.status === 'installing'
+          ? { error: 'install_in_progress' }
+          : { error: 'server_not_installable', status: current.status };
+      }
+      // #292: a retry must not replay the previous attempt's terminal line.
+      app.installProgress.reset(id);
       const actor = req.user
         ? { kind: 'steam' as const, playerId: req.user.playerId, tokenId: null }
         : { kind: 'system' as const, label: 'http-anonymous' };
@@ -433,6 +477,15 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
       });
       (async () => {
         const startedAt = Date.now();
+        const heartbeat = setInterval(() => {
+          app.db
+            .update(servers)
+            .set({ updatedAt: new Date() })
+            .where(and(eq(servers.id, id), eq(servers.status, 'installing')))
+            .catch((err: unknown) => {
+              app.log.warn({ err, server_id: id }, 'install heartbeat failed');
+            });
+        }, INSTALL_HEARTBEAT_MS);
         try {
           await runInstall(
             app,
@@ -506,8 +559,16 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
               stream: 'stderr',
             });
           }
+        } finally {
+          clearInterval(heartbeat);
         }
-      })();
+      })().catch((err) => {
+        // #295: if the `catch` block above itself fails (e.g. the
+        // status='failed' UPDATE), this IIFE used to reject with nothing
+        // awaiting it — the row stays 'installing' until the 30-minute
+        // watchdog, and a retry gets 409 the whole time.
+        app.log.error({ err, server_id: id }, 'install failure handling itself failed');
+      });
       return { status: 'installing', server_id: id };
     },
   );
@@ -549,8 +610,17 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         })
         .catch(() => undefined);
 
-      for (const line of app.installProgress.snapshot(id)) {
+      const snapshot = app.installProgress.snapshot(id);
+      for (const line of snapshot) {
         socket.send(JSON.stringify(line));
+      }
+      // #292: an install that ended before the socket connected publishes no
+      // further line, so the terminal frame must come from the snapshot.
+      const last = snapshot.at(-1);
+      if (last && (last.step === 'done' || last.step === 'error')) {
+        socket.send(JSON.stringify({ done: true, final: last.step }));
+        socket.close();
+        return;
       }
       const unsubscribe = app.installProgress.subscribe(id, (line) => {
         try {

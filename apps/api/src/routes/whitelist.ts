@@ -1,10 +1,11 @@
 import { panelMeta, players, roles } from '@squad/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { csvCell } from '../lib/csv.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 import {
@@ -17,6 +18,8 @@ import {
 const PANEL_META_SINGLETON_ID = 1;
 const STEAM_ID64_RE = /^\d{17}$/;
 const IMPORT_MAX_ROWS = 5000;
+/** Same cap as role-members import comments. */
+const IMPORT_COMMENT_MAX_LEN = 512;
 
 const putSettingsBody = z.object({ whitelist_role_id: z.string().uuid().nullable() });
 const memberBody = z.object({ player_id: z.string().uuid() });
@@ -35,6 +38,8 @@ interface ImportSkippedRow {
     | 'malformed_row'
     | 'invalid_steam_id64'
     | 'player_not_found'
+    | 'duplicate_steam_id64'
+    | 'comment_too_long'
     | WhitelistRoleDenial['error'];
 }
 
@@ -57,11 +62,6 @@ function parseCsvRow(raw: string): { steamId64: string; comment: string | null }
   const [steamId64, comment] = cells;
   if (!steamId64) return null;
   return { steamId64, comment: comment ? comment : null };
-}
-
-function csvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
 }
 
 const whitelistRoutes: FastifyPluginAsync = async (app) => {
@@ -171,7 +171,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/settings',
     {
       schema: { body: putSettingsBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const before = await settingsView();
@@ -222,7 +222,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members',
     {
       schema: { body: memberBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -265,7 +265,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members/:playerId',
     {
       schema: { params: memberParam },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -313,7 +313,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/import',
     {
       schema: { body: importBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -342,12 +342,14 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'too_many_rows', max_rows: IMPORT_MAX_ROWS };
       }
       const result: ImportResult = { total_rows: lines.length, imported: 0, skipped: [] };
-      const assignments: Array<{
+      // First pass: shape checks and in-file duplicates, no queries (#377).
+      const candidates: Array<{
         line: number;
         raw: string;
-        playerId: string;
+        steamId64: string;
         comment: string | null;
       }> = [];
+      const seen = new Set<string>();
       for (const [index, raw] of lines.entries()) {
         const lineNumber = index + 1;
         const parsed = parseCsvRow(raw);
@@ -359,17 +361,54 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           result.skipped.push({ line: lineNumber, raw, reason: 'invalid_steam_id64' });
           continue;
         }
-        const playerRows = await app.db
-          .select({ id: players.id })
-          .from(players)
-          .where(eq(players.steamId64, BigInt(parsed.steamId64)))
-          .limit(1);
-        const player = playerRows[0];
-        if (!player) {
-          result.skipped.push({ line: lineNumber, raw, reason: 'player_not_found' });
+        if (parsed.comment !== null && parsed.comment.length > IMPORT_COMMENT_MAX_LEN) {
+          result.skipped.push({ line: lineNumber, raw, reason: 'comment_too_long' });
           continue;
         }
-        assignments.push({ line: lineNumber, raw, playerId: player.id, comment: parsed.comment });
+        if (seen.has(parsed.steamId64)) {
+          result.skipped.push({ line: lineNumber, raw, reason: 'duplicate_steam_id64' });
+          continue;
+        }
+        seen.add(parsed.steamId64);
+        candidates.push({ line: lineNumber, raw, ...parsed });
+      }
+
+      // One lookup for every SteamID64 in the file instead of one per line.
+      const found =
+        candidates.length === 0
+          ? []
+          : await app.db
+              .select({ id: players.id, steamId64: players.steamId64 })
+              .from(players)
+              .where(
+                inArray(
+                  players.steamId64,
+                  candidates.map((candidate) => BigInt(candidate.steamId64)),
+                ),
+              );
+      const playerIdBySteam = new Map(found.map((row) => [String(row.steamId64), row.id]));
+      const assignments: Array<{
+        line: number;
+        raw: string;
+        playerId: string;
+        comment: string | null;
+      }> = [];
+      for (const candidate of candidates) {
+        const playerId = playerIdBySteam.get(candidate.steamId64);
+        if (!playerId) {
+          result.skipped.push({
+            line: candidate.line,
+            raw: candidate.raw,
+            reason: 'player_not_found',
+          });
+          continue;
+        }
+        assignments.push({
+          line: candidate.line,
+          raw: candidate.raw,
+          playerId,
+          comment: candidate.comment,
+        });
       }
       const changedPlayerIds: string[] = [];
       await app.db.transaction(async (tx) => {
@@ -390,6 +429,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
                   ),
                 );
         const currentById = new Map(current.map((player) => [player.id, player]));
+        const changes: Array<{ playerId: string; comment: string | null }> = [];
         for (const assignment of assignments) {
           const player = currentById.get(assignment.playerId);
           if (!player) continue;
@@ -409,18 +449,29 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           }
           result.imported += 1;
           if (player.currentRole?.id === whitelistRoleId && assignment.comment === null) continue;
-          await tx
-            .update(players)
-            .set({ roleId: whitelistRoleId, roleExpiresAt: null, roleComment: assignment.comment })
-            .where(eq(players.id, assignment.playerId));
-          changedPlayerIds.push(assignment.playerId);
-          await publishAdminsCfgSyncForAllServers(tx, {
-            reason: 'whitelist.member.add',
-            actor_player_id: req.user?.playerId ?? null,
-            enqueued_at: new Date().toISOString(),
-            request_id: req.id,
-          });
+          changes.push({ playerId: assignment.playerId, comment: assignment.comment });
         }
+        if (changes.length === 0) return;
+        // One batched UPDATE and one Admins.cfg fan-out for the whole file:
+        // the sync regenerates every server's file from the current roles, so
+        // a task per imported row only repeated the same work (#377).
+        const values = sql.join(
+          changes.map((change) => sql`(${change.playerId}::uuid, ${change.comment}::text)`),
+          sql`, `,
+        );
+        await tx.execute(sql`
+          UPDATE players AS p
+          SET role_id = ${whitelistRoleId}::uuid, role_expires_at = NULL, role_comment = v.comment
+          FROM (VALUES ${values}) AS v(id, comment)
+          WHERE p.id = v.id
+        `);
+        changedPlayerIds.push(...changes.map((change) => change.playerId));
+        await publishAdminsCfgSyncForAllServers(tx, {
+          reason: 'whitelist.member.add',
+          actor_player_id: req.user?.playerId ?? null,
+          enqueued_at: new Date().toISOString(),
+          request_id: req.id,
+        });
       });
       for (const playerId of changedPlayerIds) {
         invalidatePermissionCache(playerId);

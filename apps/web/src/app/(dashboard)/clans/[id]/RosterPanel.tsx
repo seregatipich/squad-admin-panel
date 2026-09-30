@@ -50,6 +50,14 @@ interface RosterResponse {
   limit: number;
   priority_count: number;
   max_priority_slots: number;
+  /**
+   * The viewer's own manage level, computed server-side by the same
+   * `clanManageLevel` gate the mutating routes use. Never derive this from
+   * searching `items` for the viewer's own row — that row can be (and, once
+   * searched, sorted, or paginated, routinely is) absent from this page even
+   * though the server still grants the viewer full manage rights (#509).
+   */
+  viewer_manage_level: 'full' | 'deputy' | null;
 }
 
 interface PriorityErrorBody {
@@ -99,7 +107,6 @@ export const ROLE_LABELS: Record<string, string> = {
 };
 
 const PAGE_LIMIT = 25;
-const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_MIN_CHARS = 3;
 const PRIORITY_LOCK_MS = 3000;
 
@@ -115,6 +122,18 @@ const DOWNLOAD_LINK_CLASS =
   'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 export type SortField = 'name' | 'role' | 'priority' | 'joined_at' | 'last_seen' | 'online';
+
+/**
+ * Confirmation text for the "transfer leadership" dialog. The server always
+ * demotes the clan's *current* leader to deputy, never the viewer — an admin
+ * with `can_manage_clans` who is not themself the leader must not be told
+ * that they personally will be demoted.
+ */
+export function transferLeadershipMessage(isViewerLeader: boolean, targetName: string): string {
+  return isViewerLeader
+    ? `${targetName} станет главой клана, а вы — заместителем.`
+    : `${targetName} станет главой клана. Текущий глава станет заместителем.`;
+}
 
 export function memberRoleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role;
@@ -147,19 +166,28 @@ export interface Capabilities {
   canRemoveMembers: boolean;
   canManageFull: boolean;
   canTogglePriority: boolean;
+  /** True when the viewer is themself the clan's current leader (a roster row), not merely an admin with `can_manage_clans`. */
+  isLeader: boolean;
 }
 
-export function deriveCapabilities(me: MeResponse | null, members: RosterMember[]): Capabilities {
-  const myRole = me ? members.find((m) => m.player_id === me.player_id)?.member_role : undefined;
-  const canManageFull = Boolean(me?.can_manage_clans) || myRole === 'leader';
-  const isDeputy = myRole === 'deputy';
+export function deriveCapabilities(
+  me: MeResponse | null,
+  viewerManageLevel: 'full' | 'deputy' | null,
+): Capabilities {
+  const canManageFull = Boolean(me?.can_manage_clans) || viewerManageLevel === 'full';
+  const isDeputy = viewerManageLevel === 'deputy';
+  // 'full' also covers a global clan manager; the leader is the viewer whose
+  // full control comes from the clan itself.
+  const isLeader = viewerManageLevel === 'full' && !me?.can_manage_clans;
   return {
     canManageFull,
     canAdd: canManageFull || isDeputy,
     canRemoveMembers: canManageFull || isDeputy,
     // Mirrors the API gate on PUT .../priority (clanManageLevel !== null):
-    // full managers and deputies may toggle, rank-and-file members may not.
+    // full managers and deputies may toggle, rank-and-file members may not;
+    // a deputy only for rank-and-file members (see RosterRow).
     canTogglePriority: canManageFull || isDeputy,
+    isLeader,
   };
 }
 
@@ -174,11 +202,13 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<SortField>('role');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(1);
-  const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
+  const [busyPlayerIds, setBusyPlayerIds] = useState<Set<string>>(new Set());
+  const latestRosterRequestRef = useRef(0);
   const [addOpen, setAddOpen] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<RosterMember | null>(null);
   const [pendingTransfer, setPendingTransfer] = useState<RosterMember | null>(null);
@@ -218,6 +248,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   }, []);
 
   const loadRoster = useCallback(async () => {
+    const requestId = ++latestRosterRequestRef.current;
     try {
       const query = new URLSearchParams({
         sort,
@@ -231,9 +262,19 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`Не удалось загрузить ростер (${res.status})`);
-      setRoster((await res.json()) as RosterResponse);
+      const body = (await res.json()) as RosterResponse;
+      // Ответ на устаревший запрос (другой поиск, сортировка, страница) не применяем.
+      if (requestId !== latestRosterRequestRef.current) return;
+      const lastPage = Math.max(1, Math.ceil(body.total / PAGE_LIMIT));
+      if (page > lastPage) {
+        // Последняя строка последней страницы удалена: переходим на новую последнюю.
+        setPage(lastPage);
+        return;
+      }
+      setRoster(body);
       setErr(null);
     } catch (e) {
+      if (requestId !== latestRosterRequestRef.current) return;
       setErr((e as Error).message);
     }
   }, [clanId, q, sort, order, page]);
@@ -247,7 +288,10 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   }, [loadRoster]);
 
   const members = roster?.items ?? [];
-  const caps = useMemo(() => deriveCapabilities(me, members), [me, members]);
+  const caps = useMemo(
+    () => deriveCapabilities(me, roster?.viewer_manage_level ?? null),
+    [me, roster],
+  );
 
   const mutate = useCallback(
     async (
@@ -255,23 +299,30 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
       run: () => Promise<Response>,
       mapError: (body: PriorityErrorBody) => string = (body) =>
         `Действие не выполнено: ${body.error ?? 'unknown'}`,
+      onSuccess?: (body: unknown) => void,
     ) => {
-      setBusyPlayerId(playerId);
+      setBusyPlayerIds((prev) => new Set(prev).add(playerId));
+      setInfo(null);
       try {
         const res = await run();
+        const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as PriorityErrorBody;
-          setErr(mapError(body));
+          setErr(mapError(body as PriorityErrorBody));
           return false;
         }
         setErr(null);
+        onSuccess?.(body);
         await loadRoster();
         return true;
       } catch (e) {
         setErr((e as Error).message);
         return false;
       } finally {
-        setBusyPlayerId(null);
+        setBusyPlayerIds((prev) => {
+          const next = new Set(prev);
+          next.delete(playerId);
+          return next;
+        });
       }
     },
     [loadRoster],
@@ -338,13 +389,27 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
 
   const addMember = useCallback(
     async (playerId: string, role: string) => {
-      const ok = await mutate(playerId, () =>
-        fetch(`/api/v1/clans/${clanId}/members`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ player_id: playerId, member_role: role }),
-        }),
+      const ok = await mutate(
+        playerId,
+        () =>
+          fetch(`/api/v1/clans/${clanId}/members`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ player_id: playerId, member_role: role }),
+          }),
+        undefined,
+        (body) => {
+          // #14 follow-up: the first member of an empty clan is always
+          // forced to 'leader' regardless of the requested role — the API
+          // flags this with role_overridden so the operator isn't left
+          // thinking their chosen role was honored.
+          if ((body as { role_overridden?: boolean }).role_overridden) {
+            setInfo(
+              'Первый участник клана всегда становится главой — выбранная роль не применена.',
+            );
+          }
+        },
       );
       if (ok) setAddOpen(false);
     },
@@ -413,6 +478,16 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                   Повторить
                 </Button>
               }
+            />
+          ) : null}
+
+          {info ? (
+            <InlineBanner
+              tone="info"
+              title="Роль изменена автоматически"
+              description={info}
+              onDismiss={() => setInfo(null)}
+              dismissLabel="Скрыть уведомление"
             />
           ) : null}
 
@@ -511,7 +586,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                   key={member.player_id}
                   member={member}
                   caps={caps}
-                  busy={busyPlayerId === member.player_id}
+                  busy={busyPlayerIds.has(member.player_id)}
                   locked={lockedPlayerIds.has(member.player_id)}
                   onChangeRole={changeRole}
                   onRemove={setPendingRemove}
@@ -558,7 +633,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         tone="destructive"
-        busy={pendingRemove !== null && busyPlayerId === pendingRemove.player_id}
+        busy={pendingRemove !== null && busyPlayerIds.has(pendingRemove.player_id)}
         onConfirm={() => void confirmRemove()}
       />
 
@@ -568,13 +643,13 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         title="Передать лидерство?"
         body={
           pendingTransfer
-            ? `${pendingTransfer.canonical_name} станет главой клана, а вы — заместителем.`
+            ? transferLeadershipMessage(caps.isLeader, pendingTransfer.canonical_name)
             : ''
         }
         confirmLabel="Передать"
         cancelLabel="Отмена"
         tone="default"
-        busy={pendingTransfer !== null && busyPlayerId === pendingTransfer.player_id}
+        busy={pendingTransfer !== null && busyPlayerIds.has(pendingTransfer.player_id)}
         onConfirm={() => void confirmTransfer()}
       />
     </section>
@@ -605,6 +680,9 @@ export function RosterRow({
   const canEditThisRole = caps.canManageFull && !isLeader;
   const canRemoveThis =
     !isLeader && (caps.canManageFull || (caps.canRemoveMembers && member.member_role === 'member'));
+  // A deputy toggles priority for rank-and-file members only, as the API enforces.
+  const canTogglePriorityThis =
+    caps.canManageFull || (caps.canTogglePriority && member.member_role === 'member');
 
   return (
     <TableRow interactive>
@@ -643,7 +721,7 @@ export function RosterRow({
             <input type="checkbox" checked disabled readOnly className="size-3.5 accent-ink-3" />
             <span className="text-xs">роль</span>
           </span>
-        ) : caps.canTogglePriority ? (
+        ) : canTogglePriorityThis ? (
           // Подпись скрыта визуально: колонка уже названа заголовком, но без
           // доступного имени флажок нем для скринридера.
           <Checkbox
@@ -701,35 +779,39 @@ function AddMemberModal({
   const [searching, setSearching] = useState(false);
   const [role, setRole] = useState('member');
   const addRoleId = useId();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // SearchField already debounces onCommit (see its own `delay` prop); a
+  // second timer here only doubled the wait before a request and added a
+  // second place for a stale response to race a newer one. The effect runs
+  // straight off the committed `term`, with a `cancelled` guard so an older
+  // request never overwrites a newer one's results.
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
     const trimmed = term.trim();
     if (trimmed.length < SEARCH_MIN_CHARS) {
       setResults([]);
       setSearching(false);
       return;
     }
+    let cancelled = false;
     setSearching(true);
-    debounceRef.current = setTimeout(async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/v1/players/search?q=${encodeURIComponent(trimmed)}`, {
           credentials: 'include',
           cache: 'no-store',
         });
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const body = (await res.json()) as { items: SearchCandidate[] };
           setResults(body.items);
         }
       } catch {
         /* ignore */
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
-    }, SEARCH_DEBOUNCE_MS);
+    })();
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
+      cancelled = true;
     };
   }, [term]);
 

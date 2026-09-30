@@ -44,29 +44,46 @@ export async function notifySeedSubscribers(
   const matchingRules = rules.filter(
     (rule) => (rule.config as SeedAlertRuleConfig).eventKind === input.eventKind,
   );
-  let notified = 0;
-  for (const subscription of subscriptions) {
-    for (const rule of matchingRules) {
-      const channels = Array.isArray(rule.channels) ? rule.channels : [];
-      if (!channels.includes(subscription.channel)) continue;
 
-      const payload = {
+  // At most one alert event per subscription: when several enabled custom
+  // rules match the same event kind and channel, the first one found wins
+  // rather than duplicating the event per matching rule.
+  const events: Array<{ ruleId: string; severity: 'info'; payload: Record<string, unknown> }> = [];
+  for (const subscription of subscriptions) {
+    const rule = matchingRules.find((candidate) => {
+      const channels = Array.isArray(candidate.channels) ? candidate.channels : [];
+      return channels.includes(subscription.channel);
+    });
+    if (!rule) continue;
+
+    events.push({
+      ruleId: rule.id,
+      severity: 'info',
+      payload: {
         ...input.payload,
         event_kind: input.eventKind,
         player_id: subscription.playerId,
         channel: subscription.channel,
-      };
-      await db.insert(alertEvents).values({
-        ruleId: rule.id,
-        severity: 'info',
-        payload,
-      });
-      await redis.publish(
-        'live-bus',
-        JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-      );
-      notified++;
-    }
+      },
+    });
   }
-  return notified;
+
+  if (events.length === 0) return 0;
+
+  // A single batched insert instead of one INSERT per subscription avoids
+  // partial materialization if the statement fails partway through.
+  await db.insert(alertEvents).values(events);
+  await Promise.all(
+    events.map((event) =>
+      redis.publish(
+        'live-bus',
+        JSON.stringify({
+          type: 'alert.triggered',
+          ts: new Date().toISOString(),
+          data: event.payload,
+        }),
+      ),
+    ),
+  );
+  return events.length;
 }

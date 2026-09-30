@@ -24,9 +24,11 @@ import {
   formatRejectedMark,
   LINK_TYPE_LABELS_RU,
   type PlayerLink,
+  parseCandidateResponse,
+  parseLinksResponse,
   splitCandidates,
 } from './alt-links';
-import { SteamFriendCheck, type SteamFriendCheckResult } from './SteamFriendCheck';
+import { SteamFriendCheck } from './SteamFriendCheck';
 
 const CONFIDENCE_LABELS_RU: Record<AltCandidate['confidence'], string> = {
   high: 'высокая',
@@ -40,15 +42,6 @@ const CONFIDENCE_TONE: Record<AltCandidate['confidence'], BadgeTone> = {
   medium: 'warn',
   low: 'neutral',
 };
-
-interface CandidateResponse {
-  candidates: AltCandidate[];
-  total: number;
-}
-
-interface LinksResponse {
-  links: PlayerLink[];
-}
 
 function formatElapsed(seconds: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -75,7 +68,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
   const [candidates, setCandidates] = useState<AltCandidate[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [savingCandidate, setSavingCandidate] = useState<string | null>(null);
-  const [friendResults, setFriendResults] = useState<Record<string, SteamFriendCheckResult>>({});
 
   const load = useCallback(
     async (force = false) => {
@@ -104,8 +96,9 @@ export function AltsSection({ playerId }: { playerId: string }) {
         }
         if (!linksRes.ok) throw new Error(`HTTP ${linksRes.status}`);
         if (!candidatesRes.ok) throw new Error(`HTTP ${candidatesRes.status}`);
-        const linksBody = (await linksRes.json()) as LinksResponse;
-        const candidatesBody = (await candidatesRes.json()) as CandidateResponse;
+        const linksBody = parseLinksResponse(await linksRes.json());
+        const candidatesBody = parseCandidateResponse(await candidatesRes.json());
+        if (!linksBody || !candidatesBody) throw new Error('invalid response shape');
         setLinks(linksBody.links);
         setCandidates(candidatesBody.candidates);
         setLoaded(true);
@@ -131,13 +124,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
             other_player_id: candidate.player_id,
             link_type: status === 'confirmed' ? 'alt' : 'unrelated',
             status,
-            evidence_snapshot: {
-              score: candidate.score,
-              confidence: candidate.confidence,
-              shared_ip_count: candidate.shared_ip_count,
-              signals: candidate.signals,
-              steam_friend: friendResults[candidate.player_id] ?? null,
-            },
           }),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -148,7 +134,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
         setSavingCandidate(null);
       }
     },
-    [friendResults, load, playerId],
+    [load, playerId],
   );
 
   if (hidden) return null;
@@ -278,12 +264,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
                                 <SteamFriendCheck
                                   playerId={playerId}
                                   otherPlayerId={candidate.player_id}
-                                  onResult={(result) =>
-                                    setFriendResults((current) => ({
-                                      ...current,
-                                      [candidate.player_id]: result,
-                                    }))
-                                  }
                                 />
                               )}
                             </Td>

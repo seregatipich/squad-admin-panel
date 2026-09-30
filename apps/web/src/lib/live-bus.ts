@@ -2,7 +2,21 @@ export type LiveEvent =
   | {
       type: 'server.status';
       ts: string;
-      data: { server_id: string; status: string; source: 'reconciler' | 'install' | 'delete' };
+      data: {
+        server_id: string;
+        status: string;
+        source:
+          | 'reconciler'
+          | 'install'
+          | 'delete'
+          | 'stop'
+          | 'start'
+          | 'restart'
+          | 'force_stop'
+          | 'crash_detected'
+          | 'crash_loop'
+          | 'external';
+      };
     }
   | {
       type: 'server.deleted';
@@ -20,7 +34,11 @@ export type LiveEvent =
       data: { server_id: string; state: string; player_count?: number };
     }
   | {
-      /** New rows in `events`; the list refetches over REST (no row data here). */
+      /**
+       * New rows in `events`; the list refetches over REST (no row data here).
+       * Match boundaries arrive this way too — as the `match.started` /
+       * `match.ended` kinds — see {@link announcesMatchBoundary}.
+       */
       type: 'server.events.appended';
       ts: string;
       data: { server_id: string | null; kinds: string[] };
@@ -49,14 +67,19 @@ export type LiveEvent =
       data: { state: 'up' | 'down'; down_for_s: number };
     }
   | {
-      type: 'worker.heartbeat';
-      ts: string;
-      data: { worker: string; healthy: boolean };
-    }
-  | {
       type: 'note.created';
       ts: string;
       data: { player_id: string; note: PlayerNote };
+    }
+  | {
+      type: 'note.updated';
+      ts: string;
+      data: { player_id: string; note: PlayerNote };
+    }
+  | {
+      type: 'note.deleted';
+      ts: string;
+      data: { player_id: string; note_id: string };
     }
   | {
       type: 'mark_type.changed';
@@ -94,16 +117,6 @@ export type LiveEvent =
       data: ChatMessage;
     }
   | {
-      type: 'match.started';
-      ts: string;
-      data: { server_id: string; match_id?: string | null };
-    }
-  | {
-      type: 'match.ended';
-      ts: string;
-      data: { server_id: string; match_id?: string | null };
-    }
-  | {
       type: 'combat.event';
       ts: string;
       data: {
@@ -116,6 +129,21 @@ export type LiveEvent =
         damage: number | null;
         is_teamkill: boolean;
         is_suicide: boolean;
+        occurred_at: string;
+      };
+    }
+  | {
+      type: 'combat.vehicle';
+      ts: string;
+      data: {
+        server_id: string;
+        match_id: string | null;
+        kind: 'vehicle_destroyed' | 'vehicle_damage';
+        attacker_player_id: string | null;
+        victim_vehicle: string;
+        attacker_vehicle: string | null;
+        weapon: string | null;
+        damage: number | null;
         occurred_at: string;
       };
     }
@@ -150,6 +178,23 @@ export type LiveEvent =
       data: { server_id: string; action: string; layer: string | null };
     }
   | {
+      type: 'externalban.matched';
+      ts: string;
+      data: {
+        server_id: string;
+        player_id: string | null;
+        source_id: string;
+        external_ban_id: string;
+        steam_id64: string;
+        eos_id: string | null;
+        name: string;
+        source_name: string;
+        reason: string | null;
+        action: 'none' | 'alert' | 'kick';
+        kick_enqueued?: boolean;
+      };
+    }
+  | {
       /**
        * A file arrived through a one-time delegated-upload link (VIDEO-3,
        * #159). The API delivers this frame only to the admin who minted the
@@ -170,6 +215,26 @@ export type LiveEvent =
       ts: string;
       data: Record<string, unknown>;
     };
+
+/** Event kinds log-ingest stores when a match starts or ends. */
+const MATCH_BOUNDARY_KINDS: readonly string[] = ['match.started', 'match.ended'];
+
+/**
+ * Whether a `server.events.appended` batch announces a match start or end.
+ *
+ * The API publishes no dedicated match frame: log-ingest stores the boundary
+ * in `events`, and the events feed announces it with its kind (#1315).
+ *
+ * @param batch `data` of the `server.events.appended` frame.
+ * @param serverId When given, the batch must also belong to this server.
+ */
+export function announcesMatchBoundary(
+  batch: { server_id: string | null; kinds: string[] },
+  serverId?: string,
+): boolean {
+  if (serverId !== undefined && batch.server_id !== serverId) return false;
+  return batch.kinds.some((kind) => MATCH_BOUNDARY_KINDS.includes(kind));
+}
 
 export type ReportStatus = 'pending' | 'in_review' | 'resolved' | 'rejected';
 
@@ -248,6 +313,8 @@ export interface ChatMessage {
   steam_id64: string | null;
   eos_id: string | null;
   message: string;
+  /** Which pipeline carried the line — same values the archive row's `source` uses. */
+  source: 'log' | 'rcon' | 'panel';
 }
 
 export interface PlayerNote {
@@ -320,17 +387,22 @@ export interface LivePlayerMark {
 }
 
 export type LiveBusState = 'connecting' | 'open' | 'closed';
-export type BridgeState = 'up' | 'down' | 'unknown';
 
 export interface LiveBusHandle {
-  subscribe(cb: (event: LiveEvent) => void): () => void;
+  /**
+   * Receive every event this socket is sent. Pass `eventType` to also declare
+   * interest in that type: the API pushes high-volume types (chat, combat,
+   * roster snapshots) only to sockets that subscribed to them, and replays the
+   * chat/combat tail on subscribe. The subscription is reference-counted and
+   * re-sent after every reconnect.
+   */
+  subscribe(cb: (event: LiveEvent) => void, eventType?: LiveEvent['type']): () => void;
   state(): LiveBusState;
-  bridgeState(): BridgeState;
   onStateChange(cb: (state: LiveBusState) => void): () => void;
-  onBridgeChange(cb: (state: BridgeState) => void): () => void;
   /** Force the singleton's WS connection to be opened (or kept alive)
-   *  while the caller is mounted. Returns a release function — call it
-   *  in the cleanup of useEffect to allow idle-close. */
+   *  while the caller is mounted, even with no subscribers. Returns a
+   *  release function — call it in the cleanup of useEffect to allow
+   *  idle-close. Calling the release function more than once is harmless. */
   retain(): () => void;
   /** Tear down the current socket and immediately reopen. Used by the
    *  ConnectionBanner's manual "Переподключить" button to bypass the
@@ -346,11 +418,12 @@ let singleton: LiveBusHandle | null = null;
 function makeLiveBus(): LiveBusHandle {
   const eventSubs = new Set<(event: LiveEvent) => void>();
   const stateSubs = new Set<(state: LiveBusState) => void>();
-  const bridgeSubs = new Set<(state: BridgeState) => void>();
+  /** Declared interest per event type; the server is told on 0→1 and 1→0. */
+  const typeRefs = new Map<string, number>();
+  let retainCount = 0;
 
   let socket: WebSocket | null = null;
   let connState: LiveBusState = 'closed';
-  let bridge: BridgeState = 'unknown';
   let attempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -374,16 +447,29 @@ function makeLiveBus(): LiveBusHandle {
     }
   };
 
-  const setBridge = (next: BridgeState): void => {
-    if (bridge === next) return;
-    bridge = next;
-    for (const cb of bridgeSubs) {
-      try {
-        cb(next);
-      } catch (err) {
-        debug('bridge-sub threw', err);
-      }
+  const sendFrame = (frame: { type: 'subscribe' | 'unsubscribe'; events: string[] }): void => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify(frame));
+    } catch (err) {
+      debug(`${frame.type} send failed`, err);
     }
+  };
+
+  const addTypeRef = (eventType: string): void => {
+    const next = (typeRefs.get(eventType) ?? 0) + 1;
+    typeRefs.set(eventType, next);
+    if (next === 1) sendFrame({ type: 'subscribe', events: [eventType] });
+  };
+
+  const releaseTypeRef = (eventType: string): void => {
+    const next = (typeRefs.get(eventType) ?? 0) - 1;
+    if (next > 0) {
+      typeRefs.set(eventType, next);
+      return;
+    }
+    typeRefs.delete(eventType);
+    sendFrame({ type: 'unsubscribe', events: [eventType] });
   };
 
   const clearReconnect = (): void => {
@@ -417,9 +503,12 @@ function makeLiveBus(): LiveBusHandle {
   };
 
   const scheduleReconnect = (): void => {
-    if (eventSubs.size === 0 && stateSubs.size === 0 && bridgeSubs.size === 0) return;
+    if (refCount() === 0) return;
     clearReconnect();
-    const delay = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
+    // Полный джиттер: после рестарта API вкладки не должны возвращаться
+    // одновременной волной.
+    const ceiling = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
+    const delay = Math.round(ceiling * (0.5 + Math.random() / 2));
     attempts++;
     debug(`reconnect in ${delay}ms (attempt ${attempts})`);
     reconnectTimer = setTimeout(() => {
@@ -454,6 +543,9 @@ function makeLiveBus(): LiveBusHandle {
 
     ws.onopen = () => {
       attempts = 0;
+      // A new connection starts with no subscriptions: re-declare every type
+      // a mounted consumer still listens to (the server replays tails then).
+      if (typeRefs.size > 0) sendFrame({ type: 'subscribe', events: [...typeRefs.keys()] });
       setState('open');
     };
 
@@ -465,6 +557,8 @@ function makeLiveBus(): LiveBusHandle {
         return;
       }
       if (!frame || typeof frame.type !== 'string') return;
+      // Subscription acknowledgements are protocol frames, not live events.
+      if (frame.type === 'subscribed' || frame.type === 'unsubscribed') return;
       if (frame.type === 'ping') {
         try {
           ws.send(JSON.stringify({ type: 'pong' }));
@@ -474,9 +568,6 @@ function makeLiveBus(): LiveBusHandle {
         return;
       }
       const event = frame as LiveEvent;
-      if (event.type === 'bridge.connection') {
-        setBridge(event.data.state);
-      }
       for (const cb of eventSubs) {
         try {
           cb(event);
@@ -509,11 +600,12 @@ function makeLiveBus(): LiveBusHandle {
     clearReconnect();
     teardownSocket();
     setState('closed');
-    setBridge('unknown');
     attempts = 0;
   };
 
-  const refCount = (): number => eventSubs.size + stateSubs.size + bridgeSubs.size;
+  function refCount(): number {
+    return eventSubs.size + stateSubs.size + retainCount;
+  }
 
   const scheduleIdleClose = (): void => {
     clearIdle();
@@ -545,38 +637,36 @@ function makeLiveBus(): LiveBusHandle {
   };
 
   return {
-    retain: () => {
-      retain();
-      return () => release();
-    },
     forceReconnect,
-    subscribe(cb) {
+    retain: () => {
+      retainCount++;
+      retain();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        retainCount--;
+        release();
+      };
+    },
+    subscribe(cb, eventType) {
       eventSubs.add(cb);
+      if (eventType) addTypeRef(eventType);
       retain();
       return () => {
         eventSubs.delete(cb);
+        if (eventType) releaseTypeRef(eventType);
         release();
       };
     },
     state() {
       return connState;
     },
-    bridgeState() {
-      return bridge;
-    },
     onStateChange(cb) {
       stateSubs.add(cb);
       retain();
       return () => {
         stateSubs.delete(cb);
-        release();
-      };
-    },
-    onBridgeChange(cb) {
-      bridgeSubs.add(cb);
-      retain();
-      return () => {
-        bridgeSubs.delete(cb);
         release();
       };
     },
@@ -588,9 +678,7 @@ export function getLiveBus(): LiveBusHandle {
     return {
       subscribe: () => () => {},
       state: () => 'closed',
-      bridgeState: () => 'unknown',
       onStateChange: () => () => {},
-      onBridgeChange: () => () => {},
       retain: () => () => {},
       forceReconnect: () => {},
     };

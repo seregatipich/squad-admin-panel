@@ -1,18 +1,18 @@
-import {
-  CHAT_SCOPES,
-  CHAT_SOURCES,
-  chatMessages,
-  playerNameHistory,
-  players,
-} from '@squad/db/schema';
-import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { CHAT_SCOPES, CHAT_SOURCES, chatMessages, players } from '@squad/db/schema';
+import { and, desc, eq, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
+import { playerNameMatch } from '../lib/player-name-search.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;
-const STEAM_ID_RE = /^\d{16,20}$/;
+/** A SteamID64 is always 17 digits, so it always fits Postgres int8 (#119). */
+const STEAM_ID_RE = /^\d{17}$/;
+/** Largest value of Postgres `bigint`; a cursor id past it would 500 in SQL. */
+const INT8_MAX = 9_223_372_036_854_775_807n;
 
 const scopeEnum = z.enum(CHAT_SCOPES);
 const sourceEnum = z.enum(CHAT_SOURCES);
@@ -52,10 +52,6 @@ function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
 function encodeCursor(sentAt: Date, id: bigint): string {
   return Buffer.from(`${sentAt.toISOString()}~${id.toString()}`).toString('base64url');
 }
@@ -67,57 +63,49 @@ function decodeCursor(raw: string): { sentAt: Date; id: bigint } | null {
     if (sep < 0) return null;
     const sentAt = new Date(decoded.slice(0, sep));
     if (Number.isNaN(sentAt.getTime())) return null;
-    return { sentAt, id: BigInt(decoded.slice(sep + 1)) };
+    const rawId = decoded.slice(sep + 1);
+    if (!/^\d{1,19}$/.test(rawId)) return null;
+    const id = BigInt(rawId);
+    if (id > INT8_MAX) return null;
+    return { sentAt, id };
   } catch {
     return null;
   }
 }
 
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 const chatRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function resolvePlayerIds(query: string): Promise<string[]> {
-    const ids = new Set<string>();
-
+  /**
+   * Chat rows of the player(s) `query` names: an exact SteamID64 or EOS id,
+   * or a (normalised) nickname substring over current and past names. Kept
+   * as subqueries so no id list is materialised (audit #117/#118).
+   */
+  function playerQueryClause(query: string): SQL | undefined {
+    const alternatives: SQL[] = [];
     if (STEAM_ID_RE.test(query)) {
-      const steamRows = await app.db
-        .select({ id: players.id })
-        .from(players)
-        .where(eq(players.steamId64, BigInt(query)));
-      for (const row of steamRows) ids.add(row.id);
+      alternatives.push(
+        inArray(
+          chatMessages.playerId,
+          app.db
+            .select({ id: players.id })
+            .from(players)
+            .where(eq(players.steamId64, BigInt(query))),
+        ),
+      );
     }
-
-    const eosRows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(eq(players.eosId, query));
-    for (const row of eosRows) ids.add(row.id);
-
-    const pattern = `%${escapeLike(query.toLowerCase())}%`;
-    const nameRows = await app.db
-      .selectDistinct({ id: playerNameHistory.playerId })
-      .from(playerNameHistory)
-      .where(sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`);
-    for (const row of nameRows) ids.add(row.id);
-
-    return Array.from(ids);
+    alternatives.push(
+      inArray(
+        chatMessages.playerId,
+        app.db.select({ id: players.id }).from(players).where(eq(players.eosId, query)),
+      ),
+    );
+    const byName = playerNameMatch(chatMessages.playerId, query);
+    if (byName) alternatives.push(byName);
+    return or(...alternatives);
   }
 
-  async function buildFilters(
-    query: CountQuery,
-  ): Promise<{ where: SQL | undefined; empty: boolean }> {
+  function buildFilters(query: CountQuery): SQL | undefined {
     const clauses: SQL[] = [];
 
     if (query.playerId) clauses.push(eq(chatMessages.playerId, query.playerId));
@@ -139,30 +127,25 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (query.playerQuery) {
-      const playerIds = await resolvePlayerIds(query.playerQuery);
-      if (playerIds.length === 0) return { where: undefined, empty: true };
-      clauses.push(inArray(chatMessages.playerId, playerIds));
+      const byPlayer = playerQueryClause(query.playerQuery);
+      if (byPlayer) clauses.push(byPlayer);
     }
 
-    return {
-      where: clauses.length > 0 ? and(...clauses) : undefined,
-      empty: false,
-    };
+    return clauses.length > 0 ? and(...clauses) : undefined;
   }
 
   fast.get(
     '/api/v1/chat/messages',
     {
       schema: { querystring: listQuery },
-      config: { audit: false },
+      config: { audit: false, permissions: ['events:view'] },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
       const query: ListQuery = req.query;
-      const { where, empty } = await buildFilters(query);
-      if (empty) return { items: [], next_cursor: null };
+      const where = buildFilters(query);
 
       const clauses: SQL[] = where ? [where] : [];
       if (query.cursor) {
@@ -222,14 +205,13 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/chat/messages/count',
     {
       schema: { querystring: countQuery },
-      config: { audit: false },
+      config: { audit: false, permissions: ['events:view'] },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const { where, empty } = await buildFilters(req.query);
-      if (empty) return { count: 0 };
+      const where = buildFilters(req.query);
 
       const countRows = await app.db
         .select({ total: sql<number>`count(*)::int` })

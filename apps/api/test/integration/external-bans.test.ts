@@ -274,8 +274,8 @@ describeIfDb('GET /api/v1/players/:playerId/external-bans', () => {
       url: `/api/v1/players/${playerId}/external-bans`,
       headers: { cookie: noAccessCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe('forbidden');
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('unauthenticated');
   });
 
   it('returns 404 for an unknown playerId', async () => {
@@ -392,7 +392,7 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
       url: '/api/v1/external-bans',
       headers: { cookie: noAccessCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('searches by nickname substring', async () => {
@@ -501,6 +501,30 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
     expect(body2.total).toBe(3);
   });
 
+  it('reports the real total when offset runs past the last page', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/external-bans?q=Cban3PagingNick&limit=2&offset=10',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.rows).toHaveLength(0);
+    expect(body.total).toBe(3);
+  });
+
+  it('treats % and _ in q literally instead of as ILIKE wildcards', async () => {
+    for (const q of ['Cban3Paging%Nick', 'Cban3Paging_ick']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/external-bans?q=${encodeURIComponent(q)}`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().total, q).toBe(0);
+    }
+  });
+
   it('attaches player_id/panel_nickname when the identity is known to the panel, null otherwise', async () => {
     const known = await h.app.inject({
       method: 'GET',
@@ -526,6 +550,46 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
     const unknownRow = unknown.json().rows[0];
     expect(unknownRow.player_id).toBeNull();
     expect(unknownRow.panel_nickname).toBeNull();
+  });
+});
+
+describeIfDb('GET /api/v1/external-bans (split identities, #155)', () => {
+  it('lists an identity once when its steam and eos ids belong to different players', async () => {
+    const splitSteam = testSteamId(942030);
+    const splitEos = 'eos-cban3-split-001';
+    const steamPlayer = await seedPlayer({
+      steamId64: splitSteam,
+      eosId: null,
+      namePrefix: 'SplitSteam',
+      panelAccess: true,
+    });
+    await seedPlayer({
+      steamId64: null,
+      eosId: splitEos,
+      namePrefix: 'SplitEos',
+      panelAccess: true,
+    });
+    await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: splitSteam.toString(),
+      eosId: splitEos,
+      nickname: 'Cban3SplitIdentityNick',
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/external-bans?q=Cban3SplitIdentityNick',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]).toMatchObject({
+      steam_id64: splitSteam.toString(),
+      eos_id: splitEos,
+      player_id: steamPlayer,
+    });
   });
 });
 
@@ -603,7 +667,15 @@ describeIfDb('POST /api/v1/players/:playerId/external-bans/:externalBanId/local-
       ban_length: '30d',
       external_ban_id: externalBanId,
       source_id: sourceTrustedId,
+      source: 'external_ban',
+      target: STEAM_TWO_SOURCES,
+      rcon_request_id: 'cban4-local-ban',
     });
+    // #149: a temporary local ban records its expiry, so the alt-candidate
+    // query does not mistake it for a permanent ban.
+    const expiresAt = Date.parse(String((ledger?.context as { expires_at?: unknown }).expires_at));
+    expect(expiresAt - Date.now()).toBeGreaterThan(29 * 86_400_000);
+    expect(expiresAt - Date.now()).toBeLessThanOrEqual(30 * 86_400_000);
 
     const [event] = await h.db
       .select({ kind: events.kind, correlationId: events.correlationId, payload: events.payload })

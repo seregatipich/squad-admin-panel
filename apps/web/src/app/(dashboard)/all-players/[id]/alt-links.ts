@@ -105,24 +105,54 @@ export function formatRejectedMark(link: CandidateLinkAnnotation): string {
   return `Отклонено админом ${name} ${formatDecisionDate(link.decided_at)}`;
 }
 
+/** Response shape of `GET /players/:id/links`. */
+export interface LinksResponse {
+  links: PlayerLink[];
+}
+
+/** Response shape of `GET /players/:id/alt-candidates`. */
+export interface CandidateResponse {
+  candidates: AltCandidate[];
+  total: number;
+}
+
+/**
+ * Narrows an untyped `.json()` result to {@link LinksResponse} (#438) — a
+ * shallow shape check, not a full schema, matching `parseDiscordLink`'s
+ * depth: enough to catch a proxy error page or a changed API contract before
+ * it reaches `.map`/`.filter` and crashes the whole player card.
+ */
+export function parseLinksResponse(json: unknown): LinksResponse | null {
+  if (!json || typeof json !== 'object') return null;
+  const value = json as Record<string, unknown>;
+  if (!Array.isArray(value.links)) return null;
+  return { links: value.links as PlayerLink[] };
+}
+
+/** Narrows an untyped `.json()` result to {@link CandidateResponse} (#438). */
+export function parseCandidateResponse(json: unknown): CandidateResponse | null {
+  if (!json || typeof json !== 'object') return null;
+  const value = json as Record<string, unknown>;
+  if (!Array.isArray(value.candidates) || typeof value.total !== 'number') return null;
+  return { candidates: value.candidates as AltCandidate[], total: value.total };
+}
+
 /**
  * Builds the POST /players/:id/links request body for confirming/rejecting
- * a candidate, snapshotting the ALT-1 signals already fetched into
- * `evidence_snapshot` so the decision stays auditable even if the candidate
- * later scores differently (e.g. new IP history, tuned weights).
+ * a candidate. It carries no evidence: the API snapshots the ALT-1 signals
+ * for the pair itself at decision time, so the stored evidence cannot be
+ * whatever a browser chose to send (#461).
  */
 export function buildLinkPayload(
   otherPlayerId: string,
   linkType: PlayerLinkType,
   status: PlayerLinkStatus,
   note: string,
-  candidate: AltCandidate,
 ): {
   other_player_id: string;
   link_type: PlayerLinkType;
   status: PlayerLinkStatus;
   note?: string;
-  evidence_snapshot: Record<string, unknown>;
 } {
   const trimmedNote = note.trim();
   return {
@@ -130,12 +160,5 @@ export function buildLinkPayload(
     link_type: linkType,
     status,
     ...(trimmedNote ? { note: trimmedNote } : {}),
-    evidence_snapshot: {
-      score: candidate.score,
-      confidence: candidate.confidence,
-      shared_ip_count: candidate.shared_ip_count,
-      shared_names: candidate.signals.shared_names.value,
-      signals: candidate.signals,
-    },
   };
 }

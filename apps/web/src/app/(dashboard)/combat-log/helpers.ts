@@ -66,14 +66,16 @@ export function showsDamageColumn(facet: CombatFacet): boolean {
 
 export interface EventTypeMeta {
   labelRu: string;
-  badgeClass: string;
 }
 
+// Badge color (tone) lives in CombatLog.tsx's own EVENT_TONE table, next to
+// the design-system <Badge> it feeds — this table only owns the Russian
+// label, so there is exactly one place that maps an event type to a tone.
 const EVENT_TYPE_META: Record<CombatEventType, EventTypeMeta> = {
-  death: { labelRu: 'Смерть', badgeClass: 'bg-red-900 text-red-200' },
-  damage: { labelRu: 'Урон', badgeClass: 'bg-amber-900 text-amber-200' },
-  wound: { labelRu: 'Ранение', badgeClass: 'bg-orange-900 text-orange-200' },
-  revive: { labelRu: 'Реанимация', badgeClass: 'bg-emerald-900 text-emerald-200' },
+  death: { labelRu: 'Смерть' },
+  damage: { labelRu: 'Урон' },
+  wound: { labelRu: 'Ранение' },
+  revive: { labelRu: 'Реанимация' },
 };
 
 function isEventType(value: string): value is CombatEventType {
@@ -82,7 +84,7 @@ function isEventType(value: string): value is CombatEventType {
 
 export function eventTypeMeta(eventType: string): EventTypeMeta {
   if (isEventType(eventType)) return EVENT_TYPE_META[eventType];
-  return { labelRu: eventType, badgeClass: 'bg-neutral-800 text-neutral-300' };
+  return { labelRu: eventType };
 }
 
 export interface CombatFilters {
@@ -320,7 +322,8 @@ export interface CombatApiRow {
   id: number;
   eventType: string;
   serverId: string;
-  matchId: number | null;
+  /** `matches.id` (uuid) the event happened in; null when unknown. */
+  matchId: string | null;
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;
@@ -333,7 +336,8 @@ export interface CombatApiRow {
 export interface CombatListResponse {
   rows: CombatApiRow[];
   nextCursor: string | null;
-  approxTotal: number;
+  /** Counted for the first page only; cursor pages carry null. */
+  approxTotal: number | null;
 }
 
 export function playerHref(player: CombatPlayer | null): string | null {
@@ -424,7 +428,7 @@ const LIVE_KIND_TO_EVENT_TYPE: Record<CombatLiveEventKind, CombatEventType> = {
  * same frame delivered twice (e.g. a duplicate publish) dedupes to one row.
  */
 function liveRowId(data: CombatLiveEventData): number {
-  const key = `${data.server_id}|${data.kind}|${data.occurred_at}|${data.attacker_player_id ?? ''}|${data.victim_player_id ?? ''}|${data.weapon ?? ''}`;
+  const key = `${data.server_id}|${data.kind}|${data.occurred_at}|${data.attacker_player_id ?? ''}|${data.victim_player_id ?? ''}|${data.weapon ?? ''}|${data.damage ?? ''}`;
   let hash = 5381;
   for (let i = 0; i < key.length; i++) {
     hash = (hash * 33 + key.charCodeAt(i)) | 0;
@@ -455,6 +459,52 @@ export function combatEventToRow(data: CombatLiveEventData): CombatApiRow {
       : null,
     victim: data.victim_player_id ? { player_id: data.victim_player_id, current_name: null } : null,
   };
+}
+
+/**
+ * Whether a live `combat.event` row belongs under the currently selected
+ * facet/filters — `onCombat` used to only check `liveEnabled` and
+ * `lockedServerId`, so enabling Live under a narrow facet (e.g. «Тимкиллы»)
+ * flooded the table with every other event type from every server (#528).
+ *
+ * Weapon and name-text filters (`filters.weapon`, an unresolved
+ * `attackerQuery`/`victimQuery`) can't be checked against the live payload —
+ * it carries only ids, not names or weapon strings resolved server-side in
+ * the same way the REST filter does — so a row is excluded whenever one of
+ * those is active, rather than risk a false match. A `custom`/`yesterday`
+ * period has an upper bound in the past, which a live (always "now") row can
+ * never fall inside, so no live row ever matches under those presets either.
+ */
+export function matchesLiveFilters(
+  row: CombatApiRow,
+  filters: CombatFilters,
+  lockedServerId: string | undefined,
+): boolean {
+  if (filters.preset === 'custom' || filters.preset === 'yesterday') return false;
+
+  const facetParams = facetToApiParams(filters.facet);
+  if (facetParams.type && !(facetParams.type as string[]).includes(row.eventType)) {
+    return false;
+  }
+  if (facetParams.teamkillsOnly && !row.isTeamkill) return false;
+
+  if (lockedServerId) {
+    if (row.serverId !== lockedServerId) return false;
+  } else if (filters.serverIds.length > 0 && !filters.serverIds.includes(row.serverId)) {
+    return false;
+  }
+
+  if (filters.attackerPlayerId && row.attacker?.player_id !== filters.attackerPlayerId) {
+    return false;
+  }
+  if (filters.victimPlayerId && row.victim?.player_id !== filters.victimPlayerId) {
+    return false;
+  }
+  if (filters.weapon) return false;
+  if (!filters.attackerPlayerId && filters.attackerQuery) return false;
+  if (!filters.victimPlayerId && filters.victimQuery) return false;
+
+  return true;
 }
 
 /**

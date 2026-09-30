@@ -1,5 +1,6 @@
 'use client';
 
+import { isValidBanLength } from '@squad/shared-config/ban-length';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
@@ -15,6 +16,7 @@ import {
   PageContainer,
   PageHeader,
   Pagination,
+  SafeExternalLink,
   SegmentedControl,
   Select,
   Skeleton,
@@ -43,7 +45,6 @@ import {
   isExternalLinkEvidence,
   isImageEvidence,
   isRecidivist,
-  isValidBanLength,
   isVideoEvidence,
   NOTE_MAX,
   NOTIFY_TEMPLATE_LABELS,
@@ -983,14 +984,12 @@ function ReportEvidenceBlock({ evidence }: { evidence: ReportEvidenceItem[] }) {
                 className="max-h-40 rounded-ctl border border-line"
               />
             ) : isExternalLinkEvidence(item) && item.external_url ? (
-              <a
+              <SafeExternalLink
                 href={item.external_url}
-                target="_blank"
-                rel="noreferrer"
                 className="block truncate text-xs text-accent no-underline hover:brightness-110"
               >
                 {evidenceLabel(item)}
-              </a>
+              </SafeExternalLink>
             ) : null}
           </div>
         ))}

@@ -6,7 +6,13 @@ const push = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ push, refresh: vi.fn() })),
 }));
-vi.mock('@/components/ForceStopDialog', () => ({ ForceStopDialog: () => null }));
+let latestForceStopProps: { onConfirm: () => Promise<void> } | undefined;
+vi.mock('@/components/ForceStopDialog', () => ({
+  ForceStopDialog: (props: { onConfirm: () => Promise<void> }) => {
+    latestForceStopProps = props;
+    return null;
+  },
+}));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
 let latestProgressModalProps:
@@ -61,6 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   push.mockReset();
   latestProgressModalProps = undefined;
+  latestForceStopProps = undefined;
 });
 
 describe('ServerControls', () => {
@@ -95,6 +102,21 @@ describe('ServerControls', () => {
     expect(screen.queryByRole('button', { name: 'Обновить игру' })).not.toBeInTheDocument();
   });
 
+  it('shows a network failure instead of leaking an unhandled rejection', async () => {
+    stubFetch('stopped', undefined, (url, init) => {
+      if (url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST') {
+        throw new TypeError('Failed to fetch');
+      }
+      return undefined;
+    });
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Старт' }));
+    });
+    expect(await screen.findByText('start failed: Failed to fetch')).toBeInTheDocument();
+  });
+
   it('shows the API error when an action fails', async () => {
     stubFetch('stopped', undefined, (url, init) =>
       url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST'
@@ -107,6 +129,59 @@ describe('ServerControls', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Старт' }));
     });
     expect(await screen.findByText('start failed: HTTP 500 boom')).toBeInTheDocument();
+  });
+
+  it('shows a rejected action request as an error instead of an unhandled rejection', async () => {
+    stubFetch('stopped', undefined, (url, init) => {
+      if (url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST') {
+        throw new Error('network down');
+      }
+      return undefined;
+    });
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Старт' }));
+    });
+    expect(await screen.findByText('start failed: network down')).toBeInTheDocument();
+  });
+
+  it('clears a poll error once a later poll succeeds', async () => {
+    vi.useFakeTimers();
+    let failing = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        failing
+          ? ({ ok: false, status: 502 } as Response)
+          : ({ ok: true, json: async () => serverBody('running') } as Response),
+      ),
+    );
+    await act(async () => {
+      render(<ServerControls serverId={SERVER_ID} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    failing = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    vi.useRealTimers();
+    expect(screen.queryByText('HTTP 502')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Стоп' })).toBeEnabled();
+  });
+
+  it('offers the game update for a freshly installed (ready) server and blocks start while installing', async () => {
+    stubFetch('ready');
+    await renderControls();
+    expect(await screen.findByRole('button', { name: 'Обновить игру' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Старт' })).toBeEnabled();
+    cleanup();
+
+    stubFetch('installing');
+    await renderControls();
+    expect(await screen.findByRole('button', { name: 'Старт' })).toBeDisabled();
   });
 
   it('starts an update, opens the progress modal, and resets on completion', async () => {
@@ -208,5 +283,50 @@ describe('ServerControls', () => {
     await renderControls();
 
     expect(screen.queryByRole('button', { name: /Опасная зона/ })).not.toBeInTheDocument();
+  });
+
+  // #780: ForceStopDialog shows the rejection message, so it must name the API's reason.
+  it('rejects the force-stop confirmation with the API error code', async () => {
+    stubFetch('running', undefined, (url, init) =>
+      url === `/api/v1/servers/${SERVER_ID}/force-stop` && init?.method === 'POST'
+        ? ({ ok: false, status: 403, json: async () => ({ error: 'forbidden' }) } as Response)
+        : undefined,
+    );
+    await renderControls();
+    await screen.findByRole('button', { name: 'Стоп' });
+
+    await expect(latestForceStopProps?.onConfirm()).rejects.toThrow('forbidden');
+  });
+});
+
+describe('ServerControls — опрос статуса (#641)', () => {
+  function getCalls(fetchMock: ReturnType<typeof stubFetch>): number {
+    return fetchMock.mock.calls.filter((call) => call[0] === `/api/v1/servers/${SERVER_ID}`).length;
+  }
+
+  it('не опрашивает /servers/:id, пока вкладка скрыта, и возобновляет при её появлении', async () => {
+    const fetchMock = stubFetch('stopped');
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(<ServerControls serverId={SERVER_ID} />);
+      });
+      const before = getCalls(fetchMock);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      expect(getCalls(fetchMock)).toBe(before);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getCalls(fetchMock)).toBeGreaterThan(before);
+    } finally {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      vi.useRealTimers();
+    }
   });
 });

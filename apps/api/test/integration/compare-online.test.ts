@@ -37,6 +37,7 @@ async function seedPlayer(
       roleId: opts.roleId ?? null,
     })
     .returning({ id: players.id });
+  if (!row) throw new Error('row: insert returned no row');
   return row.id;
 }
 
@@ -115,7 +116,7 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
-  it('rejects a logged-in player without panel_access with 403', async () => {
+  it('rejects a logged-in player without panel_access with 401', async () => {
     const roleId = uuidv7();
     await h.db
       .insert(roles)
@@ -128,8 +129,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
       url: `/api/v1/players/${uuidv7()}/compare-online?other=${uuidv7()}`,
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('returns 404 when the target player does not exist', async () => {
@@ -166,6 +167,32 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({ error: 'same_player' });
+  });
+
+  it('rejects the same player spelled in another UUID case with 422 same_player (#70)', async () => {
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/compare-online?other=${idA.toUpperCase()}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: 'same_player' });
+  });
+
+  it('rejects from/to that are not calendar days with 400 (#70)', async () => {
+    const idA = await seedPlayer(playerASteam, 'PlayerA');
+    const idB = await seedPlayer(playerBSteam, 'PlayerB');
+    const cookie = await loginAsOwner(h);
+    for (const window of ['from=2026-02-30&to=2026-03-05', 'from=2026-03-01&to=2026-13-45']) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${idA}/compare-online?other=${idB}&${window}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(400);
+    }
   });
 
   it('rejects from > to with 422 invalid_window', async () => {
@@ -266,8 +293,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     const body = res.json() as CompareOnlineResponse;
 
     expect(body.players.map((p) => p.id)).toEqual([idA, idB]);
-    expect(body.players[0].canonical_name).toBe('PlayerA');
-    expect(body.players[1].canonical_name).toBe('PlayerB');
+    expect(body.players[0]?.canonical_name).toBe('PlayerA');
+    expect(body.players[1]?.canonical_name).toBe('PlayerB');
 
     expect(body.sessions.a).toHaveLength(2);
     expect(body.sessions.b).toHaveLength(1);

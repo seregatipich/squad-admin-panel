@@ -1,3 +1,4 @@
+import { BridgeError } from '@squad/bridge-client';
 import { relayAdminsCfgSyncOutbox } from '@squad/db';
 import {
   adminsCfgSyncOutbox,
@@ -152,8 +153,8 @@ describe('softDeleteServer (orchestrator)', () => {
     });
     expect(result.sidecar_dirs_removed).toBe(true);
     expect(ufwRule).toHaveBeenCalledTimes(4);
-    for (const call of ufwRule.mock.calls) {
-      expect(call[0].action).toBe('remove');
+    for (const call of ufwRule.mock.calls as unknown as Array<[{ action: string }]>) {
+      expect(call[0]?.action).toBe('remove');
     }
 
     const backupRows = await h.db
@@ -199,7 +200,7 @@ describe('softDeleteServer (orchestrator)', () => {
         },
         seeded.id,
       ),
-    ).rejects.toThrow(/no config files could be backed up.*transport issue/);
+    ).rejects.toThrow(/could not back up .*nothing was removed/);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).toBeNull();
@@ -207,11 +208,11 @@ describe('softDeleteServer (orchestrator)', () => {
 
   it('soft-deletes a never-installed server (configs dir never existed)', async () => {
     const seeded = await seedServer(h, { slug: 'never-installed' });
-    // Simulate the bridge's exact error shape when the host configs dir
-    // does not exist — this is what an install that aborted before
-    // seedConfigs leaves behind.
+    // Simulate the bridge's error shape when the host configs dir does not
+    // exist — this is what an install that aborted before seedConfigs leaves
+    // behind.
     const fileRead = vi.fn(async ({ path }: { path: string }) => {
-      throw new Error(`stat: stat ${path}: no such file or directory`);
+      throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
     });
     const directoryDelete = vi.fn(async () => ({ removed: false }));
     const ufwRule = vi.fn(async () => ({ output: '', status: 'ok' }));
@@ -259,15 +260,47 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(versions).toHaveLength(0);
   });
 
+  it('treats a pre-not_found bridge (runtime_error + OS text) as missing, never-installed', async () => {
+    const seeded = await seedServer(h, { slug: 'legacy-bridge-missing' });
+    const fileRead = vi.fn(async ({ path }: { path: string }) => {
+      throw new BridgeError('runtime_error', `openat ${path}: no such file or directory`);
+    });
+    const bridge = {
+      ...h.bridge,
+      fileRead,
+      directoryDelete: vi.fn(async () => ({ removed: false })),
+      ufwRule: vi.fn(async () => ({ output: '', status: 'ok' })),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId as string,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+      },
+      seeded.id,
+    );
+
+    expect(result.files_backed_up).toBe(0);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
   it('treats a mixed error set (some ENOENT, one transport) as bridge failure', async () => {
     const seeded = await seedServer(h, { slug: 'mixed-errors' });
     let callCount = 0;
     const fileRead = vi.fn(async ({ path }: { path: string }) => {
       callCount++;
       if (callCount === 5) {
-        throw new Error('connect ECONNREFUSED /run/panel-host-bridge/bridge.sock');
+        throw new BridgeError(
+          'transport',
+          'connect ECONNREFUSED /run/panel-host-bridge/bridge.sock',
+        );
       }
-      throw new Error(`stat: stat ${path}: no such file or directory`);
+      throw new BridgeError('not_found', `openat ${path}: no such file or directory`);
     });
     const bridge = { ...h.bridge, fileRead };
 
@@ -285,10 +318,84 @@ describe('softDeleteServer (orchestrator)', () => {
         },
         seeded.id,
       ),
-    ).rejects.toThrow(/transport issue/);
+    ).rejects.toThrow(/could not back up/);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).toBeNull();
+  });
+
+  it('aborts before any teardown when one config read fails for a reason other than not-found (#50)', async () => {
+    const seeded = await seedServer(h, { slug: 'partial-backup' });
+    await seedConfigs(h, seeded.id);
+    const failingFile = ALLOWED_CONFIG_FILES[1] as string;
+    const fileRead = vi.fn(async ({ path }: { path: string }) => {
+      if (path.endsWith(`/${failingFile}`)) {
+        throw new BridgeError('timeout', 'bridge call file_read timed out after 30000ms');
+      }
+      return h.bridge.fileRead({ path });
+    });
+    const directoryDelete = vi.fn(async () => ({ removed: true }));
+    const containerRm = vi.fn(async () => ({ status: 'ok' }));
+    const bridge = { ...h.bridge, fileRead, directoryDelete, containerRm };
+
+    await expect(
+      softDeleteServer(
+        {
+          db: h.db,
+          bridge: bridge as unknown as FakeBridge,
+          log: silentLogger,
+          actorPlayerId: h.seed.ownerPlayerId as string,
+          actorIp: null,
+          actorLabel: `player:${h.seed.ownerPlayerId}`,
+        },
+        seeded.id,
+      ),
+    ).rejects.toThrow(new RegExp(`could not back up ${failingFile}`));
+
+    expect(directoryDelete).not.toHaveBeenCalled();
+    expect(containerRm).not.toHaveBeenCalled();
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).toBeNull();
+    const markers = await h.db.query.configVersions.findMany({
+      where: and(
+        eq(configVersions.serverId, seeded.id),
+        like(configVersions.message, 'deletion-backup-marker%'),
+      ),
+    });
+    expect(markers).toHaveLength(0);
+  });
+
+  it('backs up the files that exist and proceeds when the rest are not_found', async () => {
+    const seeded = await seedServer(h, { slug: 'partial-missing' });
+    const presentFile = ALLOWED_CONFIG_FILES[0] as string;
+    h.bridge.files.set(
+      `/var/lib/squad-panel/configs/${seeded.id}/ServerConfig/${presentFile}`,
+      Buffer.from('key=v\n', 'utf-8'),
+    );
+    const bridge = {
+      ...h.bridge,
+      directoryDelete: vi.fn(async () => ({ removed: true })),
+      ufwRule: vi.fn(async () => ({ output: '', status: 'ok' })),
+      containerStop: vi.fn(async () => ({ status: 'ok' })),
+      containerRm: vi.fn(async () => ({ status: 'ok' })),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId as string,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+      },
+      seeded.id,
+    );
+
+    expect(result.files_backed_up).toBe(1);
+    expect(result.configs_dir_removed).toBe(true);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
   });
 
   it('records partial-failure errors but still soft-deletes the row', async () => {
@@ -332,6 +439,52 @@ describe('softDeleteServer (orchestrator)', () => {
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('records why the sidecar container and config dir could not be removed (#58)', async () => {
+    const seeded = await seedServer(h, { slug: 'sidecar-fail' });
+    for (const file of ALLOWED_CONFIG_FILES) {
+      h.bridge.files.set(
+        `/var/lib/squad-panel/configs/${seeded.id}/ServerConfig/${file}`,
+        Buffer.from('key=v\n', 'utf-8'),
+      );
+    }
+
+    const bridge = {
+      ...h.bridge,
+      directoryDelete: vi.fn(async ({ path }: { path: string }) => {
+        if (path.includes('/rnsquadjs/')) throw new Error('EACCES: permission denied');
+        return { removed: true };
+      }),
+      ufwRule: vi.fn(async () => ({ output: '', status: 'ok' })),
+      containerStop: vi.fn(async () => ({ status: 'ok' })),
+      containerRm: vi.fn(async ({ name }: { name: string }) => {
+        if (name.startsWith('rnsquadjs-')) throw new Error('bridge transport closed');
+        return { status: 'ok' };
+      }),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId as string,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+      },
+      seeded.id,
+    );
+
+    expect(result.sidecar_dirs_removed).toBe(false);
+    expect(result.errors).toContainEqual({
+      phase: 'sidecar_dir_delete',
+      error: 'EACCES: permission denied',
+    });
+    expect(result.errors).toContainEqual({
+      phase: 'sidecar_rm',
+      error: 'bridge transport closed',
+    });
   });
 
   it('treats container_stop "no such container" as success (idempotent)', async () => {
@@ -634,5 +787,36 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     expect(result.errors.some((e) => e.phase === 'sync_queue_cleanup')).toBe(true);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('reports the UNLINK failure itself instead of masking it with a DEL retry (#66)', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-unlink-fail' });
+    await seedConfigs(h, seeded.id);
+
+    const redisStub = {
+      xgroup: vi.fn(async () => 1),
+      unlink: vi.fn(async () => {
+        throw new Error('UNLINK boom');
+      }),
+      del: vi.fn(async () => 1),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: null,
+        actorIp: null,
+        actorLabel: 'system',
+        redis: redisStub as unknown as IntegrationHarness['redis'],
+      },
+      seeded.id,
+    );
+
+    expect(result.errors).toContainEqual({ phase: 'sync_queue_cleanup', error: 'UNLINK boom' });
+    expect(redisStub.del).not.toHaveBeenCalledWith(
+      expect.stringContaining('events:admins-cfg-sync:'),
+    );
   });
 });

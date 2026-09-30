@@ -1,3 +1,4 @@
+import type { DatabaseClient } from '@squad/db';
 import { events, moderationActions } from '@squad/db/schema';
 import {
   type EventEnvelope,
@@ -5,7 +6,7 @@ import {
   moderationActionPayload,
   STREAM_NAME,
 } from '@squad/shared-types';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';
 import { parseBanLengthToExpiry } from './banlist-publish.js';
@@ -45,6 +46,11 @@ export interface EnforceModerationActionInput {
   source?: ModerationActionSource;
   /** Extra `context` jsonb keys the caller wants recorded (e.g. `external_ban_id`). */
   extraContext?: Record<string, unknown>;
+  /**
+   * The EVT-1 envelope's `correlation_id` — the record that caused the action
+   * (e.g. the external ban a local ban enforces). Defaults to `reportId`.
+   */
+  correlationId?: string | null;
 }
 
 export type EnforceModerationActionResult =
@@ -72,10 +78,13 @@ const MODERATION_EVENT_TYPE: Record<'ban' | 'kick' | 'warn' | 'unban', EventType
 
 /**
  * Enforces a warn/kick/ban through worker-rcon and, only once the command is
- * confirmed applied, records the `moderation_actions` ledger row and
- * publishes the EVT-1 envelope consumed by discord-notify. A failed or
- * timed-out RCON command never leaves a ledger row behind — the caller gets
- * `{ ok: false, outcome }` and nothing is persisted.
+ * confirmed applied, records the `moderation_actions` ledger row and its
+ * `events` row in one transaction, then publishes the EVT-1 envelope consumed
+ * by discord-notify. A failed or timed-out RCON command never leaves a ledger
+ * row behind — the caller gets `{ ok: false, outcome }` and nothing is
+ * persisted. Once the command is applied, a failed stream publish is logged
+ * rather than thrown: failing the request would invite the operator to retry
+ * and apply the action a second time.
  *
  * @param app - The Fastify instance (`app.db`, `app.redis`).
  * @param input - The action to enforce. `input.identity` must resolve a
@@ -118,34 +127,40 @@ export async function enforceModerationAction(
     ...input.extraContext,
   };
 
-  const [action] = await app.db
-    .insert(moderationActions)
-    .values({
-      playerId: input.playerId,
-      serverId: input.serverId,
+  const { actionId, envelope } = await app.db.transaction(async (tx) => {
+    const [action] = await tx
+      .insert(moderationActions)
+      .values({
+        playerId: input.playerId,
+        serverId: input.serverId,
+        actionType: input.actionType,
+        authorPlayerId: input.actorPlayerId,
+        reason: input.reason,
+        context,
+        reportId: input.reportId ?? null,
+      })
+      .returning({ id: moderationActions.id });
+    if (!action) throw new Error('moderation action insert returned no row');
+
+    const built = buildModerationEnvelope({
+      actionId: action.id,
       actionType: input.actionType,
-      authorPlayerId: input.actorPlayerId,
-      reason: input.reason,
-      context,
+      actorPlayerId: input.actorPlayerId,
+      actorName: input.actorName,
+      playerId: input.playerId,
+      player: input.identity,
+      serverId: input.serverId,
       reportId: input.reportId ?? null,
-    })
-    .returning({ id: moderationActions.id });
-  if (!action) throw new Error('moderation action insert returned no row');
-
-  const envelope = await publishModerationEvent(app, {
-    actionId: action.id,
-    actionType: input.actionType,
-    actorPlayerId: input.actorPlayerId,
-    actorName: input.actorName,
-    playerId: input.playerId,
-    player: input.identity,
-    serverId: input.serverId,
-    reportId: input.reportId ?? null,
-    reason: input.reason,
-    duration: input.actionType === 'ban' ? input.banLength : null,
+      correlationId: input.correlationId,
+      reason: input.reason,
+      duration: input.actionType === 'ban' ? input.banLength : null,
+    });
+    await insertModerationEvent(tx, built);
+    return { actionId: action.id, envelope: built };
   });
+  await streamModerationEvent(app, input.serverId, envelope);
 
-  return { ok: true, actionId: action.id, requestId: outcome.requestId, envelope, context };
+  return { ok: true, actionId, requestId: outcome.requestId, envelope, context };
 }
 
 /**
@@ -156,16 +171,16 @@ export async function enforceModerationAction(
  * operator clicked through, to match the row set actually removed from
  * `Bans.cfg` by {@link removeBanLines}.
  *
- * `targetActionId` — the specific row the revert was invoked from — is
- * always included in the update, even if a concurrent request already
- * reverted it, so calling this twice for the same target action is
- * idempotent from the caller's perspective.
+ * Rows that are already reverted are left untouched, so a repeated or
+ * concurrent unban never overwrites who reverted a ban and when; the
+ * `reverted_at IS NULL` predicate is re-checked under the row lock, so of two
+ * concurrent calls only one claims a given row.
  *
- * @returns The ids of every row that was (re-)marked reverted.
+ * @returns The ids of the rows this call marked reverted.
  */
 export async function markBansReverted(
   app: FastifyInstance,
-  params: { playerId: string; serverId: string; actorPlayerId: string; targetActionId: string },
+  params: { playerId: string; serverId: string; actorPlayerId: string },
 ): Promise<string[]> {
   const rows = await app.db
     .update(moderationActions)
@@ -175,33 +190,30 @@ export async function markBansReverted(
         eq(moderationActions.playerId, params.playerId),
         eq(moderationActions.serverId, params.serverId),
         eq(moderationActions.actionType, 'ban'),
-        or(isNull(moderationActions.revertedAt), eq(moderationActions.id, params.targetActionId)),
+        isNull(moderationActions.revertedAt),
       ),
     )
     .returning({ id: moderationActions.id });
   return rows.map((row) => row.id);
 }
 
-/**
- * Persists a `moderation.<action_type>` row in the `events` ledger and
- * publishes its EVT-1 envelope onto the per-server Redis stream consumed by
- * discord-notify (DISCORD-2).
- */
-export async function publishModerationEvent(
-  app: FastifyInstance,
-  params: {
-    actionId: string;
-    actionType: 'ban' | 'kick' | 'warn' | 'unban';
-    actorPlayerId: string;
-    actorName: string;
-    playerId: string;
-    player: PlayerIdentity;
-    serverId: string;
-    reportId: string | null;
-    reason: string;
-    duration: string | null;
-  },
-): Promise<EventEnvelope> {
+/** Inputs of one EVT-1 `moderation.<action_type>` envelope. */
+export interface ModerationEventParams {
+  actionId: string;
+  actionType: 'ban' | 'kick' | 'warn' | 'unban';
+  actorPlayerId: string;
+  actorName: string;
+  playerId: string;
+  player: PlayerIdentity;
+  serverId: string;
+  reportId: string | null;
+  /** Envelope `correlation_id`; defaults to `reportId`. */
+  correlationId?: string | null;
+  reason: string;
+  duration: string | null;
+}
+
+function buildModerationEnvelope(params: ModerationEventParams): EventEnvelope {
   const payload = moderationActionPayload.parse({
     moderation_action_id: params.actionId,
     action_type: params.actionType,
@@ -214,18 +226,24 @@ export async function publishModerationEvent(
     actor_name: params.actorName,
     report_id: params.reportId,
   });
-  const envelope: EventEnvelope = {
+  return {
     event_id: uuidv7(),
     version: 1,
     type: MODERATION_EVENT_TYPE[params.actionType],
     server_id: params.serverId,
     ts: new Date().toISOString(),
     actor: { kind: 'user', id: params.actorPlayerId },
-    correlation_id: params.reportId,
+    correlation_id: params.correlationId ?? params.reportId,
     payload,
   };
+}
 
-  await app.db.insert(events).values({
+/** Writes the envelope's `events` ledger row; `db` may be a transaction. */
+async function insertModerationEvent(
+  db: Pick<DatabaseClient, 'insert'>,
+  envelope: EventEnvelope,
+): Promise<void> {
+  await db.insert(events).values({
     eventId: envelope.event_id,
     serverId: envelope.server_id,
     occurredAt: new Date(envelope.ts),
@@ -236,14 +254,48 @@ export async function publishModerationEvent(
     correlationId: envelope.correlation_id,
     payload: envelope.payload,
   });
-  await app.redis.xadd(
-    STREAM_NAME.eventsServer(params.serverId),
-    'MAXLEN',
-    '~',
-    '10000',
-    '*',
-    'envelope',
-    JSON.stringify(envelope),
-  );
+}
+
+/**
+ * XADDs the envelope onto the per-server stream consumed by discord-notify.
+ * Best-effort: it runs after the ledger rows are committed, so a Redis fault
+ * is logged and swallowed — the `events` row stays the durable record.
+ */
+async function streamModerationEvent(
+  app: FastifyInstance,
+  serverId: string,
+  envelope: EventEnvelope,
+): Promise<void> {
+  try {
+    await app.redis.xadd(
+      STREAM_NAME.eventsServer(serverId),
+      'MAXLEN',
+      '~',
+      '10000',
+      '*',
+      'envelope',
+      JSON.stringify(envelope),
+    );
+  } catch (err) {
+    app.log.warn(
+      { err: (err as Error).message, event_id: envelope.event_id, type: envelope.type },
+      'moderation event stream publish failed; the events ledger row is committed',
+    );
+  }
+}
+
+/**
+ * Persists a `moderation.<action_type>` row in the `events` ledger and
+ * publishes its EVT-1 envelope onto the per-server Redis stream consumed by
+ * discord-notify (DISCORD-2). The stream publish is best-effort (see
+ * {@link streamModerationEvent}); only the ledger insert can throw.
+ */
+export async function publishModerationEvent(
+  app: FastifyInstance,
+  params: ModerationEventParams,
+): Promise<EventEnvelope> {
+  const envelope = buildModerationEnvelope(params);
+  await insertModerationEvent(app.db, envelope);
+  await streamModerationEvent(app, params.serverId, envelope);
   return envelope;
 }

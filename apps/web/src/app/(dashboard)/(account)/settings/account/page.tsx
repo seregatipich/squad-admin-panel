@@ -22,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { AccountIdentity } from './AccountIdentity';
 import {
@@ -31,7 +32,8 @@ import {
   formatPermissionCount,
   formatRelative,
 } from './helpers';
-import { isCurrentSessionRevoked, type SessionRevokedEvent } from './sessionEvents';
+
+type SessionRevokedEvent = Extract<LiveEvent, { type: 'session.revoked' }>;
 
 const POLL_MS = 30_000;
 
@@ -57,50 +59,97 @@ export default function AccountSettings() {
   const [me, setMe] = useState<Me | null>(null);
   const [names, setNames] = useState<AccountNames | null>(null);
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const sessionsRef = useRef<ActiveSession[]>([]);
-  sessionsRef.current = sessions;
+  // Bumped by every session-list mutation (revokeOne). loadSessions captures
+  // the revision it started with and discards its response if a mutation
+  // landed in the meantime, so a poll started before revokeOne can never
+  // repopulate a row it just removed (#427).
+  const sessionsRevisionRef = useRef(0);
+  // Which request last failed, so the error banner's "Повторить" retries
+  // that request instead of always reloading everything (#426).
+  const lastFailedRef = useRef<'profile' | 'sessions' | null>(null);
 
   const onSessionRevoked = useCallback((event: SessionRevokedEvent) => {
-    const currentSession = sessionsRef.current.find((s) => s.current);
-    if (isCurrentSessionRevoked(event, currentSession?.id ?? null)) {
-      window.location.href = '/login';
-      return;
-    }
+    // Redirecting *this* tab when its own session is the one revoked is
+    // <ForcedLogout />'s job — it is mounted once in the dashboard layout and
+    // already handles every session.revoked event globally. Duplicating that
+    // check here only served to remove the row from the table (#428).
     setSessions((prev) => prev.filter((s) => s.id !== event.data.session_id));
   }, []);
   useLiveSubscription('session.revoked', onSessionRevoked);
 
-  const load = useCallback(async () => {
+  // Права и история ников не меняются в пределах визита: опрашивать их
+  // повторно незачем, они загружаются один раз при монтировании (#426).
+  const loadProfile = useCallback(async () => {
     try {
-      const [meRes, sessRes, namesRes] = await Promise.all([
+      const [meRes, namesRes] = await Promise.all([
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me/sessions', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/v1/me/names', { credentials: 'include', cache: 'no-store' }),
       ]);
       if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!sessRes.ok) throw new Error(`HTTP ${sessRes.status}`);
       if (!namesRes.ok) throw new Error(`HTTP ${namesRes.status}`);
       setMe((await meRes.json()) as Me);
-      setSessions((await sessRes.json()) as ActiveSession[]);
       setNames((await namesRes.json()) as AccountNames);
-      // Снимается только сообщение об ошибке: удачный опрос действительно
-      // отменяет её, а подтверждение «Сессия завершена» оператор должен
-      // успеть прочитать, и опрос раз в полминуты не имеет права его стереть.
-      setMsg((prev) => (prev?.kind === 'err' ? null : prev));
+      // Снимается только сообщение об ошибке от ЭТОГО же запроса: удачный
+      // опрос профиля не должен стирать ошибку сессий (и наоборот), а
+      // подтверждение «Сессия завершена» опрос вообще не имеет права стереть.
+      if (lastFailedRef.current === 'profile') {
+        lastFailedRef.current = null;
+        setMsg((prev) => (prev?.kind === 'err' ? null : prev));
+      }
     } catch (e) {
+      lastFailedRef.current = 'profile';
       setMsg({ kind: 'err', text: (e as Error).message });
     }
   }, []);
 
+  const loadSessions = useCallback(async () => {
+    const revision = sessionsRevisionRef.current;
+    try {
+      const res = await fetch('/api/v1/me/sessions', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ActiveSession[];
+      if (sessionsRevisionRef.current !== revision) return;
+      setSessions(data);
+      setSessionsLoaded(true);
+      if (lastFailedRef.current === 'sessions') {
+        lastFailedRef.current = null;
+        setMsg((prev) => (prev?.kind === 'err' ? null : prev));
+      }
+    } catch (e) {
+      if (sessionsRevisionRef.current !== revision) return;
+      setSessionsLoaded(true);
+      lastFailedRef.current = 'sessions';
+      setMsg({ kind: 'err', text: (e as Error).message });
+    }
+  }, []);
+
+  const retry = useCallback(() => {
+    if (lastFailedRef.current === 'sessions') void loadSessions();
+    else void loadProfile();
+  }, [loadProfile, loadSessions]);
+
   useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), POLL_MS);
+    void loadProfile();
+    void loadSessions();
+  }, [loadProfile, loadSessions]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      // Списко сессий и так обновляется событием session.revoked; опрос в
+      // скрытой вкладке — трата запроса без наблюдателя (#426).
+      if (document.visibilityState !== 'visible') return;
+      void loadSessions();
+    }, POLL_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [loadSessions]);
 
   async function revokeOne(id: string) {
     setBusyId(id);
@@ -111,6 +160,7 @@ export default function AccountSettings() {
         credentials: 'include',
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      sessionsRevisionRef.current++;
       setSessions((prev) => prev.filter((s) => s.id !== id));
       setMsg({ kind: 'ok', text: 'Сессия завершена.' });
     } catch (e) {
@@ -160,7 +210,7 @@ export default function AccountSettings() {
             description={msg.kind === 'ok' ? undefined : msg.text}
             action={
               msg.kind === 'err' ? (
-                <Button size="sm" onClick={() => void load()}>
+                <Button size="sm" onClick={retry}>
                   Повторить
                 </Button>
               ) : undefined
@@ -222,7 +272,7 @@ export default function AccountSettings() {
               </Button>
             }
           />
-          {me === null ? (
+          {!sessionsLoaded ? (
             <div className="p-3">
               <SkeletonTable rows={3} cols={5} label="Загрузка списка сессий" />
             </div>

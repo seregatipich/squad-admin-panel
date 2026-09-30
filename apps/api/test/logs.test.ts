@@ -3,6 +3,8 @@ import { encodeLogEntry, PANEL_LOGS_STREAM } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { narrowedOwnerHeaders } from './helpers/narrowed-token.js';
+import { VIEWER_PERMISSIONS } from './helpers/viewer-fixture.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -294,28 +296,11 @@ describe('GET /api/v1/logs/export', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for Viewer role (missing host:metrics permission)', async () => {
-    const viewerRows = await h.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.name, 'Viewer'))
-      .limit(1);
-    const viewerRoleId = viewerRows[0]?.id;
-    if (!viewerRoleId || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
-      throw new Error('Viewer role missing');
-    }
-
-    await h.db
-      .update(players)
-      .set({ roleId: viewerRoleId })
-      .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without host:metrics (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/logs/export',
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });
@@ -330,5 +315,71 @@ describe('GET /api/v1/logs/export', () => {
     expect(resp.statusCode).toBe(200);
     const disposition = resp.headers['content-disposition'] as string;
     expect(disposition).toMatch(/panel-logs-\d{4}-\d{2}-\d{2}/);
+  });
+});
+
+describe('GET /api/v1/logs — sources and tail cursor', () => {
+  async function append(fields: Record<string, string>): Promise<string> {
+    const args: unknown[] = [PANEL_LOGS_STREAM, 'MAXLEN', '~', '10000', '*'];
+    for (const [k, v] of Object.entries(fields)) args.push(k, v);
+    const id = await (h.redis as { xadd(...a: unknown[]): Promise<string | null> }).xadd(...args);
+    if (!id) throw new Error('xadd returned no id');
+    return id;
+  }
+
+  // #781: config-sync writes source code C; the route used to drop it from src=.
+  it('filters by the config-sync source code (src=C)', async () => {
+    await append(
+      encodeLogEntry({ source: 'config-sync', level: 'info', msg: 'admins.cfg synced' }),
+    );
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/logs?src=C',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    const entries = resp.json().entries as Array<{ source: string }>;
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries.every((e) => e.source === 'config-sync')).toBe(true);
+  });
+
+  // #778/#779: the cursor must follow the scanned stream, not the filtered
+  // result, or a filter that matches nothing in a window stalls the tail.
+  it('returns a cursor that advances past entries the filter drops', async () => {
+    const token = `cursor-probe-${Date.now()}`;
+    const cookie = await loginAsOwner(h);
+    const initial = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/logs?q=${token}`,
+      headers: { cookie },
+    });
+    expect(initial.statusCode).toBe(200);
+    const initialBody = initial.json() as { entries: unknown[]; cursor?: string };
+    expect(initialBody.entries).toHaveLength(0);
+    expect(initialBody.cursor).toMatch(/^\d+-\d+$/);
+
+    for (let i = 0; i < 6; i += 1) {
+      await append(encodeLogEntry({ source: 'api', level: 'info', msg: `filler ${i}` }));
+    }
+    const matchId = await append(
+      encodeLogEntry({ source: 'api', level: 'error', msg: `found ${token}` }),
+    );
+
+    let cursor = initialBody.cursor as string;
+    let found: Array<{ id: string }> = [];
+    for (let poll = 0; poll < 20 && found.length === 0; poll += 1) {
+      const resp = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/logs?q=${token}&limit=3&after=${cursor}`,
+        headers: { cookie },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json() as { entries: Array<{ id: string }>; cursor: string };
+      found = body.entries;
+      if (found.length === 0) expect(body.cursor).not.toBe(cursor);
+      cursor = body.cursor;
+    }
+    expect(found.map((e) => e.id)).toEqual([matchId]);
   });
 });

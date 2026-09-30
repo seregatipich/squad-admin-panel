@@ -23,7 +23,7 @@ Tests the SSR no-op stub returned by `getLiveBus()` when `window` is undefined: 
 Validates that `useLiveSubscription`, `useLiveBusState`, and `useBridgeState` are exported as functions without invoking them outside a React render context.
 
 ### `test/middleware.test.ts` (10 tests)
-Tests the Next.js middleware redirect logic using a mocked `next/server` and fake `NextRequest` objects. Covers: unauthenticated redirect from `/dashboard` and `/servers/:id` (verifying `307` status and `?next=<path>`), redirect target is `/login`, authenticated pass-through, public path pass-through, and all 5 `config.matcher` patterns.
+Tests the Next.js middleware using a mocked `next/server` and fake `NextRequest` objects. Covers: unauthenticated redirect from the protected prefixes (verifying `307` status and `?next=<path>`), authenticated and public pass-through, the per-request nonce `Content-Security-Policy` on the response and the forwarded request, and the catch-all `config.matcher` (pages in, API/health/build assets/prefetches out).
 
 ## Property-based tests
 

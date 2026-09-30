@@ -59,10 +59,24 @@ export interface HandleCombatResult {
   matchId: string | null;
 }
 
+interface IdentityMatch {
+  id: string;
+  eosId: string | null;
+  steamId64: bigint | null;
+  /** The EOS id and SteamID belong to two different `players` rows. */
+  conflicting: boolean;
+}
+
+/**
+ * Finds the player row for an EOS id and/or SteamID. Each column is unique,
+ * so at most two rows match; when they differ (an EOS-only row and a
+ * Steam-only row for the same person), the EOS row wins and the match is
+ * flagged `conflicting` so no backfill tries to merge them.
+ */
 async function resolveByIdentity(
   db: DatabaseClient,
   identity: { eosId: string | null; steamId64: string | null },
-): Promise<{ id: string; eosId: string | null; steamId64: bigint | null } | null> {
+): Promise<IdentityMatch | null> {
   const filters = [];
   if (identity.eosId) filters.push(eq(players.eosId, identity.eosId));
   if (identity.steamId64) filters.push(eq(players.steamId64, BigInt(identity.steamId64)));
@@ -71,10 +85,21 @@ async function resolveByIdentity(
     .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
     .from(players)
     .where(filters.length === 1 ? filters[0] : or(...filters))
-    .limit(1);
-  return rows[0] ?? null;
+    .limit(2);
+  if (rows.length === 0) return null;
+  const byEos = identity.eosId ? rows.find((row) => row.eosId === identity.eosId) : undefined;
+  const chosen = byEos ?? rows[0];
+  if (!chosen) return null;
+  return { ...chosen, conflicting: rows.length > 1 };
 }
 
+/**
+ * Resolves a player from a bare display name, which is how the log names a
+ * victim. Returns `null` rather than guessing when the name is ambiguous: two
+ * players currently carry it, or (with no current holder) more than one
+ * player has used it before. A wrong guess would pin teamkills and deaths on
+ * someone else.
+ */
 async function resolveByName(db: DatabaseClient, rawName: string): Promise<string | null> {
   const normalized = normalizePlayerName(rawName);
   if (!normalized) return null;
@@ -82,15 +107,15 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
     .select({ id: players.id })
     .from(players)
     .where(eq(players.canonicalNameNormalized, normalized))
-    .limit(1);
+    .limit(2);
+  if (direct.length > 1) return null;
   if (direct[0]) return direct[0].id;
   const historical = await db
-    .select({ id: playerNameHistory.playerId })
+    .selectDistinct({ id: playerNameHistory.playerId })
     .from(playerNameHistory)
     .where(eq(playerNameHistory.nameNormalized, normalized))
-    .orderBy(desc(playerNameHistory.lastSeenAt))
-    .limit(1);
-  return historical[0]?.id ?? null;
+    .limit(2);
+  return historical.length === 1 ? (historical[0]?.id ?? null) : null;
 }
 
 async function createPlayer(db: DatabaseClient, identity: CombatIdentity): Promise<string | null> {
@@ -133,23 +158,66 @@ async function createPlayer(db: DatabaseClient, identity: CombatIdentity): Promi
   }
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  const candidate = err as { code?: string; cause?: { code?: string } };
+  return candidate.code === '23505' || candidate.cause?.code === '23505';
+}
+
+/**
+ * Fills a missing EOS id or SteamID on an existing player. Best-effort: when
+ * the identity is split across two rows, or a concurrent writer claimed the
+ * id first (unique violation), the row is left as is — the combat event is
+ * still recorded against the resolved player instead of being dropped.
+ */
 async function backfillIdentity(
   db: DatabaseClient,
-  existing: { id: string; eosId: string | null; steamId64: bigint | null },
+  existing: IdentityMatch,
   identity: CombatIdentity,
 ): Promise<void> {
+  if (existing.conflicting) return;
   const updates: Record<string, unknown> = {};
   if (!existing.eosId && identity.eosId) updates.eosId = identity.eosId;
   if (!existing.steamId64 && identity.steamId64) updates.steamId64 = BigInt(identity.steamId64);
   if (Object.keys(updates).length === 0) return;
   updates.updatedAt = new Date();
-  await db.update(players).set(updates).where(eq(players.id, existing.id));
+  try {
+    await db.update(players).set(updates).where(eq(players.id, existing.id));
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+  }
+}
+
+/**
+ * Supplies ids for a combatant the log names without any, from the live
+ * roster: exactly one roster member with that name gives its EOS id/SteamID,
+ * several make the name ambiguous (`null`), none leaves the name as is.
+ */
+function identityFromRoster(
+  identity: CombatIdentity,
+  roster: RosterTeamMember[],
+): CombatIdentity | null {
+  if (identity.eosId || identity.steamId64) return identity;
+  const normalized = normalizePlayerName(identity.name);
+  const onRoster = roster.filter(
+    (member) => member.name && normalizePlayerName(member.name) === normalized,
+  );
+  if (onRoster.length > 1) return null;
+  const member = onRoster[0];
+  if (!member || (!member.eos_id && !member.steam_id64)) return identity;
+  return {
+    eosId: member.eos_id ?? null,
+    steamId64: member.steam_id64 ? String(member.steam_id64) : null,
+    name: identity.name,
+  };
 }
 
 async function resolveOrCreatePlayer(
   db: DatabaseClient,
-  identity: CombatIdentity | null,
+  combatant: CombatIdentity | null,
+  roster: RosterTeamMember[] = [],
 ): Promise<string | null> {
+  if (!combatant) return null;
+  const identity = identityFromRoster(combatant, roster);
   if (!identity) return null;
   const hasIds = Boolean(identity.eosId || identity.steamId64);
   if (hasIds) {
@@ -166,15 +234,19 @@ async function resolveOrCreatePlayer(
   return resolveByName(db, identity.name);
 }
 
-async function loadTeamIndex(redis: CombatRedis | null, serverId: string) {
-  if (!redis) return buildTeamIndex([]);
+/** Reads the live roster snapshot worker-rcon caches; empty when absent or unreadable. */
+async function loadRoster(
+  redis: CombatRedis | null,
+  serverId: string,
+): Promise<RosterTeamMember[]> {
+  if (!redis) return [];
   try {
     const raw = await redis.get(`rcon:roster:${serverId}`);
-    if (!raw) return buildTeamIndex([]);
+    if (!raw) return [];
     const snapshot = JSON.parse(raw) as { players?: RosterTeamMember[] };
-    return buildTeamIndex(Array.isArray(snapshot.players) ? snapshot.players : []);
+    return Array.isArray(snapshot.players) ? snapshot.players : [];
   } catch {
-    return buildTeamIndex([]);
+    return [];
   }
 }
 
@@ -248,23 +320,37 @@ export async function handleCombat(
   command: CombatRecordCommand,
 ): Promise<HandleCombatResult> {
   const occurredAt = new Date(command.ts);
-  const attackerPlayerId = await resolveOrCreatePlayer(db, command.attacker);
-  const victimPlayerId = await resolveOrCreatePlayer(db, command.victim);
+  const roster = await loadRoster(redis, command.serverId);
+  const attackerPlayerId = await resolveOrCreatePlayer(db, command.attacker, roster);
+  const victimPlayerId = await resolveOrCreatePlayer(db, command.victim, roster);
+  // The parser's isSuicide only has the two combatants' names/ids to compare
+  // (Squad's Wound/Die lines never carry a victim id segment — see
+  // parser/combat.ts), so it can miss a self-damage line whose attacker
+  // segment is a controller name that differs from the victim's display
+  // name. Once both sides resolve to the same DB player row, treat it as a
+  // suicide regardless, so it is never counted as a teamkill (#63 finding 922).
+  const isSuicide =
+    command.isSuicide || (attackerPlayerId !== null && attackerPlayerId === victimPlayerId);
 
-  const teamIndex = await loadTeamIndex(redis, command.serverId);
-  const isTeamkill = detectTeamkill(command, teamIndex);
+  const teamIndex = buildTeamIndex(roster);
+  const isTeamkill = !isSuicide && detectTeamkill(command, teamIndex);
   const matchId = await resolveMatchId(db, command.serverId, occurredAt);
 
   const eventId = deterministicEventId(command);
-  const payload = buildPayload(command, attackerPlayerId, victimPlayerId, isTeamkill, matchId);
+  const payload = buildPayload(
+    { ...command, isSuicide },
+    attackerPlayerId,
+    victimPlayerId,
+    isTeamkill,
+    matchId,
+  );
   const eventType = COMBAT_KIND_TO_EVENT_TYPE[command.kind];
 
   // DOSSIER-2 (#189): the events envelope, the typed combat_events row and the
   // dossier aggregate fold commit atomically. The fold runs only when the events
   // insert actually inserted (onConflictDoNothing returns [] on replay), so a
-  // redelivered line never double-counts. match_id stays NULL: combat_events keys
-  // matches by bigint while log-ingest resolves a uuid (a COMBAT-2/DOSSIER-1
-  // schema gap, out of scope here); the aggregates and reconcile ignore it.
+  // redelivered line never double-counts. The resolved match goes to
+  // combat_events.match_uuid; the legacy bigint match_id is never written.
   let wasInserted = false;
   await db.transaction(async (tx) => {
     const inserted = await tx
@@ -289,7 +375,7 @@ export async function handleCombat(
     await tx.insert(combatEvents).values({
       eventType,
       serverId: command.serverId,
-      matchId: null,
+      matchUuid: matchId,
       attackerPlayerId,
       victimPlayerId,
       victimVehicle: null,
@@ -327,7 +413,7 @@ export async function handleCombat(
         damage: command.damage,
         attacker_vehicle: command.attackerVehicle,
         is_teamkill: isTeamkill,
-        is_suicide: command.isSuicide,
+        is_suicide: isSuicide,
         occurred_at: occurredAt.toISOString(),
       },
     });
@@ -416,7 +502,7 @@ export async function handleVehicle(
     await tx.insert(combatEvents).values({
       eventType,
       serverId: command.serverId,
-      matchId: null,
+      matchUuid: matchId,
       attackerPlayerId,
       victimPlayerId: null,
       victimVehicle: command.victimVehicle,

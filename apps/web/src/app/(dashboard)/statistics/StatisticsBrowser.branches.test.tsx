@@ -152,6 +152,7 @@ function installFetch() {
 }
 
 let createObjectURLMock: ReturnType<typeof vi.fn>;
+let revokeObjectURLMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   statisticsResponse = { status: 200, body: FULL };
@@ -167,7 +168,8 @@ beforeEach(() => {
   installFetch();
   createObjectURLMock = vi.fn(() => 'blob:mock');
   (URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURLMock;
-  (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn();
+  revokeObjectURLMock = vi.fn();
+  (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeObjectURLMock;
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 });
 
@@ -196,11 +198,14 @@ describe('StatisticsBrowser — branch coverage', () => {
     expect(screen.getByText('Онлайн по часам суток (UTC)')).toBeInTheDocument();
   });
 
-  it('prints the Среднее / Максимум / Всего KPI strip for each series', async () => {
+  it('prints «Всего» only for additive series, never for averages and peaks', async () => {
     await mount(<StatisticsBrowser />);
     await screen.findByText('Население');
-    // avg_online: per-server 10 and 5 over two days → stacked total 30.
-    expect(screen.getAllByText(/Среднее 15 · Максимум 15 · Всего 30/).length).toBeGreaterThan(0);
+    // avg_online (10 + 5 per day) is an average: a sum of it means nothing.
+    expect(screen.getAllByText('Среднее 15 · Максимум 15').length).toBeGreaterThan(0);
+    // by_day matches (5 + 2 per day over two days) is a counter: stacked total 14.
+    expect(screen.getAllByText('Среднее 7 · Максимум 7 · Всего 14').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Среднее 15 · Максимум 15 · Всего/)).not.toBeInTheDocument();
   });
 
   it('renders the server legend from the payload', async () => {
@@ -239,6 +244,20 @@ describe('StatisticsBrowser — branch coverage', () => {
     expect(createObjectURLMock).toHaveBeenCalledTimes(1);
   });
 
+  it('revokes the JSON object URL later, after the download had a chance to start', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await mount(<StatisticsBrowser />);
+      await screen.findByText('Население');
+      fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+      expect(revokeObjectURLMock).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(10_000);
+      expect(revokeObjectURLMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the CSV link pointed at the same window as the loaded data', async () => {
     await mount(<StatisticsBrowser />);
     await screen.findByText('Население');
@@ -266,6 +285,34 @@ describe('StatisticsBrowser — branch coverage', () => {
       fireEvent.click(screen.getAllByRole('checkbox')[0] as HTMLElement);
     });
     expect(await screen.findByRole('button', { name: 'Все серверы' })).toBeInTheDocument();
+  });
+
+  it('closes the server dropdown on an outside click and on Escape', async () => {
+    await mount(<StatisticsBrowser />);
+    await screen.findByText('Население');
+    const openDropdown = async () => {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Все серверы' }));
+      });
+    };
+
+    await openDropdown();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    await act(async () => {
+      fireEvent.pointerDown(document.body);
+    });
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+
+    await openDropdown();
+    await act(async () => {
+      fireEvent.pointerDown(screen.getAllByRole('checkbox')[0] as HTMLElement);
+    });
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
   });
 
   it('renders the empty-dropdown branch when no server is available', async () => {
@@ -351,5 +398,77 @@ describe('StatisticsBrowser — branch coverage', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('discards a stale /api/v1/statistics response that resolves after a newer request (#729)', async () => {
+    // Each fetch to /api/v1/statistics is held open until the test resolves
+    // it explicitly, in whatever order it chooses — mirroring the request
+    // resolving after a newer, still-in-flight one.
+    const pendingStats: Array<(res: Response) => void> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/statistics')) {
+          return new Promise<Response>((resolve) => pendingStats.push(resolve));
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(
+            new Response(JSON.stringify(serversResponse.body), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response('nf', { status: 404 }));
+      }),
+    );
+
+    await mount(<StatisticsBrowser />);
+    // Mount fired the first request (index 0); resolve it so the page settles
+    // on an initial, known state before exercising the race.
+    await act(async () => {
+      pendingStats[0]?.(new Response(JSON.stringify(FULL), { status: 200 }));
+    });
+    await screen.findByText('Население');
+
+    // Two rapid preset changes fire two more overlapping requests (index 1,
+    // the older "week" request, then index 2, the newer "today" request).
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'week' } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'today' } });
+    });
+    expect(pendingStats).toHaveLength(3);
+
+    // Only `avg_online` differs between the two payloads — everything else
+    // stays at FULL's values, some of which coincidentally share a KPI
+    // number with one another, so the assertions below read the specific
+    // "Средний онлайн за день" card rather than searching the whole page.
+    const newer: StatisticsResponse = {
+      ...FULL,
+      population: { ...FULL.population, avg_online: series(1, 1) },
+    };
+    const stale: StatisticsResponse = {
+      ...FULL,
+      population: { ...FULL.population, avg_online: series(100, 50) },
+    };
+    function avgOnlineKpiText() {
+      const card = screen.getByText('Средний онлайн за день').closest('section');
+      expect(card).not.toBeNull();
+      return (card as HTMLElement).querySelector('figcaption span:last-child')?.textContent ?? '';
+    }
+
+    // The newer ("today") request resolves first…
+    await act(async () => {
+      pendingStats[2]?.(new Response(JSON.stringify(newer), { status: 200 }));
+    });
+    expect(avgOnlineKpiText()).toMatch(/^Среднее 2 · Максимум 2$/);
+
+    // …then the older, now-stale ("week") request resolves after it. It must
+    // not overwrite the newer data that is already on screen.
+    await act(async () => {
+      pendingStats[1]?.(new Response(JSON.stringify(stale), { status: 200 }));
+    });
+    expect(avgOnlineKpiText()).toMatch(/^Среднее 2 · Максимум 2$/);
+    expect(avgOnlineKpiText()).not.toMatch(/150/);
   });
 });

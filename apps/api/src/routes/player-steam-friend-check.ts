@@ -1,24 +1,13 @@
 import { players } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { fetchSteamFriendCheck } from '../lib/steam-friends.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const query = z.object({ other: z.string().uuid() });
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
 
 /** ALT-5 Steam-friend edge check, gated by panel_access. */
 const playerSteamFriendCheckRoutes: FastifyPluginAsync = async (app) => {

@@ -182,6 +182,22 @@ async function renderPage() {
 }
 
 describe('PlayerDetailPage', () => {
+  // Regression (#472): a decoded route id reached API paths unchecked.
+  it('refuses a route id that is not a UUID without calling the API', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <PlayerDetailPage params={Promise.resolve({ id: '../../api/v1/players/x?' })} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByText('Некорректный идентификатор игрока')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('is a valid React component', () => {
     expect(PlayerDetailPage).toBeDefined();
     expect(typeof PlayerDetailPage).toBe('function');
@@ -383,6 +399,165 @@ describe('PlayerDetailPage', () => {
         fireEvent.click(within(dialog).getByRole('button', { name: 'Заменить роль' }));
       });
       await waitFor(() => expect(memberPosts(fetchMock)).toHaveLength(1));
+    });
+
+    it('refreshes the "Роль" card the moment whitelist membership changes it, without a page reload (#477)', async () => {
+      let role: MockRole | null = ADMIN_ROLE;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/v1/whitelist/members' && init?.method === 'POST') {
+          role = {
+            ...WHITELIST_ROLE,
+            color: 'sky',
+            is_system_role: false,
+            role_expires_at: null,
+            role_comment: null,
+          };
+          return Promise.resolve(
+            new Response(JSON.stringify({ ok: true, changed: true }), { status: 201 }),
+          );
+        }
+        if (url === `/api/v1/players/${PLAYER_ID}`) {
+          return Promise.resolve(new Response(JSON.stringify(PLAYER_RESPONSE), { status: 200 }));
+        }
+        if (url === '/api/v1/me') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                player_id: 'me-1',
+                permissions: ['user:manage_roles', 'whitelist:edit'],
+                squad_permissions: [],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url.startsWith('/api/v1/whitelist/settings')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                whitelist_role_id: WHITELIST_ROLE.id,
+                whitelist_role_name: WHITELIST_ROLE.name,
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url === `/api/v1/players/${PLAYER_ID}/role`) {
+          return Promise.resolve(new Response(JSON.stringify({ role }), { status: 200 }));
+        }
+        if (url === '/api/v1/roles') {
+          return Promise.resolve(new Response(JSON.stringify([ADMIN_ROLE]), { status: 200 }));
+        }
+        if (url.startsWith('/api/v1/banned-names/check')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ matched: false, rule: null, can_mutate: false }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      const roleCardBefore = (await screen.findByText('Роль')).closest('section');
+      if (!roleCardBefore) throw new Error('role card not found');
+      expect(within(roleCardBefore).getByText('Admin')).toBeInTheDocument();
+
+      const card = await whitelistCard();
+      await act(async () => {
+        fireEvent.click(await within(card).findByRole('button', { name: 'В whitelist' }));
+      });
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Заменить роль' }));
+      });
+
+      const roleCardAfter = (await screen.findByText('Роль')).closest('section');
+      if (!roleCardAfter) throw new Error('role card not found');
+      await waitFor(() => expect(within(roleCardAfter).getByText('Whitelist')).toBeInTheDocument());
+      expect(within(roleCardAfter).queryByText('Admin')).not.toBeInTheDocument();
+    }, 15_000);
+  });
+
+  describe('playerId path safety (#480)', () => {
+    it('rejects a non-UUID route param without ever calling the API', async () => {
+      const fetchMock = mockFetch({ canBan: false });
+      vi.stubGlobal('fetch', fetchMock);
+      await act(async () => {
+        render(
+          <Suspense fallback={null}>
+            <PlayerDetailPage
+              params={Promise.resolve({ id: '..%2Fapi%2Fv1%2Fwhitelist%2Fmembers%2Fx' })}
+            />
+          </Suspense>,
+        );
+      });
+      expect(await screen.findByText('Некорректный идентификатор игрока')).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('role change error messages (#478)', () => {
+    const ADMIN_ROLE: MockRole = {
+      id: 'role-admin',
+      name: 'Admin',
+      color: 'sky',
+      is_system_role: false,
+      role_expires_at: null,
+      role_comment: null,
+    };
+
+    it('shows "insufficient rights" for a generic permission-hook 403 on removal, not the Owner text', async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === `/api/v1/players/${PLAYER_ID}/role` && init?.method === 'DELETE') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }),
+          );
+        }
+        return mockFetch({ canBan: false, canManageRoles: true, currentRole: ADMIN_ROLE })(
+          input,
+          init,
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Снять роль' }));
+      });
+
+      expect(await screen.findByText('Недостаточно прав для этого действия.')).toBeInTheDocument();
+      expect(screen.queryByText('Нельзя выдать роль Owner через UI.')).not.toBeInTheDocument();
+    });
+
+    it('names the removed player, not the viewer, in the last-Owner 409 message', async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === `/api/v1/players/${PLAYER_ID}/role` && init?.method === 'DELETE') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'cannot_remove_last_owner' }), { status: 409 }),
+          );
+        }
+        return mockFetch({ canBan: false, canManageRoles: true, currentRole: ADMIN_ROLE })(
+          input,
+          init,
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Снять роль' }));
+      });
+
+      expect(await screen.findByText(/последний Owner панели/)).toBeInTheDocument();
     });
   });
 });

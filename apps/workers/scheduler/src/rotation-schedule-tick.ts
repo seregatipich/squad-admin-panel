@@ -13,11 +13,26 @@ export interface RotationScheduleEntry {
 
 export interface RotationScheduleAuditEntry {
   actor: { kind: 'system'; label: 'rotation-scheduler' };
-  actionType: 'server.rotation_schedule.execute' | 'server.rotation_schedule.skip_depot_update';
+  actionType:
+    | 'server.rotation_schedule.execute'
+    | 'server.rotation_schedule.skip_depot_update'
+    | 'server.rotation_schedule.skip_expired';
   targetType: 'rotation_schedule';
   targetId: string;
   context: Record<string, unknown>;
 }
+
+/**
+ * How late (past `scheduledAt`) a one-off rotation entry may still fire
+ * (#1004). Without a bound, an entry queued while the worker/bridge/Redis was
+ * down fires unconditionally on recovery, changing the map mid-match at an
+ * unpredictable time — worse for `force_change` (`AdminChangeLayer`, which
+ * cuts the round short) than for `set_next` (`AdminSetNextLayer`, which only
+ * takes effect at the next natural map change). Both share one conservative
+ * window here; there is no evidence a longer allowance for `set_next` is
+ * worth the extra branch.
+ */
+export const ROTATION_SCHEDULE_MAX_LATENESS_MS = 15 * 60_000;
 
 export interface RotationScheduleTickDeps {
   now?: Date;
@@ -30,6 +45,13 @@ export interface RotationScheduleTickDeps {
   }): Promise<void>;
   setLastExecutedAt(entryId: string, executedAt: Date): Promise<void>;
   writeAuditEntry(entry: RotationScheduleAuditEntry): Promise<void>;
+  /**
+   * Occurrences (`<entry id>:<ISO time>`) whose depot-update skip is already
+   * audited. Keeps a depot update that lasts many ticks from appending one
+   * identical row per tick to the append-only audit chain; the set must
+   * outlive a single tick, so the runtime deps supply a long-lived one.
+   */
+  auditedDepotSkips?: Set<string>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -51,14 +73,50 @@ export async function runRotationScheduleTick(
   const now = deps.now ?? new Date();
   let executed = 0;
   let skippedDepotUpdate = 0;
+  const auditedDepotSkips = deps.auditedDepotSkips ?? new Set<string>();
+  // The flag is global, so it is read once per tick, and only when something is due.
+  let depotUpdating: boolean | undefined;
 
   try {
     for (const entry of await deps.loadEnabledEntries()) {
       const occurrence = resolveDueRotationSchedule(entry, now);
       if (!occurrence) continue;
 
-      if (await deps.isDepotUpdating()) {
+      // #1004: a one-off entry more than ROTATION_SCHEDULE_MAX_LATENESS_MS
+      // past its scheduledAt is stale — likely queued while the worker,
+      // bridge, or Redis was down — and firing it now would change the map
+      // mid-match at an unpredictable time. Advance the cursor so it is
+      // marked done rather than retried forever, and audit the skip.
+      if (now.getTime() - occurrence.getTime() > ROTATION_SCHEDULE_MAX_LATENESS_MS) {
+        await deps.setLastExecutedAt(entry.id, occurrence);
+        await deps.writeAuditEntry({
+          actor: { kind: 'system', label: 'rotation-scheduler' },
+          actionType: 'server.rotation_schedule.skip_expired',
+          targetType: 'rotation_schedule',
+          targetId: entry.id,
+          context: {
+            server_id: entry.serverId,
+            occurrence: occurrence.toISOString(),
+            late_by_ms: now.getTime() - occurrence.getTime(),
+          },
+        });
+        await deps.diag.emit({
+          component: 'worker-scheduler',
+          kind: 'rotation_schedule.skip_expired',
+          severity: 'warn',
+          message: `rotation_schedule ${entry.id} skipped: ${Math.round(
+            (now.getTime() - occurrence.getTime()) / 60_000,
+          )} minutes late`,
+          payload: { entry_id: entry.id, server_id: entry.serverId },
+        });
+        continue;
+      }
+
+      depotUpdating ??= await deps.isDepotUpdating();
+      const skipKey = `${entry.id}:${occurrence.toISOString()}`;
+      if (depotUpdating) {
         skippedDepotUpdate++;
+        if (auditedDepotSkips.has(skipKey)) continue;
         await deps.writeAuditEntry({
           actor: { kind: 'system', label: 'rotation-scheduler' },
           actionType: 'server.rotation_schedule.skip_depot_update',
@@ -66,8 +124,10 @@ export async function runRotationScheduleTick(
           targetId: entry.id,
           context: { server_id: entry.serverId, occurrence: occurrence.toISOString() },
         });
+        auditedDepotSkips.add(skipKey);
         continue;
       }
+      auditedDepotSkips.delete(skipKey);
 
       const command: RconOperatorCommandName =
         entry.mode === 'force_change' ? 'AdminChangeLayer' : 'AdminSetNextLayer';

@@ -4,9 +4,9 @@ import { eq, isNotNull, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
   type AdminsCfgSyncEvent,
-  ensureAdminsCfgSyncGroup,
   publishAdminsCfgSyncForAllServers,
 } from '../../src/lib/admins-cfg-sync.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
@@ -175,10 +175,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('retries after a crash following XADD with the same stable _outbox_id', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id: outboxId }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('relay-crash') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const outboxId = inserted.id;
 
     let crash = true;
     const crashingRedis: OutboxRelayRedis = {
@@ -259,13 +261,106 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
     }
   });
 
+  it('commits each published row on its own so one failing server never blocks or re-publishes the others', async () => {
+    const [failingServer, healthyServer] = await activeServerIds();
+    if (!failingServer || !healthyServer) throw new Error('expected two active servers');
+    const [failingRow] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: failingServer, payload: makeEvent('poisoned-stream') })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    const failingId = failingRow?.id;
+    if (!failingId) throw new Error('outbox insert returned no row');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const [healthyRow] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: healthyServer, payload: makeEvent('healthy-stream') })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    const healthyId = healthyRow?.id;
+    if (!healthyId) throw new Error('outbox insert returned no row');
+    const poisonedRedis: OutboxRelayRedis = {
+      xadd: async (key, ...args) => {
+        if (key === `${ADMINS_CFG_SYNC_STREAM_PREFIX}${failingServer}`) {
+          throw new Error('WRONGTYPE Operation against a key holding the wrong kind of value');
+        }
+        return h.redis.xadd(key, ...args);
+      },
+    };
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, poisonedRedis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+      }),
+    ).rejects.toThrow('WRONGTYPE');
+
+    const rows = await h.db
+      .select({ id: adminsCfgSyncOutbox.id, relayedAt: adminsCfgSyncOutbox.relayedAt })
+      .from(adminsCfgSyncOutbox);
+    const byId = new Map(rows.map((row) => [row.id, row.relayedAt]));
+    expect(byId.get(failingId)).toBeNull();
+    expect(byId.get(healthyId)).toBeInstanceOf(Date);
+    const healthyEntries = async () =>
+      (await streamEvents(healthyServer)).filter((event) => event._outbox_id === healthyId);
+    expect(await healthyEntries()).toHaveLength(1);
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, poisonedRedis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+      }),
+    ).rejects.toThrow('WRONGTYPE');
+    expect(await healthyEntries()).toHaveLength(1);
+  });
+
+  it('refuses a non-object payload instead of spreading it into the stream event', async () => {
+    const [serverId] = await activeServerIds();
+    if (!serverId) throw new Error('expected an active server');
+    const [outboxRow] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId, payload: ['not', 'an', 'object'] })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    const id = outboxRow?.id;
+    if (!id) throw new Error('outbox insert returned no row');
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, h.redis, { streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX }),
+    ).rejects.toThrow('admins_cfg_outbox_invalid_payload');
+
+    const [row] = await h.db
+      .select({ relayedAt: adminsCfgSyncOutbox.relayedAt })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.id, id));
+    expect(row?.relayedAt).toBeNull();
+    const published = await streamEvents(serverId);
+    expect(published.filter((event) => event._outbox_id === id)).toEqual([]);
+  });
+
+  it('stops a run after consecutive failures instead of waiting out every row', async () => {
+    const [serverId] = await activeServerIds();
+    if (!serverId) throw new Error('expected an active server');
+    await h.db.insert(adminsCfgSyncOutbox).values(
+      Array.from({ length: 10 }, (_, index) => ({
+        serverId,
+        payload: makeEvent(`redis-down-${index}`),
+      })),
+    );
+    const xadd = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, { xadd }, { streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX }),
+    ).rejects.toThrow('ECONNREFUSED');
+    expect(xadd).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps a row pending when XADD returns no stream id', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('null-stream-id') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const id = inserted.id;
     const redis: OutboxRelayRedis = { xadd: async () => null };
 
     await expect(
@@ -282,10 +377,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('bounds a stalled XADD and leaves the row pending for retry', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('relay-timeout') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const id = inserted.id;
     const stalledRedis: OutboxRelayRedis = {
       xadd: () => new Promise(() => undefined),
     };
@@ -317,7 +414,7 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
       }),
     ).toEqual({ relayed: 1 });
 
-    await ensureAdminsCfgSyncGroup(h.redis, serverId);
+    await h.redis.xgroup('CREATE', stream, ADMINS_CFG_SYNC_GROUP, '0', 'MKSTREAM');
     const read = await h.redis.xreadgroup(
       'GROUP',
       'config-sync',
@@ -328,29 +425,32 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
       stream,
       '>',
     );
-    expect(read?.[0]?.[1]).toHaveLength(1);
+    expect((read as [string, unknown[]][] | null)?.[0]?.[1]).toHaveLength(1);
   });
 
   it('does not trim unconsumed entries when a pending batch exceeds the old stream cap', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
     const rowCount = 550;
-    await h.db.insert(adminsCfgSyncOutbox).values(
-      Array.from({ length: rowCount }, (_, index) => ({
-        serverId,
-        payload: makeEvent(`load-${index}`),
-      })),
-    );
+    const inserted = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values(
+        Array.from({ length: rowCount }, (_, index) => ({
+          serverId,
+          payload: makeEvent(`load-${index}`),
+        })),
+      )
+      .returning({ id: adminsCfgSyncOutbox.id });
 
-    expect(
-      await relayAdminsCfgSyncOutbox(h.db, h.redis, {
-        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
-      }),
-    ).toEqual({ relayed: rowCount });
+    // Route tests running in parallel against the shared database may enqueue
+    // their own rows meanwhile, so assert on this test's rows only.
+    const { relayed } = await relayAdminsCfgSyncOutbox(h.db, h.redis, {
+      streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+    });
+    expect(relayed).toBeGreaterThanOrEqual(rowCount);
 
-    const events = await streamEvents(serverId);
-    expect(events).toHaveLength(rowCount);
-    expect(new Set(events.map((event) => event._outbox_id)).size).toBe(rowCount);
+    const streamedIds = new Set((await streamEvents(serverId)).map((event) => event._outbox_id));
+    expect(inserted.filter((row) => !streamedIds.has(row.id))).toEqual([]);
   });
 
   it("stamps a soft-deleted server's pending rows relayed without publishing (SYNC-5)", async () => {

@@ -1,14 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildPlayersListQuery,
-  DEFAULT_SORT_STATE,
-  nextSortState,
-  type PlayerSortState,
-  SORT_GLYPH_ASC,
-  SORT_GLYPH_DESC,
-  SORT_GLYPH_INACTIVE,
-  sortIndicator,
-} from './helpers';
+import { buildPlayersListQuery, DEFAULT_SORT_STATE, nextSortState } from './helpers';
 
 describe('nextSortState', () => {
   it('nextSortState flips the direction when the active column is clicked again', () => {
@@ -43,22 +34,6 @@ describe('nextSortState', () => {
   });
 });
 
-describe('sortIndicator', () => {
-  const active: PlayerSortState = { key: 'created', dir: 'asc' };
-
-  it('sortIndicator returns the neutral glyph for an inactive column', () => {
-    expect(sortIndicator(active, 'nickname')).toBe(SORT_GLYPH_INACTIVE);
-  });
-
-  it('sortIndicator returns the ascending glyph for the active ascending column', () => {
-    expect(sortIndicator(active, 'created')).toBe(SORT_GLYPH_ASC);
-  });
-
-  it('sortIndicator returns the descending glyph for the active descending column', () => {
-    expect(sortIndicator({ key: 'created', dir: 'desc' }, 'created')).toBe(SORT_GLYPH_DESC);
-  });
-});
-
 describe('buildPlayersListQuery', () => {
   it('buildPlayersListQuery emits sort and dir for the default state', () => {
     expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false)).toBe('sort=last_seen&dir=desc');
@@ -70,9 +45,41 @@ describe('buildPlayersListQuery', () => {
     );
   });
 
+  it('buildPlayersListQuery sends no paging params for the first page', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1)).toBe('sort=last_seen&dir=desc');
+  });
+
+  it('buildPlayersListQuery appends limit and offset for later pages', () => {
+    expect(buildPlayersListQuery({ key: 'nickname', dir: 'asc' }, true, 3)).toBe(
+      'sort=nickname&dir=asc&filter=new&limit=200&offset=400',
+    );
+  });
+
   it('buildPlayersListQuery omits filter when the new-players toggle is off', () => {
     expect(buildPlayersListQuery({ key: 'nickname', dir: 'asc' }, false)).toBe(
       'sort=nickname&dir=asc',
+    );
+  });
+
+  it('sends q so the search runs server-side instead of over only the loaded page (#485)', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1, 'Alpha')).toBe(
+      'sort=last_seen&dir=desc&q=Alpha',
+    );
+  });
+
+  it('trims q and omits it when empty', () => {
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1, '   ')).toBe(
+      'sort=last_seen&dir=desc',
+    );
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1, '  Bravo  ')).toBe(
+      'sort=last_seen&dir=desc&q=Bravo',
+    );
+  });
+
+  it('omits q longer than the API accepts (64 chars)', () => {
+    const tooLong = 'x'.repeat(65);
+    expect(buildPlayersListQuery(DEFAULT_SORT_STATE, false, 1, tooLong)).toBe(
+      'sort=last_seen&dir=desc',
     );
   });
 });

@@ -15,54 +15,96 @@ import {
   Textarea,
 } from '@/components/ui';
 import type { LiveEvent, PlayerNote } from '@/lib/live-bus';
-import { formatRelativeNote, prependNote, removeNote, replaceNote } from '@/lib/player-notes';
+import {
+  formatRelativeNote,
+  type NotesPage,
+  parseNotesPage,
+  prependNote,
+  removeNote,
+  replaceNote,
+} from '@/lib/player-notes';
 import { useLiveSubscription } from '@/lib/use-live-bus';
-
-interface NotesResponse {
-  items: PlayerNote[];
-  next_cursor: string | null;
-  total: number;
-}
 
 interface Viewer {
   player_id: string;
   permissions: string[];
 }
 
+function readNotesPage(json: unknown): NotesPage {
+  const page = parseNotesPage(json);
+  if (!page) throw new Error('Некорректный ответ сервера');
+  return page;
+}
+
+/** A failed mutation: what was attempted, and the server's answer. */
+interface MutationError {
+  title: string;
+  message: string;
+}
+
+/**
+ * «Заметки» player-card section: newest-first list with keyset paging, a
+ * composer, and author-only edit / author-or-`role:edit` delete.
+ *
+ * Other moderators' changes arrive live — `note.created`, `note.updated` and
+ * `note.deleted` (#449). Live notes and deletions that land while the first
+ * page is in flight are remembered and merged into that page, so the answer
+ * of a request sent before them cannot undo them.
+ *
+ * A failed load and a failed mutation are separate states (#448): only the
+ * load banner offers «Повторить» (which reloads the list); a failed send,
+ * edit or delete says which action failed and leaves the list as it is.
+ */
 export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | null }) {
   const [notes, setNotes] = useState<PlayerNote[]>([]);
   const [total, setTotal] = useState(0);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<MutationError | null>(null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const idsRef = useRef<Set<string>>(new Set());
+  const liveCreatedRef = useRef<PlayerNote[]>([]);
+  const liveDeletedRef = useRef<Set<string>>(new Set());
 
   const canModerate = me?.permissions.includes('role:edit') ?? false;
 
-  const applyPage = useCallback((response: NotesResponse, append: boolean) => {
+  const applyPage = useCallback((response: NotesPage, append: boolean) => {
+    const deleted = liveDeletedRef.current;
+    const fetched = response.items.filter((note) => !deleted.has(note.id));
+    const fetchedIds = new Set(fetched.map((note) => note.id));
+    const liveOnly = append
+      ? []
+      : liveCreatedRef.current.filter((note) => !fetchedIds.has(note.id) && !deleted.has(note.id));
     setNotes((prev) => {
-      const merged = append ? [...prev, ...response.items] : response.items;
+      const merged = append
+        ? [...prev, ...fetched.filter((note) => !idsRef.current.has(note.id))]
+        : [...liveOnly, ...fetched];
       idsRef.current = new Set(merged.map((note) => note.id));
       return merged;
     });
-    setTotal(response.total);
+    if (!append) {
+      const removedFromPage = response.items.length - fetched.length;
+      setTotal(Math.max(0, response.total + liveOnly.length - removedFromPage));
+    }
     setNextCursor(response.next_cursor);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
+    liveCreatedRef.current = [];
+    liveDeletedRef.current = new Set();
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/notes`, {
+      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/notes`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      applyPage((await res.json()) as NotesResponse, false);
+      applyPage(readNotesPage(await res.json()), false);
     } catch (e) {
-      setError((e as Error).message);
+      setLoadError((e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -76,6 +118,7 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
     (event: Extract<LiveEvent, { type: 'note.created' }>) => {
       if (event.data.player_id !== playerId) return;
       const note = event.data.note;
+      liveCreatedRef.current.push(note);
       if (idsRef.current.has(note.id)) return;
       idsRef.current.add(note.id);
       setNotes((prev) => prependNote(prev, note));
@@ -85,13 +128,39 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   );
   useLiveSubscription('note.created', onIncoming);
 
+  const onUpdated = useCallback(
+    (event: Extract<LiveEvent, { type: 'note.updated' }>) => {
+      if (event.data.player_id !== playerId) return;
+      setNotes((prev) => replaceNote(prev, event.data.note));
+    },
+    [playerId],
+  );
+  useLiveSubscription('note.updated', onUpdated);
+
+  const dropNote = useCallback((noteId: string) => {
+    liveDeletedRef.current.add(noteId);
+    if (!idsRef.current.has(noteId)) return;
+    idsRef.current.delete(noteId);
+    setNotes((prev) => removeNote(prev, noteId));
+    setTotal((prev) => Math.max(0, prev - 1));
+  }, []);
+
+  const onDeleted = useCallback(
+    (event: Extract<LiveEvent, { type: 'note.deleted' }>) => {
+      if (event.data.player_id !== playerId) return;
+      dropNote(event.data.note_id);
+    },
+    [playerId, dropNote],
+  );
+  useLiveSubscription('note.deleted', onDeleted);
+
   async function submit() {
     const body = draft.trim();
     if (!body || busy) return;
     setBusy(true);
-    setError(null);
+    setMutationError(null);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/notes`, {
+      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/notes`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
@@ -106,7 +175,7 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
       }
       setDraft('');
     } catch (e) {
-      setError((e as Error).message);
+      setMutationError({ title: 'Не удалось отправить заметку', message: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -117,13 +186,16 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
     setBusy(true);
     try {
       const res = await fetch(
-        `/api/v1/players/${playerId}/notes?cursor=${encodeURIComponent(nextCursor)}`,
+        `/api/v1/players/${encodeURIComponent(playerId)}/notes?cursor=${encodeURIComponent(nextCursor)}`,
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      applyPage((await res.json()) as NotesResponse, true);
+      applyPage(readNotesPage(await res.json()), true);
     } catch (e) {
-      setError((e as Error).message);
+      setMutationError({
+        title: 'Не удалось загрузить ещё заметки',
+        message: (e as Error).message,
+      });
     } finally {
       setBusy(false);
     }
@@ -163,11 +235,19 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
             </div>
           </div>
 
-          {error ? (
+          {mutationError ? (
+            <InlineBanner
+              tone="crit"
+              title={mutationError.title}
+              description={mutationError.message}
+            />
+          ) : null}
+
+          {loadError ? (
             <InlineBanner
               tone="crit"
               title="Не удалось загрузить заметки"
-              description={error}
+              description={loadError}
               action={
                 <Button size="sm" onClick={() => void load()}>
                   Повторить
@@ -192,14 +272,14 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
                   canDelete={note.author.id === me?.player_id || canModerate}
                   canEdit={note.author.id === me?.player_id}
                   onChanged={(updated) => {
+                    setMutationError(null);
                     setNotes((prev) => replaceNote(prev, updated));
                   }}
                   onRemoved={(noteId) => {
-                    idsRef.current.delete(noteId);
-                    setNotes((prev) => removeNote(prev, noteId));
-                    setTotal((prev) => Math.max(0, prev - 1));
+                    setMutationError(null);
+                    dropNote(noteId);
                   }}
-                  onError={setError}
+                  onError={setMutationError}
                 />
               ))}
             </ul>
@@ -231,7 +311,7 @@ function NoteItem({
   canDelete: boolean;
   onChanged: (note: PlayerNote) => void;
   onRemoved: (noteId: string) => void;
-  onError: (message: string) => void;
+  onError: (error: MutationError) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.body);
@@ -253,7 +333,7 @@ function NoteItem({
       onChanged((await res.json()) as PlayerNote);
       setEditing(false);
     } catch (e) {
-      onError((e as Error).message);
+      onError({ title: 'Не удалось сохранить заметку', message: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -271,7 +351,8 @@ function NoteItem({
       setConfirmOpen(false);
       onRemoved(note.id);
     } catch (e) {
-      onError((e as Error).message);
+      setConfirmOpen(false);
+      onError({ title: 'Не удалось удалить заметку', message: (e as Error).message });
     } finally {
       setBusy(false);
     }

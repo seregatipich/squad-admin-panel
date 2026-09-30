@@ -23,7 +23,27 @@ import {
   Textarea,
   Th,
 } from '@/components/ui';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { ApplicationsSection } from './ApplicationsSection';
+
+/** Russian text for the machine codes the whitelist API answers with. */
+const WHITELIST_ERROR_MESSAGES: Record<string, string> = {
+  owner_role_forbidden: 'роль владельца панели нельзя использовать для whitelist',
+  role_not_found: 'выбранная роль не найдена',
+  whitelist_role_not_configured: 'сначала выберите роль для whitelist',
+};
+
+/** Turns a failed whitelist response body into a sentence; never prints `[object Object]`. */
+function describeWhitelistError(body: unknown, status: number): string {
+  const { error, max_rows: maxRows } = (body ?? {}) as { error?: unknown; max_rows?: unknown };
+  if (error === 'too_many_rows' && typeof maxRows === 'number') {
+    return `в файле слишком много строк (максимум ${maxRows})`;
+  }
+  if (typeof error === 'string' && WHITELIST_ERROR_MESSAGES[error]) {
+    return WHITELIST_ERROR_MESSAGES[error];
+  }
+  return describeHttpStatus(status);
+}
 
 interface WhitelistSettings {
   whitelist_role_id: string | null;
@@ -44,6 +64,8 @@ interface ImportSkippedRow {
     | 'malformed_row'
     | 'invalid_steam_id64'
     | 'player_not_found'
+    | 'duplicate_steam_id64'
+    | 'comment_too_long'
     | 'owner_role_protected'
     | 'role_assignment_forbidden';
 }
@@ -62,6 +84,8 @@ const SKIP_REASON_LABEL: Record<ImportSkippedRow['reason'], string> = {
   malformed_row: 'некорректная строка',
   invalid_steam_id64: 'некорректный SteamID64',
   player_not_found: 'игрок не найден',
+  duplicate_steam_id64: 'SteamID64 уже встречался выше в файле',
+  comment_too_long: 'комментарий длиннее 512 символов',
   owner_role_protected: 'владелец панели — роль не меняется',
   role_assignment_forbidden: 'у игрока другая роль — заменить её может только управляющий ролями',
 };
@@ -77,26 +101,47 @@ export default function WhitelistSettingsPage() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [rolesForbidden, setRolesForbidden] = useState(false);
 
   const roleSelectId = useId();
   const csvId = useId();
 
   const refresh = useCallback(async () => {
-    const [settingsRes, rolesRes, meRes] = await Promise.all([
-      fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (settingsRes.ok) {
-      const loaded = (await settingsRes.json()) as WhitelistSettings;
-      setSettings(loaded);
-      setPicked(loaded.whitelist_role_id ?? '');
-      setErr(null);
-    } else {
-      setErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+    try {
+      const [settingsRes, rolesRes, meRes] = await Promise.all([
+        fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (settingsRes.ok) {
+        const loaded = (await settingsRes.json()) as WhitelistSettings;
+        setSettings(loaded);
+        setPicked(loaded.whitelist_role_id ?? '');
+        setErr(null);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${describeHttpStatus(settingsRes.status)}`);
+      }
+      if (rolesRes.ok) {
+        setRoleOptions((await rolesRes.json()) as RoleOption[]);
+        setRolesForbidden(false);
+      } else if (rolesRes.status === 403) {
+        // whitelist:edit and role:view are independent permissions
+        // (packages/shared-config/src/permissions.ts) — this is not a
+        // failure, just an empty role picker, so it must not clobber a
+        // settings-load error already set above.
+        setRoleOptions([]);
+        setRolesForbidden(true);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${rolesRes.status}`);
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        setErr(`Не удалось загрузить настройки: ${meRes.status}`);
+      }
+    } catch (e) {
+      setErr(`Ошибка сети: ${(e as Error).message}`);
     }
-    if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
   }, []);
 
   useEffect(() => {
@@ -123,15 +168,16 @@ export default function WhitelistSettingsPage() {
         body: JSON.stringify({ whitelist_role_id: picked || null }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setErr(`Ошибка сохранения: ${e.error ?? res.status}`);
+        setErr(
+          `Ошибка сохранения: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
+        );
         return;
       }
       const fresh = (await res.json()) as WhitelistSettings;
       setSettings(fresh);
       setNotice('Роль для whitelist сохранена.');
-    } catch (e) {
-      setErr(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setErr(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setSaving(false);
     }
@@ -150,13 +196,14 @@ export default function WhitelistSettingsPage() {
         body: JSON.stringify({ csv }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setErr(`Ошибка импорта: ${e.error ?? res.status}`);
+        setErr(
+          `Ошибка импорта: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
+        );
         return;
       }
       setImportResult((await res.json()) as ImportResult);
-    } catch (e) {
-      setErr(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setErr(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setImporting(false);
     }
@@ -234,11 +281,17 @@ export default function WhitelistSettingsPage() {
                   Выбрать роль whitelist может только пользователь с правом управления ролями.
                 </p>
               ) : null}
+              {canPickRole && rolesForbidden ? (
+                <p className="text-xs text-ink-3">
+                  Список ролей недоступен: нужно право «Просмотр ролей».
+                </p>
+              ) : null}
               {canPickRole ? (
                 <FieldRow label="Роль для whitelist" htmlFor={roleSelectId}>
                   <Select
                     id={roleSelectId}
                     value={picked}
+                    disabled={rolesForbidden}
                     onChange={(e) => setPicked(e.target.value)}
                   >
                     <option value="">— не выбрана —</option>

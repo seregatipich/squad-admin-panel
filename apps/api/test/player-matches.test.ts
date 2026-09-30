@@ -167,7 +167,7 @@ describeIfDb('player match summary API (MATCH-7)', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a player without panel_access with 403', async () => {
+  it('rejects a player without panel_access with 401', async () => {
     const noAccessRole = await seedRole(h.db, { panelAccess: false });
     const denied = await seedPlayer(h.db, { roleId: noAccessRole });
     const deniedCookie = await loginAs(h, denied);
@@ -176,8 +176,8 @@ describeIfDb('player match summary API (MATCH-7)', () => {
       url: `/api/v1/players/${uuidv7()}/match-summary`,
       headers: { cookie: deniedCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('computes outcome from the player perspective for both teams and draw (AC)', async () => {

@@ -61,15 +61,15 @@ Source: `apps/bridge/internal/rpc/types.go`.
 ```json
 {
   "code":    "forbidden",
-  "message": "path \"/etc/passwd\" outside allowed roots",
-  "detail":  null
+  "message": "path \"/etc/passwd\" outside allowed roots"
 }
 ```
 
 | `code` | Meaning |
 |---|---|
-| `forbidden` | Path, image, or container name rejected by policy. |
+| `forbidden` | Path, image, container name, mode, port or argument rejected by policy (the error wraps `validate.ErrForbidden`; the code is chosen by `errors.Is`, never by matching error text). |
 | `invalid_args` | JSON unmarshal failure or missing required field. |
+| `not_found` | A file read targeted a path that does not exist. |
 | `runtime_error` | OS-level or Docker CLI failure. |
 | `timeout` | Operation exceeded its context deadline. |
 | `internal` | Unexpected internal error. |
@@ -159,30 +159,6 @@ After all streaming frames the final response frame is written (same framing, `o
 
 ---
 
-### `process_info`
-
-**Params:**
-```json
-{ "pid": 12345 }
-```
-
-**Result:**
-```json
-{
-  "pid":       12345,
-  "exists":    true,
-  "rss_bytes": 1073741824,
-  "vsz_bytes": 4294967296,
-  "cmdline":   "/squad/SquadGameServer.sh ...",
-  "state":     "S (sleeping)",
-  "threads":   64
-}
-```
-
-When `exists: false` only `pid` and `exists` are populated.
-
----
-
 ### `file_read`
 
 **Params:**
@@ -201,11 +177,11 @@ When `exists: false` only `pid` and `exists` are populated.
 - Depot host path (default `/var/lib/docker/volumes/squad-depot/_data`, overridable via `PANEL_DEPOT_HOST_PATH`).
 - `/var/lib/squad-panel/.first-owner-claimed` sentinel.
 
-**Confinement:** the allowlist check is lexical, so every reader (`file_read`, `file_read_tail`, `file_read_stream`, `squad_log_list`) also resolves the path inside a trust root through `os.Root`: `configs/{uuid}` and `saved/{uuid}` per server (their contents are bind-mounted read-write into the game container), the depot root, and `/var/lib/squad-panel` for the sentinel. A symlink or `..` that leaves the trust root fails the request, and a target that is not a regular file (FIFO, socket, device) is refused with `forbidden`. `squad_log_retention_sweep` resolves each server's `Logs` directory the same way inside `saved/{uuid}`.
+**Confinement:** the allowlist check is lexical, so every reader (`file_read`, `file_read_stream`, `squad_log_list`) also resolves the path inside a trust root through `os.Root`: `configs/{uuid}` and `saved/{uuid}` per server (their contents are bind-mounted read-write into the game container), the depot root, and `/var/lib/squad-panel` for the sentinel. A symlink or `..` that leaves the trust root fails the request, and a target that is not a regular file (FIFO, socket, device) is refused with `forbidden`. `squad_log_retention_sweep` resolves each server's `Logs` directory the same way inside `saved/{uuid}`.
 
 ---
 
-### `file_write`
+### `file_atomic_write`
 
 **Params:**
 ```json
@@ -216,7 +192,7 @@ When `exists: false` only `pid` and `exists` are populated.
 }
 ```
 
-`mode` is an octal file permission as a decimal integer (default 0644 = 420). Optional.
+`mode` is an octal file permission as a decimal integer. Optional: omitted or `0` means `0644` (420); otherwise only `0644` (420), `0640` (416) and `0600` (384) are accepted and anything else is `forbidden`.
 
 **Result:**
 ```json
@@ -229,11 +205,7 @@ When `exists: false` only `pid` and `exists` are populated.
 
 The depot path is **read-only** and not in the writable allowlist.
 
----
-
-### `file_atomic_write`
-
-Identical params and result to `file_write`. Uses a write-to-temp + rename pattern to ensure atomicity. Also calls `MkdirAll` up through the allowed root before writing.
+Writes a unique hidden temp file next to the target (`.<name>.*.tmp`), fsyncs it, applies `mode`, and `rename(2)`s it into place, so concurrent writers of one path never interleave. Missing parent directories are created at `0755`; existing ones keep their mode.
 
 ---
 
@@ -270,11 +242,11 @@ Used exclusively by the soft-delete orchestrator after backing up `.cfg` files t
   "action":  "allow",
   "port":    7787,
   "proto":   "udp",
-  "comment": "squad-{uuid}-game"
+  "comment": "squad-game-0190abcd"
 }
 ```
 
-`action`: `"allow"` or `"delete"`. `proto`: `"tcp"`, `"udp"`, or `"tcp/udp"`. `port`: 1–65535.
+`action`: `"add"` or `"remove"`. `proto`: `"tcp"` or `"udp"`. `port`: 1024–65535. `comment` (optional): `^[a-z][a-z0-9-]{0,63}$`.
 
 **Result:**
 ```json
@@ -297,15 +269,14 @@ Used exclusively by the soft-delete orchestrator after backing up `.cfg` files t
   "max_players":  100,
   "tickrate":     50,
   "multihome":    "0.0.0.0",
-  "extra_args":   [],
-  "configs_host": "/var/lib/squad-panel/configs/{uuid}",
+  "configs_host": "/var/lib/squad-panel/configs/{uuid}/ServerConfig",
   "saved_host":   "/var/lib/squad-panel/saved/{uuid}",
   "depot_volume": "squad-depot",
   "ulimit_nofile": 65536
 }
 ```
 
-`server_id` must be a valid UUID v4/v7 (lowercase hex). `image` must be one of the two allowlisted images (see below). `configs_host` and `saved_host` must pass `PanelConfigsPath` and `PanelSavedPath` validation respectively. `depot_volume` must equal `"squad-depot"`.
+`server_id` must be a valid UUID v4/v7 (lowercase hex). `image` must be one of the two allowlisted images (see below). `configs_host` must be exactly `/var/lib/squad-panel/configs/{server_id}/ServerConfig` and `saved_host` exactly `/var/lib/squad-panel/saved/{server_id}` after cleaning (`validate.ServerConfigsMount` / `validate.ServerSavedMount`); the cleaned paths are what get mounted. `depot_volume` must equal `"squad-depot"`. Ports must be in `1024..65535`, `multihome` a literal IP address, and each `extra_args` token must pass `validate.ServerExtraArg`.
 
 **Result:**
 ```json
@@ -378,9 +349,13 @@ Runs `docker rm -f`. If the container does not exist the call succeeds silently.
   "image":         "squad-server:latest",
   "pid":           12345,
   "restart_count": 0,
-  "exit_code":     0
+  "exit_code":     137,
+  "oom_killed":    true,
+  "error":         "signal: killed"
 }
 ```
+
+`oom_killed` is Docker's `State.OOMKilled` (always present). `error` is Docker's `State.Error`, omitted when empty.
 
 ---
 
@@ -410,7 +385,7 @@ Runs `docker rm -f`. If the container does not exist the call succeeds silently.
 { "name": "squad-0190abcd-...", "tail": 50 }
 ```
 
-`tail`: number of historical lines to emit before live tailing. Default 0 (no history).
+`tail`: number of historical lines to emit before live tailing. Default 0 (no history). `--tail` is always passed to `docker logs`, so 0 or a negative value never replays the whole log; values above 5000 are clamped to 5000.
 
 **Streaming frames:** one per log line, `stream: "stdout"` or `"stderr"`.
 

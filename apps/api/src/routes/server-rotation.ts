@@ -5,6 +5,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
+import { isFileNotFoundError } from '../lib/bridge-file-errors.js';
 import {
   buildRotationSegmentBody,
   findManagedSegment,
@@ -76,8 +77,14 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
       try {
         const res = await app.bridge.fileRead({ path: rotationPath(req.params.id) });
         content = res.content;
-      } catch {
-        content = null;
+      } catch (err) {
+        // Only a missing file is "no rotation yet"; any other failure must not
+        // be shown as an empty rotation the operator would then overwrite.
+        if (!isFileNotFoundError(err)) {
+          req.log.warn({ err, id: req.params.id }, 'LayerRotation.cfg read failed');
+          reply.code(502);
+          return { error: 'bridge_read_failed' };
+        }
       }
 
       if (content === null) {
@@ -145,7 +152,7 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/rotation',
-    { config: { audit: false }, schema: { params: idParams, body: putBody } },
+    { config: { audit: 'manual' }, schema: { params: idParams, body: putBody } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -171,12 +178,18 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      let current: string;
+      let current = '';
       try {
         const res = await app.bridge.fileRead({ path: rotationPath(req.params.id) });
         current = res.content;
-      } catch {
-        current = '';
+      } catch (err) {
+        // A missing file starts empty. Any other failure must abort: splicing
+        // into '' would drop every line outside the managed segment.
+        if (!isFileNotFoundError(err)) {
+          req.log.warn({ err, id: req.params.id }, 'LayerRotation.cfg read failed');
+          reply.code(502);
+          return { error: 'bridge_read_failed' };
+        }
       }
 
       const beforeSegment = findManagedSegment(current)?.segment ?? null;

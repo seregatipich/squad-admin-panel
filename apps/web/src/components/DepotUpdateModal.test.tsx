@@ -99,4 +99,35 @@ describe('DepotUpdateModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  // #774: the update stops live servers, so a refused start must be visible.
+  it('shows why the update did not start when onStart rejects', async () => {
+    const onStart = vi.fn(async () => {
+      throw new Error('update_in_progress');
+    });
+    const onOpenChange = vi.fn();
+    render(
+      <DepotUpdateModal open onOpenChange={onOpenChange} servers={SERVERS} onStart={onStart} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Начать обновление' }));
+
+    const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+    expect(alert).toHaveTextContent('Обновление не запущено');
+    expect(alert).toHaveTextContent('update_in_progress');
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('clears a previous start failure when reopened', async () => {
+    const onStart = vi.fn(async () => {
+      throw new Error('update_in_progress');
+    });
+    const props = { onOpenChange: () => {}, servers: SERVERS, onStart };
+    const { rerender } = render(<DepotUpdateModal open {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Начать обновление' }));
+    await within(screen.getByRole('dialog')).findByRole('alert');
+
+    rerender(<DepotUpdateModal open={false} {...props} />);
+    rerender(<DepotUpdateModal open {...props} />);
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
+  });
 });

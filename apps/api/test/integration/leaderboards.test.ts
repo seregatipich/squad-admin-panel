@@ -10,7 +10,7 @@ import {
   servers,
 } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -212,7 +212,7 @@ describeIfDb('GET /api/v1/leaderboards', () => {
   it('requires panel_access', async () => {
     const noPanelCookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchLeaderboard('?metric=online', noPanelCookie);
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('ranks the all-servers rollup by online time', async () => {
@@ -276,6 +276,16 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     const body = res.json() as LeaderboardBody;
     expect(body.rows.map((r) => r.current_name)).toEqual(['Alpha']);
     expect(body.total_rows).toBe(1);
+  });
+
+  it('keeps the global rank of a player found by search (#176)', async () => {
+    const byNick = await fetchLeaderboard('?metric=online&period=alltime&search=brav');
+    const nickBody = byNick.json() as LeaderboardBody;
+    expect(nickBody.rows.map((r) => [r.current_name, r.rank])).toEqual([['Bravo', 3]]);
+
+    const ascending = await fetchLeaderboard('?metric=online&period=alltime&order=asc&search=alph');
+    const ascBody = ascending.json() as LeaderboardBody;
+    expect(ascBody.rows.map((r) => [r.current_name, r.rank])).toEqual([['Alpha', 2]]);
   });
 
   it('searches by exact steam_id64', async () => {
@@ -372,16 +382,74 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(body.combat_available).toBe(true);
   });
 
-  it('returns an opaque error envelope when the query fails (no SQL leaked)', async () => {
-    const res = await fetchLeaderboard('?metric=online&period=day&period_start=9999-99-99');
-    expect(res.statusCode).toBe(500);
-    const body = res.json() as { error: { code: string; message: string } };
-    expect(body.error.code).toBe('internal_error');
-    const serialized = JSON.stringify(body).toLowerCase();
-    expect(serialized).not.toContain('select');
-    expect(serialized).not.toContain('from ');
-    expect(serialized).not.toContain('player_stat_periods');
-    expect(serialized).not.toContain('date/time');
+  it('rejects a period_start that is not a real calendar date with 400, not 500', async () => {
+    for (const query of [
+      '?metric=online&period=day&period_start=9999-99-99',
+      '?metric=online&period=day&period_start=2024-13-45',
+      '?metric=online&period=season&period_start=2024-02-30',
+    ]) {
+      const res = await fetchLeaderboard(query);
+      expect(res.statusCode, query).toBe(400);
+      const serialized = res.body.toLowerCase();
+      expect(serialized).not.toContain('select');
+      expect(serialized).not.toContain('player_stat_periods');
+    }
+  });
+
+  it('rejects an out-of-range page or offset with 400 instead of overflowing OFFSET', async () => {
+    for (const query of [
+      '?metric=online&period=alltime&page=9007199254740991&per_page=200',
+      '?metric=online&period=alltime&offset=9007199254740991',
+    ]) {
+      const res = await fetchLeaderboard(query);
+      expect(res.statusCode, query).toBe(400);
+    }
+  });
+
+  it('treats LIKE wildcards in search literally', async () => {
+    for (const search of ['%25', '_', 'alph_']) {
+      const res = await fetchLeaderboard(`?metric=online&period=alltime&search=${search}`);
+      expect(res.statusCode, search).toBe(200);
+      const body = res.json() as LeaderboardBody;
+      expect(body.total_rows, search).toBe(0);
+    }
+  });
+
+  it('always leaves the search rate-limit key with a TTL, even if an earlier EXPIRE was lost', async () => {
+    const rateKey = `ratelimit:leaderboard-search:127.0.0.1:${h.seed.ownerPlayerId}`;
+    // A counter left without a TTL (EXPIRE failed or the process died between
+    // INCR and EXPIRE) must not lock search forever.
+    await h.redis.set(rateKey, '5');
+    try {
+      const res = await fetchLeaderboard('?metric=online&period=alltime&search=bravo');
+      expect(res.statusCode).toBe(200);
+      const ttl = await h.redis.ttl(rateKey);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(60);
+    } finally {
+      await h.redis.del(rateKey);
+    }
+  });
+
+  it('logs the database error and returns an opaque envelope when the query fails', async () => {
+    const logged = vi.spyOn(h.app.log, 'error');
+    await h.db.execute(sql`ALTER TABLE player_stat_periods RENAME TO player_stat_periods_hidden`);
+    try {
+      const res = await fetchLeaderboard('?metric=online&period=alltime&limit=13');
+      expect(res.statusCode).toBe(500);
+      const body = res.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('internal_error');
+      const serialized = JSON.stringify(body).toLowerCase();
+      expect(serialized).not.toContain('select');
+      expect(serialized).not.toContain('player_stat_periods');
+      expect(logged).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.anything() }),
+        expect.any(String),
+      );
+    } finally {
+      await h.db.execute(sql`ALTER TABLE player_stat_periods_hidden RENAME TO player_stat_periods`);
+      logged.mockRestore();
+    }
   });
 });
 

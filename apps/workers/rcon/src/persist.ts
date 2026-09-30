@@ -2,13 +2,10 @@ import {
   auditLog,
   type ClosedReason,
   type DatabaseClient,
-  type GeoLookup,
   playerKitTime,
   playerNameHistory,
   playerSessions,
   players,
-  recordIpObservation,
-  resolveGeo,
   type SessionMode,
 } from '@squad/db';
 import { normalizePlayerName, normalizeRoleName } from '@squad/shared-config';
@@ -36,106 +33,172 @@ async function writeSystemAudit(
   });
 }
 
+interface IdentityRow {
+  id: string;
+  steamId64: bigint | null;
+  eosId: string | null;
+  steamEosConflict: boolean;
+}
+
+/**
+ * Reports a player whose upsert failed; the rest of the poll still proceeds.
+ * @param player - The `ListPlayers` entry whose transaction rolled back.
+ * @param error - The error that aborted it.
+ */
+export type UpsertPlayerErrorHandler = (player: RconPlayer, error: Error) => void;
+
+/**
+ * Upserts the canonical identity of every player in one `ListPlayers` poll.
+ *
+ * Each player runs in its own transaction, so one bad row never aborts the
+ * poll: a failure is rolled back, passed to `onPlayerError`, and the loop
+ * continues. The audit row is written in the same transaction, after the
+ * UPDATE it describes, so a rolled-back link never leaves a false entry in
+ * the append-only `audit_log`.
+ *
+ * A split identity — one row holding the `eos_id` and a different row
+ * holding the `steam_id64` (#967) — cannot be merged here without violating
+ * the unique indexes, so the eos row is updated without the steam link and
+ * flagged `steam_eos_conflict`; the `player.eos_steam_conflict` audit is
+ * written only when that flag is first raised.
+ *
+ * @param db - Database client.
+ * @param incoming - Players parsed from the current `ListPlayers` response.
+ * @param onPlayerError - Called for each player whose upsert failed.
+ */
 export async function upsertPlayers(
   db: DatabaseClient,
   incoming: RconPlayer[],
-  geoLookup: GeoLookup | null = null,
+  onPlayerError?: UpsertPlayerErrorHandler,
 ): Promise<void> {
-  if (incoming.length === 0) return;
   for (const p of incoming) {
-    const normalised = normalizePlayerName(p.name);
-    const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
+    try {
+      // The transaction exposes the same query builder as the client.
+      await db.transaction((tx) => upsertPlayer(tx as unknown as DatabaseClient, p));
+    } catch (err) {
+      onPlayerError?.(p, err as Error);
+    }
+  }
+}
 
-    const matchClause =
-      steamBigint === null
-        ? eq(players.eosId, p.eos_id)
-        : or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint));
+/**
+ * Loads the rows matching `p` by eos or steam and prefers the eos match. The
+ * partial-unique eos and steam indexes bound the result to two rows.
+ */
+async function lookupIdentity(
+  db: DatabaseClient,
+  p: RconPlayer,
+  steamBigint: bigint | null,
+): Promise<{ row: IdentityRow; steamHeldElsewhere: boolean } | null> {
+  const matchClause =
+    steamBigint === null
+      ? eq(players.eosId, p.eos_id)
+      : or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint));
+  const rows = await db
+    .select({
+      id: players.id,
+      steamId64: players.steamId64,
+      eosId: players.eosId,
+      steamEosConflict: players.steamEosConflict,
+    })
+    .from(players)
+    .where(matchClause);
+  const eosRow = rows.find((row) => row.eosId === p.eos_id);
+  const steamRow =
+    steamBigint === null ? undefined : rows.find((row) => row.steamId64 === steamBigint);
+  const row = eosRow ?? steamRow;
+  if (!row) return null;
+  return { row, steamHeldElsewhere: steamRow !== undefined && steamRow.id !== row.id };
+}
 
-    const existing = await db
-      .select({
-        id: players.id,
-        steamId64: players.steamId64,
-        canonicalName: players.canonicalName,
-        eosId: players.eosId,
-      })
-      .from(players)
-      .where(matchClause)
-      .limit(1);
+async function upsertPlayer(db: DatabaseClient, p: RconPlayer): Promise<void> {
+  const normalised = normalizePlayerName(p.name);
+  const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
 
-    if (existing[0]) {
-      const row = existing[0];
-      const playerId = row.id;
-
-      const updates: Record<string, unknown> = {
-        lastSeenAt: new Date(),
-        updatedAt: new Date(),
-        canonicalName: p.name,
-        canonicalNameNormalized: normalised,
-      };
-
-      if (!row.eosId && p.eos_id) {
-        updates.eosId = p.eos_id;
-      }
-
-      if (!row.steamId64 && steamBigint) {
-        updates.steamId64 = steamBigint;
-        await writeSystemAudit(db, 'player.steam_linked', playerId, {
-          steam_id64: p.steam_id64,
-          eos_id: p.eos_id,
-        });
-      }
-
-      await db.update(players).set(updates).where(eq(players.id, playerId));
-
-      await db
-        .insert(playerNameHistory)
-        .values({ playerId, name: p.name, nameNormalized: normalised })
-        .onConflictDoUpdate({
-          target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
-          set: {
-            lastSeenAt: new Date(),
-            observationCount: sql`${playerNameHistory.observationCount} + 1`,
-          },
-        });
-
-      if (p.ip) {
-        await recordIpObservation(db, {
-          playerId,
-          ip: p.ip,
-          geo: resolveGeo(geoLookup, p.ip),
-        });
-      }
-    } else {
-      const playerId = uuidv7();
-      await db.insert(players).values({
+  let identity = await lookupIdentity(db, p, steamBigint);
+  if (!identity) {
+    const playerId = uuidv7();
+    const inserted = await db
+      .insert(players)
+      .values({
         id: playerId,
         steamId64: steamBigint,
         eosId: p.eos_id,
         canonicalName: p.name,
         canonicalNameNormalized: normalised,
-      });
+      })
+      .onConflictDoNothing()
+      .returning({ id: players.id });
 
+    if (inserted.length > 0) {
       await db.insert(playerNameHistory).values({
         playerId,
         name: p.name,
         nameNormalized: normalised,
       });
-
       await writeSystemAudit(db, 'player.created', playerId, {
         steam_id64: p.steam_id64,
         eos_id: p.eos_id,
         canonical_name: p.name,
       });
-
-      if (p.ip) {
-        await recordIpObservation(db, {
-          playerId,
-          ip: p.ip,
-          geo: resolveGeo(geoLookup, p.ip),
-        });
-      }
+      return;
     }
+
+    // A concurrent writer (log-ingest's connect handler) created the row
+    // between the lookup and the insert; fold onto it.
+    identity = await lookupIdentity(db, p, steamBigint);
+    if (!identity)
+      throw new Error(`player insert conflicted but no row matches eos_id=${p.eos_id}`);
   }
+
+  const { row, steamHeldElsewhere } = identity;
+  const playerId = row.id;
+  const updates: Record<string, unknown> = {
+    lastSeenAt: new Date(),
+    updatedAt: new Date(),
+    canonicalName: p.name,
+    canonicalNameNormalized: normalised,
+  };
+
+  if (!row.eosId && p.eos_id) {
+    updates.eosId = p.eos_id;
+  }
+
+  const linkSteam = !row.steamId64 && steamBigint !== null && !steamHeldElsewhere;
+  if (linkSteam) {
+    updates.steamId64 = steamBigint;
+  }
+  const raiseConflict = steamHeldElsewhere && !row.steamEosConflict;
+  if (raiseConflict) {
+    updates.steamEosConflict = true;
+  }
+
+  await db.update(players).set(updates).where(eq(players.id, playerId));
+
+  if (linkSteam) {
+    await writeSystemAudit(db, 'player.steam_linked', playerId, {
+      steam_id64: p.steam_id64,
+      eos_id: p.eos_id,
+    });
+  }
+  if (raiseConflict) {
+    await writeSystemAudit(db, 'player.eos_steam_conflict', playerId, {
+      eos_id: p.eos_id,
+      stored_steam_id64: row.steamId64?.toString() ?? null,
+      observed_steam_id64: p.steam_id64,
+    });
+  }
+
+  await db
+    .insert(playerNameHistory)
+    .values({ playerId, name: p.name, nameNormalized: normalised })
+    .onConflictDoUpdate({
+      target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
+      set: {
+        lastSeenAt: new Date(),
+        observationCount: sql`${playerNameHistory.observationCount} + 1`,
+      },
+    });
 }
 
 /**

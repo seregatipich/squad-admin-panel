@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { heartbeatWatchPlugin } from '../src/plugins/heartbeat-watch.js';
@@ -5,7 +7,7 @@ import { heartbeatWatchPlugin } from '../src/plugins/heartbeat-watch.js';
 function buildApp(pttlFn: (...args: unknown[]) => Promise<number>) {
   const diagEvents: Array<{ kind: string; severity: string; message: string }> = [];
   const app = Fastify();
-  app.decorate('redis', { pttl: pttlFn });
+  app.decorate('redis', { pttl: pttlFn } as never);
   app.decorate('diag', {
     emit: vi.fn(async (ev: { kind: string; severity: string; message: string }) => {
       diagEvents.push(ev);
@@ -56,7 +58,7 @@ describe('heartbeat-watch plugin', () => {
     await app.heartbeatWatchTick();
     const lostEvents = diagEvents.filter((e) => e.kind === 'worker.heartbeat_lost');
     expect(lostEvents.length).toBeGreaterThan(0);
-    expect(lostEvents[0].severity).toBe('error');
+    expect(lostEvents[0]?.severity).toBe('error');
   });
 
   it('emits heartbeat_recovered when worker comes back', async () => {
@@ -69,7 +71,7 @@ describe('heartbeat-watch plugin', () => {
     await app.heartbeatWatchTick();
     const recovered = diagEvents.filter((e) => e.kind === 'worker.heartbeat_recovered');
     expect(recovered.length).toBeGreaterThan(0);
-    expect(recovered[0].severity).toBe('info');
+    expect(recovered[0]?.severity).toBe('info');
   });
 
   it('does not re-emit heartbeat_lost for already-reported workers', async () => {
@@ -88,5 +90,32 @@ describe('heartbeat-watch plugin', () => {
   it('handles redis errors gracefully without throwing', async () => {
     pttlFn.mockRejectedValue(new Error('connection lost'));
     await expect(app.heartbeatWatchTick()).resolves.toBeUndefined();
+  });
+
+  it('watches every worker service docker/compose.yml deploys (#37)', async () => {
+    // Line-based parse of the top-level `worker-*` service keys, as in
+    // compose-stand-worker-parity.test.ts.
+    const compose = readFileSync(resolve(__dirname, '../../../docker/compose.yml'), 'utf-8');
+    const deployed = [...compose.matchAll(/^ {2}worker-([\w-]+):\s*$/gm)]
+      .map((match) => match[1])
+      .sort();
+    expect(deployed.length).toBeGreaterThan(6);
+
+    await app.heartbeatWatchTick();
+
+    const watched = pttlFn.mock.calls.map(([key]) => String(key).replace('worker:heartbeat:', ''));
+    expect(watched.sort()).toEqual(deployed);
+  });
+
+  it('reports a lost heartbeat for a worker outside the original six, e.g. role-expirer', async () => {
+    pttlFn.mockImplementation(async (key: string) =>
+      key === 'worker:heartbeat:role-expirer' ? -2 : 25000,
+    );
+    await app.heartbeatWatchTick();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await app.heartbeatWatchTick();
+
+    const lost = diagEvents.filter((e) => e.kind === 'worker.heartbeat_lost');
+    expect(lost.map((e) => e.message)).toEqual(['worker role-expirer heartbeat absent for >30s']);
   });
 });

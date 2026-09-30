@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { type SessionScope, sessions } from '@squad/db/schema';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { eq, inArray, lt } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -18,6 +18,23 @@ export interface SessionRecord {
 
 const REDIS_PREFIX = 'session:';
 const REDIS_TTL_SECONDS = 600;
+
+/**
+ * Key that authenticates this process's session cache entries (#30, finding
+ * #1254). Redis is reachable by every local process and by the RNSquadJS
+ * sidecar, so an unauthenticated `session:<id>` entry would let anyone who
+ * can write Redis mint a session for any player. Each entry carries an
+ * HMAC over its session id and contents under this key; an entry that fails
+ * the check is treated as a cache miss and the session is re-read from
+ * Postgres, which stays the only source of truth. The key never leaves the
+ * process, so entries written by an earlier process (before a restart) are
+ * simply re-read once from the database.
+ */
+const CACHE_MAC_KEY = randomBytes(32);
+
+function cacheMac(tokenId: string, payload: string): Buffer {
+  return createHmac('sha256', CACHE_MAC_KEY).update(tokenId).update('\n').update(payload).digest();
+}
 
 /**
  * Minimal live-bus surface needed to push a forced logout. `app.liveBus`
@@ -97,6 +114,17 @@ export async function createSession(
   return { token, session: record };
 }
 
+/**
+ * Resolves a cookie token to its live session, serving from the Redis cache
+ * when the cached entry is still within its deadline.
+ *
+ * A cached entry past its `expiresAt` is never trusted to revoke on its own:
+ * `touchSession` extends the row in Postgres, so the cache can lag behind a
+ * session that is still valid. Such an entry is dropped and the row re-read;
+ * only a row that is expired in the database too is deleted (#52).
+ *
+ * @returns The session, or `null` when the token is unknown or expired.
+ */
 export async function resolveSession(
   db: DatabaseClient,
   redis: Redis,
@@ -106,19 +134,16 @@ export async function resolveSession(
   const tokenId = tokenIdFromToken(token);
   const cached = await cacheGet(redis, tokenId);
   if (cached) {
-    if (cached.expiresAt.getTime() < Date.now()) {
-      await revokeSession(db, redis, tokenId);
-      return null;
-    }
-    return cached;
+    if (cached.expiresAt.getTime() >= Date.now()) return cached;
+    await invalidateSessionCache(redis, tokenId);
   }
-  const rows = await db
-    .select()
-    .from(sessions)
-    .where(and(eq(sessions.id, tokenId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
+  const rows = await db.select().from(sessions).where(eq(sessions.id, tokenId)).limit(1);
   const row = rows[0];
   if (!row) return null;
+  if (row.expiresAt.getTime() <= Date.now()) {
+    await revokeSession(db, redis, tokenId);
+    return null;
+  }
   const record: SessionRecord = {
     id: row.id,
     playerId: row.playerId,
@@ -130,6 +155,20 @@ export async function resolveSession(
   };
   await cachePut(redis, record);
   return record;
+}
+
+/**
+ * Drops the Redis cache entry of one session so the next `resolveSession`
+ * reads the authoritative row from Postgres.
+ *
+ * @param redis - Redis client holding the `session:<id>` cache.
+ * @param tokenId - Session id (SHA-256 of the cookie token).
+ */
+export async function invalidateSessionCache(
+  redis: Pick<Redis, 'del'>,
+  tokenId: string,
+): Promise<void> {
+  await redis.del(`${REDIS_PREFIX}${tokenId}`);
 }
 
 export async function revokeSession(
@@ -155,29 +194,60 @@ export async function revokeAllForPlayer(
   playerId: string,
   publisher?: SessionRevokePublisher,
 ): Promise<void> {
+  await revokeAllForPlayers(db, redis, [playerId], publisher);
+}
+
+/** Redis `DEL` batch size: keeps each command's argument list bounded. */
+const REVOKE_REDIS_DEL_BATCH = 1_000;
+
+/**
+ * Bulk form of {@link revokeAllForPlayer}: one `DELETE … WHERE player_id =
+ * ANY(…) RETURNING` for every listed player, then batched Redis `DEL`s, so a
+ * role change touching thousands of players costs a handful of round trips
+ * instead of several per player.
+ *
+ * @param db - database handle.
+ * @param redis - session cache.
+ * @param playerIds - players whose sessions are revoked; may be empty.
+ * @param publisher - when given, receives one `session.revoked` event per
+ *   revoked session.
+ */
+export async function revokeAllForPlayers(
+  db: DatabaseClient,
+  redis: Redis,
+  playerIds: readonly string[],
+  publisher?: SessionRevokePublisher,
+): Promise<void> {
+  if (playerIds.length === 0) return;
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
-  if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.playerId, playerId));
-    await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
-    if (publisher) {
-      const ts = new Date().toISOString();
-      for (const r of rows) {
-        publisher.publish({
-          type: 'session.revoked',
-          ts,
-          data: { player_id: playerId, session_id: r.id },
-        });
-      }
-    }
+    .delete(sessions)
+    .where(inArray(sessions.playerId, [...playerIds]))
+    .returning({ id: sessions.id, playerId: sessions.playerId });
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += REVOKE_REDIS_DEL_BATCH) {
+    const batch = rows.slice(i, i + REVOKE_REDIS_DEL_BATCH);
+    await redis.del(...batch.map((r) => `${REDIS_PREFIX}${r.id}`));
+  }
+  if (!publisher) return;
+  const ts = new Date().toISOString();
+  for (const r of rows) {
+    publisher.publish({
+      type: 'session.revoked',
+      ts,
+      data: { player_id: r.playerId, session_id: r.id },
+    });
   }
 }
 
+/**
+ * Deletes every session whose `expires_at` has passed. Called on a timer by
+ * the `session-prune` plugin.
+ *
+ * @returns the number of rows deleted (postgres.js reports it as `count`).
+ */
 export async function pruneExpired(db: DatabaseClient): Promise<number> {
   const result = await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
-  return (result as unknown as { rowCount?: number }).rowCount ?? 0;
+  return result.count;
 }
 
 export interface TouchSessionInput {
@@ -193,9 +263,9 @@ export async function touchSession(input: TouchSessionInput): Promise<boolean> {
   const ok = await input.redis.set(
     `session-touch:${input.sessionId}`,
     '1',
-    'EX' as never,
-    input.throttleSeconds as never,
-    'NX' as never,
+    'EX',
+    input.throttleSeconds,
+    'NX',
   );
   if (ok !== 'OK') return false;
   const newExpiresAt = new Date(input.now.getTime() + input.ttlSeconds * 1000);
@@ -204,26 +274,37 @@ export async function touchSession(input: TouchSessionInput): Promise<boolean> {
 }
 
 async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
+  const payload = JSON.stringify({
+    playerId: record.playerId,
+    expiresAt: record.expiresAt.toISOString(),
+    lastActivityAt: record.lastActivityAt.toISOString(),
+    ip: record.ip,
+    userAgent: record.userAgent,
+    scope: record.scope,
+  });
   await redis.set(
     `${REDIS_PREFIX}${record.id}`,
-    JSON.stringify({
-      playerId: record.playerId,
-      expiresAt: record.expiresAt.toISOString(),
-      lastActivityAt: record.lastActivityAt.toISOString(),
-      ip: record.ip,
-      userAgent: record.userAgent,
-      scope: record.scope,
-    }),
+    JSON.stringify({ payload, mac: cacheMac(record.id, payload).toString('base64url') }),
     'EX',
     REDIS_TTL_SECONDS,
   );
 }
 
+/**
+ * Reads a session from the Redis cache, or `null` on a miss — including any
+ * entry whose HMAC does not verify (forged, tampered, legacy-format, or
+ * written by another process), so the caller falls back to Postgres.
+ */
 async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | null> {
   const raw = await redis.get(`${REDIS_PREFIX}${tokenId}`);
   if (!raw) return null;
   try {
-    const obj = JSON.parse(raw) as {
+    const envelope = JSON.parse(raw) as { payload?: unknown; mac?: unknown };
+    if (typeof envelope.payload !== 'string' || typeof envelope.mac !== 'string') return null;
+    const expected = cacheMac(tokenId, envelope.payload);
+    const actual = Buffer.from(envelope.mac, 'base64url');
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const obj = JSON.parse(envelope.payload) as {
       playerId: string;
       expiresAt: string;
       lastActivityAt: string;

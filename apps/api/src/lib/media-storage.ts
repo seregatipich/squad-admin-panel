@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { finished } from 'node:stream/promises';
 import type { MediaUploadMimeType } from '@squad/shared-types';
 
 /** Hard cap on a single media upload, in bytes. Resumable/chunked upload is out of scope for VIDEO-1. */
@@ -103,16 +105,32 @@ export interface StoredMediaFile {
  * Streams an upload to `<baseDir>/<yyyy>/<mm>/<id><ext>`, computing its SHA-256
  * and size incrementally and validating its magic bytes against `mimeType`.
  *
- * On a size-limit breach or magic-byte mismatch, the partially-written file is
- * removed and the corresponding error is thrown after the source stream has
- * been fully drained (so the caller's multipart parser doesn't hang waiting
- * for more of a part we've already decided to reject).
+ * On a size-limit breach, magic-byte mismatch or write failure (ENOSPC,
+ * EACCES, …), the partially-written file is removed and the corresponding
+ * error is thrown after the source stream has been fully drained (so the
+ * caller's multipart parser doesn't hang waiting for more of a part we've
+ * already decided to reject). If the source itself errors — the client
+ * aborting the upload — the write stream is closed, the partial file removed
+ * and the source's error rethrown.
+ *
+ * A size breach is detected two ways: more than `maxBytes` bytes arrive, or
+ * the source reports `truncated` once drained. The second covers a multipart
+ * parser capped at the same size (`server.ts` registers
+ * `limits.fileSize: MEDIA_MAX_UPLOAD_BYTES`): busboy then cuts the part at
+ * exactly the cap and ends the stream without an error, so the byte count
+ * alone would store the truncated file as a success (#36).
+ *
+ * @throws {MediaSizeLimitExceededError} the upload is larger than `maxBytes`
+ *   or was truncated by the multipart parser.
+ * @throws {MediaMagicByteMismatchError} the leading bytes don't match `mimeType`.
+ * @throws the source's or the filesystem's own error when either stream fails.
  */
 export async function storeMediaUpload(params: {
   baseDir: string;
   id: string;
   mimeType: MediaUploadMimeType;
-  source: AsyncIterable<Buffer>;
+  /** The part's bytes; a busboy file stream also carries `truncated`. */
+  source: AsyncIterable<Buffer> & { readonly truncated?: boolean };
   maxBytes?: number;
   now?: Date;
 }): Promise<StoredMediaFile> {
@@ -128,51 +146,72 @@ export async function storeMediaUpload(params: {
 
   const hash = createHash('sha256');
   const writeStream = createWriteStream(absolutePath);
+  // Write failures (ENOSPC, EACCES, EISDIR) are read back from
+  // `writeStream.errored`; the listener only keeps them from surfacing as an
+  // uncaught 'error' event that would take the whole API process down (#37).
+  writeStream.on('error', () => {});
   let sizeBytes = 0;
   let headerBuf = Buffer.alloc(0);
   let headerChecked = false;
   let rejection: Error | null = null;
 
-  for await (const chunk of params.source) {
-    sizeBytes += chunk.length;
-    if (rejection) continue; // drain the rest of the part without further processing
+  try {
+    for await (const chunk of params.source) {
+      sizeBytes += chunk.length;
+      rejection ??= writeStream.errored;
+      if (rejection) continue; // drain the rest of the part without further processing
 
-    if (sizeBytes > maxBytes) {
-      rejection = new MediaSizeLimitExceededError(maxBytes);
-      continue;
-    }
+      if (sizeBytes > maxBytes) {
+        rejection = new MediaSizeLimitExceededError(maxBytes);
+        continue;
+      }
 
-    if (!headerChecked) {
-      headerBuf = Buffer.concat([headerBuf, chunk]);
-      if (headerBuf.length >= MAGIC_BYTE_CHECK_LENGTH) {
-        headerChecked = true;
-        if (!matchesMagicBytes(params.mimeType, headerBuf)) {
-          rejection = new MediaMagicByteMismatchError(params.mimeType);
-          continue;
+      if (!headerChecked) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        if (headerBuf.length >= MAGIC_BYTE_CHECK_LENGTH) {
+          headerChecked = true;
+          if (!matchesMagicBytes(params.mimeType, headerBuf)) {
+            rejection = new MediaMagicByteMismatchError(params.mimeType);
+            continue;
+          }
         }
+      }
+
+      hash.update(chunk);
+      if (!writeStream.write(chunk) && !writeStream.errored) {
+        // `once` rejects if the stream errors while we wait, so a failed
+        // write can't leave the loop parked on a 'drain' that never comes.
+        await once(writeStream, 'drain');
       }
     }
 
-    hash.update(chunk);
-    if (!writeStream.write(chunk)) {
-      await new Promise<void>((resolve) => writeStream.once('drain', resolve));
+    if (!rejection && params.source.truncated === true) {
+      rejection = new MediaSizeLimitExceededError(maxBytes);
     }
+
+    if (!rejection && !headerChecked && !matchesMagicBytes(params.mimeType, headerBuf)) {
+      rejection = new MediaMagicByteMismatchError(params.mimeType);
+    }
+    rejection ??= writeStream.errored;
+
+    if (!rejection) {
+      await new Promise<void>((resolve, reject) => {
+        writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+      });
+      return { relativePath, absolutePath, sizeBytes, sha256: hash.digest('hex') };
+    }
+  } catch (err) {
+    // The source aborted (client disconnect → ERR_STREAM_PREMATURE_CLOSE) or
+    // the write stream failed: fall through to the same cleanup as a rejection.
+    rejection = err instanceof Error ? err : new Error(String(err));
   }
 
-  if (!rejection && !headerChecked && !matchesMagicBytes(params.mimeType, headerBuf)) {
-    rejection = new MediaMagicByteMismatchError(params.mimeType);
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
-  });
-
-  if (rejection) {
-    await rm(absolutePath, { force: true });
-    throw rejection;
-  }
-
-  return { relativePath, absolutePath, sizeBytes, sha256: hash.digest('hex') };
+  writeStream.destroy();
+  await finished(writeStream).catch(() => {});
+  // Best-effort cleanup: a failing rm must not replace the error that
+  // explains why the upload was rejected.
+  await rm(absolutePath, { force: true }).catch(() => {});
+  throw rejection;
 }
 
 /** Resolves a stored `media_files.storage_path` to an absolute path under `baseDir`. */

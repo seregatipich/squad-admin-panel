@@ -1,10 +1,19 @@
 import { createServer as createNetServer, type Socket } from 'node:net';
 import { withAdminsCfgServerLock } from '@squad/db';
-import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  configVersions,
+  players,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BLAME_MAX_VERSIONS } from '../../src/lib/blame.js';
+import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import { createSession } from '../../src/lib/sessions.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -14,6 +23,7 @@ import {
 } from './harness.js';
 
 const OWNER_STEAM_ID = 76561198000000999n;
+const TEST_PLAYER_LIMITED_VIEWER = 76561198000000998n;
 
 let h: IntegrationHarness;
 
@@ -38,6 +48,56 @@ afterAll(async () => {
 
 async function login(): Promise<string> {
   return loginAsOwner(h);
+}
+
+/**
+ * #286: a panel_access role without can_view_ips — used to assert that
+ * config-version history hides author_ip for such a caller.
+ */
+async function loginAsRoleWithoutViewIps(): Promise<string> {
+  const [row] = await h.db
+    .insert(players)
+    .values({
+      steamId64: TEST_PLAYER_LIMITED_VIEWER,
+      canonicalName: 'ConfigsLimitedViewer',
+      canonicalNameNormalized: 'configslimitedviewer',
+    })
+    .onConflictDoNothing()
+    .returning({ id: players.id });
+  const playerRow =
+    row ??
+    (await h.db.query.players.findFirst({
+      where: eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER),
+    }));
+  if (!playerRow) throw new Error('failed to seed limited-viewer player');
+
+  const ownerCookie = await loginAsOwner(h);
+  const created = await h.app.inject({
+    method: 'POST',
+    url: '/api/v1/roles',
+    headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+    payload: JSON.stringify({
+      name: `no-view-ips-configs-${Date.now()}`,
+      color: '#123456',
+      squad_permissions: [],
+      panel_access: true,
+      can_view_ips: false,
+    }),
+  });
+  const roleId = (created.json() as { id: string }).id;
+  await h.db
+    .update(players)
+    .set({ roleId })
+    .where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
+  invalidateAllPermissionCaches();
+
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: playerRow.id,
+    ip: null,
+    userAgent: 'server-configs-test',
+    ttlMs: 21_600_000,
+  });
+  return `__Host-sid=${token}`;
 }
 
 async function createServer(cookie: string): Promise<string> {
@@ -517,6 +577,69 @@ describe('PUT /api/v1/servers/:id/configs/:name', () => {
     expect(versions).toHaveLength(1);
   });
 
+  it('rejects a stale base_sha256 with 409 instead of clobbering a concurrent write (#608)', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    seedFakeConfig(id, 'Admins.cfg', 'original content');
+
+    const get1 = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+    });
+    expect(get1.statusCode).toBe(200);
+    const baseSha = get1.json<{ sha256: string }>().sha256;
+
+    // Simulates a write that bypassed this editor session entirely — another
+    // operator's PUT, a worker rewrite, or a manual SSH edit — after this
+    // editor loaded `baseSha`.
+    seedFakeConfig(id, 'Admins.cfg', 'someone else changed this first');
+
+    const stale = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'my stale edit', base_sha256: baseSha },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json<{ error: string }>().error).toBe('stale_base');
+
+    // The concurrent writer's content must survive untouched, and no new
+    // version was created for the rejected write.
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)?.toString(),
+    ).toBe('someone else changed this first');
+    const versions = await h.db
+      .select()
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Admins.cfg')));
+    expect(versions).toHaveLength(0);
+  });
+
+  it('accepts a PUT whose base_sha256 still matches the file on disk', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    seedFakeConfig(id, 'Admins.cfg', 'original content');
+
+    const get1 = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+    });
+    const baseSha = get1.json<{ sha256: string }>().sha256;
+
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'fresh edit', base_sha256: baseSha },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)?.toString(),
+    ).toBe('fresh edit');
+  });
+
   it('round-trips a CRLF payload byte-identically through PUT → GET and into config_versions', async () => {
     const cookie = await login();
     const id = await createServer(cookie);
@@ -575,6 +698,42 @@ describe('GET /api/v1/servers/:id/configs/:name/history + :vid + /diff + /blame'
     expect(body.items).toHaveLength(2);
     expect(body.items[0]?.message).toBe('b');
     expect(body.items[1]?.message).toBe('a');
+  });
+
+  // #286: author_ip used to be returned to anyone with config:view; it must
+  // be gated behind player:view_ips like the rest of the panel's IP model.
+  it('hides author_ip from a caller without player:view_ips, shows it to one with it', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'v1', message: 'a' },
+    });
+
+    const limitedCookie = await loginAsRoleWithoutViewIps();
+    const limited = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/history`,
+      headers: { cookie: limitedCookie },
+    });
+    expect(limited.statusCode).toBe(200);
+    const limitedBody = limited.json<{ items: Array<{ author_ip: string | null }> }>();
+    expect(limitedBody.items[0]?.author_ip).toBeNull();
+
+    const owner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/history`,
+      headers: { cookie },
+    });
+    expect(owner.statusCode).toBe(200);
+    const ownerBody = owner.json<{ items: Array<{ author_ip: string | null }> }>();
+    // The Owner role has every permission including player:view_ips, so the
+    // field is not forced to null (it may still be null if no IP was
+    // recorded for this write, which is fine — the assertion is that the
+    // route does not blanket-null it for a privileged caller).
+    expect(ownerBody.items).toHaveLength(1);
   });
 
   it('single version read returns its full content', async () => {
@@ -657,6 +816,81 @@ describe('GET /api/v1/servers/:id/configs/:name/history + :vid + /diff + /blame'
     });
     expect(cached.statusCode).toBe(200);
     expect(cached.body).toBe(first.body);
+  });
+});
+
+/**
+ * Inserts a config version straight into `config_versions` with a
+ * microsecond-precise `created_at` literal, the way concurrent saves land.
+ * Returns the new version id.
+ */
+async function insertVersionAt(
+  serverId: string,
+  content: string,
+  createdAt: string,
+  label: string,
+): Promise<string> {
+  const rows = (await h.db.execute(sql`
+    INSERT INTO config_versions (server_id, filename, content, sha256, author_label, created_at)
+    VALUES (${serverId}, 'Admins.cfg', ${content}, digest(${content}, 'sha256'), ${label},
+            ${createdAt}::timestamptz)
+    RETURNING id::text AS id
+  `)) as unknown as Array<{ id: string }>;
+  const row = rows[0];
+  if (!row) throw new Error('config version insert returned no row');
+  return row.id;
+}
+
+describe('GET /api/v1/servers/:id/configs/:name/blame — ordering and depth (#36 finding 19)', () => {
+  it('orders versions saved within one millisecond by their full-precision time', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    // Stored newest-first so an unordered SELECT returns them that way; both
+    // stamps truncate to the same millisecond in toISOString().
+    const later = await insertVersionAt(id, 'a\nB', '2026-09-01 10:00:00.000900+00', 'later');
+    const earlier = await insertVersionAt(id, 'a\nb', '2026-09-01 10:00:00.000100+00', 'earlier');
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/blame`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ lines: Array<{ text: string; version_id: string }> }>();
+    expect(body.lines.map((l) => l.text)).toEqual(['a', 'B']);
+    expect(body.lines[0]?.version_id).toBe(earlier);
+    expect(body.lines[1]?.version_id).toBe(later);
+  });
+
+  it(`diffs at most the ${BLAME_MAX_VERSIONS} newest versions and flags the cut`, async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const total = BLAME_MAX_VERSIONS + 2;
+    const ids: string[] = [];
+    for (let k = 0; k < total; k++) {
+      const second = String(k).padStart(4, '0');
+      ids.push(
+        await insertVersionAt(id, `base\nline-${k}`, `2026-09-02 00:00:00.${second}+00`, `v${k}`),
+      );
+    }
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/blame`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      lines: Array<{ text: string; version_id: string }>;
+      truncated: boolean;
+    }>();
+    expect(body.truncated).toBe(true);
+    // `base` predates the window, so it is attributed to the oldest version inside it.
+    expect(body.lines[0]).toMatchObject({
+      text: 'base',
+      version_id: ids[total - BLAME_MAX_VERSIONS],
+    });
+    expect(body.lines[1]).toMatchObject({ text: `line-${total - 1}`, version_id: ids[total - 1] });
   });
 });
 

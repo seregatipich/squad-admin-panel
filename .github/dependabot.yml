@@ -6,3 +6,39 @@ updates:
     target-branch: "dev"
     schedule:
       interval: "weekly"
+
+  # pnpm workspace dependencies (Fastify, Next.js, drizzle, ioredis, etc.).
+  # Dependabot resolves the pnpm-workspace.yaml catalog and every workspace
+  # package from the root manifest, so one entry covers the whole monorepo.
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # apps/bridge is the sole privileged, root-run component (see CLAUDE.md
+  # "Architecture"), so its Go module dependencies get the same coverage.
+  - package-ecosystem: "gomod"
+    directory: "/apps/bridge"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    groups:
+      gomod-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Base images referenced by docker/*.Dockerfile (node, caddy, postgres,
+  # redis, restic, debian).
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker-compose"
+    directory: "/docker"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"

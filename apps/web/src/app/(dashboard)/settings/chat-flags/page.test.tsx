@@ -16,20 +16,32 @@ const RULE = {
   created_at: '2026-07-20T10:00:00.000Z',
 };
 
-function mockFetch(opts: { permissions?: string[] } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+function mockFetch(opts: { canMutate?: boolean; reindexStatus?: number } = {}) {
+  const canMutate = opts.canMutate ?? true;
+  const reindexStatus = opts.reindexStatus ?? 200;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     calls.push({ url, init });
-    if (url.endsWith('/api/v1/me')) {
-      return Promise.resolve(new Response(JSON.stringify({ permissions }), { status: 200 }));
-    }
     if (url.endsWith('/api/v1/settings/chat-flag-rules')) {
-      return Promise.resolve(new Response(JSON.stringify({ items: [RULE] }), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [RULE], can_mutate: canMutate }), { status: 200 }),
+      );
+    }
+    if (url.endsWith('/api/v1/settings/chat-flag-rules/reindex') && init?.method === 'POST') {
+      const body =
+        reindexStatus === 200
+          ? { days: 7, scanned: 0, flagged: 0, changed: 0 }
+          : { error: 'reindex_in_progress' };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: reindexStatus }));
     }
     if (url.includes('/api/v1/settings/chat-flag-rules/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    if (url.endsWith('/api/v1/settings/chat-flag-rules/reindex')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ scanned: 0, flagged: 0 }), { status: 200 }),
+      );
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`));
   });
@@ -84,14 +96,74 @@ describe('ChatFlagsPage', () => {
   );
 
   it(
-    'hides mutating controls without role:edit',
+    'explains a 409 from reindex as a run already in progress (#345)',
     async () => {
-      const { fn } = mockFetch({ permissions: [] });
+      const { fn } = mockFetch({ reindexStatus: 409 });
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+      fireEvent.click(screen.getByRole('button', { name: 'Переиндексировать' }));
+      expect(
+        await screen.findByText('Переиндексация уже выполняется — дождитесь её завершения.'),
+      ).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides mutating controls when the API reports can_mutate=false',
+    async () => {
+      const { fn } = mockFetch({ canMutate: false });
       vi.stubGlobal('fetch', fn);
       render(<ChatFlagsPage />);
       await screen.findByText('мудак');
       expect(screen.queryByRole('button', { name: 'Удалить' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Переиндексировать' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the reindex days field stay empty while typing instead of snapping to 1',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+
+      const input = screen.getByLabelText('Дней назад') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: '30' } });
+      expect(input.value).toBe('30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Переиндексировать' }));
+
+      await waitFor(() => {
+        const reindexCall = calls.find((c) => c.url.endsWith('/reindex'));
+        expect(reindexCall).toBeDefined();
+        expect(JSON.parse(String(reindexCall?.init?.body))).toEqual({ days: 30 });
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'clamps an out-of-range reindex days value on blur',
+    async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ChatFlagsPage />);
+      await screen.findByText('мудак');
+
+      const input = screen.getByLabelText('Дней назад') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '9000' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('365');
+
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('1');
     },
     TEST_TIMEOUT_MS,
   );

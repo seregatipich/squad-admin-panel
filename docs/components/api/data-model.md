@@ -19,17 +19,11 @@ Used by `POST /api/v1/servers`. Source: `packages/shared-types/src/api.ts`.
 | `query_port` | integer | yes | 1024–65535 |
 | `beacon_port` | integer | yes | 1024–65535 |
 | `rcon_port` | integer | yes | 1024–65535 |
-| `multihome` | string | no | default `"0.0.0.0"` |
+| `multihome` | string | no | IPv4/IPv6 literal, default `"0.0.0.0"` (#53) |
 | `max_players` | integer | no | 1–100, default 100 |
 | `tickrate` | integer | no | 10–120, default 50 |
-| `extra_args` | string | no | default `""` |
-| `launch_args_override` | string \| null | no | — |
-| `cpu_affinity` | string \| null | no | — |
-| `cpu_weight` | integer \| null | no | 1–10000 |
-| `niceness` | integer \| null | no | -20 to 19 |
-| `memory_high_mb` | integer \| null | no | positive |
-| `memory_max_mb` | integer \| null | no | positive |
-| `io_weight` | integer \| null | no | 1–10000 |
+| `extra_args` | `""` | no | only the unset value; anything else → 400 (#53) |
+| `launch_args_override`, `cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight` | `null` | no | only `null`; a value → 400 — the container is never started with these (#53) |
 
 ### `createRole` body
 
@@ -229,7 +223,7 @@ Returned by `DELETE /api/v1/servers/:id`. Source: `DeleteResult` in [`apps/api/s
 }
 ```
 
-Each entry in `errors[]` is `{phase: 'container_stop'|'container_rm'|'configs_dir_delete'|'saved_dir_delete'|'ufw_<proto>_<port>', error: string}`. Phases 2-4 are best-effort: a non-empty `errors[]` does NOT roll back the soft-delete UPDATE on `servers`. If phase 1 (the config backup) reads zero files the route returns 500 `{ error: 'delete_failed', message: '...' }` and the row stays alive.
+Each entry in `errors[]` is `{phase: 'container_stop'|'container_rm'|'sidecar_rm'|'sidecar_dir_delete'|'configs_dir_delete'|'saved_dir_delete'|'ufw_<proto>_<port>'|'sync_queue_cleanup', error: string}`. Phases 2-4 are best-effort: a non-empty `errors[]` does NOT roll back the soft-delete UPDATE on `servers`. If phase 1 (the config backup) reads zero files the route returns 500 `{ error: 'delete_failed', message: '...' }` and the row stays alive.
 
 ### Server restore result
 
@@ -430,4 +424,4 @@ The `context` column in `audit_log` is a JSON object. Its contents depend on `ac
 | `player.role.assign` | `{steam_id64, role_id, role_name}` |
 | `player.role.revoke` | `{steam_id64, former_role_id}` |
 
-All mutating routes must declare `config.audit: {action, resource}` in the Fastify route config. The `apps/api/test/audit-coverage.test.ts` suite scans all registered routes at startup and fails if any POST/PUT/PATCH/DELETE lacks an audit declaration.
+All mutating routes must declare `config.audit` in the Fastify route config: `{action, resource}` for the declarative `onResponse` hook, or `'manual'` when the handler writes its own rows with `writeAuditEntry`. `false` is reserved for reads and an allowlist of machine-integration endpoints. The `apps/api/test/audit-coverage.test.ts` suite scans every route `registerRoutes()` registers and fails if any POST/PUT/PATCH/DELETE lacks an audit declaration, uses `false` off the allowlist, or declares `'manual'` in a module that never calls `writeAuditEntry`.

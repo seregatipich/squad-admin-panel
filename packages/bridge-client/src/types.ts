@@ -3,22 +3,11 @@ import type { BridgeMethod } from '@squad/shared-config';
 export type BridgeErrorCode =
   | 'forbidden'
   | 'invalid_args'
+  | 'not_found'
   | 'runtime_error'
   | 'timeout'
   | 'internal'
   | 'transport';
-
-export class BridgeError extends Error {
-  readonly code: BridgeErrorCode;
-  readonly detail?: unknown;
-
-  constructor(code: BridgeErrorCode, message: string, detail?: unknown) {
-    super(message);
-    this.name = 'BridgeError';
-    this.code = code;
-    this.detail = detail;
-  }
-}
 
 export interface BridgeRequest<Params = unknown> {
   id: string;
@@ -77,18 +66,6 @@ export interface FileReadParams {
   path: string;
 }
 
-export interface FileReadTailParams {
-  path: string;
-  max_bytes?: number;
-}
-
-export interface FileReadTailResult {
-  content: string;
-  offset: number;
-  size: number;
-  truncated: boolean;
-}
-
 export interface FileReadStreamParams {
   path: string;
   /** Read/emit chunk size in bytes. Bridge default 1 MiB, capped at 8 MiB. */
@@ -117,6 +94,11 @@ export interface SquadLogListResult {
   files: SquadLogFileEntry[];
 }
 
+/**
+ * Params of `file_atomic_write`. `mode` is optional: omitted (or 0) writes
+ * 0o644; otherwise the bridge accepts only 0o644, 0o640 or 0o600 and rejects
+ * anything else with a `forbidden` error.
+ */
 export interface FileWriteParams {
   path: string;
   content: string;
@@ -138,20 +120,6 @@ export interface UfwRuleParams {
   comment?: string;
 }
 
-export interface ProcessInfoParams {
-  pid: number;
-}
-
-export interface ProcessInfoResult {
-  pid: number;
-  exists: boolean;
-  rss_bytes?: number;
-  vsz_bytes?: number;
-  cmdline?: string;
-  state?: string;
-  threads?: number;
-}
-
 export interface ContainerRunParams {
   server_id: string;
   image: string;
@@ -162,7 +130,6 @@ export interface ContainerRunParams {
   max_players?: number;
   tickrate?: number;
   multihome?: string | null;
-  extra_args?: string[];
   configs_host: string;
   saved_host: string;
   depot_volume: string;
@@ -184,10 +151,15 @@ export interface ContainerRunRnsquadjsResult {
   status: 'started';
 }
 
+/**
+ * Parameters shared by `container_start`, `container_stop`, `container_rm`,
+ * `container_inspect` and `container_stats`. Mirrors the Go `containerParams`
+ * struct in `apps/bridge/internal/handlers/handlers.go`; `container_rm` always
+ * force-removes (`docker rm -f`), so there is no `force` switch.
+ */
 export interface ContainerControlParams {
   name: string;
   timeout_sec?: number;
-  force?: boolean;
 }
 
 export interface ContainerInspectResult {
@@ -201,12 +173,12 @@ export interface ContainerInspectResult {
   image: string;
   restart_count: number;
   labels: Record<string, string>;
-  /** Set by the bridge when Docker reports the container was OOM-killed. Older
-   *  bridge builds omit the field entirely; consumers must default to `false`. */
+  /** Docker's `State.OOMKilled`: the kernel OOM killer ended the container.
+   *  Bridge builds before #45 never sent it; consumers must default to `false`. */
   oom_killed?: boolean;
   /** Docker's `State.Error` string. Usually empty; populated with values like
-   *  `"signal: killed"` when the runtime sends the container a signal. Older
-   *  bridge builds omit the field; consumers must default to `null`. */
+   *  `"signal: killed"` when the runtime sends the container a signal. Omitted
+   *  when empty (and by bridge builds before #45); consumers must default to `null`. */
   error?: string;
 }
 

@@ -41,10 +41,10 @@ function makeDeps(opts: {
         roleExpiresAt: new Date(NOW.getTime() + 30 * DAY_MS),
         enqueued: 1,
       }),
-    expireSubscription: vi.fn().mockResolvedValue(undefined),
+    expireSubscription: vi.fn().mockResolvedValue(true),
     writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-    notifySubscriptionExpired: vi.fn().mockResolvedValue(undefined),
     invalidatePermissionCache: vi.fn(),
+    notifySubscriptionExpired: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
   } satisfies SubscriptionRenewalDeps;
   return deps;
@@ -96,7 +96,6 @@ describe('runSubscriptionRenewalTick', () => {
         targetId: PLAYER_ID,
       }),
     );
-    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(PLAYER_ID);
   });
 
   it('expires the subscription and notifies the player when the balance is short', async () => {
@@ -121,6 +120,18 @@ describe('runSubscriptionRenewalTick', () => {
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({ actionType: 'player.subscription.expire' }),
     );
+  });
+
+  it('skips the audit row and the alert when the subscription was cancelled before expiry', async () => {
+    const charge = vi.fn().mockResolvedValue({ status: 'insufficient_balance', balance: 10 });
+    const deps = makeDeps({ dueSubscriptions: [due()], charge });
+    deps.expireSubscription.mockResolvedValue(false);
+
+    const result = await runSubscriptionRenewalTick(deps);
+
+    expect(result).toMatchObject({ renewed: 0, expired: 0 });
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
+    expect(deps.notifySubscriptionExpired).not.toHaveBeenCalled();
   });
 
   it('expires the subscription when the tier role can no longer be granted', async () => {
@@ -153,6 +164,55 @@ describe('runSubscriptionRenewalTick', () => {
     const result = await runSubscriptionRenewalTick(deps);
 
     expect(result).toMatchObject({ renewed: 1, expired: 1 });
+  });
+
+  it('passes the scanned due date through as dueAt, for the charge to re-check (#990)', async () => {
+    const scannedAt = new Date('2026-07-27T00:00:00.000Z');
+    const subscription = due({ nextRenewalAt: scannedAt });
+    const deps = makeDeps({ dueSubscriptions: [subscription] });
+
+    await runSubscriptionRenewalTick(deps);
+
+    expect(deps.chargeRenewal).toHaveBeenCalledWith(expect.objectContaining({ dueAt: scannedAt }));
+  });
+
+  it('does not abort the batch when writeAuditEntry throws for one subscription (#991)', async () => {
+    const deps = makeDeps({
+      dueSubscriptions: [due(), due({ id: 'sub-2', playerId: 'player-2' })],
+    });
+    deps.writeAuditEntry = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('audit_log write failed'))
+      .mockResolvedValue(undefined);
+
+    const result = await runSubscriptionRenewalTick(deps);
+
+    // The first subscription's charge succeeded (money moved) even though
+    // its audit write then threw — the old code would have let that
+    // exception escape and abort the second subscription entirely.
+    expect(result).toMatchObject({ renewed: 2 });
+    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(PLAYER_ID);
+    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith('player-2');
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'role_expirer.renewal_failed' }),
+    );
+  });
+
+  it('does not abort the batch when notifySubscriptionExpired throws for one subscription (#991)', async () => {
+    const charge = vi.fn().mockResolvedValue({ status: 'insufficient_balance', balance: 0 });
+    const deps = makeDeps({
+      dueSubscriptions: [due(), due({ id: 'sub-2', playerId: 'player-2' })],
+      charge,
+    });
+    deps.notifySubscriptionExpired = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('redis publish failed'))
+      .mockResolvedValue(undefined);
+
+    const result = await runSubscriptionRenewalTick(deps);
+
+    expect(result).toMatchObject({ expired: 2 });
+    expect(deps.expireSubscription).toHaveBeenCalledTimes(2);
   });
 
   it('skips a subscription cancelled between the scan and the charge', async () => {

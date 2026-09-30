@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
-import serverLogsRoutes from '../src/routes/server-logs.js';
+import serverLogsRoutes, { LOG_STREAMS_PER_CALLER } from '../src/routes/server-logs.js';
 
 const testId = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 
@@ -133,6 +133,64 @@ describe('/api/v1/servers/:id/logs/ws', () => {
     const last = frames.at(-1) as { done?: boolean };
     expect(last.done).toBe(true);
   });
+
+  // #296: an external server (runtime='external') is marked status='running'
+  // at creation with no panel-managed container; without this check the
+  // `installed` branch above would pass and ask the bridge to follow logs
+  // for a container that was never created.
+  it('refuses to follow an external server instead of asking the bridge for a nonexistent container', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'External Box',
+      status: 'running',
+      runtime: 'external',
+    });
+    const frames: Array<Record<string, unknown>> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+    ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    expect(frames).toEqual([{ error: 'external_server' }]);
+  });
+
+  // #295: `findFirst` used to run before the try block, so a DB failure
+  // rejected the background IIFE with nothing awaiting it — the client saw
+  // no {error} and the socket stayed open on heartbeats alone.
+  it('sends an error frame and closes the socket when the DB lookup fails', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => {
+      throw new Error('db unavailable');
+    };
+    const frames: Array<Record<string, unknown>> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+    ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    expect(frames).toEqual([{ error: 'db unavailable' }]);
+  });
+
+  it('delivers the bridge error frame before closing when the bridge connect fails', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    const bridge = (app as any).bridge;
+    const originalConnect = bridge.connect;
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'Fake',
+      status: 'running',
+    });
+    bridge.connect = async () => {
+      throw new Error('bridge unavailable');
+    };
+    try {
+      const frames: Array<Record<string, unknown>> = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+      ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+      await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+      expect(frames).toEqual([{ error: 'bridge unavailable' }]);
+    } finally {
+      bridge.connect = originalConnect;
+    }
+  });
 });
 
 async function waitFor(pred: () => boolean, timeoutMs = 2000) {
@@ -142,3 +200,44 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+describe('/api/v1/servers/:id/logs/ws stream cap (#1298)', () => {
+  it('refuses a caller past its concurrent stream limit with close code 1013', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'Fake',
+      status: 'running',
+    });
+    const url = `ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws?lines=0`;
+    const open: WebSocket[] = [];
+    for (let i = 0; i < LOG_STREAMS_PER_CALLER; i++) {
+      const ws = new WebSocket(url);
+      await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+      open.push(ws);
+    }
+
+    const extra = new WebSocket(url);
+    const frames: Array<Record<string, unknown>> = [];
+    extra.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    const code = await new Promise<number>((resolve) => extra.on('close', (c) => resolve(c)));
+    expect(code).toBe(1013);
+    expect(frames).toContainEqual({ error: 'too_many_streams' });
+
+    // Closing one stream frees its slot.
+    const first = open.shift() as WebSocket;
+    first.close();
+    await new Promise<void>((resolve) => first.on('close', () => resolve()));
+    await new Promise((r) => setTimeout(r, 50));
+    const again = new WebSocket(url);
+    const againFrames: Array<Record<string, unknown>> = [];
+    again.on('message', (raw) => againFrames.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve) => again.on('open', () => resolve()));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(again.readyState).toBe(WebSocket.OPEN);
+    expect(againFrames).not.toContainEqual({ error: 'too_many_streams' });
+    open.push(again);
+
+    for (const ws of open) ws.close();
+  });
+});

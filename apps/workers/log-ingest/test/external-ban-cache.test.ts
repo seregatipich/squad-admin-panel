@@ -47,4 +47,51 @@ describe('ExternalBanCache', () => {
     expect(getVersion).toHaveBeenNthCalledWith(1, EXTERNAL_BAN_CACHE_VERSION_KEY);
     expect(getVersion).toHaveBeenNthCalledWith(2, EXTERNAL_BAN_CACHE_VERSION_KEY);
   });
+
+  it('stops enforcing a ban that expired since the last refresh, without waiting for a version bump', async () => {
+    const db = fakeDb([
+      {
+        externalBanId: '00000000-0000-7000-8000-000000000001',
+        sourceId: '00000000-0000-7000-8000-000000000002',
+        sourceName: 'Trusted list',
+        trustLevel: 'trusted',
+        onMatch: 'kick',
+        steamId64: '76561198000000000',
+        eosId: null,
+        nickname: 'Cheater',
+        reason: 'reason',
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    ]);
+    const redis = { get: vi.fn().mockResolvedValue('1') };
+    const cache = new ExternalBanCache(db as never, redis);
+
+    await expect(cache.match('76561198000000000', null)).resolves.toHaveLength(0);
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one refresh between concurrent matches after a version change', async () => {
+    const db = fakeDb([]);
+    const cache = new ExternalBanCache(db as never, { get: vi.fn().mockResolvedValue('1') });
+
+    await Promise.all([
+      cache.match('76561198000000000', null),
+      cache.match('76561198000000001', null),
+      cache.match('76561198000000002', null),
+    ]);
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the loaded index instead of reloading when Redis is unavailable', async () => {
+    const db = fakeDb([]);
+    const get = vi.fn().mockResolvedValueOnce('1').mockRejectedValue(new Error('redis down'));
+    const cache = new ExternalBanCache(db as never, { get });
+
+    await cache.match('76561198000000000', null);
+    await cache.match('76561198000000000', null);
+    await cache.match('76561198000000000', null);
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
 });

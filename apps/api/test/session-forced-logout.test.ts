@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import {
   playerApiTokens,
@@ -41,7 +42,7 @@ async function buildApp(opts: { dbUrl: string; revalidateIntervalMs?: number }) 
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',
@@ -260,6 +261,14 @@ async function connectIgnoringRevocation(
   return { ws, frames, closeCode: () => code };
 }
 
+/** Sends a live-bus subscription frame and waits for the server's acknowledgement. */
+async function subscribeTo(sock: ObservedSocket, events: string[]): Promise<void> {
+  const acks = () => sock.frames.filter((f) => (f.type as string) === 'subscribed').length;
+  const before = acks();
+  sock.ws.send(JSON.stringify({ type: 'subscribe', events }));
+  await waitFor(() => acks() > before);
+}
+
 /** A non-system panel role, so demoting its member never trips the last-Owner guard. */
 async function createPanelRole(
   // biome-ignore lint/suspicious/noExplicitAny: drizzle test handle
@@ -273,6 +282,15 @@ async function createPanelRole(
     combatView: true,
   });
   return id;
+}
+
+/** A broadcast event a socket receives regardless of its subscriptions or role. */
+function heartbeatMarker(worker: string): LiveEvent {
+  return {
+    type: 'worker.heartbeat',
+    ts: new Date().toISOString(),
+    data: { worker, healthy: true },
+  };
 }
 
 function combatEvent(): LiveEvent {
@@ -295,11 +313,12 @@ function combatEvent(): LiveEvent {
   };
 }
 
-function heartbeatMarker(worker: string): LiveEvent {
+/** A frame every socket receives, used to prove earlier frames were filtered. */
+function deliveryMarker(serverId: string): LiveEvent {
   return {
-    type: 'worker.heartbeat',
+    type: 'rcon.status',
     ts: new Date().toISOString(),
-    data: { worker, healthy: true },
+    data: { server_id: serverId, state: 'connected' },
   };
 }
 
@@ -466,10 +485,48 @@ describe('server-side close of live sockets on revocation (#12)', () => {
       await waitFor(() => sock.closeCode() === 4001);
     });
 
+    it('keeps an API-token socket’s combat and role-alert filters narrowed to the token across revalidations', async () => {
+      const combatRoleId = await createPanelRole(h.db);
+      await h.db.update(roles).set({ canAssignRoles: true }).where(eq(roles.id, combatRoleId));
+      const player = await seedAuthedPlayer(h.db, h.redis, testSteamId(12016), combatRoleId);
+      invalidatePermissionCache(player.playerId);
+      const minted = mintApiToken();
+      await h.db.insert(playerApiTokens).values({
+        id: minted.id,
+        playerId: player.playerId,
+        name: 'ws-token-narrowing-test',
+        tokenHash: minted.tokenHash,
+        scopes: ['server:view'],
+      });
+      const sock = await connectIgnoringRevocation(h.port, { bearer: minted.plaintext });
+      await subscribeTo(sock, ['combat.event']);
+      // Several revalidation ticks: each reloads the owner's role, which does
+      // hold combat_view and can_assign_roles — the token delegates neither.
+      await new Promise((r) => setTimeout(r, 500));
+
+      h.app.liveBus.publish(combatEvent());
+      h.app.liveBus.publish({
+        type: 'alert.triggered',
+        ts: new Date().toISOString(),
+        data: { event_kind: 'role_expiring', player_id: player.playerId },
+      } as unknown as LiveEvent);
+      h.app.liveBus.publish(heartbeatMarker('ws-token-narrowing-marker'));
+      await waitFor(() =>
+        sock.frames.some(
+          (f) => f.type === 'worker.heartbeat' && f.data.worker === 'ws-token-narrowing-marker',
+        ),
+      );
+      expect(sock.frames.filter((f) => f.type === 'combat.event')).toHaveLength(0);
+      expect(sock.frames.filter((f) => f.type === 'alert.triggered')).toHaveLength(0);
+      expect(sock.closeCode()).toBeNull();
+      await closeWs(sock.ws);
+    });
+
     it('stops forwarding combat events once the role loses combat_view', async () => {
       const combatRoleId = await createPanelRole(h.db);
       const player = await seedAuthedPlayer(h.db, h.redis, testSteamId(12014), combatRoleId);
       const sock = await connectIgnoringRevocation(h.port, { cookieToken: player.token });
+      await subscribeTo(sock, ['combat.event']);
       const combatFrames = () => sock.frames.filter((f) => f.type === 'combat.event').length;
 
       h.app.liveBus.publish(combatEvent());
@@ -481,10 +538,10 @@ describe('server-side close of live sockets on revocation (#12)', () => {
       await new Promise((r) => setTimeout(r, 500));
 
       h.app.liveBus.publish(combatEvent());
-      h.app.liveBus.publish(heartbeatMarker('ws-revocation-marker'));
+      h.app.liveBus.publish(deliveryMarker('ws-revocation-marker'));
       await waitFor(() =>
         sock.frames.some(
-          (f) => f.type === 'worker.heartbeat' && f.data.worker === 'ws-revocation-marker',
+          (f) => f.type === 'rcon.status' && f.data.server_id === 'ws-revocation-marker',
         ),
       );
       expect(combatFrames()).toBe(1);

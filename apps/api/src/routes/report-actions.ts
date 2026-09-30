@@ -1,10 +1,5 @@
-import { events, moderationActions, playerReports, players } from '@squad/db/schema';
-import {
-  type EventEnvelope,
-  type EventType,
-  moderationActionPayload,
-  STREAM_NAME,
-} from '@squad/shared-types';
+import { playerReports, players } from '@squad/db/schema';
+import { BAN_LENGTH_PATTERN } from '@squad/shared-config';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -13,14 +8,14 @@ import { z } from 'zod';
 import { raiseAltBanAlert } from '../lib/alt-ban-alert.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
-import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
-import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
+import { enforceModerationAction, type PlayerIdentity } from '../lib/moderation-enforce.js';
+import { panelGuard } from '../lib/panel-guard.js';
+import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
 import { parseStoredRoster } from '../lib/roster.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const REASON_MAX = 300;
-const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
 const RESOLUTION_NOTE_MAX = 2000;
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -42,15 +37,7 @@ const bulkResolveBody = z.object({
   resolution_note: z.string().trim().min(1).max(RESOLUTION_NOTE_MAX),
 });
 
-type ReportModerationActionType = z.infer<typeof actionBody>['action_type'];
-
-const MODERATION_EVENT_TYPES: Record<ReportModerationActionType, EventType> = {
-  ban: 'moderation.ban',
-  kick: 'moderation.kick',
-  warn: 'moderation.warn',
-};
-
-interface ModerationActionApiRow {
+interface ModerationActionApiRow extends Record<string, unknown> {
   id: string;
   action_type: string;
   reason: string | null;
@@ -101,86 +88,6 @@ const ACTION_ROW_SELECT = sql`
   ma.author_system_label
 `;
 
-interface PlayerIdentity {
-  eosId: string | null;
-  steamId64: string | null;
-  name: string;
-}
-
-/** Persists and publishes the EVT-1 envelope consumed by discord-notify. */
-async function publishModerationEvent(
-  app: Parameters<FastifyPluginAsync>[0],
-  params: {
-    actionId: string;
-    actionType: ReportModerationActionType;
-    actorPlayerId: string;
-    actorName: string;
-    playerId: string;
-    player: PlayerIdentity;
-    serverId: string;
-    reportId: string;
-    reason: string;
-    duration: string | null;
-  },
-): Promise<EventEnvelope> {
-  const payload = moderationActionPayload.parse({
-    moderation_action_id: params.actionId,
-    action_type: params.actionType,
-    player_id: params.playerId,
-    steam_id64: params.player.steamId64,
-    eos_id: params.player.eosId,
-    name: params.player.name,
-    reason: params.reason,
-    duration: params.duration,
-    actor_name: params.actorName,
-    report_id: params.reportId,
-  });
-  const envelope: EventEnvelope = {
-    event_id: uuidv7(),
-    version: 1,
-    type: MODERATION_EVENT_TYPES[params.actionType],
-    server_id: params.serverId,
-    ts: new Date().toISOString(),
-    actor: { kind: 'user', id: params.actorPlayerId },
-    correlation_id: params.reportId,
-    payload,
-  };
-
-  await app.db.insert(events).values({
-    eventId: envelope.event_id,
-    serverId: envelope.server_id,
-    occurredAt: new Date(envelope.ts),
-    kind: envelope.type,
-    version: envelope.version,
-    actorKind: envelope.actor?.kind ?? null,
-    actorId: envelope.actor?.id ?? null,
-    correlationId: envelope.correlation_id,
-    payload: envelope.payload,
-  });
-  await app.redis.xadd(
-    STREAM_NAME.eventsServer(params.serverId),
-    'MAXLEN',
-    '~',
-    '10000',
-    '*',
-    'envelope',
-    JSON.stringify(envelope),
-  );
-  return envelope;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
 function handlerGuard(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -213,16 +120,14 @@ interface ReportRow {
 
 /**
  * Report-scoped moderation actions (REPORT-3, #113). Lets a moderator warn,
- * kick, or ban a report's target directly from the report card — the action
- * is enqueued through the same worker-rcon command pipeline as MOD-2 would
- * use and recorded in `moderation_actions` with {@link reportId} set, so the
- * enforcement shows up both in the player's moderation history and on the
- * report card itself. Also exposes reporter notification and a bulk-resolve
+ * kick, or ban a report's target directly from the report card. Each target
+ * is enforced through the shared MOD-2 pipeline
+ * ({@link enforceModerationAction}, `source: 'report'`), which records the
+ * `moderation_actions` row with `report_id` set — so the enforcement shows up
+ * both in the player's moderation history and on the report card — plus the
+ * same `context` (`expires_at`, `rcon_request_id`, `target`) as every other
+ * moderation surface. Also exposes reporter notification and a bulk-resolve
  * shortcut for closing every pending report against one target at once.
- *
- * MOD-2 (#59, generic player-card enforcement) is not built yet; this route
- * implements the RCON-send + ledger-insert path scoped to reports. When
- * MOD-2 lands, it should reuse this insert logic rather than duplicate it.
  */
 const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -282,7 +187,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/reports/:id/actions',
-    { schema: { params: idParam, body: actionBody }, config: { audit: false } },
+    { schema: { params: idParam, body: actionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -312,8 +217,6 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           warning = await loadBanAltWarning(app, {
             playerId: report.targetPlayerId,
             canViewIps: req.user?.permissions.permissions.has('player:view_ips') ?? false,
-            cookie: req.headers.cookie,
-            authorization: req.headers.authorization,
           });
         } catch (error) {
           req.log.warn({ error }, 'ALT-7 warning lookup failed; continuing with the ban');
@@ -352,152 +255,131 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      const banLength = req.body.ban_length ?? '0';
-      const command =
-        actionType === 'warn' ? 'AdminWarn' : actionType === 'kick' ? 'AdminKick' : 'AdminBan';
-
-      // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
-      const actorPlayerId = req.user!.playerId;
+      // Every alt must resolve to an RCON target before anything is sent, so
+      // a missing identity can never strand a half-applied multi-ban.
       for (const entry of targetEntries) {
-        const identity = entry.identity;
-        const entryTarget = identity?.eosId ?? identity?.steamId64 ?? null;
-        if (!entryTarget) {
+        if (!entry.identity?.eosId && !entry.identity?.steamId64) {
           reply.code(400);
           return { error: 'alt_identity_missing', player_id: entry.playerId };
         }
-        const viaWorker = await sendRconCommandViaWorker(app.redis, {
-          serverId: report.serverId,
-          command,
-          args: actionType === 'ban' ? [entryTarget, banLength, reason] : [entryTarget, reason],
-          actorPlayerId,
-        });
-        if (!viaWorker.attempted || !viaWorker.ok) {
-          reply.code(502);
-          return {
-            error: 'action_failed',
-            reason: viaWorker.reason,
-            detail: viaWorker.attempted ? viaWorker.detail : undefined,
-            player_id: entry.playerId,
-          };
-        }
       }
 
-      const context: Record<string, unknown> = {
-        report_id: report.id,
-        ...(alsoPlayerIds.length > 0 ? { also_player_ids: alsoPlayerIds } : {}),
-      };
-      if (actionType === 'ban') context.ban_length = banLength;
+      const banLength = req.body.ban_length ?? '0';
+      // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
+      const actor = req.user!;
+      const actorPlayerId = actor.playerId;
 
-      const [inserted] = await app.db
-        .insert(moderationActions)
-        .values({
-          playerId: report.targetPlayerId,
+      // Not transactional, like MOD-4 bulk moderation (moderation-bulk.ts): an
+      // applied RCON command has no inverse, so each target is persisted
+      // (ledger + EVT-1 inside enforceModerationAction, then its audit row)
+      // as soon as its command is confirmed. A later failure stops the loop
+      // and reports what was already applied instead of leaving it untraced.
+      const applied: Array<{ player_id: string; moderation_action_id: string }> = [];
+      let primaryActionId: string | null = null;
+      let failure: Record<string, unknown> | null = null;
+      for (const entry of targetEntries) {
+        // biome-ignore lint/style/noNonNullAssertion: every identity was checked above
+        const identity = entry.identity!;
+        const isPrimary = entry.playerId === primaryEntry.playerId;
+        const result = await enforceModerationAction(app, {
           serverId: report.serverId,
+          playerId: entry.playerId,
+          identity,
           actionType,
-          authorPlayerId: actorPlayerId,
           reason,
-          context,
+          banLength,
+          actorPlayerId,
+          actorName: actor.canonicalName,
           reportId: report.id,
-        })
-        .returning({ id: moderationActions.id });
-      if (!inserted) throw new Error('moderation action insert returned no row');
+          source: 'report',
+          extraContext: isPrimary
+            ? {
+                report_id: report.id,
+                ...(alsoPlayerIds.length > 0 ? { also_player_ids: alsoPlayerIds } : {}),
+              }
+            : { report_id: report.id, related_action_id: primaryActionId },
+        });
 
-      const insertedActions: Array<{
-        id: string;
-        playerId: string;
-        identity: PlayerIdentity;
-      }> = [{ id: inserted.id, playerId: primaryEntry.playerId, identity: primaryIdentity }];
-
-      for (const playerId of alsoPlayerIds) {
-        const entry = targetEntries.find((targetEntry) => targetEntry.playerId === playerId);
-        if (!entry?.identity) throw new Error(`resolved alt identity missing for ${playerId}`);
-        const [related] = await app.db
-          .insert(moderationActions)
-          .values({
-            playerId,
-            serverId: report.serverId,
-            actionType,
-            authorPlayerId: actorPlayerId,
-            reason,
-            context: {
-              report_id: report.id,
-              ban_length: banLength,
-              related_action_id: inserted.id,
+        const status = result.ok ? 'applied' : 'failed';
+        if (!isPrimary || !result.ok) {
+          // Per-target trail for alts, and for any target whose command was
+          // sent but not confirmed: a timed-out command may still land.
+          await writeAuditEntry(app.db, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'report.action',
+            targetType: 'player',
+            targetId: entry.playerId,
+            after: {
+              action_type: actionType,
+              reason,
+              target_player_id: entry.playerId,
+              status,
+              moderation_action_id: result.ok ? result.actionId : null,
+              related_action_id: isPrimary ? null : primaryActionId,
             },
-            reportId: report.id,
-          })
-          .returning({ id: moderationActions.id });
-        if (!related) throw new Error('related moderation action insert returned no row');
-        insertedActions.push({ id: related.id, playerId, identity: entry.identity });
+            context: {
+              requestId: req.id,
+              method: req.method,
+              url: req.url,
+              report_id: report.id,
+              related_action_id: isPrimary ? null : primaryActionId,
+            },
+            statusCode: result.ok ? 200 : 502,
+          });
+        }
+        if (isPrimary && result.ok) {
+          await writeAuditEntry(app.db, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'report.action',
+            targetType: 'report',
+            targetId: report.id,
+            after: {
+              action_type: actionType,
+              reason,
+              target_player_id: report.targetPlayerId,
+              also_player_ids: alsoPlayerIds,
+            },
+            context: {
+              requestId: req.id,
+              method: req.method,
+              url: req.url,
+              moderation_action_id: result.actionId,
+            },
+            statusCode: 200,
+          });
+        }
 
-        await writeAuditEntry(app.db, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'report.action',
-          targetType: 'player',
-          targetId: playerId,
-          after: {
-            action_type: actionType,
-            reason,
-            target_player_id: playerId,
-            related_action_id: inserted.id,
-          },
-          context: {
-            requestId: req.id,
-            method: req.method,
-            url: req.url,
-            related_action_id: inserted.id,
-          },
-          statusCode: reply.statusCode,
-        });
-      }
-
-      const actorIdentity = await resolveIdentity(actorPlayerId);
-      if (!actorIdentity) throw new Error('moderation actor identity missing');
-      for (const action of insertedActions) {
-        await publishModerationEvent(app, {
-          actionId: action.id,
-          actionType,
-          actorPlayerId,
-          actorName: actorIdentity.name,
-          playerId: action.playerId,
-          player: action.identity,
-          serverId: report.serverId,
-          reportId: report.id,
-          reason,
-          duration: actionType === 'ban' ? banLength : null,
-        });
+        if (!result.ok) {
+          const outcome = result.outcome;
+          failure = {
+            error: 'action_failed',
+            reason: !outcome.attempted || !outcome.ok ? outcome.reason : undefined,
+            detail: outcome.attempted && !outcome.ok ? outcome.detail : undefined,
+            player_id: entry.playerId,
+            applied,
+          };
+          break;
+        }
+        if (isPrimary) primaryActionId = result.actionId;
+        applied.push({ player_id: entry.playerId, moderation_action_id: result.actionId });
       }
 
       // Linking a moderation action to the report changes its reporter's
       // "confirmed" count (REPORT-5, #115) — recompute their trust metrics.
       // Best-effort: a stats failure must never fail the enforcement action.
-      if (report.reporterPlayerId) {
+      if (applied.length > 0 && report.reporterPlayerId) {
         await recomputeReporterStats(app.db, app.redis, report.reporterPlayerId).catch(
           () => undefined,
         );
       }
-
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'report.action',
-        targetType: 'report',
-        targetId: report.id,
-        after: {
-          action_type: actionType,
-          reason,
-          target_player_id: report.targetPlayerId,
-          also_player_ids: alsoPlayerIds,
-        },
-        context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
-          moderation_action_id: inserted.id,
-        },
-        statusCode: reply.statusCode,
-      });
+      if (failure) {
+        reply.code(502);
+        return failure;
+      }
+      // biome-ignore lint/style/noNonNullAssertion: no failure means the primary target was applied
+      const insertedId = primaryActionId!;
 
       if (
         actionType === 'ban' &&
@@ -514,13 +396,13 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const rows = (await app.db.execute(sql`
+      const rows = await app.db.execute<ModerationActionApiRow>(sql`
         SELECT ${ACTION_ROW_SELECT}
         FROM moderation_actions ma
         LEFT JOIN players ap ON ap.id = ma.author_player_id
         LEFT JOIN servers s ON s.id = ma.server_id
-        WHERE ma.id = ${inserted.id}
-      `)) as unknown as ModerationActionApiRow[];
+        WHERE ma.id = ${insertedId}
+      `);
       const row = rows[0];
       return row ? serializeActionRow(row) : { ok: true };
     },
@@ -540,14 +422,14 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'report_not_found' };
       }
 
-      const rows = (await app.db.execute(sql`
+      const rows = await app.db.execute<ModerationActionApiRow>(sql`
         SELECT ${ACTION_ROW_SELECT}
         FROM moderation_actions ma
         LEFT JOIN players ap ON ap.id = ma.author_player_id
         LEFT JOIN servers s ON s.id = ma.server_id
         WHERE ma.report_id = ${report.id}
         ORDER BY ma.created_at DESC, ma.id DESC
-      `)) as unknown as ModerationActionApiRow[];
+      `);
 
       return { actions: rows.map(serializeActionRow) };
     },
@@ -556,7 +438,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   /** Sends the reporter an AdminWarn status template, if they're online. */
   fast.post(
     '/api/v1/reports/:id/notify-reporter',
-    { schema: { params: idParam, body: notifyBody }, config: { audit: false } },
+    { schema: { params: idParam, body: notifyBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -574,7 +456,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
       const outcome = await notifyReporter(app.db, app.redis, {
         serverId: report.serverId,
         reporterPlayerId: report.reporterPlayerId,
-        template: req.body.template as ReporterNotifyTemplate,
+        template: req.body.template,
         // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
         actorPlayerId: req.user!.playerId,
       });
@@ -604,12 +486,14 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Resolves/rejects every pending or in-review report against one target in
    * a single action, writing one audit entry per report (sharing a
-   * `bulk_group` id in context) and best-effort notifying each distinct
-   * online reporter once.
+   * `bulk_group` id in context, with the replaced state as `before`) in the
+   * same transaction as the update, then best-effort notifying each distinct
+   * online reporter once. Reports closed concurrently by another handler are
+   * left untouched and omitted from `resolved_ids`.
    */
   fast.post(
     '/api/v1/reports/bulk-resolve',
-    { schema: { body: bulkResolveBody }, config: { audit: false } },
+    { schema: { body: bulkResolveBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -619,74 +503,93 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         status,
         resolution_note: resolutionNote,
       } = req.body;
-      const targets = await app.db
-        .select({
-          id: playerReports.id,
-          serverId: playerReports.serverId,
-          reporterPlayerId: playerReports.reporterPlayerId,
-        })
-        .from(playerReports)
-        .where(
-          and(
-            eq(playerReports.targetPlayerId, targetPlayerId),
-            inArray(playerReports.status, ['pending', 'in_review']),
-          ),
-        )
-        .orderBy(desc(playerReports.createdAt));
+      // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
+      const handlerPlayerId = req.user!.playerId;
+      const resolvedAt = new Date();
+      const bulkGroup = uuidv7();
 
-      if (targets.length === 0) {
+      // Lock, update and audit in one transaction. `FOR UPDATE` re-checks the
+      // status filter against the latest committed row, so a report another
+      // handler closed after this request started is skipped rather than
+      // overwritten, and each audit row carries the state it replaced.
+      const updated = await app.db.transaction(async (tx) => {
+        const open = await tx
+          .select({
+            id: playerReports.id,
+            status: playerReports.status,
+            handlerPlayerId: playerReports.handlerPlayerId,
+            resolutionNote: playerReports.resolutionNote,
+          })
+          .from(playerReports)
+          .where(
+            and(
+              eq(playerReports.targetPlayerId, targetPlayerId),
+              inArray(playerReports.status, ['pending', 'in_review']),
+            ),
+          )
+          .orderBy(desc(playerReports.createdAt))
+          .for('update');
+        if (open.length === 0) return [];
+
+        const rows = await tx
+          .update(playerReports)
+          .set({ status, handlerPlayerId, resolutionNote, resolvedAt })
+          .where(
+            inArray(
+              playerReports.id,
+              open.map((report) => report.id),
+            ),
+          )
+          .returning({
+            id: playerReports.id,
+            serverId: playerReports.serverId,
+            reporterPlayerId: playerReports.reporterPlayerId,
+            targetPlayerId: playerReports.targetPlayerId,
+            targetRaw: playerReports.targetRaw,
+            body: playerReports.body,
+            source: playerReports.source,
+            status: playerReports.status,
+            handlerPlayerId: playerReports.handlerPlayerId,
+            resolutionNote: playerReports.resolutionNote,
+            createdAt: playerReports.createdAt,
+            claimedAt: playerReports.claimedAt,
+            resolvedAt: playerReports.resolvedAt,
+          });
+
+        const beforeById = new Map(open.map((report) => [report.id, report]));
+        for (const report of rows) {
+          const before = beforeById.get(report.id);
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'report.update',
+            targetType: 'report',
+            targetId: report.id,
+            before: {
+              status: before?.status ?? null,
+              handler_player_id: before?.handlerPlayerId ?? null,
+              resolution_note: before?.resolutionNote ?? null,
+            },
+            after: { status, resolution_note: resolutionNote },
+            context: {
+              requestId: req.id,
+              method: req.method,
+              url: req.url,
+              bulk_group: bulkGroup,
+              target_player_id: targetPlayerId,
+            },
+            statusCode: 200,
+          });
+        }
+        return rows;
+      });
+
+      if (updated.length === 0) {
         reply.code(404);
         return { error: 'no_pending_reports' };
       }
 
-      const ids = targets.map((t) => t.id);
-      // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
-      const handlerPlayerId = req.user!.playerId;
-      const resolvedAt = new Date();
-      await app.db
-        .update(playerReports)
-        .set({ status, handlerPlayerId, resolutionNote, resolvedAt })
-        .where(inArray(playerReports.id, ids));
-
-      const bulkGroup = uuidv7();
-      const notifiedReporters = new Set<string>();
-      const updated = await app.db
-        .select({
-          id: playerReports.id,
-          serverId: playerReports.serverId,
-          reporterPlayerId: playerReports.reporterPlayerId,
-          targetPlayerId: playerReports.targetPlayerId,
-          targetRaw: playerReports.targetRaw,
-          body: playerReports.body,
-          source: playerReports.source,
-          status: playerReports.status,
-          handlerPlayerId: playerReports.handlerPlayerId,
-          resolutionNote: playerReports.resolutionNote,
-          createdAt: playerReports.createdAt,
-          claimedAt: playerReports.claimedAt,
-          resolvedAt: playerReports.resolvedAt,
-        })
-        .from(playerReports)
-        .where(inArray(playerReports.id, ids));
-
       for (const report of updated) {
-        await writeAuditEntry(app.db, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'report.update',
-          targetType: 'report',
-          targetId: report.id,
-          after: { status, resolution_note: resolutionNote },
-          context: {
-            requestId: req.id,
-            method: req.method,
-            url: req.url,
-            bulk_group: bulkGroup,
-            target_player_id: targetPlayerId,
-          },
-          statusCode: reply.statusCode,
-        });
-
         const liveView: ReportLiveView = {
           id: report.id,
           server_id: report.serverId,
@@ -707,17 +610,27 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           ts: new Date().toISOString(),
           data: { report: liveView },
         });
+      }
 
-        if (report.reporterPlayerId && !notifiedReporters.has(report.reporterPlayerId)) {
-          notifiedReporters.add(report.reporterPlayerId);
-          await notifyReporter(app.db, app.redis, {
-            serverId: report.serverId,
-            reporterPlayerId: report.reporterPlayerId,
-            template: 'resolved',
-            actorPlayerId: handlerPlayerId,
-          }).catch(() => undefined);
+      // Notify each distinct reporter once, concurrently: every notify can
+      // wait up to the RCON command timeout, so a sequential loop made the
+      // request last N x that timeout. Best-effort.
+      const reporterServer = new Map<string, string>();
+      for (const report of updated) {
+        if (report.reporterPlayerId && !reporterServer.has(report.reporterPlayerId)) {
+          reporterServer.set(report.reporterPlayerId, report.serverId);
         }
       }
+      await Promise.allSettled(
+        [...reporterServer].map(([reporterPlayerId, serverId]) =>
+          notifyReporter(app.db, app.redis, {
+            serverId,
+            reporterPlayerId,
+            template: 'resolved',
+            actorPlayerId: handlerPlayerId,
+          }),
+        ),
+      );
 
       // Recompute reporter trust metrics once per distinct reporter among the
       // bulk-resolved reports (REPORT-5, #115). Best-effort.
@@ -728,7 +641,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         await recomputeReporterStats(app.db, app.redis, reporterPlayerId).catch(() => undefined);
       }
 
-      return { ok: true, resolved_ids: ids };
+      return { ok: true, resolved_ids: updated.map((report) => report.id) };
     },
   );
 };

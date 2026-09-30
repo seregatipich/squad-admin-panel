@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
-import { playerNameHistory, players } from '@squad/db/schema';
+import { auditLog, playerNameHistory, players } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -162,5 +162,50 @@ describeIfDb('upsertPlayers integration', () => {
       .from(players)
       .where(and(eq(players.id, playerId)));
     expect(player?.canonicalName).toBe('[TSF] Rex');
+  });
+
+  it('survives a split identity without aborting the poll or writing a false steam link (regression #967)', async () => {
+    const eosId = 'eos-split-00000000000000000000005';
+    const steamId = '76561199000000015';
+    const eosRowId = '01900000-0000-7000-8000-000000000967';
+    const steamRowId = '01900000-0000-7000-8000-000000000968';
+    await db.insert(players).values([
+      {
+        id: eosRowId,
+        eosId,
+        steamId64: null,
+        canonicalName: 'EpicSide',
+        canonicalNameNormalized: 'epicside',
+      },
+      {
+        id: steamRowId,
+        eosId: null,
+        steamId64: BigInt(steamId),
+        canonicalName: 'SteamSide',
+        canonicalNameNormalized: 'steamside',
+      },
+    ]);
+    const bystanderEos = 'eos-split-bystander-0000000000006';
+
+    for (let poll = 0; poll < 2; poll += 1) {
+      await upsertPlayers(db, [
+        makePlayer({ eos_id: eosId, steam_id64: steamId, name: 'SplitPlayer' }),
+        makePlayer({ eos_id: bystanderEos, steam_id64: '76561199000000016', name: 'Bystander' }),
+      ]);
+    }
+
+    await expect(playerIdByEos(db, bystanderEos)).resolves.toBeTruthy();
+    const [eosRow] = await db.select().from(players).where(eq(players.id, eosRowId));
+    expect(eosRow?.steamId64).toBeNull();
+    expect(eosRow?.steamEosConflict).toBe(true);
+    expect(eosRow?.canonicalName).toBe('SplitPlayer');
+    const [steamRow] = await db.select().from(players).where(eq(players.id, steamRowId));
+    expect(steamRow?.eosId).toBeNull();
+
+    const audits = await db
+      .select({ action: auditLog.actionType })
+      .from(auditLog)
+      .where(eq(auditLog.targetId, eosRowId));
+    expect(audits.map((row) => row.action)).toEqual(['player.eos_steam_conflict']);
   });
 });

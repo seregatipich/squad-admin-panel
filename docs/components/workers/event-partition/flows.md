@@ -5,7 +5,7 @@
 1. Read `DATABASE_URL` from environment; fatal-exit if missing.
 2. Connect to Postgres (`max: 1` connection pool).
 3. Connect to Redis if `REDIS_URL` is set.
-4. Call `runPartitionTick({ sql, diag })` immediately. It runs `ensureMonthlyPartitions(sql)` (events), `ensureDiagPartitions(sql)` (diagnostic_events), `ensurePlayerSessionPartitions(sql)` (player_sessions) and `ensureDefaultBackedMonthlyPartitions(sql, table)` for each of `chat_messages`, `bonus_transactions` and `combat_events` concurrently via `Promise.allSettled`, then emits `event_partition.run_ok` / `event_partition.run_failed`.
+4. Call `runPartitionTick({ sql, diag })` immediately. It runs `ensureMonthlyPartitions(sql)` (events), `ensureDiagPartitions(sql)` (diagnostic_events), `ensurePlayerSessionPartitions(sql)` (player_sessions), `pruneProcessedEvents(sql)` (deletes `processed_events` rows whose `processed_at` is older than the 24-month `events` cutoff) and `ensureDefaultBackedMonthlyPartitions(sql, table)` for each of `chat_messages`, `bonus_transactions` and `combat_events` concurrently via `Promise.allSettled`, then emits `event_partition.run_ok` / `event_partition.run_failed`.
 5. Start `setInterval(runPartitionTick, 3_600_000)` (1 h).
 6. Start heartbeat (`worker:heartbeat:event-partition`, every 5 s).
 

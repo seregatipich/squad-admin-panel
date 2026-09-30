@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { banStatusBadge, formatDate, foundBadgeLabel, trustLevelLabel } from './external-bans';
+import { banStatusBadge, foundBadgeLabel, trustLevelLabel } from './external-bans';
 
 describe('foundBadgeLabel', () => {
   it('renders the green "not found" phrase for n=0', () => {
@@ -58,19 +58,5 @@ describe('trustLevelLabel', () => {
 
   it('falls back to the raw value for an unknown level', () => {
     expect(trustLevelLabel('mystery')).toBe('mystery');
-  });
-});
-
-describe('formatDate', () => {
-  it('returns an em-dash for null', () => {
-    expect(formatDate(null)).toBe('—');
-  });
-
-  it('returns an em-dash for an invalid date string', () => {
-    expect(formatDate('not-a-date')).toBe('—');
-  });
-
-  it('formats a valid ISO date', () => {
-    expect(formatDate('2026-07-09T10:00:00.000Z')).not.toBe('—');
   });
 });

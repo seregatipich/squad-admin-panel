@@ -1,7 +1,7 @@
 import { players, servers } from '@squad/db/schema';
-import type { PermissionKey } from '@squad/shared-config';
+import { BAN_LENGTH_PATTERN, type PermissionKey } from '@squad/shared-config';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
@@ -12,14 +12,13 @@ import {
   enforceModerationAction,
   type PlayerIdentity,
 } from '../lib/moderation-enforce.js';
+import { panelGuard } from '../lib/panel-guard.js';
 import { parseStoredRoster } from '../lib/roster.js';
 
 /** Hard ceiling on targets per request — see the deadline note below. */
 const BULK_MOD_MAX = 50;
 /** Same reason ceiling as the single-target moderation and report routes. */
 const REASON_MAX = 300;
-/** Squad's `AdminBan` duration grammar; `0` (any unit) means permanent. */
-const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
 /**
  * Wall-clock budget for the whole loop. Each target costs one worker-rcon
  * round trip whose default timeout is 4 s (`rcon-worker-command.ts`), so
@@ -50,7 +49,8 @@ type BulkTargetError =
   | 'target_identity_missing'
   | 'target_offline'
   | 'rcon_failed'
-  | 'bulk_deadline_exceeded';
+  | 'bulk_deadline_exceeded'
+  | 'internal_error';
 
 interface BulkTargetResult {
   player_id: string;
@@ -58,18 +58,6 @@ interface BulkTargetResult {
   moderation_action_id?: string;
   error?: BulkTargetError;
   detail?: string;
-}
-
-function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
 }
 
 /**
@@ -118,7 +106,7 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/moderation-actions/bulk',
-    { schema: { body: bulkBody }, config: { audit: false } },
+    { schema: { body: bulkBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -209,33 +197,41 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
           }
         }
 
-        const outcome = await enforceModerationAction(app, {
-          serverId: server.id,
-          playerId,
-          identity,
-          actionType,
-          reason,
-          banLength,
-          actorPlayerId: actor.playerId,
-          actorName: actor.canonicalName,
-          source: 'live_players',
-          extraContext: { bulk_group: bulkGroup, bulk_size: bulkSize, bulk_index: index },
-        });
-
         let result: BulkTargetResult;
-        if (outcome.ok) {
-          result = {
-            player_id: playerId,
-            status: 'applied',
-            moderation_action_id: outcome.actionId,
-          };
-        } else {
-          // `enforceModerationAction` only reports `ok: false` for an outcome
-          // that was not attempted or not ok, but that invariant does not
-          // survive the return-type boundary — re-narrow to read `reason`.
-          const rcon = outcome.outcome;
-          const detail = !rcon.attempted || !rcon.ok ? rcon.reason : undefined;
-          result = { player_id: playerId, status: 'failed', error: 'rcon_failed', detail };
+        try {
+          const outcome = await enforceModerationAction(app, {
+            serverId: server.id,
+            playerId,
+            identity,
+            actionType,
+            reason,
+            banLength,
+            actorPlayerId: actor.playerId,
+            actorName: actor.canonicalName,
+            source: 'live_players',
+            extraContext: { bulk_group: bulkGroup, bulk_size: bulkSize, bulk_index: index },
+          });
+          if (outcome.ok) {
+            result = {
+              player_id: playerId,
+              status: 'applied',
+              moderation_action_id: outcome.actionId,
+            };
+          } else {
+            // `enforceModerationAction` only reports `ok: false` for an outcome
+            // that was not attempted or not ok, but that invariant does not
+            // survive the return-type boundary — re-narrow to read `reason`.
+            const rcon = outcome.outcome;
+            const detail = !rcon.attempted || !rcon.ok ? rcon.reason : undefined;
+            result = { player_id: playerId, status: 'failed', error: 'rcon_failed', detail };
+          }
+        } catch (err) {
+          // The command may already have landed in game (the ledger insert or
+          // event publish failed after RCON): record the target as failed and
+          // keep going, so the remaining targets and the summary audit row
+          // are not lost to one exception.
+          req.log.error({ err, playerId, bulkGroup }, 'moderation bulk: target failed');
+          result = { player_id: playerId, status: 'failed', error: 'internal_error' };
         }
         results.push(result);
 
@@ -244,28 +240,32 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
         // landed in game, and that is exactly when the trail matters. Targets
         // rejected before RCON (unknown player, offline, budget spent) are
         // covered by the summary row's results breakdown.
-        await writeAuditEntry(app.db, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'moderation.bulk_action',
-          targetType: 'player',
-          targetId: playerId,
-          after: {
-            action_type: actionType,
-            reason,
-            ban_length: banLength,
-            status: result.status,
-            moderation_action_id: result.moderation_action_id ?? null,
-          },
-          context: {
-            requestId: req.id,
-            method: req.method,
-            url: req.url,
-            bulk_group: bulkGroup,
-            bulk_size: bulkSize,
-          },
-          statusCode: reply.statusCode,
-        });
+        try {
+          await writeAuditEntry(app.db, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'moderation.bulk_action',
+            targetType: 'player',
+            targetId: playerId,
+            after: {
+              action_type: actionType,
+              reason,
+              ban_length: banLength,
+              status: result.status,
+              moderation_action_id: result.moderation_action_id ?? null,
+            },
+            context: {
+              requestId: req.id,
+              method: req.method,
+              url: req.url,
+              bulk_group: bulkGroup,
+              bulk_size: bulkSize,
+            },
+            statusCode: reply.statusCode,
+          });
+        } catch (err) {
+          req.log.error({ err, playerId, bulkGroup }, 'moderation bulk: target audit failed');
+        }
       }
 
       const applied = results.filter((row) => row.status === 'applied').length;
