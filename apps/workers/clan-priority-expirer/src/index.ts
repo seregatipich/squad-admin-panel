@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -15,7 +19,7 @@ const log = pino({
   base: { service: 'worker-clan-priority-expirer' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.CLAN_PRIORITY_EXPIRER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.CLAN_PRIORITY_EXPIRER_INTERVAL_MS, 60_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

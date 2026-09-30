@@ -4,7 +4,11 @@ import { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -29,7 +33,7 @@ const log = pino({
   base: { service: 'worker-scheduler' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.SCHEDULER_INTERVAL_MS ?? 30_000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.SCHEDULER_INTERVAL_MS, 30_000);
 const DEFAULT_ROTATION_PROFILE_APPLY_HOUR = 4;
 
 function requiredEnv(name: string): string {

@@ -152,6 +152,7 @@ describe('runSteamRefreshTick', () => {
 
     await expect(runSteamRefreshTick(testDeps)).rejects.toThrow('Steam batch request failed');
     expect(testDeps.saveSnapshot).not.toHaveBeenCalled();
+    expect(testDeps.fetchOwnedGames).not.toHaveBeenCalled();
     expect(testDeps.diag.emit).toHaveBeenLastCalledWith(
       expect.objectContaining({ kind: 'steam_refresh.run_failed', severity: 'error' }),
     );

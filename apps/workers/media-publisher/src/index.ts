@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -21,7 +25,7 @@ const log = pino({
  * is a showcase side-channel, uploads take far longer than the interval, and
  * both destinations meter their APIs.
  */
-const TICK_INTERVAL_MS = Number(process.env.MEDIA_PUBLISHER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.MEDIA_PUBLISHER_INTERVAL_MS, 60_000);
 /** Publications handled per tick — bounded so one large upload cannot stall the loop indefinitely. */
 const BATCH_SIZE = Number(process.env.MEDIA_PUBLISHER_BATCH_SIZE ?? 3);
 

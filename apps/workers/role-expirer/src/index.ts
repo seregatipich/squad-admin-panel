@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -17,15 +21,18 @@ const log = pino({
   base: { service: 'worker-role-expirer' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.ROLE_EXPIRER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.ROLE_EXPIRER_INTERVAL_MS, 60_000);
 /** Daily VIPSUB-4 reminder pass — window crossings fire at most once, so once a day is enough. */
-const REMINDER_INTERVAL_MS = Number(process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS ?? 86_400_000);
+const REMINDER_INTERVAL_MS = intervalMsFromEnv(
+  process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS,
+  86_400_000,
+);
 /**
  * VIPSUB-5 subscription renewal pass. Hourly: a renewal is due on a date, not
  * at a second, and each pass charges real bonus points — an hour keeps the
  * billing punctual without hammering the ledger.
  */
-const RENEWAL_INTERVAL_MS = Number(process.env.VIP_RENEWAL_INTERVAL_MS ?? 3_600_000);
+const RENEWAL_INTERVAL_MS = intervalMsFromEnv(process.env.VIP_RENEWAL_INTERVAL_MS, 3_600_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

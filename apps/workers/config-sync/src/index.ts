@@ -2,6 +2,7 @@ import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, relayAdminsCfgSyncOutbox, servers } from '@squad/db';
 import {
   createGracefulShutdownController,
+  intervalMsFromEnv,
   redisSinkStream,
   startHeartbeat,
 } from '@squad/shared-config';
@@ -28,23 +29,29 @@ const requiredEnv = (name: string): string => {
 };
 
 const SERVERS_REFRESH_MS = 30_000;
-const DRIFT_INTERVAL_MS = Number(process.env.ADMINS_CFG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+const DRIFT_INTERVAL_MS = intervalMsFromEnv(process.env.ADMINS_CFG_DRIFT_INTERVAL_MS, 5 * 60_000);
 // CFG-2 (#64): generic per-file drift sweep over the non-managed config files
 // (separate cadence from the Admins.cfg managed-segment sweep above).
-const CONFIG_DRIFT_INTERVAL_MS = Number(process.env.CONFIG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+const CONFIG_DRIFT_INTERVAL_MS = intervalMsFromEnv(
+  process.env.CONFIG_DRIFT_INTERVAL_MS,
+  5 * 60_000,
+);
 const STREAM_BLOCK_MS = 5_000;
 // Pending-message claim cadence + minimum-idle window. A message that has
 // been delivered to *some* consumer but not XACK'd within `RECLAIM_MIN_IDLE_MS`
 // (e.g. because that consumer crashed, was renamed across restarts, or
 // hit `state=unreachable`) is reclaimed by this consumer via XAUTOCLAIM
 // and replayed. This is the bottom of the spec §2.7.7 retry stack.
-const RECLAIM_INTERVAL_MS = Number(process.env.ADMINS_CFG_RECLAIM_INTERVAL_MS ?? 30_000);
-const RECLAIM_MIN_IDLE_MS = Number(process.env.ADMINS_CFG_RECLAIM_MIN_IDLE_MS ?? 60_000);
+const RECLAIM_INTERVAL_MS = intervalMsFromEnv(process.env.ADMINS_CFG_RECLAIM_INTERVAL_MS, 30_000);
+const RECLAIM_MIN_IDLE_MS = intervalMsFromEnv(process.env.ADMINS_CFG_RECLAIM_MIN_IDLE_MS, 60_000);
 // Cadence for draining the durable Postgres outbox onto the Redis streams
 // (SYNC-1, #34). API and worker producers only write Postgres; this post-commit
 // relay is the sole publisher for Admins.cfg streams.
-const RELAY_INTERVAL_MS = Number(process.env.ADMINS_CFG_RELAY_INTERVAL_MS ?? 1_000);
-const RELAY_XADD_TIMEOUT_MS = Number(process.env.ADMINS_CFG_RELAY_XADD_TIMEOUT_MS ?? 5_000);
+const RELAY_INTERVAL_MS = intervalMsFromEnv(process.env.ADMINS_CFG_RELAY_INTERVAL_MS, 1_000);
+const RELAY_XADD_TIMEOUT_MS = intervalMsFromEnv(
+  process.env.ADMINS_CFG_RELAY_XADD_TIMEOUT_MS,
+  5_000,
+);
 const CONSUMER_NAME = `consumer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
