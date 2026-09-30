@@ -50,7 +50,11 @@ export default function PublicWhitelistPage() {
         setState('error');
         return;
       }
-      const data = (await res.json()) as { enabled: boolean };
+      const data = (await res.json()) as { enabled?: unknown } | null;
+      if (typeof data?.enabled !== 'boolean') {
+        setState('error');
+        return;
+      }
       if (data.enabled) {
         const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
         const me = meRes.ok ? ((await meRes.json()) as { steam_id64: string | null }) : null;

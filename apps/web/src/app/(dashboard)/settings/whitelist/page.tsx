@@ -23,7 +23,27 @@ import {
   Textarea,
   Th,
 } from '@/components/ui';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { ApplicationsSection } from './ApplicationsSection';
+
+/** Russian text for the machine codes the whitelist API answers with. */
+const WHITELIST_ERROR_MESSAGES: Record<string, string> = {
+  owner_role_forbidden: 'роль владельца панели нельзя использовать для whitelist',
+  role_not_found: 'выбранная роль не найдена',
+  whitelist_role_not_configured: 'сначала выберите роль для whitelist',
+};
+
+/** Turns a failed whitelist response body into a sentence; never prints `[object Object]`. */
+function describeWhitelistError(body: unknown, status: number): string {
+  const { error, max_rows: maxRows } = (body ?? {}) as { error?: unknown; max_rows?: unknown };
+  if (error === 'too_many_rows' && typeof maxRows === 'number') {
+    return `в файле слишком много строк (максимум ${maxRows})`;
+  }
+  if (typeof error === 'string' && WHITELIST_ERROR_MESSAGES[error]) {
+    return WHITELIST_ERROR_MESSAGES[error];
+  }
+  return describeHttpStatus(status);
+}
 
 interface WhitelistSettings {
   whitelist_role_id: string | null;
@@ -99,7 +119,7 @@ export default function WhitelistSettingsPage() {
         setPicked(loaded.whitelist_role_id ?? '');
         setErr(null);
       } else {
-        setErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+        setErr(`Не удалось загрузить настройки: ${describeHttpStatus(settingsRes.status)}`);
       }
       if (rolesRes.ok) {
         setRoleOptions((await rolesRes.json()) as RoleOption[]);
@@ -148,15 +168,16 @@ export default function WhitelistSettingsPage() {
         body: JSON.stringify({ whitelist_role_id: picked || null }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setErr(`Ошибка сохранения: ${e.error ?? res.status}`);
+        setErr(
+          `Ошибка сохранения: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
+        );
         return;
       }
       const fresh = (await res.json()) as WhitelistSettings;
       setSettings(fresh);
       setNotice('Роль для whitelist сохранена.');
-    } catch (e) {
-      setErr(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setErr(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setSaving(false);
     }
@@ -175,13 +196,14 @@ export default function WhitelistSettingsPage() {
         body: JSON.stringify({ csv }),
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setErr(`Ошибка импорта: ${e.error ?? res.status}`);
+        setErr(
+          `Ошибка импорта: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
+        );
         return;
       }
       setImportResult((await res.json()) as ImportResult);
-    } catch (e) {
-      setErr(`Ошибка сети: ${(e as Error).message}`);
+    } catch {
+      setErr(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
       setImporting(false);
     }

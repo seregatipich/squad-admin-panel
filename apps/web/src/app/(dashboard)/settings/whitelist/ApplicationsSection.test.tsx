@@ -258,4 +258,44 @@ describe('ApplicationsSection', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'keeps unsaved portal settings and skips refetching them when the status tab changes',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000001');
+
+      const days = screen.getByDisplayValue('30');
+      fireEvent.change(days, { target: { value: '45' } });
+      fireEvent.click(screen.getByRole('tab', { name: 'Одобренные' }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.url.includes('/applications?status=approved'))).toBe(true),
+      );
+
+      expect(screen.getByDisplayValue('45')).toBeInTheDocument();
+      const settingsGets = calls.filter(
+        (c) => c.url.includes('/applications/settings') && c.init?.method !== 'PUT',
+      );
+      expect(settingsGets).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows Russian text, not the raw API code, when a decision fails',
+    async () => {
+      const { fn } = mockFetch({ patchStatus: 500 });
+      vi.stubGlobal('fetch', fn);
+      render(<ApplicationsSection canEdit={true} canManageRoles={true} />);
+      await screen.findByText('76561198000000001');
+
+      fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
+
+      expect(await screen.findByText(/Сервер вернул ошибку \(код 500\)/)).toBeInTheDocument();
+      expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

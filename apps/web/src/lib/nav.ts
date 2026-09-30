@@ -419,6 +419,8 @@ export const NAV_GROUPS: NavGroup[] = [
             labelKey: 'nav.seedNotifications',
             hint: 'зов на пустой сервер',
             hintKey: 'nav.hint.seedNotifications',
+            // The page lists servers through GET /api/v1/servers, which needs server:view.
+            permission: 'server:view',
           },
         ],
       },

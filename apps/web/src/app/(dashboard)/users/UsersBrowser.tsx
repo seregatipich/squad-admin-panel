@@ -1,7 +1,7 @@
 'use client';
 import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
 import {
@@ -30,6 +30,7 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
@@ -64,6 +65,18 @@ interface PendingUnassign {
   name: string;
 }
 
+const ROLE_ERROR_MESSAGES: Record<string, string> = {
+  forbidden: 'Недостаточно прав для изменения ролей.',
+  role_not_found: 'Такой роли больше нет.',
+  player_not_found: 'Игрок не найден.',
+  owner_assignment_forbidden: 'Роль Owner нельзя выдать через панель.',
+  role_expiry_must_be_future: 'Срок действия роли должен быть в будущем.',
+};
+
+function describeRoleError(code: string | undefined, status: number): string {
+  return (code && ROLE_ERROR_MESSAGES[code]) || describeHttpStatus(status);
+}
+
 export function UsersBrowser() {
   const locale = useIntlLocale();
   const [users, setUsers] = useState<UserRow[] | null>(null);
@@ -78,35 +91,50 @@ export function UsersBrowser() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const roleFilterId = useId();
 
+  // Bumped by every list request: an older response must not overwrite a newer one.
+  const listGeneration = useRef(0);
+
   const load = useCallback(async () => {
+    listGeneration.current += 1;
+    const generation = listGeneration.current;
     try {
       const url = new URL('/api/v1/users', window.location.origin);
       if (q.trim()) url.searchParams.set('q', q.trim());
       if (filterRoleId) url.searchParams.set('role_id', filterRoleId);
       const path = url.toString().replace(window.location.origin, '');
       const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
+      if (generation !== listGeneration.current) return;
       if (r.ok) {
         setUsers((await r.json()) as UserRow[]);
         setLoadError(null);
       } else {
         setLoadError(`Не удалось загрузить список пользователей: ${r.status}`);
       }
-      const m = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      if (m.ok) {
-        setMe((await m.json()) as Me);
-      } else {
-        setLoadError(`Не удалось загрузить список пользователей: ${m.status}`);
-      }
-      const ro = await fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' });
-      if (ro.ok) setRoleOptions((await ro.json()) as RoleOption[]);
     } catch (e) {
-      setLoadError(`Ошибка сети: ${(e as Error).message}`);
+      if (generation === listGeneration.current) {
+        setLoadError(`Ошибка сети: ${(e as Error).message}`);
+      }
     }
   }, [q, filterRoleId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The caller's permissions and the role list do not depend on the filters.
+  useEffect(() => {
+    const options = { credentials: 'include', cache: 'no-store' } as const;
+    void Promise.all([fetch('/api/v1/me', options), fetch('/api/v1/roles', options)])
+      .then(async ([meResponse, rolesResponse]) => {
+        if (meResponse.ok) {
+          setMe((await meResponse.json()) as Me);
+        } else {
+          setLoadError(`Не удалось загрузить список пользователей: ${meResponse.status}`);
+        }
+        if (rolesResponse.ok) setRoleOptions((await rolesResponse.json()) as RoleOption[]);
+      })
+      .catch((e: Error) => setLoadError(`Ошибка сети: ${e.message}`));
+  }, []);
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
@@ -126,7 +154,7 @@ export function UsersBrowser() {
         setActionError(
           r.status === 409 && e.error === 'cannot_remove_last_owner'
             ? 'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.'
-            : `Ошибка: ${e.error ?? r.status}`,
+            : describeRoleError(e.error, r.status),
         );
         return;
       }
@@ -291,16 +319,14 @@ export function UsersBrowser() {
                   </Td>
                   {canManage ? (
                     <Td align="right">
-                      {u.role.is_system_role && u.role.name === 'Owner' ? (
-                        <span className="text-xs text-ink-3">—</span>
-                      ) : (
-                        <Button
-                          size="sm"
-                          onClick={() => setPendingUnassign({ id: u.id, name: u.canonical_name })}
-                        >
-                          Снять
-                        </Button>
-                      )}
+                      {/* Owner тоже можно снять, пока есть другой Owner: последнего
+                          не отпустит сервер (409 cannot_remove_last_owner). */}
+                      <Button
+                        size="sm"
+                        onClick={() => setPendingUnassign({ id: u.id, name: u.canonical_name })}
+                      >
+                        Снять
+                      </Button>
                     </Td>
                   ) : null}
                 </TableRow>
@@ -335,7 +361,8 @@ export function UsersBrowser() {
 
       {showAssign ? (
         <AssignModal
-          onClose={() => {
+          onClose={() => setShowAssign(false)}
+          onAssigned={() => {
             setShowAssign(false);
             void load();
           }}
@@ -345,7 +372,7 @@ export function UsersBrowser() {
   );
 }
 
-function AssignModal({ onClose }: { onClose: () => void }) {
+function AssignModal({ onClose, onAssigned }: { onClose: () => void; onAssigned: () => void }) {
   const uid = useId();
   const playerInputId = `${uid}-player`;
   const roleSelectId = `${uid}-role`;
@@ -386,16 +413,24 @@ function AssignModal({ onClose }: { onClose: () => void }) {
       setHits([]);
       return;
     }
+    const controller = new AbortController();
     const t = setTimeout(async () => {
-      const r = await fetch(`/api/v1/players?q=${encodeURIComponent(q)}`, {
-        credentials: 'include',
-      });
-      if (r.ok) {
+      try {
+        const r = await fetch(`/api/v1/players?q=${encodeURIComponent(q)}`, {
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (!r.ok) return;
         const body = (await r.json()) as { items: PlayerHit[] };
         setHits(body.items.slice(0, 20));
+      } catch {
+        // Aborted by a newer query or a network failure: keep the current hits.
       }
     }, 250);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [q]);
 
   // 2.6.4 — Owner is excluded from the assignable roles set; only the
@@ -418,11 +453,12 @@ function AssignModal({ onClose }: { onClose: () => void }) {
       });
       if (!r.ok) {
         const e = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(e.error ?? `HTTP ${r.status}`);
+        setErr(describeRoleError(e.error, r.status));
+        return;
       }
-      onClose();
-    } catch (e) {
-      setErr((e as Error).message);
+      onAssigned();
+    } catch {
+      setErr(describeLoadError(null));
     } finally {
       setBusy(false);
     }

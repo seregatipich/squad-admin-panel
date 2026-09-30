@@ -119,7 +119,12 @@ export default function PublicAppealPage() {
         }),
       });
       if (res.status === 201) {
-        setSubmitted((await res.json()) as SubmittedAppeal);
+        const created = (await res.json().catch(() => null)) as Partial<SubmittedAppeal> | null;
+        if (typeof created?.number !== 'number' || typeof created.tracking_token !== 'string') {
+          setError('Не удалось отправить апелляцию: сервер вернул неожиданный ответ.');
+          return;
+        }
+        setSubmitted({ number: created.number, tracking_token: created.tracking_token });
         return;
       }
       if (res.status === 401) {

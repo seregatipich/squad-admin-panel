@@ -114,7 +114,7 @@ describe('SuspectsBrowser', () => {
     render(<SuspectsBrowser />);
 
     const banner = await screen.findByRole('alert');
-    expect(within(banner).getByText('HTTP 500')).toBeInTheDocument();
+    expect(within(banner).getByText('Сервер вернул ошибку (код 500).')).toBeInTheDocument();
 
     const before = listUrls.length;
     fireEvent.click(within(banner).getByRole('button', { name: 'Повторить' }));
@@ -141,5 +141,41 @@ describe('SuspectsBrowser', () => {
 
     expect(await screen.findByText('Подозреваемых не найдено.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('drops a "load more" page that finishes after the filter changed', async () => {
+    const OTHER = { ...SUSPECT, id: 'player-9', canonical_name: 'Stalezz' };
+    let releaseMore: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/mark-types')) {
+          return Promise.resolve(new Response(JSON.stringify(MARK_TYPES), { status: 200 }));
+        }
+        if (url.includes('cursor=')) {
+          return new Promise<Response>((resolve) => {
+            releaseMore = resolve;
+          });
+        }
+        const body = url.includes('mark_type_ids=1')
+          ? { items: [CLEAN_SUSPECT], next_cursor: null }
+          : { items: [SUSPECT], next_cursor: 'c1' };
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }),
+    );
+    render(<SuspectsBrowser />);
+    await screen.findByText('Alphazz');
+
+    fireEvent.click(await screen.findByRole('button', { name: /Показать ещё/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Читер/ }));
+    await screen.findByText('Bravozz');
+
+    releaseMore(
+      new Response(JSON.stringify({ items: [OTHER], next_cursor: 'stale' }), { status: 200 }),
+    );
+
+    await waitFor(() => expect(screen.queryByText('Alphazz')).not.toBeInTheDocument());
+    expect(screen.queryByText('Stalezz')).not.toBeInTheDocument();
   });
 });

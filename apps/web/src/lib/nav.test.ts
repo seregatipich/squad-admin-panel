@@ -3,6 +3,13 @@ import { ru } from '@/i18n/dictionaries/ru';
 import { activeNavGroupLabel, flattenNavItems, isNavHrefActive, NAV_GROUPS } from './nav';
 
 describe('NAV_GROUPS', () => {
+  it('gates the seed-notification page on server:view, which its server list requires', () => {
+    const item = flattenNavItems(NAV_GROUPS).find(
+      (entry) => entry.href === '/settings/seed-notifications',
+    );
+    expect(item?.permission).toBe('server:view');
+  });
+
   it('contains the dashboard as the first item', () => {
     expect(NAV_GROUPS[0]?.items[0]).toEqual({
       href: '/dashboard',

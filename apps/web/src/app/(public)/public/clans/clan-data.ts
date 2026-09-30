@@ -1,4 +1,4 @@
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { forwardedClientHeaders } from '@/lib/forwarded-client';
 
 export interface PublicClanSummary {
@@ -48,13 +48,20 @@ export async function getPublicClans(): Promise<{ items: PublicClanSummary[]; to
 }
 
 /**
- * Loads one public clan page; the API returns 404 when visibility is disabled.
+ * Loads one public clan page. The API returns 404 when the clan is unknown or
+ * its visibility is disabled, which resolves to `null`; every other failure
+ * (429, 5xx, network) is rethrown so the error boundary can show it.
  * Relays the visitor's IP so the API rate-limits each visitor separately.
  */
-export async function getPublicClan(id: string): Promise<PublicClan> {
-  return apiFetch<PublicClan>(`/api/v1/public/clans/${encodeURIComponent(id)}`, {
-    headers: await forwardedClientHeaders(),
-  });
+export async function getPublicClan(id: string): Promise<PublicClan | null> {
+  try {
+    return await apiFetch<PublicClan>(`/api/v1/public/clans/${encodeURIComponent(id)}`, {
+      headers: await forwardedClientHeaders(),
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 export function formatOnlineHours(seconds: number): string {

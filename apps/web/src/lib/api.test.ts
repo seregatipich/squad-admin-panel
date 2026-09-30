@@ -207,3 +207,13 @@ describe('apiFetch', () => {
     });
   });
 });
+
+describe('apiFetch errors', () => {
+  it('throws an ApiError carrying the HTTP status', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 404 })));
+    const error = await apiFetch('/api/v1/x').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+    expect((error as ApiError).message).toBe('API /api/v1/x 404: nope');
+  });
+});

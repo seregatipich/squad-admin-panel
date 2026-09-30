@@ -115,6 +115,33 @@ describe('PublicAppealPage', () => {
   );
 
   it(
+    'reports an error instead of a broken tracking link when the 201 body is not an appeal',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) =>
+          Promise.resolve(
+            String(input) === '/api/v1/me'
+              ? new Response(JSON.stringify({ steam_id64: STEAM_ID, canonical_name: 'Апеллянт' }), {
+                  status: 200,
+                })
+              : new Response('<html>proxy</html>', { status: 201 }),
+          ),
+        ),
+      );
+      render(<PublicAppealPage />);
+      await screen.findByDisplayValue(STEAM_ID);
+
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
+
+      expect(await screen.findByText(/не удалось отправить апелляцию/i)).toBeInTheDocument();
+      expect(screen.queryByText(/\/appeal\/undefined/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'submits for the signed-in account with the optional contact and shows the tracking link',
     async () => {
       const { calls } = await renderSignedIn({ token: 'my-tracking-token-1234' });
