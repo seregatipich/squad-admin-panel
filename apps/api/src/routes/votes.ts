@@ -173,11 +173,11 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { querystring: listQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const { order, limit } = req.query;
       const clauses = buildFilters(req.query);
 
@@ -215,7 +215,10 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes/count',
-    { schema: { querystring: countQuery }, config: { audit: false } },
+    {
+      schema: { querystring: countQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -232,11 +235,11 @@ const votesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/votes/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    {
+      schema: { params: idParam },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const voteRows = await listSelection().where(eq(gameVotes.id, req.params.id)).limit(1);
       const vote = voteRows[0];
       if (!vote) {

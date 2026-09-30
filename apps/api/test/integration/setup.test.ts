@@ -160,7 +160,39 @@ describeIfDb('POST /api/v1/setup/complete', () => {
     // z.string().trim() normalises the stored name.
     expect(row?.organizationName).toBe('Breaking Squad');
 
-    await assertAuditRow(h, { action: 'setup.complete', resource: 'panel' });
+    const auditRow = await assertAuditRow(h, { action: 'setup.complete', resource: 'panel' });
+    // Regression for finding #350: the audit row must record the org name
+    // that was actually saved, via req.auditSnapshots.
+    expect(auditRow.beforeSnapshot).toEqual({ organization_name: '' });
+    expect(auditRow.afterSnapshot).toEqual({ organization_name: 'Breaking Squad' });
+  });
+
+  // Regression test for finding #350: the UPDATE used to be unconditional
+  // (WHERE id = 1 only), so two concurrent completions could both appear to
+  // succeed and the second would silently overwrite the first's org name.
+  // Scoping the UPDATE to setup_completed = false means only the first
+  // commit can ever return a row.
+  it('only the first of two concurrent completions succeeds; the loser sees 410', async () => {
+    const [first, second] = await Promise.all([
+      h.app.inject({
+        method: 'POST',
+        url: '/api/v1/setup/complete',
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: { organization_name: 'Racer One' },
+      }),
+      h.app.inject({
+        method: 'POST',
+        url: '/api/v1/setup/complete',
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: { organization_name: 'Racer Two' },
+      }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 410]);
+
+    const [row] = await h.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
+    expect(row?.setupCompleted).toBe(true);
+    expect(['Racer One', 'Racer Two']).toContain(row?.organizationName);
   });
 
   it('returns 410 setup_already_completed on a repeat completion by the owner', async () => {

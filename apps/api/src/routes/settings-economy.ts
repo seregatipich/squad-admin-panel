@@ -168,7 +168,17 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
         body.seed_reward_role_id === undefined
           ? before.seed_reward_role_id
           : body.seed_reward_role_id;
-      if (rewardRoleId) {
+      // A request that doesn't touch the seed reward at all must not be
+      // blocked by a previously-saved reward role that has since become
+      // invalid (granted panel_access, or deleted) — otherwise a caller with
+      // can_manage_economy but not can_edit_roles could get permanently
+      // locked out of unrelated economy edits (e.g. only k_online) with no
+      // way to fix the reward role themselves (finding #347). worker-seed-
+      // reward re-validates the saved role on every tick regardless.
+      const changesSeedReward =
+        body.seed_reward_role_id !== undefined ||
+        body.seed_reward_threshold_hours_per_month !== undefined;
+      if (rewardRoleId && changesSeedReward) {
         const [rewardRole] = await app.db
           .select({ id: roles.id, panelAccess: roles.panelAccess })
           .from(roles)
@@ -183,15 +193,10 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'seed_reward_role_requires_no_panel_access' };
         }
         // A zero threshold qualifies every player (worker-seed-reward skips it).
-        // Checked only when this request edits the seed reward, so a legacy
-        // zero-threshold row never blocks unrelated economy updates.
-        const changesSeedReward =
-          body.seed_reward_role_id !== undefined ||
-          body.seed_reward_threshold_hours_per_month !== undefined;
         const rewardThresholdHours =
           body.seed_reward_threshold_hours_per_month ??
           before.seed_reward_threshold_hours_per_month;
-        if (changesSeedReward && rewardThresholdHours <= 0) {
+        if (rewardThresholdHours <= 0) {
           reply.code(422);
           return { error: 'seed_reward_threshold_required' };
         }

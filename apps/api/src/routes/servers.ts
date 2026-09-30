@@ -14,7 +14,7 @@ import {
   serverCreateInput,
 } from '@squad/shared-types';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
@@ -127,6 +127,22 @@ async function readSeedingSummary(redis: Redis, serverId: string): Promise<Seedi
 
 const HOST_INFO_TTL_MS = 60_000;
 
+/**
+ * Parses a JSON string cached by a background worker (a2s:status:<id>,
+ * crashes:<id>) without letting a malformed or partially-written entry crash
+ * the whole request. A single bad Redis key must not 500 the entire server
+ * list/detail (finding #338) the way the parallel `rcon:status` parse below
+ * is already guarded against.
+ */
+function safeJsonParse(raw: string, log: FastifyBaseLogger, context: Record<string, unknown>) {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (err) {
+    log.warn({ err: (err as Error).message, ...context }, 'failed to parse cached JSON from redis');
+    return null;
+  }
+}
+
 const serverRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -198,7 +214,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             rcon_state: rconState,
             player_count: playerCount,
             last_poll_at: lastPollAt,
-            a2s_status: a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null,
+            a2s_status: a2sRaw
+              ? safeJsonParse(a2sRaw, app.log, { serverId: r.id, key: 'a2s:status' })
+              : null,
             crash_loop: r.status === 'failed',
             seeding,
           };
@@ -466,7 +484,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           rcon_status = { state: 'not_polled' };
         }
       }
-      const a2s_status: unknown = a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null;
+      const a2s_status: unknown = a2sRaw
+        ? safeJsonParse(a2sRaw, app.log, { serverId: row.id, key: 'a2s:status' })
+        : null;
 
       const external = isExternalRuntime(row.runtime);
       const name = containerName(row.id);
@@ -516,7 +536,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         app.redis.zrevrange(`crashes:${row.id}`, 0, 9),
         readSeedingSummary(app.redis, row.id),
       ]);
-      const crash_history = crashRaw.map((c: string) => JSON.parse(c) as unknown);
+      const crash_history = crashRaw
+        .map((c: string) => safeJsonParse(c, app.log, { serverId: row.id, key: 'crashes' }))
+        .filter((entry): entry is unknown => entry !== null);
       const crash_loop = row.status === 'failed';
 
       // SRV-6 (#45): license *state* only — the key itself never leaves the
@@ -1102,7 +1124,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/reconcile',
     {
       config: {
-        permissions: ['server:view'],
+        // Triggers a bridge containerInspect call, a DB status write, a
+        // live-event publish, and an audit entry — a mutating action, so it
+        // requires a mutating permission, not the read-only server:view.
+        permissions: ['server:restart'],
         audit: { action: 'server.reconcile', resource: 'server' },
       },
       schema: { params: serverIdParams },

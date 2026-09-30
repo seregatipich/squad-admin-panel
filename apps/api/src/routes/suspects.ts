@@ -25,6 +25,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { panelGuard } from '../lib/panel-guard.js';
+import { containsPattern } from '../lib/sql-like.js';
 
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 100;
@@ -113,12 +114,14 @@ function encodeCursor(row: { lastSeenMicros: string; id: string }): string {
   return `${row.lastSeenMicros}_${row.id}`;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function parseCursor(raw: string): { lastSeenMicros: string; id: string } | null {
   const sep = raw.indexOf('_');
   if (sep === -1) return null;
   const lastSeenMicros = raw.slice(0, sep);
   const id = raw.slice(sep + 1);
-  if (!/^-?\d{1,19}$/.test(lastSeenMicros) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  if (!/^-?\d{1,19}$/.test(lastSeenMicros) || !UUID_RE.test(id)) return null;
   return { lastSeenMicros, id };
 }
 
@@ -162,9 +165,12 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
 
   /** Matches `q` (normalized substring) against a player's current name or any historical name. */
   function nickMatches(q: string): SQL {
-    const pattern = `%${normalizePlayerName(q)}%`;
+    // Escaped so a literal `%`/`_`/`\` in the query — `_` in particular is
+    // common in Squad clan tags — isn't treated as a LIKE wildcard, widening
+    // the match far beyond what the caller typed (finding #358).
+    const pattern = containsPattern(normalizePlayerName(q));
     return or(
-      sql`${players.canonicalNameNormalized} LIKE ${pattern}`,
+      sql`${players.canonicalNameNormalized} LIKE ${pattern} ESCAPE '\\'`,
       exists(
         app.db
           .select({ one: sql`1` })
@@ -172,7 +178,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
           .where(
             and(
               eq(playerNameHistory.playerId, players.id),
-              sql`${playerNameHistory.nameNormalized} LIKE ${pattern}`,
+              sql`${playerNameHistory.nameNormalized} LIKE ${pattern} ESCAPE '\\'`,
             ),
           ),
       ),

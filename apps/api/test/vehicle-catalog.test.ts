@@ -123,7 +123,10 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
       payload: { name_en: 'x', name_ru: 'x', vehicle_class: 'IFV' },
     });
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ required: 'config:edit' });
+    // #361: the manual writeGuard was replaced with declarative
+    // `config.permissions`, enforced by the global auth hook, which reports
+    // the full required-permissions array rather than a single string.
+    expect(res.json()).toMatchObject({ error: 'forbidden', required: ['config:edit'] });
   });
 
   it('upserts a new catalog entry and writes an audit row with before/after', async () => {

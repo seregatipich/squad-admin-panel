@@ -51,21 +51,6 @@ function readGuard(req: FastifyRequest, reply: FastifyReply): { error: string } 
   return null;
 }
 
-function writeGuard(
-  req: FastifyRequest,
-  reply: FastifyReply,
-): { error: string; required?: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.permissions.has('config:edit')) {
-    reply.code(403);
-    return { error: 'forbidden', required: 'config:edit' };
-  }
-  return null;
-}
-
 const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -87,15 +72,13 @@ const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/vehicle-catalog/:assetId',
-    { schema: { params: assetIdParam, body: putBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: assetIdParam, body: putBody },
+      config: { permissions: ['config:edit'], audit: 'manual' },
+    },
     async (req, reply) => {
-      const denied = writeGuard(req, reply);
-      if (denied) return denied;
-      const actorId = req.user?.playerId;
-      if (!actorId) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      // config.permissions above already requires req.user to be present.
+      const actorId = req.user!.playerId;
 
       const { assetId } = req.params;
       const body = req.body;
