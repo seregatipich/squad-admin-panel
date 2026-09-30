@@ -12,6 +12,8 @@
  * persisting/publishing the resulting transitions.
  */
 
+import { z } from 'zod';
+
 export type SeedingStateName = 'seeding' | 'live';
 
 export interface SeedingState {
@@ -24,6 +26,17 @@ export interface SeedingState {
   layer: string | null;
   updated_at: string;
 }
+
+/** Validates a state restored from Redis, which may be corrupt or written by an older format. */
+export const seedingStateSchema: z.ZodType<SeedingState> = z.object({
+  state: z.enum(['seeding', 'live']),
+  started_at: z.string().nullable(),
+  current_players: z.number(),
+  live_at: z.number(),
+  progress_pct: z.number(),
+  layer: z.string().nullable(),
+  updated_at: z.string(),
+});
 
 export interface SeedingTickInput {
   playerCount: number;

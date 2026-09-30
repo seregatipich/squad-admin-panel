@@ -1,3 +1,4 @@
+import { createDecipheriv } from 'node:crypto';
 import { ChatFlagDetector } from '@squad/chat-ingest';
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
@@ -11,6 +12,7 @@ import {
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { z } from 'zod';
 import { positiveIntEnv } from './env.js';
 import { RconSupervisor, type Target } from './supervisor.js';
 
@@ -24,30 +26,26 @@ const requiredEnv = (name: string): string => {
 };
 
 /**
- * In production the RCON password is stored as an encrypted blob in
- * `server_credentials.rcon_password_encrypted`. This worker reads the
- * raw bytea and decrypts via APP_ENCRYPTION_KEY. For Phase 0 we only
- * stand up the plumbing; the crypto helper is shared with the API via
- * apps/api/src/lib/crypto.ts. We re-implement a tiny subset here to
- * avoid coupling the worker to the API package.
+ * The RCON password is stored in `server_credentials.rcon_password_encrypted`
+ * as a JSON envelope encrypted with AES-256-GCM under APP_ENCRYPTION_KEY. This
+ * mirrors the subset of `apps/api/src/lib/crypto.ts` the worker needs, without
+ * coupling it to the API package.
  */
-import { createDecipheriv } from 'node:crypto';
+const encryptedBlobSchema = z.object({
+  v: z.literal(1),
+  kv: z.number(),
+  iv: z.string().transform((value) => Buffer.from(value, 'base64')),
+  tag: z.string().transform((value) => Buffer.from(value, 'base64')),
+  ct: z.string().transform((value) => Buffer.from(value, 'base64')),
+});
 
-interface Blob {
-  v: 1;
-  kv: number;
-  iv: string;
-  tag: string;
-  ct: string;
-}
-
-function decrypt(key: Buffer, blob: Blob): string {
-  const iv = Buffer.from(blob.iv, 'base64');
-  const tag = Buffer.from(blob.tag, 'base64');
-  const ct = Buffer.from(blob.ct, 'base64');
-  const d = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(ct), d.final()]).toString('utf-8');
+function decrypt(key: Buffer, rawBlob: Buffer): string {
+  const blob = encryptedBlobSchema.parse(JSON.parse(rawBlob.toString('utf-8')));
+  if (blob.iv.byteLength !== 12) throw new Error('invalid credentials iv length');
+  if (blob.tag.byteLength !== 16) throw new Error('invalid credentials tag length');
+  const decipher = createDecipheriv('aes-256-gcm', key, blob.iv, { authTagLength: 16 });
+  decipher.setAuthTag(blob.tag);
+  return Buffer.concat([decipher.update(blob.ct), decipher.final()]).toString('utf-8');
 }
 
 async function main() {
@@ -118,9 +116,6 @@ async function main() {
     for (const row of rows) {
       if (row.status !== 'running' && row.status !== 'starting') continue;
       try {
-        const blob = JSON.parse(
-          Buffer.from(row.blob as unknown as Buffer).toString('utf-8'),
-        ) as Blob;
         targets.push({
           serverId: row.serverId,
           host: resolveRconHost(row.host),
@@ -129,7 +124,7 @@ async function main() {
           tickrate: row.tickrate ?? undefined,
           seedLiveAt: row.seedLiveAt ?? undefined,
           seedHysteresis: row.seedHysteresis ?? undefined,
-          password: decrypt(key, blob),
+          password: decrypt(key, row.blob),
         });
       } catch (err) {
         log.error(
@@ -165,8 +160,17 @@ async function main() {
   process.on('SIGTERM', shutdown);
 
   await reconcile();
+  // Passes never overlap: supervisors are stopped and replaced during a pass, so
+  // a second one must not start while the first is still waiting on that.
+  let reconciling = false;
   interval = setInterval(() => {
-    reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
+    if (reconciling) return;
+    reconciling = true;
+    reconcile()
+      .catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'))
+      .finally(() => {
+        reconciling = false;
+      });
   }, 15_000);
 
   stopHeartbeat = startHeartbeat({

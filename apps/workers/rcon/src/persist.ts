@@ -2,13 +2,10 @@ import {
   auditLog,
   type ClosedReason,
   type DatabaseClient,
-  type GeoLookup,
   playerKitTime,
   playerNameHistory,
   playerSessions,
   players,
-  recordIpObservation,
-  resolveGeo,
   type SessionMode,
 } from '@squad/db';
 import { normalizePlayerName, normalizeRoleName } from '@squad/shared-config';
@@ -36,11 +33,7 @@ async function writeSystemAudit(
   });
 }
 
-export async function upsertPlayers(
-  db: DatabaseClient,
-  incoming: RconPlayer[],
-  geoLookup: GeoLookup | null = null,
-): Promise<void> {
+export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]): Promise<void> {
   if (incoming.length === 0) return;
   for (const p of incoming) {
     const normalised = normalizePlayerName(p.name);
@@ -97,14 +90,6 @@ export async function upsertPlayers(
             observationCount: sql`${playerNameHistory.observationCount} + 1`,
           },
         });
-
-      if (p.ip) {
-        await recordIpObservation(db, {
-          playerId,
-          ip: p.ip,
-          geo: resolveGeo(geoLookup, p.ip),
-        });
-      }
     } else {
       const playerId = uuidv7();
       await db.insert(players).values({
@@ -126,14 +111,6 @@ export async function upsertPlayers(
         eos_id: p.eos_id,
         canonical_name: p.name,
       });
-
-      if (p.ip) {
-        await recordIpObservation(db, {
-          playerId,
-          ip: p.ip,
-          geo: resolveGeo(geoLookup, p.ip),
-        });
-      }
     }
   }
 }

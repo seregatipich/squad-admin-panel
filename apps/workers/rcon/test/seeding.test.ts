@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeSeedingTick, isSeedLayer, type SeedingState } from '../src/seeding.js';
+import {
+  computeSeedingTick,
+  isSeedLayer,
+  type SeedingState,
+  seedingStateSchema,
+} from '../src/seeding.js';
 
 const LIVE_AT = 60;
 const HYSTERESIS = 5;
@@ -254,5 +259,20 @@ describe('computeSeedingTick: threshold changes without a transition', () => {
     );
     expect(result.transition).toBeNull();
     expect(result.state.live_at).toBe(70);
+  });
+});
+
+describe('seedingStateSchema', () => {
+  it('accepts a well-formed state', () => {
+    expect(seedingStateSchema.safeParse(liveState()).success).toBe(true);
+  });
+
+  it.each([
+    ['a wrong field type', { ...liveState(), current_players: '80' }],
+    ['a missing field', { state: 'live' }],
+    ['an unknown state name', { ...liveState(), state: 'paused' }],
+    ['a non-object value', null],
+  ])('rejects %s', (_label, value) => {
+    expect(seedingStateSchema.safeParse(value).success).toBe(false);
   });
 });

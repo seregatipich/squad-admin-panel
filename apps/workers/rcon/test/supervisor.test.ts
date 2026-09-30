@@ -724,3 +724,29 @@ describe('RconSupervisor redial on changed connection parameters', () => {
     }
   });
 });
+
+describe('RconSupervisor overlapping reconciles', () => {
+  it('leaves exactly one live connection when two reconciles replace the same target', async () => {
+    const { server, port } = await makePollingRconServer();
+    const sockets = new Set<Socket>();
+    server.on('connection', (sock: Socket) => {
+      sockets.add(sock);
+      sock.on('close', () => sockets.delete(sock));
+    });
+    const supervisor = new RconSupervisor({ db: makeDb(), redis: makeRedis(), log: makeLogger() });
+    const original = { ...target, port, password: 'one' };
+
+    try {
+      await supervisor.reconcile([original]);
+      await sleep(200);
+      const rotated = { ...original, password: 'two' };
+      await Promise.all([supervisor.reconcile([rotated]), supervisor.reconcile([rotated])]);
+      await sleep(300);
+      expect(sockets.size).toBe(1);
+    } finally {
+      await supervisor.stop();
+      for (const sock of sockets) sock.destroy();
+      await closeServer(server);
+    }
+  });
+});
