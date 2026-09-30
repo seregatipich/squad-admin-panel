@@ -84,4 +84,25 @@ describe('runRotationProfileTick', () => {
     await expect(runRotationProfileTick(deps)).resolves.toEqual({ applied: 0, skipped: 0 });
     expect(deps.bridge.fileAtomicWrite).not.toHaveBeenCalled();
   });
+
+  it('reports a failure and keeps the cursor when the managed block has no END marker', async () => {
+    const profile = makeProfile();
+    const deps = makeDeps({
+      loadProfiles: vi.fn().mockResolvedValue([profile]),
+      bridge: {
+        fileRead: vi.fn().mockResolvedValue({
+          content: '//SQUAD-PANEL BEGIN — не редактировать вручную\r\nGorodok RAAS v1\r\n',
+        }),
+        fileAtomicWrite: vi.fn().mockResolvedValue({ status: 'written' }),
+      },
+    });
+
+    await expect(runRotationProfileTick(deps)).resolves.toEqual({ applied: 0, skipped: 1 });
+    expect(deps.bridge.fileAtomicWrite).not.toHaveBeenCalled();
+    expect(deps.setLastAppliedAt).not.toHaveBeenCalled();
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'rotation_profile.apply_failed' }),
+    );
+  });
 });

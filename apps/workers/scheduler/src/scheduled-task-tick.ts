@@ -1,5 +1,6 @@
 import type { Diag } from '@squad/diag';
-import { expandCron5Occurrences, type RconOperatorCommandName } from '@squad/shared-types';
+import type { RconOperatorCommandName } from '@squad/shared-types';
+import { resolveCronDueOccurrence, type SendRconCommandInput } from './due-occurrence.js';
 
 /** Server action a scheduled task performs when it becomes due (AUTO-2, #73). */
 export type ScheduledTaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -30,12 +31,6 @@ export interface ScheduledTaskEntry {
   /** Player who created the task; the author of the chat echo. Null → echo skipped. */
   createdBy: string | null;
   createdAt: Date;
-}
-
-export interface SendRconCommandInput {
-  serverId: string;
-  command: RconOperatorCommandName;
-  args: string[];
 }
 
 export type ScheduledTaskRunStatus = 'executed' | 'skipped_depot_update' | 'failed';
@@ -87,34 +82,13 @@ export interface ScheduledTaskTickResult {
 }
 
 /**
- * Resolves the single cron/one-off occurrence (if any) that is due for `entry`
- * as of `now`, or `null` when nothing is due. Mirrors
- * `seed-schedule-tick.ts`'s `resolveDueOccurrence`:
- *
- * - Recurring (`recurrence !== null`): due when {@link expandCron5Occurrences}
- *   finds at least one matching minute strictly after the last-known cursor
- *   (`lastExecutedAt`, or `createdAt` if never executed) and at or before
- *   `now`. Multiple missed occurrences collapse to the most recent — the tick
- *   fires once and advances the cursor past all of them.
- * - One-off (`recurrence === null`, `scheduledAt` set): due once
- *   `scheduledAt <= now`, and only while it has never executed.
- * - Neither set: never due (the DB check constraint forbids this, but a stale
- *   row is treated defensively).
+ * Resolves the single cron/one-off occurrence (if any) due for `entry` as of
+ * `now` (a one-off fires at `scheduledAt`); see {@link resolveCronDueOccurrence}.
+ * A row with neither `recurrence` nor `scheduledAt` is never due (the DB check
+ * constraint forbids it, but a stale row is treated defensively).
  */
 export function resolveDueOccurrence(entry: ScheduledTaskEntry, now: Date): Date | null {
-  if (entry.recurrence === null) {
-    if (entry.scheduledAt === null) return null;
-    if (entry.lastExecutedAt !== null) return null;
-    return entry.scheduledAt.getTime() <= now.getTime() ? entry.scheduledAt : null;
-  }
-
-  const hasPriorOccurrence = entry.lastExecutedAt !== null;
-  const cursor = entry.lastExecutedAt ?? entry.createdAt;
-  const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
-  if (from.getTime() > now.getTime()) return null;
-
-  const occurrences = expandCron5Occurrences(entry.recurrence, from, now);
-  return occurrences.length > 0 ? (occurrences.at(-1) ?? null) : null;
+  return resolveCronDueOccurrence({ ...entry, oneOffAt: entry.scheduledAt }, now);
 }
 
 /**

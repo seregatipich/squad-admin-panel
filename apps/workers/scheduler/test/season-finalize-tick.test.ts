@@ -24,7 +24,6 @@ function makeDeps(overrides: Partial<SeasonFinalizeTickDeps> = {}): SeasonFinali
     loadActiveSeasons: vi.fn().mockResolvedValue([]),
     finalizeSeason: vi.fn().mockResolvedValue(undefined),
     invalidateLeaderboardCache: vi.fn().mockResolvedValue(0),
-    writeAuditEntry: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
     ...overrides,
   };
@@ -69,7 +68,7 @@ describe('runSeasonFinalizeTick', () => {
 
     expect(result).toEqual({ finalized: 0, failed: 0 });
     expect(deps.finalizeSeason).not.toHaveBeenCalled();
-    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
+    expect(deps.finalizeSeason).not.toHaveBeenCalled();
   });
 
   it('closes and freezes an expired season, then invalidates the leaderboard cache', async () => {
@@ -79,7 +78,7 @@ describe('runSeasonFinalizeTick', () => {
     const result = await runSeasonFinalizeTick(deps);
 
     expect(result).toEqual({ finalized: 1, failed: 0 });
-    expect(deps.finalizeSeason).toHaveBeenCalledWith(season.id);
+    expect(deps.finalizeSeason).toHaveBeenCalledWith(season.id, expect.any(Object));
     expect(deps.invalidateLeaderboardCache).toHaveBeenCalledOnce();
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,7 +94,8 @@ describe('runSeasonFinalizeTick', () => {
 
     await runSeasonFinalizeTick(deps);
 
-    expect(deps.writeAuditEntry).toHaveBeenCalledWith(
+    expect(deps.finalizeSeason).toHaveBeenCalledWith(
+      season.id,
       expect.objectContaining({
         actor: { kind: 'system', label: 'season-finalizer' },
         actionType: 'season.finalize',
@@ -119,7 +119,6 @@ describe('runSeasonFinalizeTick', () => {
     const result = await runSeasonFinalizeTick(deps);
 
     expect(result).toEqual({ finalized: 0, failed: 1 });
-    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
     expect(deps.invalidateLeaderboardCache).not.toHaveBeenCalled();
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'season_finalize.finalize_failed', severity: 'error' }),

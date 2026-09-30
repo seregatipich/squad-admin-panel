@@ -22,7 +22,10 @@ import {
   createSeedScheduleDeps,
 } from './deps.js';
 import { runMapVoteTick } from './map-vote-tick.js';
-import { runRotationProfileTick } from './rotation-profile-tick.js';
+import {
+  DEFAULT_ROTATION_PROFILE_APPLY_HOUR,
+  runRotationProfileTick,
+} from './rotation-profile-tick.js';
 import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runScheduledTaskTick } from './scheduled-task-tick.js';
 import { runSeasonFinalizeTick } from './season-finalize-tick.js';
@@ -34,7 +37,6 @@ const log = pino({
 });
 
 const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.SCHEDULER_INTERVAL_MS, 30_000);
-const DEFAULT_ROTATION_PROFILE_APPLY_HOUR = 4;
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -53,9 +55,10 @@ function rotationProfileApplyHour(): number {
 }
 
 /**
- * `@squad/worker-scheduler`: hosts the SEED-3 and ROT-4 scheduled ticks.
- * RCON changes are queued for worker-rcon; weekly profiles use the host
- * bridge to replace only the managed LayerRotation.cfg segment.
+ * `@squad/worker-scheduler`: hosts the seed schedule, one-off rotation
+ * schedule, weekly rotation profile, scheduled task, map vote and season
+ * finalize ticks. RCON changes are queued for worker-rcon; weekly profiles use
+ * the host bridge to replace only the managed LayerRotation.cfg segment.
  */
 async function main() {
   const sql = postgres(requiredEnv('DATABASE_URL'), { max: 4, prepare: false });
@@ -88,34 +91,34 @@ async function main() {
   const seasonFinalizeDeps = createSeasonFinalizeDeps(db, redis);
   const profileApplyHour = rotationProfileApplyHour();
 
+  /**
+   * Runs every scheduler tick concurrently. A tick that throws is logged under
+   * its own name and does not hide the others' results or stall the heartbeat.
+   */
   async function tick(): Promise<void> {
-    const [
-      seedResult,
-      rotationResult,
-      profileResult,
-      scheduledTaskResult,
-      mapVoteResult,
-      seasonFinalizeResult,
-    ] = await Promise.all([
-      runSeedScheduleTick({ ...runtimeDeps, diag }),
-      runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
-      runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
-      runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
-      runMapVoteTick({ ...mapVoteDeps, diag }),
-      runSeasonFinalizeTick({ ...seasonFinalizeDeps, diag }),
-    ]);
+    const ticks = {
+      seedSchedule: () => runSeedScheduleTick({ ...runtimeDeps, diag }),
+      rotationSchedule: () => runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
+      rotationProfile: () =>
+        runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
+      scheduledTask: () => runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
+      mapVote: () => runMapVoteTick({ ...mapVoteDeps, diag }),
+      seasonFinalize: () => runSeasonFinalizeTick({ ...seasonFinalizeDeps, diag }),
+    };
+    const names = Object.keys(ticks) as (keyof typeof ticks)[];
+    const settled = await Promise.allSettled(names.map((name) => ticks[name]()));
+    const results: Record<string, unknown> = {};
+    settled.forEach((outcome, index) => {
+      const name = names[index] as string;
+      if (outcome.status === 'fulfilled') {
+        results[name] = outcome.value;
+        return;
+      }
+      const err = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      log.error({ err, tick: name }, 'scheduler tick failed');
+    });
     lastTickAt = new Date().toISOString();
-    log.info(
-      {
-        seedResult,
-        rotationResult,
-        profileResult,
-        scheduledTaskResult,
-        mapVoteResult,
-        seasonFinalizeResult,
-      },
-      'scheduler tick',
-    );
+    log.info({ results }, 'scheduler tick');
   }
 
   let interval: NodeJS.Timeout | null = null;
@@ -161,7 +164,7 @@ async function main() {
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
   interval = setInterval(() => {
-    tick().catch((err) => log.error({ err: (err as Error).message }, 'seed-schedule tick failed'));
+    tick().catch((err) => log.error({ err: (err as Error).message }, 'scheduler tick failed'));
   }, TICK_INTERVAL_MS);
 }
 

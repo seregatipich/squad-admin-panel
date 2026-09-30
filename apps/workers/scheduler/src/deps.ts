@@ -24,28 +24,19 @@ import {
   STREAM_NAME,
   seedCallSentPayload,
 } from '@squad/shared-types';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
+import type { SendRconCommandInput } from './due-occurrence.js';
 import type {
-  MapVoteAuditEntry,
   MapVoteCandidateEntry,
   MapVoteServerEntry,
   MapVoteTickDeps,
 } from './map-vote-tick.js';
-import type {
-  RotationProfileAuditEntry,
-  RotationProfileEntry,
-  RotationProfileTickDeps,
-} from './rotation-profile-tick.js';
-import type {
-  RotationScheduleAuditEntry,
-  RotationScheduleEntry,
-  RotationScheduleTickDeps,
-} from './rotation-schedule-tick.js';
+import type { RotationProfileEntry, RotationProfileTickDeps } from './rotation-profile-tick.js';
+import type { RotationScheduleEntry, RotationScheduleTickDeps } from './rotation-schedule-tick.js';
 import type {
   ScheduledBroadcastEcho,
-  ScheduledTaskAuditEntry,
   ScheduledTaskEntry,
   ScheduledTaskRunRecord,
   ScheduledTaskTickDeps,
@@ -57,10 +48,8 @@ import type {
 } from './season-finalize-tick.js';
 import type {
   SeedingLiveness,
-  SeedScheduleAuditEntry,
   SeedScheduleEntry,
   SeedScheduleTickDeps,
-  SendRconCommandInput,
 } from './seed-schedule-tick.js';
 
 const RCON_STREAM_MAXLEN = 500;
@@ -76,6 +65,40 @@ function seedPublicHost(): string {
     }
   }
   return process.env.RCON_HOST_DEFAULT ?? '127.0.0.1';
+}
+
+/** Fields shared by every system-actor `audit_log` row this worker writes. */
+export interface SystemAuditEntry {
+  actor: { kind: 'system'; label: string };
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  context: Record<string, unknown>;
+}
+
+/**
+ * Appends one `audit_log` row for a scheduler action. `rowHash` is a
+ * placeholder: the `audit_log_append` trigger computes the real hash chain.
+ */
+export async function writeSystemAuditEntry(
+  db: Pick<DatabaseClient, 'insert'>,
+  entry: SystemAuditEntry,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: entry.actor.kind,
+    actorPlayerId: null,
+    actorTokenId: null,
+    actorSystemLabel: entry.actor.label,
+    actorIp: null,
+    actionType: entry.actionType,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    beforeSnapshot: null,
+    afterSnapshot: null,
+    context: entry.context,
+    statusCode: null,
+    rowHash: Buffer.from([]),
+  });
 }
 
 export async function loadEnabledSeedScheduleEntries(
@@ -163,32 +186,14 @@ export async function setLastExecutedAt(
     .where(eq(seedSchedule.id, entryId));
 }
 
-export async function writeSeedScheduleAuditEntry(
-  db: DatabaseClient,
-  entry: SeedScheduleAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
-/** Loads enabled one-off rotation changes for the scheduler tick. */
+/** Loads enabled one-off rotation changes that have not executed yet. */
 export async function loadEnabledRotationScheduleEntries(
   db: DatabaseClient,
 ): Promise<RotationScheduleEntry[]> {
-  const rows = await db.select().from(rotationSchedule).where(eq(rotationSchedule.enabled, true));
+  const rows = await db
+    .select()
+    .from(rotationSchedule)
+    .where(and(eq(rotationSchedule.enabled, true), isNull(rotationSchedule.lastExecutedAt)));
   return rows.map((row) => ({
     id: row.id,
     serverId: row.serverId,
@@ -209,27 +214,6 @@ export async function setRotationScheduleLastExecutedAt(
     .update(rotationSchedule)
     .set({ lastExecutedAt: executedAt, updatedAt: new Date() })
     .where(eq(rotationSchedule.id, entryId));
-}
-
-export async function writeRotationScheduleAuditEntry(
-  db: DatabaseClient,
-  entry: RotationScheduleAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
 }
 
 /** Loads profiles together with each server's configured timezone. */
@@ -261,27 +245,6 @@ export async function setRotationProfileLastAppliedAt(
     .update(rotationProfiles)
     .set({ lastAppliedAt: appliedAt, updatedAt: new Date() })
     .where(eq(rotationProfiles.id, profileId));
-}
-
-export async function writeRotationProfileAuditEntry(
-  db: DatabaseClient,
-  entry: RotationProfileAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
 }
 
 /**
@@ -358,7 +321,7 @@ export async function notifyScheduledSeeders(
     eventKind: 'seed.call_sent',
     payload,
   });
-  await writeSeedScheduleAuditEntry(db, {
+  await writeSystemAuditEntry(db, {
     actor: { kind: 'system', label: 'seed-scheduler' },
     actionType: 'seed.call_sent',
     targetType: 'seed_schedule',
@@ -383,7 +346,7 @@ export function createSeedScheduleDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     notifySeeders: (entry, occurrence) => notifyScheduledSeeders(db, redis, entry, occurrence),
     setLastExecutedAt: (entryId, executedAt) => setLastExecutedAt(db, entryId, executedAt),
-    writeAuditEntry: (entry) => writeSeedScheduleAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -397,7 +360,8 @@ export function createRotationScheduleDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     setLastExecutedAt: (entryId, executedAt) =>
       setRotationScheduleLastExecutedAt(db, entryId, executedAt),
-    writeAuditEntry: (entry) => writeRotationScheduleAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
+    auditedDepotSkips: new Set<string>(),
   };
 }
 
@@ -526,27 +490,6 @@ export async function setMapVotePickFailure(
   await db.update(mapVotePicks).set({ failureReason: reason }).where(eq(mapVotePicks.id, pickId));
 }
 
-export async function writeMapVoteAuditEntry(
-  db: DatabaseClient,
-  entry: MapVoteAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
 export function createMapVoteDeps(
   db: DatabaseClient,
   redis: Pick<Redis, 'get' | 'xadd'>,
@@ -562,7 +505,7 @@ export function createMapVoteDeps(
     setPickFailure: (pickId, reason) => setMapVotePickFailure(db, pickId, reason),
     isDepotUpdating: () => isDepotUpdating(redis),
     sendRconCommand: (input, requestId) => sendRconCommand(redis, input, requestId),
-    writeAuditEntry: (entry) => writeMapVoteAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -575,13 +518,25 @@ export function createRotationProfileDeps(
     bridge,
     setLastAppliedAt: (profileId, appliedAt) =>
       setRotationProfileLastAppliedAt(db, profileId, appliedAt),
-    writeAuditEntry: (entry) => writeRotationProfileAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
-/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick. */
+/**
+ * Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick.
+ * A one-off task that already executed can never be due again, so it is
+ * filtered out in SQL instead of being read (with its jsonb params) every tick.
+ */
 export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<ScheduledTaskEntry[]> {
-  const rows = await db.select().from(scheduledTasks).where(eq(scheduledTasks.enabled, true));
+  const rows = await db
+    .select()
+    .from(scheduledTasks)
+    .where(
+      and(
+        eq(scheduledTasks.enabled, true),
+        or(isNotNull(scheduledTasks.recurrence), isNull(scheduledTasks.lastExecutedAt)),
+      ),
+    );
   return rows.map((row) => ({
     id: row.id,
     serverId: row.serverId,
@@ -654,27 +609,6 @@ export async function recordScheduledTaskRun(
   });
 }
 
-export async function writeScheduledTaskAuditEntry(
-  db: DatabaseClient,
-  entry: ScheduledTaskAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
 /**
  * Restarts a server via the SRV-3 container-restart mechanism — the same
  * `containerStop` + `containerStart` on `squad-<serverId>` that
@@ -718,7 +652,7 @@ export function createScheduledTaskDeps(
       setScheduledTaskRotationIndex(db, taskId, nextIndex),
     echoBroadcastToChat: (echo) => echoScheduledBroadcast(db, echo),
     recordRun: (run) => recordScheduledTaskRun(db, run),
-    writeAuditEntry: (entry) => writeScheduledTaskAuditEntry(db, entry),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
   };
 }
 
@@ -742,15 +676,22 @@ export async function loadActiveSeasons(db: DatabaseClient): Promise<ActiveSeaso
 }
 
 /**
- * Closes a season and freezes its materialised slice in one statement, so the
- * two can never drift apart. `loadActiveSeasonTarget` in @squad/db skips
+ * Closes a season, freezes its materialised slice and appends its audit row in
+ * one transaction, so none of the three can happen without the others. `loadActiveSeasonTarget` in @squad/db skips
  * finalized rows, which is what stops the aggregator recomputing it.
  */
-export async function finalizeSeason(db: DatabaseClient, seasonId: string): Promise<void> {
-  await db
-    .update(seasons)
-    .set({ status: 'closed', finalized: true, updatedAt: new Date() })
-    .where(eq(seasons.id, seasonId));
+export async function finalizeSeason(
+  db: DatabaseClient,
+  seasonId: string,
+  audit: SeasonFinalizeAuditEntry,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(seasons)
+      .set({ status: 'closed', finalized: true, updatedAt: new Date() })
+      .where(eq(seasons.id, seasonId));
+    await writeSystemAuditEntry(tx, audit);
+  });
 }
 
 export async function invalidateLeaderboardCache(
@@ -766,35 +707,13 @@ export async function invalidateLeaderboardCache(
   return keys.length;
 }
 
-export async function writeSeasonFinalizeAuditEntry(
-  db: DatabaseClient,
-  entry: SeasonFinalizeAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: null,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: null,
-    afterSnapshot: null,
-    context: entry.context,
-    statusCode: null,
-    rowHash: Buffer.from([]),
-  });
-}
-
 export function createSeasonFinalizeDeps(
   db: DatabaseClient,
   redis: Pick<Redis, 'scanStream' | 'del'>,
 ): Omit<SeasonFinalizeTickDeps, 'now' | 'diag'> {
   return {
     loadActiveSeasons: () => loadActiveSeasons(db),
-    finalizeSeason: (seasonId) => finalizeSeason(db, seasonId),
+    finalizeSeason: (seasonId, audit) => finalizeSeason(db, seasonId, audit),
     invalidateLeaderboardCache: () => invalidateLeaderboardCache(redis),
-    writeAuditEntry: (entry) => writeSeasonFinalizeAuditEntry(db, entry),
   };
 }

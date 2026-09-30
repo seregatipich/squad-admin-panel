@@ -105,4 +105,33 @@ describe('runRotationScheduleTick', () => {
       expect.objectContaining({ actionType: 'server.rotation_schedule.skip_depot_update' }),
     );
   });
+
+  it('audits a depot-update skip once per occurrence across ticks', async () => {
+    const entry = makeEntry();
+    const deps = makeDeps({
+      now: new Date('2026-07-13T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+      isDepotUpdating: vi.fn().mockResolvedValue(true),
+      auditedDepotSkips: new Set<string>(),
+    });
+
+    await runRotationScheduleTick(deps);
+    const second = await runRotationScheduleTick(deps);
+
+    expect(second.skippedDepotUpdate).toBe(1);
+    expect(deps.writeAuditEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the depot flag once per tick however many entries are due', async () => {
+    const entries = [makeEntry(), makeEntry({ id: '019f7800-0000-7000-8000-000000000003' })];
+    const deps = makeDeps({
+      now: new Date('2026-07-13T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue(entries),
+    });
+
+    await runRotationScheduleTick(deps);
+
+    expect(deps.isDepotUpdating).toHaveBeenCalledTimes(1);
+    expect(deps.sendRconCommand).toHaveBeenCalledTimes(2);
+  });
 });
