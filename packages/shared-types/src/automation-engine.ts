@@ -1,4 +1,5 @@
 import {
+  type AutomationActionConfigs,
   type AutomationActionType,
   type AutomationConditionType,
   type ChatKeywordCondition,
@@ -57,17 +58,25 @@ export interface AutomationTriggerInput {
   player?: AutomationPlayerRef | null;
 }
 
-/** A rule that matched a trigger, carrying everything the action layer needs. */
-export interface AutomationMatch {
+interface AutomationMatchBase {
   ruleId: string;
   ruleName: string;
   serverId: string | null;
   conditionType: AutomationConditionType;
-  actionType: AutomationActionType;
-  action: Record<string, unknown>;
   matched: Record<string, unknown>;
   player: AutomationPlayerRef | null;
 }
+
+/**
+ * A rule that matched a trigger, carrying everything the action layer needs.
+ * Discriminated by `actionType`, so narrowing it types `action` without casts.
+ */
+export type AutomationMatch = {
+  [T in AutomationActionType]: AutomationMatchBase & {
+    actionType: T;
+    action: AutomationActionConfigs[T];
+  };
+}[AutomationActionType];
 
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
@@ -211,17 +220,60 @@ function evaluateCondition(
   input: AutomationTriggerInput,
   rule: AutomationRuleInput,
 ): Record<string, unknown> | null {
-  const parsed = parseAutomationCondition(rule.conditionType, rule.condition);
-  if (!parsed.success) return null;
   switch (rule.conditionType) {
-    case 'chat_keyword':
-      return matchChatKeyword(input, parsed.data as ChatKeywordCondition);
-    case 'player_count':
-      return matchPlayerCount(input, parsed.data as PlayerCountCondition);
-    case 'time_of_day':
-      return matchTimeOfDay(input, parsed.data as TimeOfDayCondition);
-    case 'player_flag':
-      return matchPlayerFlag(input, parsed.data as PlayerFlagCondition);
+    case 'chat_keyword': {
+      const parsed = parseAutomationCondition('chat_keyword', rule.condition);
+      return parsed.success ? matchChatKeyword(input, parsed.data) : null;
+    }
+    case 'player_count': {
+      const parsed = parseAutomationCondition('player_count', rule.condition);
+      return parsed.success ? matchPlayerCount(input, parsed.data) : null;
+    }
+    case 'time_of_day': {
+      const parsed = parseAutomationCondition('time_of_day', rule.condition);
+      return parsed.success ? matchTimeOfDay(input, parsed.data) : null;
+    }
+    case 'player_flag': {
+      const parsed = parseAutomationCondition('player_flag', rule.condition);
+      return parsed.success ? matchPlayerFlag(input, parsed.data) : null;
+    }
+  }
+}
+
+/**
+ * Builds the match for a rule whose condition already matched, or `null` when
+ * its `action` jsonb fails validation for its `action_type`.
+ */
+function buildMatch(
+  rule: AutomationRuleInput,
+  input: AutomationTriggerInput,
+  matched: Record<string, unknown>,
+): AutomationMatch | null {
+  const base = {
+    ruleId: rule.id,
+    ruleName: rule.name,
+    serverId: input.serverId,
+    conditionType: rule.conditionType,
+    matched,
+    player: input.player ?? null,
+  };
+  switch (rule.actionType) {
+    case 'rcon_command': {
+      const action = parseAutomationAction('rcon_command', rule.action);
+      return action.success ? { ...base, actionType: 'rcon_command', action: action.data } : null;
+    }
+    case 'kick': {
+      const action = parseAutomationAction('kick', rule.action);
+      return action.success ? { ...base, actionType: 'kick', action: action.data } : null;
+    }
+    case 'warn': {
+      const action = parseAutomationAction('warn', rule.action);
+      return action.success ? { ...base, actionType: 'warn', action: action.data } : null;
+    }
+    case 'notify_admin': {
+      const action = parseAutomationAction('notify_admin', rule.action);
+      return action.success ? { ...base, actionType: 'notify_admin', action: action.data } : null;
+    }
   }
 }
 
@@ -246,18 +298,8 @@ export function evaluate(
     if (!scopeMatches(rule, input)) continue;
     const matched = evaluateCondition(input, rule);
     if (!matched) continue;
-    const action = parseAutomationAction(rule.actionType, rule.action);
-    if (!action.success) continue;
-    matches.push({
-      ruleId: rule.id,
-      ruleName: rule.name,
-      serverId: input.serverId,
-      conditionType: rule.conditionType,
-      actionType: rule.actionType,
-      action: action.data as Record<string, unknown>,
-      matched,
-      player: input.player ?? null,
-    });
+    const match = buildMatch(rule, input, matched);
+    if (match) matches.push(match);
   }
   return matches;
 }
