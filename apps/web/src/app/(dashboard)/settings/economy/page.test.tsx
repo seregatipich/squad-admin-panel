@@ -424,6 +424,31 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    [400, 'price_requires_days', 'Цена требует срок по умолчанию: укажите срок или очистите цену.'],
+    [400, 'role_not_found', 'Выбранная роль не найдена.'],
+    [404, 'vip_tier_not_found', 'Тир не найден — возможно, его уже удалили.'],
+    [403, 'forbidden', 'Недостаточно прав для этого действия.'],
+  ])(
+    'translates the %i %s code returned by the vip-tiers endpoints (#692)',
+    async (status, code, text) => {
+      stubFetch({
+        tiers: [],
+        tierMutationError: { status, body: { error: code } },
+      });
+      render(<EconomySettingsPage />);
+      const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+      const scope = within(section);
+
+      fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
+      fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+      fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
+      fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
+
+      expect(await scope.findByText(`Ошибка сохранения тира: ${text}`)).toBeInTheDocument();
+    },
+  );
+
   it('falls back to the raw error code for unknown tier save errors', async () => {
     stubFetch({
       tiers: [],
