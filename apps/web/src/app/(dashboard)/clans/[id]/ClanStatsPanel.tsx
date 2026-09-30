@@ -91,7 +91,6 @@ const ONLINE_COLOR = '#30d158';
 const BOOST_COLOR = '#ff9f0a';
 const PEAK_COLOR = '#ff9f0a';
 const PRIMETIME_BAR_COLOR = '#409cff';
-const TOP_MEMBERS_DISPLAY_LIMIT = 5;
 const DAY_MS = 86_400_000;
 
 /*
@@ -118,6 +117,24 @@ function fmtDuration(seconds: number): string {
   const minutes = Math.floor((total % 3600) / 60);
   if (hours > 0) return `${hours}ч ${minutes}м`;
   return `${minutes}м`;
+}
+
+/** Structural guard for the parts of the stats response the renderer dereferences. */
+function isClanStatsResponse(body: unknown): body is ClanStatsResponse {
+  if (typeof body !== 'object' || body === null) return false;
+  const { chart, totals, primetime, combat } = body as Partial<ClanStatsResponse>;
+  return (
+    Array.isArray(chart) &&
+    typeof totals === 'object' &&
+    totals !== null &&
+    typeof primetime === 'object' &&
+    primetime !== null &&
+    Array.isArray(primetime.histogram) &&
+    typeof combat === 'object' &&
+    combat !== null &&
+    typeof combat.kd === 'number' &&
+    Array.isArray(combat.top)
+  );
 }
 
 function isPeakHour(hour: number, range: ClanStatsPrimetimeRange | null): boolean {
@@ -153,7 +170,8 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`Не удалось загрузить статистику (${res.status})`);
-      const body = (await res.json()) as ClanStatsResponse;
+      const body: unknown = await res.json();
+      if (!isClanStatsResponse(body)) throw new Error('Некорректный ответ сервера');
       // Ответ на устаревший период (7/30/90) не должен перезаписать актуальный.
       if (requestId !== latestLoadRef.current) return;
       setData(body);
@@ -360,7 +378,7 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {data.combat.top.slice(0, TOP_MEMBERS_DISPLAY_LIMIT).map((member) => (
+                    {data.combat.top.map((member) => (
                       <TableRow key={member.player_id} interactive>
                         <Td>
                           <Link
