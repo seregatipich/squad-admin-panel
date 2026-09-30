@@ -13,6 +13,9 @@ describe('isRestrictedNetworkHost (#30, finding #333)', () => {
     'localhost',
     'LOCALHOST.',
     'api.localhost',
+    'host.docker.internal',
+    'gateway.docker.internal',
+    'host.containers.internal',
     'metadata.google.internal',
     'redis',
     'postgres',
@@ -31,6 +34,10 @@ describe('isRestrictedNetworkHost (#30, finding #333)', () => {
     'fe80::1',
     'ff02::1',
     '1:2:3',
+    '256.1.1.1',
+    '1::2::3',
+    '1:2:zz:4:5:6:7:8',
+    '1:2:3:4:5:6:7::8',
     ':::1',
   ])('refuses %s', (host) => {
     expect(isRestrictedNetworkHost(host)).toBe(true);

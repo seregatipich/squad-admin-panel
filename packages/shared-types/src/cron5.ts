@@ -159,18 +159,12 @@ function cron5DayMatches(expr: Cron5Expression, date: Date): boolean {
   const month = date.getUTCMonth() + 1;
   if (expr.month && !expr.month.includes(month)) return false;
 
-  const dayOfMonth = date.getUTCDate();
-  const dayOfWeek = date.getUTCDay();
-  const domRestricted = expr.dayOfMonth !== null;
-  const dowRestricted = expr.dayOfWeek !== null;
-  if (domRestricted && dowRestricted) {
-    const domMatch = expr.dayOfMonth?.includes(dayOfMonth) ?? false;
-    const dowMatch = expr.dayOfWeek?.includes(dayOfWeek) ?? false;
-    return domMatch || dowMatch;
-  }
-  if (domRestricted) return expr.dayOfMonth?.includes(dayOfMonth) ?? false;
-  if (dowRestricted) return expr.dayOfWeek?.includes(dayOfWeek) ?? false;
-  return true;
+  const { dayOfMonth: allowedDaysOfMonth, dayOfWeek: allowedDaysOfWeek } = expr;
+  const dayOfMonthMatches = allowedDaysOfMonth?.includes(date.getUTCDate()) ?? true;
+  const dayOfWeekMatches = allowedDaysOfWeek?.includes(date.getUTCDay()) ?? true;
+  // Standard cron: when both day fields are restricted, either one matching is enough.
+  if (allowedDaysOfMonth && allowedDaysOfWeek) return dayOfMonthMatches || dayOfWeekMatches;
+  return dayOfMonthMatches && dayOfWeekMatches;
 }
 
 /**

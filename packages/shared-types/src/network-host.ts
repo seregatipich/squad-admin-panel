@@ -7,7 +7,8 @@
  * bridge — and a link-local one reaches cloud metadata endpoints.
  *
  * Refused: loopback, unspecified, link-local, multicast and reserved
- * addresses (IPv4, IPv6, and IPv4 embedded in IPv6); `localhost` names and
+ * addresses (IPv4, IPv6, and IPv4 embedded in IPv6); `localhost` names;
+ * Docker/Podman host aliases (`*.docker.internal`, `*.containers.internal`);
  * single-label names (Docker service names such as `redis`); and numeric
  * spellings other than a canonical dotted quad (`127.1`, `2130706433`,
  * `0x7f.0.0.1`), which resolvers would silently turn into loopback. Private
@@ -19,6 +20,9 @@
  */
 
 const RESTRICTED_NAMES = new Set(['localhost', 'metadata', 'metadata.google.internal']);
+
+/** Aliases that resolve to the panel host itself: loopback and the Docker/Podman host gateways. */
+const RESTRICTED_SUFFIXES = ['.localhost', '.docker.internal', '.containers.internal'];
 
 /**
  * Whether a canonical IPv4 address falls in a range the panel must never dial.
@@ -83,8 +87,8 @@ function parseIpv6(host: string): number[] | null {
     const all = [...groups, ...tail];
     return all.length === 8 ? all : null;
   }
-  const head = toGroups(halves[0] ?? '');
-  const rest = toGroups(halves[1] ?? '');
+  const head = toGroups(halves[0] as string);
+  const rest = toGroups(halves[1] as string);
   if (!head || !rest) return null;
   const known = head.length + rest.length + tail.length;
   if (known > 7) return null;
@@ -131,6 +135,8 @@ export function isRestrictedNetworkHost(host: string): boolean {
     return octets === null || isRestrictedIpv4(octets);
   }
 
-  if (RESTRICTED_NAMES.has(normalized) || normalized.endsWith('.localhost')) return true;
+  if (RESTRICTED_NAMES.has(normalized) || RESTRICTED_SUFFIXES.some((s) => normalized.endsWith(s))) {
+    return true;
+  }
   return labels.length < 2;
 }

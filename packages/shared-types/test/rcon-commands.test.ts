@@ -4,6 +4,7 @@ import {
   RCON_COMMAND_RESULT_PREFIX,
   RCON_COMMAND_STREAM_PREFIX,
   RCON_OPERATOR_COMMANDS,
+  rconCommandDoneKey,
   rconCommandRequestSchema,
   rconCommandResultKey,
   rconCommandResultSchema,
@@ -17,6 +18,11 @@ describe('rcon command contract', () => {
     expect(RCON_COMMAND_RESULT_PREFIX).toBe('rcon:command-result:');
     expect(rconCommandStream('srv-1')).toBe('rcon:commands:srv-1');
     expect(rconCommandResultKey('req-1')).toBe('rcon:command-result:req-1');
+  });
+
+  it('keeps the long-lived done marker apart from the short-lived result key', () => {
+    expect(rconCommandDoneKey('req-1')).toBe('rcon:command-done:req-1');
+    expect(rconCommandDoneKey('req-1')).not.toBe(rconCommandResultKey('req-1'));
   });
 
   it('allows only the whitelisted operator command names', () => {

@@ -161,12 +161,9 @@ function matchTimeOfDay(
   input: AutomationTriggerInput,
   config: TimeOfDayCondition,
 ): Record<string, unknown> | null {
-  let position: { minute: number; weekday: number };
-  try {
-    position = zoneMinuteAndWeekday(input.now, config.timezone);
-  } catch {
-    return null;
-  }
+  // `config.timezone` was validated as a known IANA zone when the condition
+  // was parsed (`isKnownTimeZone`), so formatting it cannot throw here.
+  const position = zoneMinuteAndWeekday(input.now, config.timezone);
   if (
     config.weekdays &&
     config.weekdays.length > 0 &&

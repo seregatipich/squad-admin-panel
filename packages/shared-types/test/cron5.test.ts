@@ -178,6 +178,63 @@ describe('findLastCron5Occurrence', () => {
     expect(occurrence).toBeNull();
   });
 
+  it('matches either day field when both day-of-month and day-of-week are restricted', () => {
+    // 2026-07-01 is a Wednesday (day-of-month hit), 2026-07-04 a Saturday (day-of-week hit).
+    const from = new Date('2026-06-30T00:00:00.000Z');
+    expect(
+      findLastCron5Occurrence(
+        '0 10 1 * 6',
+        from,
+        new Date('2026-07-03T00:00:00.000Z'),
+      )?.toISOString(),
+    ).toBe('2026-07-01T10:00:00.000Z');
+    expect(
+      findLastCron5Occurrence(
+        '0 10 1 * 6',
+        from,
+        new Date('2026-07-05T00:00:00.000Z'),
+      )?.toISOString(),
+    ).toBe('2026-07-04T10:00:00.000Z');
+  });
+
+  it('honours a day-of-week only restriction', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * 6',
+      new Date('2026-07-01T00:00:00.000Z'),
+      new Date('2026-07-14T23:59:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-07-11T10:00:00.000Z');
+  });
+
+  it('skips a candidate before `from` on the first day, then finds none', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10 * * *',
+      new Date('2026-07-11T10:30:00.000Z'),
+      new Date('2026-07-11T12:00:00.000Z'),
+    );
+    expect(occurrence).toBeNull();
+  });
+
+  it('skips candidates after `to` on the last day and returns the latest one inside the window', () => {
+    const occurrence = findLastCron5Occurrence(
+      '0 10,12 * * *',
+      new Date('2026-07-11T09:00:00.000Z'),
+      new Date('2026-07-11T11:00:00.000Z'),
+    );
+    expect(occurrence?.toISOString()).toBe('2026-07-11T10:00:00.000Z');
+  });
+
+  it('scans every minute of a wildcard hour and every hour of a wildcard minute', () => {
+    const to = new Date('2026-07-11T15:45:30.000Z');
+    const from = new Date('2026-07-11T00:00:00.000Z');
+    expect(findLastCron5Occurrence('30 * * * *', from, to)?.toISOString()).toBe(
+      '2026-07-11T15:30:00.000Z',
+    );
+    expect(findLastCron5Occurrence('* 10 * * *', from, to)?.toISOString()).toBe(
+      '2026-07-11T10:59:00.000Z',
+    );
+  });
+
   it('agrees with expandCron5Occurrences on the latest match for a short window', () => {
     const from = new Date('2026-07-01T00:00:00.000Z');
     const to = new Date('2026-07-14T23:59:00.000Z');
