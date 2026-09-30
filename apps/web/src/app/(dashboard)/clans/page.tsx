@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -31,7 +31,7 @@ import {
   type ToolbarProps,
 } from '@/components/ui';
 import type { ClanSortField, MeResponse, ServerOption, SortOrder } from './helpers';
-import { paginate, priorityBadge, sortClans } from './helpers';
+import { priorityBadge } from './helpers';
 import { PRIORITY_TONE } from './priority-tone';
 
 interface Clan {
@@ -70,16 +70,34 @@ export default function ClansPage() {
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
 
+  // Only the newest request may update the table, so a slow response for an
+  // earlier query/sort/page can never overwrite a fresher one.
+  const latestLoadRef = useRef(0);
+
   const load = useCallback(async () => {
+    const requestId = ++latestLoadRef.current;
+    const query = new URLSearchParams({
+      sort,
+      order,
+      page: String(page),
+      limit: String(PAGE_SIZE),
+    });
+    if (q.trim().length > 0) query.set('q', q.trim());
     try {
-      const res = await fetch('/api/v1/clans', { credentials: 'include', cache: 'no-store' });
+      const res = await fetch(`/api/v1/clans?${query.toString()}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
       if (!res.ok) throw new Error(`Не удалось загрузить кланы (${res.status})`);
-      setData((await res.json()) as ClansResponse);
+      const body = (await res.json()) as ClansResponse;
+      if (latestLoadRef.current !== requestId) return;
+      setData(body);
       setErr(null);
     } catch (e) {
+      if (latestLoadRef.current !== requestId) return;
       setErr((e as Error).message);
     }
-  }, []);
+  }, [q, sort, order, page]);
 
   const loadServers = useCallback(async () => {
     try {
@@ -105,9 +123,12 @@ export default function ClansPage() {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
     void loadServers();
     void loadMe();
-  }, [load, loadServers, loadMe]);
+  }, [loadServers, loadMe]);
 
   const serverNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -115,23 +136,12 @@ export default function ClansPage() {
     return map;
   }, [servers]);
 
-  const filtered = useMemo(() => {
-    if (!data) return [];
-    const needle = q.trim().toLowerCase();
-    if (!needle) return data.items;
-    return data.items.filter(
-      (clan) =>
-        clan.name.toLowerCase().includes(needle) ||
-        clan.tags.some((tag) => tag.toLowerCase().includes(needle)),
-    );
-  }, [data, q]);
-
-  const sorted = useMemo(() => sortClans(filtered, sort, order), [filtered, sort, order]);
-  const paged = useMemo(() => paginate(sorted, page, PAGE_SIZE), [sorted, page]);
-
+  // Смена запроса или сортировки возвращает на первую страницу.
   useEffect(() => {
     setPage(1);
   }, [q, sort, order]);
+
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   // Повторное нажатие по активной колонке разворачивает порядок, переход на
   // другую — начинает с возрастания: так стрелка в шапке всегда объясняет,
@@ -193,14 +203,14 @@ export default function ClansPage() {
           />
         }
         {...resetProps}
-        summary={data ? `Найдено ${paged.total} из ${data.total}` : undefined}
+        summary={data ? `Найдено ${data.total}` : undefined}
       />
 
       {loading ? (
         <Card padding="none">
           <SkeletonTable rows={8} cols={6} label="Загружаем кланы" />
         </Card>
-      ) : !data ? null : paged.items.length === 0 ? (
+      ) : !data ? null : data.items.length === 0 ? (
         <Card padding="none">
           <EmptyState
             variant={searching ? 'filtered' : 'initial'}
@@ -252,7 +262,7 @@ export default function ClansPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {paged.items.map((clan) => {
+              {data.items.map((clan) => {
                 const badge = priorityBadge(clan.priority_expires_at);
                 return (
                   <TableRow key={clan.id} interactive>
@@ -298,11 +308,11 @@ export default function ClansPage() {
         </Card>
       )}
 
-      {paged.pageCount > 1 ? (
+      {pageCount > 1 ? (
         <div className="flex justify-end">
           <Pagination
-            page={paged.page}
-            pageCount={paged.pageCount}
+            page={Math.min(page, pageCount)}
+            pageCount={pageCount}
             onChange={setPage}
             labels={{
               previous: 'Назад',
