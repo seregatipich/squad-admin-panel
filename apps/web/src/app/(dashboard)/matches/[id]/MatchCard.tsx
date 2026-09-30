@@ -28,6 +28,7 @@ import {
   TableRow,
   Td,
 } from '@/components/ui';
+import { errorMessage } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   buildMatchCombatLogHref,
@@ -52,6 +53,7 @@ import {
   teamPillTone,
   winnerLabel,
 } from '../helpers';
+import { parseMatchDetail } from '../response-parsers';
 
 /**
  * Исход команды красит значение плитки. Цвет здесь только ускоряет просмотр:
@@ -131,13 +133,13 @@ export function MatchCard({
       .then(async (res) => {
         if (res.status === 404) throw new Error('Матч не найден');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as MatchDetail;
+        return parseMatchDetail(await res.json());
       })
       .then((data) => {
         if (current()) setMatch(data);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (current()) setError(errorMessage(err));
       })
       .finally(() => {
         if (current()) setLoading(false);

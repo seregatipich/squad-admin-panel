@@ -11,3 +11,12 @@ describe('describeLoadError', () => {
     expect(describeLoadError(undefined)).toMatch(/связаться с сервером/);
   });
 });
+
+describe('errorMessage', () => {
+  it('reads an Error message and stringifies anything else', async () => {
+    const { errorMessage } = await import('./load-error');
+    expect(errorMessage(new Error('boom'))).toBe('boom');
+    expect(errorMessage('plain')).toBe('plain');
+    expect(errorMessage(undefined)).toBe('undefined');
+  });
+});

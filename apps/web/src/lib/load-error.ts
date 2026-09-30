@@ -22,3 +22,13 @@ export function describeLoadError(error: unknown): string {
     ? describeHttpStatus(Number(status))
     : 'Не удалось связаться с сервером. Проверьте подключение.';
 }
+
+/**
+ * Message of a caught value without assuming it is an `Error`.
+ *
+ * @param error Value caught from a request or a parser.
+ * @returns The `Error` message, or the value stringified.
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

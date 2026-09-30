@@ -176,6 +176,23 @@ describe('MatchCard', () => {
   );
 
   it(
+    'shows a readable error for a 200 body that is not a match (#588)',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() =>
+          Promise.resolve(new Response(JSON.stringify({ error: 'boom' }), { status: 200 })),
+        ),
+      );
+
+      render(<MatchCard matchId="11111111-1111-4111-8111-111111111111" />);
+
+      await screen.findByText('Сервер вернул некорректный ответ.');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'refuses a non-UUID matchId instead of ever fetching it (#587)',
     async () => {
       const fetchMock = vi.fn(() => Promise.reject(new Error('should not be called')));
