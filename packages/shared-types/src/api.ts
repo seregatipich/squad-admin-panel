@@ -215,17 +215,6 @@ export const externalRconHost = rconHostString.refine((host) => !isPanelInternal
 });
 
 /**
- * RCON password typed by an operator. CR, LF and NUL are refused: the
- * password is sent verbatim as the SERVERDATA_AUTH body, and a line break
- * would let it smuggle commands into any line-based service the dial lands on.
- */
-export const rconPasswordString = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[^\r\n\0]+$/, 'password must not contain line breaks or NUL');
-
-/**
  * Body of `POST /api/v1/servers/external` — registers an already-running
  * Squad server that the panel does not host. The RCON password is the one
  * configured in that server's `Rcon.cfg`; the panel stores it encrypted and

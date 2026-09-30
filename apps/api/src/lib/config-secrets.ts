@@ -111,7 +111,7 @@ async function panelRconCredentials(
  * raw secret value can never be recovered from the diff's "before" side —
  * comparing two masked strings would always be a no-op. Instead, for
  * `Rcon.cfg`, the panel's own authoritative password
- * ({@link credentialsRconPassword}) stands in for "what the tip's password
+ * ({@link panelRconCredentials}) stands in for "what the tip's password
  * should currently read as"; when the disk's actual password differs from
  * it (and both are non-empty), the `after` side's masked line gets
  * {@link CHANGED_SECRET_SUFFIX} appended so the diff shows a visible change
@@ -138,7 +138,7 @@ export async function maskConfigSecretsForDiff(
   if (!key) return [maskedBefore, maskedAfter];
 
   if (filename === 'Rcon.cfg') {
-    const authoritative = await credentialsRconPassword(app, serverId);
+    const authoritative = (await panelRconCredentials(app, serverId))?.password ?? null;
     const diskValue = extractSecretValue(filename, after);
     const changed =
       authoritative !== null &&

@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { events, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';

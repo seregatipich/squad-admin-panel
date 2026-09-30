@@ -206,6 +206,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           canManageEconomy: req.body.can_manage_economy,
           canManageMedia: false,
           canHandleReports: req.body.can_handle_reports,
+          canManageInfrastructure: req.body.can_manage_infrastructure,
           // Column default for a new role (`roles.combat_view`).
           combatView: true,
           squadPermissions: req.body.squad_permissions,
