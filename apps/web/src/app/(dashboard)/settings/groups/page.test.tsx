@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
+import { SQUAD_PERMISSIONS } from '@squad/shared-config/squad-permissions';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -161,11 +162,13 @@ describe('Owner banner text (#702)', () => {
       ],
     });
     render(<GroupsPage />);
-    expect(
-      await screen.findByText(
-        /Owner всегда имеет все 7 флагов доступа и все \d+ Squad permissions\./,
-      ),
-    ).toBeInTheDocument();
+    const banner = await screen.findByText(/Owner всегда имеет все \d+ флагов доступа/);
+    const flagCount = within(
+      screen.getByRole('heading', { name: 'Доступ к панели' }).closest('section') as HTMLElement,
+    ).getAllByRole('switch').length;
+    expect(banner).toHaveTextContent(
+      `Owner всегда имеет все ${flagCount} флагов доступа и все ${SQUAD_PERMISSIONS.length} Squad permissions.`,
+    );
   });
 });
 
