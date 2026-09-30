@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const pushMock = vi.fn();
@@ -70,6 +70,54 @@ describe('NewServerPage', () => {
 
     expect(await screen.findByText(/идёт обновление файлов игры/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers/srv-new/install', expect.anything());
+  });
+});
+
+describe('NewServerPage — сокет прогресса установки (#660)', () => {
+  class FakeSocket {
+    static instances: FakeSocket[] = [];
+    onmessage: ((ev: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    closed = false;
+    constructor(public url: string) {
+      FakeSocket.instances.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+  }
+
+  async function startInstall() {
+    FakeSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeSocket);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        Promise.resolve(
+          url === '/api/v1/servers'
+            ? new Response(JSON.stringify({ id: 'srv-new' }), { status: 201 })
+            : new Response('{}', { status: 202 }),
+        ),
+      ),
+    );
+    const view = render(<NewServerPage />);
+    fireEvent.change(screen.getByLabelText(/^Название/), { target: { value: 'Новый' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Установить' }));
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+    return view;
+  }
+
+  it('выходит из «Установка…» в ошибку, если сокет закрылся без кадра done', async () => {
+    await startInstall();
+    act(() => FakeSocket.instances[0]?.onclose?.());
+    expect(await screen.findByText(/закрылось раньше отчёта/)).toBeInTheDocument();
+  });
+
+  it('закрывает сокет при уходе со страницы', async () => {
+    const view = await startInstall();
+    view.unmount();
+    expect(FakeSocket.instances[0]?.closed).toBe(true);
   });
 });
 
