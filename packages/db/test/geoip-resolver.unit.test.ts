@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createMmdbLookup } from '../src/geoip/mmdb.js';
 import {
@@ -95,6 +98,17 @@ describe('createMmdbLookup', () => {
 
   it('returns null when the db file does not exist', async () => {
     expect(await createMmdbLookup('/nonexistent/path/GeoLite2-City.mmdb')).toBeNull();
+  });
+
+  it('returns null when the file is not a valid mmdb database', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mmdb-'));
+    try {
+      const dbPath = join(dir, 'GeoLite2-City.mmdb');
+      await writeFile(dbPath, 'not a maxmind database');
+      expect(await createMmdbLookup(dbPath)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

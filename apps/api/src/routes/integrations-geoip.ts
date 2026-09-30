@@ -54,10 +54,11 @@ function geoipView(
  * refusals included — is audited with the license key masked.
  *
  * Only the credentials and the switch are stored here: no worker downloads the
- * database yet (packages/db/src/geoip/refresh.ts and mmdb.ts have no runtime
- * caller — tracked in #51 and #64), so `db_path` and `last_refreshed_at` stay
- * null and the settings page warns that the key is not used while `db_present`
- * is false.
+ * database yet (packages/db/src/geoip/refresh.ts has no runtime caller —
+ * tracked in #51 and #64), so `db_path` and `last_refreshed_at` stay null and
+ * the settings page warns that the key is not used while `db_present` is
+ * false. The log-ingest worker only reads an operator-provided database from
+ * `GEOIP_DB_PATH` (packages/db/src/geoip/mmdb.ts).
  */
 const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
