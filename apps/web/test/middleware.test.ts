@@ -53,13 +53,14 @@ describe('middleware', () => {
     expect((res as { status: number }).status).toBe(307);
   });
 
-  it('redirects unauthenticated user from /servers/abc with ?next=/servers/abc', () => {
+  it('redirects unauthenticated user from /servers/abc to /login without a ?next= parameter', () => {
     const res = middleware(makeRequest('/servers/abc', false));
     expect((res as { status: number }).status).toBe(307);
     const location = (res as { headers: { get(k: string): string | null } }).headers.get(
       'location',
     );
-    expect(location).toContain('next=%2Fservers%2Fabc');
+    expect(location).toContain('/login');
+    expect(location).not.toContain('next=');
   });
 
   it('sets redirect destination to /login', () => {
