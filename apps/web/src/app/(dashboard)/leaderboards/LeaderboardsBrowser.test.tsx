@@ -215,3 +215,63 @@ describe('LeaderboardsBrowser season selector', () => {
     TEST_TIMEOUT_MS,
   );
 });
+
+/*
+ * LEAD-572: metricValue() had no 'revives' case and fell through to
+ * `default: row.metric_value` — whichever metric the table is currently
+ * sorted by — so the "Возрождения" column showed the sort metric's value
+ * instead of the actual revive count.
+ */
+describe('LeaderboardsBrowser — LEAD-572 колонка «Возрождения»', () => {
+  it(
+    'показывает число возрождений, а не значение метрики сортировки',
+    async () => {
+      currentParams = new URLSearchParams(); // default sort: metric=online
+      const row = {
+        rank: 1,
+        player_id: 'p1',
+        current_name: 'Игрок1',
+        steam_id64: null,
+        eos_id: null,
+        metric_value: 12345, // the online-seconds sort value
+        secondary: {
+          online_seconds: 12345,
+          seeding_seconds: 0,
+          kills: 10,
+          deaths: 2,
+          revives: 7,
+          teamkills: 0,
+          kd: 5,
+          matches_played: 3,
+        },
+      };
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(emptyLeaderboard({ rows: [row], total_rows: 1 })), {
+            status: 200,
+          }),
+        );
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<LeaderboardsBrowser />);
+
+      await screen.findByText('Игрок1');
+      const table = screen.getByRole('table');
+      const revivesColIndex = Array.from(table.querySelectorAll('th')).findIndex((th) =>
+        th.textContent?.includes('Возрождения'),
+      );
+      expect(revivesColIndex).toBeGreaterThan(-1);
+      const dataRow = table.querySelectorAll('tbody tr')[0];
+      const cell = dataRow?.querySelectorAll('td')[revivesColIndex];
+      expect(cell?.textContent).toBe('7');
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

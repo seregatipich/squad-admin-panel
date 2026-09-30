@@ -21,6 +21,7 @@ vi.mock('@/lib/use-live-bus', () => ({
 }));
 
 import { CombatLog } from './CombatLog';
+import type { CombatListResponse } from './helpers';
 
 function combatEvent(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -40,6 +41,41 @@ function combatEvent(overrides: Partial<Record<string, unknown>> = {}) {
       ...overrides,
     },
   } as Extract<LiveEvent, { type: 'combat.event' }>;
+}
+
+function historyRow(id: number) {
+  return {
+    id,
+    eventType: 'death',
+    serverId: 'srv-1',
+    matchId: null,
+    weapon: 'BP_AK74',
+    damage: null,
+    attackerKit: null,
+    isTeamkill: false,
+    occurredAt: '2026-09-25T10:00:00.000Z',
+    attacker: null,
+    victim: null,
+  };
+}
+
+/** A first history page of 300 rows with more pages behind it. */
+function mockFetchWithHistory() {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.startsWith('/api/v1/combat-events')) {
+      const body: CombatListResponse = {
+        rows: Array.from({ length: 300 }, (_, i) => historyRow(300 - i)),
+        nextCursor: 'cursor-after-300',
+        approxTotal: 1000,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    }
+    if (url.startsWith('/api/v1/servers')) {
+      return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    }
+    return Promise.resolve(new Response('{}', { status: 404 }));
+  });
 }
 
 function mockFetch() {
@@ -118,5 +154,37 @@ describe('CombatLog — PlayerAutocomplete blur only commits on an actual change
     const lastUrl = String(replace.mock.calls.at(-1)?.[0]);
     expect(lastUrl).toContain('attacker=NewName');
     expect(lastUrl).not.toContain('attackerPlayerId');
+  });
+});
+
+describe('CombatLog — COMBAT-529 live cap does not create a pagination gap', () => {
+  it('keeps every loaded history row when a live event arrives after 300 rows are loaded', async () => {
+    vi.stubGlobal('fetch', mockFetchWithHistory());
+    render(<CombatLog />);
+
+    // Wait for the 300-row history page to load.
+    await screen.findByText(/1\s*000/);
+
+    fireEvent.click(screen.getByLabelText('Живая лента'));
+
+    act(() => {
+      liveHandlers['combat.event']?.(
+        combatEvent({
+          server_id: 'srv-1',
+          kind: 'combat_death',
+          attacker_player_id: null,
+          victim_player_id: null,
+          weapon: 'BP_M4',
+          damage: null,
+          occurred_at: '2026-09-25T10:05:00.000Z',
+        }),
+      );
+    });
+
+    // All 300 history rows must still be present: the live-row cap must never
+    // trim rows the loaded page's nextCursor still expects to find.
+    const rows = screen.getAllByRole('row');
+    // header row + 300 history rows + 1 live row
+    expect(rows.length).toBe(302);
   });
 });

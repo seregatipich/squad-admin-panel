@@ -35,6 +35,8 @@ export interface LeaderboardRow {
     seeding_seconds: number;
     kills: number;
     deaths: number;
+    revives: number;
+    teamkills: number;
     kd: number;
     matches_played: number;
     boost_seconds?: number;

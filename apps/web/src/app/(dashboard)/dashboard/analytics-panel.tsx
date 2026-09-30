@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -77,8 +77,17 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     setRange(windowRange(windowDays));
   }, [windowDays]);
 
+  /**
+   * Номер последнего запущенного запроса. Оператор может быстро переключить
+   * сервер или период, пока предыдущий, более тяжёлый запрос ещё летит; без
+   * этого счётчика ответ, пришедший позже, может перезаписать состояние более
+   * свежим запросом уже выставленное — см. ANALYTICS-538.
+   */
+  const requestRef = useRef(0);
+
   const load = useCallback(async () => {
     if (!range) return;
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -92,11 +101,14 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      setData((await res.json()) as DashboardAnalytics);
+      const body = (await res.json()) as DashboardAnalytics;
+      if (requestRef.current !== requestId) return;
+      setData(body);
     } catch (e) {
+      if (requestRef.current !== requestId) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestRef.current === requestId) setLoading(false);
     }
   }, [serverId, range]);
 

@@ -408,14 +408,30 @@ export function buildMatchDetailHref(matchId: string, backHref: string = '/match
   return `/matches/${encodeURIComponent(matchId)}${backQuery}`;
 }
 
+/**
+ * Formats an ISO timestamp as the viewer's *local* calendar date
+ * (`YYYY-MM-DD`), not its UTC date. combat-log's `custom` preset parses
+ * `from`/`to` as local dates (`parseDateInput` → `new Date(y, m-1, d)`), so
+ * building them from `slice(0, 10)` (the UTC date) mismatched for a viewer
+ * ahead of UTC once a match's UTC date differed from its local one
+ * (MATCHES-590).
+ */
+function toLocalDateString(iso: string): string {
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function buildMatchCombatLogHref(
   match: Pick<MatchListItem, 'server_id' | 'started_at' | 'ended_at'>,
 ): string {
   const params = new URLSearchParams();
   params.set('server', match.server_id);
   params.set('preset', 'custom');
-  params.set('from', match.started_at.slice(0, 10));
-  params.set('to', (match.ended_at ?? match.started_at).slice(0, 10));
+  params.set('from', toLocalDateString(match.started_at));
+  params.set('to', toLocalDateString(match.ended_at ?? match.started_at));
   return `/combat-log?${params.toString()}`;
 }
 

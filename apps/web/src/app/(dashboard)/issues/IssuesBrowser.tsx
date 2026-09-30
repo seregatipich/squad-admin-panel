@@ -151,8 +151,15 @@ export function IssuesBrowser() {
     (event: { data: { issue: IssueView } }) => {
       if (filters.page !== 1) return;
       const issue = event.data.issue;
-      const matches = issueMatchesFilters(issue, filters);
       const existed = idsRef.current.has(issue.id);
+      // `issueMatchesFilters` only checks state/assignee/label — it cannot
+      // evaluate the server's `search_vector @@ websearch_to_tsquery(q)`
+      // match client-side. With an active search, a ticket the viewer has
+      // not already seen must not be inserted just because it happens to
+      // satisfy the other filters: it might not match `q` at all, and would
+      // silently pollute the search results (ISSUES-558). A ticket already
+      // shown can still be updated or removed as usual.
+      const matches = issueMatchesFilters(issue, filters) && (!filters.q || existed);
       if (matches && !existed) {
         idsRef.current.add(issue.id);
         setTotal((t) => t + 1);

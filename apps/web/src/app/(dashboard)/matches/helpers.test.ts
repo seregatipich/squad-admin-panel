@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   appendMatchPage,
   buildCountApiQuery,
@@ -284,6 +284,45 @@ describe('match combat-log links', () => {
         ended_at: '2026-07-05T00:15:00.000Z',
       }),
     ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-07-04&to=2026-07-05');
+  });
+
+  /*
+   * MATCHES-590 regression: combat-log's `custom` preset parses `from`/`to`
+   * as *local* calendar dates (`parseDateInput` → `new Date(y, m-1, d)`), so
+   * the href must be built from the viewer's local date, not the UTC one. A
+   * viewer in UTC+3 opening a match that runs 2026-09-25T22:30Z–23:40Z (i.e.
+   * locally 2026-09-26, 01:30–02:40) must get `from=to=2026-09-26`, not the
+   * UTC date `2026-09-25` — that range would exclude the match's own events
+   * entirely (they all occurred after 2026-09-26T00:00 local).
+   *
+   * The CI/sandbox Node build's ICU is fixed to UTC, so `process.env.TZ`
+   * cannot actually shift `Date`'s local getters here. A UTC+3 viewer is
+   * simulated instead by making `new Date(<iso string>)` return a Date
+   * shifted three hours forward: its *local* getters (which read the epoch
+   * through the environment's fixed-UTC ICU) then report exactly what a
+   * genuine UTC+3 viewer's local getters would report for the original
+   * instant — the same effect a real non-UTC `process.env.TZ` would have,
+   * without depending on the sandbox's ICU timezone database.
+   */
+  it('uses the viewer local date, not the UTC date, for a match crossing local midnight', () => {
+    const RealDate = Date;
+    class Utc3Date extends RealDate {
+      constructor(iso: string) {
+        super(new RealDate(iso).getTime() + 3 * 60 * 60 * 1000);
+      }
+    }
+    vi.stubGlobal('Date', Utc3Date);
+    try {
+      expect(
+        buildMatchCombatLogHref({
+          server_id: 'srv-1',
+          started_at: '2026-09-25T22:30:00.000Z',
+          ended_at: '2026-09-25T23:40:00.000Z',
+        }),
+      ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-09-26&to=2026-09-26');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
