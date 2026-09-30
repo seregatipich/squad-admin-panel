@@ -140,3 +140,40 @@ describe('MatchesBrowser — open match row (#584)', () => {
     vi.useRealTimers();
   });
 });
+
+describe('MatchesBrowser — scroll restore with a failing page (#586)', () => {
+  it('requests the failing next page once instead of retrying up to 20 times', async () => {
+    currentParams = new URLSearchParams();
+    window.sessionStorage.setItem(
+      `squad:matches:list-scroll:${encodeURIComponent('/matches')}`,
+      JSON.stringify({
+        href: '/matches',
+        matchId: 'match-1',
+        savedAt: Date.now(),
+        scrollY: 100000,
+      }),
+    );
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/matches/count')) {
+        return Promise.resolve(new Response(JSON.stringify({ total: 3 }), { status: 200 }));
+      }
+      if (url.startsWith('/api/v1/servers')) {
+        return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+      }
+      if (url.includes('cursor=')) return Promise.resolve(new Response('', { status: 500 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [match()], next_cursor: 'c1' }), { status: 200 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<MatchesBrowser />);
+
+    await screen.findByText('HTTP 500');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const pageTwoCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('cursor='));
+    expect(pageTwoCalls).toHaveLength(1);
+    window.sessionStorage.clear();
+  });
+});
