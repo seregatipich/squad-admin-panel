@@ -36,7 +36,8 @@ const CACHE_PREFIX = 'leaderboard:';
 const CACHE_TTL_SECONDS = 60;
 const MAX_LIMIT = 200;
 const SEARCH_RATE_LIMIT_PER_MINUTE = 60;
-const SEARCH_RATE_LIMIT_PREFIX = 'leaderboard:search-rl:';
+// Kept outside `leaderboard:` so the workers' cache invalidation never resets it.
+const SEARCH_RATE_LIMIT_PREFIX = 'ratelimit:leaderboard-search:';
 
 const leaderboardsQuery = z.object({
   metric: z.enum([

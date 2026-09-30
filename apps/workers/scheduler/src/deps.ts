@@ -754,16 +754,16 @@ export async function finalizeSeason(db: DatabaseClient, seasonId: string): Prom
 }
 
 export async function invalidateLeaderboardCache(
-  redis: Pick<Redis, 'scanStream' | 'del'>,
+  redis: Pick<Redis, 'scanStream' | 'unlink'>,
 ): Promise<number> {
-  const keys: string[] = [];
+  let removed = 0;
   const stream = redis.scanStream({ match: `${LEADERBOARD_CACHE_PREFIX}*`, count: 200 });
-  for await (const batch of stream) {
-    for (const key of batch as string[]) keys.push(key);
+  for await (const batch of stream as AsyncIterable<string[]>) {
+    if (batch.length === 0) continue;
+    await redis.unlink(...batch);
+    removed += batch.length;
   }
-  if (keys.length === 0) return 0;
-  await redis.del(...keys);
-  return keys.length;
+  return removed;
 }
 
 export async function writeSeasonFinalizeAuditEntry(
@@ -789,7 +789,7 @@ export async function writeSeasonFinalizeAuditEntry(
 
 export function createSeasonFinalizeDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'scanStream' | 'del'>,
+  redis: Pick<Redis, 'scanStream' | 'unlink'>,
 ): Omit<SeasonFinalizeTickDeps, 'now' | 'diag'> {
   return {
     loadActiveSeasons: () => loadActiveSeasons(db),

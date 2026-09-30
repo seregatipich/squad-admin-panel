@@ -43,14 +43,14 @@ export function resolveBackfillMonths(env: NodeJS.ProcessEnv = process.env): num
 }
 
 export async function invalidateLeaderboardCache(redis: Redis): Promise<number> {
-  const keys: string[] = [];
+  let removed = 0;
   const stream = redis.scanStream({ match: `${LEADERBOARD_CACHE_PREFIX}*`, count: 200 });
-  for await (const batch of stream) {
-    for (const key of batch as string[]) keys.push(key);
+  for await (const batch of stream as AsyncIterable<string[]>) {
+    if (batch.length === 0) continue;
+    await redis.unlink(...batch);
+    removed += batch.length;
   }
-  if (keys.length === 0) return 0;
-  await redis.del(...keys);
-  return keys.length;
+  return removed;
 }
 
 export interface LeaderboardTickDeps {
@@ -238,10 +238,20 @@ async function main() {
   await runLeaderboardAggregatorTick({ sql, diag, invalidateCache });
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
+  // A tick can outlast the interval on a large database; skipping the overlap
+  // stops recomputes from queueing on the single pooled connection.
+  let tickInProgress = false;
   interval = setInterval(() => {
-    runLeaderboardAggregatorTick({ sql, diag, invalidateCache }).catch((err) =>
-      log.error({ err: (err as Error).message }, 'leaderboard tick failed'),
-    );
+    if (tickInProgress) {
+      log.warn('previous leaderboard tick still running, skipping this interval');
+      return;
+    }
+    tickInProgress = true;
+    runLeaderboardAggregatorTick({ sql, diag, invalidateCache })
+      .catch((err) => log.error({ err: (err as Error).message }, 'leaderboard tick failed'))
+      .finally(() => {
+        tickInProgress = false;
+      });
   }, resolveTickIntervalMs());
 }
 
