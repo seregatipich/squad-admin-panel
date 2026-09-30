@@ -3,6 +3,7 @@ import {
   addCandidate,
   buildCandidatesPayload,
   buildSettingsPayload,
+  describeApiError,
   isValidCooldown,
   isValidWeight,
   type MapVoteCandidate,
@@ -74,7 +75,9 @@ describe('validateSettings', () => {
   });
 
   it('rejects enabling without candidates', () => {
-    expect(validateSettings(settingsForm({ enabled: true }), 0)).toContain('без кандидатов');
+    expect(validateSettings(settingsForm({ enabled: true }), 0)).toContain(
+      'без включённых кандидатов',
+    );
     expect(validateSettings(settingsForm({ enabled: true }), 2)).toBeNull();
   });
 
@@ -128,5 +131,24 @@ describe('addCandidate / removeCandidateAt', () => {
   it('removes the row at the given index', () => {
     const rows = [candidate(), candidate({ layer: 'Gorodok RAAS v1' })];
     expect(removeCandidateAt(rows, 0)).toEqual([rows[1]]);
+  });
+});
+
+describe('describeApiError', () => {
+  it('maps a known error code to Russian and names the offending layer', async () => {
+    const res = new Response(
+      JSON.stringify({ error: 'deprecated_layer_confirmation_required', layer: 'Old v1' }),
+      { status: 409 },
+    );
+    const message = await describeApiError(res);
+    expect(message).toContain('устаревшие слои');
+    expect(message).toContain('Old v1');
+    expect(message).not.toContain('deprecated_layer');
+  });
+
+  it('falls back to a generic Russian message with the status for unknown bodies', async () => {
+    expect(await describeApiError(new Response('boom', { status: 502 }))).toBe(
+      'Не удалось выполнить запрос (HTTP 502).',
+    );
   });
 });

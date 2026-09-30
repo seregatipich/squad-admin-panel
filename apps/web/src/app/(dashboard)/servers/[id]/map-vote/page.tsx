@@ -28,16 +28,13 @@ import {
   addCandidate,
   buildCandidatesPayload,
   buildSettingsPayload,
+  describeApiError,
   type MapVoteCandidate,
   type MapVoteSettingsForm,
   removeCandidateAt,
   validateCandidates,
   validateSettings,
 } from './helpers';
-
-interface Me {
-  squad_permissions: string[];
-}
 
 interface MapVoteResponse {
   enabled: boolean;
@@ -89,6 +86,16 @@ const EXCLUSION_LABELS: Record<string, string> = {
   map_cooldown: 'кулдаун карты',
 };
 
+/** Fetches an auxiliary block; a failed request yields `null` instead of failing the page. */
+async function fetchOptional<T>(url: string): Promise<T | null> {
+  try {
+    const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    return res.ok ? ((await res.json()) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function MapVotePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
 
@@ -110,6 +117,8 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   const [confirmDeprecated, setConfirmDeprecated] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
+  /** Состояние с сервера не пришло — форму с дефолтами показывать нельзя. */
+  const [stateLoaded, setStateLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -128,35 +137,23 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     async (preserve: { settings?: boolean; candidates?: boolean } = {}) => {
       setErr(null);
       try {
-        const [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes] = await Promise.all([
-          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-          fetch(`/api/v1/servers/${id}/map-vote`, { credentials: 'include', cache: 'no-store' }),
-          fetch(`/api/v1/servers/${id}/map-vote/preview`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-          fetch(`/api/v1/servers/${id}/map-vote/picks?limit=20`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-          fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
-          fetch(`/api/v1/servers/${id}/map-vote/versions?limit=20`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-        ]);
-        for (const res of [meRes, stateRes, previewRes, picksRes, layersRes, versionsRes]) {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        }
-        const me = (await meRes.json()) as Me;
+        const stateRes = await fetch(`/api/v1/servers/${id}/map-vote`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const state = (await stateRes.json()) as MapVoteResponse;
-        const previewBody = (await previewRes.json()) as PreviewResponse;
-        const picksBody = (await picksRes.json()) as { picks: PickRow[] };
-        const layersBody = (await layersRes.json()) as { rows: CatalogLayer[] };
-        const versionsBody = (await versionsRes.json()) as {
-          can_restore: boolean;
-          versions: VersionRow[];
-        };
+
+        // Вспомогательные блоки грузятся независимо: их сбой не должен
+        // ронять форму, у которой состояние уже есть.
+        const [previewBody, picksBody, layersBody, versionsBody] = await Promise.all([
+          fetchOptional<PreviewResponse>(`/api/v1/servers/${id}/map-vote/preview`),
+          fetchOptional<{ picks: PickRow[] }>(`/api/v1/servers/${id}/map-vote/picks?limit=20`),
+          fetchOptional<{ rows: CatalogLayer[] }>('/api/v1/layers'),
+          fetchOptional<{ can_restore: boolean; versions: VersionRow[] }>(
+            `/api/v1/servers/${id}/map-vote/versions?limit=20`,
+          ),
+        ]);
 
         const loadedForm: MapVoteSettingsForm = {
           enabled: state.enabled,
@@ -169,12 +166,13 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         lastLoadedCandidatesRef.current = JSON.stringify(state.candidates);
         if (!preserve.settings) setForm(loadedForm);
         if (!preserve.candidates) setCandidates(state.candidates);
+        setStateLoaded(true);
         setPreview(previewBody);
-        setPicks(picksBody.picks);
-        setPool(layersBody.rows);
-        setVersions(versionsBody.versions);
-        setCanRestore(versionsBody.can_restore);
-        setCanEdit(state.can_edit && me.squad_permissions.includes('changemap'));
+        setPicks(picksBody?.picks ?? []);
+        setPool(layersBody?.rows ?? []);
+        setVersions(versionsBody?.versions ?? []);
+        setCanRestore(versionsBody?.can_restore ?? false);
+        setCanEdit(state.can_edit);
       } catch (e) {
         setErr((e as Error).message);
       } finally {
@@ -205,7 +203,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         body: JSON.stringify({ drop_unknown_layers: dropUnknown }),
       });
       if (res.status === 409) {
-        const body = (await res.json()) as { layers?: string[] };
+        const body = (await res.json().catch(() => ({}))) as { layers?: string[] };
         const missing = (body.layers ?? []).join(', ');
         setErr(
           `В этой версии есть слои, которых больше нет в каталоге: ${missing}. Нажмите «Откатить без них», чтобы восстановить остальное.`,
@@ -213,12 +211,13 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         setPendingRestore(versionId);
         return;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      const body = (await res.json()) as { count: number; dropped_layers: string[] };
+      if (!res.ok) throw new Error(await describeApiError(res));
+      const body = (await res.json()) as { count: number; dropped_layers?: string[] };
+      const dropped = body.dropped_layers ?? [];
       setPendingRestore(null);
       setMsg(
-        body.dropped_layers.length > 0
-          ? `Откат выполнен: ${body.count} слоёв, пропущено ${body.dropped_layers.length}`
+        dropped.length > 0
+          ? `Откат выполнен: ${body.count} слоёв, пропущено ${dropped.length}`
           : `Откат выполнен: ${body.count} слоёв`,
       );
       await load();
@@ -229,13 +228,15 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     }
   }
 
-  /** Candidate count last confirmed saved on the server, from `load`'s snapshot. */
-  function savedCandidateCount(): number {
-    if (!lastLoadedCandidatesRef.current) return candidates.length;
+  /** Enabled candidates last confirmed saved on the server, from `load`'s snapshot. */
+  function savedEnabledCandidateCount(): number {
+    if (!lastLoadedCandidatesRef.current) return 0;
     try {
-      return (JSON.parse(lastLoadedCandidatesRef.current) as MapVoteCandidate[]).length;
+      return (JSON.parse(lastLoadedCandidatesRef.current) as MapVoteCandidate[]).filter(
+        (candidate) => candidate.enabled,
+      ).length;
     } catch {
-      return candidates.length;
+      return 0;
     }
   }
 
@@ -244,7 +245,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     // sitting unsaved in the candidates editor below (#624) — the two
     // sections save through different endpoints, and the pool the operator
     // is mid-editing here may not exist on the server yet.
-    const validation = validateSettings(form, savedCandidateCount());
+    const validation = validateSettings(form, savedEnabledCandidateCount());
     if (validation) {
       setErr(validation);
       return;
@@ -259,7 +260,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(buildSettingsPayload(form)),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      if (!res.ok) throw new Error(await describeApiError(res));
       setMsg('Настройки сохранены');
       // Candidates below may still be mid-edit and unsaved — reloading must
       // not silently discard them just because settings were saved (#624).
@@ -288,7 +289,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(buildCandidatesPayload(candidates, confirmDeprecated)),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      if (!res.ok) throw new Error(await describeApiError(res));
       setMsg('Кандидаты сохранены');
       // Settings above may still be mid-edit and unsaved (#624).
       const settingsDirty = JSON.stringify(form) !== lastLoadedFormRef.current;
@@ -315,6 +316,22 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     return (
       <PageContainer width="wide">
         <Skeleton variant="card" count={3} label="Голосование за карту загружается" />
+      </PageContainer>
+    );
+  }
+
+  if (!stateLoaded) {
+    return (
+      <PageContainer width="wide">
+        <InlineBanner
+          tone="crit"
+          title={err ?? 'Не удалось загрузить голосование за карту'}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       </PageContainer>
     );
   }

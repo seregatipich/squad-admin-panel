@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { MetricsChart } from '@/components/MetricsChart';
 import { Button, InlineBanner, PageContainer, SegmentedControl, Skeleton } from '@/components/ui';
 
@@ -41,7 +41,11 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
    */
   const [firstLoad, setFirstLoad] = useState(true);
 
+  /** Номер последнего запроса: ответ прежнего периода не должен затирать новый. */
+  const latestRequest = useRef(0);
+
   const load = useCallback(async () => {
+    const request = ++latestRequest.current;
     try {
       const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
       const r = await fetch(`/api/v1/servers/${id}/metrics?since=${encodeURIComponent(since)}`, {
@@ -50,12 +54,14 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = (await r.json()) as { points: MetricsPoint[] };
+      if (request !== latestRequest.current) return;
       setPoints(data.points);
       setErr(null);
     } catch (e) {
+      if (request !== latestRequest.current) return;
       setErr((e as Error).message);
     } finally {
-      setFirstLoad(false);
+      if (request === latestRequest.current) setFirstLoad(false);
     }
   }, [id, range]);
 

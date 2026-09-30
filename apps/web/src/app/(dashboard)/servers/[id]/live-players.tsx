@@ -114,7 +114,6 @@ export function LivePlayers({
 }) {
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [now, setNow] = useState<number>(() => Date.now());
   const [squadTarget, setSquadTarget] = useState<SquadMessageTarget | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -131,16 +130,34 @@ export function LivePlayers({
     });
   }, []);
 
+  /**
+   * Номер последнего запроса ростера. Загрузки идут из шины, возврата на
+   * вкладку и после модерации и могут завершиться не по порядку: применяется
+   * только ответ самого свежего запроса, а после смены сервера или размонтирования
+   * номер сдвигается, и прежний ответ отбрасывается.
+   */
+  const latestLoad = useRef(0);
+  useEffect(() => {
+    return () => {
+      latestLoad.current += 1;
+    };
+  }, [serverId]);
+
   const load = useCallback(async () => {
+    const request = ++latestLoad.current;
     try {
       const resp = await fetch(`/api/v1/servers/${serverId}/roster`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setRoster((await resp.json()) as RosterResponse);
+      const body = (await resp.json()) as RosterResponse;
+      if (request !== latestLoad.current) return;
+      if (!Array.isArray(body?.players)) throw new Error('Некорректный ответ сервера');
+      setRoster(body);
       setErr(null);
     } catch (loadError) {
+      if (request !== latestLoad.current) return;
       setErr((loadError as Error).message);
     }
   }, [serverId]);
@@ -169,11 +186,6 @@ export function LivePlayers({
     previousBusState.current = busState;
   }, [busState, load]);
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   const onRoster = useCallback(
     (event: { data: { server_id: string } }) => {
       if (event.data.server_id === serverId) void load();
@@ -182,11 +194,11 @@ export function LivePlayers({
   );
   useLiveSubscription('rcon.roster', onRoster);
 
-  const players = roster ? sortRoster(roster.players) : [];
-  const { teams, unaffiliated } = groupRosterByTeam(players, {
-    teams: roster?.teams,
-    squads: roster?.squads,
-  });
+  const players = useMemo(() => (roster ? sortRoster(roster.players) : []), [roster]);
+  const { teams, unaffiliated } = useMemo(
+    () => groupRosterByTeam(players, { teams: roster?.teams, squads: roster?.squads }),
+    [players, roster],
+  );
   // Only roster entries resolved to a panel player can be bulk-targeted —
   // the API takes player uuids, not roster slots.
   const selectable: BulkModerationTarget[] = players.flatMap((player) =>
@@ -210,7 +222,6 @@ export function LivePlayers({
   const abilities = quickAbilities(modPermissions);
 
   const rowProps = {
-    now,
     serverId,
     canChat,
     canBulk,
@@ -339,12 +350,21 @@ export function LivePlayers({
  * Одиночное действие модерации из строки ростера (предупреждение, кик, бан).
  *
  * Ходит в тот же `POST /api/v1/moderation-actions/bulk`, что и массовое окно,
- * со списком из одной цели: у одиночного действия отдельного эндпоинта нет, а
- * заводить его ради строки таблицы незачем. Челленджа с количеством целей тут
+ * со списком из одной цели, — сознательно: этот путь охраняется ключами `mod:*`,
+ * которые есть у страницы, тогда как одиночный `POST /api/v1/players/:id/moderation-actions`
+ * требует squad-права `kick`/`ban`. Из-за этого в журнале аудита такое действие
+ * записывается как `moderation.bulk_action` с `bulk_size=1`, а клиент шлёт
+ * `confirm_bulk: true` как серверную половину подтверждения. Челленджа с количеством целей тут
  * нет — он охраняет массовый бан, где ошибка стоит десятков игроков; здесь
  * достаточно подтверждения и обязательной причины, которую всё равно требует
  * схема запроса.
  */
+/** Русские подписи ошибок уровня запроса; всё остальное — общий текст с кодом HTTP. */
+const REQUEST_ERROR_LABEL: Record<string, string> = {
+  forbidden: 'Недостаточно прав для этого действия',
+  server_not_found: 'Сервер не найден',
+};
+
 function QuickModerationDialog({
   serverId,
   request,
@@ -411,16 +431,19 @@ function QuickModerationDialog({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+        throw new Error(
+          REQUEST_ERROR_LABEL[body.error ?? ''] ?? `Не удалось применить (HTTP ${res.status})`,
+        );
       }
       // Запрос не транзакционный: 200 приходит и тогда, когда единственная
       // цель не была задета, — причина лежит в `results[0].error`.
-      const body = (await res.json()) as BulkResponse;
+      const body = (await res.json().catch(() => null)) as BulkResponse | null;
+      if (!Array.isArray(body?.results)) throw new Error('Некорректный ответ сервера');
       const failure = body.results.find((row) => row.status === 'failed');
       if (failure) {
-        setError(
-          TARGET_ERROR_LABEL[failure.error ?? ''] ?? failure.error ?? 'Не удалось применить',
-        );
+        const label =
+          TARGET_ERROR_LABEL[failure.error ?? ''] ?? failure.error ?? 'Не удалось применить';
+        setError(failure.detail ? `${label} (${failure.detail})` : label);
         return;
       }
       onApplied();
@@ -478,7 +501,6 @@ function QuickModerationDialog({
 }
 
 interface RosterRowsProps {
-  now: number;
   serverId: string;
   canChat: boolean;
   canBulk: boolean;
@@ -579,7 +601,6 @@ function pluralize(count: number, forms: readonly [string, string, string]): str
 
 function SquadGroupRows({
   group,
-  now,
   serverId,
   canChat,
   canBulk,
@@ -688,7 +709,6 @@ function SquadGroupRows({
         <RosterRow
           key={player.eos_id}
           player={player}
-          now={now}
           serverId={serverId}
           canChat={canChat}
           canBulk={canBulk}
@@ -702,9 +722,23 @@ function SquadGroupRows({
   );
 }
 
+/**
+ * Колонка «На сервере» со своим секундным таймером: тикает только эта ячейка,
+ * а не весь ростер, и не тикает, пока вкладка скрыта.
+ */
+function TimeOnServer({ firstSeenAt }: { firstSeenAt: string | null }) {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{formatTimeOnServer(firstSeenAt, now)}</>;
+}
+
 function RosterRow({
   player,
-  now,
   serverId,
   canChat,
   canBulk,
@@ -714,7 +748,6 @@ function RosterRow({
   onQuickAction,
 }: {
   player: RosterPlayer;
-  now: number;
   serverId: string;
   canChat: boolean;
   canBulk: boolean;
@@ -782,7 +815,7 @@ function RosterRow({
         </span>
       </Td>
       <Td numeric className="whitespace-nowrap">
-        {formatTimeOnServer(player.first_seen_at, now)}
+        <TimeOnServer firstSeenAt={player.first_seen_at} />
       </Td>
       <Td align="right">
         <div className="flex items-center justify-end gap-0.5">

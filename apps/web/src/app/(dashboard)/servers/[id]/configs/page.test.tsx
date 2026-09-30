@@ -1235,3 +1235,107 @@ describe('ConfigsPage — гонка ответов при переключен�
     expect(screen.getByTestId('monaco-stub')).toHaveAttribute('data-value', BODIES['MOTD.cfg']);
   });
 });
+
+describe('ConfigsPage — состояние файла и защита правок (#610-#612)', () => {
+  const VERSION: VersionFixture = {
+    id: 'ver-0001',
+    sha256: 'abcdef0123456789',
+    author_user_id: 'u1',
+    author_email: 'admin@example.com',
+    message: 'правка',
+    size: 42,
+    created_at: '2026-07-26T10:00:00.000Z',
+  };
+
+  /** Два файла с историей: у History-запроса всегда одна версия. */
+  function installFilesWithHistory(names: string[]): FetchCall[] {
+    const calls: FetchCall[] = [];
+    const json = (payload: unknown) =>
+      Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        calls.push({ method, url, body: init?.body as string | undefined });
+        if (url.endsWith('/configs/drift')) return json({ items: [] });
+        if (url.endsWith('/api/v1/me')) return json({ permissions: [] });
+        if (url.includes('/history')) return json({ items: [VERSION] });
+        if (method === 'POST') return json({ ok: true });
+        if (url.includes('/versions/')) return json({ content: 'старое\n' });
+        if (url.endsWith('/configs')) {
+          return json({
+            items: names.map((name) => ({
+              name,
+              size: 5,
+              sha256: `sha-${name}`,
+              behavior: 'hot_reload',
+              exists: true,
+            })),
+          });
+        }
+        const hit = names.find((name) => url.endsWith(`/configs/${name}`));
+        if (hit) {
+          return json({
+            name: hit,
+            content: `${hit}\n`,
+            sha256: `sha-${hit}`,
+            behavior: 'hot_reload',
+          });
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }),
+    );
+    return calls;
+  }
+
+  it('сбрасывает открытое сравнение версий при переходе на другой файл', async () => {
+    installFilesWithHistory(['Server.cfg', 'MOTD.cfg']);
+    await renderPage();
+    await openFile('Server.cfg');
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+    await clickButton('Сравнить');
+    expect(await screen.findByText(/Сравнение: v/)).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByText('MOTD.cfg').click();
+    });
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+
+    expect(screen.queryByText(/Сравнение: v/)).not.toBeInTheDocument();
+  });
+
+  it('предупреждает о потере правок при восстановлении версии', async () => {
+    installFilesWithHistory(['Server.cfg']);
+    await renderPage();
+    await openFile('Server.cfg');
+    await startEditing();
+    await act(async () => {
+      editorCapture.onChange?.('изменено вручную\n');
+    });
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+
+    await clickButton('Восстановить');
+
+    expect(screen.getByText(/Несохранённые правки в редакторе будут потеряны/)).toBeInTheDocument();
+  });
+
+  it('не предлагает править и восстанавливать License.cfg', async () => {
+    installFilesWithHistory(['License.cfg']);
+    await renderPage();
+    await openFile('License.cfg');
+
+    expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+    expect(screen.getByText('Файл управляется панелью')).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+    expect(screen.queryByRole('button', { name: 'Восстановить' })).not.toBeInTheDocument();
+  });
+});

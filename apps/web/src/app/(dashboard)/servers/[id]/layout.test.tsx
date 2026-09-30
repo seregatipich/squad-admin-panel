@@ -84,6 +84,7 @@ describe('ServerSectionLayout', () => {
   it('links to every subsection, including the combat log', async () => {
     stubServerFetch();
     await renderLayout();
+    await screen.findByRole('link', { name: 'Конфиги' });
 
     const nav = screen.getByRole('navigation', { name: 'Разделы сервера' });
     const links = Array.from(nav.querySelectorAll('a'));
@@ -157,5 +158,19 @@ describe('ServerSectionLayout — внешний сервер', () => {
     expect(labels).toContain('Конфиги');
     expect(labels).toContain('Мониторинг');
     expect(screen.queryByText('внешний')).not.toBeInTheDocument();
+  });
+
+  it('не показывает контейнерные вкладки, пока тип сервера неизвестен', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.resolve(new Response('nope', { status: 500 }))),
+    );
+    await renderLayout();
+
+    const nav = screen.getByRole('navigation', { name: 'Разделы сервера' });
+    const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent);
+    expect(labels).not.toContain('Конфиги');
+    expect(labels).not.toContain('Мониторинг');
+    expect(labels).toContain('Обзор');
   });
 });

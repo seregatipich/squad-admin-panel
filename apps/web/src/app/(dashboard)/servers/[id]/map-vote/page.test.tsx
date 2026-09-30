@@ -100,11 +100,6 @@ function mockFetch(
   options: { restore?: () => Response; canRestore?: boolean } = {},
 ) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    if (url === '/api/v1/me') {
-      return Promise.resolve(
-        new Response(JSON.stringify({ squad_permissions: squadPermissions }), { status: 200 }),
-      );
-    }
     if (url === '/api/v1/layers') {
       return Promise.resolve(new Response(JSON.stringify(LAYERS_POOL), { status: 200 }));
     }
@@ -128,7 +123,12 @@ function mockFetch(
       );
     }
     if (url.endsWith('/map-vote') && (!init || init.method === undefined)) {
-      return Promise.resolve(new Response(JSON.stringify(STATE), { status: 200 }));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ...STATE, can_edit: squadPermissions.includes('changemap') }),
+          { status: 200 },
+        ),
+      );
     }
     if (init?.method === 'PUT') {
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
@@ -345,5 +345,80 @@ describe('MapVotePage — независимые несохранённые пр
     await waitFor(() => expect(screen.getByText('Кандидаты сохранены')).toBeInTheDocument());
 
     expect(screen.getByLabelText('Кулдаун слоя (матчей)')).toHaveValue(7);
+  });
+});
+
+describe('MapVotePage — сбои загрузки и сохранения', () => {
+  it('не запрашивает /api/v1/me: право берётся из can_edit', async () => {
+    const fetchMock = mockFetch();
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+    expect(fetchMock.mock.calls.some((call) => call[0] === '/api/v1/me')).toBe(false);
+  });
+
+  it('при сбое основного состояния показывает только ошибку, без формы с дефолтами', async () => {
+    const fetchMock = mockFetch();
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/map-vote') ? new Response('x', { status: 500 }) : new Response('{}'),
+      ),
+    );
+    await renderPage();
+    expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Сохранить настройки' })).not.toBeInTheDocument();
+  });
+
+  it('сбой вспомогательного запроса не роняет страницу', async () => {
+    const fetchMock = mockFetch();
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/map-vote/picks')
+        ? Promise.resolve(new Response('x', { status: 500 }))
+        : (base as (u: string, i?: RequestInit) => Promise<Response>)(url, init),
+    );
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+    expect(screen.getByRole('button', { name: 'Сохранить настройки' })).toBeInTheDocument();
+  });
+
+  it('ошибку сохранения показывает по-русски, а не сырым JSON', async () => {
+    const fetchMock = mockFetch();
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      init?.method === 'PUT'
+        ? Promise.resolve(
+            new Response(JSON.stringify({ error: 'unknown_layer', layer: 'Ghost v1' }), {
+              status: 400,
+            }),
+          )
+        : (base as (u: string, i?: RequestInit) => Promise<Response>)(url, init),
+    );
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить кандидатов' }));
+    expect(await screen.findByText(/Слоя нет в каталоге\. Слой: Ghost v1/)).toBeInTheDocument();
+  });
+
+  it('не даёт включить автовыбор, когда сохранённые кандидаты выключены', async () => {
+    const fetchMock = mockFetch();
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.endsWith('/map-vote') && !init?.method
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...STATE,
+                enabled: true,
+                candidates: STATE.candidates.map((c) => ({ ...c, enabled: false })),
+              }),
+            ),
+          )
+        : (base as (u: string, i?: RequestInit) => Promise<Response>)(url, init),
+    );
+    await renderPage();
+    await findCandidate('Yehorivka RAAS v11');
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    expect(await screen.findByText(/без включённых кандидатов/)).toBeInTheDocument();
+    expect(findPutCall('/map-vote/settings')).toBeUndefined();
   });
 });

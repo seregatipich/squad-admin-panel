@@ -262,6 +262,84 @@ describe('MapWidget', () => {
     },
     TEST_TIMEOUT_MS,
   );
+  it(
+    'shows a change failure inside the open picker, not only under the modal',
+    async () => {
+      const post = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: 'rcon_unavailable' }), { status: 503 }),
+        ),
+      );
+      vi.stubGlobal('fetch', mockFetch({ post }));
+
+      render(<MapWidget serverId="srv-1" canChangeMap={true} />);
+      fireEvent.click(await screen.findByRole('button', { name: /следующая/i }));
+      fireEvent.click(await screen.findByText('Yehorivka RAAS v11'));
+      fireEvent.click(screen.getByRole('button', { name: /применить/i }));
+
+      const picker = (
+        await screen.findByRole('heading', { name: 'Установить следующую карту' })
+      ).closest('dialog') as HTMLElement;
+      expect(await within(picker).findByText('rcon_unavailable')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'loads the layer catalog only once the picker is opened',
+    async () => {
+      const fetchMock = mockFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      const layerCalls = () =>
+        fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/v1/layers')).length;
+
+      render(<MapWidget serverId="srv-1" canChangeMap={true} />);
+      await screen.findByText('По ротации');
+      expect(layerCalls()).toBe(0);
+
+      fireEvent.click(screen.getByRole('button', { name: /следующая/i }));
+      await screen.findByText('Yehorivka RAAS v11');
+      expect(layerCalls()).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps the newest map when an older request resolves last',
+    async () => {
+      const replies: Array<(r: Response) => void> = [];
+      const side = (layer: string) => ({ layer, map: null, gamemode: null, deprecated: false });
+      const body = (layer: string) =>
+        new Response(JSON.stringify({ current: side(layer), next: null, match_started_at: null }), {
+          status: 200,
+        });
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({
+          map: () =>
+            new Promise<Response>((resolve) => {
+              replies.push(resolve);
+            }),
+        }),
+      );
+      render(<MapWidget serverId="srv-1" canChangeMap={false} />);
+      await waitFor(() => expect(replies).toHaveLength(1));
+      act(() => emitLive('server.map.changed', { server_id: 'srv-1' }));
+      await waitFor(() => expect(replies).toHaveLength(2));
+
+      await act(async () => {
+        replies[1]?.(body('Fresh Layer'));
+      });
+      await act(async () => {
+        replies[0]?.(body('Stale Layer'));
+      });
+
+      expect(await screen.findByText('Fresh Layer')).toBeInTheDocument();
+      expect(screen.queryByText('Stale Layer')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   describe('live match boundaries', () => {
     // #1315: the widget listened for `match.started`/`match.ended` frames the API
     // never publishes. A match boundary arrives as `server.events.appended`.

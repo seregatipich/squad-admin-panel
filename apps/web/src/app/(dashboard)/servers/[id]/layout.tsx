@@ -92,8 +92,8 @@ export default function ServerSectionLayout({
           cache: 'no-store',
         });
         if (!response.ok || cancelled) return;
-        const body = (await response.json()) as ServerNameResponse;
-        if (!cancelled) {
+        const body = (await response.json()) as Partial<ServerNameResponse>;
+        if (!cancelled && typeof body.server?.display_name === 'string') {
           setName(body.server.display_name);
           setRuntime(body.server.runtime ?? 'container');
         }
@@ -108,8 +108,11 @@ export default function ServerSectionLayout({
   }, [id]);
 
   const isExternal = runtime === 'external';
+  // Пока тип сервера неизвестен (ответа нет или он не пришёл), контейнерные
+  // вкладки скрыты: у внешнего сервера они ведут на 409.
+  const showContainerSections = runtime !== null && !isExternal;
   const items: SegmentedNavItem[] = SECTIONS.filter(
-    (section) => !isExternal || !CONTAINER_ONLY_PATHS.has(section.path),
+    (section) => showContainerSections || !CONTAINER_ONLY_PATHS.has(section.path),
   ).map((section) => ({
     href: `/servers/${id}${section.path}`,
     label: section.label,
