@@ -15,7 +15,7 @@ import ClanDetailPage from './page';
 const TEST_TIMEOUT_MS = 15_000;
 
 const CLAN = {
-  id: 'clan-1',
+  id: '00000000-0000-0000-0000-0000000000c1',
   name: 'Альфа',
   tags: ['ALF'],
   description: 'Описание клана',
@@ -34,10 +34,16 @@ function json(body: unknown): Promise<Response> {
 function mockFetch() {
   return vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
-    if (url === '/api/v1/clans/clan-1') return json(CLAN);
-    if (url === '/api/v1/clans/clan-1/online') return json({ clan_id: 'clan-1', servers: [] });
-    if (url.startsWith('/api/v1/clans/clan-1/matches')) {
-      return json({ clan_id: 'clan-1', items: [], next_cursor: null, limit: 20 });
+    if (url === '/api/v1/clans/00000000-0000-0000-0000-0000000000c1') return json(CLAN);
+    if (url === '/api/v1/clans/00000000-0000-0000-0000-0000000000c1/online')
+      return json({ clan_id: '00000000-0000-0000-0000-0000000000c1', servers: [] });
+    if (url.startsWith('/api/v1/clans/00000000-0000-0000-0000-0000000000c1/matches')) {
+      return json({
+        clan_id: '00000000-0000-0000-0000-0000000000c1',
+        items: [],
+        next_cursor: null,
+        limit: 20,
+      });
     }
     if (url === '/api/v1/servers') return json({ items: [] });
     if (url === '/api/v1/me') return json({ can_manage_clans: true });
@@ -60,7 +66,7 @@ describe('ClanDetailPage', () => {
     'keeps the clan settings draft across the page’s one-second session ticker',
     async () => {
       vi.stubGlobal('fetch', mockFetch());
-      const params = Promise.resolve({ id: 'clan-1' });
+      const params = Promise.resolve({ id: '00000000-0000-0000-0000-0000000000c1' });
       await act(async () => {
         render(
           <Suspense fallback={null}>
@@ -79,6 +85,25 @@ describe('ClanDetailPage', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it('rejects a non-UUID clan id instead of interpolating it into API paths (#514)', async () => {
+    const fetchSpy = mockFetch();
+    vi.stubGlobal('fetch', fetchSpy);
+    const params = Promise.resolve({ id: '../../admin' });
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ClanDetailPage params={params} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByText('Некорректный идентификатор клана.')).toBeInTheDocument();
+    const clanUrls = fetchSpy.mock.calls
+      .map(([input]) => (typeof input === 'string' ? input : String(input)))
+      .filter((url) => url.startsWith('/api/v1/clans/'));
+    expect(clanUrls).toEqual([]);
+  });
 });
 
 function deferred<T>() {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildReportsAnalyticsQuery,
   formatAccuracy,
@@ -57,6 +57,15 @@ describe('formatTrendDay', () => {
 
   it('falls back to the raw string for invalid input', () => {
     expect(formatTrendDay('not-a-day')).toBe('not-a-day');
+  });
+
+  it('formats in UTC, so a negative-offset local timezone cannot shift the day back (#547)', () => {
+    // See the identical test in dashboard/vote-analytics-data.test.ts for
+    // why this asserts the `timeZone: 'UTC'` option directly.
+    const spy = vi.spyOn(Date.prototype, 'toLocaleDateString');
+    formatTrendDay('2026-09-20');
+    expect(spy).toHaveBeenCalledWith('ru-RU', expect.objectContaining({ timeZone: 'UTC' }));
+    spy.mockRestore();
   });
 });
 

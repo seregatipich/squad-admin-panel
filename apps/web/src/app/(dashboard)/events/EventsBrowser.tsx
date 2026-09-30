@@ -109,6 +109,10 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const [items, setItems] = useState<EventListItem[]>([]);
+  const itemsRef = useRef<EventListItem[]>(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -129,10 +133,6 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
    * list the new first page already replaced (EVENTS-553).
    */
   const requestGenerationRef = useRef(0);
-  const itemsRef = useRef<EventListItem[]>(items);
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
   // Mirrors `loadingMore` without being a `loadMore` dependency: putting the
   // state value itself in the deps recreated `loadMore` on every toggle,
   // which re-ran the IntersectionObserver effect below and could re-trigger
@@ -188,13 +188,15 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       credentials: 'include',
       cache: 'no-store',
     })
+      // A failed count is unknown, not zero: `total: 0` would render "Всего: 0"
+      // and read as "there are no events" instead of "count unavailable".
       .then(async (res) =>
-        res.ok ? ((await res.json()) as { total: number; estimated?: boolean }) : { total: 0 },
+        res.ok ? ((await res.json()) as { total: number; estimated?: boolean }) : null,
       )
       .then((data) => {
         if (cancelled) return;
-        setTotal(data.total);
-        setTotalEstimated(data.estimated === true);
+        setTotal(data ? data.total : null);
+        setTotalEstimated(data?.estimated === true);
       })
       .catch(() => {});
     return () => {

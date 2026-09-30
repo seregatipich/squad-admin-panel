@@ -368,6 +368,12 @@ describe('combatEventToRow', () => {
     expect(second.id).toBe(first.id);
     expect(third.id).not.toBe(first.id);
   });
+
+  it('does not collide two same-millisecond hits on the same target that differ only in damage (#536)', () => {
+    const first = combatEventToRow(liveEvent({ damage: 40 }));
+    const second = combatEventToRow(liveEvent({ damage: 60 }));
+    expect(second.id).not.toBe(first.id);
+  });
 });
 
 describe('prependLiveRow', () => {

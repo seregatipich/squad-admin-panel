@@ -19,6 +19,7 @@ import RosterPanel, {
   priorityErrorMessage,
   type RosterMember,
   RosterRow,
+  transferLeadershipMessage,
 } from './RosterPanel';
 
 function member(overrides: Partial<RosterMember> = {}): RosterMember {
@@ -61,6 +62,23 @@ describe('RosterPanel helpers', () => {
   });
 });
 
+describe('transferLeadershipMessage', () => {
+  it('tells the viewer they will be demoted only when they are the leader', () => {
+    expect(transferLeadershipMessage(true, 'Ветеран')).toBe(
+      'Ветеран станет главой клана, а вы — заместителем.',
+    );
+  });
+
+  it('never claims an admin without a clan role will be demoted', () => {
+    // Regression for #513: an admin with can_manage_clans who is not a
+    // clan member must not be told that *they* become deputy — the server
+    // demotes the current leader, not the viewer.
+    expect(transferLeadershipMessage(false, 'Ветеран')).toBe(
+      'Ветеран станет главой клана. Текущий глава станет заместителем.',
+    );
+  });
+});
+
 describe('priorityErrorMessage', () => {
   it('renders the pool-limit message with usage numbers when present', () => {
     expect(priorityErrorMessage({ error: 'priority_pool_limit', used: 5, limit: 5 })).toBe(
@@ -97,6 +115,7 @@ describe('deriveCapabilities', () => {
       canAdd: true,
       canRemoveMembers: true,
       canTogglePriority: true,
+      isLeader: false,
     });
   });
 
@@ -104,6 +123,7 @@ describe('deriveCapabilities', () => {
     const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, 'full');
     expect(caps.canManageFull).toBe(true);
     expect(caps.canTogglePriority).toBe(true);
+    expect(caps.isLeader).toBe(true);
   });
 
   it('grants a deputy add/remove/priority-toggle but not full control', () => {
@@ -121,6 +141,7 @@ describe('deriveCapabilities', () => {
       canAdd: false,
       canRemoveMembers: false,
       canTogglePriority: false,
+      isLeader: false,
     });
   });
 
@@ -138,18 +159,21 @@ describe('RosterRow', () => {
     canAdd: true,
     canRemoveMembers: true,
     canTogglePriority: true,
+    isLeader: false,
   };
   const deputyCaps = {
     canManageFull: false,
     canAdd: true,
     canRemoveMembers: true,
     canTogglePriority: true,
+    isLeader: false,
   };
   const memberCaps = {
     canManageFull: false,
     canAdd: false,
     canRemoveMembers: false,
     canTogglePriority: false,
+    isLeader: false,
   };
 
   it('shows transfer + role select for a non-leader when the actor has full control', () => {

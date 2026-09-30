@@ -210,6 +210,32 @@ describe('DashboardPage', () => {
     expect(headings[0]).toHaveTextContent('Дашборд');
   });
 
+  it('does not flag a worker crit before its heartbeat TTL, only before 2x the interval (#548)', async () => {
+    // 20s: behind the 2×HEARTBEAT_INTERVAL_MS=10s "warn" threshold, but well
+    // under the HEARTBEAT_TTL_SECONDS=30s the worker is actually considered
+    // dead by — the old hardcoded 15s crit threshold fired here regardless.
+    stubFetch({
+      '/api/v1/health/workers': {
+        body: { items: [{ name: 'rcon', age_ms: 20_000, pid: 1, status: 'жив' }] },
+      },
+    });
+    await renderDashboard();
+
+    const row = await screen.findByText('worker-rcon');
+    const dot = row.closest('li')?.querySelector('[aria-hidden="true"]');
+    expect(dot?.className).toContain('bg-warn');
+    expect(dot?.className).not.toContain('bg-crit');
+  });
+
+  it('carries exactly one first-level heading', async () => {
+    stubFetch({});
+    await renderDashboard();
+
+    const headings = screen.getAllByRole('heading', { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveTextContent('Дашборд');
+  });
+
   it('announces the server list as loading before the first response arrives', async () => {
     // Ответ не приходит никогда: так виден именно момент загрузки.
     vi.stubGlobal(

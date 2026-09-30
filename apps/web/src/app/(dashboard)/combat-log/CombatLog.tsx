@@ -187,7 +187,9 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     )
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as CombatListResponse;
+        const body = (await res.json()) as Partial<CombatListResponse>;
+        if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
+        return body as CombatListResponse;
       })
       .then((data) => {
         if (!current()) return;
@@ -198,7 +200,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
       })
       .catch((err: unknown) => {
         if (!current()) return;
-        setError((err as Error).message);
+        setError(err instanceof Error ? err.message : String(err));
         setRows([]);
         setLiveRows([]);
         setNextCursor(null);
@@ -217,6 +219,12 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    // Captured at the start: if the user changes filters while this request
+    // is in flight, loadFirstPage bumps listRequestRef and this stale
+    // response is dropped instead of appending rows (or a cursor) from the
+    // filter that was active when it was sent.
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -224,13 +232,16 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as CombatListResponse;
-      setRows((prev) => appendPage(prev, data.rows));
-      setNextCursor(data.nextCursor);
+      const body = (await res.json()) as Partial<CombatListResponse>;
+      if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
+      if (!current()) return;
+      setRows((prev) => appendPage(prev, body.rows as CombatApiRow[]));
+      setNextCursor(body.nextCursor ?? null);
     } catch (err) {
-      setError((err as Error).message);
+      if (!current()) return;
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoadingMore(false);
+      if (current()) setLoadingMore(false);
     }
   }, [filters, nextCursor, loadingMore, lockedServerId]);
 
@@ -680,7 +691,7 @@ function PlayerAutocomplete({
         .then((res) => (res.ok ? res.json() : { items: [] }))
         .then((data: PlayersResponse) => {
           if (cancelled) return;
-          const names = data.items
+          const names = (data.items ?? [])
             .map((item) => item.canonical_name)
             .filter((name): name is string => Boolean(name));
           setSuggestions(Array.from(new Set(names)).slice(0, 10));

@@ -38,6 +38,11 @@
       "types": "./dist/log-stream.d.ts",
       "development": "./src/log-stream.ts",
       "default": "./dist/log-stream.js"
+    },
+    "./heartbeat": {
+      "types": "./dist/heartbeat.d.ts",
+      "development": "./src/heartbeat.ts",
+      "default": "./dist/heartbeat.js"
     }
   },
   "scripts": {

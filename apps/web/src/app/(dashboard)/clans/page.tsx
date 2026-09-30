@@ -31,7 +31,13 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
-import type { ClanSortField, BadgeTone as PriorityTone, SortOrder } from './helpers';
+import type {
+  ClanSortField,
+  MeResponse,
+  BadgeTone as PriorityTone,
+  ServerOption,
+  SortOrder,
+} from './helpers';
 import { paginate, priorityBadge, sortClans } from './helpers';
 
 interface Clan {
@@ -51,15 +57,6 @@ interface Clan {
 interface ClansResponse {
   items: Clan[];
   total: number;
-}
-
-interface ServerOption {
-  id: string;
-  display_name: string;
-}
-
-interface MeResponse {
-  can_manage_clans: boolean;
 }
 
 const PAGE_SIZE = 25;
@@ -220,7 +217,7 @@ export default function ClansPage() {
         <Card padding="none">
           <SkeletonTable rows={8} cols={6} label="Загружаем кланы" />
         </Card>
-      ) : paged.items.length === 0 ? (
+      ) : !data ? null : paged.items.length === 0 ? (
         <Card padding="none">
           <EmptyState
             variant={searching ? 'filtered' : 'initial'}
@@ -377,6 +374,16 @@ function CreateClanModal({
   const [form, setForm] = useState<CreateClanForm>(EMPTY_CREATE_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The modal stays mounted between opens (only `open` toggles its
+  // visibility), so without this the form fields and a stale error banner
+  // from a previous attempt would still be there the next time it opens.
+  useEffect(() => {
+    if (open) {
+      setForm(EMPTY_CREATE_FORM);
+      setError(null);
+    }
+  }, [open]);
 
   const submit = useCallback(async () => {
     const name = form.name.trim();
