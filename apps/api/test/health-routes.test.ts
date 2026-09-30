@@ -154,6 +154,18 @@ describe('GET /ready for anonymous callers (#70)', () => {
   });
 });
 
+describe('GET /api/v1/health/dependencies', () => {
+  it('reports ok/fail per check with 200 and hides error text', async () => {
+    fakes.redis.ping.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const res = await app.inject({ method: 'GET', url: '/api/v1/health/dependencies' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('degraded');
+    expect(body.checks).toEqual({ postgres: 'ok', redis: 'fail', bridge: 'ok' });
+    expect(res.body).not.toContain('ECONNREFUSED');
+  });
+});
+
 describe('GET /api/v1/health/workers', () => {
   it('returns empty items when no heartbeat keys exist', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/health/workers' });

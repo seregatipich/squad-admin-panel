@@ -50,25 +50,40 @@ export default fp<HealthPluginOptions>(async (app, opts) => {
     }),
   );
 
-  // Operator-only dependency probe: the reverse proxy never exposes it (#47),
-  // and the body reports only ok/fail per check. The reason for a failure goes
-  // to the log, not to the caller.
+  /**
+   * Probes Postgres, Redis and the bridge. Reports only ok/fail per check; the
+   * reason for a failure goes to the log, never to the caller (#47).
+   */
+  async function probeDependencies() {
+    const [postgres, redis, bridge] = await Promise.all([
+      probe('postgres', async () => {
+        await app.db.execute(sql`SELECT 1`);
+        return true;
+      }),
+      probe('redis', async () => (await app.redis.ping()) === 'PONG'),
+      probe('bridge', async () => (await app.bridge.ping()).pong === true),
+    ]);
+    const checks = { postgres, redis, bridge };
+    const ok = Object.values(checks).every((v) => v === 'ok');
+    return { ok, body: { status: ok ? 'ok' : 'degraded', checks } };
+  }
+
+  // Operator-only dependency probe: the reverse proxy never exposes it (#47).
   app.get(
     '/ready',
     { config: { public: true, audit: false }, schema: { hide: true } },
     async (_req, reply) => {
-      const [postgres, redis, bridge] = await Promise.all([
-        probe('postgres', async () => {
-          await app.db.execute(sql`SELECT 1`);
-          return true;
-        }),
-        probe('redis', async () => (await app.redis.ping()) === 'PONG'),
-        probe('bridge', async () => (await app.bridge.ping()).pong === true),
-      ]);
-      const checks = { postgres, redis, bridge };
-      const ok = Object.values(checks).every((v) => v === 'ok');
-      return reply.code(ok ? 200 : 503).send({ status: ok ? 'ok' : 'degraded', checks });
+      const { ok, body } = await probeDependencies();
+      return reply.code(ok ? 200 : 503).send(body);
     },
+  );
+
+  // Authenticated twin of /ready for the dashboard, which cannot reach the
+  // proxy-hidden probe. Always 200: a degraded dependency is data, not an error.
+  app.get(
+    '/api/v1/health/dependencies',
+    { config: { permissions: ['host:view'], audit: false } },
+    async () => (await probeDependencies()).body,
   );
 
   app.get(

@@ -95,7 +95,9 @@ function stubFetch(routes: Record<string, RouteBody>): FetchCall[] {
     '/api/v1/host/metrics': { body: null, status: 500 },
     '/api/v1/servers': { body: { items: SERVERS } },
     '/api/v1/audit': { body: { items: AUDIT } },
-    '/ready': { body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } } },
+    '/api/v1/health/dependencies': {
+      body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } },
+    },
     '/api/v1/health/workers': { body: { items: [] } },
     '/api/v1/host/disk-usage': { body: null, status: 500 },
     '/api/v1/analytics/': { body: null, status: 500 },
@@ -147,7 +149,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return {
             ok: true,
             json: async () => ({ status: 'ok', checks: {} }),
@@ -179,7 +181,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
         }
         if (url === '/api/v1/depot/update') {
@@ -205,7 +207,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
         }
         if (url === '/api/v1/depot/update') {
@@ -233,7 +235,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
         }
         if (url === '/api/v1/depot/update') {
@@ -266,6 +268,14 @@ describe('DashboardPage', () => {
     const dot = row.closest('li')?.querySelector('[aria-hidden="true"]');
     expect(dot?.className).toContain('bg-warn');
     expect(dot?.className).not.toContain('bg-crit');
+  });
+
+  it('reads PostgreSQL and Redis state from the authenticated API, not the public /ready path', async () => {
+    const calls = stubFetch({});
+    await renderDashboard();
+    const urls = calls.map((call) => call.url);
+    expect(urls).toContain('/api/v1/health/dependencies');
+    expect(urls).not.toContain('/ready');
   });
 
   it('carries exactly one first-level heading', async () => {
@@ -523,7 +533,7 @@ describe('DashboardPage', () => {
             }
             if (url.startsWith('/api/v1/servers')) return { items: SERVERS };
             if (url.startsWith('/api/v1/audit')) return { items: AUDIT };
-            if (url.startsWith('/ready')) return { status: 'ok', checks: {} };
+            if (url.startsWith('/api/v1/health/dependencies')) return { status: 'ok', checks: {} };
             if (url.startsWith('/api/v1/health/workers')) return { items: [] };
             return null;
           },
@@ -654,7 +664,8 @@ describe('DashboardPage', () => {
                 return { connected: true };
               }
               if (url.startsWith('/api/v1/audit')) return { items: [] };
-              if (url.startsWith('/ready')) return { status: 'ok', checks: {} };
+              if (url.startsWith('/api/v1/health/dependencies'))
+                return { status: 'ok', checks: {} };
               if (url.startsWith('/api/v1/health/workers')) return { items: [] };
               return null;
             },

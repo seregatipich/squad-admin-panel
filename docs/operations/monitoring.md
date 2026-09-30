@@ -91,6 +91,8 @@ docker compose exec api wget -qO- http://localhost:3000/ready | jq .checks.bridg
 
 `/ready` is public, so each check reports only `ok` or `fail` and every probe gives up after 3 s. The reason for a `fail` (connection error, bridge socket path, timeout) is logged by the API as `readiness check failed` with the check name.
 
+The dashboard reads the same checks (without the reason for a failure) from the authenticated `GET /api/v1/health/dependencies` (`host:view`), because the proxy hides `/ready`.
+
 ## Audit log
 
 `audit_log` is the security-grade append-only record of all state-mutating API calls. It is hash-chained: each row's `row_hash = sha256(prev_hash || canonical_json(row))`.

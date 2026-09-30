@@ -290,7 +290,7 @@ export default function DashboardPage() {
         fetchJson<HostMetrics>('/api/v1/host/metrics'),
         fetchJson<{ items: ServerRow[] }>('/api/v1/servers'),
         fetchJson<{ items: AuditRow[] }>('/api/v1/audit?page_size=25'),
-        fetch('/ready', { cache: 'no-store' }).then((r) => r.json() as Promise<ReadyCheck>),
+        fetchJson<ReadyCheck>('/api/v1/health/dependencies'),
         fetchJson<{ items: Worker[] }>('/api/v1/health/workers'),
       ]);
       if (!mountedRef.current) return;
