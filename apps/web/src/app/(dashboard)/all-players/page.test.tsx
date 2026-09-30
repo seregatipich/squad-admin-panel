@@ -108,7 +108,7 @@ function mockFetch(opts: MockOptions = {}): {
           )
         : source.items;
       return Promise.resolve(
-        new Response(JSON.stringify({ items, total: items.length }), {
+        new Response(JSON.stringify({ items, total: q ? items.length : source.total }), {
           status: opts.listStatus ?? 200,
         }),
       );
