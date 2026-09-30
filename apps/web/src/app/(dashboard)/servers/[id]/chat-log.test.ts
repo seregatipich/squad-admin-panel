@@ -61,7 +61,7 @@ describe('appendChatMessage', () => {
       list = appendChatMessage(list, message({ id: `m${i}` }), { serverId: SERVER_A });
     }
     expect(list).toHaveLength(CHAT_LOG_CAP);
-    expect(list[list.length - 1].id).toBe(`m${CHAT_LOG_CAP + 9}`);
+    expect(list[list.length - 1]!.id).toBe(`m${CHAT_LOG_CAP + 9}`);
   });
 });
 

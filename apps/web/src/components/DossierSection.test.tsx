@@ -674,14 +674,14 @@ describe('DossierSection', () => {
 
       await screen.findByText('K/D');
       await waitFor(() => expect(screen.getByLabelText('Сервер')).toBeInTheDocument());
-      fireEvent.change(screen.getByLabelText('Сервер'), { target: { value: SERVERS[1].id } });
+      fireEvent.change(screen.getByLabelText('Сервер'), { target: { value: SERVERS[1]!.id } });
 
       await waitFor(() => {
         const dossierCalls = fetchMock.mock.calls.filter((call) =>
           String(call[0]).includes('/dossier'),
         );
         expect(dossierCalls).toHaveLength(2);
-        expect(String(dossierCalls[1]?.[0])).toContain(`serverId=${SERVERS[1].id}`);
+        expect(String(dossierCalls[1]?.[0])).toContain(`serverId=${SERVERS[1]!.id}`);
       });
     },
     TEST_TIMEOUT_MS,

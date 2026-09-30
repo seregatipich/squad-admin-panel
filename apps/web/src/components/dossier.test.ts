@@ -220,7 +220,7 @@ describe('sortKits', () => {
     const sorted = sortKits(rows);
     expect(sorted.map((r) => r.kit)).toEqual(['Rifleman', 'LAT', 'Medic']);
     expect(sorted).not.toBe(rows);
-    expect(rows[0].kit).toBe('Medic');
+    expect(rows[0]!.kit).toBe('Medic');
   });
 });
 

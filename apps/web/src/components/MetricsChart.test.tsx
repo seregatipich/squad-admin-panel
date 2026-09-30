@@ -74,6 +74,6 @@ describe('MetricsChart', () => {
 
     expect(xs).toHaveLength(3);
     // 1 minute of 10 is a tenth of the width; index spacing would give one half.
-    expect((xs[1] - xs[0]) / (xs[2] - xs[0])).toBeCloseTo(0.1, 1);
+    expect((xs[1]! - xs[0]!) / (xs[2]! - xs[0]!)).toBeCloseTo(0.1, 1);
   });
 });

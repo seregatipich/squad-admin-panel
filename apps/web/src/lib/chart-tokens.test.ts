@@ -21,7 +21,7 @@ const globalsCss = readFileSync(
 function token(name: string): string {
   const match = globalsCss.match(new RegExp(`--color-${name}:\\s*(#[0-9a-f]{6})`, 'i'));
   if (!match) throw new Error(`токен --color-${name} не найден в globals.css`);
-  return match[1].toLowerCase();
+  return match[1]!.toLowerCase();
 }
 
 describe('палитра графиков', () => {

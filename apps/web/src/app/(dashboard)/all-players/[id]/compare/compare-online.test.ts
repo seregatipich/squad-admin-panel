@@ -37,7 +37,7 @@ describe('buildCompareWeekGrid', () => {
     const b = [session('b1', '2026-07-01T10:00:00.000Z', '2026-07-01T11:00:00.000Z')];
     const grid = buildCompareWeekGrid(a, b, WEEK_START, NOW);
     const dayIndex = Math.round((Date.parse('2026-07-01T00:00:00.000Z') - WEEK_START) / 86_400_000);
-    const cell = grid.cells[dayIndex][10];
+    const cell = grid.cells[dayIndex]![10]!;
     expect(cell.aSeconds).toBe(3600);
     expect(cell.bSeconds).toBe(3600);
     expect(cell.overlapSeconds).toBe(3600);
@@ -47,7 +47,7 @@ describe('buildCompareWeekGrid', () => {
     const a = [session('a1', '2026-07-01T10:00:00.000Z', '2026-07-01T11:00:00.000Z')];
     const grid = buildCompareWeekGrid(a, [], WEEK_START, NOW);
     const dayIndex = Math.round((Date.parse('2026-07-01T00:00:00.000Z') - WEEK_START) / 86_400_000);
-    const cell = grid.cells[dayIndex][10];
+    const cell = grid.cells[dayIndex]![10]!;
     expect(cell.aSeconds).toBe(3600);
     expect(cell.bSeconds).toBe(0);
     expect(cell.overlapSeconds).toBe(0);
@@ -57,7 +57,7 @@ describe('buildCompareWeekGrid', () => {
     const b = [session('b1', '2026-07-01T10:00:00.000Z', '2026-07-01T11:00:00.000Z')];
     const grid = buildCompareWeekGrid([], b, WEEK_START, NOW);
     const dayIndex = Math.round((Date.parse('2026-07-01T00:00:00.000Z') - WEEK_START) / 86_400_000);
-    const cell = grid.cells[dayIndex][10];
+    const cell = grid.cells[dayIndex]![10]!;
     expect(cell.aSeconds).toBe(0);
     expect(cell.bSeconds).toBe(3600);
     expect(cell.overlapSeconds).toBe(0);
@@ -68,7 +68,7 @@ describe('buildCompareWeekGrid', () => {
     const b = [session('b1', '2026-07-01T10:15:00.000Z', '2026-07-01T10:45:00.000Z')];
     const grid = buildCompareWeekGrid(a, b, WEEK_START, NOW);
     const dayIndex = Math.round((Date.parse('2026-07-01T00:00:00.000Z') - WEEK_START) / 86_400_000);
-    const cell = grid.cells[dayIndex][10];
+    const cell = grid.cells[dayIndex]![10]!;
     expect(cell.overlapSeconds).toBe(15 * 60);
   });
 
@@ -77,7 +77,7 @@ describe('buildCompareWeekGrid', () => {
     const b = [session('b1', '2026-07-01T10:30:00.000Z', '2026-07-01T10:45:00.000Z')];
     const grid = buildCompareWeekGrid(a, b, WEEK_START, NOW);
     const dayIndex = Math.round((Date.parse('2026-07-01T00:00:00.000Z') - WEEK_START) / 86_400_000);
-    const cell = grid.cells[dayIndex][10];
+    const cell = grid.cells[dayIndex]![10]!;
     expect(cell.overlapSeconds).toBe(0);
   });
 });

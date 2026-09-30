@@ -284,7 +284,7 @@ describe('prependLiveRow', () => {
       list = prependLiveRow(list, liveMessageToRow(liveMessage({ id: `m${index}` })), 3);
     }
     expect(list).toHaveLength(3);
-    expect(list[0].id).toBe('m4');
+    expect(list[0]!.id).toBe('m4');
   });
 });
 

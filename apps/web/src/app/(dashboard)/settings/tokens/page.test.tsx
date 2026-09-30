@@ -156,7 +156,7 @@ describe('TokensPage', () => {
 
     const calls = deleteCalls(fetchMock);
     expect(calls).toHaveLength(1);
-    expect(String(calls[0][0])).toBe('/api/v1/me/tokens/tok-1');
+    expect(String(calls[0]![0])).toBe('/api/v1/me/tokens/tok-1');
     expect(await screen.findByText('отозван')).toBeInTheDocument();
     expect(screen.getByText('Токен отозван.')).toBeInTheDocument();
   });
@@ -168,7 +168,7 @@ describe('TokensPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Отозвать' }));
     const dialog = await screen.findByRole('dialog', { name: 'Отозвать токен' });
     await act(async () => {
-      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
     });
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

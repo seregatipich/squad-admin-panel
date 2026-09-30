@@ -70,7 +70,7 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
       (point) => `${projectX(point.longitude).toFixed(1)},${projectY(point.latitude).toFixed(1)}`,
     )
     .join(' ');
-  const latestAt = ordered.length > 0 ? ordered[ordered.length - 1].last_seen_at : null;
+  const latestAt = ordered.at(-1)?.last_seen_at ?? null;
 
   return (
     <svg
