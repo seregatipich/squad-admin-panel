@@ -80,6 +80,8 @@ export interface ChatMessageData {
   steam_id64: string | null;
   eos_id: string | null;
   message: string;
+  /** Which pipeline carried the line — same value the archive row stores. */
+  source: ChatSource;
 }
 
 export interface ChatMessageFrame {
@@ -122,6 +124,7 @@ export function buildChatFrame(
   playerId: string | null,
   serverId: string,
   chat: ChatInput,
+  source: ChatSource = 'log',
 ): ChatMessageFrame {
   return {
     type: 'chat.message',
@@ -136,6 +139,7 @@ export function buildChatFrame(
       steam_id64: chat.steamId64,
       eos_id: chat.eosId,
       message: chat.message,
+      source,
     },
   };
 }
@@ -178,7 +182,7 @@ export async function handleChat(
   detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
   const playerId = await resolvePlayerId(db, chat);
-  const frame = buildChatFrame(playerId, serverId, chat);
+  const frame = buildChatFrame(playerId, serverId, chat, source);
   if (redis) await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
   if (playerId) {
     const matchedRuleId = detector ? await detector.detect(chat.message).catch(() => null) : null;

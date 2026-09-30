@@ -135,9 +135,13 @@ describe('prependLiveMessage', () => {
 });
 
 describe('liveToChatMsg', () => {
+  // Real live-bus frames carry a uuidv7 id (packages/chat-ingest/src/store.ts),
+  // never the archive row's numeric bigserial id — the fixture below uses a
+  // realistic uuidv7-shaped id instead of the old `'42'` stand-in that hid
+  // the NaN bug (#432, #470).
   function live(overrides: Partial<LiveChatMessage> = {}): LiveChatMessage {
     return {
-      id: '42',
+      id: '0192c1e4-9b2a-7c31-8f2e-5a1d3b6e7c90',
       server_id: 'srv-1',
       ts: '2026-07-05T10:00:00.000Z',
       channel: 'ChatTeam',
@@ -146,14 +150,15 @@ describe('liveToChatMsg', () => {
       steam_id64: null,
       eos_id: null,
       message: 'moving up',
+      source: 'log',
       ...overrides,
     };
   }
 
-  it('maps a live channel event into a table row', () => {
+  it('maps a live channel event into a table row, keyed by a live: prefix rather than a numeric id', () => {
     const row = liveToChatMsg(live());
     expect(row).toEqual({
-      id: 42,
+      id: 'live:0192c1e4-9b2a-7c31-8f2e-5a1d3b6e7c90',
       serverId: 'srv-1',
       scope: 'team',
       message: 'moving up',
@@ -166,12 +171,13 @@ describe('liveToChatMsg', () => {
     });
   });
 
-  it('drops events without a resolved player', () => {
-    expect(liveToChatMsg(live({ player_id: null }))).toBeNull();
+  it('carries the frame source through instead of hardcoding "log" (#470)', () => {
+    const row = liveToChatMsg(live({ source: 'rcon' }));
+    expect(row?.source).toBe('rcon');
   });
 
-  it('drops events with a non-numeric id', () => {
-    expect(liveToChatMsg(live({ id: 'not-a-number' }))).toBeNull();
+  it('drops events without a resolved player', () => {
+    expect(liveToChatMsg(live({ player_id: null }))).toBeNull();
   });
 });
 

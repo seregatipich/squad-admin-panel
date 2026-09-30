@@ -270,3 +270,71 @@ describe('MediaPublishControl — queueing', () => {
     TEST_TIMEOUT_MS,
   );
 });
+
+describe('MediaPublishControl — image media never offers YouTube (#439)', () => {
+  it(
+    'never selects or offers YouTube for an image, only Telegram',
+    async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] }), { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ items: [publication({ destination: 'telegram' })] }), {
+            status: 201,
+          }),
+        );
+      vi.stubGlobal('fetch', fetchImpl);
+      render(<MediaPublishControl mediaId="media-1" mediaKind="image" />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Опубликовать' }));
+      expect(screen.queryByRole('checkbox', { name: 'YouTube' })).not.toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Telegram' })).toBeChecked();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+      const [, init] = fetchImpl.mock.calls[1];
+      expect(JSON.parse(init.body)).toEqual({ destinations: ['telegram'] });
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('MediaPublishControl — a failed publication can be retried, not stuck forever (#439)', () => {
+  it(
+    'offers to remove a failed publication, freeing its destination for a new attempt',
+    async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: [
+                publication({
+                  destination: 'youtube',
+                  status: 'failed',
+                  error: 'youtube_auth_failed',
+                }),
+              ],
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+      vi.stubGlobal('fetch', fetchImpl);
+      render(<MediaPublishControl mediaId="media-1" mediaKind="video" />);
+
+      const removeButton = await screen.findByRole('button', { name: 'Убрать' });
+      fireEvent.click(removeButton);
+
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+      const [url, init] = fetchImpl.mock.calls[1];
+      expect(url).toBe('/api/v1/media/media-1/publications/youtube');
+      expect(init.method).toBe('DELETE');
+
+      // Once removed, the destination is free again and the publish action returns.
+      await screen.findByRole('button', { name: 'Опубликовать' });
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

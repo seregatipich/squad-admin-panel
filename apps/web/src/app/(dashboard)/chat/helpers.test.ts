@@ -59,6 +59,7 @@ function liveMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     steam_id64: '76561198000000001',
     eos_id: null,
     message: 'hello world',
+    source: 'log',
     ...overrides,
   };
 }

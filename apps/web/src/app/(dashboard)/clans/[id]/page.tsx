@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -195,6 +195,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [serverOptions, setServerOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [allServers, setAllServers] = useState<ServerOption[]>([]);
   const [canManageClans, setCanManageClans] = useState(false);
+  // Tracks the most recently started loadMatches() request; a response is
+  // applied only if it is still current, so a slower "Показать ещё" request
+  // can never overwrite a fresher server-filter change (see finding #519).
+  const matchesRequestIdRef = useRef(0);
 
   const loadClan = useCallback(async () => {
     try {
@@ -229,6 +233,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
 
   const loadMatches = useCallback(
     async (cursor: string | null, serverId: string, replace: boolean) => {
+      const requestId = ++matchesRequestIdRef.current;
       setMatchesLoading(true);
       try {
         const query = new URLSearchParams({ limit: String(MATCHES_PAGE_LIMIT) });
@@ -240,6 +245,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         });
         if (!res.ok) return;
         const body = (await res.json()) as ClanMatchesResponse;
+        if (matchesRequestIdRef.current !== requestId) return;
         setMatchRows((prev) => (replace ? body.items : [...prev, ...body.items]));
         setMatchCursor(body.next_cursor);
         setMatchesLoaded(true);
@@ -258,7 +264,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       } catch {
         /* keep the current match list on transient failures */
       } finally {
-        setMatchesLoading(false);
+        if (matchesRequestIdRef.current === requestId) setMatchesLoading(false);
       }
     },
     [clanId],

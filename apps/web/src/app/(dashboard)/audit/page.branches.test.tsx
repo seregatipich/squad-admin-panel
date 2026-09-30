@@ -12,12 +12,17 @@ vi.mock('next/navigation', () => ({
 import AuditPage from './page';
 
 // Tokens are disjoint per field so a filter query hits exactly one OR operand.
+// actor_kind is only ever 'steam' or 'system' — GET /api/v1/audit never
+// returns 'user'/'bot' (audit_log_actor_kind check constraint), and never
+// returns actor_user_id at all (#484).
 const ITEMS = [
   {
     id: 'a1',
     created_at: '2026-07-23T10:00:00Z',
-    actor_user_id: 'deltauser1234567',
-    actor_kind: 'user',
+    actor_kind: 'steam',
+    actor_player_id: 'deltauser1234567',
+    actor_token_id: null,
+    actor_system_label: null,
     action_type: 'alpha.action',
     target_type: 'beta',
     target_id: 'gamma-id-0001',
@@ -30,8 +35,10 @@ const ITEMS = [
   {
     id: 'a2',
     created_at: '2026-07-23T10:01:00Z',
-    actor_user_id: null,
-    actor_kind: 'user',
+    actor_kind: 'steam',
+    actor_player_id: null,
+    actor_token_id: null,
+    actor_system_label: null,
     action_type: 'ban',
     target_type: null,
     target_id: null,
@@ -44,8 +51,10 @@ const ITEMS = [
   {
     id: 'a3',
     created_at: '2026-07-23T10:02:00Z',
-    actor_user_id: null,
     actor_kind: 'system',
+    actor_player_id: null,
+    actor_token_id: null,
+    actor_system_label: 'sync-worker',
     action_type: 'sync',
     target_type: 'server',
     target_id: null,
@@ -56,8 +65,10 @@ const ITEMS = [
   {
     id: 'a4',
     created_at: '2026-07-23T10:03:00Z',
-    actor_user_id: null,
-    actor_kind: 'bot',
+    actor_kind: 'system',
+    actor_player_id: null,
+    actor_token_id: null,
+    actor_system_label: null,
     action_type: 'cleanup',
     target_type: null,
     target_id: null,
@@ -68,8 +79,10 @@ const ITEMS = [
   {
     id: 'a5',
     created_at: '2026-07-23T10:04:00Z',
-    actor_user_id: null,
     actor_kind: 'system',
+    actor_player_id: null,
+    actor_token_id: null,
+    actor_system_label: null,
     action_type: 'noop',
     target_type: null,
     target_id: null,
@@ -120,9 +133,14 @@ describe('AuditPage — branch coverage', () => {
     // Код, которого нет, остаётся прочерком.
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
 
-    // Actor cell: user w/ id → 8-char slice; user w/o id / non-user → kind or '—'
-    expect(screen.getByText('deltause')).toBeInTheDocument();
-    expect(screen.getAllByText('bot').length).toBeGreaterThanOrEqual(1);
+    // Actor cell: a steam actor with a resolved player id links to the player
+    // card (8-char slice); one without a resolved id (still 'steam') falls
+    // back to '—'; a system actor with a label shows it, one without falls
+    // back to the bare kind (#484).
+    const actorLink = screen.getByRole('link', { name: 'deltause' });
+    expect(actorLink).toHaveAttribute('href', '/all-players/deltauser1234567');
+    expect(screen.getByText('sync-worker')).toBeInTheDocument();
+    expect(screen.getAllByText('system').length).toBeGreaterThanOrEqual(1);
 
     // Target cell: truthy target_type with sliced id, and '—' fallbacks
     expect(screen.getByText(/beta gamma-id-000/)).toBeInTheDocument();
@@ -164,7 +182,7 @@ describe('AuditPage — branch coverage', () => {
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
   });
 
-  it('filters on the actor_user_id operand', async () => {
+  it('filters on the actor_player_id operand', async () => {
     render(<AuditPage />);
     await screen.findByText('alpha.action');
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
@@ -174,6 +192,16 @@ describe('AuditPage — branch coverage', () => {
     // не в том же такте, что и ввод.
     await waitFor(() => expect(screen.queryByText('sync')).not.toBeInTheDocument());
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
+  });
+
+  it('filters on the actor_system_label operand (#484)', async () => {
+    render(<AuditPage />);
+    await screen.findByText('alpha.action');
+    fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
+      target: { value: 'sync-worker' },
+    });
+    await waitFor(() => expect(screen.queryByText('cleanup')).not.toBeInTheDocument());
+    expect(screen.getByText('sync')).toBeInTheDocument();
   });
 
   it('shows the no-match empty state when a filter matches nothing', async () => {

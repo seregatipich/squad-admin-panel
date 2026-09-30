@@ -1381,10 +1381,18 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       `)) as unknown as Array<{ priority_count: number }>;
       const priorityCount = priorityCountRows[0]?.priority_count ?? 0;
 
+      // The viewer's own manage level, computed server-side the same way the
+      // mutating routes below gate themselves — never derived by the client
+      // from searching this same paginated/sorted page for the viewer's own
+      // row, which can (and, once searched/sorted/paged, routinely does) fall
+      // off it (#509).
+      const viewerManageLevel = await clanManageLevel(clan.id, req.user);
+
       return {
         clan_id: clan.id,
         priority_count: priorityCount,
         max_priority_slots: clan.maxPrioritySlots,
+        viewer_manage_level: viewerManageLevel,
         items: rows.map((row) => ({
           player_id: row.player_id,
           canonical_name: row.canonical_name,

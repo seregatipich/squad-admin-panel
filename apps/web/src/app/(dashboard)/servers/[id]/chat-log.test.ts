@@ -22,6 +22,7 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
     steam_id64: '76561198012345678',
     eos_id: null,
     message: 'hello',
+    source: 'log',
     ...overrides,
   };
 }

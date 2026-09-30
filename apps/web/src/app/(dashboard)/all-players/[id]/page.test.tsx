@@ -384,5 +384,84 @@ describe('PlayerDetailPage', () => {
       });
       await waitFor(() => expect(memberPosts(fetchMock)).toHaveLength(1));
     });
+
+    it('refreshes the "Роль" card the moment whitelist membership changes it, without a page reload (#477)', async () => {
+      let role: MockRole | null = ADMIN_ROLE;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/v1/whitelist/members' && init?.method === 'POST') {
+          role = {
+            ...WHITELIST_ROLE,
+            color: 'sky',
+            is_system_role: false,
+            role_expires_at: null,
+            role_comment: null,
+          };
+          return Promise.resolve(
+            new Response(JSON.stringify({ ok: true, changed: true }), { status: 201 }),
+          );
+        }
+        if (url === `/api/v1/players/${PLAYER_ID}`) {
+          return Promise.resolve(new Response(JSON.stringify(PLAYER_RESPONSE), { status: 200 }));
+        }
+        if (url === '/api/v1/me') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                player_id: 'me-1',
+                permissions: ['user:manage_roles', 'whitelist:edit'],
+                squad_permissions: [],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url.startsWith('/api/v1/whitelist/settings')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                whitelist_role_id: WHITELIST_ROLE.id,
+                whitelist_role_name: WHITELIST_ROLE.name,
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url === `/api/v1/players/${PLAYER_ID}/role`) {
+          return Promise.resolve(new Response(JSON.stringify({ role }), { status: 200 }));
+        }
+        if (url === '/api/v1/roles') {
+          return Promise.resolve(new Response(JSON.stringify([ADMIN_ROLE]), { status: 200 }));
+        }
+        if (url.startsWith('/api/v1/banned-names/check')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ matched: false, rule: null, can_mutate: false }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderPage();
+
+      const roleCardBefore = (await screen.findByText('Роль')).closest('section');
+      if (!roleCardBefore) throw new Error('role card not found');
+      expect(within(roleCardBefore).getByText('Admin')).toBeInTheDocument();
+
+      const card = await whitelistCard();
+      await act(async () => {
+        fireEvent.click(await within(card).findByRole('button', { name: 'В whitelist' }));
+      });
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Заменить роль' }));
+      });
+
+      const roleCardAfter = (await screen.findByText('Роль')).closest('section');
+      if (!roleCardAfter) throw new Error('role card not found');
+      await waitFor(() => expect(within(roleCardAfter).getByText('Whitelist')).toBeInTheDocument());
+      expect(within(roleCardAfter).queryByText('Admin')).not.toBeInTheDocument();
+    }, 15_000);
   });
 });

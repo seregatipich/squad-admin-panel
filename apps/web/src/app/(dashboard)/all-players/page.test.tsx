@@ -93,8 +93,22 @@ function mockFetch(opts: MockOptions = {}): {
     }
     if (url.startsWith('/api/v1/players')) {
       listUrls.push(url);
+      const source = opts.players ?? PLAYERS_RESPONSE;
+      // Mirrors GET /api/v1/players' own `q` search (nickname, SteamID64, EOS
+      // ID) so tests exercise the real contract: the page must send `q` and
+      // rely on the server to filter, not re-filter only the loaded page
+      // itself (#485).
+      const q = new URL(url, 'http://test').searchParams.get('q')?.toLowerCase().trim();
+      const items = q
+        ? source.items.filter(
+            (p) =>
+              p.canonical_name.toLowerCase().includes(q) ||
+              (p.steam_id64 ?? '') === q ||
+              (p.eos_id ?? '').toLowerCase() === q,
+          )
+        : source.items;
       return Promise.resolve(
-        new Response(JSON.stringify(opts.players ?? PLAYERS_RESPONSE), {
+        new Response(JSON.stringify({ items, total: items.length }), {
           status: opts.listStatus ?? 200,
         }),
       );
@@ -279,7 +293,7 @@ describe('PlayersPage', () => {
     expect(await screen.findByText('Нет совпадений.')).toBeInTheDocument();
   });
 
-  it('filters client-side by SteamID64 and by EOS ID', async () => {
+  it('searches server-side by SteamID64 and by EOS ID (via the q param, #485)', async () => {
     await renderPage();
     const box = screen.getByPlaceholderText('Поиск по нику, SteamID или EOS ID…');
     await userEvent.type(box, '76561197999270003');
@@ -294,6 +308,28 @@ describe('PlayersPage', () => {
       expect(screen.queryByText('Bravozz')).not.toBeInTheDocument();
     });
     expect(screen.getByText('Alphazz')).toBeInTheDocument();
+  });
+
+  it('sends the search text as q, so search runs server-side rather than only over the loaded page (#485)', async () => {
+    const listUrls = await renderPage();
+    await userEvent.type(
+      screen.getByPlaceholderText('Поиск по нику, SteamID или EOS ID…'),
+      'Alpha',
+    );
+    await waitFor(() =>
+      expect(
+        listUrls.some((url) => new URL(url, 'http://test').searchParams.get('q') === 'Alpha'),
+      ).toBe(true),
+    );
+  });
+
+  it('counts "онлайн сейчас" from the full online-status set, not just the loaded page (#485)', async () => {
+    // A page limited to two rows, neither of which is the third, online player.
+    await renderPage({
+      players: { items: PLAYERS_RESPONSE.items.slice(0, 2), total: 2 },
+      onlinePlayerIds: ['player-1', 'player-3'],
+    });
+    expect(await screen.findByText(/онлайн сейчас: 2/)).toBeInTheDocument();
   });
 
   it('marks an online player and hides the offline ones behind только онлайн', async () => {

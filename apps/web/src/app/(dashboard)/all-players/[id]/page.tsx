@@ -143,6 +143,12 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const [err, setErr] = useState<string | null>(null);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [nickBanRefreshKey, setNickBanRefreshKey] = useState(0);
+  // WhitelistQuickAction and PanelAccessSection each show the same player role
+  // from their own independent fetch; bumping this after either one mutates
+  // the role makes both refetch it, so neither shows a stale role/whitelist
+  // status after the other one changes it (#477).
+  const [roleRefreshKey, setRoleRefreshKey] = useState(0);
+  const onRoleChanged = useCallback(() => setRoleRefreshKey((key) => key + 1), []);
   const [eosCopied, setEosCopied] = useState(false);
 
   useEffect(() => {
@@ -268,6 +274,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         playerId={playerId}
         canEdit={canEditWhitelist}
         canManageRoles={canManageRoles}
+        roleRefreshKey={roleRefreshKey}
+        onRoleChanged={onRoleChanged}
       />
 
       <ReportPlayerSection playerId={playerId} />
@@ -324,7 +332,12 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <SteamProfileSection playerId={playerId} steamId64={player.steam_id64} snapshot={player} />
 
-      <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
+      <PanelAccessSection
+        playerId={playerId}
+        canManage={canManageRoles}
+        roleRefreshKey={roleRefreshKey}
+        onRoleChanged={onRoleChanged}
+      />
 
       <DiscordLinkSection playerId={playerId} me={me} />
 
@@ -450,10 +463,14 @@ function WhitelistQuickAction({
   playerId,
   canEdit,
   canManageRoles,
+  roleRefreshKey,
+  onRoleChanged,
 }: {
   playerId: string;
   canEdit: boolean;
   canManageRoles: boolean;
+  roleRefreshKey: number;
+  onRoleChanged: () => void;
 }) {
   const [settings, setSettings] = useState<WhitelistSettings | null>(null);
   const [current, setCurrent] = useState<SingleRole | null>(null);
@@ -473,9 +490,10 @@ function WhitelistQuickAction({
     }
   }, [playerId]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: roleRefreshKey is a deliberate re-check trigger, not read in the effect body — bumped by PanelAccessSection so both sections agree on the role (#477)
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, roleRefreshKey]);
 
   if (!settings?.whitelist_role_id) return null;
 
@@ -513,6 +531,7 @@ function WhitelistQuickAction({
         );
       }
       await reload();
+      onRoleChanged();
       setMsg({ kind: 'ok', text: isWhitelisted ? 'Убран из whitelist.' : 'Добавлен в whitelist.' });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
@@ -568,7 +587,17 @@ function WhitelistQuickAction({
   );
 }
 
-function PanelAccessSection({ playerId, canManage }: { playerId: string; canManage: boolean }) {
+function PanelAccessSection({
+  playerId,
+  canManage,
+  roleRefreshKey,
+  onRoleChanged,
+}: {
+  playerId: string;
+  canManage: boolean;
+  roleRefreshKey: number;
+  onRoleChanged: () => void;
+}) {
   const [current, setCurrent] = useState<SingleRole | null>(null);
   const [editing, setEditing] = useState(false);
   const [allRoles, setAllRoles] = useState<SingleRole[]>([]);
@@ -595,9 +624,10 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
     if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
   }, [playerId, canManage]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: roleRefreshKey is a deliberate re-check trigger, not read in the effect body — bumped by WhitelistQuickAction so both sections agree on the role (#477)
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, roleRefreshKey]);
 
   useEffect(() => {
     if (!editing) return;
@@ -640,6 +670,7 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await reload();
+      onRoleChanged();
       setEditing(false);
       setMsg({ kind: 'ok', text: 'Готово.' });
     } catch (e) {

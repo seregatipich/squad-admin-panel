@@ -44,8 +44,23 @@ function stubApi(
           }),
         );
       }
-      const body = url.includes('/bonus-shop/tiers') ? SHOP_TIERS : { rows: subscriptions };
-      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      if (url.includes('/bonus-shop/tiers')) {
+        return Promise.resolve(new Response(JSON.stringify(SHOP_TIERS), { status: 200 }));
+      }
+      if (url === '/api/v1/me') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              can_manage_economy: true,
+              permissions: ['user:manage_roles'],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ rows: subscriptions }), { status: 200 }),
+      );
     }),
   );
   return calls;
@@ -194,6 +209,42 @@ describe('SubscriptionGrantSection', () => {
     'hides the grant control when no tier is purchasable',
     async () => {
       stubApi([{ match: '/bonus-shop/tiers', status: 200, body: { tiers: [] } }]);
+      render(<SubscriptionGrantSection playerId="player-1" />);
+
+      await screen.findByText('Подписок нет');
+      expect(screen.queryByRole('button', { name: 'Выдать подписку' })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the grant control for a panel user without can_manage_economy, even though tiers are purchasable (#459)',
+    async () => {
+      stubApi([
+        {
+          match: '/api/v1/me',
+          status: 200,
+          body: { can_manage_economy: false, permissions: ['user:manage_roles'] },
+        },
+      ]);
+      render(<SubscriptionGrantSection playerId="player-1" />);
+
+      await screen.findByText('Подписок нет');
+      expect(screen.queryByRole('button', { name: 'Выдать подписку' })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the grant control for a panel user without can_assign_roles, even though tiers are purchasable (#459)',
+    async () => {
+      stubApi([
+        {
+          match: '/api/v1/me',
+          status: 200,
+          body: { can_manage_economy: true, permissions: [] },
+        },
+      ]);
       render(<SubscriptionGrantSection playerId="player-1" />);
 
       await screen.findByText('Подписок нет');

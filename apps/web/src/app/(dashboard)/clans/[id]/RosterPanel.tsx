@@ -50,6 +50,14 @@ interface RosterResponse {
   limit: number;
   priority_count: number;
   max_priority_slots: number;
+  /**
+   * The viewer's own manage level, computed server-side by the same
+   * `clanManageLevel` gate the mutating routes use. Never derive this from
+   * searching `items` for the viewer's own row — that row can be (and, once
+   * searched, sorted, or paginated, routinely is) absent from this page even
+   * though the server still grants the viewer full manage rights (#509).
+   */
+  viewer_manage_level: 'full' | 'deputy' | null;
 }
 
 interface PriorityErrorBody {
@@ -149,10 +157,12 @@ export interface Capabilities {
   canTogglePriority: boolean;
 }
 
-export function deriveCapabilities(me: MeResponse | null, members: RosterMember[]): Capabilities {
-  const myRole = me ? members.find((m) => m.player_id === me.player_id)?.member_role : undefined;
-  const canManageFull = Boolean(me?.can_manage_clans) || myRole === 'leader';
-  const isDeputy = myRole === 'deputy';
+export function deriveCapabilities(
+  me: MeResponse | null,
+  viewerManageLevel: 'full' | 'deputy' | null,
+): Capabilities {
+  const canManageFull = Boolean(me?.can_manage_clans) || viewerManageLevel === 'full';
+  const isDeputy = viewerManageLevel === 'deputy';
   return {
     canManageFull,
     canAdd: canManageFull || isDeputy,
@@ -249,7 +259,10 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   }, [loadRoster]);
 
   const members = roster?.items ?? [];
-  const caps = useMemo(() => deriveCapabilities(me, members), [me, members]);
+  const caps = useMemo(
+    () => deriveCapabilities(me, roster?.viewer_manage_level ?? null),
+    [me, roster],
+  );
 
   const mutate = useCallback(
     async (

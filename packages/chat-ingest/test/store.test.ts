@@ -49,6 +49,7 @@ describe('buildChatFrame', () => {
       eos_id: EOS,
       message: 'hello panel',
       ts: '2026-09-09T10:00:00.000Z',
+      source: 'log',
     });
   });
 
@@ -56,6 +57,11 @@ describe('buildChatFrame', () => {
     const a = buildChatFrame(null, SERVER_ID, chat());
     const b = buildChatFrame(null, SERVER_ID, chat());
     expect(a.data.id).not.toBe(b.data.id);
+  });
+
+  it('carries the caller-supplied source instead of always defaulting to log (#470)', () => {
+    const frame = buildChatFrame(null, SERVER_ID, chat(), 'rcon');
+    expect(frame.data.source).toBe('rcon');
   });
 });
 
@@ -75,6 +81,10 @@ describe('handleChat', () => {
     expect(channel).toBe(LIVE_BUS_CHANNEL);
     expect(JSON.parse(payload as string)).toEqual(frame);
     expect((db as unknown as { insert: unknown }).insert).not.toHaveBeenCalled();
+    // The frame must be labeled with the pipeline that actually carried it,
+    // not hardcoded to 'log' — RCON-origin messages were mislabeled and
+    // filtered out incorrectly by the panel's «Источник» filter (#470).
+    expect(frame.data.source).toBe('rcon');
   });
 
   it('still returns the frame with no publisher wired', async () => {

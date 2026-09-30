@@ -27,6 +27,7 @@ function seed(): ChatMessage[] {
       steam_id64: '76561198012345678',
       eos_id: '0002a10186d9414496bf20d22d3860ba',
       message: 'hello everyone',
+      source: 'log',
     },
     {
       id: 'c2',
@@ -38,6 +39,7 @@ function seed(): ChatMessage[] {
       steam_id64: '76561198087654321',
       eos_id: null,
       message: 'need medic',
+      source: 'log',
     },
     {
       id: 'c3',
@@ -49,6 +51,7 @@ function seed(): ChatMessage[] {
       steam_id64: null,
       eos_id: null,
       message: 'server restart in 5',
+      source: 'log',
     },
   ];
 }

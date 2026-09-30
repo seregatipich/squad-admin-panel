@@ -9,7 +9,13 @@ vi.mock('next/navigation', () => ({
   useRouter: vi.fn(() => ({ replace })),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
-vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: () => undefined }));
+type LiveHandler = () => void;
+let liveHandlers: Partial<Record<string, LiveHandler>> = {};
+vi.mock('@/lib/use-live-bus', () => ({
+  useLiveSubscription: (type: string, handler: LiveHandler) => {
+    liveHandlers[type] = handler;
+  },
+}));
 
 import { AppealsBrowser } from './AppealsBrowser';
 
@@ -77,6 +83,7 @@ afterEach(() => {
   cleanup();
   replace.mockClear();
   vi.unstubAllGlobals();
+  liveHandlers = {};
 });
 
 describe('AppealsBrowser', () => {
@@ -226,6 +233,69 @@ describe('AppealsBrowser', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Одобренные' }));
       await waitFor(() => expect(replace).toHaveBeenCalled());
       expect(String(replace.mock.calls.at(-1)?.[0])).toContain('status=approved');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps an in-progress reply draft on an unrelated live event, instead of remounting the list (#486)',
+    async () => {
+      const items = [PENDING_APPEAL];
+      let listCalls = 0;
+      const secondResponse = (() => {
+        let resolve!: (value: Response) => void;
+        const promise = new Promise<Response>((res) => {
+          resolve = res;
+        });
+        return { promise, resolve };
+      })();
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/appeals')) {
+          listCalls += 1;
+          const body = JSON.stringify({ items, total: items.length, page: 1, page_size: 20 });
+          if (listCalls === 1) {
+            return Promise.resolve(new Response(body, { status: 200 }));
+          }
+          // The refetch triggered by the live event: held back so we can
+          // observe whether the list is swapped for a Skeleton while it's
+          // in flight, same as a real (non-instant) network round trip.
+          return secondResponse.promise;
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      render(<AppealsBrowser />);
+      await screen.findByText('#7');
+
+      const noteField = screen.getByPlaceholderText(
+        'Ответ заявителю (необязательно)',
+      ) as HTMLTextAreaElement;
+      noteField.focus();
+      fireEvent.change(noteField, { target: { value: 'draft in progress' } });
+      expect(document.activeElement).toBe(noteField);
+
+      // A completely unrelated appeal.created/updated event fires — while its
+      // refetch is in flight, the list must not be swapped for a Skeleton
+      // (which would unmount noteField and drop the operator's focus/cursor
+      // and draft, per #486).
+      liveHandlers['appeal.created']?.();
+      await waitFor(() => expect(listCalls).toBe(2));
+
+      expect(screen.queryByLabelText('Загрузка апелляций')).not.toBeInTheDocument();
+      const noteFieldMidFlight = screen.getByPlaceholderText(
+        'Ответ заявителю (необязательно)',
+      ) as HTMLTextAreaElement;
+      expect(noteFieldMidFlight).toBe(noteField);
+      expect(noteFieldMidFlight.value).toBe('draft in progress');
+      expect(document.activeElement).toBe(noteFieldMidFlight);
+
+      secondResponse.resolve(
+        new Response(JSON.stringify({ items, total: items.length, page: 1, page_size: 20 }), {
+          status: 200,
+        }),
+      );
+      await waitFor(() => expect(screen.getByText('#7')).toBeInTheDocument());
     },
     TEST_TIMEOUT_MS,
   );
