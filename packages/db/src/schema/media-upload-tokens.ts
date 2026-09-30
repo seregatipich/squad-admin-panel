@@ -1,14 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  bigint,
-  check,
-  index,
-  pgTable,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { bigint, check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 
 export const MEDIA_UPLOAD_TOKEN_TARGET_TYPES = [
@@ -63,7 +54,6 @@ export const mediaUploadTokens = pgTable(
       sql`(${table.targetEntityType} IS NULL) = (${table.targetEntityId} IS NULL)`,
     ),
     tokenHashKey: uniqueIndex('media_upload_tokens_token_hash_key').on(table.tokenHash),
-    expiresAtIdx: index('media_upload_tokens_expires_at_idx').on(table.expiresAt),
   }),
 );
 

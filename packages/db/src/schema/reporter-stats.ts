@@ -1,4 +1,4 @@
-import { boolean, index, integer, pgTable, real, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, pgTable, real, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 
 /**
@@ -17,27 +17,20 @@ import { players } from './players.js';
  * (see `raiseBanSyncFailureAlert` in apps/workers/ban-sync/src/alerts.ts for
  * the pattern this mirrors).
  */
-export const reporterStats = pgTable(
-  'reporter_stats',
-  {
-    playerId: uuid('player_id')
-      .primaryKey()
-      .notNull()
-      .references(() => players.id, { onDelete: 'cascade' }),
-    totalReports: integer('total_reports').notNull().default(0),
-    resolvedReports: integer('resolved_reports').notNull().default(0),
-    rejectedReports: integer('rejected_reports').notNull().default(0),
-    confirmedReports: integer('confirmed_reports').notNull().default(0),
-    accuracy: real('accuracy').notNull().default(0),
-    trusted: boolean('trusted').notNull().default(false),
-    spamFlaggedAt: timestamp('spam_flagged_at', { withTimezone: true, mode: 'date' }),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
-  },
-  (table) => ({
-    trustedIdx: index('reporter_stats_trusted_idx').on(table.trusted),
-    spamFlaggedIdx: index('reporter_stats_spam_idx').on(table.spamFlaggedAt),
-  }),
-);
+export const reporterStats = pgTable('reporter_stats', {
+  playerId: uuid('player_id')
+    .primaryKey()
+    .notNull()
+    .references(() => players.id, { onDelete: 'cascade' }),
+  totalReports: integer('total_reports').notNull().default(0),
+  resolvedReports: integer('resolved_reports').notNull().default(0),
+  rejectedReports: integer('rejected_reports').notNull().default(0),
+  confirmedReports: integer('confirmed_reports').notNull().default(0),
+  accuracy: real('accuracy').notNull().default(0),
+  trusted: boolean('trusted').notNull().default(false),
+  spamFlaggedAt: timestamp('spam_flagged_at', { withTimezone: true, mode: 'date' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+});
 
 export type ReporterStatsRow = typeof reporterStats.$inferSelect;
 export type NewReporterStats = typeof reporterStats.$inferInsert;

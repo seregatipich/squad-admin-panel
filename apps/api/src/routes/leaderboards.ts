@@ -5,6 +5,7 @@ import {
   periodStartFor,
   playerStatPeriods,
   players,
+  STAT_PERIOD_TYPES,
   seasons,
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
@@ -64,7 +65,7 @@ const leaderboardsQuery = z.object({
     'bonus',
     'boost',
   ]),
-  period: z.enum(['day', 'week', 'month', 'season', 'alltime']).default('alltime'),
+  period: z.enum(STAT_PERIOD_TYPES).default('alltime'),
   period_start: calendarDaySchema.optional(),
   server_id: z.union([z.literal('all'), z.string().uuid()]).default('all'),
   order: z.enum(['asc', 'desc']).default('desc'),
