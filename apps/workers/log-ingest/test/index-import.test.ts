@@ -8,6 +8,7 @@ vi.mock('ioredis', () => ({
   })),
 }));
 vi.mock('@squad/db', () => ({
+  createMmdbLookup: vi.fn().mockResolvedValue(null),
   createDatabaseClient: vi.fn(() => ({
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
