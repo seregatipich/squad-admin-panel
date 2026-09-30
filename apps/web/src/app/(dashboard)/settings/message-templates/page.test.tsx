@@ -163,6 +163,28 @@ describe('MessageTemplatesPage', () => {
   );
 
   it(
+    'refuses a negative, fractional or oversized sort order without calling the API (#717)',
+    async () => {
+      const { calls } = mockFetch();
+      render(<MessageTemplatesPage />);
+      fireEvent.change(await screen.findByLabelText('Название'), { target: { value: 'Тест' } });
+      fireEvent.change(screen.getByLabelText(/^Текст/), { target: { value: 'Текст {player}' } });
+
+      for (const invalid of ['-5', '1.5', '200000']) {
+        fireEvent.change(screen.getByLabelText('Порядок'), { target: { value: invalid } });
+        // Submit the form directly: the browser's own min/max/step validation would
+        // otherwise intercept the click before the page's check runs.
+        fireEvent.submit(screen.getByLabelText('Порядок').closest('form') as HTMLFormElement);
+        expect(
+          await screen.findByText('Порядок — целое число от 0 до 100000.'),
+        ).toBeInTheDocument();
+      }
+      expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'loads a template into the form for editing and can abandon it',
     async () => {
       mockFetch();

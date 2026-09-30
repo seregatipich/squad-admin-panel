@@ -62,6 +62,8 @@ interface Me {
 interface RoleOption {
   id: string;
   name: string;
+  panel_access: boolean;
+  is_system_role: boolean;
 }
 
 type FieldErrors = Partial<Record<keyof EconomyFormState, string>>;
@@ -74,6 +76,8 @@ const TIER_ERROR_MESSAGES: Record<string, string> = {
   vip_tier_has_active_assignments: 'Нельзя удалить тир: у него есть активные назначения.',
   vip_tier_has_subscriptions:
     'Нельзя удалить тир: на него оформлялись подписки. Отключите тир вместо удаления.',
+  vip_tier_not_found: 'Тир не найден — возможно, его уже удалили.',
+  forbidden: 'Недостаточно прав для этого действия.',
   role_referenced_by_vip_tier: 'Роль привязана к VIP-тиру — сначала удалите тир.',
   role_in_use: 'Роль используется и не может быть удалена.',
   price_requires_days: 'Цена требует срок по умолчанию: укажите срок или очистите цену.',
@@ -104,11 +108,9 @@ export default function EconomySettingsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [settingsRes, meRes, tiersRes, rolesRes] = await Promise.all([
+      const [settingsRes, meRes] = await Promise.all([
         fetch('/api/v1/settings/economy', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/vip-tiers', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
       ]);
       if (settingsRes.ok) {
         const loaded = (await settingsRes.json()) as EconomySettings;
@@ -123,6 +125,22 @@ export default function EconomySettingsPage() {
       } else {
         setGlobalErr(`Не удалось загрузить данные пользователя: ${meRes.status}`);
       }
+    } catch (err) {
+      setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  /** Reloads only the VIP tier list, without touching the economy form. */
+  const refreshTiers = useCallback(async () => {
+    try {
+      const [tiersRes, rolesRes] = await Promise.all([
+        fetch('/api/v1/vip-tiers', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+      ]);
       // Both endpoints 403 without can_edit_roles — the section is hidden then,
       // so a failed load is not an error worth surfacing.
       if (tiersRes.ok) setTiers(((await tiersRes.json()) as { rows: VipTier[] }).rows);
@@ -133,8 +151,8 @@ export default function EconomySettingsPage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refreshTiers();
+  }, [refreshTiers]);
 
   const canManage = me?.can_manage_economy ?? false;
   const canEditTiers = me?.permissions?.includes('role:edit') ?? false;
@@ -231,7 +249,7 @@ export default function EconomySettingsPage() {
         return;
       }
       cancelTierForm();
-      await refresh();
+      await refreshTiers();
     } catch (err) {
       setTierErr(`Ошибка сети: ${(err as Error).message}`);
     } finally {
@@ -253,7 +271,9 @@ export default function EconomySettingsPage() {
         setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.status)}`);
         return;
       }
-      await refresh();
+      await refreshTiers();
+    } catch (err) {
+      setTierErr(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setTierDeleting(false);
       setPendingTierDelete(null);
@@ -525,11 +545,16 @@ export default function EconomySettingsPage() {
                           onChange={(e) => updateTierField('roleId', e.target.value)}
                         >
                           <option value="">— выберите роль —</option>
-                          {roleOptions.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.name}
-                            </option>
-                          ))}
+                          {roleOptions.map((r) => {
+                            const sellable = !r.panel_access && !r.is_system_role;
+                            return (
+                              <option key={r.id} value={r.id} disabled={!sellable}>
+                                {sellable
+                                  ? r.name
+                                  : `${r.name} (нельзя продать — роль даёт доступ к панели)`}
+                              </option>
+                            );
+                          })}
                         </Select>
                       </FieldRow>
                       <FieldRow

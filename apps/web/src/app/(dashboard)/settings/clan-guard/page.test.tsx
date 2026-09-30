@@ -69,4 +69,40 @@ describe('ClanGuardSettingsPage', () => {
     expect(screen.getByText('Механизм активен')).toBeInTheDocument();
     expect(screen.getByText(/несохранённые изменения/i)).toBeInTheDocument();
   });
+
+  it('shows an error banner instead of an endless skeleton when /api/v1/me fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith('/api/v1/settings/clan-guard')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ enabled: true, grace_period_seconds: 300, updated_at: null }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url.endsWith('/api/v1/me')) {
+          return Promise.resolve(new Response(null, { status: 500 }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    render(<ClanGuardSettingsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить данные пользователя: 500'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an error banner instead of an unhandled rejection on a network failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('network down'))),
+    );
+    render(<ClanGuardSettingsPage />);
+    expect(
+      await screen.findByText('Не удалось загрузить настройки: ошибка сети.'),
+    ).toBeInTheDocument();
+  });
 });

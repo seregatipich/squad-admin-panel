@@ -1,20 +1,12 @@
-export const DISCORD_EVENT_TYPES = [
-  'server_crashed',
-  'ban_issued',
-  'unban',
-  'kick',
-  'warn',
-  'admin_login',
-  'player_report',
-  'match_ended',
-  'map_changed',
-  'marked_player_joined',
-  'drift_detected',
-  'server_monitoring',
-  'seed_needed',
-] as const;
+import {
+  DISCORD_TEMPLATE_EVENT_TYPES,
+  type DiscordTemplateEventType,
+} from '@squad/shared-config/discord-template';
 
-export type DiscordEventType = (typeof DISCORD_EVENT_TYPES)[number];
+/** Event types a webhook or template can be bound to (single source: shared-config). */
+export const DISCORD_EVENT_TYPES = DISCORD_TEMPLATE_EVENT_TYPES;
+
+export type DiscordEventType = DiscordTemplateEventType;
 
 const EVENT_LABELS: Record<DiscordEventType, string> = {
   server_crashed: 'Сервер упал',
@@ -34,6 +26,34 @@ const EVENT_LABELS: Record<DiscordEventType, string> = {
 
 export function eventLabel(type: string): string {
   return (EVENT_LABELS as Record<string, string>)[type] ?? type;
+}
+
+const API_ERROR_LABELS: Record<string, string> = {
+  unauthenticated: 'Сессия истекла, войдите заново',
+  forbidden: 'Недостаточно прав',
+  validation_failed: 'Проверьте введённые значения',
+  webhook_not_found: 'Вебхук не найден — возможно, он уже удалён',
+  template_not_found: 'Шаблон не найден',
+  server_not_found: 'Сервер не найден',
+  unknown_server_id: 'Неизвестный сервер',
+  role_not_found: 'Роль не найдена',
+  role_mapping_exists: 'Такое сопоставление уже существует',
+  mapping_not_found: 'Сопоставление не найдено',
+  discord_error: 'Discord отклонил запрос',
+  unreachable: 'Discord недоступен',
+};
+
+/**
+ * Russian operator-facing text for a failed Discord integration API call.
+ * Known error codes are translated; anything else falls back to a generic
+ * sentence, with the HTTP status kept as a secondary detail.
+ *
+ * @param status HTTP status of the failed response.
+ * @param code `error` field of the response body, if any.
+ */
+export function describeApiError(status: number, code?: unknown): string {
+  const label = typeof code === 'string' ? API_ERROR_LABELS[code] : undefined;
+  return `${label ?? 'Запрос не выполнен'} (HTTP ${status})`;
 }
 
 export function looksLikeWebhookUrl(url: string): boolean {

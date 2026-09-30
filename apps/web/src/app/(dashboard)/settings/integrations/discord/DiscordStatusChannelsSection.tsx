@@ -28,10 +28,15 @@ interface StatusChannelRow {
   channel_id: string | null;
 }
 
-/** Preview of the name the worker will write, or null when nothing is configured. */
+/**
+ * Example of the name format the worker writes
+ * (`{emoji}{map}_{players}x{queue}_👮{admins}`, see `buildStatusChannelName` in
+ * `@squad/worker-discord`), or null when nothing is configured. The values are
+ * illustrative, not the live server state.
+ */
 export function statusChannelPreview(channelId: string | null): string | null {
   if (!channelId) return null;
-  return '🟢карта_00x0_админов0';
+  return '🟢narva_0x0_👮0';
 }
 
 export default function DiscordStatusChannelsSection() {
@@ -43,21 +48,25 @@ export default function DiscordStatusChannelsSection() {
   const [saved, setSaved] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/v1/integrations/discord/status-channels', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (res.status === 401 || res.status === 403) {
-      setHidden(true);
-      return;
-    }
-    if (!res.ok) {
+    try {
+      const res = await fetch('/api/v1/integrations/discord/status-channels', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (res.status === 401 || res.status === 403) {
+        setHidden(true);
+        return;
+      }
+      if (!res.ok) {
+        setError('Не удалось загрузить статус-каналы.');
+        return;
+      }
+      const body = (await res.json()) as { items: StatusChannelRow[] };
+      setRows(body.items);
+      setDrafts(Object.fromEntries(body.items.map((i) => [i.server_id, i.channel_id ?? ''])));
+    } catch {
       setError('Не удалось загрузить статус-каналы.');
-      return;
     }
-    const body = (await res.json()) as { items: StatusChannelRow[] };
-    setRows(body.items);
-    setDrafts(Object.fromEntries(body.items.map((i) => [i.server_id, i.channel_id ?? ''])));
   }, []);
 
   useEffect(() => {
@@ -84,12 +93,14 @@ export default function DiscordStatusChannelsSection() {
         return;
       }
       setSaved(row.server_id);
-      await load();
     } catch {
       setError(`Не удалось сохранить статус-канал для ${row.display_name}.`);
+      return;
     } finally {
       setBusy(null);
     }
+    // The value is already stored: a failed reload is reported by load() itself.
+    await load();
   }
 
   if (hidden) return null;

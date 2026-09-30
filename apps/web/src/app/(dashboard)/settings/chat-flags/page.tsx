@@ -51,6 +51,11 @@ const EMPTY_DRAFT: DraftForm = {
   enabled: true,
 };
 
+/** Приводит сырой ввод поля «Дней назад» к целому числу в диапазоне 1..365. */
+function clampReindexDays(raw: string): number {
+  return Math.min(365, Math.max(1, Math.trunc(Number(raw) || 1)));
+}
+
 export default function ChatFlagsPage() {
   const [rules, setRules] = useState<ChatFlagRule[]>([]);
   const [canEdit, setCanEdit] = useState(false);
@@ -59,7 +64,7 @@ export default function ChatFlagsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [reindexDays, setReindexDays] = useState(7);
+  const [reindexDaysInput, setReindexDaysInput] = useState('7');
   const [pendingDelete, setPendingDelete] = useState<ChatFlagRule | null>(null);
 
   const patternId = useId();
@@ -201,7 +206,7 @@ export default function ChatFlagsPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ days: reindexDays }),
+        body: JSON.stringify({ days: clampReindexDays(reindexDaysInput) }),
       });
       if (res.status === 409) {
         throw new Error('Переиндексация уже выполняется — дождитесь её завершения.');
@@ -392,10 +397,9 @@ export default function ChatFlagsPage() {
                   type="number"
                   min={1}
                   max={365}
-                  value={reindexDays}
-                  onChange={(e) =>
-                    setReindexDays(Math.min(365, Math.max(1, Number(e.target.value) || 1)))
-                  }
+                  value={reindexDaysInput}
+                  onChange={(e) => setReindexDaysInput(e.target.value)}
+                  onBlur={() => setReindexDaysInput(String(clampReindexDays(reindexDaysInput)))}
                 />
               </FieldRow>
               <Button loading={busy} onClick={() => void runReindex()}>

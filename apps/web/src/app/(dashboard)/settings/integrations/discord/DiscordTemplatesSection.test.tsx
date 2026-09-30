@@ -273,7 +273,7 @@ describe('DiscordTemplatesSection', () => {
     await screen.findByLabelText('Заголовок');
     await user.click(screen.getByRole('button', { name: 'Сохранить шаблон' }));
 
-    expect(await screen.findByText(/template_not_found/)).toBeInTheDocument();
+    expect(await screen.findByText(/Шаблон не найден \(HTTP 404\)/)).toBeInTheDocument();
     expect(screen.getByText('Шаблоны сообщений')).toBeInTheDocument();
   });
 

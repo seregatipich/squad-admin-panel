@@ -31,6 +31,7 @@ import DiscordTemplatesSection from './DiscordTemplatesSection';
 import {
   DISCORD_EVENT_TYPES,
   type DiscordEventType,
+  describeApiError,
   describeTestSendOutcome,
   eventLabel,
   looksLikeWebhookUrl,
@@ -65,7 +66,7 @@ type Banner = { kind: 'ok' | 'err'; text: string } | null;
 async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
+    throw new Error(describeApiError(res.status, body.error));
   }
   return (await res.json()) as T;
 }
@@ -97,7 +98,11 @@ export default function DiscordIntegrationPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let loadedOnce = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
     async function load() {
+      // A hidden tab has nobody to show the result to.
+      if (loadedOnce && document.visibilityState === 'hidden') return;
       try {
         const [settingsRes, hooksRes] = await Promise.all([
           fetch('/api/v1/integrations/discord', { credentials: 'include', cache: 'no-store' }),
@@ -109,6 +114,7 @@ export default function DiscordIntegrationPage() {
         if (cancelled) return;
         if (settingsRes.status === 403 || hooksRes.status === 403) {
           setForbidden(true);
+          clearInterval(timer);
           return;
         }
         const settings = await readJson<IntegrationSettings>(settingsRes);
@@ -120,12 +126,14 @@ export default function DiscordIntegrationPage() {
           setEnabled(settings.enabled);
         }
         setWebhooks(hooks);
+        loadedOnce = true;
       } catch (e) {
-        if (!cancelled) setBanner({ kind: 'err', text: (e as Error).message });
+        // Background polls must not overwrite the result of the operator's own action.
+        if (!cancelled && !loadedOnce) setBanner({ kind: 'err', text: (e as Error).message });
       }
     }
     void load();
-    const timer = setInterval(load, POLL_MS);
+    timer = setInterval(load, POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -219,7 +227,10 @@ export default function DiscordIntegrationPage() {
         method: 'DELETE',
         credentials: 'include',
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(describeApiError(res.status, body.error));
+      }
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
       setBanner({ kind: 'ok', text: 'Вебхук удалён.' });
     } catch (err) {

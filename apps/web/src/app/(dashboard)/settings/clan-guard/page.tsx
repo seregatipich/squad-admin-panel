@@ -36,20 +36,29 @@ export default function ClanGuardSettingsPage() {
   const graceId = useId();
 
   const refresh = useCallback(async () => {
-    const [settingsRes, meRes] = await Promise.all([
-      fetch('/api/v1/settings/clan-guard', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (settingsRes.ok) {
-      const loaded = (await settingsRes.json()) as ClanGuardSettings;
-      setSettings(loaded);
-      setEnabled(loaded.enabled);
-      setGracePeriodInput(String(loaded.grace_period_seconds));
-      setGlobalErr(null);
-    } else {
-      setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+    try {
+      const [settingsRes, meRes] = await Promise.all([
+        fetch('/api/v1/settings/clan-guard', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      let loadErr: string | null = null;
+      if (settingsRes.ok) {
+        const loaded = (await settingsRes.json()) as ClanGuardSettings;
+        setSettings(loaded);
+        setEnabled(loaded.enabled);
+        setGracePeriodInput(String(loaded.grace_period_seconds));
+      } else {
+        loadErr = `Не удалось загрузить настройки: ${settingsRes.status}`;
+      }
+      if (meRes.ok) {
+        setMe((await meRes.json()) as Me);
+      } else {
+        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.status}`;
+      }
+      setGlobalErr(loadErr);
+    } catch {
+      setGlobalErr('Не удалось загрузить настройки: ошибка сети.');
     }
-    if (meRes.ok) setMe((await meRes.json()) as Me);
   }, []);
 
   useEffect(() => {

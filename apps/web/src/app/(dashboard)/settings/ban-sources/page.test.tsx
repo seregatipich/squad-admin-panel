@@ -47,6 +47,9 @@ function mockFetch(opts: { canManage?: boolean; discordUrl?: string | null } = {
     if (url.includes('/api/v1/ban-sources/') && init?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
+    if (url.endsWith('/api/v1/ban-sources') && init?.method === 'POST') {
+      return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 201 }));
+    }
     if (url.endsWith('/api/v1/ban-sources')) {
       return Promise.resolve(
         new Response(JSON.stringify([{ ...SOURCE, discord_url: opts.discordUrl ?? null }]), {
@@ -190,6 +193,55 @@ describe('BanSourcesPage', () => {
       render(<BanSourcesPage />);
 
       expect(await screen.findByText(/Не удалось загрузить источники/)).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the poll interval field stay empty while typing instead of snapping to 60',
+    async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+      await screen.findByRole('heading', { name: 'Ру-Баны' });
+
+      const input = screen.getByLabelText('Интервал опроса (мин)') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: '30' } });
+      expect(input.value).toBe('30');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'clamps the poll interval to the 15-minute minimum on blur, and sends it on submit',
+    async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal('fetch', fn);
+      render(<BanSourcesPage />);
+      await screen.findByRole('heading', { name: 'Ру-Баны' });
+
+      const interval = screen.getByLabelText('Интервал опроса (мин)') as HTMLInputElement;
+      fireEvent.change(interval, { target: { value: '5' } });
+      fireEvent.blur(interval);
+      expect(interval.value).toBe('15');
+
+      fireEvent.change(screen.getByLabelText('Имя'), { target: { value: 'Новый источник' } });
+      fireEvent.change(screen.getByLabelText('URL банлиста'), {
+        target: { value: 'https://example.com/new.cfg' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Добавить источник' }));
+
+      await waitFor(() => {
+        const createCall = calls.find(
+          (c) => c.url.endsWith('/api/v1/ban-sources') && c.init?.method === 'POST',
+        );
+        expect(createCall).toBeDefined();
+        expect(JSON.parse(String(createCall?.init?.body))).toMatchObject({
+          poll_interval_minutes: 15,
+        });
+      });
     },
     TEST_TIMEOUT_MS,
   );

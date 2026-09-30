@@ -99,6 +99,11 @@ const EMPTY_FORM = {
   poll_interval_minutes: 60,
 };
 
+/** Приводит сырой ввод поля «Интервал опроса» к целому числу минут не меньше 15. */
+function clampPollIntervalMinutes(raw: string): number {
+  return Math.max(15, Math.trunc(Number(raw) || 60));
+}
+
 /** Показатель источника: служебный ярлык над значением (§1). */
 function SourceStat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -114,6 +119,9 @@ export default function BanSourcesPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [pollIntervalInput, setPollIntervalInput] = useState(
+    String(EMPTY_FORM.poll_interval_minutes),
+  );
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<BanSource | null>(null);
@@ -165,7 +173,7 @@ export default function BanSourcesPage() {
           on_match: form.on_match,
           discord_url: form.discord_url.trim() || null,
           auth_header: form.auth_header.trim() || null,
-          poll_interval_minutes: form.poll_interval_minutes,
+          poll_interval_minutes: clampPollIntervalMinutes(pollIntervalInput),
         }),
       });
       if (!res.ok) {
@@ -173,6 +181,7 @@ export default function BanSourcesPage() {
         throw new Error(String(body.message ?? body.error ?? res.status));
       }
       setForm({ ...EMPTY_FORM });
+      setPollIntervalInput(String(EMPTY_FORM.poll_interval_minutes));
       await refresh();
     } catch (err) {
       setError(`Не удалось создать источник: ${(err as Error).message}`);
@@ -365,12 +374,10 @@ export default function BanSourcesPage() {
                         id={`${formId}-interval`}
                         type="number"
                         min={15}
-                        value={form.poll_interval_minutes}
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            poll_interval_minutes: Number(event.target.value) || 60,
-                          }))
+                        value={pollIntervalInput}
+                        onChange={(event) => setPollIntervalInput(event.target.value)}
+                        onBlur={() =>
+                          setPollIntervalInput(String(clampPollIntervalMinutes(pollIntervalInput)))
                         }
                       />
                     </FieldRow>

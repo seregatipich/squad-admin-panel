@@ -22,8 +22,10 @@ function makeSettings(overrides: Partial<EconomySettings> = {}): EconomySettings
     seed_threshold: overrides.seed_threshold ?? 40,
     economy_enabled: overrides.economy_enabled ?? false,
     privilege_costs: overrides.privilege_costs ?? {},
-    vip_expiry_windows_days: overrides.vip_expiry_windows_days,
-    vip_expiry_warn_in_game: overrides.vip_expiry_warn_in_game,
+    seed_reward_threshold_hours_per_month: overrides.seed_reward_threshold_hours_per_month ?? 0,
+    seed_reward_role_id: overrides.seed_reward_role_id ?? null,
+    vip_expiry_windows_days: overrides.vip_expiry_windows_days ?? [7, 3, 1],
+    vip_expiry_warn_in_game: overrides.vip_expiry_warn_in_game ?? true,
     updated_at: overrides.updated_at ?? null,
     updated_by_player_id: overrides.updated_by_player_id ?? null,
   };
