@@ -117,3 +117,53 @@ describe('live bus event subscriptions (browser)', () => {
     expect(received).toEqual(['bridge.connection']);
   });
 });
+
+describe('live bus reconnect after an expired session (browser)', () => {
+  beforeEach(() => {
+    FakeSocket.instances = [];
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeSocket);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Fails every socket the bus opens, `rounds` times over, letting each backoff elapse. */
+  const failSockets = async (rounds: number): Promise<void> => {
+    for (let i = 0; i < rounds; i++) {
+      FakeSocket.instances.at(-1)?.onclose?.();
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+  };
+
+  it('stops reconnecting and leaves for the login page once /me answers 401', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bus = await freshBus();
+    bus.subscribe(() => {});
+
+    await failSockets(3);
+    const socketsBefore = FakeSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/me', expect.anything());
+    expect(window.location.href).toContain('/login');
+    expect(FakeSocket.instances.length).toBe(socketsBefore);
+  });
+
+  it('keeps reconnecting while /me still answers 200', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ status: 200 })),
+    );
+    const bus = await freshBus();
+    bus.subscribe(() => {});
+
+    await failSockets(3);
+    const before = FakeSocket.instances.length;
+    await failSockets(2);
+
+    expect(FakeSocket.instances.length).toBeGreaterThan(before);
+  });
+});

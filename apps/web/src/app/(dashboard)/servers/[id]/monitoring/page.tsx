@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { MetricsChart } from '@/components/MetricsChart';
 import { Button, InlineBanner, PageContainer, SegmentedControl, Skeleton } from '@/components/ui';
+import { CHART_SERIES } from '@/lib/chart-tokens';
 
 interface MetricsPoint {
   timestamp: string;
@@ -116,7 +117,7 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
             points={points.map((p) => ({ timestamp: p.timestamp, value: p.mem_bytes }))}
             label="Память"
             unit=""
-            color="#bf5af2"
+            color={CHART_SERIES.memory}
           />
 
           {points.some((p) => p.tickrate !== undefined) && (

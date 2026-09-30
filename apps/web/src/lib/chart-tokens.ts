@@ -36,6 +36,7 @@ export const CHART_SERIES = {
   cpu: '#30d158',
   ram: '#409cff',
   disk: '#bf5af2',
+  memory: '#bf5af2',
   rx: '#409cff',
   tx: '#ff9f0a',
 } as const;
