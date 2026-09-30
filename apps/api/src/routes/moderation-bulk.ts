@@ -1,5 +1,5 @@
 import { players, servers } from '@squad/db/schema';
-import type { PermissionKey } from '@squad/shared-config';
+import { BAN_LENGTH_PATTERN, type PermissionKey } from '@squad/shared-config';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -19,8 +19,6 @@ import { parseStoredRoster } from '../lib/roster.js';
 const BULK_MOD_MAX = 50;
 /** Same reason ceiling as the single-target moderation and report routes. */
 const REASON_MAX = 300;
-/** Squad's `AdminBan` duration grammar; `0` (any unit) means permanent. */
-const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
 /**
  * Wall-clock budget for the whole loop. Each target costs one worker-rcon
  * round trip whose default timeout is 4 s (`rcon-worker-command.ts`), so

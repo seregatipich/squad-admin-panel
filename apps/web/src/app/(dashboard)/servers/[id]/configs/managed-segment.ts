@@ -32,11 +32,3 @@ export function managedSegmentLineRange(content: string): {
   const endLine = startLine + countNewlines(located.segment);
   return { startLine, endLine };
 }
-
-/**
- * The exact managed-segment text (markers included), or `null` when the content
- * has no complete `BEGIN … END` marker pair.
- */
-export function managedSegmentText(content: string): string | null {
-  return findManagedSegment(content)?.segment ?? null;
-}

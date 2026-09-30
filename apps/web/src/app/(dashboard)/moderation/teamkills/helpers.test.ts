@@ -51,6 +51,10 @@ describe('teamkill moderation helpers', () => {
     expect(formatTeamkillDate('2026-07-07T18:30:00.000Z')).not.toBe('—');
   });
 
+  it('includes the year, since the last-TK/moderation columns can show dates years apart', () => {
+    expect(formatTeamkillDate('2024-01-05T09:00:00.000Z')).toContain('2024');
+  });
+
   describe('formatModerationSummary', () => {
     it('returns an em dash when there is no moderation history', () => {
       expect(
@@ -62,14 +66,24 @@ describe('teamkill moderation helpers', () => {
       ).toBe('—');
     });
 
-    it('formats the latest action type, date and total count', () => {
+    it('formats the latest action type as a Russian label, with the date and total count', () => {
       expect(
         formatModerationSummary({
           moderation_total: 3,
           last_moderation_at: '2026-07-12T14:30:00.000Z',
           last_moderation_type: 'warn',
         }),
-      ).toBe(`warn · ${formatTeamkillDate('2026-07-12T14:30:00.000Z')}, всего 3`);
+      ).toBe(`Предупреждение · ${formatTeamkillDate('2026-07-12T14:30:00.000Z')}, всего 3`);
+    });
+
+    it('falls back to the raw action type for a code with no Russian label', () => {
+      expect(
+        formatModerationSummary({
+          moderation_total: 1,
+          last_moderation_at: '2026-07-12T14:30:00.000Z',
+          last_moderation_type: 'some_future_worker_action',
+        }),
+      ).toContain('some_future_worker_action ·');
     });
 
     it('falls back to an em dash date when last_moderation_at is null despite a positive total', () => {
@@ -79,7 +93,7 @@ describe('teamkill moderation helpers', () => {
           last_moderation_at: null,
           last_moderation_type: 'kick',
         }),
-      ).toBe('kick · —, всего 1');
+      ).toBe('Кик · —, всего 1');
     });
 
     it('falls back to an em dash date for an invalid last_moderation_at', () => {
@@ -89,7 +103,7 @@ describe('teamkill moderation helpers', () => {
           last_moderation_at: 'not-a-date',
           last_moderation_type: 'ban',
         }),
-      ).toBe('ban · —, всего 1');
+      ).toBe('Бан · —, всего 1');
     });
   });
 });

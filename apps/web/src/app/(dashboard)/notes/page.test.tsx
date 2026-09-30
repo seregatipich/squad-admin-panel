@@ -70,6 +70,32 @@ describe('NotesFeedPage', () => {
     expect(empty.closest('[data-variant]')).toHaveAttribute('data-variant', 'initial');
   });
 
+  it('does not re-fetch the feed when can_view_deleted flips to true after the first load', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/notes/authors')) {
+        return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [NOTE], next_cursor: null, can_view_deleted: true }), {
+          status: 200,
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<NotesFeedPage />);
+
+    await screen.findByRole('table', { name: 'Лента заметок админов' });
+    // Reveals the "Показывать удалённые" checkbox once can_view_deleted comes
+    // back true, proving the privileged branch actually ran.
+    await screen.findByLabelText('Показывать удалённые');
+
+    const feedRequests = fetchMock.mock.calls.filter(
+      (call) => !String(call[0]).startsWith('/api/v1/notes/authors'),
+    );
+    expect(feedRequests).toHaveLength(1);
+  });
+
   it('offers a retry when the feed request fails', async () => {
     const fetchMock = stubFetch({ items: [], next_cursor: null }, false);
     vi.stubGlobal('fetch', fetchMock);

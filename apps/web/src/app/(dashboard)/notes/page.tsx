@@ -80,7 +80,6 @@ function buildParams(filters: {
   dateFrom: string;
   dateTo: string;
   includeDeleted: boolean;
-  canViewDeleted: boolean;
 }): URLSearchParams {
   const params = new URLSearchParams();
   if (filters.q.trim()) params.set('q', filters.q.trim());
@@ -90,7 +89,11 @@ function buildParams(filters: {
   if (from) params.set('dateFrom', from.toISOString());
   const to = parseDateInput(filters.dateTo);
   if (to) params.set('dateTo', endOfDay(to).toISOString());
-  if (filters.canViewDeleted && filters.includeDeleted) params.set('includeDeleted', 'true');
+  // The server enforces the `can_view_deleted` permission independently, so
+  // the client only needs to gate the checkbox itself — not double-check it
+  // against a value the server just echoed back (that value flipping after
+  // the first load must not, by itself, trigger a second identical request).
+  if (filters.includeDeleted) params.set('includeDeleted', 'true');
   return params;
 }
 
@@ -116,8 +119,8 @@ export default function NotesFeedPage() {
   const toId = useId();
 
   const filters = useMemo(
-    () => ({ q, player, author, dateFrom, dateTo, includeDeleted, canViewDeleted }),
-    [q, player, author, dateFrom, dateTo, includeDeleted, canViewDeleted],
+    () => ({ q, player, author, dateFrom, dateTo, includeDeleted }),
+    [q, player, author, dateFrom, dateTo, includeDeleted],
   );
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
