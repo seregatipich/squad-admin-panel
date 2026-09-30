@@ -247,7 +247,8 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
           restart: panelPermissions?.has('server:restart') ?? false,
           set_next_layer: squadPermissions?.has('changemap') ?? false,
           change_layer: squadPermissions?.has('changemap') ?? false,
-          broadcast: squadPermissions?.has('chat') ?? false,
+          // Mirrors taskTypeGuard: a broadcast needs both the squad `chat` right and panel `role:edit`.
+          broadcast: (squadPermissions?.has('chat') && panelPermissions?.has('role:edit')) ?? false,
         },
       };
     },
