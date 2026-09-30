@@ -76,6 +76,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const [data, setData] = useState<ArchiveDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [fileErr, setFileErr] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<BackupContent | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
 
@@ -114,6 +115,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
 
   async function viewFile(filename: string) {
     setLoadingFile(filename);
+    setFileErr(null);
     try {
       const r = await fetch(
         `/api/v1/servers/archive/${id}/configs/${encodeURIComponent(filename)}`,
@@ -123,7 +125,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
       const body = (await r.json()) as BackupContent;
       setOpenFile(body);
     } catch (e) {
-      setErr((e as Error).message);
+      setFileErr(`Не удалось открыть файл ${filename}: ${(e as Error).message}`);
     } finally {
       setLoadingFile(null);
     }
@@ -176,6 +178,8 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
           }
         />
       )}
+
+      {fileErr && <InlineBanner tone="crit" title={fileErr} />}
 
       {!data ? (
         err ? null : (
