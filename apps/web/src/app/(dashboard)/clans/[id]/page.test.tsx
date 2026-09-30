@@ -140,7 +140,7 @@ function matchItem(overrides: Record<string, unknown>): Record<string, unknown> 
 describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
   it('ignores a stale "Показать ещё" response that resolves after a newer server-filter load', async () => {
     const firstPage = {
-      clan_id: 'clan-1',
+      clan_id: CLAN.id,
       items: [
         matchItem({
           id: 'match-1',
@@ -159,7 +159,7 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
       limit: 20,
     };
     const filteredPage = {
-      clan_id: 'clan-1',
+      clan_id: CLAN.id,
       items: [
         matchItem({
           id: 'match-3',
@@ -176,11 +176,11 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
     const staleLoadMore = deferred<Response>();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url === '/api/v1/clans/clan-1') return json(CLAN);
-      if (url === '/api/v1/clans/clan-1/online') return json({ clan_id: 'clan-1', servers: [] });
+      if (url === `/api/v1/clans/${CLAN.id}`) return json(CLAN);
+      if (url === `/api/v1/clans/${CLAN.id}/online`) return json({ clan_id: CLAN.id, servers: [] });
       if (url === '/api/v1/servers') return json({ items: [] });
       if (url === '/api/v1/me') return json({ can_manage_clans: true });
-      if (url.startsWith('/api/v1/clans/clan-1/matches')) {
+      if (url.startsWith(`/api/v1/clans/${CLAN.id}/matches`)) {
         matchesCalls += 1;
         if (matchesCalls === 1) return json(firstPage);
         if (matchesCalls === 2) return staleLoadMore.promise;
@@ -190,7 +190,7 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const params = Promise.resolve({ id: 'clan-1' });
+    const params = Promise.resolve({ id: CLAN.id });
     await act(async () => {
       render(
         <Suspense fallback={null}>
@@ -216,7 +216,7 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
     staleLoadMore.resolve(
       new Response(
         JSON.stringify({
-          clan_id: 'clan-1',
+          clan_id: CLAN.id,
           items: [matchItem({ id: 'match-stale', server_id: 'srv-1', map: 'StaleMap' })],
           next_cursor: 'STALE',
           limit: 20,
