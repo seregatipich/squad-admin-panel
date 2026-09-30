@@ -1,3 +1,5 @@
+import { serverLabel } from '@/lib/format';
+
 export type SessionMode = 'online' | 'boost' | 'queue' | 'seed';
 
 export interface PresenceSession {
@@ -179,10 +181,6 @@ function hexWithAlpha(hex: string, alpha: number): string {
     .toString(16)
     .padStart(2, '0');
   return `${hex}${byte}`;
-}
-
-export function serverLabel(server: Pick<ServerPresence, 'server_slug' | 'server_name'>): string {
-  return server.server_slug ?? server.server_name ?? '—';
 }
 
 export function sortServersByOnline(servers: ServerPresence[]): ServerPresence[] {

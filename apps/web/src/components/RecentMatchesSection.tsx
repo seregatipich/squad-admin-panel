@@ -12,6 +12,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  formatAbsolute,
   InlineBanner,
   SkeletonTable,
   Table,
@@ -21,14 +22,13 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { formatMatchDuration, serverLabel } from '@/lib/format';
 import {
   allMatchesHref,
-  formatMatchDate,
-  formatMatchDuration,
   type MatchOutcome,
   type MatchSummary,
   outcomeLabel,
-  serverLabel,
+  parseMatchSummary,
   winratePercent,
   winrateSummaryText,
 } from './recent-matches';
@@ -55,8 +55,10 @@ export function RecentMatchesSection({ playerId }: { playerId: string }) {
       cache: 'no-store',
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: MatchSummary) => {
-        if (!cancelled) setSummary(body);
+      .then((body: unknown) => {
+        const parsed = parseMatchSummary(body);
+        if (!parsed) throw new Error('Неверный формат ответа');
+        if (!cancelled) setSummary(parsed);
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
@@ -128,7 +130,7 @@ export function RecentMatchesSection({ playerId }: { playerId: string }) {
                       className="whitespace-nowrap font-mono text-accent"
                       title="Открыть матч"
                     >
-                      {formatMatchDate(match.started_at)}
+                      {formatAbsolute(match.started_at, 'ru-RU') ?? match.started_at}
                     </Link>
                   </Td>
                   <Td>

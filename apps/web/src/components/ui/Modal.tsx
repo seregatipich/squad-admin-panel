@@ -123,24 +123,44 @@ export function Modal({
       }
       notifyClose();
     };
-    const handleNativeClose = () => notifyClose();
+    // Второй Escape подряд браузеры с CloseWatcher закрывают без отменяемого
+    // `cancel`, поэтому недопустимое закрытие откатывается здесь. Закрытие
+    // через проп сюда не попадает: `notifiedRef` к тому моменту уже сброшен.
+    const handleNativeClose = () => {
+      if (!dismissible && notifiedRef.current) {
+        dialog.showModal();
+        return;
+      }
+      notifyClose();
+    };
 
     // Клик по `::backdrop` приходит на сам `<dialog>`: отдельного узла у
     // подложки нет. Панель занимает элемент целиком (`p-0`), поэтому
     // `target === dialog` случается только за её пределами.
+    // Выделение текста, начатое в панели и законченное над подложкой, тоже
+    // порождает `click` на `<dialog>`, поэтому нажатие внутри панели
+    // запоминается и такой `click` за закрытие не считается.
+    let pressStartedInPanel = false;
+    const handlePress = (event: Event) => {
+      pressStartedInPanel = event.target !== dialog;
+    };
     const handleSurfaceClick = (event: Event) => {
-      if (!dismissible || event.target !== dialog) return;
+      const startedInPanel = pressStartedInPanel;
+      pressStartedInPanel = false;
+      if (!dismissible || event.target !== dialog || startedInPanel) return;
       notifyClose();
     };
 
-    // События `cancel` и `close` не всплывают, поэтому все три слушателя
+    // События `cancel` и `close` не всплывают, поэтому все слушатели
     // висят на самом элементе, а не приходят пропсами React.
     dialog.addEventListener('cancel', handleCancel);
     dialog.addEventListener('close', handleNativeClose);
+    dialog.addEventListener('mousedown', handlePress);
     dialog.addEventListener('click', handleSurfaceClick);
     return () => {
       dialog.removeEventListener('cancel', handleCancel);
       dialog.removeEventListener('close', handleNativeClose);
+      dialog.removeEventListener('mousedown', handlePress);
       dialog.removeEventListener('click', handleSurfaceClick);
     };
   }, [dismissible, notifyClose]);

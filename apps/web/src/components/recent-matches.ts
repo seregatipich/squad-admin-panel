@@ -38,22 +38,9 @@ const OUTCOME_LABELS: Record<Exclude<MatchOutcome, null>, string> = {
   draw: 'Ничья',
 };
 
-const OUTCOME_TONES: Record<Exclude<MatchOutcome, null>, string> = {
-  win: 'border-emerald-800 bg-emerald-950/60 text-emerald-300',
-  loss: 'border-red-900 bg-red-950/50 text-red-300',
-  draw: 'border-neutral-800 bg-neutral-900 text-neutral-400',
-};
-
-const NEUTRAL_TONE = 'border-neutral-800 bg-neutral-900 text-neutral-500';
-
 export function outcomeLabel(outcome: MatchOutcome): string {
   if (outcome === null) return 'В процессе';
   return OUTCOME_LABELS[outcome];
-}
-
-export function outcomeToneClasses(outcome: MatchOutcome): string {
-  if (outcome === null) return NEUTRAL_TONE;
-  return OUTCOME_TONES[outcome];
 }
 
 export function winrateSummaryText(winrate: Winrate): string {
@@ -69,29 +56,61 @@ export function allMatchesHref(playerId: string): string {
   return `/matches?player=${encodeURIComponent(playerId)}`;
 }
 
-export function serverLabel(match: Pick<RecentMatch, 'server_slug' | 'server_name'>): string {
-  return match.server_slug ?? match.server_name ?? '—';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
-export function formatMatchDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
-  const total = Math.floor(seconds);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours > 0) return `${hours}ч ${minutes}м`;
-  if (minutes > 0) return `${minutes}м ${secs}с`;
-  return `${secs}с`;
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
 }
 
-export function formatMatchDate(iso: string): string {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function isNullableNumber(value: unknown): boolean {
+  return value === null || typeof value === 'number';
+}
+
+function isRecentMatch(value: unknown): value is RecentMatch {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.match_id === 'string' &&
+    typeof value.server_id === 'string' &&
+    isNullableString(value.server_name) &&
+    isNullableString(value.server_slug) &&
+    isNullableString(value.layer) &&
+    isNullableString(value.map) &&
+    isNullableString(value.game_mode) &&
+    isNullableString(value.winner) &&
+    typeof value.is_seed === 'boolean' &&
+    typeof value.started_at === 'string' &&
+    isNullableString(value.ended_at) &&
+    isNullableNumber(value.duration_seconds) &&
+    isNullableNumber(value.team) &&
+    typeof value.play_seconds === 'number' &&
+    (value.outcome === null ||
+      (typeof value.outcome === 'string' && value.outcome in OUTCOME_LABELS))
+  );
+}
+
+function isWinrate(value: unknown): value is Winrate {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.wins === 'number' &&
+    typeof value.losses === 'number' &&
+    typeof value.draws === 'number' &&
+    typeof value.decided === 'number' &&
+    typeof value.considered === 'number' &&
+    typeof value.window === 'number'
+  );
+}
+
+/**
+ * Validates a `GET /api/v1/players/:id/match-summary` body.
+ *
+ * @param value Parsed JSON of unknown shape.
+ * @returns The summary, or `null` when the shape does not match the contract.
+ */
+export function parseMatchSummary(value: unknown): MatchSummary | null {
+  if (!isRecord(value)) return null;
+  if (!Array.isArray(value.recent) || !value.recent.every(isRecentMatch)) return null;
+  if (!isWinrate(value.winrate)) return null;
+  return { recent: value.recent, winrate: value.winrate };
 }

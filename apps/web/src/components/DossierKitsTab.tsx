@@ -3,7 +3,7 @@
 import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
 import { type DossierKit, formatPlayTime, sortKits } from './dossier';
 
-/** Same field set as `formatMatchDate` in `recent-matches.ts`; `—` for a never-played kit. */
+/** Same field set as `formatAbsolute` in `ui/DateTime.tsx`; `—` for a never-played kit. */
 function formatKitDate(iso: string | null): string {
   if (iso === null) return '—';
   return new Date(iso).toLocaleString('ru-RU', {

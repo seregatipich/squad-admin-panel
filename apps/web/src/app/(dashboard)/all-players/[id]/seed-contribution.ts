@@ -1,3 +1,5 @@
+import { serverLabel } from '@/lib/format';
+
 export interface SeedContributionWindow {
   from: string;
   to: string;
@@ -109,12 +111,6 @@ export function parseSeedContribution(json: unknown): SeedContributionResponse |
     series: value.series,
     bonus: { k_seed: bonus.k_seed, earned_points: bonus.earned_points },
   };
-}
-
-export function serverLabel(
-  server: Pick<SeedServerContribution, 'server_slug' | 'server_name'>,
-): string {
-  return server.server_slug ?? server.server_name ?? '—';
 }
 
 export function sortServersBySeedSeconds(

@@ -51,8 +51,28 @@ function toDate(value: string | number | Date): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/*
+ * Конструктор Intl.DateTimeFormat дорог, а список строк форматирует сотни дат
+ * за рендер: форматтеры кэшируются по локали.
+ */
+const absoluteFormatters = new Map<string, Intl.DateTimeFormat>();
+const clockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function cachedFormatter(
+  cache: Map<string, Intl.DateTimeFormat>,
+  locale: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  let formatter = cache.get(locale);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    cache.set(locale, formatter);
+  }
+  return formatter;
+}
+
 function absoluteFor(date: Date, locale: string): string {
-  return new Intl.DateTimeFormat(locale, ABSOLUTE_OPTIONS).format(date);
+  return cachedFormatter(absoluteFormatters, locale, ABSOLUTE_OPTIONS).format(date);
 }
 
 function relativeFor(date: Date, now: number, labels: RelativeLabels): string {
@@ -95,7 +115,9 @@ export function formatAbsolute(value: string | number | Date, locale: string): s
  */
 export function formatClock(value: string | number | Date, locale: string): string | null {
   const date = toDate(value);
-  return date === null ? null : new Intl.DateTimeFormat(locale, CLOCK_OPTIONS).format(date);
+  return date === null
+    ? null
+    : cachedFormatter(clockFormatters, locale, CLOCK_OPTIONS).format(date);
 }
 
 /**

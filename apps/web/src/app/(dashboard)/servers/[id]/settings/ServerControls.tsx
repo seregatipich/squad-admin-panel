@@ -107,6 +107,8 @@ export function ServerControls({ serverId }: { serverId: string }) {
         }
       }
       await refresh();
+    } catch (e) {
+      setErr(`${name} failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setActing(null);
     }

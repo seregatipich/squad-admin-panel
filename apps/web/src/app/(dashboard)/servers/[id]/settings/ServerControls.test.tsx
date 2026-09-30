@@ -95,6 +95,21 @@ describe('ServerControls', () => {
     expect(screen.queryByRole('button', { name: 'Обновить игру' })).not.toBeInTheDocument();
   });
 
+  it('shows a network failure instead of leaking an unhandled rejection', async () => {
+    stubFetch('stopped', undefined, (url, init) => {
+      if (url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST') {
+        throw new TypeError('Failed to fetch');
+      }
+      return undefined;
+    });
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Старт' }));
+    });
+    expect(await screen.findByText('start failed: Failed to fetch')).toBeInTheDocument();
+  });
+
   it('shows the API error when an action fails', async () => {
     stubFetch('stopped', undefined, (url, init) =>
       url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST'

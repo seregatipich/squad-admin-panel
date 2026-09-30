@@ -171,4 +171,28 @@ describe('Modal', () => {
     fireEvent.click(dialogIn(container));
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('does not close when a press starts inside the panel and ends on the backdrop', () => {
+    const { container, onClose } = renderModal();
+    fireEvent.mouseDown(screen.getByText('Сессия будет прервана.'));
+    fireEvent.click(dialogIn(container));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes on a backdrop click after an earlier drag out of the panel', () => {
+    const { container, onClose } = renderModal();
+    fireEvent.mouseDown(screen.getByText('Сессия будет прервана.'));
+    fireEvent.click(dialogIn(container));
+    fireEvent.mouseDown(dialogIn(container));
+    fireEvent.click(dialogIn(container));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopens a non-dismissible dialog that the browser closed natively', () => {
+    const { container, onClose } = renderModal({ dismissible: false });
+    const dialog = dialogIn(container);
+    dialog.close();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute('open');
+  });
 });
