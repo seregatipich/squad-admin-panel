@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createMmdbLookup } from '../src/geoip/mmdb.js';
 import {
+  buildGeoLite2BasicAuthHeader,
   buildGeoLite2DownloadUrl,
+  GEOIP_MAX_ARCHIVE_BYTES,
   type RefreshGeoLite2Options,
   refreshGeoLite2Db,
   shouldRefreshGeoIpDb,
@@ -97,11 +99,22 @@ describe('createMmdbLookup', () => {
 });
 
 describe('buildGeoLite2DownloadUrl', () => {
-  it('targets the GeoLite2-City tar.gz edition with the license key', () => {
-    const url = buildGeoLite2DownloadUrl('lic-key-123');
-    expect(url).toContain('edition_id=GeoLite2-City');
-    expect(url).toContain('license_key=lic-key-123');
-    expect(url).toContain('suffix=tar.gz');
+  it('targets the current per-edition download endpoint with no credentials in the URL', () => {
+    const url = buildGeoLite2DownloadUrl();
+    expect(url).toBe(
+      'https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz',
+    );
+    // Regression guard for the legacy `app/geoip_download?license_key=...`
+    // endpoint, which leaked the license key into the query string (and so
+    // into access logs, proxies and request history).
+    expect(url).not.toContain('license_key');
+  });
+});
+
+describe('buildGeoLite2BasicAuthHeader', () => {
+  it('base64-encodes accountId:licenseKey for HTTP Basic Auth', () => {
+    const header = buildGeoLite2BasicAuthHeader('acct-1', 'lic-1');
+    expect(header).toBe(`Basic ${Buffer.from('acct-1:lic-1').toString('base64')}`);
   });
 });
 
@@ -140,6 +153,91 @@ describe('refreshGeoLite2Db', () => {
       makeOptions({ credentials: { accountId: null, licenseKey: null } }),
     );
     expect(result).toEqual({ status: 'skipped_no_key' });
+  });
+
+  it('skips the download when the account id is missing, even with a license key', async () => {
+    // MaxMind's current API authenticates with account id + license key
+    // together; a license key alone can no longer authenticate.
+    const result = await refreshGeoLite2Db(
+      makeOptions({ credentials: { accountId: null, licenseKey: 'lic-1' } }),
+    );
+    expect(result).toEqual({ status: 'skipped_no_key' });
+  });
+
+  it('sends credentials as a Basic Auth header, never in the URL', async () => {
+    let requestedUrl = '';
+    let sentHeaders: Record<string, string> | undefined;
+    await refreshGeoLite2Db(
+      makeOptions({
+        fetchImpl: async (url, init) => {
+          requestedUrl = url;
+          sentHeaders = init?.headers;
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+          };
+        },
+      }),
+    );
+    expect(requestedUrl).not.toContain('lic-1');
+    expect(sentHeaders?.Authorization).toBe(buildGeoLite2BasicAuthHeader('acct-1', 'lic-1'));
+  });
+
+  it('aborts the request once the configured timeout elapses', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    await refreshGeoLite2Db(
+      makeOptions({
+        timeoutMs: 5,
+        fetchImpl: async (_url, init) => {
+          receivedSignal = init?.signal;
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+          };
+        },
+      }),
+    );
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('rejects an archive whose declared Content-Length exceeds the cap, before buffering it', async () => {
+    let bufferedBody = false;
+    const result = await refreshGeoLite2Db(
+      makeOptions({
+        maxArchiveBytes: 10,
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: (name: string) => (name === 'content-length' ? '999' : null) },
+          arrayBuffer: async () => {
+            bufferedBody = true;
+            return new Uint8Array(999).buffer;
+          },
+        }),
+      }),
+    );
+    expect(result).toEqual({ status: 'archive_too_large', contentLength: 999 });
+    expect(bufferedBody).toBe(false);
+  });
+
+  it('rejects an oversized archive even without a Content-Length header', async () => {
+    const result = await refreshGeoLite2Db(
+      makeOptions({
+        maxArchiveBytes: 2,
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+        }),
+      }),
+    );
+    expect(result).toEqual({ status: 'archive_too_large', contentLength: 3 });
+  });
+
+  it('accepts an archive at or below the default cap', () => {
+    expect(GEOIP_MAX_ARCHIVE_BYTES).toBeGreaterThan(100 * 1024 * 1024);
   });
 
   it('reports a download failure without persisting', async () => {
