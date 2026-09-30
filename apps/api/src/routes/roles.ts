@@ -26,6 +26,7 @@ import {
   roleCeilingError,
 } from '../lib/role-guards.js';
 import { checkGrantsWithinActor, checkRoleWithinActor } from '../lib/role-hierarchy.js';
+import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const colorSchema = z.string().refine(isRoleColor, { message: 'invalid color' });
 /** Role names become Admins.cfg group names verbatim, so they must not alter its syntax (#11). */
@@ -154,6 +155,21 @@ function ensureFlagDependency(body: {
 
 const rolesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  async function listMemberIds(roleId: string): Promise<string[]> {
+    const rows = await app.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.roleId, roleId));
+    return rows.map((row) => row.id);
+  }
+
+  // A role that loses panel_access must not leave its members' live sessions behind.
+  async function revokeMemberSessions(playerIds: string[]): Promise<void> {
+    for (const playerId of playerIds) {
+      await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
+    }
+  }
 
   fast.get('/api/v1/roles', { config: { permissions: ['role:view'], audit: false } }, async () => {
     return listRolesWithCounts(app.db);
@@ -389,6 +405,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         return roleCeilingError(beyond);
       }
       const before = await loadRoleSnapshot(app.db, req.params.id);
+      const memberIds = await listMemberIds(req.params.id);
       try {
         await app.db.transaction(async (tx) => {
           const updates: Partial<typeof roles.$inferInsert> = {};
@@ -454,6 +471,9 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       await invalidatePermissionCacheForRole(app.db, req.params.id);
       const after = await loadRoleSnapshot(app.db, req.params.id);
       req.auditSnapshots = { before, after };
+      if (req.body.panel_access === false && roleRow.panelAccess) {
+        await revokeMemberSessions(memberIds);
+      }
       return after;
     },
   );
@@ -500,6 +520,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_referenced_by_vip_tier' };
       }
       const before = await loadRoleSnapshot(app.db, req.params.id);
+      const memberIds = await listMemberIds(req.params.id);
       try {
         await app.db.transaction(async (tx) => {
           await tx
@@ -531,6 +552,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       // caches because we don't know exactly which sessions remain valid.
       invalidateAllPermissionCaches();
       req.auditSnapshots = { before, after: null };
+      if (deleteTarget.panelAccess) await revokeMemberSessions(memberIds);
       return { ok: true };
     },
   );

@@ -129,11 +129,12 @@ export default fp(async (app) => {
       }
     }
 
-    // VIPSUB-5 (#171) — self-service session scope.
+    // VIPSUB-5 (#171) — session without live panel access.
     //
     // `auth-steam.ts` mints a session for a player whose role has no
     // `panel_access` so they can manage their own VIP on `/me`. That session is
-    // scoped `self_service` and is honoured ONLY on routes that opt in with
+    // scoped `self_service`; a `panel` session whose owner later lost
+    // `panel_access` is treated the same way. Both are honoured ONLY on routes that opt in with
     // `config.selfService`; anywhere else the request is downgraded to
     // anonymous. Deny-by-default is required here rather than trusting the
     // permission set, because `loadUserPermissions` still honours explicit
@@ -146,7 +147,7 @@ export default fp(async (app) => {
     // The scope never over-restricts a real admin: once the player actually
     // holds `panel_access` the gate lifts without re-login.
     if (
-      req.session?.scope === 'self_service' &&
+      req.session &&
       !req.user?.permissions.panelAccess &&
       req.routeOptions?.config?.selfService !== true
     ) {
