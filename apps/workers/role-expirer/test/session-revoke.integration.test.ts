@@ -86,6 +86,64 @@ describeIfDb('role-expirer revokeAllSessionsForPlayer', () => {
     expect(revoked).toHaveLength(2);
   });
 
+  it('leaves no session cache key behind when a session is created during the revoke (#996)', async () => {
+    if (!db) throw new Error('database not configured');
+    const lateSessionId = `role-expirer-revoke-late-${PLAYER_ID}`;
+    const cache = new Set<string>([`session:${SESSION_A}`]);
+    await db.insert(sessions).values({
+      id: SESSION_A,
+      playerId: PLAYER_ID,
+      expiresAt: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    // A login landing between a pre-read of the session ids and the delete:
+    // createSession writes the DB row and the Redis key at the same moment.
+    const racingDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop !== 'select') return Reflect.get(target, prop, receiver);
+        return (...args: unknown[]) => {
+          const query = (target.select as (...a: unknown[]) => { from: (t: unknown) => unknown })(
+            ...args,
+          );
+          return {
+            from: (table: unknown) => {
+              const from = query.from(table) as { where: (w: unknown) => Promise<unknown> };
+              return {
+                where: async (condition: unknown) => {
+                  const rows = await from.where(condition);
+                  await target.insert(sessions).values({
+                    id: lateSessionId,
+                    playerId: PLAYER_ID,
+                    expiresAt: new Date('2026-08-01T00:00:00.000Z'),
+                  });
+                  cache.add(`session:${lateSessionId}`);
+                  return rows;
+                },
+              };
+            },
+          };
+        };
+      },
+    });
+    const redis = {
+      del: async (...keys: string[]) => {
+        for (const key of keys) cache.delete(key);
+        return keys.length;
+      },
+      publish: async () => 1,
+    } as unknown as Pick<Redis, 'del' | 'publish'>;
+
+    await revokeAllSessionsForPlayer(racingDb, redis, PLAYER_ID);
+
+    const remaining = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.playerId, PLAYER_ID));
+    const staleKeys = [...cache].filter(
+      (key) => !remaining.some((row) => key === `session:${row.id}`),
+    );
+    expect(staleKeys).toEqual([]);
+  });
+
   it('does nothing and publishes nothing when the player has no sessions', async () => {
     if (!db) throw new Error('database not configured');
     const { redis, del, publish } = makeRedis();
