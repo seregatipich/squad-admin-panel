@@ -128,6 +128,14 @@ async function postWebhook(
 
     if (res.ok) return { ok: true, rateLimited };
 
+    if (res.status >= 400 && res.status < 500) {
+      deps.log.error(
+        { status: res.status },
+        'discord webhook post rejected (permanent, not retried)',
+      );
+      return { ok: false, rateLimited };
+    }
+
     attempt++;
     if (attempt >= MAX_SEND_ATTEMPTS) {
       deps.log.error({ status: res.status }, 'discord webhook post failed (status, giving up)');
@@ -220,10 +228,7 @@ export async function deliverEnvelope(
 
   for (const row of candidates) {
     try {
-      const url = decryptString(
-        deps.encryptionKey,
-        deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
-      );
+      const url = decryptString(deps.encryptionKey, deserialize(row.webhookUrlEncrypted));
       const outcome = await postWebhook(deps, url, buildPayload(embed, row.mentionEveryone));
       if (outcome.rateLimited) result.rateLimited++;
       if (outcome.ok) result.sent++;

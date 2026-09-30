@@ -40,8 +40,8 @@ const ADMIN_EMOJI = '👮';
 export interface StatusChannelSnapshot {
   state?: string;
   current_map?: string;
-  player_count?: number;
-  public_queue?: number;
+  player_count?: number | null;
+  public_queue?: number | null;
 }
 
 interface RosterCacheEntry {
@@ -70,11 +70,28 @@ export interface StatusChannelTickSummary {
 
 export type RenameOutcome = 'renamed' | 'unchanged' | 'rate_limited' | 'error';
 
-/** Tolerant parse of the `rcon:status:<serverId>` cache; a missing or corrupt entry reads as offline. */
+function isOptionalType(value: unknown, type: 'string' | 'number', allowNull: boolean): boolean {
+  if (value === undefined) return true;
+  if (value === null) return allowNull;
+  return typeof value === type;
+}
+
+/**
+ * Tolerant parse of the `rcon:status:<serverId>` cache; a missing, corrupt or
+ * wrongly shaped entry reads as offline.
+ */
 export function parseStatusCache(raw: string | null): StatusChannelSnapshot | null {
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as StatusChannelSnapshot;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const snapshot = parsed as Record<string, unknown>;
+    const wellFormed =
+      isOptionalType(snapshot.state, 'string', false) &&
+      isOptionalType(snapshot.current_map, 'string', false) &&
+      isOptionalType(snapshot.player_count, 'number', true) &&
+      isOptionalType(snapshot.public_queue, 'number', true);
+    return wellFormed ? (snapshot as StatusChannelSnapshot) : null;
   } catch {
     return null;
   }
@@ -84,7 +101,11 @@ export function parseStatusCache(raw: string | null): StatusChannelSnapshot | nu
 export function parseRosterCache(raw: string | null): RosterCache | null {
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as RosterCache;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const { players } = parsed as { players?: unknown };
+    if (players !== undefined && !Array.isArray(players)) return null;
+    return parsed as RosterCache;
   } catch {
     return null;
   }
@@ -193,8 +214,9 @@ async function readBudget(deps: StatusChannelDeps, channelId: string): Promise<R
 
 /**
  * Applies a name to one channel, honouring both the change check and the
- * two-per-ten-minutes budget. Never throws — a channel an operator mistyped
- * must not stop the other servers' updates.
+ * two-per-ten-minutes budget. A Discord failure is reported as `'error'`; a
+ * Redis failure propagates, and `runStatusChannelTick` contains it per server
+ * so one channel cannot stop the other servers' updates.
  */
 export async function renameStatusChannel(
   deps: StatusChannelDeps,
@@ -224,12 +246,19 @@ export async function renameStatusChannel(
   }
 
   recent.push(now);
-  await deps.redis.set(
-    budgetKey(channelId),
-    JSON.stringify({ name: desiredName, renames: recent } satisfies RenameBudget),
-    'EX',
-    Math.ceil((STATUS_CHANNEL_RENAME_WINDOW_MS * 2) / 1000),
-  );
+  try {
+    await deps.redis.set(
+      budgetKey(channelId),
+      JSON.stringify({ name: desiredName, renames: recent } satisfies RenameBudget),
+      'EX',
+      Math.ceil((STATUS_CHANNEL_RENAME_WINDOW_MS * 2) / 1000),
+    );
+  } catch (err) {
+    deps.log.error(
+      { channelId, err: (err as Error).message },
+      'status channel rename applied but its budget could not be recorded',
+    );
+  }
   return 'renamed';
 }
 
@@ -263,19 +292,27 @@ export async function runStatusChannelTick(
     if (!channelId) continue;
     summary.considered++;
 
-    const [statusRaw, rosterRaw] = await Promise.all([
-      deps.redis.get(`rcon:status:${target.id}`),
-      deps.redis.get(`rcon:roster:${target.id}`),
-    ]);
-    const snapshot = parseStatusCache(statusRaw);
-    const adminCount = countOnlineAdmins(parseRosterCache(rosterRaw), adminSteamIds);
-    const name = buildStatusChannelName(snapshot, adminCount);
+    try {
+      const [statusRaw, rosterRaw] = await Promise.all([
+        deps.redis.get(`rcon:status:${target.id}`),
+        deps.redis.get(`rcon:roster:${target.id}`),
+      ]);
+      const snapshot = parseStatusCache(statusRaw);
+      const adminCount = countOnlineAdmins(parseRosterCache(rosterRaw), adminSteamIds);
+      const name = buildStatusChannelName(snapshot, adminCount);
 
-    const outcome = await renameStatusChannel(deps, channelId, name);
-    if (outcome === 'renamed') summary.renamed++;
-    else if (outcome === 'unchanged') summary.unchanged++;
-    else if (outcome === 'rate_limited') summary.rateLimited++;
-    else summary.errors++;
+      const outcome = await renameStatusChannel(deps, channelId, name);
+      if (outcome === 'renamed') summary.renamed++;
+      else if (outcome === 'unchanged') summary.unchanged++;
+      else if (outcome === 'rate_limited') summary.rateLimited++;
+      else summary.errors++;
+    } catch (err) {
+      summary.errors++;
+      deps.log.error(
+        { serverId: target.id, channelId, err: (err as Error).message },
+        'status channel update failed',
+      );
+    }
   }
 
   deps.log.debug({ ...summary }, 'discord status channel tick finished');
