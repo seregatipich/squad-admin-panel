@@ -11,7 +11,7 @@ export const test = base.extend<Fixtures>({
     const seed = await seedOwner();
     const ctx: BrowserContext = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await ctx.newPage();
-    await loginAndAttachCookie(page, ctx, null, seed);
+    await loginAndAttachCookie(ctx, seed);
     await use(page);
     await ctx.close();
     await teardownOwner(seed.uid);
