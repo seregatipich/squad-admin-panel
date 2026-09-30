@@ -124,3 +124,16 @@ describe('next.config.mjs headers()', () => {
     );
   });
 });
+
+describe('next.config.mjs rewrites()', () => {
+  it('does not forward the operator-only /ready probe to the api (#47)', async () => {
+    if (typeof nextConfig.rewrites !== 'function') {
+      throw new Error('next.config.mjs default export is missing an async rewrites() function');
+    }
+    const rewrites = await nextConfig.rewrites();
+    const sources = (Array.isArray(rewrites) ? rewrites : []).map((rule) => rule.source);
+    expect(sources).toContain('/health');
+    expect(sources).not.toContain('/ready');
+    expect(sources).not.toContain('/metrics');
+  });
+});

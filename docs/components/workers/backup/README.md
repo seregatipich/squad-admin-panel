@@ -15,7 +15,7 @@ The scheduled backups the panel actually relies on today are **not** produced by
 - **What is backed up:** logical dumps, not raw data dirs. Before each snapshot the service's `PRE_COMMANDS` run `pg_dump -Fc` (Postgres → `admin.dump`) and `redis-cli --rdb` (Redis → `dump.rdb`) into the `backup_dump` volume, then `restic backup /data` snapshots that directory. `pg_dump`/`redis-cli` reuse `POSTGRES_PASSWORD`.
 - **Archived Squad logs (LOG-3, #51):** for servers with `server_settings.archive_logs_to_backup` on, the host bridge copies a rotated `SquadGame*.log` into `${DATA_DIR}/backup-dump/log-archive/{uuid}/` (via `PANEL_BACKUP_DUMP_ROOT`) just before the LOG-1 10-day retention sweep deletes it. Because that path is already inside `RESTIC_BACKUP_SOURCES=/data`, the next snapshot captures it under the same 7d/4w/6m retention — no separate restic invocation.
 - **Schedule + retention:** daily at 03:00 UTC; `--keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune`.
-- **Enable:** `docker compose --profile backup up -d backup` (requires `RESTIC_REPOSITORY` + `RESTIC_PASSWORD`).
+- **Enable:** `docker compose --profile backup up -d backup` (requires `RESTIC_REPOSITORY` + `RESTIC_PASSWORD`; `docker/compose.yml` refuses to start at all while `RESTIC_PASSWORD` is empty). On the stand, run the backup through `docker/compose.stand.yml`, which carries the same service.
 - **Restore:** `scripts/restore.sh` (dry run by default, `--apply` to restore). Full runbook and the manual `down -v` acceptance procedure: [`docs/operations/deployment.md`](../../../operations/deployment.md#backup-optional).
 - **Automated test:** `scripts/test-backup-restore.sh` runs the whole backup → `down -v` → restore round-trip in CI's `docker` job.
 

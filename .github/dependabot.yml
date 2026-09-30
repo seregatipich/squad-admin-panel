@@ -6,3 +6,15 @@ updates:
     target-branch: "dev"
     schedule:
       interval: "weekly"
+  # Base images are pinned by digest (#47); these propose digest and tag bumps
+  # for the Dockerfiles and the compose files under docker/.
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker-compose"
+    directory: "/docker"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"

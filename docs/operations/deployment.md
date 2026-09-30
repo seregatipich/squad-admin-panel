@@ -288,12 +288,12 @@ workflow selects a runner group or a self-hosted runner.
 
 | Service | Image | Notes |
 |---|---|---|
-| `caddy` | `caddy:2-alpine` | TLS termination + reverse proxy. Ports 80 + 443. |
+| `caddy` | `caddy:2-alpine@sha256:…` | TLS termination + reverse proxy. Ports 80 + 443. `/metrics` and `/ready` answer 404 here. |
 | `api` | `docker/api.Dockerfile` | Fastify 5, port 3000 (internal only). |
 | `web` | `docker/web.Dockerfile` | Next.js 15 SSR, internal only, proxied by Caddy. |
 | `migrator` | `docker/api.Dockerfile` | One-shot: runs Drizzle migrations then exits. |
-| `postgres` | `postgres:16-alpine` | Port 5432, bound to `127.0.0.1` only. |
-| `redis` | `redis:7-alpine` | Port 6379, bound to `127.0.0.1` only. Append-only persistence. Password required (`REDIS_PASSWORD`); the sidecars use the restricted ACL user `rnsquadjs` (`REDIS_SIDECAR_PASSWORD`). |
+| `postgres` | `postgres:16-alpine@sha256:…` | Port 5432, bound to `127.0.0.1` only. |
+| `redis` | `redis:7-alpine@sha256:…` | Port 6379, bound to `127.0.0.1` only. Append-only persistence (the stand too). Password required (`REDIS_PASSWORD`); the sidecars use the restricted ACL user `rnsquadjs` (`REDIS_SIDECAR_PASSWORD`). |
 | `worker-log-ingest` | `docker/worker.Dockerfile` | Tails squad container logs via bridge, writes events to Redis Streams. |
 | `worker-rcon` | `docker/worker.Dockerfile` | `--network host`. RCON poller (ListPlayers every 30 s). |
 | `worker-config-sync` | `docker/worker.Dockerfile` | Consumes Admins.cfg sync events and writes managed role/group segments. |
@@ -303,7 +303,17 @@ workflow selects a runner group or a self-hosted runner.
 | `worker-seed-reward` | `docker/worker.Dockerfile` | Grants or revokes the configured seed reward role from rolling 30-day presence. |
 | `worker-metrics-sampler` | `docker/worker.Dockerfile` | Samples `host_metrics` via bridge every 15 s, writes to `host:metrics` stream. |
 | `worker-media-publisher` | `docker/worker.Dockerfile` | Publishes queued media to YouTube/Telegram. Shares the `media_data` volume with `api`; inert until `YOUTUBE_*`/`TELEGRAM_*` are set. |
-| `backup` (optional) | `mazzolino/restic:latest` | Profile `backup`. Daily restic snapshot of postgres + redis volumes. |
+| `backup` (optional) | `docker/restic.Dockerfile` (`mazzolino/restic:1.8.2@sha256:…`) | Profile `backup`. Daily restic snapshot of logical postgres + redis dumps. Defined in both compose files. |
+
+Every third-party image — in the compose files and in every Dockerfile `FROM` — is pinned by digest, and the stand's Caddy DuckDNS module by version (#47). Dependabot's `docker` and `docker-compose` ecosystems propose the bumps; `apps/api/test/compose-hardening.test.ts` fails on an unpinned image.
+
+### Container hardening
+
+Every panel container (`caddy`, `migrator`, `api`, `web`, all workers) runs with `cap_drop: [ALL]` and `no-new-privileges` (the `x-hardening` fragment of both compose files); `postgres`, `redis` and `backup` get `no-new-privileges` only, since their entrypoints start as root and drop to their own user. Capabilities come back only where a service needs one: `caddy` gets `NET_BIND_SERVICE`, `api` gets `CHOWN` (it hands the RNSquadJS sidecar config to uid 1001). The `web`, `api` and `worker` images declare `USER node`, so `web`, the migrator and every worker without a reason otherwise run unprivileged. The bridge-consuming workers run as `1000:${PANEL_GID}` — the bridge checks only the primary GID. Uid 0 (still without capabilities) is left to the `api`, which writes the root-owned `/run/squad-panel/rnsquadjs` tree and the media volume, `worker-media-publisher`, which deletes the media files the api wrote, and `worker-diag-flush`, which reads the host journal.
+
+### Database roles
+
+The schema belongs to `admin`, the superuser the postgres image creates, and only the `migrator` and `worker-event-partition` (which creates and drops partitions) connect as it. With `PANEL_DB_USER` and `PANEL_DB_PASSWORD` set, the migrator provisions that login on every run ([`packages/db/src/app-role.ts`](../../packages/db/src/app-role.ts)): no SUPERUSER/CREATEDB/CREATEROLE, owns no table, DML on the application tables, only `SELECT`/`INSERT` on `audit_log` and `config_versions`, and default privileges for tables later migrations create. The `api` and the other workers then connect as it, so neither SQL injection nor code execution in them can switch the append-only triggers off, change the schema or run `COPY … TO PROGRAM`. `scripts/bootstrap.sh` sets both for new installs. On an existing install or the stand, add both to `.env` / `.env.stand` and run the migrator once **before** the services restart (`docker compose run --rm migrator`; on the stand the deploy runs it only when `packages/db/drizzle` changed). Leaving them blank keeps every service on `admin`.
 
 ### Bridge daemon (host, not Docker)
 
@@ -377,7 +387,7 @@ docker compose config --quiet
 sg panel -c 'bash scripts/verify-bridge.sh'
 docker compose ps
 curl -sk https://${APP_DOMAIN}/health
-curl -sk https://${APP_DOMAIN}/ready
+docker compose exec api wget -qO- http://localhost:3000/ready
 curl -skI https://${APP_DOMAIN}/api/docs
 ```
 
@@ -385,7 +395,7 @@ Expected results:
 
 - `verify-bridge.sh` exits `0` and covers every bridge RPC method.
 - `/health` returns `{"status":"ok", ...}`.
-- `/ready` returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
+- `/ready` (operator-only: Caddy answers it with 404, so query it on the compose network) returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
 - `/api/docs` returns an HTTP 200/30x response from the API docs UI.
 - A fresh panel can complete the Steam first-Owner login and organization-name setup.
 - The dashboard loads and the bridge/worker health widgets do not report a persistent outage.
@@ -459,11 +469,11 @@ sudo systemctl restart panel-host-bridge.service
 ```bash
 sg panel -c 'bash scripts/verify-bridge.sh'   # bridge RPC smoke test
 curl -sk https://${APP_DOMAIN}/health          # {"status":"ok"}
-curl -sk https://${APP_DOMAIN}/ready           # {"status":"ok","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
+docker compose exec api wget -qO- http://localhost:3000/ready   # {"status":"ok","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
 curl -skI https://${APP_DOMAIN}/api/docs        # API docs UI responds
 ```
 
-The `/ready` endpoint returns 503 if any dependency is unhealthy.
+The `/ready` endpoint returns 503 if any dependency is unhealthy. It reports only `ok`/`fail` per check; the reason is in the api log (`readiness check failed`). It is not reachable through Caddy (#47): every request costs a Postgres query, a Redis PING and a bridge RPC.
 
 ## Backup (optional)
 
@@ -475,7 +485,8 @@ docker compose --profile backup up -d backup
 
 Requires `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in `.env`. Snapshots are taken daily at 03:00 UTC. Retention: 7 daily, 4 weekly, 6 monthly.
 
-The `backup` service (image built from [`docker/restic.Dockerfile`](../../docker/restic.Dockerfile)) does **not** snapshot the raw data directories. Before every snapshot its `PRE_COMMANDS` produce **logical dumps** — `pg_dump -Fc` for Postgres and `redis-cli --rdb` for Redis — into the `backup_dump` volume (`${DATA_DIR}/backup-dump`), and restic snapshots that directory. Logical dumps restore cleanly into a fresh, freshly-migrated stack; a raw snapshot of live WAL/AOF files cannot guarantee that. `pg_dump` reuses `POSTGRES_PASSWORD` and `redis-cli` reuses `REDIS_PASSWORD` — no additional secret is required. The service waits for `postgres` and `redis` to be healthy (`depends_on`) before it starts.
+`docker/compose.yml` has no fallback for `RESTIC_PASSWORD` any more: while it is empty, every `docker compose` command against the file fails (#47) — the repository holds full database dumps. Generate one with `openssl rand -hex 32` (`scripts/bootstrap.sh` does). A repository initialised while the old `changeme` fallback was in effect still opens only with `changeme`; rotate it: set `RESTIC_PASSWORD=changeme` in `.env`, run `docker compose --profile backup run --rm --entrypoint restic backup key passwd` (it prompts for the new password), then put the new password in `.env`. The stand's `backup` service in `docker/compose.stand.yml` is the same service with the same staging tree under `${DATA_DIR}`; there an empty `RESTIC_PASSWORD` does not block deploys, and restic refuses to run with it.
+| `redis` | `redis:7-alpine@sha256:…` | Port 6379, bound to `127.0.0.1` only. Append-only persistence (the stand too). Password required (`REDIS_PASSWORD`); the sidecars use the restricted ACL user `rnsquadjs` (`REDIS_SIDECAR_PASSWORD`). |
 
 ### Disaster-recovery restore (manual)
 
@@ -487,21 +498,31 @@ scripts/restore.sh --apply                # destructive — overwrites live Post
 scripts/restore.sh --apply --snapshot ID  # destructive — restore a specific restic snapshot id
 ```
 
-`--apply` restores the selected snapshot (default `latest`; `--snapshot` takes a restic short/long id or `latest` and is regex-validated so it cannot smuggle arguments): it waits for `postgres` to be healthy, runs `pg_restore --clean --if-exists`, then reloads the Redis dataset. Run it with `sudo` if `${DATA_DIR}/redis` is not writable by your user — the Redis container owns those files (uid 999), and `--apply` rewrites them on the host. Redis is loaded via a one-off `redis-server` that reads the restored `dump.rdb` and rewrites it into an AOF, because the `redis` service runs with `--appendonly yes` and would otherwise ignore a bare `dump.rdb`.
+`--apply` restores the selected snapshot (default `latest`; `--snapshot` takes a restic short/long id or `latest` and is regex-validated so it cannot smuggle arguments): it waits for `postgres` to be healthy, runs `pg_restore --clean --if-exists`, then reloads the Redis dataset inside a one-off container on the `redis` service's own volume (a `${DATA_DIR}` bind here, a named volume on the stand), with the restored dump mounted read-only from `${DATA_DIR}/backup-dump/redis`. Redis is loaded via a one-off `redis-server` that reads the restored `dump.rdb` and rewrites it into an AOF, because the `redis` service runs with `--appendonly yes` and would otherwise ignore a bare `dump.rdb`.
 
 ### Backup/restore from the panel UI (INFRA-8-P1)
 
 Operators with the `host:manage` permission get a **Настройки → Бэкапы** page (`/settings/backup`) that lists the restic snapshots, triggers a manual backup, and restores a chosen snapshot behind a strong typed confirmation (the operator must type the snapshot's short id). The API container has no docker socket, so these operations go through the Go host bridge — new RPCs `backup_snapshots` (`restic snapshots --json`), `backup_run` (`docker compose --profile backup run --rm backup backup`) and `backup_restore` (wraps `scripts/restore.sh --apply --snapshot <id>`) — behind the routes `GET/POST /api/v1/host/backups` and `POST /api/v1/host/backups/:id/restore` (audited `backup.run` / `backup.restore`).
 
-Because the bridge shells out to `docker compose` and `scripts/restore.sh` from the panel's deploy directory, its systemd unit must set that directory so the RPCs inherit `.env` (`RESTIC_PASSWORD`, `POSTGRES_PASSWORD`):
+Because the bridge shells out to `docker compose` and `scripts/restore.sh` from the panel's deploy directory, its systemd unit must name that directory, the compose file and the env files, so the RPCs inherit `RESTIC_PASSWORD` and `POSTGRES_PASSWORD` from the deploy's own env files. `scripts/install-host-bridge.sh` writes all three into its drop-in (`panel-host-bridge.service.d/install.conf`); the compose file and env files default to the base install and are overridable for the stand:
+
+```bash
+# base install (defaults)
+sudo ./scripts/install-host-bridge.sh
+# the stand
+sudo PANEL_COMPOSE_FILE=docker/compose.stand.yml PANEL_COMPOSE_ENV_FILES=.env.stand,.release.env \
+  ./scripts/install-host-bridge.sh
+```
 
 ```ini
-# /etc/systemd/system/panel-host-bridge.service — [Service]
-Environment=PANEL_COMPOSE_DIR=/opt/squad-admin-panel   # dir holding docker/compose.yml + .env + scripts/
+# generated drop-in — [Service]
+Environment=PANEL_COMPOSE_DIR=/opt/squad-admin-panel      # the checkout that ran the installer
+Environment=PANEL_COMPOSE_FILE=docker/compose.yml         # relative to PANEL_COMPOSE_DIR
+Environment=PANEL_COMPOSE_ENV_FILES=.env                  # comma-separated, relative
 # ProtectSystem=strict also requires the deploy dir on ReadWritePaths for the restore path.
 ```
 
-Unset or non-absolute `PANEL_COMPOSE_DIR` makes the backup RPCs fail closed (`forbidden`), so the UI degrades to a clear error rather than running from an unexpected directory.
+Unset or non-absolute `PANEL_COMPOSE_DIR`, or a compose/env file that is absolute or escapes it, makes the backup RPCs fail closed (`forbidden`), so the UI degrades to a clear error rather than running from an unexpected directory. `backup_restore` hands the same target to `scripts/restore.sh` through `COMPOSE_FILE`, `COMPOSE_ENV_FILES` and `ENV_FILE`.
 
 **Acceptance procedure (full `down -v` recovery).** This is the manual proof that a total-loss restore works. It destroys the live stack — run it only against a scratch host or a copy of production:
 

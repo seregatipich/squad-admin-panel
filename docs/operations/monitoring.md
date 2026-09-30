@@ -86,7 +86,7 @@ sudo journalctl -u panel-host-bridge -n 100
 The `/ready` endpoint also probes the bridge:
 
 ```bash
-curl -sk https://${APP_DOMAIN}/ready | jq .checks.bridge
+docker compose exec api wget -qO- http://localhost:3000/ready | jq .checks.bridge
 ```
 
 ## Audit log
@@ -108,7 +108,7 @@ Do not use `audit_log` for diagnostic log noise. It covers only POST/PUT/PATCH/D
 | `/logs` page empty | `XLEN panel:logs` in Redis. If zero, the pino sink may not have wired up — check `docker compose logs api --since 2m` for boot errors. |
 | RCON status `not_polled` | Expected when the server is stopped. Only starts polling when `servers.status = 'running'`. |
 | RCON status `error` | `docker compose logs worker-rcon --since 5m` — look for `ECONNREFUSED`. Check that the Squad container is running and RCON port is correct. |
-| `/ready` returns 503 | `curl -sk .../ready | jq .checks` — which check failed? Restart the relevant service or the bridge. |
+| `/ready` returns 503 | `docker compose exec api wget -qO- http://localhost:3000/ready` — which check is `fail`? The api log line `readiness check failed` carries the reason. Restart the relevant service or the bridge. |
 
 ## No external monitoring (design choice)
 

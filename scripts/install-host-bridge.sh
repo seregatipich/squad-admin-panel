@@ -117,6 +117,7 @@ mkdir -p \
   "${DATA_DIR}/backup-repo" \
   "${DATA_DIR}/backup-dump" \
   "${DATA_DIR}/depot" \
+  "${DATA_DIR}/media" \
   "${DATA_DIR}/servers/configs" \
   "${DATA_DIR}/servers/saved"
 
@@ -167,6 +168,13 @@ fi
 # whole /home tree which blocks traversal to ${DATA_DIR}/... even with the
 # leaves listed in ReadWritePaths. Disable ProtectHome for this install and
 # compensate by listing every writable path explicitly.
+# The backup RPCs run `docker compose` against the deploy's own compose file
+# and env files. A base install uses the defaults; the dev stand installs with
+#   PANEL_COMPOSE_FILE=docker/compose.stand.yml PANEL_COMPOSE_ENV_FILES=.env.stand,.release.env
+# Both are paths relative to REPO_DIR (the bridge refuses anything else).
+PANEL_COMPOSE_FILE="${PANEL_COMPOSE_FILE:-docker/compose.yml}"
+PANEL_COMPOSE_ENV_FILES="${PANEL_COMPOSE_ENV_FILES:-.env}"
+
 log "installing systemd drop-in for data-dir access"
 mkdir -p "${UNIT_DIR}/panel-host-bridge.service.d"
 cat > "${UNIT_DIR}/panel-host-bridge.service.d/install.conf" <<EOF
@@ -183,12 +191,18 @@ cat > "${UNIT_DIR}/panel-host-bridge.service.d/install.conf" <<EOF
 #     (RESTIC_BACKUP_SOURCES=/data → backup_dump volume). The bridge copies a
 #     flagged server's expiring rotated log under log-archive/ here before the
 #     retention sweep deletes it, so the next snapshot archives it.
+#   - PANEL_COMPOSE_DIR / PANEL_COMPOSE_FILE / PANEL_COMPOSE_ENV_FILES: the
+#     deploy directory, compose file and env files the backup RPCs (snapshots,
+#     run, restore) target. Without PANEL_COMPOSE_DIR they fail closed.
 [Service]
 ProtectHome=no
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 Environment=PANEL_DEPOT_HOST_PATH=${DATA_DIR}/depot
 Environment=PANEL_BACKUP_DUMP_ROOT=${DATA_DIR}/backup-dump
+Environment=PANEL_COMPOSE_DIR=${REPO_DIR}
+Environment=PANEL_COMPOSE_FILE=${PANEL_COMPOSE_FILE}
+Environment=PANEL_COMPOSE_ENV_FILES=${PANEL_COMPOSE_ENV_FILES}
 ReadWritePaths=${DATA_DIR}/servers
 ReadWritePaths=${DATA_DIR}/depot
 ReadWritePaths=${DATA_DIR}/backup-dump

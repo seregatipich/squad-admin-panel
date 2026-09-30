@@ -78,7 +78,6 @@ export default {
     return [
       { source: '/api/:path*', destination: `${apiUrl}/api/:path*` },
       { source: '/health', destination: `${apiUrl}/health` },
-      { source: '/ready', destination: `${apiUrl}/ready` },
     ];
   },
   async redirects() {

@@ -68,7 +68,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/discord/interactions',
     { config: { audit: false, public: true } },
     async (req, reply) => {
-      const publicKeyHex = (app.config as { DISCORD_PUBLIC_KEY?: string }).DISCORD_PUBLIC_KEY;
+      const publicKeyHex = app.config.DISCORD_PUBLIC_KEY;
       if (!publicKeyHex) {
         reply.code(503);
         return { error: 'discord_interactions_not_configured' };
