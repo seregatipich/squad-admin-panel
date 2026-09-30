@@ -51,6 +51,11 @@ describe('parseReportLine', () => {
     expect(parsed.body).toBe('SuspiciousGuy');
   });
 
+  it('returns null for a chat line with an empty message body', () => {
+    const raw = `[2026.04.23-11.34.00:000][10]LogSquad: ChatMessage: ${SENDER} : ChatAll : `;
+    expect(parseReportLine(raw)).toBeNull();
+  });
+
   it('returns null for chat that is not a report command', () => {
     const raw = `[2026.04.23-11.34.00:000][10]LogSquad: ChatMessage: ${SENDER} : ChatAll : hello everyone`;
     expect(parseReportLine(raw)).toBeNull();

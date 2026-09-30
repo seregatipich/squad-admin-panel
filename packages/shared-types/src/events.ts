@@ -34,7 +34,6 @@ export const EVENT_TYPES = [
 
   'rcon.connected',
   'rcon.admin_command',
-  'rcon.admin_command',
   'rcon.disconnected',
   'rcon.players_polled',
 

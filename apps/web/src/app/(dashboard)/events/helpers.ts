@@ -80,7 +80,6 @@ export const KNOWN_EVENT_KINDS: Array<{ value: string; label: string }> = [
   { value: 'match.ended', label: 'Матч завершён' },
   { value: 'rcon.connected', label: 'RCON подключён' },
   { value: 'rcon.admin_command', label: 'Админ-команда RCON' },
-  { value: 'rcon.admin_command', label: 'Админ-команда RCON' },
   { value: 'rcon.disconnected', label: 'RCON отключён' },
   { value: 'rcon.players_polled', label: 'Опрос игроков' },
   { value: 'banname.matched', label: 'Совпадение по запрещённому нику' },
