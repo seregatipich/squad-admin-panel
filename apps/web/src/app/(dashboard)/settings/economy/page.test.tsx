@@ -71,6 +71,10 @@ function stubFetch(opts: {
   settingsStatus?: number;
   meStatus?: number;
   refreshNetworkError?: boolean;
+  /** Overrides the JSON body of the matching GET endpoint (malformed-response tests). */
+  settingsBody?: unknown;
+  rolesBody?: unknown;
+  tiersBody?: unknown;
   onPost?: (body: Record<string, unknown>) => void;
   onPut?: (url: string, body: Record<string, unknown>) => void;
   onDelete?: (url: string) => void;
@@ -93,7 +97,9 @@ function stubFetch(opts: {
     if (url.endsWith('/api/v1/settings/economy') && method === 'GET') {
       if (opts.refreshNetworkError) return Promise.reject(new Error('offline'));
       return Promise.resolve(
-        new Response(JSON.stringify(makeSettings()), { status: opts.settingsStatus ?? 200 }),
+        new Response(JSON.stringify(opts.settingsBody ?? makeSettings()), {
+          status: opts.settingsStatus ?? 200,
+        }),
       );
     }
     if (url.endsWith('/api/v1/settings/economy') && method === 'PUT') {
@@ -134,10 +140,11 @@ function stubFetch(opts: {
       return Promise.resolve(
         new Response(
           JSON.stringify(
-            opts.roles ?? [
-              { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
-              { id: 'role-2', name: 'Premium Role', panel_access: false, is_system_role: false },
-            ],
+            opts.rolesBody ??
+              opts.roles ?? [
+                { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
+                { id: 'role-2', name: 'Premium Role', panel_access: false, is_system_role: false },
+              ],
           ),
           { status: 200 },
         ),
@@ -145,7 +152,7 @@ function stubFetch(opts: {
     }
     if (url.endsWith('/api/v1/vip-tiers') && method === 'GET') {
       return Promise.resolve(
-        new Response(JSON.stringify({ rows: opts.tiers ?? [] }), { status: 200 }),
+        new Response(JSON.stringify(opts.tiersBody ?? { rows: opts.tiers ?? [] }), { status: 200 }),
       );
     }
     if (url.endsWith('/api/v1/vip-tiers') && method === 'POST') {
@@ -564,6 +571,31 @@ describe('EconomySettingsPage — economy settings form', () => {
     render(<EconomySettingsPage />);
     expect(
       await screen.findByText('Не удалось загрузить данные пользователя: 500'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an error instead of crashing when settings come back in an unexpected shape (#691)', async () => {
+    stubFetch({ settingsBody: { k_online: 1 } });
+    render(<EconomySettingsPage />);
+    expect(
+      await screen.findByText('Сервер вернул настройки экономики в неожиданном формате.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Сохранить' })).not.toBeInTheDocument();
+  });
+
+  it('shows an error instead of crashing when /roles is not an array (#691)', async () => {
+    stubFetch({ rolesBody: { rows: [] } });
+    render(<EconomySettingsPage />);
+    expect(
+      await screen.findByText('Сервер вернул список ролей в неожиданном формате.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an error when the tier list is not wrapped in rows (#691)', async () => {
+    stubFetch({ tiersBody: [] });
+    render(<EconomySettingsPage />);
+    expect(
+      await screen.findByText('Сервер вернул список VIP-тиров в неожиданном формате.'),
     ).toBeInTheDocument();
   });
 
