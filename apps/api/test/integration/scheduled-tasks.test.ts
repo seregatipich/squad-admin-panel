@@ -803,6 +803,29 @@ describe('MSG-4 (#187): broadcast rotation, fan-out, and the role:edit gate', ()
     }
   });
 
+  // #317: server_ids is documented as a broadcast-only fan-out, but any
+  // task_type used to accept it — one POST could create e.g. a restart on
+  // every listed server, undocumented.
+  it('rejects server_ids on a non-broadcast task_type', async () => {
+    const cookie = await login();
+    const serverA = await createServer(cookie);
+    const serverB = await extraServer(cookie, 3);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverA}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'No fan-out for restart',
+        task_type: 'restart',
+        recurrence: '0 * * * *',
+        server_ids: [serverB],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'server_ids_only_for_broadcast' });
+  });
+
   it('rolls back the whole fan-out and returns 404 for an unknown target server', async () => {
     const cookie = await login();
     const serverA = await createServer(cookie);
@@ -855,6 +878,27 @@ describe('MSG-4 (#187): broadcast rotation, fan-out, and the role:edit gate', ()
       .from(scheduledTasks)
       .where(eq(scheduledTasks.serverId, serverA));
     expect(rows).toHaveLength(0);
+  });
+
+  // #315: capabilities.broadcast used to be squadPermissions.has('chat')
+  // alone, while taskTypeGuard (the actual gate on POST) also requires
+  // role:edit — a caller with chat but not role:edit saw the broadcast
+  // create form and only then got a 403 on submit.
+  it('reports capabilities.broadcast=false for a caller with chat but without role:edit', async () => {
+    const ownerCookie = await login();
+    const serverId = await createServer(ownerCookie);
+    const cookie = await asRole({
+      panelAccess: true,
+      canEditRoles: false,
+      squadPermissions: ['chat'],
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ capabilities: { broadcast: boolean } }>().capabilities.broadcast).toBe(false);
   });
 
   it('rejects a broadcast from a caller with chat but without role:edit', async () => {

@@ -169,7 +169,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(servers.displayName);
       const items = await Promise.all(
         rows.map(async (r) => {
-          const raw = await app.redis.get(`rcon:status:${r.id}`);
+          // #339: these three reads are independent — running them
+          // sequentially costs N·3 round trips for a list of N servers.
+          const [raw, a2sRaw, seeding] = await Promise.all([
+            app.redis.get(`rcon:status:${r.id}`),
+            app.redis.get(`a2s:status:${r.id}`),
+            readSeedingSummary(app.redis, r.id),
+          ]);
           let rconState: string | null = null;
           let playerCount: number | null = null;
           let lastPollAt: string | null = null;
@@ -187,8 +193,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               // ignore
             }
           }
-          const a2sRaw = await app.redis.get(`a2s:status:${r.id}`);
-          const seeding = await readSeedingSummary(app.redis, r.id);
           return {
             ...r,
             rcon_state: rconState,
@@ -434,13 +438,18 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      const settingsRow = await app.db.query.serverSettings.findFirst({
-        where: eq(serverSettings.serverId, req.params.id),
-      });
-      const credsRow = await app.db.query.serverCredentials.findFirst({
-        where: eq(serverCredentials.serverId, req.params.id),
-      });
-      const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
+      // #339: these four reads (two DB, two Redis) are independent of each
+      // other — fetching them sequentially only adds latency.
+      const [settingsRow, credsRow, rconRaw, a2sRaw] = await Promise.all([
+        app.db.query.serverSettings.findFirst({
+          where: eq(serverSettings.serverId, req.params.id),
+        }),
+        app.db.query.serverCredentials.findFirst({
+          where: eq(serverCredentials.serverId, req.params.id),
+        }),
+        app.redis.get(`rcon:status:${row.id}`),
+        app.redis.get(`a2s:status:${row.id}`),
+      ]);
       let rcon_status: {
         state: string;
         ts?: string;
@@ -457,7 +466,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           rcon_status = { state: 'not_polled' };
         }
       }
-      const a2sRaw = await app.redis.get(`a2s:status:${row.id}`);
       const a2s_status: unknown = a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null;
 
       const external = isExternalRuntime(row.runtime);
@@ -504,10 +512,12 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           : null;
 
-      const crashRaw = await app.redis.zrevrange(`crashes:${row.id}`, 0, 9);
+      const [crashRaw, seeding] = await Promise.all([
+        app.redis.zrevrange(`crashes:${row.id}`, 0, 9),
+        readSeedingSummary(app.redis, row.id),
+      ]);
       const crash_history = crashRaw.map((c: string) => JSON.parse(c) as unknown);
       const crash_loop = row.status === 'failed';
-      const seeding = await readSeedingSummary(app.redis, row.id);
 
       // SRV-6 (#45): license *state* only — the key itself never leaves the
       // API. License.cfg is requires_restart, so the license is live only if

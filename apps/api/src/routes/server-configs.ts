@@ -27,6 +27,7 @@ import {
   unmaskRconPassword,
 } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
+import { canViewIps } from '../lib/ip-visibility.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
@@ -304,13 +305,14 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         )
         .orderBy(desc(configVersions.createdAt))
         .limit(req.query.limit);
+      const showIps = canViewIps(req);
       const items = rows.map((r) => ({
         id: r.id,
         sha256: hex(r.sha256),
         parent_version_id: r.parent_version_id,
         author_player_id: r.author_player_id ?? null,
         author_canonical_name: r.author_canonical_name ?? r.author_label ?? 'system',
-        author_ip: r.author_ip,
+        author_ip: showIps ? r.author_ip : null,
         message: r.message,
         created_at: r.created_at,
         size: Number(r.size),
@@ -473,7 +475,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           ? await app.db
               .select({ id: players.id, canonicalName: players.canonicalName })
               .from(players)
-              .where(inArrayOr(players.id, playerIds))
+              .where(inArray(players.id, playerIds))
           : [];
       const authors: Record<string, string> = {};
       for (const r of playerRows) authors[r.id] = r.canonicalName;
@@ -853,11 +855,6 @@ async function readTipVersion(
     .limit(1);
   const row = rows[0];
   return row ? { id: row.id, content: row.content, sha: row.sha } : null;
-}
-
-function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
-  if (values.length === 0) throw new Error('empty values');
-  return inArray(col, values as Parameters<typeof inArray>[1]);
 }
 
 /**

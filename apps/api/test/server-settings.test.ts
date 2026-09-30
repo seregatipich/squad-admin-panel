@@ -92,11 +92,45 @@ describe('PUT /api/v1/servers/:id/settings', () => {
     expect(row?.maxPlayers).toBe(60);
     expect(row?.tickrate).toBe(40);
 
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'server.update_settings',
       resource: 'server',
       targetId: serverId,
     });
+    // #331: before/after used to be absent from config.audit-based writes;
+    // a security-sensitive change (ports, resource limits) could not be
+    // reconstructed from audit_log alone.
+    expect(audit.beforeSnapshot).toMatchObject({ max_players: 80, tickrate: 50 });
+    expect(audit.afterSnapshot).toMatchObject({ max_players: 60, tickrate: 40 });
+  });
+
+  // #330: server_settings.multihome is a Postgres `inet` column; a non-IP
+  // value used to reach the UPDATE and 500 there instead of 400ing.
+  it('rejects a non-IP multihome value → 400', async () => {
+    const serverId = await seedServer({ slug: 'settings-bad-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { multihome: 'not-an-ip' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts a valid multihome IP → 200', async () => {
+    const serverId = await seedServer({ slug: 'settings-good-multihome', status: 'stopped' });
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${serverId}/settings`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { multihome: '10.0.0.5' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ multihome: string }>().multihome).toBe('10.0.0.5');
   });
 
   it('rejects port change on a running server → 409', async () => {
@@ -350,7 +384,17 @@ describe('PATCH /api/v1/servers/:id', () => {
     expect(row?.displayName).toBe('New Name');
     expect(row?.tags).toEqual(['pvp', 'ru']);
 
-    await assertAuditRow(h, { action: 'server.patch', resource: 'server', targetId: serverId });
+    const audit = await assertAuditRow(h, {
+      action: 'server.patch',
+      resource: 'server',
+      targetId: serverId,
+    });
+    // #331: PATCH /servers/:id used to audit only the action, with no
+    // before/after — the license key itself must stay redacted even now
+    // that the snapshot exists.
+    expect(audit.beforeSnapshot).toMatchObject({ display_name: 'Test patch-meta' });
+    expect(audit.afterSnapshot).toMatchObject({ display_name: 'New Name', tags: ['pvp', 'ru'] });
+    expect(audit.afterSnapshot).not.toHaveProperty('license_key');
   });
 
   it('updates description (nullable)', async () => {

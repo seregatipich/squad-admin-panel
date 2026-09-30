@@ -17,14 +17,21 @@ const seedingSettingsBody = z
     message: 'at least one of seed_live_at, seed_hysteresis is required',
   });
 
-interface SeedingRedisState {
-  state?: 'seeding' | 'live';
-  current_players?: number;
-  live_at?: number;
-  progress_pct?: number;
-  started_at?: string | null;
-  layer?: string | null;
-}
+// #332: the shape read back out of `seeding:state:{id}` is untrusted input —
+// validated with zod instead of a bare `as SeedingRedisState` cast, so a
+// worker-rcon rolling deploy or a hand-edited key can't send an
+// out-of-union `state` or a non-numeric field straight through to the API
+// response.
+const seedingRedisStateSchema = z
+  .object({
+    state: z.enum(['seeding', 'live']).optional(),
+    current_players: z.number().optional(),
+    live_at: z.number().optional(),
+    progress_pct: z.number().optional(),
+    started_at: z.string().nullable().optional(),
+  })
+  .partial();
+type SeedingRedisState = z.infer<typeof seedingRedisStateSchema>;
 
 /**
  * Seeding-state routes (SEED-1, #140): serves the per-server seeding state
@@ -66,7 +73,17 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
 
       let parsed: SeedingRedisState;
       try {
-        parsed = JSON.parse(raw) as SeedingRedisState;
+        const result = seedingRedisStateSchema.safeParse(JSON.parse(raw));
+        if (!result.success) {
+          return {
+            state: 'unknown' as const,
+            current_players: null,
+            live_at: null,
+            progress_pct: null,
+            started_at: null,
+          };
+        }
+        parsed = result.data;
       } catch {
         return {
           state: 'unknown' as const,
@@ -121,6 +138,18 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
         seed_live_at: currentSettings.seedLiveAt,
         seed_hysteresis: currentSettings.seedHysteresis,
       };
+
+      // #328: worker-rcon's live→seeding transition requires
+      // `playerCount < liveAt - hysteresis`. Neither field's own bounds (1-200
+      // / 0-50) rule out hysteresis >= live_at, which makes that threshold <=
+      // 0 — the server can then never drop back into seeding outside the
+      // seed layer, and seeding stats/notifications silently stop firing.
+      const nextLiveAt = req.body.seed_live_at ?? before.seed_live_at;
+      const nextHysteresis = req.body.seed_hysteresis ?? before.seed_hysteresis;
+      if (nextHysteresis >= nextLiveAt) {
+        reply.code(400);
+        return { error: 'hysteresis_must_be_below_live_at' };
+      }
 
       const updateSet: Partial<typeof serverSettings.$inferInsert> = {};
       if (req.body.seed_live_at !== undefined) updateSet.seedLiveAt = req.body.seed_live_at;

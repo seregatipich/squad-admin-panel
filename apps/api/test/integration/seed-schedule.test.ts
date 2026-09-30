@@ -535,4 +535,49 @@ describe('GET /api/v1/servers/:id/seed-schedule/history', () => {
       },
     ]);
   });
+
+  // #329: a window that started before `from` used to be reported wrong —
+  // its `ended` event inside [from, to] had no matching `started` in range,
+  // so it either vanished or (if still open) looked like a brand-new,
+  // still-running window instead of the one that actually started earlier.
+  it('resolves a window whose start predates `from` using the nearest preceding started event', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+
+    const startedBeforeFrom = new Date('2026-06-30T20:00:00.000Z');
+    const endedInRange = new Date('2026-07-01T08:30:00.000Z');
+
+    await h.db.insert(events).values([
+      {
+        eventId: uuidv7(),
+        serverId,
+        occurredAt: startedBeforeFrom,
+        kind: 'server.seeding_started',
+        payload: { player_count: 3, layer: SEED_LAYER_A },
+      },
+      {
+        eventId: uuidv7(),
+        serverId,
+        occurredAt: endedInRange,
+        kind: 'server.seeding_ended',
+        payload: { player_count: 62, layer: SEED_LAYER_A },
+      },
+    ]);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/seed-schedule/history?from=2026-07-01T00:00:00.000Z&to=2026-07-03T00:00:00.000Z`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      windows: { started_at: string; ended_at: string | null; layer: string | null }[];
+    }>();
+    expect(body.windows).toEqual([
+      expect.objectContaining({
+        started_at: startedBeforeFrom.toISOString(),
+        ended_at: endedInRange.toISOString(),
+      }),
+    ]);
+  });
 });

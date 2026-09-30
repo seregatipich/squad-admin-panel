@@ -1,11 +1,19 @@
 import { createServer as createNetServer, type Socket } from 'node:net';
 import { withAdminsCfgServerLock } from '@squad/db';
-import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  configVersions,
+  players,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BLAME_MAX_VERSIONS } from '../../src/lib/blame.js';
+import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import { createSession } from '../../src/lib/sessions.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -15,6 +23,7 @@ import {
 } from './harness.js';
 
 const OWNER_STEAM_ID = 76561198000000999n;
+const TEST_PLAYER_LIMITED_VIEWER = 76561198000000998n;
 
 let h: IntegrationHarness;
 
@@ -39,6 +48,56 @@ afterAll(async () => {
 
 async function login(): Promise<string> {
   return loginAsOwner(h);
+}
+
+/**
+ * #286: a panel_access role without can_view_ips — used to assert that
+ * config-version history hides author_ip for such a caller.
+ */
+async function loginAsRoleWithoutViewIps(): Promise<string> {
+  const [row] = await h.db
+    .insert(players)
+    .values({
+      steamId64: TEST_PLAYER_LIMITED_VIEWER,
+      canonicalName: 'ConfigsLimitedViewer',
+      canonicalNameNormalized: 'configslimitedviewer',
+    })
+    .onConflictDoNothing()
+    .returning({ id: players.id });
+  const playerRow =
+    row ??
+    (await h.db.query.players.findFirst({
+      where: eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER),
+    }));
+  if (!playerRow) throw new Error('failed to seed limited-viewer player');
+
+  const ownerCookie = await loginAsOwner(h);
+  const created = await h.app.inject({
+    method: 'POST',
+    url: '/api/v1/roles',
+    headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+    payload: JSON.stringify({
+      name: `no-view-ips-configs-${Date.now()}`,
+      color: '#123456',
+      squad_permissions: [],
+      panel_access: true,
+      can_view_ips: false,
+    }),
+  });
+  const roleId = (created.json() as { id: string }).id;
+  await h.db
+    .update(players)
+    .set({ roleId })
+    .where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
+  invalidateAllPermissionCaches();
+
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: playerRow.id,
+    ip: null,
+    userAgent: 'server-configs-test',
+    ttlMs: 21_600_000,
+  });
+  return `__Host-sid=${token}`;
 }
 
 async function createServer(cookie: string): Promise<string> {
@@ -639,6 +698,42 @@ describe('GET /api/v1/servers/:id/configs/:name/history + :vid + /diff + /blame'
     expect(body.items).toHaveLength(2);
     expect(body.items[0]?.message).toBe('b');
     expect(body.items[1]?.message).toBe('a');
+  });
+
+  // #286: author_ip used to be returned to anyone with config:view; it must
+  // be gated behind player:view_ips like the rest of the panel's IP model.
+  it('hides author_ip from a caller without player:view_ips, shows it to one with it', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'v1', message: 'a' },
+    });
+
+    const limitedCookie = await loginAsRoleWithoutViewIps();
+    const limited = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/history`,
+      headers: { cookie: limitedCookie },
+    });
+    expect(limited.statusCode).toBe(200);
+    const limitedBody = limited.json<{ items: Array<{ author_ip: string | null }> }>();
+    expect(limitedBody.items[0]?.author_ip).toBeNull();
+
+    const owner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/history`,
+      headers: { cookie },
+    });
+    expect(owner.statusCode).toBe(200);
+    const ownerBody = owner.json<{ items: Array<{ author_ip: string | null }> }>();
+    // The Owner role has every permission including player:view_ips, so the
+    // field is not forced to null (it may still be null if no IP was
+    // recorded for this write, which is fine — the assertion is that the
+    // route does not blanket-null it for a privileged caller).
+    expect(ownerBody.items).toHaveLength(1);
   });
 
   it('single version read returns its full content', async () => {

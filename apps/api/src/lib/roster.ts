@@ -1,4 +1,5 @@
 import { type SquadCrown, squadCrownSchema } from '@squad/shared-types';
+import { z } from 'zod';
 
 export interface StoredRosterEntry {
   rcon_id: number;
@@ -90,16 +91,41 @@ export interface RosterApiResponse {
   squads: RosterApiSquad[];
 }
 
+// #318: unlike parseStoredSquads (which at least checks Array.isArray on
+// `squads`), this used to be a bare `JSON.parse(raw) as StoredRoster`. The
+// route immediately reads `stored.players.length` and
+// `collectRosterLookups` calls `BigInt(steam_id64)`, so a snapshot without
+// `players` or with a non-numeric steam_id64 (a rolling worker-rcon
+// deploy, a hand-edited key) 500ed instead of degrading to an empty
+// roster, the way a missing/corrupt key already does.
+const storedRosterEntrySchema = z.object({
+  rcon_id: z.number(),
+  eos_id: z.string(),
+  steam_id64: z.string().regex(/^\d+$/).nullable(),
+  name: z.string(),
+  team_id: z.number().nullable(),
+  squad_id: z.number().nullable(),
+  is_leader: z.boolean(),
+  role: z.string().nullable(),
+  first_seen_at: z.string(),
+});
+const storedRosterSchema = z.object({
+  server_id: z.string(),
+  polled_at: z.string(),
+  players: z.array(storedRosterEntrySchema),
+});
+
 /**
  * Parses the cached `rcon:roster:{serverId}` value. Returns null for a missing
- * key, malformed JSON, or a payload without a `players` array, so a stale or
- * hand-edited cache entry degrades to "no roster" instead of a 500.
+ * key, malformed JSON, or a payload that does not match the stored roster
+ * shape (a `players` array of well-formed entries), so a stale or hand-edited
+ * cache entry degrades to "no roster" instead of a 500.
  */
 export function parseStoredRoster(raw: string | null): StoredRoster | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as StoredRoster;
-    return Array.isArray(parsed?.players) ? parsed : null;
+    const parsed = storedRosterSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }

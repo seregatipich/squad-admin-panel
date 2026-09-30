@@ -51,7 +51,12 @@ const LICENSE_FIELD_PATTERN = /^[^\p{Cc}\u2028\u2029]*$/u;
 
 export const serverPatch = z
   .object({
-    display_name: z.string().min(1).max(120).optional(),
+    display_name: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[^\r\n"]+$/, 'must not contain quotes or newlines')
+      .optional(),
     description: z.string().max(500).nullable().optional(),
     tags: z.array(z.string().min(1).max(50)).max(20).optional(),
     license_id: z

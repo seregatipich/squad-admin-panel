@@ -309,6 +309,31 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     );
   });
 
+  // #304: patchNextLayer used to GET, patch in JS and SET with a fresh
+  // `EX 300`, resetting the TTL every time regardless of what it was before —
+  // extending a stale 'connected' status left by a dead worker instead of
+  // letting it expire on schedule.
+  it('patches next_layer with KEEPTTL instead of resetting the key TTL', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
+    const key = `rcon:status:${serverId}`;
+    await h.redis.set(key, rconStatus(), 'EX', 30);
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/map/next`,
+      headers: { cookie },
+      payload: { layer: LAYER_NEXT },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const ttl = await h.redis.ttl(key);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(30);
+    const patched = JSON.parse((await h.redis.get(key)) ?? '{}');
+    expect(patched.next_layer).toBe(LAYER_NEXT);
+  });
+
   it('accepts a deprecated layer with confirm_deprecated: true', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
     await h.redis.set(`rcon:status:${serverId}`, rconStatus());

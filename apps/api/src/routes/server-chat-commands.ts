@@ -3,7 +3,6 @@ import { and, desc, eq, gte, isNull, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { panelGuard } from '../lib/panel-guard.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -27,11 +26,11 @@ const serverChatCommandsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/chat-commands',
-    { config: { audit: false }, schema: { params: serverIdParams, querystring: historyQuery } },
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: serverIdParams, querystring: historyQuery },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });

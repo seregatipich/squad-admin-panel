@@ -237,7 +237,13 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
           restart: panelPermissions?.has('server:restart') ?? false,
           set_next_layer: squadPermissions?.has('changemap') ?? false,
           change_layer: squadPermissions?.has('changemap') ?? false,
-          broadcast: squadPermissions?.has('chat') ?? false,
+          // #315: taskTypeGuard requires both the 'chat' squad permission and
+          // the 'role:edit' panel permission for broadcast (MSG-4, #187);
+          // capabilities must match or a caller with 'chat' but not
+          // 'role:edit' sees the create form and only then gets a 403.
+          broadcast:
+            (squadPermissions?.has('chat') ?? false) &&
+            (panelPermissions?.has('role:edit') ?? false),
         },
       };
     },
@@ -334,17 +340,33 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
         return { error: resolvedParams.error };
       }
 
+      // #317: server_ids is documented as "additional target servers for a
+      // broadcast fan-out" — reject it for every other task_type instead of
+      // silently letting one POST create e.g. a restart or change_layer on
+      // up to MAX_FANOUT_SERVERS servers at once, undocumented.
+      if (req.body.task_type !== 'broadcast' && (req.body.server_ids?.length ?? 0) > 0) {
+        reply.code(400);
+        return { error: 'server_ids_only_for_broadcast' };
+      }
+
       // MSG-4 (#187): fan-out — create one row per unique target server (the
       // path server is always included). Every target must exist and not be
       // soft-deleted; all rows are inserted in one transaction so a bad id
       // rolls the whole batch back.
       const targetIds = [...new Set([req.params.id, ...(req.body.server_ids ?? [])])];
-      for (const targetId of targetIds) {
-        if (targetId === req.params.id) continue;
-        const target = await loadServer(targetId);
-        if (!target) {
+      const extraTargetIds = targetIds.filter((id) => id !== req.params.id);
+      if (extraTargetIds.length > 0) {
+        // #317: this used to be up to MAX_FANOUT_SERVERS sequential
+        // findFirst() round trips; one inArray query resolves them all.
+        const foundRows = await app.db
+          .select({ id: servers.id })
+          .from(servers)
+          .where(and(inArray(servers.id, extraTargetIds), isNull(servers.deletedAt)));
+        const foundIds = new Set(foundRows.map((row) => row.id));
+        const missing = extraTargetIds.find((id) => !foundIds.has(id));
+        if (missing) {
           reply.code(404);
-          return { error: 'not_found', server_id: targetId };
+          return { error: 'not_found', server_id: missing };
         }
       }
 

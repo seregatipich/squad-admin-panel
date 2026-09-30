@@ -1,6 +1,6 @@
 import { events, layers, seedSchedule, servers } from '@squad/db/schema';
 import { isValidCron5 } from '@squad/shared-types';
-import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -15,6 +15,10 @@ const historyQuery = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
 });
+
+const SEEDING_EVENT_KINDS = ['server.seeding_started', 'server.seeding_ended'] as const;
+const SEED_HISTORY_DEFAULT_WINDOW_MS = 30 * 86_400_000;
+const SEED_HISTORY_MAX_EVENTS = 2000;
 
 const createBody = z.object({
   starts_at: z.string().datetime(),
@@ -191,36 +195,59 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
 
-      const from = req.query.from ? new Date(req.query.from) : null;
-      const to = req.query.to ? new Date(req.query.to) : null;
-      const startedRows = await app.db
-        .select({ kind: events.kind, occurredAt: events.occurredAt, payload: events.payload })
-        .from(events)
-        .where(
-          and(
-            eq(events.serverId, req.params.id),
-            eq(events.kind, 'server.seeding_started'),
-            ...(from ? [gte(events.occurredAt, from)] : []),
-            ...(to ? [lte(events.occurredAt, to)] : []),
-          ),
-        );
-      const endedRows = await app.db
-        .select({ kind: events.kind, occurredAt: events.occurredAt, payload: events.payload })
-        .from(events)
-        .where(
-          and(
-            eq(events.serverId, req.params.id),
-            eq(events.kind, 'server.seeding_ended'),
-            ...(from ? [gte(events.occurredAt, from)] : []),
-            ...(to ? [lte(events.occurredAt, to)] : []),
-          ),
-        );
+      // #329: bounded, single-query, boundary-correct history. Without
+      // from/to this used to scan the server's entire event history in two
+      // separate unlimited queries; and any window straddling an explicit
+      // from/to edge was misreported (a window that started before `from`
+      // and is still open looked "lost", one still running past `to`
+      // looked "already ended").
+      const to = req.query.to ? new Date(req.query.to) : new Date();
+      const from = req.query.from
+        ? new Date(req.query.from)
+        : new Date(to.getTime() - SEED_HISTORY_DEFAULT_WINDOW_MS);
 
-      const merged = [...startedRows, ...endedRows].sort(
-        (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
+      const inRangeRows = await app.db
+        .select({ kind: events.kind, occurredAt: events.occurredAt, payload: events.payload })
+        .from(events)
+        .where(
+          and(
+            eq(events.serverId, req.params.id),
+            inArray(events.kind, SEEDING_EVENT_KINDS),
+            gte(events.occurredAt, from),
+            lte(events.occurredAt, to),
+          ),
+        )
+        .orderBy(asc(events.occurredAt))
+        .limit(SEED_HISTORY_MAX_EVENTS);
+
+      // A window whose `started` predates `from` would otherwise show as an
+      // orphan `ended` (or be silently dropped if still open) — carry the
+      // nearest preceding `started` in as context so pairSeedingWindows can
+      // resolve it, then drop it again if it turns out to be fully closed
+      // before `from`.
+      const precedingStart =
+        inRangeRows[0]?.kind !== 'server.seeding_started'
+          ? await app.db
+              .select({ kind: events.kind, occurredAt: events.occurredAt, payload: events.payload })
+              .from(events)
+              .where(
+                and(
+                  eq(events.serverId, req.params.id),
+                  eq(events.kind, 'server.seeding_started'),
+                  lt(events.occurredAt, from),
+                ),
+              )
+              .orderBy(desc(events.occurredAt))
+              .limit(1)
+          : [];
+
+      const merged = [...precedingStart, ...inRangeRows];
+      const windows = pairSeedingWindows(merged).filter(
+        (w) =>
+          new Date(w.started_at) <= to && (w.ended_at === null || new Date(w.ended_at) >= from),
       );
 
-      return { windows: pairSeedingWindows(merged) };
+      return { windows };
     },
   );
 

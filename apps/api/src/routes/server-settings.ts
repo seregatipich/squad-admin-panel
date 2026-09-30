@@ -71,6 +71,30 @@ function ufwRuleChanges(
   };
 }
 
+function serializeSettings(row: typeof serverSettings.$inferSelect) {
+  return {
+    server_id: row.serverId,
+    install_path: row.installPath,
+    game_port: row.gamePort,
+    query_port: row.queryPort,
+    beacon_port: row.beaconPort,
+    rcon_port: row.rconPort,
+    max_players: row.maxPlayers,
+    tickrate: row.tickrate,
+    multihome: row.multihome,
+    extra_args: row.extraArgs,
+    cpu_affinity: row.cpuAffinity,
+    cpu_weight: row.cpuWeight,
+    niceness: row.niceness,
+    memory_high_mb: row.memoryHighMb,
+    memory_max_mb: row.memoryMaxMb,
+    io_weight: row.ioWeight,
+    chat_commands_enabled: row.chatCommandsEnabled,
+    rules_text: row.rulesText,
+    archive_logs_to_backup: row.archiveLogsToBackup,
+  };
+}
+
 const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -239,27 +263,18 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'settings_read_failed' };
       }
 
-      return {
-        server_id: updated.serverId,
-        install_path: updated.installPath,
-        game_port: updated.gamePort,
-        query_port: updated.queryPort,
-        beacon_port: updated.beaconPort,
-        rcon_port: updated.rconPort,
-        max_players: updated.maxPlayers,
-        tickrate: updated.tickrate,
-        multihome: updated.multihome,
-        extra_args: updated.extraArgs,
-        cpu_affinity: updated.cpuAffinity,
-        cpu_weight: updated.cpuWeight,
-        niceness: updated.niceness,
-        memory_high_mb: updated.memoryHighMb,
-        memory_max_mb: updated.memoryMaxMb,
-        io_weight: updated.ioWeight,
-        chat_commands_enabled: updated.chatCommandsEnabled,
-        rules_text: updated.rulesText,
-        archive_logs_to_backup: updated.archiveLogsToBackup,
+      // #331: config.audit-based routes write only the action, not what
+      // changed — for security-sensitive fields (ports, UFW, resource
+      // limits) there was no way to reconstruct the before/after from
+      // audit_log alone. serializeSettings() never touches secrets (no
+      // license fields live on server_settings), so the full before/after
+      // is safe to record as-is.
+      req.auditSnapshots = {
+        before: serializeSettings(currentSettings),
+        after: serializeSettings(updated),
       };
+
+      return serializeSettings(updated);
     },
   );
 
@@ -302,6 +317,22 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+
+      // #331: config.audit records only the action by default; capture
+      // before/after here so audit_log can show what a PATCH actually
+      // changed. The license key itself is never recorded, only whether a
+      // key ends up present — the same redaction PUT /settings' sibling
+      // license flows apply elsewhere.
+      const licenseBefore = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, id),
+      });
+      const auditBefore = {
+        display_name: server.displayName,
+        description: server.description,
+        tags: server.tags,
+        license_id: licenseBefore?.licenseId ?? null,
+        has_license_key: licenseBefore?.licenseKeyEncrypted != null,
+      };
 
       const updateSet: Partial<typeof servers.$inferInsert> = {
         updatedAt: new Date(),
@@ -349,6 +380,20 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'server_read_failed' };
       }
+
+      const licenseAfter = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, id),
+      });
+      req.auditSnapshots = {
+        before: auditBefore,
+        after: {
+          display_name: updated.displayName,
+          description: updated.description,
+          tags: updated.tags,
+          license_id: licenseAfter?.licenseId ?? null,
+          has_license_key: licenseAfter?.licenseKeyEncrypted != null,
+        },
+      };
 
       return {
         id: updated.id,

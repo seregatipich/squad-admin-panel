@@ -1,6 +1,7 @@
 import { servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
+import { isExternalRuntime } from '../lib/server-runtime.js';
 import { sendUnlessStalled } from '../lib/ws-send.js';
 import {
   createStreamLimiter,
@@ -103,56 +104,86 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
       }, 20_000);
 
       (async () => {
-        const row = await app.db.query.servers.findFirst({
-          where: and(eq(servers.id, id), isNull(servers.deletedAt)),
-        });
-        if (!row) {
-          safeSend({ error: 'not_found' });
-          socket.close();
-          return;
-        }
-
-        // Refuse upfront if the container was never created; otherwise
-        // `docker logs` errors are spammy and the user sees nothing useful.
-        const installed =
-          row.status === 'running' ||
-          row.status === 'starting' ||
-          row.status === 'stopping' ||
-          row.status === 'stopped' ||
-          row.status === 'ready';
-        if (!installed) {
-          safeSend({
-            ts: new Date().toISOString(),
-            stream: 'stdout',
-            message: `[panel] сервер в состоянии "${row.status}" — контейнер ещё не создан. Запустите установку.`,
-          });
-          safeSend({ done: true });
-          socket.close();
-          return;
-        }
-
         try {
-          await dedicatedBridge.connect();
-          await dedicatedBridge.containerLogsFollow({ name, tail: backfillLines }, (frame) => {
-            if (closed) return;
-            const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            for (const line of text.split(/\r?\n/)) {
-              if (line.length === 0) continue;
-              safeSend({
-                ts: new Date().toISOString(),
-                stream: frame.stream === 'stderr' ? 'stderr' : 'stdout',
-                message: line,
-              });
-            }
+          const row = await app.db.query.servers.findFirst({
+            where: and(eq(servers.id, id), isNull(servers.deletedAt)),
           });
-          safeSend({ done: true });
+          if (!row) {
+            safeSend({ error: 'not_found' });
+            socket.close();
+            return;
+          }
+
+          // #296: an external server (runtime='external') is marked
+          // 'running' at creation and has no panel-managed container, so the
+          // `installed` check below would pass and this would ask the bridge
+          // to follow logs for a container that was never created.
+          if (isExternalRuntime(row.runtime)) {
+            safeSend({ error: 'external_server' });
+            socket.close();
+            return;
+          }
+
+          // Refuse upfront if the container was never created; otherwise
+          // `docker logs` errors are spammy and the user sees nothing useful.
+          const installed =
+            row.status === 'running' ||
+            row.status === 'starting' ||
+            row.status === 'stopping' ||
+            row.status === 'stopped' ||
+            row.status === 'ready';
+          if (!installed) {
+            safeSend({
+              ts: new Date().toISOString(),
+              stream: 'stdout',
+              message: `[panel] сервер в состоянии "${row.status}" — контейнер ещё не создан. Запустите установку.`,
+            });
+            safeSend({ done: true });
+            socket.close();
+            return;
+          }
+
+          try {
+            await dedicatedBridge.connect();
+            await dedicatedBridge.containerLogsFollow({ name, tail: backfillLines }, (frame) => {
+              if (closed) return;
+              const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
+              for (const line of text.split(/\r?\n/)) {
+                if (line.length === 0) continue;
+                safeSend({
+                  ts: new Date().toISOString(),
+                  stream: frame.stream === 'stderr' ? 'stderr' : 'stdout',
+                  message: line,
+                });
+              }
+            });
+            safeSend({ done: true });
+          } finally {
+            if (!closed) socket.close();
+            await dedicatedBridge.close().catch(() => undefined);
+          }
         } catch (err) {
-          if (!closed) safeSend({ error: (err as Error).message });
-        } finally {
-          if (!closed) socket.close();
+          // #295: `findFirst` used to run before this try block, so a DB
+          // failure rejected this IIFE with nothing awaiting it — the client
+          // got no {error} and the socket stayed open on heartbeats alone.
+          if (!closed) {
+            safeSend({ error: (err as Error).message });
+            socket.close();
+          }
           await dedicatedBridge.close().catch(() => undefined);
         }
-      })();
+      })().catch((err) => {
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.error',
+            severity: 'error',
+            serverId: id,
+            message: `unhandled error in logs ws handler: ${(err as Error).message}`,
+            payload: { errorMessage: (err as Error).message, url: req.url },
+          })
+          .catch(() => undefined);
+      });
 
       socket.on('close', (code, reason) => {
         closed = true;
