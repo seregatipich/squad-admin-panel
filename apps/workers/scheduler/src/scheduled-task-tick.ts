@@ -1,6 +1,6 @@
 import type { Diag } from '@squad/diag';
-import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
-import type { SendRconCommandInput } from './due-occurrence.js';
+import type { RconOperatorCommandName } from '@squad/shared-types';
+import { resolveCronDueOccurrence, type SendRconCommandInput } from './due-occurrence.js';
 
 /** Server action a scheduled task performs when it becomes due (AUTO-2, #73). */
 export type ScheduledTaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -94,34 +94,13 @@ export class PermanentTaskDispatchError extends Error {}
 
 /**
  * Resolves the single cron/one-off occurrence (if any) that is due for `entry`
- * as of `now`, or `null` when nothing is due. Mirrors
- * `seed-schedule-tick.ts`'s `resolveDueOccurrence`:
- *
- * - Recurring (`recurrence !== null`): due when {@link findLastCron5Occurrence}
- *   finds a matching minute strictly after the last-known cursor
- *   (`lastExecutedAt`, or `createdAt` if never executed) and at or before
- *   `now`. Multiple missed occurrences collapse to the most recent — the tick
- *   fires once and advances the cursor past all of them, regardless of how far
- *   behind the cursor has fallen (a quarterly/annual cron stays due even after
- *   months of downtime).
- * - One-off (`recurrence === null`, `scheduledAt` set): due once
- *   `scheduledAt <= now`, and only while it has never executed.
- * - Neither set: never due (the DB check constraint forbids this, but a stale
- *   row is treated defensively).
+ * as of `now`, or `null` when nothing is due. A one-off task fires at
+ * `scheduledAt`; a row with neither `recurrence` nor `scheduledAt` is never due
+ * (the DB check constraint forbids it, but a stale row is treated
+ * defensively). See {@link resolveCronDueOccurrence} for the rules.
  */
 export function resolveDueOccurrence(entry: ScheduledTaskEntry, now: Date): Date | null {
-  if (entry.recurrence === null) {
-    if (entry.scheduledAt === null) return null;
-    if (entry.lastExecutedAt !== null) return null;
-    return entry.scheduledAt.getTime() <= now.getTime() ? entry.scheduledAt : null;
-  }
-
-  const hasPriorOccurrence = entry.lastExecutedAt !== null;
-  const cursor = entry.lastExecutedAt ?? entry.createdAt;
-  const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
-  if (from.getTime() > now.getTime()) return null;
-
-  return findLastCron5Occurrence(entry.recurrence, from, now);
+  return resolveCronDueOccurrence({ ...entry, oneOffAt: entry.scheduledAt }, now);
 }
 
 /**

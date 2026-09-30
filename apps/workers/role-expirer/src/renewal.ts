@@ -108,7 +108,6 @@ export interface SubscriptionRenewalDeps {
   /** Resolves `false` when the subscription was no longer active, so nothing changed. */
   expireSubscription(subscriptionId: string, now: Date): Promise<boolean>;
   writeAuditEntry(entry: SubscriptionAuditEntry): Promise<void>;
-  invalidatePermissionCache(playerId: string): void;
   notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
@@ -175,9 +174,6 @@ export async function runSubscriptionRenewalTick(
         if (result.status === 'ok') {
           renewed += 1;
           enqueued += result.enqueued;
-          // The charge already committed: drop the cached permissions before
-          // the audit write, so a failing audit row cannot leave them stale.
-          deps.invalidatePermissionCache(subscription.playerId);
           await deps.writeAuditEntry({
             actor: { kind: 'system', label: 'role-expirer' },
             actorIp: null,
@@ -284,7 +280,6 @@ export function createSubscriptionRenewalDeps(
     chargeRenewal: (input) => chargeRenewal(db, input),
     expireSubscription: (subscriptionId, now) => expireSubscription(db, subscriptionId, now),
     writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
-    invalidatePermissionCache: () => undefined,
     notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
   };
 }

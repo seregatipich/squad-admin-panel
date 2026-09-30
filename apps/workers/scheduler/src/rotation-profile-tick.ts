@@ -122,7 +122,21 @@ function chooseProfile(
   );
 }
 
-/** Applies the selected weekday/default managed profile once per local server day. */
+/** Minimum pause before a profile whose apply failed is retried. */
+const APPLY_RETRY_COOLDOWN_MS = 10 * 60_000;
+
+/**
+ * Last failed apply per profile id. Process-local on purpose: a restart simply
+ * retries once immediately, and it keeps a persistently failing bridge call
+ * (missing `LayerRotation.cfg`, bridge down) from emitting a diag event every tick.
+ */
+const lastApplyFailureAt = new Map<string, number>();
+
+/**
+ * Applies the selected weekday/default managed profile once per local server
+ * day. A failed apply is retried no sooner than {@link APPLY_RETRY_COOLDOWN_MS}
+ * later.
+ */
 export async function runRotationProfileTick(
   deps: RotationProfileTickDeps,
 ): Promise<RotationProfileTickResult> {
@@ -143,6 +157,8 @@ export async function runRotationProfileTick(
     const clock = localClock(now, first.serverTimezone);
     const profile = chooseProfile(profiles, clock);
     if (!profile || !shouldApply(profile, clock, applyHour)) continue;
+    const failedAt = lastApplyFailureAt.get(profile.id);
+    if (failedAt !== undefined && now.getTime() - failedAt < APPLY_RETRY_COOLDOWN_MS) continue;
     const path = profilePath(profile.serverId);
     try {
       const current = await deps.bridge.fileRead({ path });
@@ -151,6 +167,7 @@ export async function runRotationProfileTick(
       const wrote = next !== current.content;
       if (wrote) await deps.bridge.fileAtomicWrite({ path, content: next });
       await deps.setLastAppliedAt(profile.id, now);
+      lastApplyFailureAt.delete(profile.id);
       await deps.writeAuditEntry({
         actor: { kind: 'system', label: 'rotation-scheduler' },
         actionType: 'rotation.profile_applied',
@@ -168,6 +185,7 @@ export async function runRotationProfileTick(
       applied++;
     } catch (error) {
       skipped++;
+      lastApplyFailureAt.set(profile.id, now.getTime());
       await deps.diag.emit({
         component: 'worker-scheduler',
         kind: 'rotation_profile.apply_failed',
