@@ -107,3 +107,22 @@ export function formatDateTimeRu(iso: string | null | undefined, fallback = '—
     minute: '2-digit',
   });
 }
+
+/**
+ * Formats a duration in seconds as Russian "31 мин 05 сек" / "45 сек".
+ * Null and non-finite values render "—". Shared by the dashboard and the public stats page.
+ */
+export function formatDurationRu(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '—';
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  if (minutes === 0) return `${rest} сек`;
+  return `${minutes} мин ${String(rest).padStart(2, '0')} сек`;
+}
+
+/** Formats hours with one decimal and a Russian comma, e.g. "12,5 ч". */
+export function formatHours(hours: number): string {
+  const rounded = Math.round(hours * 10) / 10;
+  return `${String(rounded).replace('.', ',')} ч`;
+}

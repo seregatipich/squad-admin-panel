@@ -49,7 +49,20 @@ function formatOutageDuration(unreachableSince: string): string {
   return days === 1 ? `${days} день` : `${days} дней`;
 }
 
-export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
+/**
+ * Warns when Admins.cfg on a server drifted from the panel or is unreachable.
+ *
+ * @param serverId Server whose drift status is polled.
+ * @param canSync Whether the viewer holds `admin_group:edit`, which the sync
+ *   endpoint requires; without it the banner informs but offers no button.
+ */
+export function AdminsCfgDriftBanner({
+  serverId,
+  canSync,
+}: {
+  serverId: string;
+  canSync: boolean;
+}) {
   const [status, setStatus] = useState<AdminsCfgStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -141,9 +154,11 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
           </>
         }
         action={
-          <Button size="sm" onClick={forceSync} loading={busy}>
-            Повторить синхронизацию
-          </Button>
+          canSync ? (
+            <Button size="sm" onClick={forceSync} loading={busy}>
+              Повторить синхронизацию
+            </Button>
+          ) : undefined
         }
       />
     );
@@ -161,9 +176,11 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
         </>
       }
       action={
-        <Button size="sm" onClick={forceSync} loading={busy}>
-          Синхронизировать
-        </Button>
+        canSync ? (
+          <Button size="sm" onClick={forceSync} loading={busy}>
+            Синхронизировать
+          </Button>
+        ) : undefined
       }
     />
   );

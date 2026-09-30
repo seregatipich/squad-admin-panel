@@ -37,7 +37,7 @@ describe('AdminsCfgDriftBanner', () => {
       last_segment_hash: null,
       last_db_hash: null,
     });
-    const { container } = render(<AdminsCfgDriftBanner serverId="s1" />);
+    const { container } = render(<AdminsCfgDriftBanner serverId="s1" canSync />);
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
@@ -53,7 +53,7 @@ describe('AdminsCfgDriftBanner', () => {
       last_db_hash: null,
       unreachable_since: new Date(Date.now() - 5_000).toISOString(),
     });
-    const { container } = render(<AdminsCfgDriftBanner serverId="s1" />);
+    const { container } = render(<AdminsCfgDriftBanner serverId="s1" canSync />);
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
@@ -68,7 +68,7 @@ describe('AdminsCfgDriftBanner', () => {
       unreachable_since: new Date(Date.now() - 3 * HOUR_MS).toISOString(),
       error: 'bridge timeout',
     });
-    render(<AdminsCfgDriftBanner serverId="s1" />);
+    render(<AdminsCfgDriftBanner serverId="s1" canSync />);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Admins.cfg уже 3 часов');
@@ -83,7 +83,7 @@ describe('AdminsCfgDriftBanner', () => {
       last_segment_hash: 'aaa',
       last_db_hash: 'bbb',
     });
-    render(<AdminsCfgDriftBanner serverId="s1" />);
+    render(<AdminsCfgDriftBanner serverId="s1" canSync />);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('изменён вне панели');
@@ -91,6 +91,19 @@ describe('AdminsCfgDriftBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Синхронизировать' }));
 
     await waitFor(() => expect(calls).toContain('POST /api/v1/admins-cfg/sync'));
+  });
+
+  it('hides the sync button from a viewer without admin_group:edit', async () => {
+    stubApi({
+      state: 'drift',
+      last_synced_at: null,
+      last_segment_hash: 'aaa',
+      last_db_hash: 'bbb',
+    });
+    render(<AdminsCfgDriftBanner serverId="s1" canSync={false} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('изменён вне панели');
+    expect(screen.queryByRole('button', { name: 'Синхронизировать' })).toBeNull();
   });
 
   it('shows an error instead of an unhandled rejection when the sync request fails', async () => {
@@ -108,7 +121,7 @@ describe('AdminsCfgDriftBanner', () => {
           : Promise.reject(new TypeError('offline')),
       ),
     );
-    render(<AdminsCfgDriftBanner serverId="s1" />);
+    render(<AdminsCfgDriftBanner serverId="s1" canSync />);
 
     await screen.findByRole('alert');
     fireEvent.click(screen.getByRole('button', { name: 'Синхронизировать' }));
@@ -121,7 +134,7 @@ describe('AdminsCfgDriftBanner', () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 403 })));
     vi.stubGlobal('fetch', fetchMock);
     try {
-      render(<AdminsCfgDriftBanner serverId="s1" />);
+      render(<AdminsCfgDriftBanner serverId="s1" canSync />);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
