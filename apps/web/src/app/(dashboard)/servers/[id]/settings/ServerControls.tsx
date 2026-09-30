@@ -39,6 +39,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
   const router = useRouter();
   const [server, setServer] = useState<ServerSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [pollErr, setPollErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [forceStopOpen, setForceStopOpen] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
@@ -59,8 +60,9 @@ export function ServerControls({ serverId }: { serverId: string }) {
         status: body.server.status,
         runtime: body.server.runtime,
       });
+      setPollErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      setPollErr((e as Error).message);
     }
   }, [serverId]);
 
@@ -82,7 +84,8 @@ export function ServerControls({ serverId }: { serverId: string }) {
   if (!server) return null;
 
   const external = server.runtime === 'external';
-  const canStart = server.status !== 'running' && server.status !== 'starting';
+  const canStart =
+    server.status === 'stopped' || server.status === 'ready' || server.status === 'failed';
   const canStop = server.status === 'running' || server.status === 'starting';
 
   async function action(name: 'start' | 'stop' | 'restart' | 'delete') {
@@ -107,6 +110,8 @@ export function ServerControls({ serverId }: { serverId: string }) {
         }
       }
       await refresh();
+    } catch (e) {
+      setErr(`${name} failed: ${(e as Error).message}`);
     } finally {
       setActing(null);
     }
@@ -148,7 +153,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
 
   return (
     <div className="space-y-3">
-      {err ? <InlineBanner tone="crit" title={err} /> : null}
+      {(err ?? pollErr) ? <InlineBanner tone="crit" title={err ?? pollErr ?? ''} /> : null}
       <GroupedList
         title="Управление"
         footnote={
@@ -192,7 +197,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
               >
                 Рестарт
               </Button>
-              {server.status === 'stopped' || updateRunning ? (
+              {server.status === 'stopped' || server.status === 'ready' || updateRunning ? (
                 <Button onClick={() => void startUpdate()} disabled={acting !== null}>
                   {acting === 'update'
                     ? 'Запуск обновления...'

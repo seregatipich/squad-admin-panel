@@ -109,6 +109,59 @@ describe('ServerControls', () => {
     expect(await screen.findByText('start failed: HTTP 500 boom')).toBeInTheDocument();
   });
 
+  it('shows a rejected action request as an error instead of an unhandled rejection', async () => {
+    stubFetch('stopped', undefined, (url, init) => {
+      if (url === `/api/v1/servers/${SERVER_ID}/start` && init?.method === 'POST') {
+        throw new Error('network down');
+      }
+      return undefined;
+    });
+    await renderControls();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Старт' }));
+    });
+    expect(await screen.findByText('start failed: network down')).toBeInTheDocument();
+  });
+
+  it('clears a poll error once a later poll succeeds', async () => {
+    vi.useFakeTimers();
+    let failing = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        failing
+          ? ({ ok: false, status: 502 } as Response)
+          : ({ ok: true, json: async () => serverBody('running') } as Response),
+      ),
+    );
+    await act(async () => {
+      render(<ServerControls serverId={SERVER_ID} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    failing = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    vi.useRealTimers();
+    expect(screen.queryByText('HTTP 502')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Стоп' })).toBeEnabled();
+  });
+
+  it('offers the game update for a freshly installed (ready) server and blocks start while installing', async () => {
+    stubFetch('ready');
+    await renderControls();
+    expect(await screen.findByRole('button', { name: 'Обновить игру' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Старт' })).toBeEnabled();
+    cleanup();
+
+    stubFetch('installing');
+    await renderControls();
+    expect(await screen.findByRole('button', { name: 'Старт' })).toBeDisabled();
+  });
+
   it('starts an update, opens the progress modal, and resets on completion', async () => {
     let updateCalled = false;
     stubFetch('stopped', undefined, (url, init) => {
