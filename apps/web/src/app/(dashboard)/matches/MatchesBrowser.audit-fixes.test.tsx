@@ -95,7 +95,7 @@ describe('MatchesBrowser — всего counter (#585)', () => {
     vi.stubGlobal('fetch', stubFetch({ countOk: false }));
     render(<MatchesBrowser />);
 
-    await screen.findByRole('link', { name: 'Yehorivka_RAAS_v1' }).catch(() => undefined);
+    await screen.findByText('Yehorivka_RAAS_v1');
     await waitFor(() => expect(screen.getByText('всего: …')).toBeInTheDocument());
     expect(screen.queryByText('всего: 0')).not.toBeInTheDocument();
   });
