@@ -52,7 +52,7 @@ const ALL_PERMISSIONS = [
 
 function renderNav(props: Partial<Parameters<typeof TopNav>[0]> = {}) {
   return render(
-    <LocaleProvider locale="ru">
+    <LocaleProvider>
       <TopNav permissions={ALL_PERMISSIONS} displayName="Alice" groups={NAV_GROUPS} {...props} />
     </LocaleProvider>,
   );

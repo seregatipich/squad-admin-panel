@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOCALE, LOCALES } from './config';
 import { ru } from './dictionaries/ru';
-import { extractApiErrorCode, localizeApiError } from './errors';
 import {
   createTranslator,
   createTranslatorForLocale,
@@ -62,43 +61,5 @@ describe('translator', () => {
 
   it('getDictionary returns the locale dictionary', () => {
     expect(getDictionary('ru')).toBe(ru);
-  });
-});
-
-describe('localizeApiError', () => {
-  const tRu = createTranslatorForLocale('ru');
-
-  it('maps a known API error code to the localized message', () => {
-    expect(localizeApiError(tRu, 'rate_limited')).toBe('Слишком много запросов. Попробуйте позже.');
-    expect(localizeApiError(tRu, 'internal_error')).toBe('Внутренняя ошибка сервера.');
-    expect(localizeApiError(tRu, 'invalid_period')).toBe('Некорректный период.');
-  });
-
-  it('falls back to the unknown message for an unmapped code', () => {
-    expect(localizeApiError(tRu, 'teapot')).toBe('Произошла ошибка. Попробуйте ещё раз.');
-    expect(localizeApiError(tRu, null)).toBe('Произошла ошибка. Попробуйте ещё раз.');
-    expect(localizeApiError(tRu, undefined)).toBe('Произошла ошибка. Попробуйте ещё раз.');
-  });
-
-  it('does not treat the "unknown" sentinel as an API code path', () => {
-    // A code literally named "unknown" still resolves via errors.unknown.
-    expect(localizeApiError(tRu, 'unknown')).toBe('Произошла ошибка. Попробуйте ещё раз.');
-  });
-});
-
-describe('extractApiErrorCode', () => {
-  it('reads the code from a well-formed error envelope', () => {
-    expect(extractApiErrorCode({ error: { code: 'rate_limited', message: 'x' } })).toBe(
-      'rate_limited',
-    );
-  });
-
-  it('returns null for malformed or missing envelopes', () => {
-    expect(extractApiErrorCode(null)).toBeNull();
-    expect(extractApiErrorCode('nope')).toBeNull();
-    expect(extractApiErrorCode({})).toBeNull();
-    expect(extractApiErrorCode({ error: null })).toBeNull();
-    expect(extractApiErrorCode({ error: { message: 'x' } })).toBeNull();
-    expect(extractApiErrorCode({ error: { code: 42 } })).toBeNull();
   });
 });

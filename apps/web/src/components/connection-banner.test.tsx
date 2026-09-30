@@ -42,7 +42,7 @@ async function driveToUnreachable(): Promise<void> {
 describe('ConnectionBanner', () => {
   it('is hidden until the panel is confirmed unreachable', () => {
     render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );
@@ -51,7 +51,7 @@ describe('ConnectionBanner', () => {
 
   it('shows the unavailable toast in Russian', async () => {
     render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );

@@ -12,6 +12,10 @@ export interface RequestOptions extends RequestInit {
  * it issues a same-origin relative request instead: the browser cannot
  * resolve the internal `API_URL` host, but a relative path is forwarded to
  * the API by the Next.js rewrite in `next.config.mjs`.
+ *
+ * `T` is the caller's assertion about the response body; it is not validated
+ * at runtime, so callers of endpoints with an unstable contract must parse the
+ * result themselves.
  */
 export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const headers = new Headers(opts.headers ?? {});
