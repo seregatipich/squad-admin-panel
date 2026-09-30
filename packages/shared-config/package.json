@@ -19,6 +19,11 @@
       "development": "./src/discord-template.ts",
       "default": "./dist/discord-template.js"
     },
+    "./mark-types": {
+      "types": "./dist/mark-types.d.ts",
+      "development": "./src/mark-types.ts",
+      "default": "./dist/mark-types.js"
+    },
     "./banned-names": {
       "types": "./dist/banned-names.d.ts",
       "development": "./src/banned-names.ts",
