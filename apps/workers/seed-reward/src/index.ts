@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -15,7 +19,7 @@ const log = pino({
   base: { service: 'worker-seed-reward' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.SEED_REWARD_INTERVAL_MS ?? 86_400_000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.SEED_REWARD_INTERVAL_MS, 86_400_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

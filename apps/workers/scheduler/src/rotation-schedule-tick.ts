@@ -45,6 +45,13 @@ export interface RotationScheduleTickDeps {
   }): Promise<void>;
   setLastExecutedAt(entryId: string, executedAt: Date): Promise<void>;
   writeAuditEntry(entry: RotationScheduleAuditEntry): Promise<void>;
+  /**
+   * Occurrences (`<entry id>:<ISO time>`) whose depot-update skip is already
+   * audited. Keeps a depot update that lasts many ticks from appending one
+   * identical row per tick to the append-only audit chain; the set must
+   * outlive a single tick, so the runtime deps supply a long-lived one.
+   */
+  auditedDepotSkips?: Set<string>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -66,6 +73,9 @@ export async function runRotationScheduleTick(
   const now = deps.now ?? new Date();
   let executed = 0;
   let skippedDepotUpdate = 0;
+  const auditedDepotSkips = deps.auditedDepotSkips ?? new Set<string>();
+  // The flag is global, so it is read once per tick, and only when something is due.
+  let depotUpdating: boolean | undefined;
 
   try {
     for (const entry of await deps.loadEnabledEntries()) {
@@ -102,8 +112,11 @@ export async function runRotationScheduleTick(
         continue;
       }
 
-      if (await deps.isDepotUpdating()) {
+      depotUpdating ??= await deps.isDepotUpdating();
+      const skipKey = `${entry.id}:${occurrence.toISOString()}`;
+      if (depotUpdating) {
         skippedDepotUpdate++;
+        if (auditedDepotSkips.has(skipKey)) continue;
         await deps.writeAuditEntry({
           actor: { kind: 'system', label: 'rotation-scheduler' },
           actionType: 'server.rotation_schedule.skip_depot_update',
@@ -111,8 +124,10 @@ export async function runRotationScheduleTick(
           targetId: entry.id,
           context: { server_id: entry.serverId, occurrence: occurrence.toISOString() },
         });
+        auditedDepotSkips.add(skipKey);
         continue;
       }
+      auditedDepotSkips.delete(skipKey);
 
       const command: RconOperatorCommandName =
         entry.mode === 'force_change' ? 'AdminChangeLayer' : 'AdminSetNextLayer';

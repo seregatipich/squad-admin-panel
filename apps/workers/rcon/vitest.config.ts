@@ -27,10 +27,10 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/**/types.ts'],
       thresholds: {
-        lines: 12,
+        lines: 85,
         functions: 68,
         branches: 77,
-        statements: 12,
+        statements: 85,
       },
       reportsDirectory: './coverage',
     },

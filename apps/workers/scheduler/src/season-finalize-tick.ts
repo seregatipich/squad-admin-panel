@@ -19,10 +19,14 @@ export interface SeasonFinalizeAuditEntry {
 export interface SeasonFinalizeTickDeps {
   now?: Date;
   loadActiveSeasons(): Promise<ActiveSeason[]>;
-  /** Sets `status = 'closed'` and `finalized = true` for the given season. */
-  finalizeSeason(seasonId: string): Promise<void>;
+  /**
+   * Sets `status = 'closed'` and `finalized = true` for the season and appends
+   * its audit row in one transaction: the season never reappears in
+   * `loadActiveSeasons` once closed, so a separate audit write that failed
+   * would be lost for good.
+   */
+  finalizeSeason(seasonId: string, audit: SeasonFinalizeAuditEntry): Promise<void>;
   invalidateLeaderboardCache(): Promise<number>;
-  writeAuditEntry(entry: SeasonFinalizeAuditEntry): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -62,7 +66,17 @@ export async function runSeasonFinalizeTick(
       if (!isSeasonExpired(season, now)) continue;
 
       try {
-        await deps.finalizeSeason(season.id);
+        await deps.finalizeSeason(season.id, {
+          actor: { kind: 'system', label: 'season-finalizer' },
+          actionType: 'season.finalize',
+          targetType: 'season',
+          targetId: season.id,
+          context: {
+            name: season.name,
+            starts_at: season.startsAt.toISOString(),
+            ends_at: season.endsAt.toISOString(),
+          },
+        });
       } catch (error) {
         failed++;
         await deps.diag.emit({
@@ -75,17 +89,6 @@ export async function runSeasonFinalizeTick(
         continue;
       }
 
-      await deps.writeAuditEntry({
-        actor: { kind: 'system', label: 'season-finalizer' },
-        actionType: 'season.finalize',
-        targetType: 'season',
-        targetId: season.id,
-        context: {
-          name: season.name,
-          starts_at: season.startsAt.toISOString(),
-          ends_at: season.endsAt.toISOString(),
-        },
-      });
       finalized++;
     }
 

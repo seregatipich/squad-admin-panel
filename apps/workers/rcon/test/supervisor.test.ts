@@ -1024,3 +1024,62 @@ describe('RconSupervisor overlapping reconciles', () => {
     }
   });
 });
+
+describe('RconSupervisor deferred full poll', () => {
+  it('runs a full poll that came due during a roster refresh as soon as the refresh ends', async () => {
+    let releaseListPlayers: (raw: string) => void = () => undefined;
+    const exec = vi.fn((command: string) =>
+      command === 'ListPlayers'
+        ? new Promise<string>((resolve) => {
+            releaseListPlayers = resolve;
+          })
+        : Promise.resolve(''),
+    );
+    const log = makeLogger() as unknown as { warn: ReturnType<typeof vi.fn> };
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: log as never,
+      initialBackoffMs: 600_000,
+    });
+    // Nothing listens on the target port: the connect loop fails once and then
+    // parks for the backoff, leaving the injected client below untouched.
+    await supervisor.reconcile([{ ...target, serverId: 'srv-deferred', port: 1 }]);
+    await vi.waitFor(
+      () => expect(log.warn).toHaveBeenCalledWith(expect.anything(), 'reconnect in 600000ms'),
+      {
+        timeout: 5000,
+      },
+    );
+    await sleep(100);
+    const perServer = (
+      supervisor as unknown as { supervisors: Map<string, Record<string, unknown>> }
+    ).supervisors.get('srv-deferred') as {
+      client: unknown;
+      refreshRoster(): Promise<void>;
+      runFullPoll(): Promise<void>;
+      fullPollPending: boolean;
+    };
+    perServer.client = { exec, close: vi.fn().mockResolvedValue(undefined) };
+
+    try {
+      const roster = perServer.refreshRoster();
+      await perServer.runFullPoll();
+
+      expect(perServer.fullPollPending).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+
+      releaseListPlayers('');
+      await roster;
+      await sleep(50);
+
+      // The full poll begins with its own ListPlayers, which the fake keeps pending.
+      expect(exec.mock.calls.filter(([command]) => command === 'ListPlayers')).toHaveLength(2);
+      expect(perServer.fullPollPending).toBe(false);
+      releaseListPlayers('');
+    } finally {
+      perServer.client = undefined;
+      await supervisor.stop();
+    }
+  });
+});

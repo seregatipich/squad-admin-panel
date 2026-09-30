@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  intervalMsFromEnv,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -15,7 +19,7 @@ const log = pino({
   base: { service: 'worker-steam-refresh' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.STEAM_REFRESH_INTERVAL_MS ?? 60 * 60 * 1000);
+const TICK_INTERVAL_MS = intervalMsFromEnv(process.env.STEAM_REFRESH_INTERVAL_MS, 60 * 60 * 1000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

@@ -41,10 +41,9 @@ function makeDeps(opts: {
         roleExpiresAt: new Date(NOW.getTime() + 30 * DAY_MS),
         enqueued: 1,
       }),
-    expireSubscription: vi.fn().mockResolvedValue(undefined),
+    expireSubscription: vi.fn().mockResolvedValue(true),
     writeAuditEntry: vi.fn().mockResolvedValue(undefined),
     notifySubscriptionExpired: vi.fn().mockResolvedValue(undefined),
-    invalidatePermissionCache: vi.fn(),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
   } satisfies SubscriptionRenewalDeps;
   return deps;
@@ -96,7 +95,6 @@ describe('runSubscriptionRenewalTick', () => {
         targetId: PLAYER_ID,
       }),
     );
-    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(PLAYER_ID);
   });
 
   it('expires the subscription and notifies the player when the balance is short', async () => {
@@ -121,6 +119,18 @@ describe('runSubscriptionRenewalTick', () => {
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({ actionType: 'player.subscription.expire' }),
     );
+  });
+
+  it('skips the audit row and the alert when the subscription was cancelled before expiry', async () => {
+    const charge = vi.fn().mockResolvedValue({ status: 'insufficient_balance', balance: 10 });
+    const deps = makeDeps({ dueSubscriptions: [due()], charge });
+    deps.expireSubscription.mockResolvedValue(false);
+
+    const result = await runSubscriptionRenewalTick(deps);
+
+    expect(result).toMatchObject({ renewed: 0, expired: 0 });
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
+    expect(deps.notifySubscriptionExpired).not.toHaveBeenCalled();
   });
 
   it('expires the subscription when the tier role can no longer be granted', async () => {

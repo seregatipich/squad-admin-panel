@@ -1,5 +1,6 @@
 import type { Diag } from '@squad/diag';
 import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
+import type { SendRconCommandInput } from './due-occurrence.js';
 
 /** Server action a scheduled task performs when it becomes due (AUTO-2, #73). */
 export type ScheduledTaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -30,12 +31,6 @@ export interface ScheduledTaskEntry {
   /** Player who created the task; the author of the chat echo. Null → echo skipped. */
   createdBy: string | null;
   createdAt: Date;
-}
-
-export interface SendRconCommandInput {
-  serverId: string;
-  command: RconOperatorCommandName;
-  args: string[];
 }
 
 export type ScheduledTaskRunStatus = 'executed' | 'skipped_depot_update' | 'failed';

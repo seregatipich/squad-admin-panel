@@ -270,6 +270,46 @@ describe('runSeedScheduleTick', () => {
     );
   });
 
+  it('consumes the occurrence when only the broadcast fails, so the layer change is not re-sent', async () => {
+    const entry = makeEntry({
+      startsAt: new Date('2026-07-11T10:00:00.000Z'),
+      broadcastText: 'Заходим сидить!',
+    });
+    const sendRconCommand = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('redis unavailable'));
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+      sendRconCommand,
+    });
+
+    const result = await runSeedScheduleTick(deps);
+
+    expect(result).toEqual({ executed: 1, skippedDepotUpdate: 0 });
+    expect(deps.setLastExecutedAt).toHaveBeenCalledWith(entry.id, entry.startsAt);
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'seed_schedule.broadcast_failed', severity: 'error' }),
+    );
+  });
+
+  it('skips one entry without aborting the tick when the liveness read fails', async () => {
+    const entry = makeEntry({ startsAt: new Date('2026-07-11T10:00:00.000Z') });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+      getSeedingLiveness: vi.fn().mockRejectedValue(new Error('redis down')),
+    });
+
+    await expect(runSeedScheduleTick(deps)).resolves.toEqual({
+      executed: 0,
+      skippedDepotUpdate: 0,
+    });
+    expect(deps.sendRconCommand).not.toHaveBeenCalled();
+    expect(deps.setLastExecutedAt).not.toHaveBeenCalled();
+  });
+
   it('notifies before the scheduled occurrence without executing RCON early', async () => {
     const entry = makeEntry({
       startsAt: new Date('2026-07-11T10:00:00.000Z'),

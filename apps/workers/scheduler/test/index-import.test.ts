@@ -7,6 +7,7 @@ vi.mock('ioredis', () => ({
   })),
 }));
 vi.mock('@squad/shared-config', () => ({
+  intervalMsFromEnv: (_raw: string | undefined, fallbackMs: number) => fallbackMs,
   startHeartbeat: vi.fn(() => vi.fn()),
 }));
 vi.mock('pino', () => {

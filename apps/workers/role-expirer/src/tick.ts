@@ -3,9 +3,7 @@ import { auditLog, players, roles, sessions, vipSubscriptions, vipTiers } from '
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, isNotNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
-
-/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
-const LIVE_BUS_CHANNEL = 'live-bus';
+import { LIVE_BUS_CHANNEL } from './system-events.js';
 
 export interface ExpiredRoleAssignment {
   playerId: string;
@@ -331,18 +329,18 @@ export async function writeRoleExpiryAuditEntry(
  * everything else on a later failure (#992).
  */
 /** Narrower than `DatabaseClient` so a transaction handle (which lacks `$client`) can be passed too. */
-type SessionDeleteExecutor = Pick<DatabaseClient, 'select' | 'delete'>;
+type SessionDeleteExecutor = Pick<DatabaseClient, 'delete'>;
 
 async function deleteSessionRowsForPlayer(
   db: SessionDeleteExecutor,
   playerId: string,
 ): Promise<string[]> {
+  // One statement, so a session created concurrently is either deleted and
+  // returned here (its Redis key is cleared) or survives untouched in the DB.
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
-  if (rows.length === 0) return [];
-  await db.delete(sessions).where(eq(sessions.playerId, playerId));
+    .delete(sessions)
+    .where(eq(sessions.playerId, playerId))
+    .returning({ id: sessions.id });
   return rows.map((row) => row.id);
 }
 

@@ -2,7 +2,8 @@ import type { BridgeClient } from '@squad/bridge-client';
 import type { Diag } from '@squad/diag';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 
-const PROFILE_APPLY_HOUR = 4;
+/** Server-local hour at which a profile may first be applied when none is configured. */
+export const DEFAULT_ROTATION_PROFILE_APPLY_HOUR = 4;
 
 /** A profile row joined with the server timezone for local-time scheduling. */
 export interface RotationProfileEntry {
@@ -96,7 +97,10 @@ function spliceManagedSegment(content: string, body: string): string {
     return `${body}\r\n\r\n${content}`;
   }
   const end = content.indexOf(endMarker, begin);
-  if (end < 0) return content;
+  // A hand-damaged block must fail loudly: returning the content unchanged
+  // would be recorded as an applied profile that never reached the file.
+  if (end < 0)
+    throw new Error('LayerRotation.cfg has a managed BEGIN marker without an END marker');
   const after = end + endMarker.length;
   return `${content.slice(0, begin)}${body}${content.slice(after)}`;
 }
@@ -123,7 +127,7 @@ export async function runRotationProfileTick(
   deps: RotationProfileTickDeps,
 ): Promise<RotationProfileTickResult> {
   const now = deps.now ?? new Date();
-  const applyHour = deps.applyHour ?? PROFILE_APPLY_HOUR;
+  const applyHour = deps.applyHour ?? DEFAULT_ROTATION_PROFILE_APPLY_HOUR;
   const byServer = new Map<string, RotationProfileEntry[]>();
   for (const profile of await deps.loadProfiles()) {
     const group = byServer.get(profile.serverId) ?? [];

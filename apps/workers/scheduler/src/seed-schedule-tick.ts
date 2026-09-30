@@ -1,5 +1,6 @@
 import type { Diag } from '@squad/diag';
 import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
+import type { SendRconCommandInput } from './due-occurrence.js';
 
 /** One row of the `seed_schedule` table (SEED-3, #142). */
 export interface SeedScheduleEntry {
@@ -17,12 +18,6 @@ export interface SeedScheduleEntry {
 }
 
 export type SeedingLiveness = 'seeding' | 'live' | 'unknown';
-
-export interface SendRconCommandInput {
-  serverId: string;
-  command: RconOperatorCommandName;
-  args: string[];
-}
 
 export interface SeedScheduleAuditEntry {
   actor: { kind: 'system'; label: 'seed-scheduler' };
@@ -99,13 +94,14 @@ export function resolveNotificationOccurrence(entry: SeedScheduleEntry, now: Dat
  * via the worker-rcon command stream: `AdminChangeLayer` when the server's
  * SEED-1 redis state is `seeding` (or absent/unknown, i.e. not yet observed
  * as live), `AdminSetNextLayer` when it is `live`, plus an optional
- * `AdminBroadcast` when `broadcastText` is set. Skips (without advancing the
+ * `AdminBroadcast` when `broadcastText` is set (best-effort: once the layer
+ * change is queued a failing broadcast is only reported, never re-sent). Skips (without advancing the
  * execution cursor, so the same occurrence retries next tick) while a depot
  * update is in progress (redis `depot:updating`), auditing the skip. Every
  * execution is written to `audit_log` with actor `{kind:'system',
  * label:'seed-scheduler'}`.
  *
- * If the RCON enqueue itself throws, `lastExecutedAt` is deliberately left
+ * If the layer-change enqueue (or the liveness read) throws, `lastExecutedAt` is deliberately left
  * unset so the occurrence is retried on the next tick rather than silently
  * dropped.
  */
@@ -157,23 +153,15 @@ export async function runSeedScheduleTick(
         continue;
       }
 
-      const liveness = await deps.getSeedingLiveness(entry.serverId);
-      const command: RconOperatorCommandName =
-        liveness === 'live' ? 'AdminSetNextLayer' : 'AdminChangeLayer';
-
+      let command: RconOperatorCommandName;
       try {
+        const liveness = await deps.getSeedingLiveness(entry.serverId);
+        command = liveness === 'live' ? 'AdminSetNextLayer' : 'AdminChangeLayer';
         await deps.sendRconCommand({
           serverId: entry.serverId,
           command,
           args: [entry.seedLayer],
         });
-        if (entry.broadcastText) {
-          await deps.sendRconCommand({
-            serverId: entry.serverId,
-            command: 'AdminBroadcast',
-            args: [entry.broadcastText],
-          });
-        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await deps.diag.emit({
@@ -186,7 +174,27 @@ export async function runSeedScheduleTick(
         continue;
       }
 
+      // The layer change is queued, so the occurrence is consumed from here on.
+      // A failed broadcast must not send the change again on the next tick.
       await deps.setLastExecutedAt(entry.id, occurrence);
+      if (entry.broadcastText) {
+        try {
+          await deps.sendRconCommand({
+            serverId: entry.serverId,
+            command: 'AdminBroadcast',
+            args: [entry.broadcastText],
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await deps.diag.emit({
+            component: 'worker-scheduler',
+            kind: 'seed_schedule.broadcast_failed',
+            severity: 'error',
+            message: `seed_schedule ${entry.id} broadcast enqueue failed: ${message}`,
+            payload: { entry_id: entry.id, server_id: entry.serverId, err: message },
+          });
+        }
+      }
       await deps.writeAuditEntry({
         actor: { kind: 'system', label: 'seed-scheduler' },
         actionType: 'server.seed_schedule.execute',

@@ -139,20 +139,18 @@ export async function runSteamRefreshTick(
 
   try {
     const ids = candidates.map((candidate) => candidate.steamId64);
-    const [profiles, bans, ownedGames] = await Promise.all([
-      deps.fetchProfiles(ids),
-      deps.fetchBans(ids),
-      mapWithConcurrency(candidates, OWNED_GAMES_CONCURRENCY, (candidate) =>
-        // A single candidate's network/JSON error must not reject the whole
-        // Promise.all and discard the entire batch's already-fetched
-        // profiles/bans (#1027) — it is counted as `failed` below instead,
-        // same as a candidate GetOwnedGames simply omitted.
-        deps
-          .fetchOwnedGames(candidate.steamId64)
-          .catch(() => null),
-      ),
-    ]);
+    const [profiles, bans] = await Promise.all([deps.fetchProfiles(ids), deps.fetchBans(ids)]);
+    // The per-player owned-games calls are the expensive part of the quota, so
+    // they only start once both shared batch requests have succeeded.
     if (!profiles || !bans) throw new Error('Steam batch request failed');
+    const ownedGames = await mapWithConcurrency(candidates, OWNED_GAMES_CONCURRENCY, (candidate) =>
+      // A single candidate's network/JSON error must not reject the whole batch
+      // and discard the already-fetched profiles/bans (#1027) — it is counted
+      // as `failed` below instead.
+      deps
+        .fetchOwnedGames(candidate.steamId64)
+        .catch(() => null),
+    );
 
     let updated = 0;
     let failed = 0;

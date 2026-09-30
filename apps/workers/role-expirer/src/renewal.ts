@@ -6,7 +6,6 @@ import {
 } from '@squad/db';
 import {
   alertEvents,
-  auditLog,
   players,
   ROLE_EXPIRY_ALERT_RULE_ID,
   roles,
@@ -16,10 +15,12 @@ import {
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, lte } from 'drizzle-orm';
 import type Redis from 'ioredis';
+import {
+  publishAlertFrame,
+  type SystemAuditEntry,
+  writeSystemAuditEntry,
+} from './system-events.js';
 import type { AdminsCfgSyncEvent } from './tick.js';
-
-/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
-const LIVE_BUS_CHANNEL = 'live-bus';
 
 /** An active subscription whose `next_renewal_at` has come due. */
 export interface DueSubscription {
@@ -96,26 +97,19 @@ export interface SubscriptionExpiredAlertPayload {
   balance: number | null;
 }
 
-export interface SubscriptionAuditEntry {
-  actor: { kind: 'system'; label: 'role-expirer' };
-  actorIp: null;
+export interface SubscriptionAuditEntry extends SystemAuditEntry {
   actionType: 'player.subscription.renew' | 'player.subscription.expire';
-  targetType: 'player';
-  targetId: string;
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-  context: Record<string, unknown>;
-  statusCode: 200;
 }
 
 export interface SubscriptionRenewalDeps {
   now?: Date;
   findDueSubscriptions(now: Date): Promise<DueSubscription[]>;
   chargeRenewal(input: ChargeRenewalInput): Promise<ChargeRenewalResult>;
-  expireSubscription(subscriptionId: string, now: Date): Promise<void>;
+  /** Resolves `false` when the subscription was no longer active, so nothing changed. */
+  expireSubscription(subscriptionId: string, now: Date): Promise<boolean>;
   writeAuditEntry(entry: SubscriptionAuditEntry): Promise<void>;
-  notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   invalidatePermissionCache(playerId: string): void;
+  notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -210,9 +204,11 @@ export async function runSubscriptionRenewalTick(
           continue;
         }
 
-        expired += 1;
         const reason: RenewalFailureReason = result.status;
-        await deps.expireSubscription(subscription.id, now);
+        // Cancelled after the charge attempt: the row did not change, so there is
+        // no transition to audit and nobody to notify.
+        if (!(await deps.expireSubscription(subscription.id, now))) continue;
+        expired += 1;
         await deps.writeAuditEntry({
           actor: { kind: 'system', label: 'role-expirer' },
           actorIp: null,
@@ -285,9 +281,9 @@ export function createSubscriptionRenewalDeps(
     findDueSubscriptions: (now) => findDueSubscriptions(db, now, batchSize),
     chargeRenewal: (input) => chargeRenewal(db, input),
     expireSubscription: (subscriptionId, now) => expireSubscription(db, subscriptionId, now),
-    writeAuditEntry: (entry) => writeSubscriptionAuditEntry(db, entry),
-    notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
     invalidatePermissionCache: () => undefined,
+    notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
   };
 }
 
@@ -404,32 +400,13 @@ export async function expireSubscription(
   db: DatabaseClient,
   subscriptionId: string,
   now: Date,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const updated = await db
     .update(vipSubscriptions)
     .set({ status: 'expired', cancelledAt: now })
-    .where(and(eq(vipSubscriptions.id, subscriptionId), eq(vipSubscriptions.status, 'active')));
-}
-
-export async function writeSubscriptionAuditEntry(
-  db: DatabaseClient,
-  entry: SubscriptionAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: entry.actorIp,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: entry.before,
-    afterSnapshot: entry.after,
-    context: entry.context,
-    statusCode: entry.statusCode,
-    rowHash: Buffer.from([]),
-  });
+    .where(and(eq(vipSubscriptions.id, subscriptionId), eq(vipSubscriptions.status, 'active')))
+    .returning({ id: vipSubscriptions.id });
+  return updated.length > 0;
 }
 
 /**
@@ -447,8 +424,5 @@ export async function notifySubscriptionExpired(
   await db
     .insert(alertEvents)
     .values({ ruleId: ROLE_EXPIRY_ALERT_RULE_ID, severity: 'warning', payload });
-  await redis.publish(
-    LIVE_BUS_CHANNEL,
-    JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-  );
+  await publishAlertFrame(redis, payload);
 }
