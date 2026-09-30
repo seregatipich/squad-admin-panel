@@ -427,6 +427,33 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
     expect(await latestSyncReason()).toBe('clan.member.remove');
   });
 
+  it('publishes a sync event when priority was enabled while the removal waited (#129)', async () => {
+    const clan = await seedClan({ leaderHasPriority: false });
+    await drainSyncStream();
+    // Hold the member row lock so the removal has already passed its
+    // pre-checks (priority still off) when it queues on the DELETE, then
+    // enable priority and commit: the removal must still see the released slot.
+    let pending: Promise<{ statusCode: number }> | undefined;
+    await h.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT 1 FROM clan_members WHERE clan_id = ${clan.clanId} AND player_id = ${clan.memberId} FOR UPDATE`,
+      );
+      pending = h.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}`,
+        headers: { cookie: managerCookie },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await tx
+        .update(clanMembers)
+        .set({ hasPriority: true })
+        .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.memberId)));
+    });
+    expect((await pending)?.statusCode).toBe(200);
+    expect(await syncTaskCount()).toBeGreaterThanOrEqual(1);
+    expect(await latestSyncReason()).toBe('clan.member.remove');
+  });
+
   it('DELETE /api/v1/clans/:id (disband) releases priority members and publishes a sync event', async () => {
     const clan = await seedClan({ leaderHasPriority: true });
     await drainSyncStream();
