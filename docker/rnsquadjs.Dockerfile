@@ -59,9 +59,12 @@ RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 RUN yarn build
 
 FROM node:22-bookworm-slim AS runtime
-# panel.preserve=true keeps docker_prune (`docker system prune -a --filter
-# label!=panel.preserve=true`) from deleting this image while it is unused.
-LABEL panel.preserve=true
+# Sidecars are launched with `--pull never` (docker/compose.yml), like
+# squad-server and depot-init, so this tag must survive on the host between
+# deploys. `panel.preserve=true` exempts it from SystemPrune's
+# `label!=panel.preserve=true` filter (apps/bridge/internal/runner/docker.go)
+# the same way squad-server.Dockerfile and depot-init.Dockerfile do.
+LABEL panel.preserve=true panel.kind=rnsquadjs
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*

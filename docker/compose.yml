@@ -88,6 +88,13 @@ services:
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
+      # Discord OAuth2 account-link (DISCORD-4) and interactions webhook
+      # verification. Blank disables both features (see .env.example).
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
+      # Sentry-compatible error reporting. Blank disables it.
+      GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
       # Shared secret for the inbound team-balancer proposal webhook (GAME-2,
       # #81). Unset leaves POST /api/v1/integrations/balancer/proposals
       # disabled (503), which is the safe default for a deployment with no
@@ -180,6 +187,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       CONFIG_DRIFT_INTERVAL_MS: ${CONFIG_DRIFT_INTERVAL_MS:-300000}
+      ADMINS_CFG_RELAY_INTERVAL_MS: ${ADMINS_CFG_RELAY_INTERVAL_MS:-1000}
+      ADMINS_CFG_RELAY_XADD_TIMEOUT_MS: ${ADMINS_CFG_RELAY_XADD_TIMEOUT_MS:-5000}
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
     # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
     # otherwise every RPC fails with `rejected untrusted peer`. See
@@ -351,6 +360,8 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      LEADERBOARD_AGGREGATOR_INTERVAL_MS: ${LEADERBOARD_AGGREGATOR_INTERVAL_MS:-900000}
+      LEADERBOARD_BACKFILL_MONTHS: ${LEADERBOARD_BACKFILL_MONTHS:-0}
     depends_on:
       postgres:
         condition: service_healthy

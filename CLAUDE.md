@@ -170,7 +170,7 @@ The branch model is **machine-enforced**, not just documented (details, setup, a
 
 - **Claude Code** — `.claude/settings.json` runs `scripts/git-guard-hook.sh` as a `PreToolUse` hook on every Bash call and denies violating git commands with the reason.
 - **git hooks (lefthook)** — `branch-guard` runs `scripts/git-guard.sh` on pre-commit and pre-push.
-- **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`. The repository is public, so rulesets are available, but they are not applied yet; until they are, only the hooks above and the `branch-guard` CI job (which audits every `master` push and fails the run if the SHA is not reachable from `dev`) enforce the model.
+- **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`. The repository is public, so rulesets are available; they are applied and active. The `branch-guard` CI job still separately audits every `master` push and fails the run if the SHA is not reachable from `dev`.
 
 If the guard denies a command, do not work around it — follow the workflow above. Run `bash scripts/git-guard.sh doctor` to check your clone's enforcement wiring.
 
