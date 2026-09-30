@@ -87,6 +87,9 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       p.set('lvl', lvl);
       if (srv) p.set('srv', srv);
       if (q) p.set('q', q);
+      // Matches the "последние 1000 записей" subtitle promise: the API
+      // defaults to 500 (`GET /api/v1/logs` in apps/api/src/routes/logs.ts).
+      p.set('limit', '1000');
       for (const [k, v] of Object.entries(extra)) p.set(k, v);
       return `/api/v1/logs?${p.toString()}`;
     },
@@ -121,14 +124,16 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
     const t = setInterval(async () => {
       if (typeof document !== 'undefined' && document.hidden) return;
       const after = lastIdRef.current;
-      if (!after) return;
+      // No cursor yet (the initial load returned zero entries) must not stop
+      // polling forever — fall back to the plain query so the first log to
+      // appear is still picked up, matching the "в реальном времени" promise.
       try {
-        const r = await fetch(buildUrl({ after }), { credentials: 'include' });
+        const r = await fetch(buildUrl(after ? { after } : {}), { credentials: 'include' });
         if (!r.ok) return;
         const body = (await r.json()) as LogsResponse;
         lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? after;
         if (body.entries.length === 0) return;
-        setEntries((prev) => [...body.entries, ...prev].slice(0, 1000));
+        setEntries((prev) => (after ? [...body.entries, ...prev] : body.entries).slice(0, 1000));
       } catch {
         // ignore transient errors
       }

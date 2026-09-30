@@ -79,6 +79,9 @@ function editRolesGuard(
 function conflictFor(constraint: string): { code: number; error: string } {
   if (constraint === 'seasons_one_active') return { code: 409, error: 'active_season_exists' };
   if (constraint === 'seasons_name_key') return { code: 409, error: 'season_name_taken' };
+  // #576: two seasons cannot start on the same UTC day — the leaderboards
+  // route and the web UI both resolve a season by that day alone.
+  if (constraint === 'seasons_start_day_key') return { code: 409, error: 'season_start_day_taken' };
   return { code: 409, error: 'season_conflict' };
 }
 

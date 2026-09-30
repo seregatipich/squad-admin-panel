@@ -5,6 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatchDetail } from '../helpers';
 import { MatchCard } from './MatchCard';
 
+const liveHandlers = new Map<string, (event: unknown) => void>();
+vi.mock('@/lib/use-live-bus', () => ({
+  useLiveSubscription: (type: string, handler: (event: unknown) => void) => {
+    liveHandlers.set(type, handler);
+  },
+}));
+
 vi.mock('next/link', () => ({
   default: ({
     href,
@@ -109,6 +116,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  liveHandlers.clear();
 });
 
 describe('MatchCard', () => {
@@ -120,7 +128,7 @@ describe('MatchCard', () => {
   it(
     'marks the roster row of a player who left before the match ended, and leaves the full-time row unmarked',
     async () => {
-      render(<MatchCard matchId="match-1" />);
+      render(<MatchCard matchId="018f1e3a-6f3e-7c3e-9a3e-1234567890ab" />);
       const earlyRow = (await screen.findByText('EarlyLeaver')).closest('tr');
       expect(earlyRow).not.toBeNull();
       // Состояние строки названо словами, а не одной лишь приглушённостью.
@@ -136,7 +144,7 @@ describe('MatchCard', () => {
   it(
     'keeps the dimmed player link clickable to their player card',
     async () => {
-      render(<MatchCard matchId="match-1" />);
+      render(<MatchCard matchId="018f1e3a-6f3e-7c3e-9a3e-1234567890ab" />);
       const earlyLink = await screen.findByText('EarlyLeaver');
       expect(earlyLink.closest('a')).toHaveAttribute('href', '/all-players/player-left-early');
     },
@@ -146,7 +154,7 @@ describe('MatchCard', () => {
   it(
     'renders null combat stats as "—" instead of substituting 0',
     async () => {
-      render(<MatchCard matchId="match-1" />);
+      render(<MatchCard matchId="018f1e3a-6f3e-7c3e-9a3e-1234567890ab" />);
       await screen.findByText('EarlyLeaver');
       const earlyRow = screen.getByText('EarlyLeaver').closest('tr') as HTMLElement;
       const dashes = within(earlyRow)
@@ -161,8 +169,50 @@ describe('MatchCard', () => {
   it(
     'renders the no-access state when combat_events is null',
     async () => {
-      render(<MatchCard matchId="match-1" />);
+      render(<MatchCard matchId="018f1e3a-6f3e-7c3e-9a3e-1234567890ab" />);
       await screen.findByText('Нет доступа к боевым событиям.');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a non-UUID matchId instead of ever fetching it (#587)',
+    async () => {
+      const fetchMock = vi.fn(() => Promise.reject(new Error('should not be called')));
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<MatchCard matchId="../other-route" />);
+
+      await screen.findByText('Некорректный идентификатор матча');
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refetches once the live bus reports this exact match has ended (#583)',
+    async () => {
+      const matchId = '018f1e3a-6f3e-7c3e-9a3e-1234567890ab';
+      const fetchMock = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(matchDetail({ ended_at: null, duration_seconds: null })), {
+            status: 200,
+          }),
+        ),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<MatchCard matchId={matchId} />);
+      await screen.findByText('FullTimer');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // An unrelated match ending must not trigger a refetch.
+      liveHandlers.get('match.ended')?.({ data: { server_id: 'srv-1', match_id: 'other-match' } });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      liveHandlers.get('match.ended')?.({ data: { server_id: 'srv-1', match_id: matchId } });
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     },
     TEST_TIMEOUT_MS,
   );

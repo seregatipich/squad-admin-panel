@@ -37,8 +37,10 @@ interface ServerOption {
  * second copy of the list.
  *
  * The server picker is offered only when `GET /api/v1/servers` succeeds — that
- * route requires `server:view`, which a panel user working the tracker need not
- * have, so a 403 hides the option rather than breaking the block.
+ * route requires `server:view`, which every `panel_access` user is granted
+ * (see `derivePanelPermissions` in apps/api/src/lib/rbac.ts), so in practice
+ * the request only fails for an unauthenticated or de-provisioned session; a
+ * failure still just hides the option rather than breaking the block.
  */
 export function IssueLinksBlock({
   issueId,
@@ -53,6 +55,7 @@ export function IssueLinksBlock({
 }) {
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [entityType, setEntityType] = useState<IssueLinkEntityType>('player');
+  const [serverPick, setServerPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,7 +93,7 @@ export function IssueLinksBlock({
 
   function attach(type: IssueLinkEntityType, entityId: string) {
     return mutate(() =>
-      fetch(`/api/v1/issues/${issueId}/links`, {
+      fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/links`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
@@ -101,7 +104,7 @@ export function IssueLinksBlock({
 
   function detach(linkId: string) {
     return mutate(() =>
-      fetch(`/api/v1/issues/${issueId}/links/${linkId}`, {
+      fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/links/${encodeURIComponent(linkId)}`, {
         method: 'DELETE',
         credentials: 'include',
       }),
@@ -125,7 +128,11 @@ export function IssueLinksBlock({
             <li key={link.id} className="flex min-h-9 items-center gap-2 px-4 py-1.5 text-[13px]">
               <Badge size="sm">{entityTypeLabel(link.entity_type)}</Badge>
               {link.ref ? (
-                <Link href={link.ref} className="truncate text-accent no-underline hover:underline">
+                <Link
+                  href={link.ref}
+                  prefetch={link.ref.startsWith('/api/') ? false : undefined}
+                  className="truncate text-accent no-underline hover:underline"
+                >
                   {link.label}
                 </Link>
               ) : (
@@ -175,10 +182,12 @@ export function IssueLinksBlock({
           ) : (
             <FieldRow label="Сервер для связи" className="w-64">
               <Select
-                defaultValue=""
+                value={serverPick}
                 disabled={busy}
                 onChange={(e) => {
-                  if (e.target.value) void attach('server', e.target.value);
+                  const value = e.target.value;
+                  setServerPick(value);
+                  if (value) void attach('server', value).finally(() => setServerPick(''));
                 }}
               >
                 <option value="">Выберите сервер…</option>

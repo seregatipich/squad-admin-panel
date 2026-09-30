@@ -235,4 +235,16 @@ describe('eventsBatchAffectsList', () => {
       eventsBatchAffectsList(batch, { ...defaultFilters(), preset: 'custom', from: '2026-01-01' }),
     ).toBe(true);
   });
+
+  it('still appends to a custom range ending today, since the range covers now', () => {
+    const now = new Date('2026-07-02T10:00:00.000Z');
+    expect(
+      eventsBatchAffectsList(
+        batch,
+        { ...defaultFilters(), preset: 'custom', to: '2026-07-02' },
+        undefined,
+        now,
+      ),
+    ).toBe(true);
+  });
 });

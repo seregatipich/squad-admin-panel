@@ -209,6 +209,7 @@ export function Th({
   width,
   scope = 'col',
   className,
+  title,
   children,
 }: {
   align?: TableAlign;
@@ -216,12 +217,15 @@ export function Th({
   width?: string;
   scope?: 'col' | 'row' | 'colgroup' | 'rowgroup';
   className?: string;
+  /** Нативная подсказка на наведение — например, что означает сокращённое название колонки. */
+  title?: string;
   children?: ReactNode;
 }) {
   return (
     <th
       scope={scope}
       style={width ? { width } : undefined}
+      title={title}
       className={classes('px-3 py-2', TH_TYPE, ALIGN[align], className)}
     >
       {children}
@@ -262,6 +266,7 @@ export function SortableTh({
   align = 'left',
   width,
   className,
+  title,
 }: {
   /** Идентификатор, который вернётся в {@link onSort}; совпадает с `activeKey` у активной колонки. */
   sortKey: string;
@@ -275,6 +280,8 @@ export function SortableTh({
   align?: TableAlign;
   width?: string;
   className?: string;
+  /** Нативная подсказка на наведение — например, что означает сокращённое название колонки. */
+  title?: string;
 }) {
   const active = activeKey === sortKey;
 
@@ -283,6 +290,7 @@ export function SortableTh({
       scope="col"
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
       style={width ? { width } : undefined}
+      title={title}
       className={classes('p-0!', TH_TYPE, ALIGN[align], className)}
     >
       <button

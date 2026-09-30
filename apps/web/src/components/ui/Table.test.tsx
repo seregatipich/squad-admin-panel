@@ -166,6 +166,22 @@ describe('Th', () => {
     expect(screen.getByRole('columnheader', { name: 'Ник' })).toHaveStyle({ width: '12rem' });
     expect(screen.getByRole('columnheader', { name: 'Роль' }).getAttribute('style')).toBeNull();
   });
+
+  it('renders a native tooltip when a title is given', () => {
+    render(
+      <Table ariaLabel="Игроки">
+        <TableHead>
+          <TableRow>
+            <Th title="Отношение убийств к смертям">K/D</Th>
+          </TableRow>
+        </TableHead>
+      </Table>,
+    );
+    expect(screen.getByRole('columnheader', { name: 'K/D' })).toHaveAttribute(
+      'title',
+      'Отношение убийств к смертям',
+    );
+  });
 });
 
 describe('Td', () => {
@@ -255,6 +271,14 @@ describe('SortableTh', () => {
   it('reports every column as unsorted while the table has no order', () => {
     renderSortableHeader({ activeKey: null });
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'none');
+  });
+
+  it('renders a native tooltip when a title is given', () => {
+    renderSortableHeader({ title: 'Отношение убийств к смертям' });
+    expect(screen.getByRole('columnheader')).toHaveAttribute(
+      'title',
+      'Отношение убийств к смертям',
+    );
   });
 
   it('follows the active column across rerenders', () => {

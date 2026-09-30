@@ -214,6 +214,171 @@ describe('LeaderboardsBrowser season selector', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'ignores a malformed /api/v1/seasons response instead of crashing',
+    async () => {
+      currentParams = new URLSearchParams('period=season');
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items: 'not an array' }), {
+              status: 200,
+            }),
+          );
+        }
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items: 'not an array' }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify(emptyLeaderboard()), { status: 200 }));
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<LeaderboardsBrowser />);
+
+      expect(await screen.findByText('Сезоны не заданы.')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('LeaderboardsBrowser combat metrics banner', () => {
+  it(
+    'does not show the combat-unavailable banner before the first load resolves',
+    async () => {
+      currentParams = new URLSearchParams('');
+      let resolveLeaderboard: (value: Response) => void = () => {};
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons') || url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return new Promise<Response>((resolve) => {
+          resolveLeaderboard = resolve;
+        });
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<LeaderboardsBrowser />);
+
+      expect(screen.queryByText('Боевые метрики пока недоступны')).not.toBeInTheDocument();
+      resolveLeaderboard(new Response(JSON.stringify(emptyLeaderboard()), { status: 200 }));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps the combat banner hidden after a failed load, instead of defaulting to unavailable',
+    async () => {
+      currentParams = new URLSearchParams('');
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons') || url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: 'internal_error', message: 'Ой.' } }), {
+            status: 500,
+          }),
+        );
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<LeaderboardsBrowser />);
+
+      expect(await screen.findByText('Ой.')).toBeInTheDocument();
+      expect(screen.queryByText('Боевые метрики пока недоступны')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('LeaderboardsBrowser error handling', () => {
+  it(
+    'surfaces the API Russian error message instead of a bare HTTP status',
+    async () => {
+      currentParams = new URLSearchParams('');
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons') || url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: { code: 'internal_error', message: 'Не удалось загрузить таблицу лидеров.' },
+            }),
+            { status: 500 },
+          ),
+        );
+      });
+      vi.stubGlobal('fetch', fn);
+      render(<LeaderboardsBrowser />);
+
+      expect(await screen.findByText('Не удалось загрузить таблицу лидеров.')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'clears stale rows once a filter change reload fails',
+    async () => {
+      currentParams = new URLSearchParams('');
+      let call = 0;
+      const fn = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/seasons') || url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        call += 1;
+        if (call === 1) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify(
+                emptyLeaderboard({
+                  total_rows: 1,
+                  rows: [
+                    {
+                      rank: 1,
+                      player_id: 'p1',
+                      current_name: 'Игрок1',
+                      steam_id64: null,
+                      eos_id: null,
+                      metric_value: 10,
+                      secondary: {
+                        online_seconds: 10,
+                        seeding_seconds: 0,
+                        kills: 0,
+                        deaths: 0,
+                        kd: 0,
+                        matches_played: 1,
+                      },
+                    },
+                  ],
+                }),
+              ),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }));
+      });
+      vi.stubGlobal('fetch', fn);
+      const { rerender } = render(<LeaderboardsBrowser />);
+
+      expect(await screen.findByRole('link', { name: 'Игрок1' })).toBeInTheDocument();
+
+      // Simulate the URL changing (e.g. a filter edit): a fresh search params
+      // object makes `filters` recompute and the load effect refire.
+      currentParams = new URLSearchParams('server=srv-1');
+      rerender(<LeaderboardsBrowser />);
+
+      await waitFor(() => expect(screen.queryByRole('link', { name: 'Игрок1' })).toBeNull());
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
 
 /*

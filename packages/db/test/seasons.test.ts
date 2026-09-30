@@ -183,12 +183,14 @@ describeIfDb('seasons table constraints', () => {
   });
 
   it('allows many upcoming and many closed seasons', async () => {
+    // Each fixture gets its own start day: seasons_start_day_key (#576) would
+    // otherwise reject the second same-status row here.
     for (const [i, status] of (['upcoming', 'upcoming', 'closed', 'closed'] as const).entries()) {
       await db.insert(seasons).values({
         id: uuidv7(),
         name: `${NAME_PREFIX}${status}-${i}`,
-        startsAt: new Date('2026-01-01T00:00:00.000Z'),
-        endsAt: new Date('2026-02-01T00:00:00.000Z'),
+        startsAt: new Date(`2026-01-0${i + 1}T00:00:00.000Z`),
+        endsAt: new Date(`2026-02-0${i + 1}T00:00:00.000Z`),
         status,
       });
     }
@@ -270,6 +272,53 @@ describeIfDb('seasons table constraints', () => {
       sql`SELECT count(*)::int AS n FROM seasons WHERE status = 'active' AND name LIKE ${`${NAME_PREFIX}%`}`,
     )) as unknown as Array<{ n: number }>;
     expect(rows[0]?.n).toBe(1);
+  });
+
+  it('rejects a second season starting on the same UTC day via seasons_start_day_key (#84/#576)', async () => {
+    await db.insert(seasons).values({
+      id: uuidv7(),
+      name: `${NAME_PREFIX}start-day-first`,
+      startsAt: new Date('2026-06-10T00:00:00.000Z'),
+      endsAt: new Date('2026-07-10T00:00:00.000Z'),
+      status: 'upcoming',
+    });
+
+    const err = await captureViolation(() =>
+      db.insert(seasons).values({
+        id: uuidv7(),
+        // A later time on the *same* UTC day still collides — the leaderboards
+        // route and the web UI both key a season by its UTC start day, not
+        // its exact timestamp.
+        name: `${NAME_PREFIX}start-day-second`,
+        startsAt: new Date('2026-06-10T18:00:00.000Z'),
+        endsAt: new Date('2026-08-10T00:00:00.000Z'),
+        status: 'upcoming',
+      }),
+    );
+    expect(err.code).toBe(UNIQUE_VIOLATION);
+    expect(err.constraint_name).toBe('seasons_start_day_key');
+  });
+
+  it('allows seasons starting on different UTC days', async () => {
+    await db.insert(seasons).values({
+      id: uuidv7(),
+      name: `${NAME_PREFIX}start-day-a`,
+      startsAt: new Date('2026-06-10T00:00:00.000Z'),
+      endsAt: new Date('2026-07-10T00:00:00.000Z'),
+      status: 'upcoming',
+    });
+    await db.insert(seasons).values({
+      id: uuidv7(),
+      name: `${NAME_PREFIX}start-day-b`,
+      startsAt: new Date('2026-06-11T00:00:00.000Z'),
+      endsAt: new Date('2026-07-11T00:00:00.000Z'),
+      status: 'upcoming',
+    });
+
+    const rows = (await db.execute(
+      sql`SELECT count(*)::int AS n FROM seasons WHERE name LIKE ${`${NAME_PREFIX}start-day-%`}`,
+    )) as unknown as Array<{ n: number }>;
+    expect(rows[0]?.n).toBe(2);
   });
 
   it('enforces a unique season name', async () => {

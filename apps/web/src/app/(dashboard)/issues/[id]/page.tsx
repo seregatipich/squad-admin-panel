@@ -35,6 +35,8 @@ interface Me {
   can_manage_issues: boolean;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** См. `IssuesBrowser`: тон дублирует подпись состояния, а не заменяет её (§5). */
 const STATE_STATE: Record<IssueState, StatusState> = {
   open: 'good',
@@ -53,8 +55,17 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
 
   const load = useCallback(async () => {
     setError(null);
+    // Route params are decoded by Next.js before this ever runs — a route
+    // segment can smuggle an encoded slash, so a raw `id` must never reach a
+    // fetch path (it could then address an unrelated same-origin API route).
+    // The API rejects anything but a UUID here anyway (`idParam` in
+    // apps/api/src/routes/issues.ts), so an invalid id is refused up front.
+    if (!UUID_RE.test(id)) {
+      setError('Некорректный идентификатор тикета');
+      return;
+    }
     try {
-      const res = await fetch(`/api/v1/issues/${id}`, {
+      const res = await fetch(`/api/v1/issues/${encodeURIComponent(id)}`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -103,7 +114,7 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
       setBusy(true);
       setActionError(null);
       try {
-        const res = await fetch(`/api/v1/issues/${id}`, {
+        const res = await fetch(`/api/v1/issues/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           credentials: 'include',
           headers: { 'content-type': 'application/json' },
@@ -156,6 +167,12 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
   }
 
   const canManage = me?.can_manage_issues ?? false;
+  // The state (open/closed) can be changed by the ticket's own author too —
+  // matches the API's `isAuthor || canManage` check in
+  // apps/api/src/routes/issues.ts (PATCH /api/v1/issues/:id). Only assignee
+  // changes require canManage there.
+  const isAuthor = me?.player_id === issue.author_player_id;
+  const canChangeState = canManage || isAuthor;
 
   return (
     <PageContainer width="reading">
@@ -208,7 +225,7 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
         </div>
       </Card>
 
-      {canManage ? (
+      {canChangeState ? (
         <Card padding="none" as="section">
           <CardHeader title="Управление" />
           <CardBody className="space-y-3">
@@ -226,7 +243,7 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
                   Переоткрыть
                 </Button>
               )}
-              {issue.state === 'open' ? (
+              {canManage && issue.state === 'open' ? (
                 <Button
                   disabled={busy}
                   onClick={() =>
@@ -236,19 +253,21 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
                   Взять в работу
                 </Button>
               ) : null}
-              {issue.assignee ? (
+              {canManage && issue.assignee ? (
                 <Button disabled={busy} onClick={() => void patch({ assignee_player_id: null })}>
                   Снять исполнителя
                 </Button>
               ) : null}
             </div>
-            <div className="w-64">
-              <PlayerSearchSelect
-                placeholder="Назначить исполнителя"
-                disabled={busy}
-                onSelect={(player: PickedPlayer) => void patch({ assignee_player_id: player.id })}
-              />
-            </div>
+            {canManage ? (
+              <div className="w-64">
+                <PlayerSearchSelect
+                  placeholder="Назначить исполнителя"
+                  disabled={busy}
+                  onSelect={(player: PickedPlayer) => void patch({ assignee_player_id: player.id })}
+                />
+              </div>
+            ) : null}
             {actionError ? (
               <InlineBanner tone="crit" title="Действие не выполнено" description={actionError} />
             ) : null}
@@ -312,7 +331,7 @@ function CommentFeed({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/issues/${issueId}/comments`, {
+      const res = await fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/comments`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
