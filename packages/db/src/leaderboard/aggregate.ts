@@ -179,13 +179,14 @@ export async function recomputeLeaderboardPeriod(
         AND m.started_at < (${range.toDay}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'UTC'`
     : sql``;
 
+  // One statement rewrites the period in place: rows whose numbers are
+  // unchanged are not touched, so a 15-minute recompute of `alltime` does not
+  // rewrite every row and all twelve of their indexes (#1140). The upsert and
+  // the delete of vanished rows see the same snapshot and hit disjoint rows
+  // (present in `computed` versus absent from it), so their order is
+  // irrelevant.
   return sql.begin(async (tx) => {
-    await tx`
-      DELETE FROM player_stat_periods
-      WHERE period_type = ${periodType} AND period_start = ${periodStart}::date
-    `;
-
-    const inserted = await tx`
+    const [result] = await tx<{ total: number }[]>`
       WITH settings AS (
         SELECT
           COALESCE((SELECT k_online FROM economy_settings WHERE id = 1), 1) AS k_online,
@@ -256,40 +257,76 @@ export async function recomputeLeaderboardPeriod(
         SELECT * FROM per_server
         UNION ALL
         SELECT * FROM rollup
+      ),
+      computed AS MATERIALIZED (
+        SELECT
+          all_rows.player_id,
+          all_rows.server_id,
+          all_rows.online_seconds,
+          all_rows.seed_seconds AS seeding_seconds,
+          all_rows.kills,
+          all_rows.deaths,
+          all_rows.teamkills,
+          all_rows.revives,
+          CASE WHEN all_rows.deaths = 0 THEN all_rows.kills
+               ELSE all_rows.kills::numeric / all_rows.deaths END AS kd_ratio,
+          all_rows.matches_played,
+          all_rows.boost_seconds,
+          -- k_online/k_boost/k_seed are points-per-hour (accrual.ts:
+          -- round(k * seconds / 3600)); dividing by 3600 here keeps
+          -- bonus_points in the same unit as the real bonus_transactions
+          -- ledger it is meant to mirror, instead of overstating it 3600x (#1103).
+          ROUND(
+            (settings.k_online * all_rows.online_seconds
+              + settings.k_boost * all_rows.boost_seconds
+              + settings.k_seed * all_rows.seed_seconds)::numeric / 3600
+          ) AS bonus_points
+        FROM all_rows CROSS JOIN settings
+      ),
+      upserted AS (
+        INSERT INTO player_stat_periods AS existing
+          (player_id, server_id, period_type, period_start,
+           online_seconds, seeding_seconds, kills, deaths, teamkills, revives, kd_ratio,
+           matches_played, boost_seconds, bonus_points)
+        SELECT
+          player_id, server_id, ${periodType}, ${periodStart}::date,
+          online_seconds, seeding_seconds, kills, deaths, teamkills, revives, kd_ratio,
+          matches_played, boost_seconds, bonus_points
+        FROM computed
+        ON CONFLICT ON CONSTRAINT player_stat_periods_identity DO UPDATE SET
+          online_seconds = EXCLUDED.online_seconds,
+          seeding_seconds = EXCLUDED.seeding_seconds,
+          kills = EXCLUDED.kills,
+          deaths = EXCLUDED.deaths,
+          teamkills = EXCLUDED.teamkills,
+          revives = EXCLUDED.revives,
+          kd_ratio = EXCLUDED.kd_ratio,
+          matches_played = EXCLUDED.matches_played,
+          boost_seconds = EXCLUDED.boost_seconds,
+          bonus_points = EXCLUDED.bonus_points
+        WHERE (existing.online_seconds, existing.seeding_seconds, existing.kills,
+               existing.deaths, existing.teamkills, existing.revives, existing.kd_ratio,
+               existing.matches_played, existing.boost_seconds, existing.bonus_points)
+          IS DISTINCT FROM
+              (EXCLUDED.online_seconds, EXCLUDED.seeding_seconds, EXCLUDED.kills,
+               EXCLUDED.deaths, EXCLUDED.teamkills, EXCLUDED.revives, EXCLUDED.kd_ratio,
+               EXCLUDED.matches_played, EXCLUDED.boost_seconds, EXCLUDED.bonus_points)
+        RETURNING 1
+      ),
+      removed AS (
+        DELETE FROM player_stat_periods stale
+        WHERE stale.period_type = ${periodType}
+          AND stale.period_start = ${periodStart}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM computed
+            WHERE computed.player_id = stale.player_id
+              AND computed.server_id IS NOT DISTINCT FROM stale.server_id)
+        RETURNING 1
       )
-      INSERT INTO player_stat_periods
-        (player_id, server_id, period_type, period_start,
-         online_seconds, seeding_seconds, kills, deaths, teamkills, revives, kd_ratio,
-         matches_played, boost_seconds, bonus_points)
-      SELECT
-        all_rows.player_id,
-        all_rows.server_id,
-        ${periodType},
-        ${periodStart}::date,
-        all_rows.online_seconds,
-        all_rows.seed_seconds,
-        all_rows.kills,
-        all_rows.deaths,
-        all_rows.teamkills,
-        all_rows.revives,
-        CASE WHEN all_rows.deaths = 0 THEN all_rows.kills
-             ELSE all_rows.kills::numeric / all_rows.deaths END,
-        all_rows.matches_played,
-        all_rows.boost_seconds,
-        -- k_online/k_boost/k_seed are points-per-hour (accrual.ts:
-        -- round(k * seconds / 3600)); dividing by 3600 here keeps
-        -- bonus_points in the same unit as the real bonus_transactions
-        -- ledger it is meant to mirror, instead of overstating it 3600x (#1103).
-        ROUND(
-          (settings.k_online * all_rows.online_seconds
-            + settings.k_boost * all_rows.boost_seconds
-            + settings.k_seed * all_rows.seed_seconds)::numeric / 3600
-        )
-      FROM all_rows CROSS JOIN settings
-      RETURNING player_id
+      SELECT COUNT(*)::int AS total FROM computed
     `;
 
-    return inserted.length;
+    return result?.total ?? 0;
   });
 }
 

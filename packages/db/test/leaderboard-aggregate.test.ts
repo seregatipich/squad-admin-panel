@@ -737,3 +737,63 @@ describeIfDb('season periods recompute over an explicit range (LEAD-7)', () => {
     expect(rows.find((row) => row.server_id === null)?.online_seconds).toBe(333);
   });
 });
+
+describeIfDb('recomputeLeaderboardPeriod rewrites only what changed (#1140)', () => {
+  async function versions(periodStart: string) {
+    return sql<{ player_id: string; server_id: string | null; xmin: string }[]>`
+      SELECT player_id, server_id, xmin::text AS xmin
+      FROM player_stat_periods
+      WHERE period_type = 'day' AND period_start = ${periodStart}::date
+      ORDER BY player_id, server_id NULLS LAST
+    `;
+  }
+
+  it('leaves the tuples of unchanged rows alone on a repeated recompute', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600);
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-05', 900);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const before = await versions('2026-07-05');
+
+    const written = await recomputeLeaderboardPeriod(sql, {
+      periodType: 'day',
+      periodStart: '2026-07-05',
+    });
+
+    expect(written).toBe(4);
+    expect(await versions('2026-07-05')).toEqual(before);
+  });
+
+  it('rewrites only the rows whose numbers changed and keeps the rest', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600);
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-05', 900);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const before = await versions('2026-07-05');
+
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 7200);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const after = await versions('2026-07-05');
+
+    const untouched = (rows: typeof before) => rows.filter((row) => row.player_id === PLAYER_B);
+    expect(untouched(after)).toEqual(untouched(before));
+    const rows = await statRows('day', '2026-07-05');
+    expect(
+      rows.filter((row) => row.player_id === PLAYER_A).map((row) => row.online_seconds),
+    ).toEqual([7200, 7200]);
+  });
+
+  it('removes rows of a player who no longer has data in the period', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600);
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-05', 900);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    await sql`DELETE FROM player_daily_presence WHERE player_id = ${PLAYER_B} AND day = '2026-07-05'`;
+    const written = await recomputeLeaderboardPeriod(sql, {
+      periodType: 'day',
+      periodStart: '2026-07-05',
+    });
+
+    expect(written).toBe(2);
+    const rows = await statRows('day', '2026-07-05');
+    expect(rows.map((row) => row.player_id)).toEqual([PLAYER_A, PLAYER_A]);
+  });
+});

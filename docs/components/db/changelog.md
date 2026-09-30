@@ -6,6 +6,13 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
+### Пересчёт рейтингов обновляет строки на месте (#78, 1140)
+
+**Files:** `packages/db/src/leaderboard/aggregate.ts`, `packages/db/test/leaderboard-aggregate.test.ts`
+
+- `recomputeLeaderboardPeriod` вместо `DELETE` всего периода и `INSERT` заново делает одним оператором `INSERT … ON CONFLICT ON CONSTRAINT player_stat_periods_identity DO UPDATE … WHERE <значения изменились>` и удаляет только исчезнувшие строки. Строки без изменений не перезаписываются, их 12 индексов не трогаются, мёртвые кортежи не копятся. Возвращаемое значение по-прежнему число строк периода.
+- Индексы метрик `player_stat_periods_*_idx` оставлены: все десять метрик доступны как `metric` в `GET /api/v1/leaderboards`, и каждый индекс обслуживает сортировку окна `row_number()`. Удаление без данных `pg_stat_user_indexes` с боевой БД ухудшило бы запросы.
+
 ### Заметки игрока переживают удаление автора (migration 0137, #78, 1137)
 
 **Files:** `packages/db/drizzle/0137_player_notes_author_set_null.sql`, `packages/db/src/schema/player-notes.ts`, `apps/api/test/notes-deleted-author.test.ts`
