@@ -167,6 +167,30 @@ describe('/api/v1/servers/:id/logs/ws', () => {
     await new Promise<void>((resolve) => ws.on('close', () => resolve()));
     expect(frames).toEqual([{ error: 'db unavailable' }]);
   });
+
+  it('delivers the bridge error frame before closing when the bridge connect fails', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    const bridge = (app as any).bridge;
+    const originalConnect = bridge.connect;
+    // biome-ignore lint/suspicious/noExplicitAny: test fixture
+    (app as any).db.query.servers.findFirst = async () => ({
+      id: testId,
+      displayName: 'Fake',
+      status: 'running',
+    });
+    bridge.connect = async () => {
+      throw new Error('bridge unavailable');
+    };
+    try {
+      const frames: Array<Record<string, unknown>> = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/${testId}/logs/ws`);
+      ws.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+      await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+      expect(frames).toEqual([{ error: 'bridge unavailable' }]);
+    } finally {
+      bridge.connect = originalConnect;
+    }
+  });
 });
 
 async function waitFor(pred: () => boolean, timeoutMs = 2000) {
