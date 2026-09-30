@@ -529,6 +529,46 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
   });
 });
 
+describeIfDb('GET /api/v1/external-bans (split identities, #155)', () => {
+  it('lists an identity once when its steam and eos ids belong to different players', async () => {
+    const splitSteam = testSteamId(942030);
+    const splitEos = 'eos-cban3-split-001';
+    const steamPlayer = await seedPlayer({
+      steamId64: splitSteam,
+      eosId: null,
+      namePrefix: 'SplitSteam',
+      panelAccess: true,
+    });
+    await seedPlayer({
+      steamId64: null,
+      eosId: splitEos,
+      namePrefix: 'SplitEos',
+      panelAccess: true,
+    });
+    await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: splitSteam.toString(),
+      eosId: splitEos,
+      nickname: 'Cban3SplitIdentityNick',
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/external-bans?q=Cban3SplitIdentityNick',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]).toMatchObject({
+      steam_id64: splitSteam.toString(),
+      eos_id: splitEos,
+      player_id: steamPlayer,
+    });
+  });
+});
+
 describeIfDb('POST /api/v1/players/:playerId/external-bans/:externalBanId/local-ban', () => {
   it('requires the Squad ban permission', async () => {
     const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
@@ -603,7 +643,15 @@ describeIfDb('POST /api/v1/players/:playerId/external-bans/:externalBanId/local-
       ban_length: '30d',
       external_ban_id: externalBanId,
       source_id: sourceTrustedId,
+      source: 'external_ban',
+      target: STEAM_TWO_SOURCES,
+      rcon_request_id: 'cban4-local-ban',
     });
+    // #149: a temporary local ban records its expiry, so the alt-candidate
+    // query does not mistake it for a permanent ban.
+    const expiresAt = Date.parse(String((ledger?.context as { expires_at?: unknown }).expires_at));
+    expect(expiresAt - Date.now()).toBeGreaterThan(29 * 86_400_000);
+    expect(expiresAt - Date.now()).toBeLessThanOrEqual(30 * 86_400_000);
 
     const [event] = await h.db
       .select({ kind: events.kind, correlationId: events.correlationId, payload: events.payload })

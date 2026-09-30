@@ -61,6 +61,9 @@ RUN pnpm turbo run build --filter=@squad/api... --cache=local:,remote: && \
     cp -a --parents packages/*/dist packages/db/drizzle apps/api/dist /out/
 
 FROM base AS runtime
+# Spared by the panel's docker prune (--filter label!=panel.preserve=true) so the
+# previous release stays loaded for scripts/rollback-stand.sh.
+LABEL panel.preserve=true
 ENV NODE_ENV=production
 ENV PORT=3000
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates \

@@ -8,7 +8,7 @@ import {
   seasons,
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
-import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -231,12 +231,12 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
           ? isNull(playerStatPeriods.serverId)
           : eq(playerStatPeriods.serverId, server_id);
       const searchFilter = search ? buildSearchFilter(search) : undefined;
-      const whereClause = and(
+      const boardClause = and(
         eq(playerStatPeriods.periodType, period),
         eq(playerStatPeriods.periodStart, periodStart),
         serverFilter,
-        searchFilter,
       );
+      const whereClause = and(boardClause, searchFilter);
 
       const cacheKey = `${CACHE_PREFIX}${metric}:${period}:${periodStart}:${server_id}:${order}:${search ?? ''}:${limit}:${offset}:econ${economyEnabled ? 1 : 0}`;
       const cached = await app.redis.get(cacheKey).catch(() => null);
@@ -246,7 +246,22 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const metricColumn = METRIC_COLUMNS[metric];
+      // Ranks are numbered over the whole board before the search filter
+      // applies, so a searched player keeps their real place (#176). The
+      // window's ordering matches the page ordering below.
+      const ranked = app.db
+        .select({
+          playerId: playerStatPeriods.playerId,
+          rank: sql<number>`row_number() OVER (ORDER BY ${metricColumn} ${
+            order === 'asc' ? sql`ASC` : sql`DESC`
+          }, ${playerStatPeriods.playerId} ASC)`.as('rank'),
+        })
+        .from(playerStatPeriods)
+        .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
+        .where(boardClause)
+        .as('ranked');
       let rows: Array<{
+        rank: number;
         playerId: string;
         currentName: string;
         steamId64: bigint | null;
@@ -265,6 +280,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
       try {
         rows = await app.db
           .select({
+            rank: ranked.rank,
             playerId: playerStatPeriods.playerId,
             currentName: players.canonicalName,
             steamId64: players.steamId64,
@@ -281,11 +297,9 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
           })
           .from(playerStatPeriods)
           .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
+          .innerJoin(ranked, eq(ranked.playerId, playerStatPeriods.playerId))
           .where(whereClause)
-          .orderBy(
-            order === 'asc' ? asc(metricColumn) : desc(metricColumn),
-            asc(playerStatPeriods.playerId),
-          )
+          .orderBy(asc(ranked.rank))
           .limit(limit)
           .offset(offset);
 
@@ -313,8 +327,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         economy_enabled: economyEnabled,
         total_rows: total,
         total_pages: Math.max(1, Math.ceil(total / limit)),
-        rows: rows.map((row, index) => ({
-          rank: offset + index + 1,
+        rows: rows.map((row) => ({
+          rank: Number(row.rank),
           player_id: row.playerId,
           current_name: row.currentName,
           steam_id64: row.steamId64 === null ? null : row.steamId64.toString(),

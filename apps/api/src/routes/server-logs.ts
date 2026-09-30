@@ -1,6 +1,7 @@
 import { servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
+import { sendUnlessStalled } from '../lib/ws-send.js';
 
 /**
  * Live Squad-server log stream. Attaches to the server's Docker container
@@ -145,10 +146,12 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
           .catch(() => undefined);
       });
 
+      // A viewer that stops reading is dropped rather than buffering the
+      // container's log stream in the API process (#1297).
       function safeSend(payload: unknown) {
         if (closed) return;
         try {
-          socket.send(JSON.stringify(payload));
+          if (!sendUnlessStalled(socket, JSON.stringify(payload))) closed = true;
         } catch {
           closed = true;
         }

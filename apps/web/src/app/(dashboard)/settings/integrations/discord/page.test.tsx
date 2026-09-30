@@ -74,6 +74,13 @@ describe('describeTestSendOutcome', () => {
     });
   });
 
+  it('surfaces webhook_url_unreadable (#162)', () => {
+    expect(describeTestSendOutcome(false, { error: 'webhook_url_unreadable' })).toEqual({
+      kind: 'err',
+      text: 'URL вебхука не расшифровывается — удалите вебхук и добавьте заново',
+    });
+  });
+
   it('falls back to a generic message for an unrecognized error', () => {
     expect(describeTestSendOutcome(false, {})).toEqual({
       kind: 'err',

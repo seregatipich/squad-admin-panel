@@ -128,7 +128,9 @@ cd ~/apps/squad-admin-panel && bash scripts/rollback-stand.sh
 [`scripts/rollback-stand.sh`](../../scripts/rollback-stand.sh) hands the images
 recorded in `.release.prev.env` to `deploy-stand.sh`, which pulls any the host
 already pruned, recreates only what differs, and swaps the two release files —
-running it twice returns to where you started. The compose file, the Caddyfile
+running it twice returns to where you started. The panel's «очистить docker»
+action (`POST /api/v1/host/docker-prune`) does not remove them: every release
+image carries `LABEL panel.preserve=true`, which the prune filters out. The compose file, the Caddyfile
 and the schema stay those of the synced tree, and the next push to `dev`
 replaces the rollback.
 

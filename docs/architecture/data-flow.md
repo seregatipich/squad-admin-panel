@@ -242,7 +242,7 @@ POST /api/v1/depot/update   →  api spawns dedicated bridge connection
               WS /api/v1/depot/progress/ws   ──replays last 500 + tails──→  ui
 ```
 
-Multiple UI tabs can subscribe to the same update; the lock key `depot:updating` prevents concurrent runs.
+Multiple UI tabs can subscribe to the same update; the lock key `depot:updating` prevents concurrent runs. The lock ([`apps/api/src/lib/depot-lock.ts`](../../apps/api/src/lib/depot-lock.ts)) stores a per-run token, is renewed every minute while the run lasts (so an update longer than the one-hour TTL keeps it), and is released with a compare-and-delete, so a run never frees a lock another run holds. Of the `server_ids` sent to the fleet update, only servers in `running`/`starting` are stopped and restarted; the rest come back as `servers_skipped` and stay as they were.
 
 ## RCON polling loop
 

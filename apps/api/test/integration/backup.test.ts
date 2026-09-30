@@ -172,6 +172,22 @@ describe('GET /api/v1/host/backups', () => {
   });
 });
 
+/**
+ * Waits for this case's audit row to record the failure status. The audit
+ * hook writes on response, so a previous case's row can still land after the
+ * baseline; only the presence of the failure status is asserted.
+ */
+async function expectFailedAuditRowFromThisCase(action: string, statusCode: number) {
+  const statuses = async () =>
+    (
+      await h.db
+        .select({ statusCode: auditLog.statusCode })
+        .from(auditLog)
+        .where(and(eq(auditLog.actionType, action), gt(auditLog.id, auditBaseline)))
+    ).map((row) => row.statusCode);
+  await expect.poll(statuses).toContain(statusCode);
+}
+
 describe('POST /api/v1/host/backups', () => {
   it('triggers a backup and writes a backup.run audit row', async () => {
     let calls = 0;
@@ -189,6 +205,20 @@ describe('POST /api/v1/host/backups', () => {
     expect(resp.json()).toEqual({ ok: true, exit_code: 0 });
     expect(calls).toBe(1);
     await expectAuditRowFromThisCase('backup.run', 'backup');
+  });
+
+  it('reports a backup whose script exits non-zero as a 502 failure (#150)', async () => {
+    h.bridge.backupRun = async () => ({ exit_code: 3 });
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/host/backups',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'backup_run_failed', exit_code: 3 });
+    expect(resp.json().ok).toBeUndefined();
+    await expectFailedAuditRowFromThisCase('backup.run', 502);
   });
 
   it('returns 502 when the backup run fails', async () => {
@@ -285,6 +315,21 @@ describe('POST /api/v1/host/backups/:id/restore', () => {
     });
     expect(resp.statusCode).toBe(400);
     expect(resp.json()).toMatchObject({ error: 'confirm_required' });
+  });
+
+  it('reports a restore whose script exits non-zero as a 502 failure (#150)', async () => {
+    h.bridge.backupRestore = async () => ({ exit_code: 1 });
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/host/backups/${SNAPSHOT_ID}/restore`,
+      headers: { cookie },
+      payload: { confirm: SNAPSHOT_ID },
+    });
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'backup_restore_failed', exit_code: 1 });
+    expect(resp.json().ok).toBeUndefined();
+    await expectFailedAuditRowFromThisCase('backup.restore', 502);
   });
 
   it('returns 502 when the restore fails', async () => {

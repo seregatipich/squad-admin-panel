@@ -754,6 +754,9 @@ func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error
 // cache. Volumes are deliberately NOT pruned — the panel's persistent
 // state lives in the squad-depot volume and any per-server saved/configs
 // volumes that should be cleaned via directory_delete + soft-delete.
+// Images labelled panel.preserve=true are spared: the squad-server and
+// depot-init images, and every panel release image (api, web, workers,
+// caddy), so the previous release stays loaded for a rollback.
 //
 // Streams stdout/stderr live like DepotUpdate; callers can use it to
 // drive a progress UI. Returns the docker exit code.

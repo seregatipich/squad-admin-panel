@@ -1,19 +1,10 @@
-import {
-  events,
-  externalBanSources,
-  externalBans,
-  moderationActions,
-  players,
-  servers,
-} from '@squad/db/schema';
-import { type EventEnvelope, moderationActionPayload, STREAM_NAME } from '@squad/shared-types';
+import { externalBanSources, externalBans, players, servers } from '@squad/db/schema';
 import { and, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
-import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
+import { enforceModerationAction } from '../lib/moderation-enforce.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const localBanParams = z.object({
@@ -236,8 +227,10 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Converts one active external-ban match into an explicit local AdminBan.
    * The moderator chooses the target server and can edit the prefilled reason
-   * in the player-card form; successful enforcement is recorded in the
-   * moderation ledger, audit log, and EVT-1 stream consumed by DISCORD-2.
+   * in the player-card form. Enforcement runs through the shared
+   * {@link enforceModerationAction} pipeline (source `external_ban`, so the
+   * ledger row carries `expires_at` like every other ban); the envelope's
+   * `correlation_id` is the external ban, and the route adds its audit entry.
    */
   fast.post(
     '/api/v1/players/:playerId/external-bans/:externalBanId/local-ban',
@@ -299,89 +292,45 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'server_not_found' };
       }
 
-      const target = player.eosId ?? steamId64;
-      if (!target) {
+      if (!player.eosId && !steamId64) {
         reply.code(400);
         return { error: 'target_identity_missing' };
       }
 
       // biome-ignore lint/style/noNonNullAssertion: localBanGuard rejects unauthenticated callers
-      const actorPlayerId = req.user!.playerId;
-      const outcome = await sendRconCommandViaWorker(app.redis, {
+      const actor = req.user!;
+      const actorPlayerId = actor.playerId;
+      const result = await enforceModerationAction(app, {
         serverId: server.id,
-        command: 'AdminBan',
-        args: [target, req.body.ban_length, req.body.reason],
-        actorPlayerId,
-      });
-      if (!outcome.attempted || !outcome.ok) {
-        reply.code(502);
-        return {
-          error: 'action_failed',
-          reason: outcome.reason,
-          detail: outcome.attempted ? outcome.detail : undefined,
-        };
-      }
-
-      const [action] = await app.db
-        .insert(moderationActions)
-        .values({
-          playerId: req.params.playerId,
-          serverId: server.id,
-          actionType: 'ban',
-          authorPlayerId: actorPlayerId,
-          reason: req.body.reason,
-          context: {
-            ban_length: req.body.ban_length,
-            external_ban_id: externalBan.id,
-            source_id: externalBan.sourceId,
-            source_name: externalBan.sourceName,
-          },
-        })
-        .returning({ id: moderationActions.id, createdAt: moderationActions.createdAt });
-      if (!action) throw new Error('moderation action insert returned no row');
-
-      const payload = moderationActionPayload.parse({
-        moderation_action_id: action.id,
-        action_type: 'ban',
-        player_id: req.params.playerId,
-        steam_id64: steamId64,
-        eos_id: player.eosId,
-        name: player.name,
+        playerId: req.params.playerId,
+        identity: { eosId: player.eosId, steamId64, name: player.name },
+        actionType: 'ban',
         reason: req.body.reason,
-        duration: req.body.ban_length,
-        actor_name: req.user?.canonicalName,
-        report_id: null,
+        banLength: req.body.ban_length,
+        actorPlayerId,
+        actorName: actor.canonicalName,
+        source: 'external_ban',
+        correlationId: externalBan.id,
+        extraContext: {
+          external_ban_id: externalBan.id,
+          source_id: externalBan.sourceId,
+          source_name: externalBan.sourceName,
+        },
       });
-      const envelope: EventEnvelope = {
-        event_id: uuidv7(),
-        version: 1,
-        type: 'moderation.ban',
-        server_id: server.id,
-        ts: new Date().toISOString(),
-        actor: { kind: 'user', id: actorPlayerId },
-        correlation_id: externalBan.id,
-        payload,
-      };
-      await app.db.insert(events).values({
-        eventId: envelope.event_id,
-        serverId: envelope.server_id,
-        occurredAt: new Date(envelope.ts),
-        kind: envelope.type,
-        version: envelope.version,
-        actorKind: envelope.actor?.kind ?? null,
-        actorId: envelope.actor?.id ?? null,
-        correlationId: envelope.correlation_id,
-        payload: envelope.payload,
-      });
-      await app.redis.xadd(
-        STREAM_NAME.eventsServer(server.id),
-        'MAXLEN',
-        '~',
-        '10000',
-        '*',
-        'envelope',
-        JSON.stringify(envelope),
-      );
+      if (!result.ok) {
+        const { outcome } = result;
+        reply.code(502);
+        if (!outcome.attempted || !outcome.ok) {
+          return {
+            error: 'action_failed',
+            reason: outcome.reason,
+            detail: outcome.attempted ? outcome.detail : undefined,
+          };
+        }
+        // Unreachable: enforceModerationAction only returns `ok: false` for an
+        // outcome that was not attempted or not ok.
+        return { error: 'action_failed' };
+      }
 
       await writeAuditEntry(app.db, {
         actor: {
@@ -406,11 +355,11 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return {
-        id: action.id,
+        id: result.actionId,
         action_type: 'ban',
         reason: req.body.reason,
         duration: req.body.ban_length,
-        created_at: action.createdAt.toISOString(),
+        created_at: result.envelope.ts,
         server: { id: server.id, name: server.name },
         external_ban_id: externalBan.id,
       };
@@ -475,20 +424,40 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
             ) AS bans
           FROM filtered
           GROUP BY identity_steam_key, identity_eos_key
+        ),
+        page AS (
+          SELECT g.*, count(*) OVER () AS total_count
+          FROM grouped g
+          ORDER BY g.last_imported_at DESC
+          LIMIT ${limit} OFFSET ${offset}
         )
+        -- The panel player is looked up only for the page's identities, one
+        -- row per identity (steam match preferred), through the players
+        -- steam_id64/eos_id unique indexes: the steam id is cast on the
+        -- external_bans side, never on the indexed players column.
         SELECT
-          g.steam_id64,
-          g.eos_id,
-          g.bans,
+          pg.steam_id64,
+          pg.eos_id,
+          pg.bans,
           p.id AS player_id,
           p.canonical_name AS panel_nickname,
-          count(*) OVER () AS total_count
-        FROM grouped g
-        LEFT JOIN players p
-          ON (g.steam_id64 IS NOT NULL AND p.steam_id64::text = g.steam_id64)
-          OR (g.eos_id IS NOT NULL AND p.eos_id = g.eos_id)
-        ORDER BY g.last_imported_at DESC
-        LIMIT ${limit} OFFSET ${offset}
+          pg.total_count
+        FROM page pg
+        LEFT JOIN LATERAL (
+          SELECT m.id, m.canonical_name
+          FROM (
+            SELECT sp.id, sp.canonical_name, 0 AS preference
+            FROM players sp
+            WHERE pg.steam_id64 ~ '^[0-9]{1,18}$' AND sp.steam_id64 = pg.steam_id64::bigint
+            UNION ALL
+            SELECT ep.id, ep.canonical_name, 1 AS preference
+            FROM players ep
+            WHERE pg.eos_id IS NOT NULL AND ep.eos_id = pg.eos_id
+          ) m
+          ORDER BY m.preference
+          LIMIT 1
+        ) p ON true
+        ORDER BY pg.last_imported_at DESC
       `)) as unknown as RegistryRow[];
 
       const total = rows.length > 0 ? Number(rows[0]?.total_count ?? 0) : 0;

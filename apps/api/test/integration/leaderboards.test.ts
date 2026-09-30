@@ -278,6 +278,16 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(body.total_rows).toBe(1);
   });
 
+  it('keeps the global rank of a player found by search (#176)', async () => {
+    const byNick = await fetchLeaderboard('?metric=online&period=alltime&search=brav');
+    const nickBody = byNick.json() as LeaderboardBody;
+    expect(nickBody.rows.map((r) => [r.current_name, r.rank])).toEqual([['Bravo', 3]]);
+
+    const ascending = await fetchLeaderboard('?metric=online&period=alltime&order=asc&search=alph');
+    const ascBody = ascending.json() as LeaderboardBody;
+    expect(ascBody.rows.map((r) => [r.current_name, r.rank])).toEqual([['Alpha', 2]]);
+  });
+
   it('searches by exact steam_id64', async () => {
     const steam = testSteamId(830011).toString();
     const res = await fetchLeaderboard(`?metric=online&period=alltime&search=${steam}`);

@@ -62,6 +62,13 @@ const isForbidden = (req: FastifyRequest, reply: FastifyReply): boolean => {
   return false;
 };
 
+/**
+ * MaxMind GeoLite2 settings. Only the credentials and the switch are stored
+ * here: no worker downloads the database yet (packages/db/src/geoip/refresh.ts
+ * and mmdb.ts have no runtime caller — tracked in #51 and #64), so `db_path`
+ * and `last_refreshed_at` stay null and the settings page warns that the key
+ * is not used while `db_present` is false.
+ */
 const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 

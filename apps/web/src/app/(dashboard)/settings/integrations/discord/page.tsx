@@ -55,7 +55,7 @@ interface WebhookRow {
   mention_everyone: boolean;
   server_id: string | null;
   url_configured: boolean;
-  url_mask: string;
+  url_mask: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -404,7 +404,9 @@ export default function DiscordIntegrationPage() {
                     <TableRow key={row.id}>
                       <Td>{eventLabel(row.event_type)}</Td>
                       <Td className="text-ink-2">{row.channel_label ?? '—'}</Td>
-                      <Td className="font-mono text-2xs text-ink-3">{row.url_mask}</Td>
+                      <Td className="font-mono text-2xs text-ink-3">
+                        {row.url_mask ?? 'не расшифровывается'}
+                      </Td>
                       <Td className="text-ink-2">{row.mention_everyone ? 'да' : '—'}</Td>
                       <Td>
                         <span className="flex items-center gap-2">

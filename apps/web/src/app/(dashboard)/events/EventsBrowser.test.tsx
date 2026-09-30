@@ -207,3 +207,27 @@ describe('EventsBrowser — живая лента', () => {
     expect(listCalls(fetchMock)).toBe(2);
   });
 });
+
+describe('EventsBrowser — счётчик событий', () => {
+  function countFetch(count: { total: number; estimated?: boolean }) {
+    return vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/v1/events/count')) {
+        return Promise.resolve(new Response(JSON.stringify(count), { status: 200 }));
+      }
+      return mockFetch()(input);
+    });
+  }
+
+  it('показывает точное число, когда API посчитал события', async () => {
+    vi.stubGlobal('fetch', countFetch({ total: 42, estimated: false }));
+    render(<EventsBrowser />);
+    expect(await screen.findByText('Всего: 42')).toBeInTheDocument();
+  });
+
+  it('помечает оценку планировщика знаком «≈»', async () => {
+    vi.stubGlobal('fetch', countFetch({ total: 12345678, estimated: true }));
+    render(<EventsBrowser />);
+    expect(await screen.findByText('Всего: ≈12345678')).toBeInTheDocument();
+  });
+});

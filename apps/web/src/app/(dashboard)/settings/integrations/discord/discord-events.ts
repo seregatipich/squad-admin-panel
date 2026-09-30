@@ -64,6 +64,11 @@ export function describeTestSendOutcome(
       return { kind: 'err', text: 'Вебхук недоступен' };
     case 'webhook_not_found':
       return { kind: 'err', text: 'Вебхук не найден' };
+    case 'webhook_url_unreadable':
+      return {
+        kind: 'err',
+        text: 'URL вебхука не расшифровывается — удалите вебхук и добавьте заново',
+      };
     default:
       return { kind: 'err', text: 'Не удалось отправить тестовое сообщение' };
   }
