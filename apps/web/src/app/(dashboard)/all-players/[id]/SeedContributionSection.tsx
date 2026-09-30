@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-
 import {
   Badge,
   Button,
@@ -20,12 +19,12 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { serverLabel } from '@/lib/format';
 import {
   buildSeedContributionUrl,
   formatSeedDuration,
   parseSeedContribution,
   type SeedContributionResponse,
-  serverLabel,
   sortServersBySeedSeconds,
 } from './seed-contribution';
 

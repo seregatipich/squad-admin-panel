@@ -40,8 +40,6 @@ export const CHART_SERIES = {
   tx: '#ff9f0a',
 } as const;
 
-export type ChartSeriesKey = keyof typeof CHART_SERIES;
-
 /** Заливка области под линией: данные читаются, фон не спорит с сеткой. */
 export const CHART_AREA_OPACITY = 0.2;
 

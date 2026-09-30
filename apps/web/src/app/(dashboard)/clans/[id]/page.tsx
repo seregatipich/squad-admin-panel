@@ -22,6 +22,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { formatMatchDuration } from '@/lib/format';
 import type { MeResponse, BadgeTone as PriorityTone, ServerOption } from '../helpers';
 import { priorityBadge } from '../helpers';
 import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
@@ -115,17 +116,6 @@ const ROLE_LABELS: Record<string, string> = {
   deputy: 'Зам',
   member: 'Участник',
 };
-
-function formatMatchDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
-  const total = Math.floor(seconds);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours > 0) return `${hours}ч ${minutes}м`;
-  if (minutes > 0) return `${minutes}м ${secs}с`;
-  return `${secs}с`;
-}
 
 function formatMatchStart(iso: string): string {
   const date = new Date(iso);

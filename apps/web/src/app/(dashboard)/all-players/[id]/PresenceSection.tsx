@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
 import {
   Badge,
   Button,
@@ -21,6 +20,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { serverLabel } from '@/lib/format';
 import { PresenceChart } from './PresenceChart';
 import { PrimetimeSection } from './PrimetimeSection';
 import {
@@ -33,7 +33,6 @@ import {
   MODE_LABELS,
   type PresenceResponse,
   type SessionMode,
-  serverLabel,
   sortServersByOnline,
   weekStartMsForEndDay,
 } from './presence';

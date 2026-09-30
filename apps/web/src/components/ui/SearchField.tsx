@@ -69,19 +69,25 @@ export function SearchField({
     onCommitRef.current = onCommit;
   });
 
-  // Значение сменилось снаружи — показать его. Собственное эхо пропускаем:
-  // ответ на предыдущий запрос приходит уже поверх набранного дальше.
-  if (seenValue !== value) {
-    setSeenValue(value);
-    if (value !== committedRef.current) setDraft(value);
-  }
-
   const cancel = () => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
   };
+
+  // Значение сменилось снаружи — показать его. Собственное эхо пропускаем:
+  // ответ на предыдущий запрос приходит уже поверх набранного дальше. Внешняя
+  // смена отменяет и ещё не отправленный набор: иначе таймер вернул бы в
+  // список запрос, который оператор только что сбросил.
+  if (seenValue !== value) {
+    setSeenValue(value);
+    if (value !== committedRef.current) {
+      cancel();
+      committedRef.current = value;
+      setDraft(value);
+    }
+  }
 
   // Размонтирование посреди паузы не должно ни отправлять запрос, ни оставлять
   // таймер: экран уже закрыт, а в тестах он утёк бы в следующий.

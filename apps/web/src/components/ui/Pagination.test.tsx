@@ -151,4 +151,10 @@ describe('Pagination', () => {
     expect(screen.getByText('Страница 43 из 128')).toBeInTheDocument();
     expect(jump).toHaveValue(43);
   });
+
+  it('steps back to an existing page when the current one is past the end', () => {
+    const { onChange } = renderPagination({ page: 5, pageCount: 2 });
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(2);
+  });
 });

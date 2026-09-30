@@ -62,7 +62,7 @@ const ALL_PERMISSIONS = [
 
 function renderNav(props: Partial<Parameters<typeof TopNav>[0]> = {}) {
   return render(
-    <LocaleProvider locale="ru">
+    <LocaleProvider>
       <TopNav permissions={ALL_PERMISSIONS} displayName="Alice" groups={NAV_GROUPS} {...props} />
     </LocaleProvider>,
   );
@@ -111,7 +111,7 @@ describe('TopNav', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.click(trigger);
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
 

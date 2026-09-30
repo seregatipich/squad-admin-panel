@@ -1,6 +1,7 @@
 'use client';
 
 import type { CSSProperties, ReactNode } from 'react';
+import { SortAscIcon, SortDescIcon, SortIcon } from './icons';
 
 /** Горизонтальное выравнивание ячейки — заголовка или тела. */
 export type TableAlign = 'left' | 'right' | 'center';
@@ -304,13 +305,11 @@ export function SortableTh({
         <span>{label}</span>
         {active ? (
           <>
-            <span aria-hidden="true">{direction === 'asc' ? '↑' : '↓'}</span>
+            {direction === 'asc' ? <SortAscIcon /> : <SortDescIcon />}
             <span className="sr-only">{directionText[direction]}</span>
           </>
         ) : (
-          <span aria-hidden="true" className="text-ink-4">
-            ⇅
-          </span>
+          <SortIcon className="size-4 text-ink-4" />
         )}
       </button>
     </th>

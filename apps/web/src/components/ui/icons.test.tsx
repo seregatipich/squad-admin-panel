@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 describe('набор значков', () => {
   it('экспортирует только компоненты-значки', () => {
-    expect(ALL.length).toBeGreaterThan(15);
+    expect(ALL.length).toBeGreaterThan(10);
     for (const [, Component] of ALL) {
       expect(typeof Component).toBe('function');
     }

@@ -25,9 +25,10 @@ describe('computeHostHealth', () => {
     expect(computeHostHealth(baseInfo, idleMetrics, null).level).toBe('critical');
   });
 
-  it('returns healthy when info or metrics are missing but bridge is up', () => {
-    expect(computeHostHealth(null, null, connectedBridge).level).toBe('healthy');
-    expect(computeHostHealth(baseInfo, null, connectedBridge).level).toBe('healthy');
+  it('returns unknown, not healthy, when info or metrics are missing but bridge is up', () => {
+    expect(computeHostHealth(null, null, connectedBridge).level).toBe('unknown');
+    expect(computeHostHealth(baseInfo, null, connectedBridge).level).toBe('unknown');
+    expect(computeHostHealth(null, idleMetrics, connectedBridge).level).toBe('unknown');
   });
 
   it('returns critical when disk usage > 90%', () => {

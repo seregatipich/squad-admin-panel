@@ -93,30 +93,6 @@ export function RefreshIcon(props: IconProps) {
   );
 }
 
-export function ArrowLeftIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M12.5 8h-9M7 3.5 3.5 8 7 12.5" />
-    </Icon>
-  );
-}
-
-export function ArrowRightIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M3.5 8h9M9 3.5 12.5 8 9 12.5" />
-    </Icon>
-  );
-}
-
-export function CheckIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
-    </Icon>
-  );
-}
-
 export function PlusIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -169,26 +145,6 @@ export function LockIcon(props: IconProps) {
   );
 }
 
-export function InfoIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <circle cx="8" cy="8" r="6" />
-      <path d="M8 7.5v3.5" />
-      <path d="M8 5h.01" />
-    </Icon>
-  );
-}
-
-export function ExternalIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M9 3.5h3.5V7" />
-      <path d="M12.5 3.5 7.75 8.25" />
-      <path d="M12 9.5v3h-9v-9h3" />
-    </Icon>
-  );
-}
-
 export function CopyIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -204,14 +160,6 @@ export function TrashIcon(props: IconProps) {
       <path d="M3.5 4.5h9" />
       <path d="M6 4.5V3h4v1.5" />
       <path d="m5.25 4.5.7 8h4.1l.7-8" />
-    </Icon>
-  );
-}
-
-export function FilterIcon(props: IconProps) {
-  return (
-    <Icon {...props}>
-      <path d="M2.5 4h11M4.5 8h7M6.5 12h3" />
     </Icon>
   );
 }

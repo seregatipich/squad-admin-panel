@@ -249,10 +249,10 @@ describe('Menu', () => {
     render(<Harness />);
     const menu = openMenu();
 
-    fireEvent.mouseDown(menu);
+    fireEvent.pointerDown(menu);
     expect(screen.getByRole('menu')).toBeInTheDocument();
 
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 

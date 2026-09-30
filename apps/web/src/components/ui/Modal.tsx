@@ -140,26 +140,37 @@ export function Modal({
       const escapeReported = escapeReportedRef.current;
       escapeReportedRef.current = false;
       if (!openRef.current) return;
-      if (!escapeReported) onClose();
+      if (!escapeReported && dismissible) onClose();
       setNativeCloseCount((count) => count + 1);
     };
 
     // Клик по `::backdrop` приходит на сам `<dialog>`: отдельного узла у
     // подложки нет. Панель занимает элемент целиком (`p-0`), поэтому
     // `target === dialog` случается только за её пределами.
+    // Выделение текста, начатое в панели и законченное над подложкой, тоже
+    // порождает `click` на `<dialog>`, поэтому нажатие внутри панели
+    // запоминается и такой `click` за закрытие не считается.
+    let pressStartedInPanel = false;
+    const handlePress = (event: Event) => {
+      pressStartedInPanel = event.target !== dialog;
+    };
     const handleSurfaceClick = (event: Event) => {
-      if (!dismissible || event.target !== dialog) return;
+      const startedInPanel = pressStartedInPanel;
+      pressStartedInPanel = false;
+      if (!dismissible || event.target !== dialog || startedInPanel) return;
       onClose();
     };
 
-    // События `cancel` и `close` не всплывают, поэтому все три слушателя
+    // События `cancel` и `close` не всплывают, поэтому все слушатели
     // висят на самом элементе, а не приходят пропсами React.
     dialog.addEventListener('cancel', handleCancel);
     dialog.addEventListener('close', handleNativeClose);
+    dialog.addEventListener('mousedown', handlePress);
     dialog.addEventListener('click', handleSurfaceClick);
     return () => {
       dialog.removeEventListener('cancel', handleCancel);
       dialog.removeEventListener('close', handleNativeClose);
+      dialog.removeEventListener('mousedown', handlePress);
       dialog.removeEventListener('click', handleSurfaceClick);
     };
   }, [dismissible, onClose]);

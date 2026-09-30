@@ -23,12 +23,3 @@ export function useLiveBusState() {
     () => 'closed' as const,
   );
 }
-
-export function useBridgeState() {
-  const bus = typeof window !== 'undefined' ? getLiveBus() : null;
-  return useSyncExternalStore(
-    (cb) => (bus ? bus.onBridgeChange(cb) : () => {}),
-    () => (bus ? bus.bridgeState() : 'unknown'),
-    () => 'unknown' as const,
-  );
-}

@@ -2,7 +2,21 @@ export type LiveEvent =
   | {
       type: 'server.status';
       ts: string;
-      data: { server_id: string; status: string; source: 'reconciler' | 'install' | 'delete' };
+      data: {
+        server_id: string;
+        status: string;
+        source:
+          | 'reconciler'
+          | 'install'
+          | 'delete'
+          | 'stop'
+          | 'start'
+          | 'restart'
+          | 'force_stop'
+          | 'crash_detected'
+          | 'crash_loop'
+          | 'external';
+      };
     }
   | {
       type: 'server.deleted';
@@ -162,6 +176,23 @@ export type LiveEvent =
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
+    }
+  | {
+      type: 'externalban.matched';
+      ts: string;
+      data: {
+        server_id: string;
+        player_id: string | null;
+        source_id: string;
+        external_ban_id: string;
+        steam_id64: string;
+        eos_id: string | null;
+        name: string;
+        source_name: string;
+        reason: string | null;
+        action: 'none' | 'alert' | 'kick';
+        kick_enqueued?: boolean;
+      };
     }
   | {
       /**
@@ -356,7 +387,6 @@ export interface LivePlayerMark {
 }
 
 export type LiveBusState = 'connecting' | 'open' | 'closed';
-export type BridgeState = 'up' | 'down' | 'unknown';
 
 export interface LiveBusHandle {
   /**
@@ -368,12 +398,11 @@ export interface LiveBusHandle {
    */
   subscribe(cb: (event: LiveEvent) => void, eventType?: LiveEvent['type']): () => void;
   state(): LiveBusState;
-  bridgeState(): BridgeState;
   onStateChange(cb: (state: LiveBusState) => void): () => void;
-  onBridgeChange(cb: (state: BridgeState) => void): () => void;
   /** Force the singleton's WS connection to be opened (or kept alive)
-   *  while the caller is mounted. Returns a release function — call it
-   *  in the cleanup of useEffect to allow idle-close. */
+   *  while the caller is mounted, even with no subscribers. Returns a
+   *  release function — call it in the cleanup of useEffect to allow
+   *  idle-close. Calling the release function more than once is harmless. */
   retain(): () => void;
   /** Tear down the current socket and immediately reopen. Used by the
    *  ConnectionBanner's manual "Переподключить" button to bypass the
@@ -389,13 +418,12 @@ let singleton: LiveBusHandle | null = null;
 function makeLiveBus(): LiveBusHandle {
   const eventSubs = new Set<(event: LiveEvent) => void>();
   const stateSubs = new Set<(state: LiveBusState) => void>();
-  const bridgeSubs = new Set<(state: BridgeState) => void>();
   /** Declared interest per event type; the server is told on 0→1 and 1→0. */
   const typeRefs = new Map<string, number>();
+  let retainCount = 0;
 
   let socket: WebSocket | null = null;
   let connState: LiveBusState = 'closed';
-  let bridge: BridgeState = 'unknown';
   let attempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -415,18 +443,6 @@ function makeLiveBus(): LiveBusHandle {
         cb(next);
       } catch (err) {
         debug('state-sub threw', err);
-      }
-    }
-  };
-
-  const setBridge = (next: BridgeState): void => {
-    if (bridge === next) return;
-    bridge = next;
-    for (const cb of bridgeSubs) {
-      try {
-        cb(next);
-      } catch (err) {
-        debug('bridge-sub threw', err);
       }
     }
   };
@@ -487,9 +503,12 @@ function makeLiveBus(): LiveBusHandle {
   };
 
   const scheduleReconnect = (): void => {
-    if (eventSubs.size === 0 && stateSubs.size === 0 && bridgeSubs.size === 0) return;
+    if (refCount() === 0) return;
     clearReconnect();
-    const delay = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
+    // Полный джиттер: после рестарта API вкладки не должны возвращаться
+    // одновременной волной.
+    const ceiling = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
+    const delay = Math.round(ceiling * (0.5 + Math.random() / 2));
     attempts++;
     debug(`reconnect in ${delay}ms (attempt ${attempts})`);
     reconnectTimer = setTimeout(() => {
@@ -549,9 +568,6 @@ function makeLiveBus(): LiveBusHandle {
         return;
       }
       const event = frame as LiveEvent;
-      if (event.type === 'bridge.connection') {
-        setBridge(event.data.state);
-      }
       for (const cb of eventSubs) {
         try {
           cb(event);
@@ -584,11 +600,12 @@ function makeLiveBus(): LiveBusHandle {
     clearReconnect();
     teardownSocket();
     setState('closed');
-    setBridge('unknown');
     attempts = 0;
   };
 
-  const refCount = (): number => eventSubs.size + stateSubs.size + bridgeSubs.size;
+  function refCount(): number {
+    return eventSubs.size + stateSubs.size + retainCount;
+  }
 
   const scheduleIdleClose = (): void => {
     clearIdle();
@@ -620,11 +637,18 @@ function makeLiveBus(): LiveBusHandle {
   };
 
   return {
-    retain: () => {
-      retain();
-      return () => release();
-    },
     forceReconnect,
+    retain: () => {
+      retainCount++;
+      retain();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        retainCount--;
+        release();
+      };
+    },
     subscribe(cb, eventType) {
       eventSubs.add(cb);
       if (eventType) addTypeRef(eventType);
@@ -638,22 +662,11 @@ function makeLiveBus(): LiveBusHandle {
     state() {
       return connState;
     },
-    bridgeState() {
-      return bridge;
-    },
     onStateChange(cb) {
       stateSubs.add(cb);
       retain();
       return () => {
         stateSubs.delete(cb);
-        release();
-      };
-    },
-    onBridgeChange(cb) {
-      bridgeSubs.add(cb);
-      retain();
-      return () => {
-        bridgeSubs.delete(cb);
         release();
       };
     },
@@ -665,9 +678,7 @@ export function getLiveBus(): LiveBusHandle {
     return {
       subscribe: () => () => {},
       state: () => 'closed',
-      bridgeState: () => 'unknown',
       onStateChange: () => () => {},
-      onBridgeChange: () => () => {},
       retain: () => () => {},
       forceReconnect: () => {},
     };

@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Locale } from './config';
 import { LocaleProvider, useIntlLocale, useLocale, useTranslator } from './LocaleProvider';
 
 function Probe() {
@@ -30,19 +29,6 @@ describe('LocaleProvider', () => {
     expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
     expect(screen.getByTestId('date')).toHaveTextContent('22.08.2026');
-    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
-  });
-
-  it('ignores a locale prop and still resolves to ru', () => {
-    render(
-      // Cast: `Locale` now has a single value ('ru'). This proves the prop is
-      // ignored, not that 'en' is still a real locale.
-      <LocaleProvider locale={'en' as Locale}>
-        <Probe />
-      </LocaleProvider>,
-    );
-    expect(screen.getByTestId('locale')).toHaveTextContent('ru');
-    expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
     expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
   });
 

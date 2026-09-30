@@ -4,10 +4,11 @@ import {
   formatBytes,
   formatBytesPerSec,
   formatDateTimeRu,
+  formatMatchDuration,
   formatPercent,
-  formatRelativeTime,
   formatUptime,
   ratio,
+  serverLabel,
 } from './format';
 
 describe('formatBytes', () => {
@@ -111,31 +112,21 @@ describe('formatUptime', () => {
   });
 });
 
-describe('formatRelativeTime', () => {
-  const now = new Date('2026-04-24T12:00:00Z');
-
-  it('renders seconds-ago', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T11:59:57Z'), now)).toBe('3s ago');
+describe('serverLabel', () => {
+  it('prefers slug, falls back to name, then dash', () => {
+    expect(serverLabel({ server_slug: 'eu-1', server_name: 'EU Main' })).toBe('eu-1');
+    expect(serverLabel({ server_slug: null, server_name: 'EU Main' })).toBe('EU Main');
+    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
   });
+});
 
-  it('renders minutes-ago', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T11:58:00Z'), now)).toBe('2m ago');
-  });
-
-  it('renders hours-ago under 24h', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T07:00:00Z'), now)).toBe('5h ago');
-  });
-
-  it('renders > 1d ago for over 24h', () => {
-    expect(formatRelativeTime(new Date('2026-04-22T12:00:00Z'), now)).toBe('> 1d ago');
-  });
-
-  it('renders только что for future timestamps', () => {
-    expect(formatRelativeTime(new Date('2026-04-24T12:00:05Z'), now)).toBe('только что');
-  });
-
-  it('returns em-dash on invalid date', () => {
-    expect(formatRelativeTime('not-a-date', now)).toBe('—');
+describe('formatMatchDuration', () => {
+  it('formats hours, minutes, seconds and guards invalid input', () => {
+    expect(formatMatchDuration(3661)).toBe('1ч 1м');
+    expect(formatMatchDuration(125)).toBe('2м 5с');
+    expect(formatMatchDuration(42)).toBe('42с');
+    expect(formatMatchDuration(null)).toBe('—');
+    expect(formatMatchDuration(-5)).toBe('—');
   });
 });
 

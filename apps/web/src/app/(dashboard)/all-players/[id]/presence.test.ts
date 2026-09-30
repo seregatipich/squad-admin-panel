@@ -8,7 +8,6 @@ import {
   fmtDuration,
   type PresenceSession,
   type ServerPresence,
-  serverLabel,
   sortServersByOnline,
   weekStartMsForEndDay,
 } from './presence';
@@ -148,14 +147,6 @@ describe('sortServersByOnline', () => {
       base({ server_id: 'c', server_slug: 'c', online_seconds: 300 }),
     ];
     expect(sortServersByOnline(servers).map((s) => s.server_id)).toEqual(['b', 'c', 'a']);
-  });
-});
-
-describe('serverLabel', () => {
-  it('prefers slug, then name, then dash', () => {
-    expect(serverLabel({ server_slug: 'eu', server_name: 'EU Main' })).toBe('eu');
-    expect(serverLabel({ server_slug: null, server_name: 'EU Main' })).toBe('EU Main');
-    expect(serverLabel({ server_slug: null, server_name: null })).toBe('—');
   });
 });
 

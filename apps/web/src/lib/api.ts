@@ -42,6 +42,10 @@ export class ApiError extends Error {
  *
  * @throws {ApiError} The API answered with a non-2xx status.
  * @throws {DOMException} `TimeoutError`/`AbortError` when the request was aborted.
+ *
+ * `T` is the caller's assertion about the response body; it is not validated
+ * at runtime, so callers of endpoints with an unstable contract must parse the
+ * result themselves.
  */
 export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const headers = new Headers(opts.headers ?? {});

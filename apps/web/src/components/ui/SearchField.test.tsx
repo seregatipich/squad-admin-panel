@@ -213,6 +213,21 @@ describe('SearchField', () => {
     expect(input).toHaveValue('');
   });
 
+  it('drops a pending commit when the query is reset from outside mid-pause', () => {
+    const onCommit = vi.fn();
+    render(<Harness onCommit={onCommit} />);
+    const input = screen.getByRole('searchbox', { name: 'Поиск по игрокам' });
+
+    fireEvent.change(input, { target: { value: 'abc' } });
+    act(() => vi.advanceTimersByTime(250));
+    fireEvent.change(input, { target: { value: 'abcd' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
+    act(() => vi.advanceTimersByTime(250));
+
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith('abc');
+    expect(input).toHaveValue('');
+  });
+
   it('does not clobber keystrokes typed while the previous query is still being applied', () => {
     render(<SlowHarness />);
     const input = screen.getByRole('searchbox', { name: 'Поиск по игрокам' });

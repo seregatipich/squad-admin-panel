@@ -152,18 +152,21 @@ const HEALTH_LABEL: Record<HealthLevel, string> = {
   healthy: 'Здоровый',
   warning: 'Предупреждение',
   critical: 'Критично',
+  unknown: 'Нет данных',
 };
 
 const HEALTH_STATE: Record<HealthLevel, StatusState> = {
   healthy: 'good',
   warning: 'warn',
   critical: 'crit',
+  unknown: 'idle',
 };
 
 const HEALTH_TILE_TONE: Record<HealthLevel, StatTileTone> = {
   healthy: 'good',
   warning: 'warn',
   critical: 'crit',
+  unknown: 'neutral',
 };
 
 /**
@@ -465,7 +468,14 @@ export default function DashboardPage() {
         <StatTile
           label="Состояние хоста"
           value={HEALTH_LABEL[health.level]}
-          hint={health.reasons[0] ?? (bridge?.connected ? 'все метрики в норме' : 'Bridge оффлайн')}
+          hint={
+            health.reasons[0] ??
+            (health.level === 'unknown'
+              ? 'метрики хоста недоступны'
+              : bridge?.connected
+                ? 'все метрики в норме'
+                : 'Bridge оффлайн')
+          }
           tone={HEALTH_TILE_TONE[health.level]}
         />
         <StatTile

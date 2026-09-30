@@ -16,7 +16,7 @@ test.describe('server detail live refresh', () => {
   }) => {
     const seed = await seedOwner();
     try {
-      await loginAndAttachCookie(page, context, null as never, seed);
+      await loginAndAttachCookie(context, seed);
 
       const anyServerId = runSql('SELECT id FROM servers LIMIT 1');
       if (!anyServerId) {

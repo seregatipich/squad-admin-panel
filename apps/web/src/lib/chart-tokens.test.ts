@@ -41,6 +41,7 @@ describe('палитра графиков', () => {
   it.each([
     ['cpu', CHART_SERIES.cpu, 'good'],
     ['ram', CHART_SERIES.ram, 'accent'],
+    ['disk', CHART_SERIES.disk, 'purple-500'],
     ['rx', CHART_SERIES.rx, 'accent'],
     ['tx', CHART_SERIES.tx, 'warn'],
   ])('серия %s взята из палитры состояний', (_key, value, tokenName) => {

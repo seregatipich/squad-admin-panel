@@ -46,18 +46,24 @@ export function formatUptime(seconds: number): string {
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 }
 
-export function formatRelativeTime(sampledAt: string | Date, now: Date = new Date()): string {
-  const ts = sampledAt instanceof Date ? sampledAt : new Date(sampledAt);
-  if (Number.isNaN(ts.getTime())) return '—';
-  const diffMs = now.getTime() - ts.getTime();
-  if (diffMs < 0) return 'только что';
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return '> 1d ago';
+/** Server display name: slug, then name, then a dash. */
+export function serverLabel(server: {
+  server_slug: string | null;
+  server_name: string | null;
+}): string {
+  return server.server_slug ?? server.server_name ?? '—';
+}
+
+/** Match duration as `«Xч Yм»`, `«Xм Yс»` or `«Xс»`; a dash for missing or invalid input. */
+export function formatMatchDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${hours}ч ${minutes}м`;
+  if (minutes > 0) return `${minutes}м ${secs}с`;
+  return `${secs}с`;
 }
 
 const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;

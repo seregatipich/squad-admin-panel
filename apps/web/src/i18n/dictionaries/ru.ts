@@ -1,10 +1,9 @@
 /**
- * Russian dictionary — the source of truth for the translation-key set.
+ * Russian dictionary — the only dictionary and the source of truth for the
+ * translation-key set.
  *
- * Keys are flat, dot-namespaced strings (`login.heading`, `nav.dashboard`,
- * `errors.rate_limited`). The English dictionary is typed against
- * `keyof typeof ru`, so any key added here must also be translated there or
- * the build fails. `{token}` placeholders are substituted by the translator.
+ * Keys are flat, dot-namespaced strings (`login.heading`, `nav.dashboard`).
+ * `{token}` placeholders are substituted by the translator.
  */
 export const ru = {
   'app.title': 'Squad Admin Panel',
@@ -134,11 +133,6 @@ export const ru = {
   'connection.unavailable': 'Панель временно недоступна.',
   'connection.retry': 'Повторить',
   'connection.dismiss': 'Скрыть',
-
-  'errors.invalid_period': 'Некорректный период.',
-  'errors.rate_limited': 'Слишком много запросов. Попробуйте позже.',
-  'errors.internal_error': 'Внутренняя ошибка сервера.',
-  'errors.unknown': 'Произошла ошибка. Попробуйте ещё раз.',
 } as const;
 
 /** A valid translation key (every key present in the Russian dictionary). */

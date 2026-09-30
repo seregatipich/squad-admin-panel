@@ -1,12 +1,12 @@
 'use client';
 
 import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import { type DossierKit, formatPlayTime, sortKits } from './dossier';
-import { formatMatchDate } from './recent-matches';
 
-/** `—` for a never-played kit, otherwise the shared match-date format. */
+/** `—` for a never-played kit, otherwise the shared date-time format. */
 function formatKitDate(iso: string | null): string {
-  return iso === null ? '—' : formatMatchDate(iso);
+  return formatDateTimeRu(iso);
 }
 
 /**

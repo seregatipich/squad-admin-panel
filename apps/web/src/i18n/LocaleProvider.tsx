@@ -18,11 +18,10 @@ const RU_VALUE: LocaleContextValue = {
 
 /**
  * Provides the (Russian-only) {@link Locale} and its bound {@link Translator}
- * to client components. The panel no longer offers a language switch, so the
- * `locale` prop is accepted for source compatibility with existing call sites
- * but is otherwise ignored — every render resolves to {@link DEFAULT_LOCALE}.
+ * to client components. The panel has no language switch, so every render
+ * resolves to {@link DEFAULT_LOCALE}.
  */
-export function LocaleProvider({ children }: { locale?: Locale; children: React.ReactNode }) {
+export function LocaleProvider({ children }: { children: React.ReactNode }) {
   return <LocaleContext.Provider value={RU_VALUE}>{children}</LocaleContext.Provider>;
 }
 

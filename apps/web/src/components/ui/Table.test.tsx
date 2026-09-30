@@ -263,6 +263,13 @@ describe('SortableTh', () => {
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'descending');
   });
 
+  it('draws the sort direction with vector icons, not text glyphs', () => {
+    renderSortableHeader();
+    const header = screen.getByRole('columnheader');
+    expect(header.querySelector('svg')).not.toBeNull();
+    expect(header.textContent).not.toMatch(/[↑↓⇅]/);
+  });
+
   it('reports an inactive column as unsorted whatever the direction is', () => {
     renderSortableHeader({ sortKey: 'score', activeKey: 'name', direction: 'desc' });
     expect(screen.getByRole('columnheader')).toHaveAttribute('aria-sort', 'none');

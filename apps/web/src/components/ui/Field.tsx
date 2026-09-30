@@ -219,7 +219,7 @@ export function Checkbox({ label, disabled = false, className, ...rest }: Checkb
 
 export type SwitchProps = Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
-  'onChange' | 'type' | 'role' | 'aria-checked' | 'aria-label' | 'children'
+  'onChange' | 'onClick' | 'type' | 'role' | 'aria-checked' | 'aria-label' | 'children'
 > & {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -261,7 +261,7 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      aria-describedby={describedBy ?? rest['aria-describedby']}
+      aria-describedby={cx(describedBy, rest['aria-describedby']) || undefined}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(

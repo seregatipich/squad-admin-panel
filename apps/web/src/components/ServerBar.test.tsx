@@ -37,7 +37,7 @@ function respondWith(items: unknown[]) {
 
 function renderBar() {
   return render(
-    <LocaleProvider locale="ru">
+    <LocaleProvider>
       <ServerBar />
     </LocaleProvider>,
   );

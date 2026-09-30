@@ -42,7 +42,7 @@ async function driveToUnreachable(): Promise<void> {
 describe('ConnectionBanner', () => {
   it('is hidden until the panel is confirmed unreachable', () => {
     render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );
@@ -51,7 +51,7 @@ describe('ConnectionBanner', () => {
 
   it('shows the unavailable toast in Russian', async () => {
     render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );
@@ -69,7 +69,7 @@ describe('ConnectionBanner', () => {
     const location = { href: '' };
     vi.stubGlobal('location', location);
     render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );
@@ -89,7 +89,7 @@ describe('ConnectionBanner', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
     const { unmount } = render(
-      <LocaleProvider locale="ru">
+      <LocaleProvider>
         <ConnectionBanner />
       </LocaleProvider>,
     );

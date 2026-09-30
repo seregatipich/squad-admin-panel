@@ -195,6 +195,25 @@ describe('Switch', () => {
     expect(control).toHaveAttribute('aria-checked', 'false');
   });
 
+  it('объединяет собственное пояснение с aria-describedby от строки поля', () => {
+    render(
+      <>
+        <Switch
+          checked={false}
+          onChange={vi.fn()}
+          label="Автобан"
+          describedBy={AUTOBAN_HINT_ID}
+          aria-describedby={REASON_HINT_ID}
+        />
+        <p id={AUTOBAN_HINT_ID}>Банит за превышение порога.</p>
+        <p id={REASON_HINT_ID}>Не сохранено.</p>
+      </>,
+    );
+    expect(screen.getByRole('switch')).toHaveAccessibleDescription(
+      'Банит за превышение порога. Не сохранено.',
+    );
+  });
+
   it('ссылается на внешнее пояснение через aria-describedby', () => {
     render(
       <>
