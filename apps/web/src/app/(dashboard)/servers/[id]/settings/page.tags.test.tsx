@@ -91,7 +91,7 @@ describe('SettingsPage tags', () => {
     fireEvent.click(screen.getByRole('button', { name: 'add tag' }));
 
     await waitFor(() => expect(screen.getByTestId('tags')).toHaveTextContent('old,new'));
-    expect(screen.queryByText('Не удалось сохранить теги')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Не удалось сохранить теги/)).not.toBeInTheDocument();
   });
 
   it('rolls the tags back and reports an error when the save is rejected', async () => {
@@ -101,7 +101,7 @@ describe('SettingsPage tags', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'add tag' }));
 
-    expect(await screen.findByText('Не удалось сохранить теги')).toBeInTheDocument();
+    expect(await screen.findByText('Не удалось сохранить теги: HTTP 400')).toBeInTheDocument();
     expect(screen.getByTestId('tags').textContent).toBe('old');
   });
 });
