@@ -127,6 +127,40 @@ describe('LogList', () => {
     );
   });
 
+  // #781: config-sync is a real source; it must be listed and survive a narrowed filter.
+  it('offers config-sync as a source and keeps it in a narrowed filter', async () => {
+    const fetchMock = stubFetch();
+    render(<LogList servers={SERVERS} />);
+    await screen.findByText('запрос обработан');
+
+    expect(screen.getByRole('checkbox', { name: 'config-sync' })).toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'rcon' }));
+
+    await waitFor(() => {
+      const narrowed = fetchMock.mock.calls
+        .map(([url]) => new URL(String(url), 'http://x').searchParams.get('src'))
+        .find((src) => src !== null);
+      expect(narrowed?.split(',')).toContain('C');
+      expect(narrowed?.split(',')).not.toContain('R');
+    });
+  });
+
+  // #778: an empty first page (fresh stream, or a filter matching none of the
+  // recent entries) used to leave no cursor, so polling never started.
+  it('keeps tailing after an empty first response', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve(new Response(JSON.stringify({ entries: [], newest_scanned_id: '0-0' }))),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<LogList servers={SERVERS} />);
+
+    await waitFor(
+      () =>
+        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('after=0-0'))).toBe(true),
+      { timeout: 3000 },
+    );
+  });
+
   // Regression (#186): the live tail advanced only past matching entries, so a
   // run of filtered-out entries was re-read forever and later matches never came.
   it('advances the live-tail cursor to the newest scanned id even when nothing matched', async () => {

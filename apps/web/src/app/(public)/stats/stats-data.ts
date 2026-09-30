@@ -1,4 +1,5 @@
 import { apiFetch } from '@/lib/api';
+import { forwardedClientHeaders } from '@/lib/forwarded-client';
 
 /** Aggregate payload served by the public, no-session `GET /api/v1/public/stats` route. */
 export interface PublicStats {
@@ -25,10 +26,13 @@ export interface PublicStats {
 /**
  * Server-side fetch of the public stats portal data. Deliberately makes no
  * request with session credentials — the API route is anonymous-accessible,
- * and this page must render the same for every visitor.
+ * and this page must render the same for every visitor. It does relay the
+ * visitor's IP so the API rate-limits each visitor, not the web container.
  */
 export async function getPublicStats(): Promise<PublicStats> {
-  return apiFetch<PublicStats>('/api/v1/public/stats');
+  return apiFetch<PublicStats>('/api/v1/public/stats', {
+    headers: await forwardedClientHeaders(),
+  });
 }
 
 export function formatHour(hour: number): string {

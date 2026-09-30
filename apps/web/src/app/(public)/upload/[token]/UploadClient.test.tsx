@@ -14,6 +14,7 @@ interface ProgressTick {
 class FakeXhr {
   static last: FakeXhr | null = null;
   static aborted = 0;
+  static created = 0;
 
   upload = { onprogress: null as ((tick: ProgressTick) => void) | null };
   onload: (() => void) | null = null;
@@ -26,6 +27,7 @@ class FakeXhr {
 
   constructor() {
     FakeXhr.last = this;
+    FakeXhr.created += 1;
   }
 
   open(method: string, url: string): void {
@@ -59,6 +61,7 @@ function dropFile(file: File): void {
 beforeEach(() => {
   FakeXhr.last = null;
   FakeXhr.aborted = 0;
+  FakeXhr.created = 0;
   vi.stubGlobal('XMLHttpRequest', FakeXhr);
 });
 
@@ -172,5 +175,55 @@ describe('UploadClient', () => {
     await userEvent.upload(screen.getByTestId('upload-input'), pngFile());
     view.unmount();
     expect(FakeXhr.aborted).toBe(1);
+  });
+
+  // #756: the token is single-use, so a second file must never race the first.
+  it('ignores a second dropped file while an upload is in flight', async () => {
+    render(<UploadClient token="tok-1" />);
+    await userEvent.upload(screen.getByTestId('upload-input'), pngFile());
+    dropFile(pngFile());
+    expect(FakeXhr.created).toBe(1);
+  });
+
+  it('locks the input and drop zone once the upload has succeeded', async () => {
+    render(<UploadClient token="tok-1" />);
+    await userEvent.upload(screen.getByTestId('upload-input'), pngFile());
+    act(() => {
+      const xhr = FakeXhr.last;
+      if (!xhr) throw new Error('no request issued');
+      xhr.status = 201;
+      xhr.onload?.();
+    });
+
+    expect(screen.getByTestId('upload-input')).toBeDisabled();
+    dropFile(pngFile());
+    expect(FakeXhr.created).toBe(1);
+    expect(screen.getByRole('status')).toHaveTextContent('Файл загружен');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ignores completion callbacks from a request that is no longer current', async () => {
+    const view = render(<UploadClient token="tok-1" />);
+    await userEvent.upload(screen.getByTestId('upload-input'), pngFile());
+    const first = FakeXhr.last;
+    act(() => {
+      if (!first) throw new Error('no request issued');
+      first.onerror?.();
+    });
+    await userEvent.upload(screen.getByTestId('upload-input'), pngFile());
+    act(() => {
+      const second = FakeXhr.last;
+      if (!second) throw new Error('no request issued');
+      second.status = 201;
+      second.onload?.();
+    });
+    act(() => {
+      if (!first) throw new Error('no request issued');
+      first.status = 410;
+      first.onload?.();
+    });
+
+    expect(view.getByRole('status')).toHaveTextContent('Файл загружен');
+    expect(view.queryByRole('alert')).toBeNull();
   });
 });

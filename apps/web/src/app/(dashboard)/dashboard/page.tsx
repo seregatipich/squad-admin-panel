@@ -557,7 +557,8 @@ export default function DashboardPage() {
                 `Отметьте все запущенные серверы для остановки: не выбрано ${body.server_ids?.length ?? 0}.`,
               );
             }
-            throw new Error(`HTTP ${r.status}`);
+            // The dialog shows this message, so carry the API's error code.
+            throw new Error(body?.error ?? `HTTP ${r.status}`);
           }
           setDepotProgressOpen(true);
           void load();

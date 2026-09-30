@@ -174,6 +174,33 @@ describe('DashboardPage', () => {
     expect(capturedBody).toEqual({ server_ids: ['server-1', 'server-2'] });
   });
 
+  // #774: the modal shows the rejection message, so it must name the API's reason.
+  it('rejects onStart with the API error code when the update is refused', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/ready') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'update_in_progress' }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['server-1'])).rejects.toThrow('update_in_progress');
+  });
+
   it('carries exactly one first-level heading', async () => {
     stubFetch({});
     await renderDashboard();

@@ -88,6 +88,33 @@ describe('ForceStopDialog', () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  // #780: a failed destructive stop must never look like a click that did nothing.
+  it('tells the operator the server was NOT stopped when the confirm handler rejects', async () => {
+    const onConfirm = vi.fn().mockRejectedValue(new Error('server_busy'));
+    render(
+      <ForceStopDialog open onOpenChange={vi.fn()} serverName={SERVER} onConfirm={onConfirm} />,
+    );
+    typeServerName(SERVER);
+    fireEvent.click(confirmButton());
+
+    const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+    expect(alert).toHaveTextContent('Сервер не остановлен');
+    expect(alert).toHaveTextContent('server_busy');
+  });
+
+  it('clears a previous failure when the dialog is reopened', async () => {
+    const onConfirm = vi.fn().mockRejectedValue(new Error('server_busy'));
+    const props = { onOpenChange: vi.fn(), serverName: SERVER, onConfirm };
+    const { rerender } = render(<ForceStopDialog open {...props} />);
+    typeServerName(SERVER);
+    fireEvent.click(confirmButton());
+    await within(screen.getByRole('dialog')).findByRole('alert');
+
+    rerender(<ForceStopDialog open={false} {...props} />);
+    rerender(<ForceStopDialog open {...props} />);
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
+  });
+
   it('asks to close on Escape', () => {
     const onOpenChange = vi.fn();
     render(

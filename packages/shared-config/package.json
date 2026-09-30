@@ -33,6 +33,11 @@
       "types": "./dist/squad-permissions.d.ts",
       "development": "./src/squad-permissions.ts",
       "default": "./dist/squad-permissions.js"
+    },
+    "./log-stream": {
+      "types": "./dist/log-stream.d.ts",
+      "development": "./src/log-stream.ts",
+      "default": "./dist/log-stream.js"
     }
   },
   "scripts": {

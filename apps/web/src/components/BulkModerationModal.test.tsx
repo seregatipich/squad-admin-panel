@@ -389,4 +389,73 @@ describe('BulkModerationModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
     expect(screen.getByLabelText('Введите количество целей')).toBeInTheDocument();
   });
+
+  // #764: on the server page `/api/v1/me` can land after the roster, so the
+  // modal mounts with no keys and only later learns what the caller may do.
+  it('derives the default action and ban length from permissions that arrive after mount', async () => {
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
+      Promise.resolve(bulkResponse({ requested: 3, applied: 3, failed: 0, results: [] })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { rerender } = render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={null}
+        permissions={[]}
+        onOpenChange={() => undefined}
+      />,
+    );
+    rerender(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={['mod:ban_temp']}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    fireEvent.change(screen.getByLabelText('Введите количество целей'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+    expect(body.action_type).toBe('ban');
+    expect(body.ban_length).toBe('1d');
+  });
+
+  it('submits the first allowed action when permissions arrive while the modal is open', async () => {
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
+      Promise.resolve(bulkResponse({ requested: 3, applied: 3, failed: 0, results: [] })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { rerender } = render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={[]}
+        onOpenChange={() => undefined}
+      />,
+    );
+    rerender(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={['mod:warn', 'mod:ban_temp']}
+        onOpenChange={() => undefined}
+      />,
+    );
+    // A controlled <select> whose state is not among its options silently
+    // shows the first option, so assert on what is actually sent.
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Мешает' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+    expect(body.action_type).toBe('warn');
+  });
 });

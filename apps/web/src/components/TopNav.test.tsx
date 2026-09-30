@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocaleProvider } from '@/i18n/LocaleProvider';
 import { PALETTE_OPEN_EVENT } from '@/lib/commandPalette';
@@ -10,9 +10,19 @@ vi.mock('next/navigation', () => ({
   usePathname: () => mockUsePathname(),
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
+type LiveHandler = (event: { type: string; ts: string; data: Record<string, unknown> }) => void;
+const liveHandlers = new Map<string, LiveHandler>();
 vi.mock('@/lib/use-live-bus', () => ({
-  useLiveSubscription: vi.fn(),
+  useLiveSubscription: vi.fn((type: string, handler: LiveHandler) => {
+    liveHandlers.set(type, handler);
+  }),
 }));
+
+function emit(type: string) {
+  act(() => {
+    liveHandlers.get(type)?.({ type, ts: new Date().toISOString(), data: {} });
+  });
+}
 
 // The bar fetches a pending-reports count on mount; each test decides the total.
 // jsdom не реализует ResizeObserver, а раскладка панели опирается на него.
@@ -62,6 +72,7 @@ afterEach(() => {
   cleanup();
   mockUsePathname.mockReturnValue('/dashboard');
   fetchMock.mockClear();
+  liveHandlers.clear();
 });
 
 describe('TopNav', () => {
@@ -253,5 +264,46 @@ describe('TopNav', () => {
     // полоска прокрутки — этого в панели больше нет.
     expect(row?.className).not.toContain('overflow-x-auto');
     expect(row?.className).not.toContain('overflow-auto');
+  });
+
+  // #796: bulk-resolve emits one report.updated per report; each used to fire
+  // its own count request, and whichever answered last won.
+  it('coalesces a burst of report events into one count request', async () => {
+    renderNav();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    for (let i = 0; i < 10; i += 1) emit('report.updated');
+    emit('report.created');
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest pending count when an older response arrives last', async () => {
+    renderNav();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const pending: Array<(total: number) => void> = [];
+    const deferred = () =>
+      new Promise<Response>((resolve) => {
+        pending.push((total) => resolve(new Response(JSON.stringify({ total }), { status: 200 })));
+      });
+    fetchMock.mockImplementationOnce(deferred).mockImplementationOnce(deferred);
+    emit('report.created');
+    await waitFor(() => expect(pending).toHaveLength(1), { timeout: 2000 });
+    emit('report.updated');
+    await waitFor(() => expect(pending).toHaveLength(2), { timeout: 2000 });
+
+    await act(async () => {
+      pending[1]?.(3);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      pending[0]?.(7);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    const trigger = screen.getByRole('button', { name: /^Инструменты/ });
+    expect(trigger).toHaveTextContent('3');
+    expect(trigger).not.toHaveTextContent('7');
   });
 });

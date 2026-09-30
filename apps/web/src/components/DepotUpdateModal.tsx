@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Button, Checkbox, EmptyState, Modal } from '@/components/ui';
+import { Button, Checkbox, EmptyState, InlineBanner, Modal } from '@/components/ui';
 
 interface ServerEntry {
   id: string;
@@ -24,17 +24,27 @@ interface Props {
  * разметки: тогда нативный `<dialog>` сам возвращает фокус на кнопку, которая
  * его открыла. Пока запрос на запуск обновления идёт, окно не закрывается ни
  * Escape, ни кликом по подложке.
+ *
+ * Если `onStart` отклоняет промис (403, 409 — обновление уже идёт, 5xx, сеть),
+ * окно остаётся открытым и показывает причину: операция останавливает боевые
+ * серверы, и оператор должен знать, что она не началась.
+ *
+ * @param onStart - Запускает обновление; должен отклонить промис с сообщением
+ *   об ошибке, если API не принял запрос.
  */
 export function DepotUpdateModal({ open, onOpenChange, servers, onStart }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Окно не размонтируется при закрытии, поэтому выбор надо снимать явно.
   // Иначе галочки, поставленные и передуманные в прошлый раз, дожидаются
   // следующего открытия и уезжают в запрос — а он останавливает боевые
   // серверы и выкидывает с них игроков.
   useEffect(() => {
-    if (open) setSelected(new Set());
+    if (!open) return;
+    setSelected(new Set());
+    setError(null);
   }, [open]);
 
   const runnableServers = servers.filter((s) => ['running', 'starting'].includes(s.status));
@@ -50,11 +60,12 @@ export function DepotUpdateModal({ open, onOpenChange, servers, onStart }: Props
 
   async function handleStart() {
     setBusy(true);
+    setError(null);
     try {
       await onStart(Array.from(selected));
       onOpenChange(false);
-    } catch {
-      // caller handles
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -83,6 +94,11 @@ export function DepotUpdateModal({ open, onOpenChange, servers, onStart }: Props
         </>
       }
     >
+      {error ? (
+        <div className="mb-3">
+          <InlineBanner tone="crit" title="Обновление не запущено" description={error} />
+        </div>
+      ) : null}
       {runnableServers.length > 0 ? (
         <ul className="divide-y divide-line rounded-ctl border border-line">
           {runnableServers.map((s) => (

@@ -101,6 +101,20 @@ describe('PublicAppealPage', () => {
   );
 
   it(
+    'renders the tracking link as an absolute, clickable URL (#757)',
+    async () => {
+      await renderSignedIn({ token: 'abs-token-5678' });
+      fillBody('Меня забанили по ошибке, прошу пересмотреть решение.');
+      submit();
+
+      const expected = `${window.location.origin}/appeal/abs-token-5678`;
+      const link = await screen.findByRole('link', { name: expected });
+      expect(link).toHaveAttribute('href', expected);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'submits for the signed-in account with the optional contact and shows the tracking link',
     async () => {
       const { calls } = await renderSignedIn({ token: 'my-tracking-token-1234' });

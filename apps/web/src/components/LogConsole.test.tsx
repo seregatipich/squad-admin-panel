@@ -60,4 +60,27 @@ describe('LogConsole', () => {
     expect(screen.getByTestId('logconsole-error-banner')).toHaveTextContent('неизвестный код');
     expect(screen.queryByRole('button', { name: 'Переподключиться' })).not.toBeInTheDocument();
   });
+
+  // #782: once the caller's buffer is capped, every append drops the head and
+  // shifts all indices. Index-based keys then remounted every row per line.
+  it('keeps existing rows mounted when a capped buffer drops its oldest line', () => {
+    const first = { message: 'первая', ts: '2026-01-01T00:00:00Z' };
+    const second = { message: 'вторая', ts: '2026-01-01T00:00:00Z' };
+    const third = { message: 'третья', ts: '2026-01-01T00:00:00Z' };
+    const { rerender } = render(<LogConsole lines={[first, second]} />);
+    const before = screen.getByText(/вторая/);
+
+    rerender(<LogConsole lines={[second, third]} />);
+
+    expect(screen.getByText(/вторая/)).toBe(before);
+  });
+
+  it('keeps distinct keys for identical lines', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const line = () => ({ message: 'повтор', ts: '2026-01-01T00:00:00Z' });
+    render(<LogConsole lines={[line(), line(), line()]} />);
+    expect(screen.getAllByText(/повтор/)).toHaveLength(3);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
 });

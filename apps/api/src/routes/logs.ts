@@ -2,6 +2,7 @@ import { servers as serversTbl } from '@squad/db';
 import {
   decodeLogEntry,
   LOG_LEVELS,
+  LOG_SOURCES,
   type LogLevel,
   PANEL_LOGS_STREAM,
   sourceCode,
@@ -10,7 +11,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { streamBundle } from '../lib/log-export.js';
 
-const SOURCE_CODES = ['B', 'R', 'L', 'W', 'D', 'I', 'A'] as const;
+// Derived from the shared source table so a new source (config-sync → C, #781)
+// can never be silently dropped from `src=` filtering again.
+const SOURCE_CODES: ReadonlySet<string> = new Set(LOG_SOURCES.map(sourceCode));
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 /** Stream entries read per XRANGE/XREVRANGE round trip while scanning for matches. */
@@ -83,13 +86,7 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         after?: string;
         limit: number;
       };
-      const codes = q.src
-        ? new Set(
-            q.src
-              .split(',')
-              .filter((c) => SOURCE_CODES.includes(c as (typeof SOURCE_CODES)[number])),
-          )
-        : null;
+      const codes = q.src ? new Set(q.src.split(',').filter((c) => SOURCE_CODES.has(c))) : null;
       const minRank = q.lvl ? LEVEL_RANK[q.lvl] : 0;
 
       const matches = (e: DecodedEntry): boolean => {

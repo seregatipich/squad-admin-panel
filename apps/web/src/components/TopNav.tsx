@@ -27,28 +27,58 @@ function visibleFor(item: NavItem, permissions: string[], economyEnabled: boolea
 }
 
 /**
+ * Quiet period before a report event refetches the count. Bulk-resolve emits
+ * one `report.updated` per report, so N resolved reports must cost one
+ * request per tab rather than N.
+ */
+const PENDING_REPORTS_DEBOUNCE_MS = 400;
+
+/**
  * Number of reports still awaiting moderation. Fetched once on mount and
- * refreshed whenever a `report.created`/`report.updated` live-bus event
- * arrives, so the badge tracks the queue without polling.
+ * refreshed after a burst of `report.created`/`report.updated` live-bus
+ * events settles, so the badge tracks the queue without polling. Each request
+ * aborts the one before it, so an older response can never overwrite a newer
+ * count.
  */
 function usePendingReportsCount(): number {
   const [count, setCount] = useState(0);
+  const requestRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(() => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     fetch('/api/v1/reports?status=pending&page=1&page_size=1', {
       credentials: 'include',
       cache: 'no-store',
+      signal: controller.signal,
     })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { total?: number } | null) => setCount(data?.total ?? 0))
+      .then((data: { total?: number } | null) => {
+        if (controller.signal.aborted) return;
+        setCount(data?.total ?? 0);
+      })
       .catch(() => {});
   }, []);
 
+  const scheduleRefresh = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      refresh();
+    }, PENDING_REPORTS_DEBOUNCE_MS);
+  }, [refresh]);
+
   useEffect(() => {
     refresh();
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      requestRef.current?.abort();
+    };
   }, [refresh]);
-  useLiveSubscription('report.created', refresh);
-  useLiveSubscription('report.updated', refresh);
+  useLiveSubscription('report.created', scheduleRefresh);
+  useLiveSubscription('report.updated', scheduleRefresh);
 
   return count;
 }
