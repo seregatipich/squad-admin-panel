@@ -230,3 +230,45 @@ describe('ClanDetailPage — race between loadMatches() calls (#519)', () => {
     expect(screen.getByText('FilteredMap')).toBeInTheDocument();
   });
 });
+
+describe('ClanDetailPage — match server filter (#523)', () => {
+  it('offers every known server even when loaded matches come from one server', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === `/api/v1/clans/${CLAN.id}`) return json(CLAN);
+      if (url === `/api/v1/clans/${CLAN.id}/online`) return json({ clan_id: CLAN.id, servers: [] });
+      if (url === '/api/v1/servers') {
+        return json({
+          items: [
+            { id: 'srv-1', display_name: 'Сервер 1' },
+            { id: 'srv-2', display_name: 'Сервер 2' },
+          ],
+        });
+      }
+      if (url === '/api/v1/me') return json({ can_manage_clans: false });
+      if (url.startsWith(`/api/v1/clans/${CLAN.id}/matches`)) {
+        return json({
+          clan_id: CLAN.id,
+          items: [matchItem({ id: 'match-1', server_id: 'srv-1', map: 'InitialMap' })],
+          next_cursor: 'MORE',
+          limit: 20,
+        });
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const params = Promise.resolve({ id: CLAN.id });
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ClanDetailPage params={params} />
+        </Suspense>,
+      );
+    });
+
+    await screen.findByText('InitialMap');
+    const select = await screen.findByRole('combobox', { name: /сервер матча/i });
+    expect(select).toHaveTextContent('Сервер 2');
+  });
+});

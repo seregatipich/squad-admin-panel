@@ -43,10 +43,6 @@ export function peakScale(peakByHour: Array<{ peak_players: number }>): number {
   return peakByHour.reduce((max, entry) => Math.max(max, entry.peak_players), 0) || 1;
 }
 
-export function winnerLabelRu(key: OutcomeKey): string {
-  return OUTCOME_LABELS[key];
-}
-
 export interface OutcomeSegment {
   key: OutcomeKey;
   label: string;

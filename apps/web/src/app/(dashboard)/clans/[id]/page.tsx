@@ -180,9 +180,21 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [expandedMatchId, setExpandedMatchId] = useState<string | null>(null);
-  const [serverOptions, setServerOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [matchServerOptions, setMatchServerOptions] = useState<Array<{ id: string; name: string }>>(
+    [],
+  );
   const [allServers, setAllServers] = useState<ServerOption[]>([]);
   const [canManageClans, setCanManageClans] = useState(false);
+  // The filter lists every known server (not only those seen on the loaded
+  // history pages, finding #523); servers found in matches but no longer
+  // listed are appended so their matches stay filterable.
+  const serverOptions = useMemo(() => {
+    const options = new Map(allServers.map((server) => [server.id, server.display_name]));
+    for (const match of matchServerOptions) {
+      if (!options.has(match.id)) options.set(match.id, match.name);
+    }
+    return Array.from(options, ([id, name]) => ({ id, name }));
+  }, [allServers, matchServerOptions]);
   // Tracks the most recently started loadMatches() request; a response is
   // applied only if it is still current, so a slower "Показать ещё" request
   // can never overwrite a fresher server-filter change (see finding #519).
@@ -243,7 +255,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         setMatchRows((prev) => (replace ? body.items : [...prev, ...body.items]));
         setMatchCursor(body.next_cursor);
         setMatchesLoaded(true);
-        setServerOptions((prev) => {
+        setMatchServerOptions((prev) => {
           const seen = new Map(prev.map((option) => [option.id, option]));
           for (const match of body.items) {
             if (!seen.has(match.server_id)) {
