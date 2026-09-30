@@ -7,7 +7,7 @@ import {
 } from '@squad/shared-config/banned-names';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   type BannedNameRule,
   type BannedNameRuleFormState,
@@ -86,7 +86,10 @@ export default function BannedNamesPage() {
   const searchParams = useSearchParams();
   const highlightedRuleId = searchParams.get('rule');
 
+  const latestLoadRef = useRef(0);
+
   const load = useCallback(async () => {
+    const requestId = ++latestLoadRef.current;
     const params = new URLSearchParams();
     if (search.trim()) params.set('search', search.trim());
     if (matchTypeFilter) params.set('match_type', matchTypeFilter);
@@ -100,13 +103,17 @@ export default function BannedNamesPage() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as ListResponse;
+      // Ответ на устаревший поиск или страницу не должен затирать свежий.
+      if (requestId !== latestLoadRef.current) return;
       setRows(body.items);
       setTotal(body.total);
       setCanMutate(body.can_mutate);
+      setMsg((current) => (current?.kind === 'err' ? null : current));
     } catch (e) {
+      if (requestId !== latestLoadRef.current) return;
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
-      setLoading(false);
+      if (requestId === latestLoadRef.current) setLoading(false);
     }
   }, [search, matchTypeFilter, activeFilter, page]);
 
