@@ -193,3 +193,41 @@ describeIfDb('accruePlayerKitTime', () => {
     expect(rows[0]?.seconds).toBe(90);
   });
 });
+
+describeIfDb('accruePlayerKitTime query volume', () => {
+  it('resolves identities and writes kit time in a constant number of queries', async () => {
+    const queries: string[] = [];
+    const countingSql = postgres(DATABASE_URL as string, {
+      max: 1,
+      onnotice: () => undefined,
+      debug: (_connection, query) => {
+        queries.push(query);
+      },
+    });
+    const countingDb = drizzle(countingSql, { schema }) as unknown as DatabaseClient;
+    try {
+      const roster = Array.from({ length: 20 }, (_, index) =>
+        makePlayer({ name: `Bulk${index}`, role: 'USA_Medic_01' }),
+      );
+      await upsertPlayers(db, roster);
+
+      const poll1 = new Date('2026-01-01T00:00:00.000Z');
+      queries.length = 0;
+      await accruePlayerKitTime(
+        countingDb,
+        roster,
+        poll1,
+        new Date(poll1.getTime() + 30_000),
+        serverId,
+      );
+
+      expect(queries.length).toBeLessThanOrEqual(3);
+      for (const player of roster) {
+        const rows = await kitTimeRows(await playerIdByEos(player.eos_id));
+        expect(rows[0]?.seconds).toBe(30);
+      }
+    } finally {
+      await countingSql.end();
+    }
+  });
+});
