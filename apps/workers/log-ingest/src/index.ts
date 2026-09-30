@@ -190,6 +190,8 @@ async function main() {
             chat,
             onArchiveError: (err) =>
               log.warn({ err: err.message, serverId }, 'chat archive insert failed'),
+            onPublishError: (err) =>
+              log.warn({ err: err.message, serverId }, 'chat live publish failed'),
             onFlagError: (err) =>
               log.warn({ err: err.message, serverId }, 'chat flag detection failed'),
             playerIds,
