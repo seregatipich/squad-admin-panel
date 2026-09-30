@@ -30,6 +30,24 @@ export const RCON_OPERATOR_COMMANDS = [
 export const rconOperatorCommandNameSchema = z.enum(RCON_OPERATOR_COMMANDS);
 export type RconOperatorCommandName = z.infer<typeof rconOperatorCommandNameSchema>;
 
+/**
+ * Exact argument count worker-rcon's `buildOperatorCommand`
+ * (apps/workers/rcon/src/commands.ts) demands for each operator command; any
+ * other count is rejected there. Producers that persist a command for later
+ * dispatch (automation rules) validate against this at save time so a rule can
+ * never enqueue a command the worker is bound to refuse.
+ */
+export const RCON_OPERATOR_COMMAND_ARG_COUNTS: Readonly<Record<RconOperatorCommandName, number>> = {
+  AdminBan: 3,
+  AdminBroadcast: 1,
+  AdminChangeLayer: 1,
+  AdminEndMatch: 0,
+  AdminKick: 2,
+  AdminReloadServerConfig: 0,
+  AdminSetNextLayer: 1,
+  AdminWarn: 2,
+};
+
 export const rconCommandRequestSchema = z
   .object({
     request_id: z.string().min(1).max(128),

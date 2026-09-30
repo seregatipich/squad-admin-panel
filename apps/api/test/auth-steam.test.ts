@@ -13,7 +13,7 @@ import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integrati
 
 const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
 
-async function buildApp(opts: { dbUrl: string }) {
+async function buildApp(opts: { dbUrl: string; steamApiKey?: string }) {
   const app = Fastify({ logger: false });
   const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test type coercion
@@ -24,7 +24,7 @@ async function buildApp(opts: { dbUrl: string }) {
   app.decorate('bridge', makeFakeBridge());
   app.decorate('config', {
     PANEL_PUBLIC_URL: 'https://panel.test',
-    STEAM_API_KEY: '',
+    STEAM_API_KEY: opts.steamApiKey ?? '',
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     // biome-ignore lint/suspicious/noExplicitAny: partial config for isolated route test
@@ -193,6 +193,61 @@ describe('GET /api/v1/auth/steam/callback', () => {
     const flat = Array.isArray(cookieHeader) ? cookieHeader.join('\n') : cookieHeader;
     expect(flat).toMatch(/__Host-sid=s_/);
   });
+
+  // #53 (#1188): profile enrichment is best-effort, yet a hung Steam Web API
+  // used to hold the login callback for undici's 300 s default.
+  it('a hung Steam profile lookup does not block login past its short deadline', async () => {
+    await h.cleanup();
+    h = await buildApp({ dbUrl: schemaInfo.url, steamApiKey: 'test-key' });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).includes('api.steampowered.com')) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        });
+      }
+      return new Response('is_valid:true\n', { status: 200 });
+    });
+    const NONCE = 'hung-steam-nonce';
+    await h.redis.set(
+      `steam-nonce:${NONCE}`,
+      JSON.stringify({ ts: Date.now(), ip: null }),
+      'EX',
+      300,
+    );
+    const url = new URL(`https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`);
+    url.searchParams.set('openid.ns', 'http://specs.openid.net/auth/2.0');
+    url.searchParams.set('openid.mode', 'id_res');
+    url.searchParams.set(
+      'openid.claimed_id',
+      'https://steamcommunity.com/openid/id/76561198000000098',
+    );
+    url.searchParams.set(
+      'openid.identity',
+      'https://steamcommunity.com/openid/id/76561198000000098',
+    );
+    url.searchParams.set(
+      'openid.return_to',
+      `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+    );
+    url.searchParams.set('openid.response_nonce', '2026-04-25T12:00:00Zhung');
+    url.searchParams.set('openid.assoc_handle', 'x');
+    url.searchParams.set('openid.signed', 'signed,op_endpoint');
+    url.searchParams.set('openid.sig', 'sig');
+
+    const started = Date.now();
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${url.searchParams.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+
+    expect(Date.now() - started).toBeLessThan(8_000);
+    expect(res.statusCode).toBe(302);
+    const cookieHeader = (res.headers['set-cookie'] ?? '') as string | string[];
+    const flat = Array.isArray(cookieHeader) ? cookieHeader.join('\n') : cookieHeader;
+    expect(flat).toMatch(/__Host-sid=s_/);
+  }, 20_000);
 
   it('replay rejected: same response_nonce can only be used once', async () => {
     const NONCE_A = 'replay-a';

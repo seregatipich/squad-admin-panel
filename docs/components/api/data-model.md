@@ -19,17 +19,11 @@ Used by `POST /api/v1/servers`. Source: `packages/shared-types/src/api.ts`.
 | `query_port` | integer | yes | 1024–65535 |
 | `beacon_port` | integer | yes | 1024–65535 |
 | `rcon_port` | integer | yes | 1024–65535 |
-| `multihome` | string | no | default `"0.0.0.0"` |
+| `multihome` | string | no | IPv4/IPv6 literal, default `"0.0.0.0"` (#53) |
 | `max_players` | integer | no | 1–100, default 100 |
 | `tickrate` | integer | no | 10–120, default 50 |
-| `extra_args` | string | no | default `""` |
-| `launch_args_override` | string \| null | no | — |
-| `cpu_affinity` | string \| null | no | — |
-| `cpu_weight` | integer \| null | no | 1–10000 |
-| `niceness` | integer \| null | no | -20 to 19 |
-| `memory_high_mb` | integer \| null | no | positive |
-| `memory_max_mb` | integer \| null | no | positive |
-| `io_weight` | integer \| null | no | 1–10000 |
+| `extra_args` | `""` | no | only the unset value; anything else → 400 (#53) |
+| `launch_args_override`, `cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight` | `null` | no | only `null`; a value → 400 — the container is never started with these (#53) |
 
 ### `createRole` body
 

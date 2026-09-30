@@ -69,6 +69,20 @@ describe('evaluate — chat_keyword', () => {
     ).toHaveLength(0);
   });
 
+  // #53 (#1176): without the `u` flag `\W` treated every Cyrillic letter as a
+  // boundary, so a Russian 'word' rule degenerated into 'contains'.
+  it('word match respects Cyrillic word boundaries', () => {
+    const cfg = { keyword: 'бан', match: 'word' };
+    expect(evaluate(trigger({ chatMessage: 'обанана' }), [rule({ condition: cfg })])).toHaveLength(
+      0,
+    );
+    expect(evaluate(trigger({ chatMessage: 'банан' }), [rule({ condition: cfg })])).toHaveLength(0);
+    expect(
+      evaluate(trigger({ chatMessage: 'дайте БАН, пожалуйста' }), [rule({ condition: cfg })]),
+    ).toHaveLength(1);
+    expect(evaluate(trigger({ chatMessage: 'бан' }), [rule({ condition: cfg })])).toHaveLength(1);
+  });
+
   it('never matches a chat rule when the trigger carries no chat message', () => {
     const matches = evaluate(trigger({ playerCount: 50 }), [
       rule({ conditionType: 'chat_keyword' }),

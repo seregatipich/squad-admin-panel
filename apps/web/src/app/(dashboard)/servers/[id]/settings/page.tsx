@@ -34,13 +34,6 @@ interface Settings {
   max_players: number;
   tickrate: number;
   multihome: string | null;
-  extra_args: string;
-  cpu_affinity: string | null;
-  cpu_weight: number | null;
-  niceness: number | null;
-  memory_high_mb: number | null;
-  memory_max_mb: number | null;
-  io_weight: number | null;
   seed_live_at: number;
   seed_hysteresis: number;
   chat_commands_enabled: boolean;

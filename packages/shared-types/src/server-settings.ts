@@ -8,15 +8,18 @@ export const serverSettingsUpdate = z
     rcon_port: z.number().int().min(1024).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),
     tickrate: z.number().int().min(10).max(60).optional(),
-    // A bare IP literal only: the bridge puts it on the Squad command line (#52).
+    // Bare IP literal only: it becomes the RCONIP=/MULTIHOME= launch args (#53).
     multihome: z.string().ip().nullable().optional(),
-    extra_args: z.string().optional(),
-    cpu_affinity: z.string().nullable().optional(),
-    cpu_weight: z.number().int().min(1).max(10_000).nullable().optional(),
-    niceness: z.number().int().min(-20).max(19).nullable().optional(),
-    memory_high_mb: z.number().int().min(2048).nullable().optional(),
-    memory_max_mb: z.number().int().min(2048).nullable().optional(),
-    io_weight: z.number().int().min(10).max(1000).nullable().optional(),
+    // Launch-arg and cgroup knobs: the container is never started with them,
+    // so only their "unset" value is accepted (and ignored) — a real limit is
+    // rejected rather than stored as if it were in force (#53).
+    extra_args: z.literal('').optional(),
+    cpu_affinity: z.null().optional(),
+    cpu_weight: z.null().optional(),
+    niceness: z.null().optional(),
+    memory_high_mb: z.null().optional(),
+    memory_max_mb: z.null().optional(),
+    io_weight: z.null().optional(),
     // AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands and
     // the `!rules` reply text. `rules_text` is capped to worker-rcon's
     // single-message limit since it is answered with one `AdminWarn`.

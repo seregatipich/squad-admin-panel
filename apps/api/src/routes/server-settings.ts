@@ -78,10 +78,11 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
    * PUT /api/v1/servers/:id/settings
    * Partially updates the server_settings row.
    * - Port changes only allowed when server is stopped/ready/pending/failed.
-   * - `extra_args` and the resource-limit fields (cpu_affinity, cpu_weight,
-   *   niceness, memory_high_mb, memory_max_mb, io_weight) are stored and
-   *   returned only: no `container_run` call passes them, so they have no
-   *   effect on the running server.
+   * - `multihome` must be a bare IP literal (it becomes a launch argument).
+   * - Launch-arg and cgroup knobs (extra_args, cpu_affinity, cpu_weight,
+   *   niceness, memory_high_mb, memory_max_mb, io_weight) are rejected with
+   *   400 unless unset (''/null, then ignored): the container is never started
+   *   with them (#53). The stored columns are still echoed back read-only.
    * - New ports must not conflict with other active servers' ports.
    * - Same-server ports (across all four port fields) must all be distinct.
    * - If ports change, the new UFW rules are added first (a failure rolls
@@ -189,13 +190,6 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if (body.max_players !== undefined) updateSet.maxPlayers = body.max_players;
       if (body.tickrate !== undefined) updateSet.tickrate = body.tickrate;
       if (body.multihome !== undefined) updateSet.multihome = body.multihome ?? null;
-      if (body.extra_args !== undefined) updateSet.extraArgs = body.extra_args;
-      if ('cpu_affinity' in body) updateSet.cpuAffinity = body.cpu_affinity ?? null;
-      if ('cpu_weight' in body) updateSet.cpuWeight = body.cpu_weight ?? null;
-      if ('niceness' in body) updateSet.niceness = body.niceness ?? null;
-      if ('memory_high_mb' in body) updateSet.memoryHighMb = body.memory_high_mb ?? null;
-      if ('memory_max_mb' in body) updateSet.memoryMaxMb = body.memory_max_mb ?? null;
-      if ('io_weight' in body) updateSet.ioWeight = body.io_weight ?? null;
       if (body.chat_commands_enabled !== undefined)
         updateSet.chatCommandsEnabled = body.chat_commands_enabled;
       if ('rules_text' in body) updateSet.rulesText = body.rules_text ?? null;

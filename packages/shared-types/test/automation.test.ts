@@ -66,4 +66,60 @@ describe('parseAutomationAction', () => {
       false,
     );
   });
+
+  // #53 (#1168): worker-rcon rejects `AdminKick <target> ''`, yet the rule was
+  // saved and each firing recorded as executed.
+  it.each([{}, { reason: '' }, { reason: '   ' }])('rejects a kick without a reason %j', (raw) => {
+    expect(parseAutomationAction('kick', raw).success).toBe(false);
+  });
+
+  // #53 (#1168): worker-rcon demands an exact argument count per command.
+  it.each([
+    ['AdminBroadcast', []],
+    ['AdminBroadcast', ['a', 'b']],
+    ['AdminEndMatch', ['now']],
+    ['AdminReloadServerConfig', ['x']],
+    ['AdminChangeLayer', []],
+    ['AdminSetNextLayer', ['a', 'b']],
+    ['AdminWarn', ['76561198000000001']],
+    ['AdminKick', ['76561198000000001']],
+    ['AdminBan', ['76561198000000001', '0']],
+    ['AdminBroadcast', ['   ']],
+  ])('rejects %s with args %j (wrong count or blank)', (command, args) => {
+    expect(parseAutomationAction('rcon_command', { command, args }).success).toBe(false);
+  });
+
+  it.each([
+    ['AdminBroadcast', ['hello']],
+    ['AdminEndMatch', []],
+    ['AdminReloadServerConfig', []],
+    ['AdminChangeLayer', ['Yehorivka RAAS v11']],
+    ['AdminSetNextLayer', ['Yehorivka RAAS v11']],
+    ['AdminWarn', ['76561198000000001', 'stop']],
+    ['AdminKick', ['76561198000000001', 'afk']],
+    ['AdminBan', ['76561198000000001', '0', 'cheating']],
+  ])('accepts %s with exactly its argument count', (command, args) => {
+    expect(parseAutomationAction('rcon_command', { command, args }).success).toBe(true);
+  });
+});
+
+describe('time_of_day timezone (#53 #1177)', () => {
+  it('accepts IANA zones and UTC', () => {
+    for (const timezone of ['UTC', 'Europe/Moscow', 'America/New_York']) {
+      expect(
+        parseAutomationCondition('time_of_day', { startMinute: 0, endMinute: 60, timezone })
+          .success,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects an unknown timezone instead of saving a rule that never fires', () => {
+    const result = parseAutomationCondition('time_of_day', {
+      startMinute: 0,
+      endMinute: 60,
+      timezone: 'Europe/Moskow',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toBe('unknown IANA timezone');
+  });
 });

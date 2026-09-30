@@ -13,6 +13,32 @@ import (
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
 
+// #53: an injected multihome must be refused before `docker run` is invoked.
+func TestDockerRunRejectsNonIPMultihome(t *testing.T) {
+	for _, multihome := range []string{"0.0.0.0 -ExecCmds=quit", "localhost"} {
+		f := &Fake{Stdout: []byte("containerid\n")}
+		d := NewDocker(f)
+		_, err := d.Run(context.Background(), ContainerRunSpec{
+			ServerID:    "019dbb45-3556-751f-9124-d4cf0e6b0053",
+			Image:       "squad-server:latest",
+			GamePort:    7788,
+			QueryPort:   27166,
+			BeaconPort:  15001,
+			RCONPort:    21115,
+			Multihome:   multihome,
+			ConfigsHost: "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig",
+			SavedHost:   "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053",
+			DepotVolume: "squad-depot",
+		})
+		if !errors.Is(err, validate.ErrForbidden) {
+			t.Errorf("multihome %q: expected ErrForbidden, got %v", multihome, err)
+		}
+		if len(f.Calls) != 0 {
+			t.Errorf("multihome %q: expected no docker call, got %d", multihome, len(f.Calls))
+		}
+	}
+}
+
 func TestDockerRunComposesCommand(t *testing.T) {
 	f := &Fake{Stdout: []byte("containerid\n")}
 	d := NewDocker(f)
@@ -949,32 +975,5 @@ func TestBackupRestorePassesComposeTargetToRestoreScript(t *testing.T) {
 	}
 	if !strings.Contains(env, "PATH=") {
 		t.Errorf("expected restore env to keep the bridge environment (PATH), got:\n%s", env)
-	}
-}
-
-// Issue #52: multihome is interpolated into the Squad server's command line
-// (RCONIP=… / MULTIHOME=…), so a value with spaces could append launch flags.
-func TestDockerRunRejectsNonIPMultihome(t *testing.T) {
-	for _, bad := range []string{"0.0.0.0 -SomeFlag", "not-an-ip"} {
-		f := &Fake{Stdout: []byte("containerid\n")}
-		d := NewDocker(f)
-		_, err := d.Run(context.Background(), ContainerRunSpec{
-			ServerID:    "019dbb45-3556-751f-9124-d4cf0e6b0053",
-			Image:       "squad-server:latest",
-			GamePort:    7788,
-			QueryPort:   27166,
-			BeaconPort:  15001,
-			RCONPort:    21115,
-			Multihome:   bad,
-			ConfigsHost: "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig",
-			SavedHost:   "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053",
-			DepotVolume: "squad-depot",
-		})
-		if !errors.Is(err, validate.ErrInvalidArgs) {
-			t.Errorf("multihome %q: expected ErrInvalidArgs, got %v", bad, err)
-		}
-		if len(f.Calls) != 0 {
-			t.Errorf("multihome %q: docker must not be invoked, got %d calls", bad, len(f.Calls))
-		}
 	}
 }

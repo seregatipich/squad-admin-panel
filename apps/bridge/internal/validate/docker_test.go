@@ -214,6 +214,9 @@ func TestMultihome(t *testing.T) {
 		"256.0.0.1",
 		"10.0.0.5/24",
 		" 10.0.0.5",
+		"0.0.0.0\"",
+		"0.0.0.0\x00",
+		"0.0.0.0 -ExecCmds=quit",
 	} {
 		err := Multihome(bad)
 		if err == nil {

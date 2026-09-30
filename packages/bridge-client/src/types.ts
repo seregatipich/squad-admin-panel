@@ -137,7 +137,6 @@ export interface ContainerRunParams {
   max_players?: number;
   tickrate?: number;
   multihome?: string | null;
-  extra_args?: string[];
   configs_host: string;
   saved_host: string;
   depot_volume: string;

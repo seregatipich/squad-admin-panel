@@ -200,16 +200,12 @@ Input schema for `POST /api/v1/servers`. All required unless noted:
 | `beacon_port` | int, 1024–65535 |
 | `rcon_port` | int, 1024–65535 |
 | `multihome` | IPv4/IPv6 literal (`z.string().ip()`), default `'0.0.0.0'` — the bridge puts it on the Squad command line |
+
+| `multihome` | IPv4/IPv6 literal (`z.string().ip()`), default `'0.0.0.0'` |
 | `max_players` | int, 1–100, default 100 |
 | `tickrate` | int, 10–120, default 50 |
-| `extra_args` | string, default `''` |
-| `launch_args_override` | string, nullable, optional |
-| `cpu_affinity` | string, nullable, optional |
-| `cpu_weight` | int, 1–10000, nullable, optional |
-| `niceness` | int, −20–19, nullable, optional |
-| `memory_high_mb` | positive int, nullable, optional |
-| `memory_max_mb` | positive int, nullable, optional |
-| `io_weight` | int, 1–10000, nullable, optional |
+| `extra_args` | literal `''`, optional — any other value is rejected (#53) |
+| `launch_args_override`, `cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight` | `null`, optional — a value is rejected: the container is never started with these (#53) |
 
 ### `serverRow`
 

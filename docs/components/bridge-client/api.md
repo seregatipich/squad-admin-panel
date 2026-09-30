@@ -156,8 +156,7 @@ Spawns a new Squad server container. Timeout: 60 s.
 | `rcon_port` | `number` | |
 | `max_players` | `number` | optional, default 100 |
 | `tickrate` | `number` | optional, default 50 |
-| `multihome` | `string \| null` | optional bind address |
-| `extra_args` | `string[]` | optional additional launch args |
+| `multihome` | `string \| null` | optional bind address; the bridge rejects anything but an IP literal (#53) |
 | `configs_host` | `string` | host path for ServerConfig bind-mount |
 | `saved_host` | `string` | host path for Saved bind-mount |
 | `depot_volume` | `string` | named volume for the SteamCMD depot |

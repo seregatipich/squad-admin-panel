@@ -270,7 +270,6 @@ Used exclusively by the soft-delete orchestrator after backing up `.cfg` files t
   "max_players":  100,
   "tickrate":     50,
   "multihome":    "0.0.0.0",
-  "extra_args":   [],
   "configs_host": "/var/lib/squad-panel/configs/{uuid}",
   "saved_host":   "/var/lib/squad-panel/saved/{uuid}",
   "depot_volume": "squad-depot",

@@ -13,6 +13,11 @@ const NONCE_TTL_SECONDS = 300;
 const NONCE_REDIS_PREFIX = 'steam-nonce:';
 const RESPONSE_NONCE_REDIS_PREFIX = 'steam-response-nonce:';
 const RESPONSE_NONCE_TTL_SECONDS = 3600;
+/**
+ * Profile enrichment on login is best-effort (a stub name is used on failure),
+ * so a slow Steam Web API may delay the sign-in by at most this long (#53).
+ */
+const STEAM_LOGIN_PROFILE_TIMEOUT_MS = 3_000;
 
 /**
  * Pages a Steam login may send the player back to (`?return_to=` on the login
@@ -117,6 +122,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         const profile = await fetchSteamProfile(steamId64, {
           apiKey: app.config.STEAM_API_KEY ?? '',
           redis: app.redis,
+          timeoutMs: STEAM_LOGIN_PROFILE_TIMEOUT_MS,
         });
         if (profile?.persona) canonicalName = profile.persona;
         if (profile?.avatarUrl) avatarUrl = profile.avatarUrl;

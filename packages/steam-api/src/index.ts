@@ -26,11 +26,20 @@ export interface SteamApiDeps {
   apiKey: string;
   redis: Pick<Redis, 'get' | 'set'>;
   fetch?: typeof fetch;
+  /**
+   * Deadline for each Steam Web API request, response body included
+   * (default {@link STEAM_REQUEST_TIMEOUT_MS}). On expiry the call rejects with
+   * a `TimeoutError` `DOMException` instead of waiting out undici's 300 s
+   * default against a hung api.steampowered.com.
+   */
+  timeoutMs?: number;
 }
 
 export const STEAM_BATCH_SIZE = 100;
 export const STEAM_BANS_BATCH_SIZE = STEAM_BATCH_SIZE;
 export const SQUAD_APP_ID = 393380;
+/** Default per-request deadline for Steam Web API calls. */
+export const STEAM_REQUEST_TIMEOUT_MS = 10_000;
 
 const PROFILE_CACHE_PREFIX = 'steam-profile:';
 const PROFILE_CACHE_TTL_SECONDS = 60 * 60;
@@ -43,6 +52,17 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
   return chunks;
+}
+
+/**
+ * Issues one Steam Web API GET bounded by `deps.timeoutMs`. The abort signal
+ * also covers reading the body, so a stalled `response.json()` is cut too.
+ */
+function steamGet(url: URL, deps: SteamApiDeps): Promise<Response> {
+  const request = deps.fetch ?? fetch;
+  return request(url, {
+    signal: AbortSignal.timeout(deps.timeoutMs ?? STEAM_REQUEST_TIMEOUT_MS),
+  });
 }
 
 function uniqueIds(steamIds: readonly bigint[]): string[] {
@@ -83,12 +103,11 @@ export async function fetchSteamProfiles(
     cold.push(id);
   }
 
-  const request = deps.fetch ?? fetch;
   for (const batch of chunk(cold, STEAM_BATCH_SIZE)) {
     const url = new URL('https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/');
     url.searchParams.set('key', deps.apiKey);
     url.searchParams.set('steamids', batch.join(','));
-    const response = await request(url);
+    const response = await steamGet(url, deps);
     if (!response.ok) return null;
     const payload = (await response.json()) as {
       response?: {
@@ -175,12 +194,11 @@ export async function fetchSteamBans(
     cold.push(id);
   }
 
-  const request = deps.fetch ?? fetch;
   for (const batch of chunk(cold, STEAM_BANS_BATCH_SIZE)) {
     const url = new URL('https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/');
     url.searchParams.set('key', deps.apiKey);
     url.searchParams.set('steamids', batch.join(','));
-    const response = await request(url);
+    const response = await steamGet(url, deps);
     if (!response.ok) return null;
     const payload = (await response.json()) as { players?: RawBanEntry[] };
     for (const raw of payload.players ?? []) {
@@ -221,7 +239,7 @@ export async function fetchSteamOwnedGames(
   url.searchParams.set('include_played_free_games', 'true');
   url.searchParams.set('appids_filter[0]', String(SQUAD_APP_ID));
 
-  const response = await (deps.fetch ?? fetch)(url);
+  const response = await steamGet(url, deps);
   if (!response.ok) return null;
   const payload = (await response.json()) as {
     response?: { games?: Array<{ appid?: number; playtime_forever?: number }> };
