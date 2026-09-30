@@ -282,7 +282,7 @@ Streaming calls accept an `onStream` callback that receives `BridgeStreamFrame` 
 
 #### `containerLogsFollow(p: ContainerLogsParams, onStream): Promise<{ exit_code: number }>`
 
-Tails Docker logs for a running container in real-time. Timeout: `Infinity` — call `client.close()` to abort.
+Tails Docker logs for a running container in real-time. Timeout: `Infinity` — call `client.close()` to abort. The protocol has no per-call cancel: the bridge stops the follow (and its `docker logs -f`) only when the connection carrying it closes, so always run it on a dedicated client and close that client to stop it.
 
 ```ts
 const done = client.containerLogsFollow(

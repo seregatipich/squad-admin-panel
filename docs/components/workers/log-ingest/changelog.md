@@ -1,5 +1,11 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-28
+
+### Fixed
+
+- [#49](https://github.com/seregatipich/squad-admin-panel/issues/49): every container tail shared the worker's single `BridgeClient`, and stopping a tail only set a local flag. The `container_logs_follow` call (timeout `Infinity`) stayed in the client's pending map forever and the bridge kept its `docker logs -f` running, so each reconcile that stopped a tail leaked one more follow. `tailContainerLogs` now takes `openBridge`, opens a dedicated client per tail and closes it on stop and on stream end; the bridge cancels a follow when its connection closes. Regression test: `test/tail.test.ts` (`gives every tail its own connection and ends it on stop`).
+
 ## 2026-09-27
 
 ### Fixed

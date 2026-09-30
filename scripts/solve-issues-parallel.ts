@@ -82,6 +82,12 @@ export interface IssueResult {
   /** Final agent message (or error description). */
   summary: string;
   sessionId?: string;
+  /**
+   * What the runner did to stop a session it gave up on (timed out, errored,
+   * or whose stream ended without going idle), e.g. `interrupted, archived`.
+   * Absent when the session finished on its own and nothing had to be stopped.
+   */
+  remoteStop?: string;
 }
 
 /** Raised for invalid CLI input; main() prints usage and exits 2. */
@@ -526,11 +532,48 @@ export interface SessionContext {
   verbose: boolean;
 }
 
+/** Per-request budget for the best-effort calls that stop an abandoned session. */
+const STOP_REQUEST_OPTIONS = { timeout: 15_000, maxRetries: 1 };
+
+/**
+ * Stops a cloud session the runner no longer waits for. Aborting the local
+ * event stream does not stop the session: left alone it keeps spending compute
+ * and could still push a branch or comment on the issue after the report
+ * called it failed. Sends `user.interrupt`, then archives the session; each
+ * step is best-effort and never throws.
+ *
+ * @returns a short account of both steps for the report.
+ */
+async function stopSession(client: Anthropic, sessionId: string): Promise<string> {
+  const describeFailure = (error: unknown) =>
+    error instanceof Error ? error.message : String(error);
+  const steps: string[] = [];
+  try {
+    await client.beta.sessions.events.send(
+      sessionId,
+      { events: [{ type: 'user.interrupt' }] },
+      STOP_REQUEST_OPTIONS,
+    );
+    steps.push('interrupted');
+  } catch (error) {
+    steps.push(`interrupt failed (${describeFailure(error)})`);
+  }
+  try {
+    await client.beta.sessions.archive(sessionId, {}, STOP_REQUEST_OPTIONS);
+    steps.push('archived');
+  } catch (error) {
+    steps.push(`archive failed (${describeFailure(error)})`);
+  }
+  return steps.join(', ');
+}
+
 /**
  * Runs one Managed Agents session for one issue: mounts the repo on `dev`,
  * sends the task prompt, streams events until the session goes idle, and
  * returns the final agent message. Never throws — failures and timeouts are
- * folded into the returned {@link IssueResult}.
+ * folded into the returned {@link IssueResult}. A session that is given up on
+ * while it may still be running is interrupted and archived (see
+ * {@link stopSession}); the outcome is recorded in `remoteStop`.
  *
  * Only an idle status with `stop_reason: end_turn` counts as `solved`; an idle
  * session that exhausted its retries or waits on `requires_action` is
@@ -542,6 +585,24 @@ export interface SessionContext {
  * @returns The issue's outcome with the last agent message as its summary.
  */
 export async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise<IssueResult> {
+  const { outcome, sessionEnded } = await runSession(ctx, issue);
+  if (outcome.status === 'solved' || outcome.sessionId === undefined || sessionEnded) {
+    return outcome;
+  }
+  const remoteStop = await stopSession(ctx.client, outcome.sessionId);
+  console.log(`[#${issue.number}] session ${outcome.sessionId} stopped: ${remoteStop}`);
+  return { ...outcome, remoteStop };
+}
+
+/**
+ * The session loop behind {@link solveIssue}. `sessionEnded` is true when the
+ * service itself reported the session terminated, so there is nothing to stop.
+ */
+async function runSession(
+  ctx: SessionContext,
+  issue: IssueInfo,
+): Promise<{ outcome: IssueResult; sessionEnded: boolean }> {
+  const finish = (outcome: IssueResult, sessionEnded = false) => ({ outcome, sessionEnded });
   const tag = `[#${issue.number}]`;
   const mountPath = `/workspace/${ctx.repoSlug.split('/')[1]}`;
   let sessionId: string | undefined;
@@ -611,42 +672,45 @@ export async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise
               }
               break;
             }
-            return {
+            return finish({
               issue,
               status: 'failed',
               summary: `session error: ${JSON.stringify(event.error)}`,
               sessionId,
-            };
+            });
           case 'session.status_terminated':
-            return {
-              issue,
-              status: 'failed',
-              summary: lastMessage || 'session terminated before finishing',
-              sessionId,
-            };
+            return finish(
+              {
+                issue,
+                status: 'failed',
+                summary: lastMessage || 'session terminated before finishing',
+                sessionId,
+              },
+              true,
+            );
           case 'session.status_idle':
             // Only a naturally ended turn is a result. `retries_exhausted`
             // gave up and `requires_action` waits on a confirmation nobody
             // will send, so both are failures.
             if (event.stop_reason.type === 'end_turn') {
-              return { issue, status: 'solved', summary: lastMessage, sessionId };
+              return finish({ issue, status: 'solved', summary: lastMessage, sessionId });
             }
-            return {
+            return finish({
               issue,
               status: 'failed',
               summary: `session stopped (${event.stop_reason.type})${lastMessage ? `: ${lastMessage}` : ''}`,
               sessionId,
-            };
+            });
           default:
             break;
         }
       }
-      return {
+      return finish({
         issue,
         status: 'failed',
         summary: lastMessage || 'event stream ended without an idle status',
         sessionId,
-      };
+      });
     } finally {
       clearTimeout(deadline);
     }
@@ -654,19 +718,19 @@ export async function solveIssue(ctx: SessionContext, issue: IssueInfo): Promise
     const aborted =
       error instanceof Error && (error.name === 'AbortError' || /abort/i.test(error.message));
     if (aborted) {
-      return {
+      return finish({
         issue,
         status: 'timed-out',
         summary: `no idle status within ${ctx.timeoutMin} min — inspect session ${sessionId ?? '?'} in the Console`,
         sessionId,
-      };
+      });
     }
-    return {
+    return finish({
       issue,
       status: 'failed',
       summary: error instanceof Error ? error.message : String(error),
       sessionId,
-    };
+    });
   }
 }
 
@@ -677,6 +741,9 @@ function printReport(results: IssueResult[]): void {
     console.log(`\n${header}`);
     if (r.sessionId) {
       console.log(`  session: ${r.sessionId}`);
+    }
+    if (r.remoteStop) {
+      console.log(`  stopped: ${r.remoteStop}`);
     }
     if (r.status !== 'timed-out') {
       console.log(`  branch:  ${branchNameFor(r.issue)}`);

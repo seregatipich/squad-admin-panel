@@ -247,6 +247,13 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
       retryOnTransport: true,
     });
 
+  /**
+   * Follows a container's logs until the container stops. There is no timeout
+   * and no per-call cancel: the bridge stops the follow only when the
+   * connection carrying it closes. Run it on a dedicated client and `close()`
+   * that client to stop it; on a shared client an abandoned follow keeps its
+   * pending entry and its host-side `docker logs -f` forever.
+   */
   containerLogsFollow = (p: ContainerLogsParams, onStream: (frame: BridgeStreamFrame) => void) =>
     this.call<{ exit_code: number }>('container_logs_follow', p, {
       onStream,

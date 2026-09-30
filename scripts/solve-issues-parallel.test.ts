@@ -510,3 +510,116 @@ describe('solveIssue session outcome', () => {
     }
   });
 });
+
+type FakeEvent = Record<string, unknown> & { type: string };
+
+/**
+ * In-memory stand-in for the slice of the Managed Agents client solveIssue
+ * uses. `events` is what the session stream yields; `hang` keeps the stream
+ * open until the caller's abort signal fires, like a session that never goes
+ * idle. Every remote call is recorded in `calls`.
+ */
+function fakeClient(options: { events?: FakeEvent[]; hang?: boolean; failInterrupt?: boolean }): {
+  client: Anthropic;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const client = {
+    beta: {
+      sessions: {
+        create: async () => {
+          calls.push('create');
+          return { id: 'sesn_fake' };
+        },
+        archive: async (id: string) => {
+          calls.push(`archive:${id}`);
+          return { id };
+        },
+        events: {
+          stream: async (_id: string, _params: unknown, requestOptions: { signal: AbortSignal }) =>
+            (async function* () {
+              for (const event of options.events ?? []) yield event;
+              if (!options.hang) return;
+              await new Promise<void>((_resolve, reject) => {
+                requestOptions.signal.addEventListener('abort', () =>
+                  reject(Object.assign(new Error('Request was aborted.'), { name: 'AbortError' })),
+                );
+              });
+            })(),
+          send: async (id: string, body: { events: Array<{ type: string }> }) => {
+            const type = body.events[0]?.type ?? '?';
+            calls.push(`send:${type}:${id}`);
+            if (type === 'user.interrupt' && options.failInterrupt) {
+              throw new Error('interrupt rejected');
+            }
+            return {};
+          },
+        },
+      },
+    },
+  };
+  return { client: client as unknown as Anthropic, calls };
+}
+
+function sessionContext(client: Anthropic): SessionContext {
+  return {
+    client,
+    agentId: 'agent_fake',
+    environmentId: 'env_fake',
+    repoSlug: 'octo/repo',
+    githubToken: 'token',
+    model: 'claude-opus-4-8',
+    timeoutMin: 0.001,
+    verbose: false,
+  };
+}
+
+const solveTarget: IssueInfo = {
+  number: 7,
+  title: 'Fix it',
+  body: 'body',
+  url: 'https://github.com/octo/repo/issues/7',
+};
+
+describe('solveIssue remote cleanup', () => {
+  test('interrupts and archives a session that times out', async () => {
+    const { client, calls } = fakeClient({ hang: true });
+    const result = await solveIssue(sessionContext(client), solveTarget);
+    assert.equal(result.status, 'timed-out');
+    assert.deepEqual(calls.slice(2), ['send:user.interrupt:sesn_fake', 'archive:sesn_fake']);
+    assert.equal(result.remoteStop, 'interrupted, archived');
+  });
+
+  test('interrupts and archives a session that reports an error', async () => {
+    const { client, calls } = fakeClient({
+      events: [
+        {
+          type: 'session.error',
+          error: { type: 'unknown_error', message: 'boom', retry_status: { type: 'terminal' } },
+        },
+      ],
+    });
+    const result = await solveIssue(sessionContext(client), solveTarget);
+    assert.equal(result.status, 'failed');
+    assert.deepEqual(calls.slice(2), ['send:user.interrupt:sesn_fake', 'archive:sesn_fake']);
+  });
+
+  test('still archives and reports it when the interrupt is rejected', async () => {
+    const { client, calls } = fakeClient({ hang: true, failInterrupt: true });
+    const result = await solveIssue(sessionContext(client), solveTarget);
+    assert.equal(result.status, 'timed-out');
+    assert.ok(calls.includes('archive:sesn_fake'));
+    assert.equal(result.remoteStop, 'interrupt failed (interrupt rejected), archived');
+  });
+
+  test('leaves a session that went idle or terminated on its own untouched', async () => {
+    for (const type of ['session.status_idle', 'session.status_terminated']) {
+      const { client, calls } = fakeClient({
+        events: [{ type, stop_reason: { type: 'end_turn' } }],
+      });
+      const result = await solveIssue(sessionContext(client), solveTarget);
+      assert.equal(result.remoteStop, undefined, type);
+      assert.deepEqual(calls, ['create', 'send:user.message:sesn_fake'], type);
+    }
+  });
+});

@@ -63,10 +63,12 @@ async function main() {
   );
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
-  const bridge = new BridgeClient({
-    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
-    onLog: (m, meta) => log.info({ ...meta }, m),
-  });
+  const openBridge = () =>
+    new BridgeClient({
+      socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
+      onLog: (m, meta) => log.info({ ...meta }, m),
+    });
+  const bridge = openBridge();
 
   const diag = createDiag({ redis, log });
   // SSH log sources carry a private key encrypted with APP_ENCRYPTION_KEY.
@@ -350,7 +352,8 @@ async function main() {
       };
     }
     const abort = tailContainerLogs({
-      bridge,
+      // One connection per tail: closing it is how the bridge stops the follow.
+      openBridge,
       log,
       name: `squad-${serverId}`,
       onLine,
