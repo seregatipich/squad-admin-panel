@@ -162,6 +162,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [logSourceDirty, setLogSourceDirty] = useState(false);
   const [logSourceBusy, setLogSourceBusy] = useState(false);
   const [logSourceErr, setLogSourceErr] = useState<string | null>(null);
+  const [logSourceLoadFailed, setLogSourceLoadFailed] = useState(false);
   const [logSourceSaved, setLogSourceSaved] = useState(false);
 
   // `resetDraft` is false for a reload triggered by an unrelated save (license
@@ -217,7 +218,8 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           credentials: 'include',
           cache: 'no-store',
         });
-        if (!res.ok || cancelled) return;
+        if (cancelled) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as LogSourceView;
         if (cancelled) return;
         setLogSource(data);
@@ -230,8 +232,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             enabled: data.enabled ?? true,
           });
         }
-      } catch {
-        // best-effort: the section shows the empty form
+      } catch (e) {
+        if (cancelled) return;
+        // Пустая форма без блокировки перезаписала бы уже настроенный источник значениями по умолчанию.
+        setLogSourceLoadFailed(true);
+        setLogSourceErr(`Не удалось загрузить источник логов: ${(e as Error).message}`);
       }
     })();
     return () => {
@@ -523,6 +528,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const dirty = Object.keys(draft).length > 0;
   const external = serverInfo?.runtime === 'external';
   const connectionDirty = Object.keys(connectionDraft).length > 0;
+  const restartRequired = licenseRestartRequired(
+    license?.updated_at ?? null,
+    container?.running ?? false,
+    container?.started_at ?? null,
+  );
 
   return (
     <PageContainer width="reading">
@@ -801,7 +811,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             ) : null}
             <Button
               variant="primary"
-              disabled={!logSourceDirty && !!logSource?.configured}
+              disabled={logSourceLoadFailed || (!logSourceDirty && !!logSource?.configured)}
               loading={logSourceBusy}
               onClick={() => saveLogSource(false)}
             >
@@ -1031,22 +1041,14 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           <GroupedList
             title="Лицензия"
             footnote={
-              licenseRestartRequired(
-                license?.updated_at ?? null,
-                container?.running ?? false,
-                container?.started_at ?? null,
-              )
+              restartRequired
                 ? 'Лицензия сохранена и применится после перезапуска сервера.'
                 : license?.configured
                   ? 'Лицензия привязана и применена.'
                   : 'License.cfg записывается панелью; применяется после перезапуска сервера.'
             }
           >
-            {licenseRestartRequired(
-              license?.updated_at ?? null,
-              container?.running ?? false,
-              container?.started_at ?? null,
-            ) ? (
+            {restartRequired ? (
               <GroupedRow
                 label="Нужен перезапуск"
                 description="Лицензия сохранена и применится после перезапуска сервера"

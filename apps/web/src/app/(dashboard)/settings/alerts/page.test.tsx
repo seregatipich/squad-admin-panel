@@ -181,6 +181,23 @@ describe('AlertsPage', () => {
   );
 
   it(
+    'shows a system rule as immutable: no active switch and no delete button',
+    async () => {
+      mockFetch({
+        rules: [{ ...RULE, id: 'rule-sys', name: 'Истечение VIP', type: 'role_expiring' }],
+      });
+      render(<AlertsPage />);
+
+      expect(
+        await screen.findByRole('switch', { name: 'Включить правило Истечение VIP' }),
+      ).toBeDisabled();
+      expect(screen.getByText('Системное')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Удалить правило Истечение VIP' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'refuses to create a rule without a name',
     async () => {
       const { calls } = mockFetch();

@@ -173,4 +173,51 @@ describe('ServersPage — внешний сервер', () => {
     expect(screen.getAllByRole('button', { name: 'Пуск' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Открыть' })).toHaveLength(2);
   });
+
+  it('ошибка действия показывается отдельной полосой и переживает опрос списка', async () => {
+    const items = [makeServer({ id: 'srv-1', display_name: 'EU Main', tags: [] })];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'busy', message: 'Сервер занят' }), {
+              status: 409,
+            }),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ items, total: 1 }), { status: 200 }));
+      }),
+    );
+    await renderPage();
+    await screen.findByText('EU Main');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Стоп' }));
+    });
+    expect(
+      await screen.findByText('Не удалось выполнить «Стоп»: Сервер занят'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Не удалось получить список серверов')).not.toBeInTheDocument();
+  });
+
+  it('сетевой сбой действия не остаётся необработанным и показывает сообщение', async () => {
+    const items = [makeServer({ id: 'srv-1', display_name: 'EU Main', tags: [] })];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return Promise.reject(new Error('network down'));
+        return Promise.resolve(new Response(JSON.stringify({ items, total: 1 }), { status: 200 }));
+      }),
+    );
+    await renderPage();
+    await screen.findByText('EU Main');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Стоп' }));
+    });
+    expect(
+      await screen.findByText('Не удалось выполнить «Стоп»: network down'),
+    ).toBeInTheDocument();
+  });
 });

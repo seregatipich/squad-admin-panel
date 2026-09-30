@@ -16,18 +16,17 @@ const RULE = {
   created_at: '2026-07-20T10:00:00.000Z',
 };
 
-function mockFetch(opts: { permissions?: string[]; reindexStatus?: number } = {}) {
-  const permissions = opts.permissions ?? ['role:edit'];
+function mockFetch(opts: { canMutate?: boolean; reindexStatus?: number } = {}) {
+  const canMutate = opts.canMutate ?? true;
   const reindexStatus = opts.reindexStatus ?? 200;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     calls.push({ url, init });
-    if (url.endsWith('/api/v1/me')) {
-      return Promise.resolve(new Response(JSON.stringify({ permissions }), { status: 200 }));
-    }
     if (url.endsWith('/api/v1/settings/chat-flag-rules')) {
-      return Promise.resolve(new Response(JSON.stringify({ items: [RULE] }), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [RULE], can_mutate: canMutate }), { status: 200 }),
+      );
     }
     if (url.endsWith('/api/v1/settings/chat-flag-rules/reindex') && init?.method === 'POST') {
       const body =
@@ -107,9 +106,9 @@ describe('ChatFlagsPage', () => {
   );
 
   it(
-    'hides mutating controls without role:edit',
+    'hides mutating controls when the API reports can_mutate=false',
     async () => {
-      const { fn } = mockFetch({ permissions: [] });
+      const { fn } = mockFetch({ canMutate: false });
       vi.stubGlobal('fetch', fn);
       render(<ChatFlagsPage />);
       await screen.findByText('мудак');

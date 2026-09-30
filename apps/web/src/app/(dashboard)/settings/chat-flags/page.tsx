@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -37,10 +37,6 @@ import {
   summarizeReindex,
 } from '@/lib/chatFlags';
 
-interface Me {
-  permissions: string[];
-}
-
 interface DraftForm {
   pattern: string;
   patternType: ChatFlagPatternType;
@@ -57,7 +53,7 @@ const EMPTY_DRAFT: DraftForm = {
 
 export default function ChatFlagsPage() {
   const [rules, setRules] = useState<ChatFlagRule[]>([]);
-  const [me, setMe] = useState<Me | null>(null);
+  const [canEdit, setCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -67,35 +63,29 @@ export default function ChatFlagsPage() {
   const [pendingDelete, setPendingDelete] = useState<ChatFlagRule | null>(null);
 
   const patternId = useId();
-  const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
 
-  async function loadRules() {
+  const loadRules = useCallback(async () => {
     const res = await fetch('/api/v1/settings/chat-flag-rules', {
       credentials: 'include',
       cache: 'no-store',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setRules((await res.json()).items as ChatFlagRule[]);
-  }
+    const body = await res.json();
+    setRules(body.items as ChatFlagRule[]);
+    setCanEdit(Boolean(body.can_mutate));
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [meRes, rulesRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/settings/chat-flag-rules', { credentials: 'include', cache: 'no-store' }),
-      ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!rulesRes.ok) throw new Error(`HTTP ${rulesRes.status}`);
-      setMe((await meRes.json()) as Me);
-      setRules((await rulesRes.json()).items as ChatFlagRule[]);
+      await loadRules();
       setMsg(null);
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadRules]);
 
   useEffect(() => {
     void loadAll();

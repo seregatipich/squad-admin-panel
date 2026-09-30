@@ -94,6 +94,15 @@ export default function NewServerWizard() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    try {
+      await createAndInstall();
+    } catch (err) {
+      setError(`Не удалось создать сервер: ${(err as Error).message}`);
+      setSubmitting(false);
+    }
+  }
+
+  async function createAndInstall() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = form;
@@ -157,7 +166,9 @@ export default function NewServerWizard() {
           ws.close();
           return;
         }
-        setLines((prev) => [...prev, frame as ProgressLine]);
+        if (frame.step && frame.message && frame.ts) {
+          setLines((prev) => [...prev, frame as ProgressLine]);
+        }
       } catch {
         // ignore bad frame
       }
@@ -178,6 +189,15 @@ export default function NewServerWizard() {
 
   async function submitExternal(e: React.FormEvent) {
     e.preventDefault();
+    try {
+      await connectExternal();
+    } catch (err) {
+      setError(`Не удалось подключить сервер: ${(err as Error).message}`);
+      setSubmitting(false);
+    }
+  }
+
+  async function connectExternal() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = external;

@@ -38,7 +38,7 @@ const PUBLICATION = {
   updated_at: null,
 };
 
-function mockFetch(opts: { canManage?: boolean } = {}) {
+function mockFetch(opts: { canManage?: boolean; discordUrl?: string | null } = {}) {
   const canManage = opts.canManage ?? true;
   const calls: { url: string; init?: RequestInit }[] = [];
   const fn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -48,7 +48,11 @@ function mockFetch(opts: { canManage?: boolean } = {}) {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.endsWith('/api/v1/ban-sources')) {
-      return Promise.resolve(new Response(JSON.stringify([SOURCE]), { status: 200 }));
+      return Promise.resolve(
+        new Response(JSON.stringify([{ ...SOURCE, discord_url: opts.discordUrl ?? null }]), {
+          status: 200,
+        }),
+      );
     }
     if (url.endsWith('/api/v1/me')) {
       return Promise.resolve(
@@ -71,6 +75,25 @@ afterEach(() => {
 });
 
 describe('BanSourcesPage', () => {
+  it(
+    'renders the community Discord link only for http(s) URLs',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ discordUrl: 'https://discord.gg/example' }).fn);
+      const first = render(<BanSourcesPage />);
+      expect(await screen.findByRole('link', { name: 'Discord сообщества' })).toHaveAttribute(
+        'href',
+        'https://discord.gg/example',
+      );
+      first.unmount();
+
+      vi.stubGlobal('fetch', mockFetch({ discordUrl: 'data:text/html,x' }).fn);
+      render(<BanSourcesPage />);
+      await screen.findByText('Ру-Баны');
+      expect(screen.queryByRole('link', { name: 'Discord сообщества' })).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it('is a valid React component', () => {
     expect(BanSourcesPage).toBeDefined();
     expect(typeof BanSourcesPage).toBe('function');

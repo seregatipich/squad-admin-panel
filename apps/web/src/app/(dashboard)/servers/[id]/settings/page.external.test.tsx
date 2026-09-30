@@ -51,7 +51,7 @@ function detail(runtime: 'external' | 'container') {
   };
 }
 
-function stubFetch(runtime: 'external' | 'container') {
+function stubFetch(runtime: 'external' | 'container', logSourceReadStatus = 200) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   vi.stubGlobal(
     'fetch',
@@ -67,6 +67,9 @@ function stubFetch(runtime: 'external' | 'container') {
         return new Response(JSON.stringify({ error: 'external_server' }), { status: 409 });
       }
       if (url === '/api/v1/servers/srv-ext/log-source' && !init?.method) {
+        if (logSourceReadStatus !== 200) {
+          return new Response('boom', { status: logSourceReadStatus });
+        }
         return new Response(JSON.stringify({ configured: false, status: null }), { status: 200 });
       }
       if (url === '/api/v1/servers/srv-ext/log-source' && init?.method === 'PUT') {
@@ -192,6 +195,18 @@ describe('SettingsPage — внешний сервер', () => {
 });
 
 describe('SettingsPage — источник логов внешнего сервера', () => {
+  it('блокирует создание источника, если чтение источника логов не удалось', async () => {
+    stubFetch('external', 500);
+    await act(async () => {
+      render(<SettingsPage params={Promise.resolve({ id: 'srv-ext' })} />);
+    });
+    await screen.findByText('Источник логов (SSH)');
+    expect(
+      await screen.findByText('Не удалось загрузить источник логов: HTTP 500'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Создать источник и ключ' })).toBeDisabled();
+  });
+
   it('создаёт SSH-источник, отправляет PUT /log-source и показывает публичный ключ', async () => {
     const calls = stubFetch('external');
     await act(async () => {

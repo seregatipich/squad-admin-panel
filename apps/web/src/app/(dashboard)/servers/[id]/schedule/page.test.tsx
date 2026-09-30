@@ -234,7 +234,7 @@ describe('SchedulePage', () => {
     });
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('Дата и время'), {
+    fireEvent.change(screen.getByLabelText('Дата и время (UTC)'), {
       target: { value: '2026-08-01T05:00' },
     });
     expect(submit).toBeEnabled();
@@ -365,5 +365,48 @@ describe('SchedulePage', () => {
       expect(screen.queryByTestId('broadcast-interval-hint')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Создать задачу' })).toBeEnabled();
     });
+  });
+
+  it('interprets the one-off date as UTC, matching the field label', async () => {
+    const posts = mockBroadcastFetch();
+    await renderPage();
+    await screen.findByTestId('scheduled-tasks-list');
+
+    fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
+      target: { value: 'UTC restart' },
+    });
+    fireEvent.change(screen.getByLabelText('Дата и время (UTC)'), {
+      target: { value: '2026-08-01T18:00' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Создать задачу' }));
+    });
+    await screen.findByText('Задача создана');
+    expect(posts[0]?.body.scheduled_at).toBe('2026-08-01T18:00:00.000Z');
+  });
+
+  it('blocks a broadcast whose pending text would exceed the message length or rotation limits', async () => {
+    mockBroadcastFetch();
+    await renderPage();
+    await screen.findByTestId('scheduled-tasks-list');
+    await selectBroadcast();
+
+    fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
+      target: { value: 'Too many' },
+    });
+    fireEvent.change(screen.getByLabelText('Тип расписания'), { target: { value: 'cron' } });
+    fireEvent.change(screen.getByPlaceholderText('* * * * *'), { target: { value: '0 * * * *' } });
+
+    const input = screen.getByPlaceholderText('Текст оповещения');
+    expect(input).toHaveAttribute('maxLength', '300');
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.change(input, { target: { value: `msg ${i}` } });
+      fireEvent.click(screen.getByRole('button', { name: 'добавить в ротацию' }));
+    }
+    const submit = screen.getByRole('button', { name: 'Создать задачу' });
+    expect(submit).toBeEnabled();
+
+    fireEvent.change(input, { target: { value: 'eleventh' } });
+    expect(submit).toBeDisabled();
   });
 });

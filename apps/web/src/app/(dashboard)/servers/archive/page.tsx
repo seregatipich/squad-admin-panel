@@ -34,10 +34,6 @@ interface ArchiveResponse {
   total: number;
 }
 
-interface Me {
-  permissions: string[];
-}
-
 export default function ArchivePage() {
   const locale = useIntlLocale();
   const [data, setData] = useState<ArchiveResponse | null>(null);
@@ -51,14 +47,6 @@ export default function ArchivePage() {
    */
   const loadArchive = useCallback(async (isStale: () => boolean = () => false) => {
     try {
-      const m = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      if (m.ok) {
-        const meBody = (await m.json()) as Me;
-        if (!meBody.permissions.includes('server:view')) {
-          if (!isStale()) setForbidden(true);
-          return;
-        }
-      }
       const r = await fetch('/api/v1/servers/archive', {
         credentials: 'include',
         cache: 'no-store',

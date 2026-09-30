@@ -62,11 +62,6 @@ export function formatTimeOnServer(firstSeenAt: string | null, now: number): str
   return `${seconds}с`;
 }
 
-export function shortEos(eosId: string): string {
-  if (eosId.length <= 12) return eosId;
-  return `${eosId.slice(0, 8)}…${eosId.slice(-4)}`;
-}
-
 export function teamLabel(teamId: number | null): string {
   return teamId == null ? '—' : String(teamId);
 }

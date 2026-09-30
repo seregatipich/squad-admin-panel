@@ -924,6 +924,25 @@ describe('MSG-4 (#187): broadcast rotation, fan-out, and the role:edit gate', ()
     expect(res.json()).toEqual({ error: 'forbidden', required_permission: 'role:edit' });
   });
 
+  it('reports broadcast capability only for a caller with both chat and role:edit', async () => {
+    const ownerCookie = await login();
+    const serverId = await createServer(ownerCookie);
+    const capabilitiesFor = async (cookie: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+        headers: { cookie },
+      });
+      return res.json<{ capabilities: { broadcast: boolean } }>().capabilities.broadcast;
+    };
+
+    const chatOnly = await asRole({ canEditRoles: false, squadPermissions: ['chat'] });
+    expect(await capabilitiesFor(chatOnly)).toBe(false);
+
+    const chatAndRoleEdit = await asRole({ canEditRoles: true, squadPermissions: ['chat'] });
+    expect(await capabilitiesFor(chatAndRoleEdit)).toBe(true);
+  });
+
   it('keeps the existing chat 403 for a caller with role:edit but without chat', async () => {
     const ownerCookie = await login();
     const serverId = await createServer(ownerCookie);

@@ -93,6 +93,7 @@ export default function ServersPage() {
   const locale = useIntlLocale();
   const [data, setData] = useState<ServersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [actingId, setActingId] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -227,6 +228,7 @@ export default function ServersPage() {
 
   async function runAction(id: string, action: 'start' | 'stop' | 'restart') {
     setActingId(`${id}:${action}`);
+    setActionErr(null);
     try {
       const r = await fetch(`/api/v1/servers/${id}/${action}`, {
         method: 'POST',
@@ -234,10 +236,17 @@ export default function ServersPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
       });
-      if (!r.ok)
-        setErr(
-          `Не удалось выполнить «${ACTION_LABEL[action]}»: HTTP ${r.status} ${await r.text()}`,
+      if (!r.ok) {
+        const body = (await r.json().catch(() => null)) as {
+          message?: string;
+          error?: string;
+        } | null;
+        setActionErr(
+          `Не удалось выполнить «${ACTION_LABEL[action]}»: ${body?.message ?? body?.error ?? `HTTP ${r.status}`}`,
         );
+      }
+    } catch (e) {
+      setActionErr(`Не удалось выполнить «${ACTION_LABEL[action]}»: ${(e as Error).message}`);
     } finally {
       setActingId(null);
     }
@@ -288,6 +297,8 @@ export default function ServersPage() {
           </ButtonLink>
         }
       />
+
+      {actionErr && <InlineBanner tone="crit" title={actionErr} />}
 
       {err && (
         <InlineBanner
