@@ -25,8 +25,12 @@ describe('scripts/test-fullstack-down-v.sh (INFRA-8-P1)', () => {
     expect(script).toMatch(/docker compose --profile backup\)/);
     expect(script).toContain('down -v');
     // And wipes the bind-backed postgres/redis trees so the loss is real.
-    expect(script).toMatch(/rm -rf "\$\{DATA_DIR:\?\}\/postgres"/);
-    expect(script).toMatch(/rm -rf .*"\$\{DATA_DIR:\?\}\/redis"/);
+    // #49: the wipe deletes dot files too, fails on any error and asserts the
+    // bind is empty, so a silent no-op can never report a false PASS.
+    expect(script).toMatch(/find "\$dir" -mindepth 1 -delete \|\| fail/);
+    expect(script).toContain('is still not empty after the wipe');
+    expect(script).toMatch(/wipe_bind_dir "\$\{DATA_DIR:\?\}\/postgres"/);
+    expect(script).toMatch(/wipe_bind_dir "\$\{DATA_DIR:\?\}\/redis"/);
   });
 
   it('restores via scripts/restore.sh --apply', () => {
