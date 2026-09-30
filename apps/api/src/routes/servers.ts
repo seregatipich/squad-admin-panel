@@ -6,7 +6,7 @@ import {
   externalServerCreateInput,
   serverCreateInput,
 } from '@squad/shared-types';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
@@ -96,6 +96,9 @@ function safeJsonParse(raw: string, log: FastifyBaseLogger, context: Record<stri
     return null;
   }
 }
+
+/** Advisory-lock key serializing port checks with server creation in `POST /api/v1/servers`. */
+const SERVER_PORT_ALLOCATION_LOCK = 'server-port-allocation';
 
 const serverRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -193,18 +196,17 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       const id = uuidv7();
       const body = req.body;
 
-      // --- cross-server port collision check (mirrors PUT /:id/settings) ---
       const requestedPorts = [body.game_port, body.query_port, body.beacon_port, body.rcon_port];
-      if (await hasContainerPortConflict(app.db, requestedPorts)) {
-        reply.code(409);
-        return {
-          error: 'port_conflict',
-          message: 'One or more ports are already in use by another server.',
-        };
-      }
 
       try {
-        await app.db.transaction(async (tx) => {
+        const portConflict = await app.db.transaction(async (tx) => {
+          // Port uniqueness is not a DB constraint, so the check and the insert
+          // are serialized under one transaction-scoped lock: without it two
+          // concurrent creates both pass the check and bind the same ports.
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtext(${SERVER_PORT_ALLOCATION_LOCK}))`,
+          );
+          if (await hasContainerPortConflict(tx, requestedPorts)) return true;
           await tx.insert(servers).values({
             id,
             displayName: body.display_name,
@@ -243,7 +245,15 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             rconPort: body.rcon_port,
             rconPasswordEncrypted: serialize(blob),
           });
+          return false;
         });
+        if (portConflict) {
+          reply.code(409);
+          return {
+            error: 'port_conflict',
+            message: 'One or more ports are already in use by another server.',
+          };
+        }
       } catch (err) {
         if (isUniqueViolation(err)) {
           reply.code(409);

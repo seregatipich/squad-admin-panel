@@ -1,3 +1,4 @@
+import type { DatabaseClient } from '@squad/db';
 import {
   type EconomySettingsRow,
   economySettings,
@@ -8,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const SINGLETON_ID = 1;
@@ -135,8 +136,10 @@ function serialize(row: EconomySettingsRow | null): EconomySettingsView {
 const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function loadSettings(): Promise<EconomySettingsRow | null> {
-    const rows = await app.db
+  async function loadSettings(
+    db: DatabaseClient | AuditTransaction = app.db,
+  ): Promise<EconomySettingsRow | null> {
+    const rows = await db
       .select()
       .from(economySettings)
       .where(eq(economySettings.id, SINGLETON_ID))
@@ -224,26 +227,28 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
         updates.vipExpiryWarnInGame = body.vip_expiry_warn_in_game;
       }
 
-      await app.db
-        .insert(economySettings)
-        .values({ id: SINGLETON_ID, ...updates })
-        .onConflictDoUpdate({ target: economySettings.id, set: updates });
+      return app.db.transaction(async (tx) => {
+        await tx
+          .insert(economySettings)
+          .values({ id: SINGLETON_ID, ...updates })
+          .onConflictDoUpdate({ target: economySettings.id, set: updates });
 
-      const after = serialize(await loadSettings());
+        const after = serialize(await loadSettings(tx));
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'economy.settings.update',
-        targetType: 'economy_settings',
-        targetId: String(SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
+        await writeAuditEntry(tx, {
+          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
+          actorIp: req.ip ?? null,
+          actionType: 'economy.settings.update',
+          targetType: 'economy_settings',
+          targetId: String(SINGLETON_ID),
+          before,
+          after,
+          context: { requestId: req.id, method: req.method, url: req.url },
+          statusCode: 200,
+        });
+
+        return after;
       });
-
-      return after;
     },
   );
 };

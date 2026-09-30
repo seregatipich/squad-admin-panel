@@ -126,24 +126,35 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         AND v.started_at < ${toIso}::timestamptz
         AND (${serverId}::uuid IS NULL OR v.server_id = ${serverId}::uuid)`;
 
-      const summaryRows = (await app.db.execute(sql`
+      // The seven aggregates are independent reads of game_votes, so they run concurrently.
+      const [
+        summaryRows,
+        byServerRows,
+        byMapRows,
+        trendRows,
+        initiatorRows,
+        hourRows,
+        skipperRows,
+      ] = await Promise.all([
+        app.db.execute<{
+          total_votes: number;
+          passed: number;
+          failed: number;
+          cancelled: number;
+        }>(sql`
         SELECT count(*)::int AS total_votes,
                count(*) FILTER (WHERE v.result = 'passed')::int AS passed,
                count(*) FILTER (WHERE v.result = 'failed')::int AS failed,
                count(*) FILTER (WHERE v.result = 'cancelled')::int AS cancelled
         FROM game_votes v
         WHERE ${voteFilter}
-      `)) as unknown as Array<{
-        total_votes: number;
-        passed: number;
-        failed: number;
-        cancelled: number;
-      }>;
-      const summaryRow = summaryRows[0];
-      const totalVotes = Number(summaryRow?.total_votes ?? 0);
-      const passedVotes = Number(summaryRow?.passed ?? 0);
-
-      const byServerRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{
+          server_id: string;
+          server_name: string | null;
+          total: number;
+          passed: number;
+        }>(sql`
         SELECT v.server_id AS server_id,
                s.display_name AS server_name,
                count(*)::int AS total,
@@ -153,14 +164,8 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         WHERE ${voteFilter}
         GROUP BY v.server_id, s.display_name
         ORDER BY total DESC, server_name ASC
-      `)) as unknown as Array<{
-        server_id: string;
-        server_name: string | null;
-        total: number;
-        passed: number;
-      }>;
-
-      const byMapRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{ map: string; total: number; passed: number }>(sql`
         SELECT v.map_current AS map,
                count(*)::int AS total,
                count(*) FILTER (WHERE v.result = 'passed')::int AS passed
@@ -171,18 +176,21 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         GROUP BY v.map_current
         ORDER BY total DESC, map ASC
         LIMIT ${limit}
-      `)) as unknown as Array<{ map: string; total: number; passed: number }>;
-
-      const trendRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', v.started_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
                count(*)::int AS count
         FROM game_votes v
         WHERE ${voteFilter}
         GROUP BY 1
         ORDER BY 1
-      `)) as unknown as Array<{ day: string; count: number }>;
-
-      const initiatorRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{
+          player_id: string;
+          nickname: string | null;
+          initiated: number;
+          passed: number;
+        }>(sql`
         SELECT v.initiator_player_id AS player_id,
                p.canonical_name AS nickname,
                count(*)::int AS initiated,
@@ -193,22 +201,15 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         GROUP BY v.initiator_player_id, p.canonical_name
         ORDER BY initiated DESC, passed DESC, nickname ASC
         LIMIT ${limit}
-      `)) as unknown as Array<{
-        player_id: string;
-        nickname: string | null;
-        initiated: number;
-        passed: number;
-      }>;
-
-      const hourRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{ hour: number; count: number }>(sql`
         SELECT extract(hour FROM v.started_at AT TIME ZONE 'UTC')::int AS hour,
                count(*)::int AS count
         FROM game_votes v
         WHERE ${voteFilter}
         GROUP BY 1
-      `)) as unknown as Array<{ hour: number; count: number }>;
-
-      const skipperRows = (await app.db.execute(sql`
+      `),
+        app.db.execute<{ player_id: string; nickname: string | null; skip_count: number }>(sql`
         SELECT v.initiator_player_id AS player_id,
                p.canonical_name AS nickname,
                count(*)::int AS skip_count
@@ -220,11 +221,12 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         GROUP BY v.initiator_player_id, p.canonical_name
         HAVING count(*) >= ${SERIAL_SKIPPER_THRESHOLD}
         ORDER BY skip_count DESC, nickname ASC
-      `)) as unknown as Array<{
-        player_id: string;
-        nickname: string | null;
-        skip_count: number;
-      }>;
+      `),
+      ]);
+
+      const summaryRow = summaryRows[0];
+      const totalVotes = Number(summaryRow?.total_votes ?? 0);
+      const passedVotes = Number(summaryRow?.passed ?? 0);
 
       const hourMap = new Map<number, number>();
       for (const row of hourRows) hourMap.set(Number(row.hour), Number(row.count));

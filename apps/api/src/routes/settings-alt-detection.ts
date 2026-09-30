@@ -5,11 +5,11 @@ import {
   altIgnoredIps,
   players,
 } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
 import { isNarrowEnoughToIgnore, isValidIpOrCidr } from '../lib/ip-cidr.js';
 
 const SINGLETON_ID = 1;
@@ -105,7 +105,7 @@ function serializeSettings(row: AltDetectionSettingsRow | null): SettingsView {
 }
 
 async function auditMutation(
-  db: DatabaseClient,
+  db: DatabaseClient | AuditTransaction,
   req: FastifyRequest,
   input: { action: string; targetType: string; targetId: string; before: unknown; after: unknown },
 ): Promise<void> {
@@ -132,8 +132,10 @@ async function auditMutation(
 const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function loadSettings(): Promise<AltDetectionSettingsRow | null> {
-    const rows = await app.db
+  async function loadSettings(
+    db: DatabaseClient | AuditTransaction = app.db,
+  ): Promise<AltDetectionSettingsRow | null> {
+    const rows = await db
       .select()
       .from(altDetectionSettings)
       .where(eq(altDetectionSettings.id, SINGLETON_ID))
@@ -176,15 +178,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
       const actorId = req.user!.playerId;
-      const before = serializeSettings(await loadSettings());
       const body = req.body;
-
-      const nextMedium = body.medium_threshold ?? before.medium_threshold;
-      const nextHigh = body.high_threshold ?? before.high_threshold;
-      if (nextMedium > nextHigh) {
-        reply.code(400);
-        return { error: 'medium_threshold_above_high_threshold' };
-      }
 
       const updates: Partial<typeof altDetectionSettings.$inferInsert> = {
         updatedByPlayerId: actorId,
@@ -205,20 +199,38 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
       if (body.coplay_overlap_threshold_seconds !== undefined)
         updates.coplayOverlapThresholdSeconds = body.coplay_overlap_threshold_seconds;
 
-      await app.db
-        .insert(altDetectionSettings)
-        .values({ id: SINGLETON_ID, ...updates })
-        .onConflictDoUpdate({ target: altDetectionSettings.id, set: updates });
+      // The singleton row is locked so concurrent PUTs serialize: the
+      // medium <= high invariant is checked against the row they will overwrite
+      // and the audit row commits atomically with the change.
+      const result = await app.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT 1 FROM ${altDetectionSettings} WHERE ${altDetectionSettings.id} = ${SINGLETON_ID} FOR UPDATE`,
+        );
+        const before = serializeSettings(await loadSettings(tx));
+        const nextMedium = body.medium_threshold ?? before.medium_threshold;
+        const nextHigh = body.high_threshold ?? before.high_threshold;
+        if (nextMedium > nextHigh) return null;
 
-      const after = serializeSettings(await loadSettings());
-      await auditMutation(app.db, req, {
-        action: 'alt_detection.settings.update',
-        targetType: 'alt_detection_settings',
-        targetId: String(SINGLETON_ID),
-        before,
-        after,
+        await tx
+          .insert(altDetectionSettings)
+          .values({ id: SINGLETON_ID, ...updates })
+          .onConflictDoUpdate({ target: altDetectionSettings.id, set: updates });
+
+        const after = serializeSettings(await loadSettings(tx));
+        await auditMutation(tx, req, {
+          action: 'alt_detection.settings.update',
+          targetType: 'alt_detection_settings',
+          targetId: String(SINGLETON_ID),
+          before,
+          after,
+        });
+        return after;
       });
-      return after;
+      if (!result) {
+        reply.code(400);
+        return { error: 'medium_threshold_above_high_threshold' };
+      }
+      return result;
     },
   );
 
@@ -233,11 +245,22 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
       const actorId = req.user!.playerId;
       let inserted: typeof altIgnoredIps.$inferSelect | undefined;
       try {
-        const result = await app.db
-          .insert(altIgnoredIps)
-          .values({ cidr: req.body.cidr, note: req.body.note ?? null, createdBy: actorId })
-          .returning();
-        inserted = result[0];
+        inserted = await app.db.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(altIgnoredIps)
+            .values({ cidr: req.body.cidr, note: req.body.note ?? null, createdBy: actorId })
+            .returning();
+          if (row) {
+            await auditMutation(tx, req, {
+              action: 'alt_detection.ignored_ip.create',
+              targetType: 'alt_ignored_ip',
+              targetId: row.id,
+              before: null,
+              after: { id: row.id, cidr: row.cidr, note: row.note },
+            });
+          }
+          return row;
+        });
       } catch (err) {
         if (
           (err as { code?: string }).code === '23505' ||
@@ -253,13 +276,6 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'insert_failed' };
       }
       reply.code(201);
-      await auditMutation(app.db, req, {
-        action: 'alt_detection.ignored_ip.create',
-        targetType: 'alt_ignored_ip',
-        targetId: inserted.id,
-        before: null,
-        after: { id: inserted.id, cidr: inserted.cidr, note: inserted.note },
-      });
       return {
         id: inserted.id,
         cidr: inserted.cidr,
@@ -288,13 +304,15 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      await app.db.delete(altIgnoredIps).where(eq(altIgnoredIps.id, req.params.id));
-      await auditMutation(app.db, req, {
-        action: 'alt_detection.ignored_ip.delete',
-        targetType: 'alt_ignored_ip',
-        targetId: existing.id,
-        before: { id: existing.id, cidr: existing.cidr, note: existing.note },
-        after: null,
+      await app.db.transaction(async (tx) => {
+        await tx.delete(altIgnoredIps).where(eq(altIgnoredIps.id, req.params.id));
+        await auditMutation(tx, req, {
+          action: 'alt_detection.ignored_ip.delete',
+          targetType: 'alt_ignored_ip',
+          targetId: existing.id,
+          before: { id: existing.id, cidr: existing.cidr, note: existing.note },
+          after: null,
+        });
       });
       return { ok: true };
     },
