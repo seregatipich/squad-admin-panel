@@ -14,7 +14,7 @@ describe('audit-archiver – stub behavior', () => {
     const stop = startHeartbeat({
       redis: mockRedis,
       name: 'audit-archiver',
-      statusFn: () => 'idle (P1)',
+      statusFn: () => 'архивация не реализована (P1)',
     });
     await new Promise((r) => setTimeout(r, 10));
     stop();

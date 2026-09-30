@@ -251,6 +251,22 @@ describe('request bounds', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('does not wait out a Retry-After above the cap on a member lookup', async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '600' } }),
+    );
+    const result = await fetchGuildMemberRoles(makeDeps(fetchImpl, sleep), USER_ID);
+
+    expect(result).toMatchObject({
+      ok: false,
+      notAMember: false,
+      failure: { reason: 'rate_limited' },
+    });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a channel-rename 429 as rate_limited without retrying', async () => {
     const sleep = vi.fn(async () => undefined);
     const fetchImpl = vi.fn(
