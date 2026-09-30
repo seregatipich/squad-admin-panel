@@ -21,13 +21,6 @@ export const STATUS_LABELS: Record<AppealStatus, string> = {
   rejected: 'Отклонена',
 };
 
-export const STATUS_BADGE_CLASSES: Record<AppealStatus, string> = {
-  pending: 'bg-amber-950/50 text-amber-300 border border-amber-900',
-  in_review: 'bg-sky-950/50 text-sky-300 border border-sky-900',
-  approved: 'bg-emerald-950/50 text-emerald-300 border border-emerald-900',
-  rejected: 'bg-neutral-800 text-neutral-400 border border-neutral-700',
-};
-
 export const STATUS_FILTERS: Array<{ value: '' | AppealStatus; label: string }> = [
   { value: '', label: 'Все' },
   { value: 'pending', label: 'На рассмотрении' },

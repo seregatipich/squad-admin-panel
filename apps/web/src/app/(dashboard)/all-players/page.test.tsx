@@ -254,11 +254,11 @@ describe('PlayersPage', () => {
     });
   });
 
-  it('renders formatted playtime for zero, sub-hour and multi-hour totals', async () => {
+  it('renders formatted playtime for zero, sub-hour and multi-hour totals with Russian units (#492)', async () => {
     await renderPage();
-    expect(screen.getByText('6m')).toBeInTheDocument();
-    expect(screen.getByText('0m')).toBeInTheDocument();
-    expect(screen.getByText('2h 2m')).toBeInTheDocument();
+    expect(screen.getByText('6м')).toBeInTheDocument();
+    expect(screen.getByText('0м')).toBeInTheDocument();
+    expect(screen.getByText('2ч 2м')).toBeInTheDocument();
   });
 
   it('renders a dash for a player without a SteamID64', async () => {
@@ -383,5 +383,36 @@ describe('PlayersPage', () => {
     await renderPage({ sidecarsOk: false });
     expect(screen.getByText('Alphazz')).toBeInTheDocument();
     expect(screen.queryByText('сейчас на сервере')).not.toBeInTheDocument();
+  });
+
+  it('does not re-poll the mark summary on the 8s player-list tick (#489)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { fetch: fetchMock } = mockFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      render(<PlayersPage />);
+      await vi.waitFor(() => expect(screen.getByText('Alphazz')).toBeInTheDocument());
+
+      const summaryCallsAfterMount = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/marks/active-summary'),
+      ).length;
+      expect(summaryCallsAfterMount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.advanceTimersByTimeAsync(8000);
+
+      const summaryCallsAfterPolling = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/marks/active-summary'),
+      ).length;
+      expect(summaryCallsAfterPolling).toBe(1);
+
+      const listCallsAfterPolling = fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith('/api/v1/players?'),
+      ).length;
+      expect(listCallsAfterPolling).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

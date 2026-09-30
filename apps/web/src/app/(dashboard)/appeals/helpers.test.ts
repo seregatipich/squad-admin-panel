@@ -9,7 +9,6 @@ import {
   isTerminal,
   PAGE_SIZE,
   parseFilters,
-  STATUS_BADGE_CLASSES,
   STATUS_FILTERS,
   STATUS_LABELS,
   totalPages,
@@ -112,11 +111,10 @@ describe('appealNumberLabel', () => {
 });
 
 describe('status label tables', () => {
-  it('labels and styles every status', () => {
+  it('labels every status', () => {
     const statuses: AppealStatus[] = ['pending', 'in_review', 'approved', 'rejected'];
     for (const status of statuses) {
       expect(STATUS_LABELS[status]).toBeTruthy();
-      expect(STATUS_BADGE_CLASSES[status]).toContain('border');
     }
   });
 

@@ -65,21 +65,12 @@ function liveMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('scope palette', () => {
-  it('covers every chat scope with icon and badge class', () => {
+  it('covers every chat scope with icon and Russian label', () => {
     for (const scope of CHAT_SCOPES) {
       const meta = SCOPE_META[scope];
       expect(meta.icon.length).toBeGreaterThan(0);
-      expect(meta.badgeClass).toContain('bg-');
       expect(meta.labelRu.length).toBeGreaterThan(0);
-      expect(meta.labelEn.length).toBeGreaterThan(0);
     }
-  });
-
-  it('keeps CHAT-1 palette hues for the four live scopes', () => {
-    expect(SCOPE_META.all.badgeClass).toContain('sky');
-    expect(SCOPE_META.team.badgeClass).toContain('emerald');
-    expect(SCOPE_META.squad.badgeClass).toContain('amber');
-    expect(SCOPE_META.admin.badgeClass).toContain('red');
   });
 
   it('falls back for unknown scopes', () => {
@@ -266,6 +257,13 @@ describe('liveRowMatchesFilters', () => {
   it('filters by player nickname substring', () => {
     expect(liveRowMatchesFilters(row, filters({ playerQuery: 'bra' }))).toBe(true);
     expect(liveRowMatchesFilters(row, filters({ playerQuery: 'zzz' }))).toBe(false);
+  });
+
+  it('matches an exact SteamID64 or EOS ID like the archive search does', () => {
+    const withEos = liveMessageToRow(liveMessage({ eos_id: '0002ABCDEF' }));
+    expect(liveRowMatchesFilters(row, filters({ playerQuery: '76561198000000001' }))).toBe(true);
+    expect(liveRowMatchesFilters(withEos, filters({ playerQuery: '0002abcdef' }))).toBe(true);
+    expect(liveRowMatchesFilters(row, filters({ playerQuery: '76561198000000002' }))).toBe(false);
   });
 });
 

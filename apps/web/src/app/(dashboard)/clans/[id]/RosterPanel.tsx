@@ -207,7 +207,8 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const [sort, setSort] = useState<SortField>('role');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(1);
-  const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
+  const [busyPlayerIds, setBusyPlayerIds] = useState<Set<string>>(new Set());
+  const latestRosterRequestRef = useRef(0);
   const [addOpen, setAddOpen] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<RosterMember | null>(null);
   const [pendingTransfer, setPendingTransfer] = useState<RosterMember | null>(null);
@@ -247,6 +248,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   }, []);
 
   const loadRoster = useCallback(async () => {
+    const requestId = ++latestRosterRequestRef.current;
     try {
       const query = new URLSearchParams({
         sort,
@@ -260,9 +262,19 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`Не удалось загрузить ростер (${res.status})`);
-      setRoster((await res.json()) as RosterResponse);
+      const body = (await res.json()) as RosterResponse;
+      // Ответ на устаревший запрос (другой поиск, сортировка, страница) не применяем.
+      if (requestId !== latestRosterRequestRef.current) return;
+      const lastPage = Math.max(1, Math.ceil(body.total / PAGE_LIMIT));
+      if (page > lastPage) {
+        // Последняя строка последней страницы удалена: переходим на новую последнюю.
+        setPage(lastPage);
+        return;
+      }
+      setRoster(body);
       setErr(null);
     } catch (e) {
+      if (requestId !== latestRosterRequestRef.current) return;
       setErr((e as Error).message);
     }
   }, [clanId, q, sort, order, page]);
@@ -289,7 +301,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         `Действие не выполнено: ${body.error ?? 'unknown'}`,
       onSuccess?: (body: unknown) => void,
     ) => {
-      setBusyPlayerId(playerId);
+      setBusyPlayerIds((prev) => new Set(prev).add(playerId));
       setInfo(null);
       try {
         const res = await run();
@@ -306,7 +318,11 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         setErr((e as Error).message);
         return false;
       } finally {
-        setBusyPlayerId(null);
+        setBusyPlayerIds((prev) => {
+          const next = new Set(prev);
+          next.delete(playerId);
+          return next;
+        });
       }
     },
     [loadRoster],
@@ -570,7 +586,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                   key={member.player_id}
                   member={member}
                   caps={caps}
-                  busy={busyPlayerId === member.player_id}
+                  busy={busyPlayerIds.has(member.player_id)}
                   locked={lockedPlayerIds.has(member.player_id)}
                   onChangeRole={changeRole}
                   onRemove={setPendingRemove}
@@ -617,7 +633,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         tone="destructive"
-        busy={pendingRemove !== null && busyPlayerId === pendingRemove.player_id}
+        busy={pendingRemove !== null && busyPlayerIds.has(pendingRemove.player_id)}
         onConfirm={() => void confirmRemove()}
       />
 
@@ -633,7 +649,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
         confirmLabel="Передать"
         cancelLabel="Отмена"
         tone="default"
-        busy={pendingTransfer !== null && busyPlayerId === pendingTransfer.player_id}
+        busy={pendingTransfer !== null && busyPlayerIds.has(pendingTransfer.player_id)}
         onConfirm={() => void confirmTransfer()}
       />
     </section>

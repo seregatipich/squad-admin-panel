@@ -8,45 +8,33 @@ export const LIVE_CAP = 200;
 
 export interface ScopeMeta {
   labelRu: string;
-  labelEn: string;
   icon: string;
-  badgeClass: string;
 }
 
 export const SCOPE_META: Record<ChatScope, ScopeMeta> = {
-  all: { labelRu: 'Все', labelEn: 'All', icon: '🌐', badgeClass: 'bg-sky-900 text-sky-200' },
+  all: { labelRu: 'Все', icon: '🌐' },
   team: {
     labelRu: 'Команда',
-    labelEn: 'Team',
     icon: '👥',
-    badgeClass: 'bg-emerald-900 text-emerald-200',
   },
   squad: {
     labelRu: 'Отряд',
-    labelEn: 'Squad',
     icon: '🛡️',
-    badgeClass: 'bg-amber-900 text-amber-200',
   },
-  admin: { labelRu: 'Админ', labelEn: 'Admin', icon: '🛠️', badgeClass: 'bg-red-900 text-red-200' },
+  admin: { labelRu: 'Админ', icon: '🛠️' },
   broadcast: {
     labelRu: 'Бродкаст',
-    labelEn: 'Broadcast',
     icon: '📢',
-    badgeClass: 'bg-purple-900 text-purple-200',
   },
   direct: {
     labelRu: 'Личное',
-    labelEn: 'Direct',
     icon: '✉️',
-    badgeClass: 'bg-fuchsia-900 text-fuchsia-200',
   },
 };
 
 const FALLBACK_SCOPE_META: ScopeMeta = {
   labelRu: 'Прочее',
-  labelEn: 'Other',
   icon: '💬',
-  badgeClass: 'bg-neutral-800 text-neutral-300',
 };
 
 export function isChatScope(value: string): value is ChatScope {
@@ -202,6 +190,9 @@ export interface ChatRow {
   isFlagged: boolean;
   source: string;
   live: boolean;
+  /** Identifiers carried by live events only; the archive API resolves them server-side. */
+  steamId64?: string | null;
+  eosId?: string | null;
 }
 
 export function apiItemToRow(item: ChatApiItem): ChatRow {
@@ -235,7 +226,19 @@ export function liveMessageToRow(message: ChatMessage): ChatRow {
     isFlagged: false,
     source: 'log',
     live: true,
+    steamId64: message.steam_id64,
+    eosId: message.eos_id,
   };
+}
+
+/** Mirrors the archive search: nickname substring, or an exact SteamID64 / EOS ID. */
+function liveRowMatchesPlayerQuery(row: ChatRow, playerQuery: string): boolean {
+  const query = playerQuery.toLowerCase();
+  return (
+    row.nickname.toLowerCase().includes(query) ||
+    row.steamId64?.toLowerCase() === query ||
+    row.eosId?.toLowerCase() === query
+  );
 }
 
 export function liveRowMatchesFilters(row: ChatRow, filters: ChatFilters): boolean {
@@ -243,11 +246,7 @@ export function liveRowMatchesFilters(row: ChatRow, filters: ChatFilters): boole
   if (filters.serverIds.length > 0 && !filters.serverIds.includes(row.serverId)) return false;
   if (filters.scopes.length > 0 && !filters.scopes.includes(row.scope)) return false;
   if (filters.text && !row.message.toLowerCase().includes(filters.text.toLowerCase())) return false;
-  if (
-    filters.playerQuery &&
-    !row.nickname.toLowerCase().includes(filters.playerQuery.toLowerCase())
-  )
-    return false;
+  if (filters.playerQuery && !liveRowMatchesPlayerQuery(row, filters.playerQuery)) return false;
   return true;
 }
 
@@ -290,11 +289,10 @@ export function formatArchiveTime(iso: string): string {
 
 export interface TeamFlagMeta {
   label: string;
-  badgeClass: string;
 }
 
 export function teamFlagMeta(teamId: number | null): TeamFlagMeta | null {
-  if (teamId === 1) return { label: 'К1', badgeClass: 'bg-blue-900 text-blue-200' };
-  if (teamId === 2) return { label: 'К2', badgeClass: 'bg-orange-900 text-orange-200' };
+  if (teamId === 1) return { label: 'К1' };
+  if (teamId === 2) return { label: 'К2' };
   return null;
 }

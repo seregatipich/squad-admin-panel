@@ -29,6 +29,7 @@ import {
 import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { fmtDuration } from './[id]/presence';
 import {
   buildPlayersListQuery,
   DEFAULT_SORT_STATE,
@@ -168,11 +169,13 @@ export default function PlayersPage() {
     }
     const refresh = () => {
       void loadPlayers();
-      void loadMarkSummary();
       void loadOnlineStatus();
     };
     refreshRef.current = refresh;
     refresh();
+    // The mark summary doesn't need the 8s poll: it's loaded once here and
+    // kept current by the mark.changed live subscription below (#489).
+    void loadMarkSummary();
     const t = setInterval(refresh, POLL_MS);
     return () => {
       cancelled = true;
@@ -429,12 +432,4 @@ export default function PlayersPage() {
       ) : null}
     </PageContainer>
   );
-}
-
-function fmtDuration(seconds: number): string {
-  if (!seconds) return '0m';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h === 0) return `${m}m`;
-  return `${h}h ${m}m`;
 }

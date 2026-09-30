@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useSearchParams } from 'next/navigation';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const replace = vi.fn();
@@ -82,6 +83,9 @@ function stubFetch(opts: { items?: unknown[]; listStatus?: number; patchStatus?:
 afterEach(() => {
   cleanup();
   replace.mockClear();
+  vi.mocked(useSearchParams).mockReturnValue(
+    new URLSearchParams() as unknown as ReturnType<typeof useSearchParams>,
+  );
   vi.unstubAllGlobals();
   liveHandlers = {};
 });
@@ -209,14 +213,60 @@ describe('AppealsBrowser', () => {
   );
 
   it(
-    'surfaces an API error when a decision fails',
+    'surfaces a Russian message for a known error code when a decision fails (#491)',
     async () => {
       vi.stubGlobal('fetch', stubFetch({ patchStatus: 409 }).fn);
       render(<AppealsBrowser />);
       await screen.findByText('#7');
 
       fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
-      await waitFor(() => expect(screen.getByText(/appeal_already_decided/i)).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByText(/уже решена другим модератором/i)).toBeInTheDocument(),
+      );
+      expect(screen.queryByText(/appeal_already_decided/i)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'jumps back to the last page when a decision empties the current one (#487)',
+    async () => {
+      vi.mocked(useSearchParams).mockReturnValue(
+        new URLSearchParams('page=2') as unknown as ReturnType<typeof useSearchParams>,
+      );
+      let listCallCount = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (init?.method === 'PATCH') {
+            return Promise.resolve(
+              new Response(JSON.stringify({ appeal: { ...PENDING_APPEAL, status: 'approved' } }), {
+                status: 200,
+              }),
+            );
+          }
+          if (url.startsWith('/api/v1/appeals')) {
+            listCallCount += 1;
+            // First load: the single item on page 2 of 2 (total=21, page_size=20).
+            // Reload after the decision: total drops to 20 (1 page) — the
+            // second call must clamp `page` back to 1 rather than rendering
+            // page 2 as empty.
+            const body =
+              listCallCount === 1
+                ? { items: [PENDING_APPEAL], total: 21, page: 2, page_size: 20 }
+                : { items: [], total: 20, page: 2, page_size: 20 };
+            return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+          }
+          return Promise.reject(new Error(`unexpected fetch: ${url}`));
+        }),
+      );
+      render(<AppealsBrowser />);
+      await screen.findByText('#7');
+
+      fireEvent.click(screen.getByRole('button', { name: /одобрить/i }));
+
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/appeals'));
     },
     TEST_TIMEOUT_MS,
   );

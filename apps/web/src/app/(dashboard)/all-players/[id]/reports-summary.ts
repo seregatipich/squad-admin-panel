@@ -7,13 +7,6 @@ export const REPORT_STATUS_LABELS: Record<ReportSummaryStatus, string> = {
   rejected: 'Отклонён',
 };
 
-export const REPORT_STATUS_BADGE_CLASSES: Record<ReportSummaryStatus, string> = {
-  pending: 'bg-amber-950/50 text-amber-300 border border-amber-900',
-  in_review: 'bg-sky-950/50 text-sky-300 border border-sky-900',
-  resolved: 'bg-emerald-950/50 text-emerald-300 border border-emerald-900',
-  rejected: 'bg-neutral-800 text-neutral-400 border border-neutral-700',
-};
-
 const EXCERPT_MAX = 140;
 
 /** Truncates a report body for the player-card summary list, with an ellipsis. */
