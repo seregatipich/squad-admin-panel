@@ -14,7 +14,8 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
   apiFetch: vi.fn().mockResolvedValue({
     player_id: 'b1e2c3d4-0000-0000-0000-000000000001',
     steam_id64: '76561198000000001',
@@ -75,11 +76,27 @@ describe('getSession', () => {
     expect(me).toBeNull();
   });
 
-  it('returns null when apiFetch throws', async () => {
-    vi.mocked(apiModule.apiFetch).mockRejectedValueOnce(new Error('Network failure'));
+  it.each([401, 403])('returns null when the API rejects the session with %i', async (status) => {
+    vi.mocked(apiModule.apiFetch).mockRejectedValueOnce(
+      new apiModule.ApiError('/api/v1/me', status, 'no session'),
+    );
 
     const me = await getSession();
     expect(me).toBeNull();
+  });
+
+  // #827: сбой API — не разлогин. Ошибка уходит в границу ошибки, а не в /login.
+  it('rethrows a server error instead of reporting no session', async () => {
+    const failure = new apiModule.ApiError('/api/v1/me', 503, 'Service Unavailable');
+    vi.mocked(apiModule.apiFetch).mockRejectedValueOnce(failure);
+
+    await expect(getSession()).rejects.toBe(failure);
+  });
+
+  it('rethrows a network failure or timeout instead of reporting no session', async () => {
+    vi.mocked(apiModule.apiFetch).mockRejectedValueOnce(new Error('Network failure'));
+
+    await expect(getSession()).rejects.toThrow('Network failure');
   });
 });
 
@@ -99,5 +116,13 @@ describe('requireSession', () => {
     } as unknown as Awaited<ReturnType<typeof nextHeaders.cookies>>);
 
     await expect(requireSession()).rejects.toThrow('NEXT_REDIRECT:/login');
+  });
+
+  it('does not redirect to /login when the API is down', async () => {
+    vi.mocked(apiModule.apiFetch).mockRejectedValueOnce(
+      new apiModule.ApiError('/api/v1/me', 502, 'Bad Gateway'),
+    );
+
+    await expect(requireSession()).rejects.toMatchObject({ status: 502 });
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch } from './api';
+import { API_TIMEOUT_MS, ApiError, apiFetch } from './api';
 
 const originalEnv = process.env.API_URL;
 
@@ -9,6 +9,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   if (originalEnv === undefined) {
     delete process.env.API_URL;
   } else {
@@ -149,5 +150,60 @@ describe('apiFetch', () => {
 
     const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
     expect(passedHeaders.get('content-type')).toBe('application/json');
+  });
+  it('rejects with an ApiError that carries the HTTP status', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => 'Service Unavailable',
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const error = await apiFetch('/api/v1/me').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 503, path: '/api/v1/me' });
+  });
+
+  describe('request timeout', () => {
+    // #818: без ограничения зависший API держал SSR-рендер до таймаута undici.
+    it('bounds every request with a default timeout signal', async () => {
+      const timeout = vi.spyOn(AbortSignal, 'timeout');
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await apiFetch('/api/v1/me');
+
+      expect(timeout).toHaveBeenCalledWith(API_TIMEOUT_MS);
+      expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('fails fast when the API does not answer in time', async () => {
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValue(
+        AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+      );
+      const hungFetch = vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            if (init.signal?.aborted) reject(init.signal.reason);
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          }),
+      );
+      vi.stubGlobal('fetch', hungFetch);
+
+      await expect(apiFetch('/api/v1/me')).rejects.toMatchObject({ name: 'TimeoutError' });
+    });
+
+    it('keeps a signal the caller passed instead of the default timeout', async () => {
+      const timeout = vi.spyOn(AbortSignal, 'timeout');
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+      vi.stubGlobal('fetch', mockFetch);
+      const controller = new AbortController();
+
+      await apiFetch('/api/v1/me', { signal: controller.signal });
+
+      expect(timeout).not.toHaveBeenCalled();
+      expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+    });
   });
 });

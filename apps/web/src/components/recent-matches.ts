@@ -46,9 +46,21 @@ const OUTCOME_TONES: Record<Exclude<MatchOutcome, null>, string> = {
 
 const NEUTRAL_TONE = 'border-neutral-800 bg-neutral-900 text-neutral-500';
 
-export function outcomeLabel(outcome: MatchOutcome): string {
-  if (outcome === null) return 'В процессе';
-  return OUTCOME_LABELS[outcome];
+/**
+ * Подпись исхода матча для игрока.
+ *
+ * API отдаёт `outcome = null` в трёх случаях: матч ещё идёт, у завершённого
+ * матча не записан победитель (прерван, сервер упал) или неизвестна команда
+ * игрока. Отличить идущий матч от завершённого можно только по `ended_at`,
+ * поэтому функция принимает оба поля.
+ *
+ * @param match Исход и время окончания матча.
+ * @returns «Победа»/«Поражение»/«Ничья»; «В процессе», пока `ended_at` пуст;
+ *   «Неизвестно» для завершённого матча без исхода.
+ */
+export function outcomeLabel(match: Pick<RecentMatch, 'outcome' | 'ended_at'>): string {
+  if (match.outcome !== null) return OUTCOME_LABELS[match.outcome];
+  return match.ended_at === null ? 'В процессе' : 'Неизвестно';
 }
 
 export function outcomeToneClasses(outcome: MatchOutcome): string {

@@ -13,6 +13,7 @@ import {
   Modal,
   SearchField,
 } from '@/components/ui';
+import { announcesMatchBoundary } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { canSubmitLayer, filterLayers, formatMatchElapsed } from './map-widget-helpers';
 
@@ -142,10 +143,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
    */
   const onEventsAppended = useCallback(
     (event: { data: { server_id: string | null; kinds: string[] } }) => {
-      if (event.data.server_id !== serverId) return;
-      if (event.data.kinds.some((kind) => kind === 'match.started' || kind === 'match.ended')) {
-        void load();
-      }
+      if (announcesMatchBoundary(event.data, serverId)) void load();
     },
     [serverId, load],
   );

@@ -20,7 +20,11 @@ export type LiveEvent =
       data: { server_id: string; state: string; player_count?: number };
     }
   | {
-      /** New rows in `events`; the list refetches over REST (no row data here). */
+      /**
+       * New rows in `events`; the list refetches over REST (no row data here).
+       * Match boundaries arrive this way too — as the `match.started` /
+       * `match.ended` kinds — see {@link announcesMatchBoundary}.
+       */
       type: 'server.events.appended';
       ts: string;
       data: { server_id: string | null; kinds: string[] };
@@ -175,6 +179,26 @@ export type LiveEvent =
       ts: string;
       data: Record<string, unknown>;
     };
+
+/** Event kinds log-ingest stores when a match starts or ends. */
+const MATCH_BOUNDARY_KINDS: readonly string[] = ['match.started', 'match.ended'];
+
+/**
+ * Whether a `server.events.appended` batch announces a match start or end.
+ *
+ * The API publishes no dedicated match frame: log-ingest stores the boundary
+ * in `events`, and the events feed announces it with its kind (#1315).
+ *
+ * @param batch `data` of the `server.events.appended` frame.
+ * @param serverId When given, the batch must also belong to this server.
+ */
+export function announcesMatchBoundary(
+  batch: { server_id: string | null; kinds: string[] },
+  serverId?: string,
+): boolean {
+  if (serverId !== undefined && batch.server_id !== serverId) return false;
+  return batch.kinds.some((kind) => MATCH_BOUNDARY_KINDS.includes(kind));
+}
 
 export type ReportStatus = 'pending' | 'in_review' | 'resolved' | 'rejected';
 

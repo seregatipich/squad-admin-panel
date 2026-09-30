@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Modal } from './Modal';
@@ -170,5 +170,57 @@ describe('Modal', () => {
     const { container, onClose } = renderModal({ dismissible: false });
     fireEvent.click(dialogIn(container));
     expect(onClose).not.toHaveBeenCalled();
+  });
+  describe('when the owner ignores a close request', () => {
+    // Регрессия #811: флаг «уже уведомили» оставался сброшенным после того, как
+    // владелец отклонил onClose (AlertDialog во время busy). Крестик больше не
+    // срабатывал, а Escape закрывал нативный диалог при open=true, и окно
+    // рассинхронизировалось с пропом до перемонтирования страницы.
+    it('still reports every later click on the close button', () => {
+      const { onClose } = renderModal();
+      const closeButton = screen.getByRole('button', { name: 'Закрыть' });
+
+      fireEvent.click(closeButton);
+      fireEvent.click(closeButton);
+
+      expect(onClose).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the dialog open after Escape and keeps reporting close requests', () => {
+      const { container, onClose } = renderModal();
+
+      fireEvent.keyDown(dialogIn(container), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(dialogIn(container)).toHaveAttribute('open');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+      fireEvent.keyDown(dialogIn(container), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(3);
+      expect(dialogIn(container)).toHaveAttribute('open');
+    });
+
+    it('reopens a dialog the browser closed natively while the prop keeps it open', () => {
+      const { container, onClose } = renderModal();
+
+      act(() => dialogIn(container).close());
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(dialogIn(container)).toHaveAttribute('open');
+    });
+
+    it('does not report the native close that follows a non-cancelable Escape twice', () => {
+      // Chrome перестаёт давать отменять `cancel` на повторный Escape без
+      // активации пользователя: тогда за ним всё равно приходит `close`.
+      const { container, onClose } = renderModal();
+      const dialog = dialogIn(container);
+
+      act(() => {
+        dialog.dispatchEvent(new Event('cancel', { cancelable: false }));
+        dialog.close();
+      });
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(dialog).toHaveAttribute('open');
+    });
   });
 });

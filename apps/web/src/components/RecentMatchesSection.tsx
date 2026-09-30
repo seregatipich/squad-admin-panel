@@ -140,7 +140,7 @@ export function RecentMatchesSection({ playerId }: { playerId: string }) {
                   <Td numeric>{formatMatchDuration(match.play_seconds)}</Td>
                   <Td>
                     <Badge size="sm" tone={outcomeTone(match.outcome)}>
-                      {outcomeLabel(match.outcome)}
+                      {outcomeLabel(match)}
                     </Badge>
                   </Td>
                 </TableRow>

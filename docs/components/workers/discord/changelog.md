@@ -6,6 +6,13 @@
 
 - Шаблон с плейсхолдером-именем свойства прототипа (`{constructor}`, `{__proto__}`) больше не роняет отправку, а поле без значения (например, `{steam_id64}` у игрока только с EOS) и слишком длинный текст больше не дают HTTP 400 от Discord: это исправлено в `renderDiscordTemplate` из `@squad/shared-config` (#52).
 
+## 2026-09-28 — consumer groups on new and re-created streams (#60)
+
+### Fixed
+
+- A stream discovered after the loop started gets its consumer group at `0`, not `$`, so the first events of a new server's `events:server:<id>` stream (including the XADD that created it) are delivered. Streams present on the first discovery still start at `$`.
+- `NOGROUP` from the multiplexed `XREADGROUP` clears the known-stream cache and re-creates the groups; a deleted and re-created stream no longer stops reading every stream until a restart.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed
