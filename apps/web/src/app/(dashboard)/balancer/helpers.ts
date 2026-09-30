@@ -17,12 +17,6 @@ const STATE_TONES: Record<string, ProposalTone> = {
   should_move: 'red',
 };
 
-const TONE_ROW_CLASSES: Record<ProposalTone, string> = {
-  emerald: 'border-l-2 border-emerald-600 bg-emerald-950/30',
-  neutral: 'border-l-2 border-neutral-700 bg-transparent',
-  red: 'border-l-2 border-red-600 bg-red-950/30',
-};
-
 const STATE_LABELS: Record<string, string> = {
   on_target: 'На нужной стороне',
   no_change: 'Без изменений',
@@ -60,11 +54,6 @@ const TRIGGER_LABELS: Record<string, string> = {
  */
 export function proposalStateTone(state: string): ProposalTone {
   return STATE_TONES[state] ?? 'neutral';
-}
-
-/** Tailwind classes for a diff row, keyed strictly off {@link proposalStateTone}. */
-export function proposalStateRowClass(state: string): string {
-  return TONE_ROW_CLASSES[proposalStateTone(state)];
 }
 
 /** Russian label for a diff state; unknown states are echoed verbatim. */
@@ -105,17 +94,15 @@ export function triggerReasonLabel(reason: TriggerReasonLike): string {
   return `${label}: ${reason.observed} (порог ${reason.threshold})`;
 }
 
-/** Filter state of the proposal list. `serverId` empty means "every server". */
+/** Filter state of the proposal list. */
 export interface BalancerFilters {
   mode: string;
-  serverId: string;
   status: string;
   limit: number;
 }
 
 export const DEFAULT_BALANCER_FILTERS: BalancerFilters = {
   mode: 'squad',
-  serverId: '',
   status: '',
   limit: 25,
 };
@@ -124,7 +111,6 @@ export const DEFAULT_BALANCER_FILTERS: BalancerFilters = {
 export function buildProposalsQuery(filters: BalancerFilters): string {
   const params = new URLSearchParams();
   params.set('mode', filters.mode);
-  if (filters.serverId) params.set('server_id', filters.serverId);
   if (filters.status) params.set('status', filters.status);
   params.set('limit', String(filters.limit));
   return params.toString();
