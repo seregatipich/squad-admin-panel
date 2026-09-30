@@ -1,6 +1,5 @@
 import {
   applyCombatEventToDossier,
-  auditLog,
   type CombatEventType,
   combatEvents,
   type DatabaseClient,
@@ -11,7 +10,7 @@ import {
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, desc, eq, gte, isNull, lte, or } from 'drizzle-orm';
-import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
+import { v5 as uuidv5 } from 'uuid';
 import {
   buildTeamIndex,
   type CombatIdentity,
@@ -22,6 +21,7 @@ import {
   type VehicleEventKind,
   type VehicleRecordCommand,
 } from '../parser/combat.js';
+import { createPlayerWithHistory, isUniqueViolation } from '../player-identity/create-player.js';
 
 export const LIVE_BUS_CHANNEL = 'live-bus';
 const COMBAT_EVENT_NAMESPACE = '2a7c1f6e-9b3d-4c8a-8e5f-1d6b0a4c9e73';
@@ -119,48 +119,13 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
 }
 
 async function createPlayer(db: DatabaseClient, identity: CombatIdentity): Promise<string | null> {
-  const normalized = normalizePlayerName(identity.name);
-  const steamBigint = identity.steamId64 ? BigInt(identity.steamId64) : null;
-  const playerId = uuidv7();
-  try {
-    await db.insert(players).values({
-      id: playerId,
-      steamId64: steamBigint,
-      eosId: identity.eosId,
-      canonicalName: identity.name,
-      canonicalNameNormalized: normalized,
-    });
-    await db.insert(playerNameHistory).values({
-      playerId,
-      name: identity.name,
-      nameNormalized: normalized,
-    });
-    await db.insert(auditLog).values({
-      actorKind: 'system',
-      actorSystemLabel: 'log-ingest-combat',
-      actionType: 'player.created',
-      targetType: 'player',
-      targetId: playerId,
-      context: {
-        eos_id: identity.eosId,
-        steam_id64: identity.steamId64,
-        canonical_name: identity.name,
-      },
-      rowHash: Buffer.from([]),
-    });
-    return playerId;
-  } catch {
-    const existing = await resolveByIdentity(db, {
-      eosId: identity.eosId,
-      steamId64: identity.steamId64,
-    });
-    return existing?.id ?? null;
-  }
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  const candidate = err as { code?: string; cause?: { code?: string } };
-  return candidate.code === '23505' || candidate.cause?.code === '23505';
+  const created = await createPlayerWithHistory(db, identity, 'log-ingest-combat');
+  if (created) return created;
+  const existing = await resolveByIdentity(db, {
+    eosId: identity.eosId,
+    steamId64: identity.steamId64,
+  });
+  return existing?.id ?? null;
 }
 
 /**

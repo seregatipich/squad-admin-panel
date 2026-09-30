@@ -170,6 +170,7 @@ export class LogIngestor {
       if (newGame) {
         this.feedMatch(this.matchAssembler.onNewGame(newGame.layer, ts));
         this.feedVote(this.voteAssembler.onServerDown(ts));
+        this.occupiedVehicleByPlayer.clear();
       }
       return events;
     }
@@ -206,6 +207,8 @@ export class LogIngestor {
 
       const disc = PLAYER_DISCONNECT.exec(message);
       if (disc) {
+        this.occupiedVehicleByPlayer.delete(`steam:${disc[2]}`);
+        if (disc[1]) this.occupiedVehicleByPlayer.delete(`eos:${disc[1]}`);
         events.push(
           this.build('player.disconnected', ts, {
             eos_id: disc[1] ?? null,
@@ -239,7 +242,7 @@ export class LogIngestor {
       const admin = RCON_ADMIN_COMMAND.exec(message);
       if (admin) {
         events.push(
-          this.build('rcon.connected', ts, {
+          this.build('rcon.admin_command', ts, {
             summary: admin[1],
             source: admin[2],
           }),
@@ -265,6 +268,7 @@ export class LogIngestor {
           ),
         );
         this.feedVote(this.voteAssembler.onServerDown(ts));
+        this.occupiedVehicleByPlayer.clear();
       }
       return events;
     }

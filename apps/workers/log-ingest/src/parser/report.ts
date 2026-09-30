@@ -12,6 +12,7 @@
  * server; the exact live wire format is env-gated and may need a regex tweak
  * when validated against a real Squad host.
  */
+import { CHAT_CATEGORIES, CHAT_MESSAGE } from './chat.js';
 import { type LogLine, parseLine } from './patterns.js';
 
 export interface ParsedReport {
@@ -24,11 +25,6 @@ export interface ParsedReport {
   targetRaw: string;
   body: string;
 }
-
-const CHAT_CATEGORIES = new Set(['LogSquad', 'LogChat']);
-
-const CHAT_MESSAGE =
-  /^ChatMessage:\s*(?<sender>.+?)\s*:\s*(?<channel>ChatAll|ChatTeam|ChatSquad|ChatAdmin)\s*:\s*(?<text>.+)$/;
 
 const SENDER_IDS =
   /\[Online IDs:\s*EOS:\s*(?<eos>[0-9a-f]{32})(?:\s+steam:\s*(?<steam>\d{17}))?\s*\]/i;

@@ -183,6 +183,31 @@ describe('handleAltBanConnect', () => {
     );
   });
 
+  it('signals a reconnecting alt once per cooldown window (#910)', async () => {
+    await seedRule();
+    await seedLink('confirmed');
+    await seedBan();
+    const redis = makeRedis();
+    redis.set.mockResolvedValueOnce('OK').mockResolvedValue(null as never);
+
+    const first = await handleAltBanConnect(db, redis, connectEvent());
+    const second = await handleAltBanConnect(db, redis, connectEvent());
+
+    expect(first.outcome).toBe('detected');
+    expect(second).toEqual({ outcome: 'cooldown', connectingPlayerId });
+    expect(redis.set).toHaveBeenCalledWith(
+      `altban:cooldown:${connectingPlayerId}`,
+      '1',
+      'EX',
+      expect.any(Number),
+      'NX',
+    );
+    const signals = redis.publish.mock.calls.filter(([, frame]) =>
+      String(frame).includes('alert.triggered'),
+    );
+    expect(signals).toHaveLength(1);
+  });
+
   it('publishes one classifiable frame per stored alert, without player ids', async () => {
     await seedRule();
     await db.insert(alertRules).values({
