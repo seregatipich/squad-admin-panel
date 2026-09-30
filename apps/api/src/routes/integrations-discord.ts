@@ -142,10 +142,7 @@ function integrationView(row: IntegrationRowLike | null) {
 }
 
 function webhookView(row: DiscordWebhookRow, key: Buffer) {
-  const url = decryptString(
-    key,
-    deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
-  );
+  const url = decryptString(key, deserialize(row.webhookUrlEncrypted));
   return {
     id: row.id,
     event_type: row.eventType,
@@ -216,9 +213,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
       const enabled =
         req.body.enabled !== undefined ? req.body.enabled : (existing?.enabled ?? false);
       let botTokenEncrypted: Buffer | null =
-        existing?.botTokenEncrypted != null
-          ? Buffer.from(existing.botTokenEncrypted as unknown as Buffer)
-          : null;
+        existing?.botTokenEncrypted != null ? existing.botTokenEncrypted : null;
       if (req.body.bot_token === null) {
         botTokenEncrypted = null;
       } else if (typeof req.body.bot_token === 'string') {
@@ -452,10 +447,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         payload.allowed_mentions = { parse: ['everyone'] };
       }
 
-      const url = decryptString(
-        app.encryptionKey,
-        deserialize(Buffer.from(webhook.webhookUrlEncrypted as unknown as Buffer)),
-      );
+      const url = decryptString(app.encryptionKey, deserialize(webhook.webhookUrlEncrypted));
 
       let outcome: 'ok' | 'discord_error' | 'unreachable';
       let discordStatus: number | null = null;

@@ -1,12 +1,14 @@
 import { type DatabaseClient, events, matchPlayers } from '@squad/db';
 import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 
-export const COMBAT_KINDS = [
-  'combat_death',
-  'combat_wound',
-  'combat_revive',
-  'combat_damage',
-] as const;
+/** Event kinds that contribute to per-player totals. */
+export const COMBAT_COUNTED_KINDS: string[] = ['combat_death', 'combat_wound', 'combat_revive'];
+
+/**
+ * Per-hit damage events are the most numerous combat events and are not
+ * counted; their presence alone marks the match as combat-tracked.
+ */
+const COMBAT_DAMAGE_KIND = 'combat_damage';
 
 export interface PlayerCombatStats {
   kills: number;
@@ -80,21 +82,27 @@ export async function loadMatchCombatStats(
   db: DatabaseClient,
   params: { serverId: string; matchStart: Date; matchEnd: Date },
 ): Promise<MatchCombatStats> {
+  const inMatchWindow = and(
+    eq(events.serverId, params.serverId),
+    gte(events.occurredAt, params.matchStart),
+    lte(events.occurredAt, params.matchEnd),
+  );
+
   const rows = await db
     .select({ kind: events.kind, payload: events.payload })
     .from(events)
-    .where(
-      and(
-        eq(events.serverId, params.serverId),
-        inArray(events.kind, COMBAT_KINDS as unknown as string[]),
-        gte(events.occurredAt, params.matchStart),
-        lte(events.occurredAt, params.matchEnd),
-      ),
-    );
-
-  return aggregateCombatStats(
+    .where(and(inMatchWindow, inArray(events.kind, COMBAT_COUNTED_KINDS)));
+  const stats = aggregateCombatStats(
     rows.map((row) => ({ kind: row.kind, payload: row.payload as Record<string, unknown> })),
   );
+  if (stats.present) return stats;
+
+  const damageRows = await db
+    .select({ eventId: events.eventId })
+    .from(events)
+    .where(and(inMatchWindow, eq(events.kind, COMBAT_DAMAGE_KIND)))
+    .limit(1);
+  return { present: damageRows.length > 0, byPlayer: stats.byPlayer };
 }
 
 export async function applyMatchCombatStats(

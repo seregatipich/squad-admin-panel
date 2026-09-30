@@ -216,6 +216,19 @@ describe('handleMatchClose combat aggregation (MATCH-3)', () => {
     });
   });
 
+  it('treats a match with only combat_damage events as combat-tracked, with zero totals', async () => {
+    await seedRoster();
+    await insertCombat('combat_damage', at(150), {
+      match_id: MATCH_ID,
+      attacker_player_id: PLAYER_A,
+      victim_player_id: PLAYER_B,
+    });
+    await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);
+
+    const roster = await rosterById(MATCH_ID);
+    expect(roster.get(PLAYER_A)).toMatchObject({ kills: 0, deaths: 0, wounds: 0, revives: 0 });
+  });
+
   it('leaves combat columns NULL for a match played before combat parsing existed', async () => {
     await seedRoster();
     await handleMatchClose(db, NO_ROSTER_SNAPSHOT, closeCommand);

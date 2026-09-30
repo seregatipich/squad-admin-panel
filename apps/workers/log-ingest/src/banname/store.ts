@@ -56,12 +56,6 @@ export type BannedNameEventOutcome =
       kickEnqueued: boolean;
     };
 
-/** @deprecated Use {@link HandleBannedNameEventParams} for both supported player events. */
-export type HandleBannedNameConnectParams = HandleBannedNameEventParams;
-
-/** @deprecated Use {@link BannedNameEventOutcome} for both supported player events. */
-export type BannedNameConnectOutcome = BannedNameEventOutcome;
-
 interface BannedNameEventPayload {
   steam_id64: string;
   eos_id: string | null;
@@ -203,8 +197,14 @@ export async function handleBannedNameEvent(
   let escalated = false;
   if (match.action === 'kick') {
     const kicksKey = `banname:kicks:${identity}`;
-    const kicksCount = await redis.incr(kicksKey);
-    if (kicksCount === 1) await redis.expire(kicksKey, ESCALATION_WINDOW_SECONDS);
+    // INCR and EXPIRE NX travel in one MULTI so a crash between them cannot
+    // leave a counter without a TTL (which would pin the player at 'alert' forever).
+    const counted = await redis
+      .multi()
+      .incr(kicksKey)
+      .expire(kicksKey, ESCALATION_WINDOW_SECONDS, 'NX')
+      .exec();
+    const kicksCount = Number(counted?.[0]?.[1]);
     if (kicksCount > ESCALATION_KICK_THRESHOLD) {
       effectiveAction = 'alert';
       escalated = true;
@@ -307,6 +307,3 @@ export async function handleBannedNameEvent(
     kickEnqueued,
   };
 }
-
-/** @deprecated Use {@link handleBannedNameEvent} for connect and name-change enforcement. */
-export const handleBannedNameConnect = handleBannedNameEvent;

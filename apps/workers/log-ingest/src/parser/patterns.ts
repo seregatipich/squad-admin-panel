@@ -93,8 +93,12 @@ export function isBenignNoise(line: string): boolean {
 
 export const SQUAD_LOG_EXIT = /^\[(?<ts>[^\]]+)\]\[ *\d+\]LogExit: (?<msg>.*)$/;
 export const SQUAD_FATAL_ERROR = /^\[(?<ts>[^\]]+)\]\[ *\d+\]Fatal error: (?<msg>.*)$/;
+/**
+ * Anchored to the line start (optionally behind the standard `[ts][id]Category:`
+ * prefix) so the phrase typed into player chat cannot raise a fatal diagnostic.
+ */
 export const SQUAD_ASSERTION_FAILED =
-  /Assertion failed: (?<msg>.*) \[File:(?<file>[^\]]+) Line: (?<line>\d+)\]/;
+  /^(?:\[[^\]]+\]\[ *\d+\]\w+: (?:Error: )?)?Assertion failed: (?<msg>.*) \[File:(?<file>[^\]]+) Line: (?<line>\d+)\]/;
 
 export interface SquadFatalMatch {
   ts: string | null;

@@ -77,6 +77,27 @@ describe('BannedNameRuleCache', () => {
     selectSpy.mockRestore();
   });
 
+  it('shares one database load between concurrent matches', async () => {
+    const selectSpy = vi.spyOn(db, 'select');
+    const cache = new BannedNameRuleCache(db, 200);
+
+    await Promise.all([cache.match('a'), cache.match('b'), cache.match('c')]);
+    expect(selectSpy).toHaveBeenCalledTimes(1);
+
+    selectSpy.mockRestore();
+  });
+
+  it('keeps matching with the previous rule set when a reload fails', async () => {
+    const cache = new BannedNameRuleCache(db, 0);
+    expect(await cache.match('ProCheater')).toMatchObject({ ruleId: RULE_A });
+
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => {
+      throw new Error('database unavailable');
+    });
+    expect(await cache.match('ProCheater')).toMatchObject({ ruleId: RULE_A });
+    selectSpy.mockRestore();
+  });
+
   it('invalidate() forces an immediate reload on the next match', async () => {
     const cache = new BannedNameRuleCache(db, 30_000);
     expect(await cache.match('NewRuleUser')).toBeNull();

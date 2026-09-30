@@ -15,6 +15,7 @@ const DEFAULT_TTL_MS = 30_000;
 export class BannedNameRuleCache {
   private compiled: CompiledBannedNameRuleSet = { exact: [], substring: [], regex: [] };
   private loadedAt = 0;
+  private loading: Promise<void> | null = null;
 
   constructor(
     private readonly db: DatabaseClient,
@@ -26,8 +27,29 @@ export class BannedNameRuleCache {
     this.loadedAt = 0;
   }
 
+  /**
+   * Concurrent callers share one in-flight load. A failed reload keeps the
+   * previously compiled rules and is retried after the TTL; only a failure
+   * before any successful load propagates.
+   */
   private async ensureLoaded(): Promise<void> {
     if (this.loadedAt !== 0 && Date.now() - this.loadedAt < this.ttlMs) return;
+    this.loading ??= this.reload().finally(() => {
+      this.loading = null;
+    });
+    await this.loading;
+  }
+
+  private async reload(): Promise<void> {
+    try {
+      await this.loadRules();
+    } catch (err) {
+      if (this.loadedAt === 0) throw err;
+      this.loadedAt = Date.now();
+    }
+  }
+
+  private async loadRules(): Promise<void> {
     const rows = await this.db
       .select({
         id: bannedNameRules.id,

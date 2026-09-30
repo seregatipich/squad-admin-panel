@@ -334,9 +334,18 @@ async function main() {
         },
         onHostKey: (fingerprint) => {
           // Trust on first use: pin the fingerprint so a later host-key change is refused.
+          // Only an empty pin for the host this tail actually connected to is written, so a
+          // tail still running against a replaced ssh_host cannot pin the old host's key.
           db.update(serverLogSources)
             .set({ hostKeyFingerprint: fingerprint, updatedAt: new Date() })
-            .where(eq(serverLogSources.serverId, serverId))
+            .where(
+              and(
+                eq(serverLogSources.serverId, serverId),
+                isNull(serverLogSources.hostKeyFingerprint),
+                eq(serverLogSources.sshHost, src.host),
+                eq(serverLogSources.sshPort, src.port),
+              ),
+            )
             .catch((err) =>
               log.warn({ err: (err as Error).message, serverId }, 'host key pin failed'),
             );
@@ -428,10 +437,7 @@ async function main() {
         );
       for (const r of sshRows) {
         try {
-          const privateKey = decrypt(
-            encryptionKey,
-            deserialize(Buffer.from(r.blob as unknown as Buffer)),
-          );
+          const privateKey = decrypt(encryptionKey, deserialize(r.blob));
           wanted.push({
             serverId: r.id,
             beaconPort: r.beaconPort,

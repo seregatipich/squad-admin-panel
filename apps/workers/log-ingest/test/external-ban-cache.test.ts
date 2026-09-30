@@ -47,4 +47,29 @@ describe('ExternalBanCache', () => {
     expect(getVersion).toHaveBeenNthCalledWith(1, EXTERNAL_BAN_CACHE_VERSION_KEY);
     expect(getVersion).toHaveBeenNthCalledWith(2, EXTERNAL_BAN_CACHE_VERSION_KEY);
   });
+
+  it('shares one refresh between concurrent matches after a version change', async () => {
+    const db = fakeDb([]);
+    const cache = new ExternalBanCache(db as never, { get: vi.fn().mockResolvedValue('1') });
+
+    await Promise.all([
+      cache.match('76561198000000000', null),
+      cache.match('76561198000000001', null),
+      cache.match('76561198000000002', null),
+    ]);
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the loaded index instead of reloading when Redis is unavailable', async () => {
+    const db = fakeDb([]);
+    const get = vi.fn().mockResolvedValueOnce('1').mockRejectedValue(new Error('redis down'));
+    const cache = new ExternalBanCache(db as never, { get });
+
+    await cache.match('76561198000000000', null);
+    await cache.match('76561198000000000', null);
+    await cache.match('76561198000000000', null);
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
 });

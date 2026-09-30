@@ -315,30 +315,6 @@ export async function computeMatchRoster(
   });
 }
 
-export async function computeOpenMatchRoster(
-  db: DatabaseClient,
-  redis: RosterSnapshotReader,
-  params: { matchId: string; now: Date },
-): Promise<MatchRosterEntry[]> {
-  const rows = await db
-    .select({
-      serverId: matches.serverId,
-      startedAt: matches.startedAt,
-      endedAt: matches.endedAt,
-    })
-    .from(matches)
-    .where(eq(matches.id, params.matchId))
-    .limit(1);
-  const match = rows[0];
-  if (!match) return [];
-  const matchEnd = match.endedAt ?? params.now;
-  return computeMatchRoster(db, redis, {
-    serverId: match.serverId,
-    matchStart: match.startedAt,
-    matchEnd,
-  });
-}
-
 /**
  * Writes `match_players` for a closed match: play time from `player_sessions`
  * overlap, team and squad name from worker-rcon's last Redis roster snapshot

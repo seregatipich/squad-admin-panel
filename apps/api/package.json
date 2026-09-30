@@ -37,7 +37,6 @@
     "@squad/shared-config": "workspace:*",
     "@squad/shared-types": "workspace:*",
     "@squad/steam-api": "workspace:*",
-    "@types/diff": "^8.0.0",
     "arctic": "^3.1.4",
     "diff": "^9.0.0",
     "drizzle-orm": "^0.45.2",
@@ -57,7 +56,6 @@
   "devDependencies": {
     "@types/node": "^22.10.1",
     "@types/ssh2": "1.15.6",
-    "@types/uuid": "^11.0.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
