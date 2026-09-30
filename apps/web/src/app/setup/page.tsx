@@ -37,7 +37,10 @@ export default function SetupPage() {
   const loadStatus = useCallback(() => {
     setStatusErr(null);
     fetch('/api/v1/setup/status', { credentials: 'include', cache: 'no-store' })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`setup_status_${r.status}`);
+        return r.json();
+      })
       .then((s: SetupStatus) => {
         if (s.setup_completed) {
           window.location.href = '/';

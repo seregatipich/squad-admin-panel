@@ -28,8 +28,12 @@ export default function LoginPage() {
     // A failed logout leaves the session alive; bouncing to the dashboard would hide that.
     if (errorCode === 'logout_failed') return;
     (async () => {
-      const meRes = await fetch('/api/v1/me', { credentials: 'include' });
-      if (meRes.ok) window.location.href = '/dashboard';
+      try {
+        const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (meRes.ok) window.location.href = '/dashboard';
+      } catch {
+        // Сбой проверки сессии не мешает войти: страница входа остаётся доступной.
+      }
     })();
   }, []);
 
