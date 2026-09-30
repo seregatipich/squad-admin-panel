@@ -69,7 +69,6 @@ const EVENT_DELIVERY: Record<LiveEvent['type'], 'broadcast' | 'opt_in'> = {
   'server.status': 'broadcast',
   'session.revoked': 'broadcast',
   'vote.ended': 'broadcast',
-  'worker.heartbeat': 'broadcast',
 };
 
 function isBroadcast(type: string): boolean {

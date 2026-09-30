@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
   check,
-  customType,
   index,
   inet,
   pgTable,
@@ -10,14 +9,9 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 import { players } from './players.js';
 import { servers } from './servers.js';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
 
 /**
  * Append-only history of every config file the panel writes (no UPDATE; DELETE

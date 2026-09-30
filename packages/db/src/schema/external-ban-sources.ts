@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
-  customType,
   index,
   integer,
   jsonb,
@@ -12,12 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
+import { bytea } from './_types.js';
 
 export const externalBanSources = pgTable(
   'external_ban_sources',

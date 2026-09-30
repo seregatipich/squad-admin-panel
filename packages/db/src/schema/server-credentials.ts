@@ -1,11 +1,6 @@
-import { customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 import { servers } from './servers.js';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
 
 export const serverCredentials = pgTable('server_credentials', {
   serverId: uuid('server_id')
