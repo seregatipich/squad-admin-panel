@@ -13,12 +13,21 @@
  * endpoint via `apps/api/src/lib/audit-chain.ts`, so this out-of-band check
  * and the in-panel button agree by construction.
  *
- * Usage: DATABASE_URL=postgres://... pnpm verify:audit-chain
+ * External anchor (#1064): the chain alone cannot prove that its tail was not
+ * truncated or that it was regenerated wholesale. Run once with
+ * AUDIT_CHAIN_PRINT_HEAD=1 to print `head: <id>:<row_hash>`, record that line
+ * outside the database (ops log, password manager note), and pass it back as
+ * AUDIT_CHAIN_ANCHOR=<id>:<row_hash> on later runs: the run then also fails
+ * (exit 1, `anchor mismatch`) when that row is missing or has another hash.
+ *
+ * Usage: DATABASE_URL=postgres://... [AUDIT_CHAIN_ANCHOR=id:hash]
+ *        [AUDIT_CHAIN_PRINT_HEAD=1] pnpm verify:audit-chain
  */
 
 import postgres from 'postgres';
 import {
   AUDIT_CHAIN_COLUMNS_SQL,
+  type AuditChainAnchor,
   type AuditChainRow,
   AuditChainVerifier,
 } from '../apps/api/src/lib/audit-chain.js';
@@ -32,16 +41,28 @@ import {
 // inserting thousands of rows.
 const BATCH_SIZE = Number(process.env.AUDIT_CHAIN_BATCH_SIZE) || 5_000;
 
+/** Parses `AUDIT_CHAIN_ANCHOR` (`<id>:<64 hex chars>`); `undefined` when unset. */
+function parseAnchor(value: string | undefined): AuditChainAnchor | undefined {
+  if (!value) return undefined;
+  const match = /^(\d+):([0-9a-f]{64})$/.exec(value);
+  if (!match) {
+    console.error('AUDIT_CHAIN_ANCHOR must be <id>:<64 hex chars>');
+    process.exit(2);
+  }
+  return { id: match[1] as string, rowHashHex: match[2] as string };
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error('DATABASE_URL is required');
     process.exit(2);
   }
+  const anchor = parseAnchor(process.env.AUDIT_CHAIN_ANCHOR);
   const sql = postgres(url, { max: 1, prepare: false, connection: { TimeZone: 'UTC' } });
 
   try {
-    const verifier = new AuditChainVerifier();
+    const verifier = new AuditChainVerifier({ anchor });
     await sql.begin('isolation level repeatable read read only', async (tx) => {
       // `created_at::text` follows the session TimeZone; the trigger hashes it in UTC.
       await tx`SET LOCAL "TimeZone" = 'UTC'`;
@@ -69,6 +90,9 @@ async function main() {
     }
 
     console.log(`ok: audit chain intact (${result.checked} rows)`);
+    if (process.env.AUDIT_CHAIN_PRINT_HEAD && verifier.head) {
+      console.log(`head: ${verifier.head.id}:${verifier.head.rowHashHex}`);
+    }
   } finally {
     await sql.end({ timeout: 5 });
   }

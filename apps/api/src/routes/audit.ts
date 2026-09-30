@@ -22,6 +22,25 @@ const listQuery = z.object({
   page_size: z.coerce.number().int().min(1).max(200).default(50),
 });
 
+/**
+ * Optional external anchor for `verify-chain` (#1064): the `head` a previous
+ * run returned and the operator recorded outside the database. Both or neither.
+ */
+const verifyChainQuery = z
+  .object({
+    anchor_id: z
+      .string()
+      .regex(/^\d{1,19}$/)
+      .optional(),
+    anchor_hash: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .refine((query) => (query.anchor_id === undefined) === (query.anchor_hash === undefined), {
+    message: 'anchor_id and anchor_hash must be given together',
+  });
+
 const auditRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
   fast.get(
@@ -78,12 +97,19 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
    * transaction (a consistent snapshot, `created_at::text` rendered in UTC as
    * the trigger hashes it), yields the event loop between pages, and runs
    * one verification at a time: a concurrent call answers
-   * `409 verify_in_progress` (#36).
+   * `409 verify_in_progress` (#36). The response carries the verified `head`
+   * (last row id and hash) to record outside the database; passing it back as
+   * `anchor_id` + `anchor_hash` later also detects a truncated tail or a
+   * rewritten history (`reason: 'anchor'`, #1064).
    */
   fast.get(
     '/api/v1/audit/verify-chain',
-    { config: { permissions: ['audit:view'], audit: false } },
+    {
+      config: { permissions: ['audit:view'], audit: false },
+      schema: { querystring: verifyChainQuery },
+    },
     async (req, reply) => {
+      const { anchor_id, anchor_hash } = req.query;
       const acquired = await app.redis.set(
         AUDIT_VERIFY_LOCK_KEY,
         req.id,
@@ -96,7 +122,12 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'verify_in_progress' };
       }
       try {
-        const verifier = new AuditChainVerifier();
+        const verifier = new AuditChainVerifier({
+          anchor:
+            anchor_id !== undefined && anchor_hash !== undefined
+              ? { id: anchor_id, rowHashHex: anchor_hash }
+              : undefined,
+        });
         await app.db.transaction(
           async (tx) => {
             await tx.execute(sql`SET LOCAL "TimeZone" = 'UTC'`);
@@ -124,6 +155,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
           checked: result.checked,
           broken_at: result.brokenAt,
           reason: result.reason,
+          head: verifier.head && { id: verifier.head.id, row_hash: verifier.head.rowHashHex },
         };
       } finally {
         await app.redis.del(AUDIT_VERIFY_LOCK_KEY);
