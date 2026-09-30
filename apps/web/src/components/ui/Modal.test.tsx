@@ -243,7 +243,7 @@ describe('Modal', () => {
   it('reopens a non-dismissible dialog that the browser closed natively', () => {
     const { container, onClose } = renderModal({ dismissible: false });
     const dialog = dialogIn(container);
-    dialog.close();
+    act(() => dialog.close());
     expect(onClose).not.toHaveBeenCalled();
     expect(dialog).toHaveAttribute('open');
   });
