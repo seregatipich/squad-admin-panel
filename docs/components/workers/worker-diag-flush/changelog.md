@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-30 — journald forwarder resilience (#92)
+
+### Fixed
+
+- `journalctl` exiting unexpectedly is restarted with exponential backoff (1 s up to 30 s) until
+  shutdown, and the heartbeat status reports `degraded (journald forwarder down)` while it is down.
+- Forwarded events take their id from the journald `__CURSOR` (UUIDv5), so the `--since` replay
+  window after a restart is dropped by `ON CONFLICT (id, ts)` instead of duplicating rows.
+- The `diag_flush.stopped` emit is bounded to 2 s so an unreachable Redis cannot stall shutdown.
+
 ## 2026-04-29
 
 ### Fixed

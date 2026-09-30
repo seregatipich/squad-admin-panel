@@ -1,5 +1,19 @@
 # Changelog — worker-config-sync
 
+## 2026-09-30 — audit hardening and sweep guards (#92)
+
+### Changed
+
+- `audit_log` rows written by the worker are plain inserts; the hash chain is left to the
+  `audit_log_append` trigger instead of a discarded JS hash and an extra `SELECT`.
+- The generic config-drift sweep orders tips by `created_at DESC, id DESC` so equal timestamps
+  resolve deterministically, and no longer double-casts the raw SQL result.
+- The consumer name is the stable `config-sync` (no dead consumer left in each stream's group per
+  restart). The reclaim, drift and config-drift sweeps skip a tick while the previous pass runs,
+  and reclaim honours the per-server failure backoff.
+- Numeric env variables (`*_INTERVAL_MS`, `ADMINS_CFG_RECLAIM_MIN_IDLE_MS`,
+  `ADMINS_CFG_RELAY_XADD_TIMEOUT_MS`) must be positive integers; a bad value fails startup.
+
 ## 2026-09-27 — структура Admins.cfg защищена от значений из БД (#11)
 
 ### Исправлено
