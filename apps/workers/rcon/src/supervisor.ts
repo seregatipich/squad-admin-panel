@@ -1,4 +1,4 @@
-import { type ChatFlagDetector, handleChat } from '@squad/chat-ingest';
+import { type ChatFlagDetector, handleChat, type PlayerIdCache } from '@squad/chat-ingest';
 import {
   type DatabaseClient,
   events,
@@ -133,6 +133,11 @@ export interface SupervisorOptions {
    * every supervisor so the rule cache is loaded once.
    */
   chatFlagDetector?: ChatFlagDetector | null;
+  /**
+   * Sender cache for chat identity lookups, shared across every supervisor.
+   * Without one, every chat line runs the identity queries.
+   */
+  playerIds?: PlayerIdCache;
 }
 
 /** True when the parameters that pick the TCP/UDP endpoint or the AUTH secret differ. */
@@ -854,6 +859,12 @@ class PerServerSupervisor {
                 { err: err.message, serverId: this.target.serverId },
                 'rcon chat archive insert failed',
               ),
+            onFlagError: (err) =>
+              this.opts.log.warn(
+                { err: err.message, serverId: this.target.serverId },
+                'rcon chat flag detection failed',
+              ),
+            playerIds: this.opts.playerIds,
           },
           this.opts.chatFlagDetector ?? null,
         ),

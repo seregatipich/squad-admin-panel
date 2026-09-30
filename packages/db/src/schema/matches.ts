@@ -35,10 +35,6 @@ export const matches = pgTable(
   },
   (table) => ({
     serverStartedKey: uniqueIndex('matches_server_started_key').on(table.serverId, table.startedAt),
-    serverStartedIdx: index('matches_server_started_idx').on(
-      table.serverId,
-      table.startedAt.desc(),
-    ),
     startedIdx: index('matches_started_idx').on(table.startedAt.desc()),
     layerIdx: index('matches_layer_idx').on(table.layer),
     openIdx: index('matches_open_idx')

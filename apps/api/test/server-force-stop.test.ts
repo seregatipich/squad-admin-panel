@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('POST /api/v1/servers/:id/force-stop', () => {
-  it('force-stops a running server via containerRm with force:true → 200, DB status = stopped', async () => {
+  it('force-stops a running server via containerRm (always docker rm -f) → 200, DB status = stopped', async () => {
     const seeded = await seedServer(h, { slug: 'force-stop-running', status: 'running' });
     const containerRm = vi.spyOn(h.bridge, 'containerRm');
 
@@ -79,7 +79,7 @@ describe('POST /api/v1/servers/:id/force-stop', () => {
     expect(body.status).toBe('stopped');
     expect(body.server_id).toBe(seeded.id);
 
-    expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}`, force: true });
+    expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}` });
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.status).toBe('stopped');

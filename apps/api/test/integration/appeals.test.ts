@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   banAppeals,
   discordWebhooks,
@@ -276,7 +277,14 @@ describeIfDb('POST /api/v1/public/appeals (Steam-verified submission)', () => {
       .where(eq(banAppeals.steamId64, steamId64))
       .limit(1);
     expect(row?.status).toBe('pending');
-    expect(row?.trackingToken).toBe(body.tracking_token);
+    // Only the sha256 of the bearer token is at rest (#1084).
+    expect(row?.trackingToken).toBeNull();
+    expect(row?.trackingTokenHash).toBe(
+      createHash('sha256').update(body.tracking_token).digest('hex'),
+    );
+    expect(
+      JSON.stringify(row, (_key, value) => (typeof value === 'bigint' ? String(value) : value)),
+    ).not.toContain(body.tracking_token);
     expect(row?.submitterIp).toBe('127.0.0.1');
   });
 

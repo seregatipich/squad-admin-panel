@@ -42,7 +42,6 @@ export const mediaLinks = pgTable(
       table.entityId,
     ),
     entityIdx: index('media_links_entity_idx').on(table.entityType, table.entityId),
-    mediaIdx: index('media_links_media_idx').on(table.mediaId),
   }),
 );
 

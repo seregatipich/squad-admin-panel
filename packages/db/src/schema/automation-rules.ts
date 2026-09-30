@@ -64,7 +64,6 @@ export const automationRules = pgTable(
       'automation_rules_action_type_chk',
       sql`${table.actionType} IN ('rcon_command','kick','warn','notify_admin')`,
     ),
-    enabledIdx: index('automation_rules_enabled_idx').on(table.enabled),
     serverIdx: index('automation_rules_server_idx').on(table.serverId),
   }),
 );

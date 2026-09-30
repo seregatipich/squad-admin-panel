@@ -98,9 +98,9 @@ const MAP_VOTE_RECENT_MATCH_LIMIT = 50;
 
 /**
  * GAME-1 (#80): panel-driven map auto-selection per the 2026-07-09
- * map-rotation ADR — a per-server candidate pool + weighted selection rule
- * applied by the scheduler tick via `AdminSetNextLayer` (no in-game chat
- * voting, no `LayerVoting*.cfg`).
+ * map-rotation ADR (docs/architecture/decisions.md) — a per-server candidate
+ * pool + weighted selection rule applied by the scheduler tick via
+ * `AdminSetNextLayer` (no in-game chat voting, no `LayerVoting*.cfg`).
  *
  * Reads are gated on `panelAccess`; writes need the `changemap` squad
  * permission and are audited. `GET /preview` runs the exact

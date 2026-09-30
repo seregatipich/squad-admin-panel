@@ -86,8 +86,10 @@ Immutable, hash-chained record of every state-mutating API action. The DB trigge
 **Hash canonical form** (same as `scripts/verify-audit-chain.ts`):
 
 ```
-sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | created_at::text ) )
+sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | audit_log_created_at_text(created_at) ) )
 ```
+
+`audit_log_created_at_text()` renders `created_at::text` with `TimeZone = 'UTC'` and `DateStyle = 'ISO, MDY'` pinned on the function (migration 0119), so the hash does not depend on the writer's or verifier's session settings. The trigger also assigns `id` itself, after taking the advisory lock; the column has no default.
 
 **Example row:**
 
@@ -836,8 +838,9 @@ MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/ap
 | `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
 | `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
 | `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
-| `tracking_token` | `text` | NO | | `randomBytes(24).toString('base64url')`; returned once, the applicant's only handle |
-| `submitter_ip` | `inet` | YES | `null` | Abuse forensics |
+| `tracking_token` | `text` | YES | `null` | Legacy plaintext column, always NULL since migration 0119 (a trigger hashes and clears any value written); to be dropped in a later release |
+| `tracking_token_hash` | `text` | NO | | sha256 hex of the `randomBytes(24).toString('base64url')` token, which is returned once and is the applicant's only handle; unique |
+| `submitter_ip` | `inet` | YES | `null` | Abuse forensics; cleared by `worker-event-partition` 30 days after the decision, 90 days after submission at the latest |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 | `decided_at` | `timestamptz` | YES | `null` | Set on `approved`/`rejected` |
@@ -845,7 +848,7 @@ MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/ap
 **Indexes**
 
 - `ban_appeals_number_key` UNIQUE on `(number)`
-- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)`
+- `ban_appeals_tracking_token_hash_key` UNIQUE on `(tracking_token_hash)` (replaced `ban_appeals_tracking_token_key` in migration 0119)
 - `ban_appeals_status_created_idx` on `(status, created_at)`
 - `ban_appeals_player_idx` on `(player_id)`
 - `ban_appeals_action_idx` on `(moderation_action_id)`

@@ -261,6 +261,91 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
     }
   });
 
+  it('commits each published row on its own so one failing server never blocks or re-publishes the others', async () => {
+    const [failingServer, healthyServer] = await activeServerIds();
+    if (!failingServer || !healthyServer) throw new Error('expected two active servers');
+    const [{ id: failingId }] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: failingServer, payload: makeEvent('poisoned-stream') })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const [{ id: healthyId }] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: healthyServer, payload: makeEvent('healthy-stream') })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    const poisonedRedis: OutboxRelayRedis = {
+      xadd: async (key, ...args) => {
+        if (key === `${ADMINS_CFG_SYNC_STREAM_PREFIX}${failingServer}`) {
+          throw new Error('WRONGTYPE Operation against a key holding the wrong kind of value');
+        }
+        return h.redis.xadd(key, ...args);
+      },
+    };
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, poisonedRedis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+      }),
+    ).rejects.toThrow('WRONGTYPE');
+
+    const rows = await h.db
+      .select({ id: adminsCfgSyncOutbox.id, relayedAt: adminsCfgSyncOutbox.relayedAt })
+      .from(adminsCfgSyncOutbox);
+    const byId = new Map(rows.map((row) => [row.id, row.relayedAt]));
+    expect(byId.get(failingId)).toBeNull();
+    expect(byId.get(healthyId)).toBeInstanceOf(Date);
+    const healthyEntries = async () =>
+      (await streamEvents(healthyServer)).filter((event) => event._outbox_id === healthyId);
+    expect(await healthyEntries()).toHaveLength(1);
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, poisonedRedis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+      }),
+    ).rejects.toThrow('WRONGTYPE');
+    expect(await healthyEntries()).toHaveLength(1);
+  });
+
+  it('refuses a non-object payload instead of spreading it into the stream event', async () => {
+    const [serverId] = await activeServerIds();
+    if (!serverId) throw new Error('expected an active server');
+    const [{ id }] = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId, payload: ['not', 'an', 'object'] })
+      .returning({ id: adminsCfgSyncOutbox.id });
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, h.redis, { streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX }),
+    ).rejects.toThrow('admins_cfg_outbox_invalid_payload');
+
+    const [row] = await h.db
+      .select({ relayedAt: adminsCfgSyncOutbox.relayedAt })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.id, id));
+    expect(row?.relayedAt).toBeNull();
+    const published = await streamEvents(serverId);
+    expect(published.filter((event) => event._outbox_id === id)).toEqual([]);
+  });
+
+  it('stops a run after consecutive failures instead of waiting out every row', async () => {
+    const [serverId] = await activeServerIds();
+    if (!serverId) throw new Error('expected an active server');
+    await h.db.insert(adminsCfgSyncOutbox).values(
+      Array.from({ length: 10 }, (_, index) => ({
+        serverId,
+        payload: makeEvent(`redis-down-${index}`),
+      })),
+    );
+    const xadd = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+
+    await expect(
+      relayAdminsCfgSyncOutbox(h.db, { xadd }, { streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX }),
+    ).rejects.toThrow('ECONNREFUSED');
+    expect(xadd).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps a row pending when XADD returns no stream id', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
@@ -341,22 +426,25 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
     const rowCount = 550;
-    await h.db.insert(adminsCfgSyncOutbox).values(
-      Array.from({ length: rowCount }, (_, index) => ({
-        serverId,
-        payload: makeEvent(`load-${index}`),
-      })),
-    );
+    const inserted = await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values(
+        Array.from({ length: rowCount }, (_, index) => ({
+          serverId,
+          payload: makeEvent(`load-${index}`),
+        })),
+      )
+      .returning({ id: adminsCfgSyncOutbox.id });
 
-    expect(
-      await relayAdminsCfgSyncOutbox(h.db, h.redis, {
-        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
-      }),
-    ).toEqual({ relayed: rowCount });
+    // Route tests running in parallel against the shared database may enqueue
+    // their own rows meanwhile, so assert on this test's rows only.
+    const { relayed } = await relayAdminsCfgSyncOutbox(h.db, h.redis, {
+      streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+    });
+    expect(relayed).toBeGreaterThanOrEqual(rowCount);
 
-    const events = await streamEvents(serverId);
-    expect(events).toHaveLength(rowCount);
-    expect(new Set(events.map((event) => event._outbox_id)).size).toBe(rowCount);
+    const streamedIds = new Set((await streamEvents(serverId)).map((event) => event._outbox_id));
+    expect(inserted.filter((row) => !streamedIds.has(row.id))).toEqual([]);
   });
 
   it("stamps a soft-deleted server's pending rows relayed without publishing (SYNC-5)", async () => {

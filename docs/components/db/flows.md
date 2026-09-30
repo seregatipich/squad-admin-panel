@@ -134,7 +134,7 @@ await app.db
 
 1. Application code calls `db.insert(auditLog).values({ actorKind, actorSteamId64, actionType, ... })`.
 2. Postgres fires `trg_audit_log_ins` (BEFORE INSERT, FOR EACH ROW) which executes `audit_log_append()`.
-3. `audit_log_append()` acquires a transaction-scoped advisory lock with key `hashtextextended('audit_log', 0)`. This serializes concurrent inserts so the hash chain is linear.
+3. `audit_log_append()` acquires a transaction-scoped advisory lock with key `hashtextextended('audit_log', 0)`. This serializes concurrent inserts so the hash chain is linear. Only then does it assign `NEW.id` from `audit_log_id_seq` (the column has no default since migration 0119), so id order equals chain order.
 4. It reads the current maximum `row_hash` with `SELECT row_hash FROM audit_log ORDER BY id DESC LIMIT 1`.
 5. It sets `NEW.prev_hash` to the value just read (NULL if this is the first row).
 6. It computes `NEW.row_hash` as:
@@ -143,7 +143,7 @@ await app.db
      COALESCE(prev, ''::bytea) ||
      convert_to(
        action_type || '|' || COALESCE(target_type,'') || '|' || COALESCE(target_id,'')
-       || '|' || context::text || '|' || created_at::text,
+       || '|' || context::text || '|' || audit_log_created_at_text(created_at),
        'UTF8'
      ),
      'sha256'

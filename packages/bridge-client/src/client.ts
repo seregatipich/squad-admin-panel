@@ -2,46 +2,95 @@ import { EventEmitter } from 'node:events';
 import { createConnection, type Socket } from 'node:net';
 import { BRIDGE_SOCKET_DEFAULT } from '@squad/shared-config';
 import { v7 as uuidv7 } from 'uuid';
-import { decodeFrames, encodeFrame } from './frame.js';
-import {
-  type BackupRestoreParams,
-  type BackupRestoreResult,
-  type BackupRunResult,
-  type BackupSnapshotsResult,
-  BridgeError,
-  type BridgeRequest,
-  type BridgeResponse,
-  type BridgeStreamFrame,
-  type ContainerControlParams,
-  type ContainerInspectResult,
-  type ContainerLogsParams,
-  type ContainerRunParams,
-  type ContainerRunResult,
-  type ContainerRunRnsquadjsParams,
-  type ContainerRunRnsquadjsResult,
-  type ContainerStatsResult,
-  type DirectoryDeleteParams,
-  type DirectoryDeleteResult,
-  type FileReadParams,
-  type FileReadStreamParams,
-  type FileReadStreamResult,
-  type FileWriteParams,
-  type HostAgentRestartResult,
-  type HostInfo,
-  type HostMetrics,
-  type PanelDiskUsage,
-  type PingResult,
-  type SquadLogListParams,
-  type SquadLogListResult,
-  type SquadLogRetentionSweepParams,
-  type SquadLogRetentionSweepResult,
-  type UfwRuleParams,
+import { z } from 'zod';
+import { BridgeError } from './errors.js';
+import { encodeFrame, FrameAccumulator } from './frame.js';
+import type {
+  BackupRestoreParams,
+  BackupRestoreResult,
+  BackupRunResult,
+  BackupSnapshotsResult,
+  BridgeErrorCode,
+  BridgeRequest,
+  BridgeResponse,
+  BridgeStreamFrame,
+  ContainerControlParams,
+  ContainerInspectResult,
+  ContainerLogsParams,
+  ContainerRunParams,
+  ContainerRunResult,
+  ContainerRunRnsquadjsParams,
+  ContainerRunRnsquadjsResult,
+  ContainerStatsResult,
+  DirectoryDeleteParams,
+  DirectoryDeleteResult,
+  FileReadParams,
+  FileReadStreamParams,
+  FileReadStreamResult,
+  FileWriteParams,
+  HostAgentRestartResult,
+  HostInfo,
+  HostMetrics,
+  PanelDiskUsage,
+  PingResult,
+  SquadLogListParams,
+  SquadLogListResult,
+  SquadLogRetentionSweepParams,
+  SquadLogRetentionSweepResult,
+  UfwRuleParams,
 } from './types.js';
 
 export interface BridgeClientOptions {
   socketPath?: string;
   defaultTimeoutMs?: number;
   onLog?: (msg: string, meta?: Record<string, unknown>) => void;
+}
+
+const BRIDGE_ERROR_CODES = [
+  'forbidden',
+  'invalid_args',
+  'runtime_error',
+  'timeout',
+  'internal',
+  'transport',
+] as const satisfies readonly BridgeErrorCode[];
+
+/**
+ * Shapes of the frames the bridge sends (Go `rpc.StreamFrame` / `rpc.Response`
+ * in `apps/bridge/internal/rpc/types.go`). Only the envelope is validated;
+ * `result` and stream `data` stay `unknown` and are typed per method by the
+ * wrappers. An error code this client does not know yet degrades to
+ * `internal` so the bridge's message still reaches the caller.
+ */
+const streamFrameSchema = z.object({
+  id: z.string(),
+  stream: z.enum(['stdout', 'stderr', 'event']),
+  data: z.unknown(),
+});
+
+const responseSchema = z.object({
+  id: z.string(),
+  ok: z.boolean(),
+  result: z.unknown().optional(),
+  error: z
+    .object({
+      code: z.enum(BRIDGE_ERROR_CODES).catch('internal'),
+      message: z.string(),
+      detail: z.unknown().optional(),
+    })
+    .optional(),
+});
+
+/** Stream frames are told apart from responses by their `stream` key, as in the Go server. */
+function isStreamFrameCandidate(raw: unknown): boolean {
+  return raw !== null && typeof raw === 'object' && 'stream' in raw;
+}
+
+/** Renders validation issues as `path: message` pairs for logs and errors. */
+function describeIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+    .join('; ');
 }
 
 interface PendingCall {
@@ -102,7 +151,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   private readonly defaultTimeoutMs: number;
   private readonly onLog: (msg: string, meta?: Record<string, unknown>) => void;
   private socket?: Socket;
-  private buffer: Buffer = Buffer.alloc(0);
+  private readonly frames = new FrameAccumulator();
   private readonly pending = new Map<string, PendingCall>();
   private closed = false;
   private connecting?: Promise<void>;
@@ -411,10 +460,9 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
 
   private attachHandlers(sock: Socket) {
     sock.on('data', (chunk) => {
-      this.buffer = Buffer.concat([this.buffer, chunk]);
-      let decoded: ReturnType<typeof decodeFrames>;
+      let frames: Buffer[];
       try {
-        decoded = decodeFrames(this.buffer);
+        frames = this.frames.push(chunk);
       } catch (err) {
         // A framing error means the stream is out-of-sync. Drop the
         // socket so the next call reconnects; do NOT mark the client
@@ -422,7 +470,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         this.onLog('bridge frame decode error; dropping socket', {
           err: (err as Error).message,
         });
-        this.buffer = Buffer.alloc(0);
+        this.frames.reset();
         for (const [, pending] of this.pending) {
           if (pending.timer) clearTimeout(pending.timer);
           pending.reject(new BridgeError('transport', (err as Error).message));
@@ -437,8 +485,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         }
         return;
       }
-      this.buffer = decoded.remainder;
-      for (const f of decoded.frames) {
+      for (const f of frames) {
         this.handleFrame(f);
       }
     });
@@ -469,18 +516,31 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   }
 
   private handleFrame(payload: Buffer) {
-    let obj: BridgeResponse | BridgeStreamFrame;
+    let raw: unknown;
     try {
-      obj = JSON.parse(payload.toString('utf-8'));
+      raw = JSON.parse(payload.toString('utf-8'));
     } catch {
       this.onLog('bridge frame invalid JSON');
       return;
     }
-    if ('stream' in obj) {
-      const p = this.pending.get(obj.id);
-      p?.onStream?.(obj);
+    if (isStreamFrameCandidate(raw)) {
+      // A malformed stream frame (e.g. a stream kind this client does not know
+      // yet) is only logged: dropping one progress line must not abort the call.
+      const parsed = streamFrameSchema.safeParse(raw);
+      if (!parsed.success) {
+        this.onLog('malformed bridge frame', { err: describeIssues(parsed.error) });
+        return;
+      }
+      const frame: BridgeStreamFrame = { ...parsed.data, data: parsed.data.data };
+      this.pending.get(frame.id)?.onStream?.(frame);
       return;
     }
+    const parsed = responseSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.rejectMalformed(raw, describeIssues(parsed.error));
+      return;
+    }
+    const obj: BridgeResponse = parsed.data;
     const p = this.pending.get(obj.id);
     if (!p) return;
     this.pending.delete(obj.id);
@@ -514,5 +574,22 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
       });
       p.reject(new BridgeError(err.code, err.message, err.detail));
     }
+  }
+
+  /**
+   * Handles a frame that is valid JSON but not a response envelope. When it
+   * still carries the id of a pending call, that call fails fast with
+   * `internal` instead of waiting for its timeout; otherwise it is only logged.
+   */
+  private rejectMalformed(raw: unknown, reason: string) {
+    this.onLog('malformed bridge frame', { err: reason });
+    if (raw === null || typeof raw !== 'object') return;
+    const id = 'id' in raw && typeof raw.id === 'string' ? raw.id : undefined;
+    if (id === undefined) return;
+    const p = this.pending.get(id);
+    if (!p) return;
+    this.pending.delete(id);
+    if (p.timer) clearTimeout(p.timer);
+    p.reject(new BridgeError('internal', `malformed bridge response to ${p.method}: ${reason}`));
   }
 }

@@ -184,7 +184,7 @@ Gracefully stops a running container. Timeout: 120 s.
 
 #### `containerRm(p: ContainerControlParams): Promise<{ status: string }>`
 
-Removes a stopped container. Timeout: 30 s.
+Removes a container, running or not — the bridge always runs `docker rm -f`. `ContainerControlParams` is `{ name, timeout_sec? }`, mirroring the Go `containerParams` struct; there is no `force` flag. Timeout: 30 s.
 
 ---
 
@@ -334,7 +334,9 @@ The api wires these into `app.diag.emit` from [`apps/api/src/plugins/bridge.ts`]
 
 ## `BridgeError`
 
-Thrown by every RPC method on failure.
+Thrown by every RPC method on failure. Defined in `src/errors.ts`.
+
+Every frame the bridge sends is validated with zod before it is routed: a response needs `id: string`, `ok: boolean` and, when present, `error: { code, message, detail? }`; a stream frame needs `id`, `stream: 'stdout' | 'stderr' | 'event'` and `data`. A malformed response that carries a pending call's `id` rejects that call at once with `BridgeError('internal', 'malformed bridge response to <method>: …')` instead of letting it time out; other malformed frames (no usable id, an unknown stream kind) are logged as `malformed bridge frame` and dropped. `result` stays `unknown` at the envelope level and is typed per method.
 
 ```ts
 import { BridgeError } from '@squad/bridge-client';
@@ -355,7 +357,7 @@ try {
 | `not_found` | File read on a path that does not exist |
 | `runtime_error` | Docker CLI or OS command failed |
 | `timeout` | Client-side deadline exceeded |
-| `internal` | Unexpected Go-side error |
+| `internal` | Unexpected Go-side error, an error code this client does not know, or a malformed response envelope |
 | `transport` | Socket-level error (connect failed, closed) |
 
 ---
@@ -372,3 +374,5 @@ const { frames, remainder } = decodeFrames(buf);
 ```
 
 Throws `FrameTooLargeError` if a payload exceeds `BRIDGE_MAX_FRAME_BYTES` (16 MiB).
+
+The client itself reassembles incoming frames with `FrameAccumulator`: socket chunks are queued without copying and joined once per complete frame (its size is known from the header), so receiving a frame costs copying it about twice instead of once per chunk, and the leftover partial frame is copied out rather than pinning the joined buffer.

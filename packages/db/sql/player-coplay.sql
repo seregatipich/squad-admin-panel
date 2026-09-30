@@ -1,7 +1,7 @@
 -- player_coplay (ALT-3): per (pair, server, UTC day) co-presence rollup derived
 -- idempotently from player_sessions, plus the coplay_settings singleton holding
 -- the read-time noise-floor thresholds. This file mirrors migration
--- 0035_player_coplay.sql so integration tests and the orchestrator can
+-- 0036_player_coplay.sql so integration tests and the orchestrator can
 -- materialise the tables without the throwaway drizzle migration. The whole
 -- file is idempotent (IF NOT EXISTS / ON CONFLICT) so it can be re-applied.
 

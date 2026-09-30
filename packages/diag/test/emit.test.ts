@@ -36,11 +36,11 @@ describe('diag.emit', () => {
 
   it('falls back to pino.warn when Redis throws', async () => {
     const redis = { xadd: vi.fn().mockRejectedValue(new Error('NOREDIS')) } as never;
-    const log = { warn: vi.fn(), debug: vi.fn() } as never;
-    const diag = createDiag({ redis, log });
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const diag = createDiag({ redis, log: log as never });
     await diag.emit({ component: 'api', kind: 'x', severity: 'info', message: 'hi' });
     expect(log.warn).toHaveBeenCalled();
-    const arg = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+    const arg = log.warn.mock.calls[0]?.[0] as {
       diag_event: { kind: string };
     };
     expect(arg.diag_event.kind).toBe('x');

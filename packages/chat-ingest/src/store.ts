@@ -90,7 +90,80 @@ export interface ChatMessageFrame {
   data: ChatMessageData;
 }
 
-export async function resolvePlayerId(db: DatabaseClient, chat: ChatInput): Promise<string | null> {
+/**
+ * Worker-local cache of EOS/Steam id → `players.id`, used by
+ * {@link resolvePlayerId} to skip the identity queries for a sender it has
+ * already resolved by id. Only id-based hits are cached: platform ids never
+ * move between players, whereas names do, and a miss must be retried because
+ * the roster poll may create the player at any moment.
+ *
+ * Entries expire after `ttlMs`; past `maxEntries` the oldest entry is evicted.
+ * Not shared between processes.
+ */
+export class PlayerIdCache {
+  private readonly entries = new Map<string, { playerId: string; expiresAt: number }>();
+  private readonly ttlMs: number;
+  private readonly maxEntries: number;
+  private readonly now: () => number;
+
+  /**
+   * @param opts.ttlMs - Lifetime of an entry in milliseconds (default 60 s).
+   * @param opts.maxEntries - Size cap across both id kinds (default 5 000).
+   * @param opts.now - Clock, injectable for tests.
+   */
+  constructor(opts: { ttlMs?: number; maxEntries?: number; now?: () => number } = {}) {
+    this.ttlMs = opts.ttlMs ?? 60_000;
+    this.maxEntries = opts.maxEntries ?? 5_000;
+    this.now = opts.now ?? Date.now;
+  }
+
+  /** @returns The cached player id for either of the sender's ids, if still fresh. */
+  lookup(chat: Pick<ChatInput, 'eosId' | 'steamId64'>): string | undefined {
+    for (const key of cacheKeys(chat)) {
+      const entry = this.entries.get(key);
+      if (!entry) continue;
+      if (entry.expiresAt > this.now()) return entry.playerId;
+      this.entries.delete(key);
+    }
+    return undefined;
+  }
+
+  /** Records `playerId` under every platform id the sender carries. */
+  remember(chat: Pick<ChatInput, 'eosId' | 'steamId64'>, playerId: string): void {
+    const expiresAt = this.now() + this.ttlMs;
+    for (const key of cacheKeys(chat)) {
+      this.entries.delete(key);
+      this.entries.set(key, { playerId, expiresAt });
+    }
+    for (const oldest of this.entries.keys()) {
+      if (this.entries.size <= this.maxEntries) break;
+      this.entries.delete(oldest);
+    }
+  }
+}
+
+function cacheKeys(chat: Pick<ChatInput, 'eosId' | 'steamId64'>): string[] {
+  const keys: string[] = [];
+  if (chat.eosId) keys.push(`eos:${chat.eosId}`);
+  if (chat.steamId64) keys.push(`steam:${chat.steamId64}`);
+  return keys;
+}
+
+/**
+ * Resolves a chat sender to `players.id`: by EOS/Steam id first, then by
+ * current canonical name, then by name history.
+ *
+ * @param cache - Optional {@link PlayerIdCache}; an id-based hit is served from
+ *   and stored in it, so a repeat sender costs no queries.
+ * @returns The player id, or null when the sender is unknown.
+ */
+export async function resolvePlayerId(
+  db: DatabaseClient,
+  chat: ChatInput,
+  cache?: PlayerIdCache,
+): Promise<string | null> {
+  const cached = cache?.lookup(chat);
+  if (cached) return cached;
   const filters = [];
   if (chat.eosId) filters.push(eq(players.eosId, chat.eosId));
   if (chat.steamId64) filters.push(eq(players.steamId64, BigInt(chat.steamId64)));
@@ -100,7 +173,10 @@ export async function resolvePlayerId(db: DatabaseClient, chat: ChatInput): Prom
       .from(players)
       .where(filters.length === 1 ? filters[0] : or(...filters))
       .limit(1);
-    if (rows[0]) return rows[0].id;
+    if (rows[0]) {
+      cache?.remember(chat, rows[0].id);
+      return rows[0].id;
+    }
   }
 
   const normalized = normalizePlayerName(chat.playerName);
@@ -162,6 +238,9 @@ export function buildChatFrame(
  * @param source - Which pipeline carried the line; stored on the archive row.
  * @param onArchiveError - Called when the archive insert fails; the live frame
  *   has already been published at that point and is still returned.
+ * @param onFlagError - Called when the flag detector fails; the line is then
+ *   archived unflagged rather than dropped, so moderation degrades visibly.
+ * @param playerIds - Optional worker-local sender cache for identity lookups.
  * @param detector - Optional profanity/flag matcher (CHATLOG-5).
  * @returns The frame that was published, so callers can reuse it.
  */
@@ -173,19 +252,28 @@ export async function handleChat(
     chat,
     source = 'log',
     onArchiveError,
+    onFlagError,
+    playerIds,
   }: {
     serverId: string;
     chat: ChatInput;
     source?: ChatSource;
     onArchiveError?: (err: Error) => void;
+    onFlagError?: (err: Error) => void;
+    playerIds?: PlayerIdCache;
   },
   detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
-  const playerId = await resolvePlayerId(db, chat);
+  const playerId = await resolvePlayerId(db, chat, playerIds);
   const frame = buildChatFrame(playerId, serverId, chat, source);
   if (redis) await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
   if (playerId) {
-    const matchedRuleId = detector ? await detector.detect(chat.message).catch(() => null) : null;
+    const matchedRuleId = detector
+      ? await detector.detect(chat.message).catch((err: unknown) => {
+          onFlagError?.(err as Error);
+          return null;
+        })
+      : null;
     await recordChatMessage(db, {
       playerId,
       serverId,

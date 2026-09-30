@@ -24,7 +24,7 @@ import {
   STREAM_NAME,
   seedCallSentPayload,
 } from '@squad/shared-types';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import type {
@@ -67,6 +67,13 @@ import type {
 const RCON_STREAM_MAXLEN = 500;
 const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
 
+/**
+ * Loads the seed-schedule entries the tick can still execute: enabled
+ * recurring entries, and enabled one-off entries that have not run yet.
+ * Filtering executed one-offs in SQL keeps the per-tick read from growing with
+ * the calendar's history; the query matches the partial index
+ * `seed_schedule_active_idx`.
+ */
 export async function loadEnabledSeedScheduleEntries(
   db: DatabaseClient,
 ): Promise<SeedScheduleEntry[]> {
@@ -84,7 +91,13 @@ export async function loadEnabledSeedScheduleEntries(
     })
     .from(seedSchedule)
     .innerJoin(servers, eq(servers.id, seedSchedule.serverId))
-    .where(and(eq(seedSchedule.enabled, true), isNull(servers.deletedAt)));
+    .where(
+      and(
+        eq(seedSchedule.enabled, true),
+        isNull(servers.deletedAt),
+        or(isNotNull(seedSchedule.recurrence), isNull(seedSchedule.lastExecutedAt)),
+      ),
+    );
   return rows;
 }
 
@@ -177,7 +190,12 @@ export async function writeSeedScheduleAuditEntry(
   });
 }
 
-/** Loads enabled one-off rotation changes for the scheduler tick, excluding soft-deleted servers. */
+/**
+ * Loads the enabled one-off rotation changes that have not run yet, excluding soft-deleted servers. Executed
+ * entries stay enabled for the calendar's history, so they are filtered here
+ * rather than re-read every tick; the query matches the partial index
+ * `rotation_schedule_pending_idx`.
+ */
 export async function loadEnabledRotationScheduleEntries(
   db: DatabaseClient,
 ): Promise<RotationScheduleEntry[]> {
@@ -192,7 +210,13 @@ export async function loadEnabledRotationScheduleEntries(
     })
     .from(rotationSchedule)
     .innerJoin(servers, eq(servers.id, rotationSchedule.serverId))
-    .where(and(eq(rotationSchedule.enabled, true), isNull(servers.deletedAt)));
+    .where(
+      and(
+        eq(rotationSchedule.enabled, true),
+        isNull(rotationSchedule.lastExecutedAt),
+        isNull(servers.deletedAt),
+      ),
+    );
   return rows;
 }
 

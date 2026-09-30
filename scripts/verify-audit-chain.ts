@@ -38,6 +38,8 @@ async function main() {
   try {
     const verifier = new AuditChainVerifier();
     await sql.begin('isolation level repeatable read read only', async (tx) => {
+      // `created_at::text` follows the session TimeZone; the trigger hashes it in UTC.
+      await tx`SET LOCAL "TimeZone" = 'UTC'`;
       let cursor = '0';
       for (;;) {
         const rows = await tx<AuditChainRow[]>`

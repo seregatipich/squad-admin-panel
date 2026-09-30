@@ -9,6 +9,16 @@ Ensures Postgres tables that are partitioned by time always have a partition rea
 - `player_sessions` — monthly partitions, current + next month kept present (`ensurePlayerSessionPartitions`), nothing dropped.
 - `chat_messages`, `bonus_transactions`, `combat_events` — monthly partitions with a DEFAULT catch-all, current + next month kept present (`ensureDefaultBackedMonthlyPartitions`), rows already parked in DEFAULT for a new month moved into it, nothing dropped. Their migrations created only a fixed window of months; without this rotation chat, bonus-ledger and VIP-grant inserts fail from the first day past it (issue #6).
 
+It also applies the retention of the unpartitioned journal tables (`pruneJournalTables`, `src/retention.ts`, issue #77), in batches of 5 000 rows:
+
+| Table | Removed after |
+|---|---|
+| `alert_events` | 90 days when delivered, 365 days otherwise; rows an `expiry_notifications` row references are kept |
+| `admins_cfg_sync_outbox` | 30 days after `relayed_at` (pending rows are never removed) |
+| `scheduled_task_runs`, `chat_command_invocations`, `automation_runs` | 90 days |
+| `media_upload_tokens` | 7 days after expiry or use; tokens a `media_files` row references are kept |
+| `ban_appeals.submitter_ip` | set to NULL 30 days after the decision, 90 days after submission at the latest |
+
 ## Current status — fully implemented
 
 Every rotation is fully implemented and idempotent (`CREATE TABLE IF NOT EXISTS` / `DROP TABLE IF EXISTS` / an existence check). No pg_partman.
@@ -28,7 +38,8 @@ Every rotation is fully implemented and idempotent (`CREATE TABLE IF NOT EXISTS`
 ```
 apps/workers/event-partition/
   src/
-    index.ts    — hourly loop, Postgres connection, heartbeat
+    index.ts      — hourly loop, Postgres connection, heartbeat, partition rotation
+    retention.ts  — journal-table retention (`pruneJournalTables`, `JOURNAL_RETENTION`)
 ```
 
 ## Dependencies

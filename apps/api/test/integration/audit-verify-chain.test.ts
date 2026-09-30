@@ -72,6 +72,25 @@ async function overwriteContext(id: string, context: Record<string, unknown>): P
 }
 
 describe('GET /api/v1/audit/verify-chain', () => {
+  it('stays intact when a row is written from a session with another TimeZone and DateStyle', async () => {
+    await h.db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL TimeZone = 'America/New_York'`);
+      await tx.execute(sql`SET LOCAL DateStyle = 'SQL, DMY'`);
+      await tx.execute(sql`
+        INSERT INTO audit_log (actor_kind, actor_system_label, action_type, row_hash)
+        VALUES ('system', 'test-verify-chain', 'action.timezone', ''::bytea)
+      `);
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify-chain',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, broken_at: null });
+  });
+
   it('requires authentication', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/audit/verify-chain' });
     expect([401, 403]).toContain(res.statusCode);

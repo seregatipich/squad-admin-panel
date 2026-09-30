@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   check,
   customType,
   index,
@@ -18,6 +19,12 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   },
 });
 
+/**
+ * Append-only history of every config file the panel writes (no UPDATE; DELETE
+ * only through a server-delete cascade). `parent_version_id` links each
+ * version to the one it replaced; the author reference is NO ACTION because
+ * the append-only triggers make SET NULL unreachable (migration 0119).
+ */
 export const configVersions = pgTable(
   'config_versions',
   {
@@ -28,10 +35,8 @@ export const configVersions = pgTable(
     filename: text('filename').notNull(),
     content: text('content').notNull(),
     sha256: bytea('sha256').notNull(),
-    parentVersionId: uuid('parent_version_id'),
-    authorPlayerId: uuid('author_player_id').references(() => players.id, {
-      onDelete: 'set null',
-    }),
+    parentVersionId: uuid('parent_version_id').references((): AnyPgColumn => configVersions.id),
+    authorPlayerId: uuid('author_player_id').references(() => players.id),
     authorLabel: text('author_label'),
     authorIp: inet('author_ip'),
     message: text('message'),

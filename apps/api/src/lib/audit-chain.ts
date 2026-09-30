@@ -39,8 +39,9 @@ export interface AuditChainResult {
 
 /**
  * The canonical string the DB trigger feeds to sha256 (after the prev hash):
- * `action_type|target_type|target_id|context::text|created_at::text`, with
- * NULL target fields rendered as the empty string.
+ * `action_type|target_type|target_id|context::text|<created_at>`, where
+ * `<created_at>` is `audit_log_created_at_text(created_at)`, with NULL target
+ * fields rendered as the empty string.
  */
 export function canonicalAuditString(row: AuditChainRow): string {
   return [

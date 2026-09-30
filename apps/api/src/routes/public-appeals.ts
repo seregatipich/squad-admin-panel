@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { banAppeals, moderationActions } from '@squad/db/schema';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -27,6 +27,15 @@ const PUBLIC_STATUS_RATE_MAX = 60;
 const IP_DAILY_MAX = 10;
 const STEAM_DAILY_MAX = 3;
 const DAY_SECONDS = 86_400;
+
+/**
+ * The tracking token is a bearer credential for the public status page, so
+ * only its sha256 hex is stored (`ban_appeals.tracking_token_hash`, #1084); a
+ * database dump or backup therefore reveals no usable token.
+ */
+function hashTrackingToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 /** Postgres unique_violation — the partial open-appeal unique index tripped. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -167,7 +176,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
             body: req.body.body,
             contact: req.body.contact?.trim() || null,
             status: 'pending',
-            trackingToken,
+            trackingTokenHash: hashTrackingToken(trackingToken),
             submitterIp: ip,
           })
           .returning({
@@ -241,7 +250,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
           decisionNote: banAppeals.decisionNote,
         })
         .from(banAppeals)
-        .where(eq(banAppeals.trackingToken, req.params.token))
+        .where(eq(banAppeals.trackingTokenHash, hashTrackingToken(req.params.token)))
         .limit(1);
       if (!row) {
         reply.code(404);

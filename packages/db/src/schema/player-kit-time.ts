@@ -1,14 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  bigint,
-  check,
-  index,
-  pgTable,
-  primaryKey,
-  text,
-  timestamp,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { bigint, check, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -40,7 +31,6 @@ export const playerKitTime = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.playerId, table.kit, table.serverId] }),
     secondsChk: check('player_kit_time_seconds_chk', sql`seconds >= 0`),
-    playerIdIdx: index('player_kit_time_player_id_idx').on(table.playerId),
   }),
 );
 

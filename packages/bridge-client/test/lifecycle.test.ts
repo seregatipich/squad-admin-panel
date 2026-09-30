@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { BRIDGE_MAX_FRAME_BYTES } from '@squad/shared-config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BridgeClient } from '../src/client.js';
+import { BridgeError } from '../src/errors.js';
 import { encodeFrame } from '../src/frame.js';
-import { BridgeError } from '../src/types.js';
 
 let server: Server;
 let socketPath: string;

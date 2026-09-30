@@ -9,18 +9,6 @@ export type BridgeErrorCode =
   | 'internal'
   | 'transport';
 
-export class BridgeError extends Error {
-  readonly code: BridgeErrorCode;
-  readonly detail?: unknown;
-
-  constructor(code: BridgeErrorCode, message: string, detail?: unknown) {
-    super(message);
-    this.name = 'BridgeError';
-    this.code = code;
-    this.detail = detail;
-  }
-}
-
 export interface BridgeRequest<Params = unknown> {
   id: string;
   method: BridgeMethod;
@@ -158,10 +146,15 @@ export interface ContainerRunRnsquadjsResult {
   status: 'started';
 }
 
+/**
+ * Parameters shared by `container_start`, `container_stop`, `container_rm`,
+ * `container_inspect` and `container_stats`. Mirrors the Go `containerParams`
+ * struct in `apps/bridge/internal/handlers/handlers.go`; `container_rm` always
+ * force-removes (`docker rm -f`), so there is no `force` switch.
+ */
 export interface ContainerControlParams {
   name: string;
   timeout_sec?: number;
-  force?: boolean;
 }
 
 export interface ContainerInspectResult {

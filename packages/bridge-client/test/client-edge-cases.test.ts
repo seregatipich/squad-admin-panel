@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgeClient } from '../src/client.js';
+import { BridgeError } from '../src/errors.js';
 import { encodeFrame } from '../src/frame.js';
-import { BridgeError } from '../src/types.js';
 
 let server: Server;
 let socketPath: string;

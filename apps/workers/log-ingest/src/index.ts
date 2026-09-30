@@ -1,5 +1,5 @@
 import { BridgeClient } from '@squad/bridge-client';
-import { ChatFlagDetector, handleChat } from '@squad/chat-ingest';
+import { ChatFlagDetector, handleChat, PlayerIdCache } from '@squad/chat-ingest';
 import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
@@ -101,6 +101,8 @@ async function main() {
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
 
   const chatFlagDetector = new ChatFlagDetector(db);
+  // Shared by chat archiving and chat commands so a sender is resolved once.
+  const playerIds = new PlayerIdCache();
   const bannedNameCache = new BannedNameRuleCache(db, undefined, {
     onRegexTimeout: (ruleId) =>
       log.warn({ ruleId }, 'banned-name regex rule exceeded its time budget; treated as no match'),
@@ -188,13 +190,16 @@ async function main() {
             chat,
             onArchiveError: (err) =>
               log.warn({ err: err.message, serverId }, 'chat archive insert failed'),
+            onFlagError: (err) =>
+              log.warn({ err: err.message, serverId }, 'chat flag detection failed'),
+            playerIds,
           },
           chatFlagDetector,
         ).catch((err) => log.error({ err: (err as Error).message }, 'chat handling failed'));
         // AUTO-4 (#75): answer in-game `!stats`/`!rules`/`!report` over RCON.
         // Independent of the chat-message record above; `!report` delegates the
         // report record itself to REPORT-1 via the ingestor's onReport path.
-        handleChatCommand(db, redis, { serverId, chat }).catch((err) =>
+        handleChatCommand(db, redis, { serverId, chat, playerIds }).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat command handling failed'),
         );
         // AUTO-1 (#72): fire automation rules whose chat_keyword condition

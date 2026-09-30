@@ -39,6 +39,10 @@ export const rotationSchedule = pgTable(
       table.serverId,
       table.scheduledAt,
     ),
+    /** Matches the scheduler's read of entries it can still execute. */
+    pendingIdx: index('rotation_schedule_pending_idx')
+      .on(table.scheduledAt)
+      .where(sql`enabled AND last_executed_at IS NULL`),
     modeCheck: check('rotation_schedule_mode_check', sql`mode IN ('set_next','force_change')`),
   }),
 );
