@@ -19,8 +19,10 @@ function countNewlines(s: string): number {
 
 /**
  * The 1-based inclusive Monaco line range spanned by the managed segment, or
- * `null` when the content has no complete `BEGIN … END` marker pair. Works for
- * both CRLF and LF content because only `\n` occurrences are counted.
+ * `null` when the content has no `BEGIN` marker. An orphaned `BEGIN` without
+ * `END` runs to the end of the file, matching what {@link findManagedSegment}
+ * reports and the worker replaces. Works for both CRLF and LF content because
+ * only `\n` occurrences are counted.
  */
 export function managedSegmentLineRange(content: string): {
   startLine: number;

@@ -32,9 +32,9 @@ describe('managedSegmentLineRange', () => {
     expect(managedSegmentLineRange(content)).toEqual({ startLine: 3, endLine: 5 });
   });
 
-  it('returns null when BEGIN is present without END', () => {
+  it('extends an orphaned BEGIN to the end of the file, as the config-sync splice replaces it', () => {
     const content = crlf(['// header', BEGIN, 'Group=Admin:foo']);
-    expect(managedSegmentLineRange(content)).toBeNull();
+    expect(managedSegmentLineRange(content)).toEqual({ startLine: 2, endLine: 3 });
   });
 
   it('returns null when no markers are present', () => {
