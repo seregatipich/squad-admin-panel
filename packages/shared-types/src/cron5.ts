@@ -13,8 +13,10 @@
  * an expression using them is rejected by {@link parseCron5}.
  *
  * Day-of-month and day-of-week combine with the classic cron OR semantics:
- * when both fields are restricted (not `*`), an occurrence matches if
- * EITHER field matches (not both).
+ * when both fields are restricted (neither starts with `*`), an occurrence
+ * matches if EITHER field matches. As in Vixie cron, a field that starts with
+ * `*` (including a step such as `*` + `/2`) is not "restricted" for this
+ * purpose: the two fields are then ANDed.
  */
 
 export interface Cron5Expression {
@@ -24,6 +26,10 @@ export interface Cron5Expression {
   month: readonly number[] | null;
   /** 0 = Sunday, per JS `Date#getUTCDay()`. */
   dayOfWeek: readonly number[] | null;
+  /** True when the day-of-month field started with `*` (bare or stepped). */
+  dayOfMonthStar?: boolean;
+  /** True when the day-of-week field started with `*` (bare or stepped). */
+  dayOfWeekStar?: boolean;
 }
 
 function parseField(raw: string, min: number, max: number): number[] | null {
@@ -76,6 +82,8 @@ export function parseCron5(expression: string): Cron5Expression {
     dayOfMonth: parseField(domRaw, 1, 31),
     month: parseField(monthRaw, 1, 12),
     dayOfWeek: parseField(dowRaw, 0, 6),
+    dayOfMonthStar: domRaw.startsWith('*'),
+    dayOfWeekStar: dowRaw.startsWith('*'),
   };
 }
 
@@ -103,7 +111,7 @@ export function cron5Matches(expr: Cron5Expression, date: Date): boolean {
 
   const domRestricted = expr.dayOfMonth !== null;
   const dowRestricted = expr.dayOfWeek !== null;
-  if (domRestricted && dowRestricted) {
+  if (domRestricted && dowRestricted && !expr.dayOfMonthStar && !expr.dayOfWeekStar) {
     const domMatch = expr.dayOfMonth?.includes(dayOfMonth) ?? false;
     const dowMatch = expr.dayOfWeek?.includes(dayOfWeek) ?? false;
     if (!domMatch && !dowMatch) return false;

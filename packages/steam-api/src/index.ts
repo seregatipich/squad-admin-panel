@@ -136,8 +136,13 @@ export async function fetchSteamProfiles(
 
   const result = new Map<string, SteamProfile>();
   const cold: string[] = [];
-  for (const id of uniqueIds(steamIds)) {
-    const cached = await deps.redis.get(`${PROFILE_CACHE_PREFIX}${id}`);
+  const ids = uniqueIds(steamIds);
+  // Issued together so ioredis sends them as one pipelined burst, not one round trip per id.
+  const cachedProfiles = await Promise.all(
+    ids.map((id) => deps.redis.get(`${PROFILE_CACHE_PREFIX}${id}`)),
+  );
+  for (const [index, id] of ids.entries()) {
+    const cached = cachedProfiles[index];
     if (cached) {
       const profile = parseProfile(cached);
       if (profile) {
@@ -170,6 +175,7 @@ export async function fetchSteamProfiles(
           }>;
         };
       };
+      const writes: Promise<unknown>[] = [];
       for (const raw of payload.response?.players ?? []) {
         if (!raw.steamid) continue;
         const profile: SteamProfile = {
@@ -181,13 +187,16 @@ export async function fetchSteamProfiles(
           createdAt: Number.isFinite(raw.timecreated) ? Number(raw.timecreated) : null,
         };
         result.set(raw.steamid, profile);
-        await deps.redis.set(
-          `${PROFILE_CACHE_PREFIX}${raw.steamid}`,
-          JSON.stringify(profile),
-          'EX',
-          PROFILE_CACHE_TTL_SECONDS,
+        writes.push(
+          deps.redis.set(
+            `${PROFILE_CACHE_PREFIX}${raw.steamid}`,
+            JSON.stringify(profile),
+            'EX',
+            PROFILE_CACHE_TTL_SECONDS,
+          ),
         );
       }
+      await Promise.all(writes);
     } catch {
       // A batch that throws (network error, non-JSON response body, …) is
       // skipped rather than discarding the results of earlier batches/cache.
@@ -241,8 +250,12 @@ export async function fetchSteamBans(
 
   const result = new Map<string, SteamBanInfo>();
   const cold: string[] = [];
-  for (const id of uniqueIds(steamIds)) {
-    const cached = await deps.redis.get(`${BANS_CACHE_PREFIX}${id}`);
+  const ids = uniqueIds(steamIds);
+  const cachedBans = await Promise.all(
+    ids.map((id) => deps.redis.get(`${BANS_CACHE_PREFIX}${id}`)),
+  );
+  for (const [index, id] of ids.entries()) {
+    const cached = cachedBans[index];
     const info = cached ? parseCachedBan(cached) : null;
     if (info) {
       result.set(id, info);
@@ -263,17 +276,21 @@ export async function fetchSteamBans(
         continue;
       }
       const payload = (await response.json()) as { players?: RawBanEntry[] };
+      const writes: Promise<unknown>[] = [];
       for (const raw of payload.players ?? []) {
         const info = normaliseBan(raw);
         if (!info) continue;
         result.set(info.steamId64, info);
-        await deps.redis.set(
-          `${BANS_CACHE_PREFIX}${info.steamId64}`,
-          JSON.stringify(info),
-          'EX',
-          BANS_CACHE_TTL_SECONDS,
+        writes.push(
+          deps.redis.set(
+            `${BANS_CACHE_PREFIX}${info.steamId64}`,
+            JSON.stringify(info),
+            'EX',
+            BANS_CACHE_TTL_SECONDS,
+          ),
         );
       }
+      await Promise.all(writes);
     } catch {
       hadFailure = true;
     }

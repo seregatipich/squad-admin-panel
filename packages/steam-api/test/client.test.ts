@@ -298,3 +298,32 @@ describe('Steam request deadline', () => {
     expect(request.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+describe('cache round trips (#1190)', () => {
+  it('reads every cache key of a batch concurrently instead of one at a time', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const redis = {
+      get: vi.fn(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return null;
+      }),
+      set: vi.fn(async () => 'OK' as const),
+    };
+    const ids = Array.from({ length: 20 }, (_, i) => 76561198000000000n + BigInt(i));
+    const request = vi.fn(async () => ({ ok: true, json: async () => ({ players: [] }) }));
+
+    await fetchSteamBans(ids, { apiKey: 'k', redis, fetch: request as unknown as typeof fetch });
+    expect(peak).toBe(20);
+    peak = 0;
+    await fetchSteamProfiles(ids, {
+      apiKey: 'k',
+      redis,
+      fetch: request as unknown as typeof fetch,
+    });
+    expect(peak).toBe(20);
+  });
+});

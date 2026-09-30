@@ -79,14 +79,26 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sat: 6,
 };
 
+/** One formatter per timezone: constructing `Intl.DateTimeFormat` is costly and `evaluate` runs per event. */
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneFormatter(timezone: string): Intl.DateTimeFormat {
+  let formatter = zoneFormatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      weekday: 'short',
+      hour12: false,
+    });
+    zoneFormatters.set(timezone, formatter);
+  }
+  return formatter;
+}
+
 function zoneMinuteAndWeekday(now: Date, timezone: string): { minute: number; weekday: number } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-    hour12: false,
-  }).formatToParts(now);
+  const parts = zoneFormatter(timezone).formatToParts(now);
   let hour = 0;
   let minute = 0;
   let weekday = 0;
@@ -164,11 +176,14 @@ function matchTimeOfDay(
   // `config.timezone` was validated as a known IANA zone when the condition
   // was parsed (`isKnownTimeZone`), so formatting it cannot throw here.
   const position = zoneMinuteAndWeekday(input.now, config.timezone);
-  if (
-    config.weekdays &&
-    config.weekdays.length > 0 &&
-    !config.weekdays.includes(position.weekday)
-  ) {
+  // A window that crosses midnight belongs to the weekday it started on, so
+  // its after-midnight part is checked against the previous day.
+  const crossesMidnight = config.endMinute < config.startMinute;
+  const windowWeekday =
+    crossesMidnight && position.minute <= config.endMinute
+      ? (position.weekday + 6) % 7
+      : position.weekday;
+  if (config.weekdays && config.weekdays.length > 0 && !config.weekdays.includes(windowWeekday)) {
     return null;
   }
   if (!inWindow(position.minute, config.startMinute, config.endMinute)) return null;

@@ -89,3 +89,25 @@ describe('log-stream encoding', () => {
     expect(LOG_LEVELS).toEqual(['debug', 'info', 'warn', 'error']);
   });
 });
+
+describe('decodeLogEntry hardening (#1166)', () => {
+  const base = { s: 'A', l: 'I', m: 'x' };
+  const validSource = sourceCode(LOG_SOURCES[0] as (typeof LOG_SOURCES)[number]);
+
+  it('keeps non-object JSON context under _raw', () => {
+    for (const c of ['null', '[1,2]', '42', '"text"']) {
+      const decoded = decodeLogEntry('1-0', { ...base, s: validSource, c });
+      expect(decoded.ctx).toEqual({ _raw: c });
+    }
+  });
+
+  it('rejects prototype keys used as source or level codes', () => {
+    expect(() => decodeLogEntry('1-0', { ...base, s: 'constructor' })).toThrow(
+      /unknown source code/,
+    );
+    expect(() => decodeLogEntry('1-0', { ...base, s: validSource, l: 'toString' })).toThrow(
+      /unknown level code/,
+    );
+    expect(() => sourceFromCode('hasOwnProperty')).toThrow(/unknown source code/);
+  });
+});

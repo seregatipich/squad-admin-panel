@@ -45,9 +45,9 @@ Every consumer follows the dual-layer idempotency pattern before acting:
 
 `XACK` runs only after the side-effect commits. If the consumer crashes after commit but before `XACK`, the event is redelivered; idempotency prevents double-processing.
 
-### Reclaim and DLQ
+### Reclaim
 
-`XAUTOCLAIM` runs every 30 s (`XAUTOCLAIM_TICK_MS`) with a 120 s idle threshold (`XAUTOCLAIM_IDLE_MS`). After 5 deliveries (`DLQ_DELIVER_THRESHOLD`) the message moves to `events:dlq` and is `XACK`-ed from the source stream.
+Consumer group names, the `XAUTOCLAIM` idle threshold and the tick interval are owned by each worker (for example `DISPATCH_CONSUMER_GROUP` in `apps/workers/automation/src/dispatch.ts`); this package no longer exports shared constants for them. `STREAM_NAME.eventsDlq()` names the `events:dlq` stream, but no consumer moves messages into it today.
 
 ---
 
@@ -72,7 +72,7 @@ Schemas are `.strict()` — unknown keys cause a validation error, preventing ac
 
 ## `validatePayload` dispatch
 
-Used by producers when building envelopes and by consumers before processing:
+Available to producers and consumers that want to check a payload against its registered schema. It is currently called only from tests: worker consumers narrow `event.payload` with type assertions instead of validating it.
 
 ```ts
 import { validatePayload } from '@squad/shared-types/events';

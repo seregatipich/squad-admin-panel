@@ -59,6 +59,6 @@ const PALETTE_HEX: Readonly<Record<RoleColorName, string>> = {
 
 export function roleColorToHex(color: string): string {
   if (HEX_RE.test(color)) return color.toUpperCase();
-  if (color in PALETTE_HEX) return PALETTE_HEX[color as RoleColorName];
+  if (Object.hasOwn(PALETTE_HEX, color)) return PALETTE_HEX[color as RoleColorName];
   return '#737373';
 }

@@ -364,16 +364,6 @@ export const STREAM_NAME = {
 export const DEDUP_KEY = (group: string, eventId: string) => `dedup:${group}:${eventId}`;
 export const DEDUP_TTL_SECONDS = 86_400;
 
-export const CONSUMER_GROUP = {
-  playersProjector: 'players-projector:v1',
-  auditArchiver: 'audit-archiver:v1',
-  stats: 'stats:v1',
-} as const;
-
-export const XAUTOCLAIM_IDLE_MS = 120_000;
-export const XAUTOCLAIM_TICK_MS = 30_000;
-export const DLQ_DELIVER_THRESHOLD = 5;
-
 /**
  * DISCORD-5 (#152): panel-role → Discord-role sync requests. Deliberately a
  * stream of its own rather than an `EventEnvelope` on `events:*`: the payload

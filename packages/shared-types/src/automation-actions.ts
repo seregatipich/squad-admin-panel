@@ -64,7 +64,7 @@ export interface RunMatchDeps {
 function resolveTarget(match: AutomationMatch): string | null {
   const player = match.player;
   if (!player) return null;
-  return player.steamId64 ?? player.eosId ?? player.name ?? null;
+  return player.steamId64 ?? player.eosId ?? null;
 }
 
 /**
@@ -158,7 +158,7 @@ export async function runMatch(
       };
     } catch (err) {
       status = 'failed';
-      actionResult = { intent, error: (err as Error).message };
+      actionResult = { intent, error: err instanceof Error ? err.message : String(err) };
     }
   } else {
     const built = buildRconDispatch(match);
@@ -172,7 +172,7 @@ export async function runMatch(
         actionResult = { executed: true, intent };
       } catch (err) {
         status = 'failed';
-        actionResult = { intent, error: (err as Error).message };
+        actionResult = { intent, error: err instanceof Error ? err.message : String(err) };
       }
     }
   }

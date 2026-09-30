@@ -252,3 +252,24 @@ describe('findBannedNameRuleMatch', () => {
     expect(findBannedNameRuleMatch(rules, 'anything goes')?.id).toBe('fallback');
   });
 });
+
+describe('matchBannedName regex compilation cache (#1159)', () => {
+  it('compiles each regex pattern once across repeated matches', () => {
+    const OriginalRegExp = globalThis.RegExp;
+    let compilations = 0;
+    globalThis.RegExp = new Proxy(OriginalRegExp, {
+      construct(target, args, newTarget) {
+        if (args[0] === 'cache-probe-\\d+') compilations += 1;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    try {
+      for (let i = 0; i < 5; i++) {
+        expect(matchBannedName('cache-probe-\\d+', 'regex', 'CACHE-PROBE-42')).toBe(true);
+      }
+    } finally {
+      globalThis.RegExp = OriginalRegExp;
+    }
+    expect(compilations).toBe(1);
+  });
+});

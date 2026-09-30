@@ -56,11 +56,15 @@ export const RCON_OPERATOR_COMMAND_ARG_COUNTS: Readonly<Record<RconOperatorComma
   AdminWarn: 2,
 };
 
+/** Upper bounds keeping a queued request within one RCON packet (Source RCON caps a body near 4 KiB). */
+export const RCON_ARG_MAX_LENGTH = 1024;
+export const RCON_ARGS_MAX_COUNT = 8;
+
 export const rconCommandRequestSchema = z
   .object({
     request_id: z.string().min(1).max(128),
     command: rconOperatorCommandNameSchema,
-    args: z.array(z.string()).default([]),
+    args: z.array(z.string().max(RCON_ARG_MAX_LENGTH)).max(RCON_ARGS_MAX_COUNT).default([]),
     actor_player_id: z.string().min(1).max(64).nullable().optional(),
     enqueued_at: z.string().datetime().optional(),
   })
