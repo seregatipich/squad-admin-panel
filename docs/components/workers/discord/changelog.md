@@ -1,5 +1,11 @@
 # Changelog — worker-discord
 
+## 2026-09-30
+
+### Fixed
+
+- Отправитель проверяет сохранённый `template` (`isDiscordEmbedTemplate` из `@squad/shared-config`) и при повреждённой строке берёт шаблон по умолчанию, а не передаёт произвольный jsonb в рендер (#78, 1126). Тест: `test/sender.test.ts`.
+
 ## 2026-09-28
 
 ### Fixed

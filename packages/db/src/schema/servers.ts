@@ -59,7 +59,7 @@ export const servers = pgTable(
     statusIdx: index('servers_status_idx').on(table.status),
     deletedAtIdx: index('servers_deleted_at_idx').on(table.deletedAt),
     statusCheck: check(
-      'servers_status_enum',
+      'servers_status_check',
       sql`status IN ('pending','installing','ready','starting','running','stopping','stopped','failed')`,
     ),
     runtimeCheck: check('servers_runtime_enum', sql`runtime IN ('container','external')`),

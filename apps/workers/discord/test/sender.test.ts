@@ -255,6 +255,17 @@ describe('deliverEnvelope', () => {
     expect(body.embeds[0].title).toBe('Server crashed');
   });
 
+  it('falls back to the default template when the stored jsonb is malformed (#1126)', async () => {
+    const row = webhookRow({ url: 'https://discord.com/api/webhooks/1/aaa' });
+    const db = makeFakeDb({ webhookRows: [row], templateRow: { template: { title: 42 } } });
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const result = await deliverEnvelope(makeDeps({ db, fetchImpl }), envelope());
+    expect(result.sent).toBe(1);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.embeds[0].title).toBe('Server crashed');
+  });
+
   it('escapes markdown characters in a context value substituted into the embed', async () => {
     const row = webhookRow({
       url: 'https://discord.com/api/webhooks/1/aaa',

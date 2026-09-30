@@ -16,7 +16,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { loadActiveSeasonTarget } from '../src/leaderboard/season.js';
+import { loadActiveSeasonTarget, loadSeasonTarget } from '../src/leaderboard/season.js';
 import { seasons } from '../src/schema/seasons.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -383,7 +383,7 @@ describeIfDb('loadActiveSeasonTarget', () => {
       name: `${NAME_PREFIX}live`,
       periodType: 'season',
       periodStart: '2026-06-10',
-      range: { fromDay: '2026-06-10', toDay: '2026-07-20' },
+      range: { fromDay: '2026-06-10', toDay: '2026-07-19' },
     });
   });
 
@@ -395,6 +395,29 @@ describeIfDb('loadActiveSeasonTarget', () => {
     const target = await loadActiveSeasonTarget(pgsql);
     expect(target?.periodStart).toBe('2026-06-10');
     expect(target?.range).toEqual({ fromDay: '2026-06-10', toDay: '2026-07-20' });
+  });
+
+  it('treats ends_at as an exclusive instant: a midnight ends_at excludes that day (#1110)', async () => {
+    // The UI sends `D T00:00Z` and the scheduler freezes the season the moment
+    // the clock reaches it, so day D never has data inside the season.
+    await insertSeason('exclusive', 'active', '2026-06-10T00:00:00Z', '2026-07-20T00:00:00Z');
+
+    const target = await loadActiveSeasonTarget(pgsql);
+    expect(target?.range).toEqual({ fromDay: '2026-06-10', toDay: '2026-07-19' });
+  });
+
+  it('loads a season target by id regardless of status or finalization (#1110)', async () => {
+    const id = await insertSeason(
+      'by-id',
+      'active',
+      '2026-06-10T00:00:00Z',
+      '2026-07-20T00:00:00Z',
+      true,
+    );
+
+    const target = await loadSeasonTarget(pgsql, id);
+    expect(target?.range).toEqual({ fromDay: '2026-06-10', toDay: '2026-07-19' });
+    expect(await loadSeasonTarget(pgsql, '019f46a1-0000-7000-8000-00000000dead')).toBeNull();
   });
 
   it('skips a finalized season so its materialised rows stay frozen', async () => {

@@ -48,12 +48,15 @@ const exportQuery = z.object({ ...filterShape, format: z.literal('csv').default(
 
 type FilterInput = z.infer<z.ZodObject<typeof filterShape>>;
 
+/** Shown in place of an author whose player row was deleted (#1137). */
+const DELETED_AUTHOR_NAME = 'Удалённый игрок';
+
 interface FeedRow {
   id: string;
   playerId: string;
   targetName: string;
-  authorId: string;
-  authorName: string;
+  authorId: string | null;
+  authorName: string | null;
   authorRoleColor: string | null;
   authorRoleName: string | null;
   body: string;
@@ -84,8 +87,8 @@ function toDto(row: FeedRow): FeedDto {
     player_id: row.playerId,
     target: { id: row.playerId, name: row.targetName },
     author: {
-      id: row.authorId,
-      name: row.authorName,
+      id: row.authorId ?? '',
+      name: row.authorName ?? DELETED_AUTHOR_NAME,
       role_color: row.authorRoleColor,
       role_name: row.authorRoleName,
     },
@@ -168,7 +171,7 @@ const notesFeedRoutes: FastifyPluginAsync = async (app) => {
       })
       .from(playerNotes)
       .innerJoin(targetPlayer, eq(targetPlayer.id, playerNotes.playerId))
-      .innerJoin(authorPlayer, eq(authorPlayer.id, playerNotes.authorId))
+      .leftJoin(authorPlayer, eq(authorPlayer.id, playerNotes.authorId))
       .leftJoin(roles, eq(roles.id, authorPlayer.roleId))
       .leftJoin(deleterPlayer, eq(deleterPlayer.id, playerNotes.deletedBy));
   }

@@ -18,11 +18,14 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(PAGE_SIZE_MAX).optional(),
 });
 
+/** Shown in place of an author whose player row was deleted (#1137). */
+const DELETED_AUTHOR_NAME = 'Удалённый игрок';
+
 interface NoteRow {
   id: string;
   playerId: string;
-  authorId: string;
-  authorName: string;
+  authorId: string | null;
+  authorName: string | null;
   authorRoleColor: string | null;
   body: string;
   createdAt: Date;
@@ -43,7 +46,11 @@ function toDto(row: NoteRow): NoteDto {
   return {
     id: row.id,
     player_id: row.playerId,
-    author: { id: row.authorId, name: row.authorName, role_color: row.authorRoleColor },
+    author: {
+      id: row.authorId ?? '',
+      name: row.authorName ?? DELETED_AUTHOR_NAME,
+      role_color: row.authorRoleColor,
+    },
     body: row.body,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt ? row.updatedAt.toISOString() : null,
@@ -90,7 +97,7 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
         cursorTs: sql<string>`to_char(${playerNotes.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       })
       .from(playerNotes)
-      .innerJoin(players, eq(players.id, playerNotes.authorId))
+      .leftJoin(players, eq(players.id, playerNotes.authorId))
       .leftJoin(roles, eq(roles.id, players.roleId));
   }
 

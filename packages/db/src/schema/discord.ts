@@ -1,4 +1,15 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { DiscordEmbedTemplate } from '@squad/shared-config/discord-template';
+import { sql } from 'drizzle-orm';
+import {
+  boolean,
+  check,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { bytea } from './_types.js';
 import { servers } from './servers.js';
 
@@ -50,15 +61,41 @@ export const discordWebhooks = pgTable('discord_webhooks', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
-export const discordMessageTemplates = pgTable('discord_message_templates', {
-  id: uuid('id').primaryKey().defaultRandom().notNull(),
-  eventType: text('event_type').notNull().unique(),
-  locale: text('locale').notNull().default('en'),
-  template: jsonb('template').notNull(),
-  isDefault: boolean('is_default').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
-});
+const DISCORD_TEMPLATE_LOCALE_VALUES = ['en', 'ru'] as const;
+
+/**
+ * One editable embed template per Discord event type (DISCORD-3).
+ *
+ * `event_type` is unique, so an event has exactly one template and the sender
+ * never selects by language. `locale` is descriptive metadata: the language the
+ * stored embed text is written in, shown to operators and returned by the API.
+ * It is not a lookup key. Making templates multilingual would relax the unique
+ * key to `(event_type, locale)`, which the previous release's single-row
+ * lookups cannot tolerate, so it stays a two-release change (#1127).
+ */
+export const discordMessageTemplates = pgTable(
+  'discord_message_templates',
+  {
+    id: uuid('id').primaryKey().defaultRandom().notNull(),
+    eventType: text('event_type').notNull().unique(),
+    locale: text('locale').notNull().default('en'),
+    /** Editable embed; typed from shared-config so every reader sees the real shape. */
+    template: jsonb('template').$type<DiscordEmbedTemplate>().notNull(),
+    isDefault: boolean('is_default').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => ({
+    eventTypeChk: check(
+      'discord_message_templates_event_type_chk',
+      sql`${table.eventType} IN (${sql.raw(DISCORD_EVENT_TYPES.map((type) => `'${type}'`).join(','))})`,
+    ),
+    localeChk: check(
+      'discord_message_templates_locale_chk',
+      sql`${table.locale} IN (${sql.raw(DISCORD_TEMPLATE_LOCALE_VALUES.map((locale) => `'${locale}'`).join(','))})`,
+    ),
+  }),
+);
 
 export type DiscordMessageTemplateRow = typeof discordMessageTemplates.$inferSelect;
 export type NewDiscordMessageTemplate = typeof discordMessageTemplates.$inferInsert;

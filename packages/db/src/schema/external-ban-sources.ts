@@ -30,7 +30,7 @@ export const externalBanSources = pgTable(
     lastSyncStatus: text('last_sync_status'),
     lastSyncError: text('last_sync_error'),
     importedCount: integer('imported_count').notNull().default(0),
-    parserConfig: jsonb('parser_config').notNull().default({}),
+    parserConfig: jsonb('parser_config').$type<Record<string, unknown>>().notNull().default({}),
     consecutiveFailures: integer('consecutive_failures').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },

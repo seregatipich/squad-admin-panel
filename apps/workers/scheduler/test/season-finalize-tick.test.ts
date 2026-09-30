@@ -3,6 +3,7 @@ import {
   type ActiveSeason,
   isSeasonExpired,
   runSeasonFinalizeTick,
+  SEASON_FINALIZE_GRACE_MS,
   type SeasonFinalizeTickDeps,
 } from '../src/season-finalize-tick.js';
 
@@ -22,6 +23,7 @@ function makeDeps(overrides: Partial<SeasonFinalizeTickDeps> = {}): SeasonFinali
   return {
     now: NOW,
     loadActiveSeasons: vi.fn().mockResolvedValue([]),
+    recomputeSeason: vi.fn().mockResolvedValue(undefined),
     finalizeSeason: vi.fn().mockResolvedValue(undefined),
     invalidateLeaderboardCache: vi.fn().mockResolvedValue(0),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
@@ -86,6 +88,49 @@ describe('runSeasonFinalizeTick', () => {
         payload: expect.objectContaining({ finalized: 1 }),
       }),
     );
+  });
+
+  it('waits out the grace period after ends_at so presence-daily can close the last day (#1110)', async () => {
+    const season = makeSeason({ endsAt: new Date(NOW.getTime() - SEASON_FINALIZE_GRACE_MS + 1) });
+    const deps = makeDeps({ loadActiveSeasons: vi.fn().mockResolvedValue([season]) });
+
+    const result = await runSeasonFinalizeTick(deps);
+
+    expect(result).toEqual({ finalized: 0, failed: 0 });
+    expect(deps.recomputeSeason).not.toHaveBeenCalled();
+    expect(deps.finalizeSeason).not.toHaveBeenCalled();
+  });
+
+  it('runs a last recompute before freezing the season (#1110)', async () => {
+    const season = makeSeason();
+    const order: string[] = [];
+    const deps = makeDeps({
+      loadActiveSeasons: vi.fn().mockResolvedValue([season]),
+      recomputeSeason: vi.fn().mockImplementation(async () => {
+        order.push('recompute');
+      }),
+      finalizeSeason: vi.fn().mockImplementation(async () => {
+        order.push('finalize');
+      }),
+    });
+
+    await runSeasonFinalizeTick(deps);
+
+    expect(deps.recomputeSeason).toHaveBeenCalledWith(season.id);
+    expect(order).toEqual(['recompute', 'finalize']);
+  });
+
+  it('does not freeze the season when the last recompute fails, so the next tick retries (#1110)', async () => {
+    const season = makeSeason();
+    const deps = makeDeps({
+      loadActiveSeasons: vi.fn().mockResolvedValue([season]),
+      recomputeSeason: vi.fn().mockRejectedValue(new Error('recompute boom')),
+    });
+
+    const result = await runSeasonFinalizeTick(deps);
+
+    expect(result).toEqual({ finalized: 0, failed: 1 });
+    expect(deps.finalizeSeason).not.toHaveBeenCalled();
   });
 
   it('records the finalisation in the audit trail', async () => {

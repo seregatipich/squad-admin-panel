@@ -47,7 +47,7 @@ async function loadSourceById(db: DatabaseClient, sourceId: string): Promise<Due
     url: row.url,
     format: row.format,
     authHeaderEncrypted: row.authHeaderEncrypted,
-    parserConfig: row.parserConfig as Record<string, unknown>,
+    parserConfig: row.parserConfig,
     consecutiveFailures: row.consecutiveFailures,
     lastSyncAt: row.lastSyncAt,
     pollIntervalMinutes: row.pollIntervalMinutes,

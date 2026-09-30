@@ -81,6 +81,7 @@ export const players = pgTable(
     steamCheckedAtIdx: index('players_steam_checked_at_idx')
       .on(sql`${table.steamCheckedAt} NULLS FIRST`)
       .where(sql`steam_id64 IS NOT NULL`),
+    bonusBalanceDescIdx: index('players_bonus_balance_desc_idx').on(table.bonusBalance.desc()),
     bonusBalanceChk: check('players_bonus_balance_nonneg_chk', sql`bonus_balance >= 0`),
   }),
 );
