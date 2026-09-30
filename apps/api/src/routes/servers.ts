@@ -4,6 +4,8 @@ import { PANEL_CONFIGS_ROOT, resolveRconHost } from '@squad/shared-config';
 import {
   externalServerConnectionUpdate,
   externalServerCreateInput,
+  isPrivateHostAllowed,
+  parsePrivateHostAllowlist,
   serverCreateInput,
 } from '@squad/shared-types';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -26,6 +28,22 @@ import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.j
 import { stopSidecar } from '../lib/sidecar-lifecycle.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
+
+/**
+ * Whether an external server's RCON host passes the private-LAN allowlist
+ * (`EXTERNAL_HOST_PRIVATE_ALLOWLIST`, audit #333). Unset keeps every LAN
+ * address reachable; a hostname is checked by worker-rcon once it resolves.
+ */
+function isRconHostPermitted(allowlistSetting: string | undefined, host: string): boolean {
+  return isPrivateHostAllowed(host, parsePrivateHostAllowlist(allowlistSetting));
+}
+
+/** 400 body for an RCON host that is a private address outside the allowlist. */
+const PRIVATE_RCON_HOST_REFUSED = {
+  error: 'rcon_host_private_not_allowed',
+  message:
+    'Адрес RCON находится в частной сети, которой нет в списке разрешённых (EXTERNAL_HOST_PRIVATE_ALLOWLIST).',
+} as const;
 
 function containerName(id: string) {
   return `squad-${id}`;
@@ -285,6 +303,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const id = uuidv7();
       const body = req.body;
+      if (!isRconHostPermitted(app.config.EXTERNAL_HOST_PRIVATE_ALLOWLIST, body.rcon_host)) {
+        reply.code(400);
+        return PRIVATE_RCON_HOST_REFUSED;
+      }
       try {
         await app.db.transaction(async (tx) => {
           await tx.insert(servers).values({
@@ -365,6 +387,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         };
       }
       const body = req.body;
+      if (
+        body.rcon_host !== undefined &&
+        !isRconHostPermitted(app.config.EXTERNAL_HOST_PRIVATE_ALLOWLIST, body.rcon_host)
+      ) {
+        reply.code(400);
+        return PRIVATE_RCON_HOST_REFUSED;
+      }
       await app.db.transaction(async (tx) => {
         const creds: Partial<typeof serverCredentials.$inferInsert> = {};
         if (body.rcon_host !== undefined) creds.rconHost = body.rcon_host;

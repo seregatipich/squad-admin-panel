@@ -10,6 +10,13 @@
  * taken away, created, edited or deleted when it fits entirely inside the
  * actor's own permissions ({@link grantsBeyond}), and the actor may never
  * change their own role assignment or edit the role they hold.
+ *
+ * Relation to `role-guards.ts` (privilege ceiling): for an existing role the
+ * comparison here is never weaker than `roleGrantBeyondActor` (it counts every
+ * role flag, the ceiling skips the `panel_access`-gated ones), so the routes
+ * that assign a role call only {@link checkRoleAssignment}. The ceiling stays
+ * where no hierarchy check runs or where it must fail before request-body
+ * validation (role creation, CSV import, bulk move).
  */
 import type { DatabaseClient } from '@squad/db';
 import { players } from '@squad/db/schema';

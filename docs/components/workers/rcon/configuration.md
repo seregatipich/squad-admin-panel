@@ -9,6 +9,7 @@
 | `APP_ENCRYPTION_KEY` | yes | — | Base64-encoded 32-byte AES key for RCON password blobs | yes |
 | `LOG_LEVEL` | no | `info` | Pino log level (`trace`, `debug`, `info`, `warn`, `error`) | no |
 | `BRIDGE_SOCKET` | no | — | Not used by this worker | — |
+| `EXTERNAL_HOST_PRIVATE_ALLOWLIST` | no | blank | Private LAN ranges an external server may be dialled in: blank = all, `none` = none, else comma-separated addresses/CIDRs. Applied to the literal host and every resolved address; a malformed value exits at startup | no |
 | `RCON_ROSTER_INTERVAL_MS` | no | `2000` | Roster refresh cadence (`ListPlayers` + `ListSquads`). Positive integer; anything else keeps the default | no |
 | `RCON_INFO_INTERVAL_MS` | no | `5000` | Server-info refresh cadence (`ShowServerInfo` + `ShowNextMap`). Positive integer; anything else keeps the default | no |
 

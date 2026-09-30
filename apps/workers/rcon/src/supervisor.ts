@@ -12,6 +12,7 @@ import type { Diag } from '@squad/diag';
 import { type RconRefreshScope, seedPublicHost } from '@squad/shared-config';
 import {
   type EventEnvelope,
+  type HostCidr,
   SQUAD_CROWNS_TTL_SECONDS,
   STREAM_NAME,
   squadCrownsKey,
@@ -103,6 +104,8 @@ export interface Target {
    * refuse loopback/link-local addresses — see `RconClientOptions`.
    */
   refuseRestrictedAddresses?: boolean;
+  /** Private LAN ranges an external host may be in; see `RconClientOptions`. */
+  privateHostAllowlist?: readonly HostCidr[] | null;
 }
 
 export interface SupervisorOptions {
@@ -947,6 +950,7 @@ class PerServerSupervisor {
           port: this.target.port,
           password: this.target.password,
           refuseRestrictedAddresses: this.target.refuseRestrictedAddresses,
+          privateHostAllowlist: this.target.privateHostAllowlist,
           log: this.opts.log.child({ serverId: this.target.serverId }),
           onDisconnect: (reason) => {
             this.opts.log.warn(
