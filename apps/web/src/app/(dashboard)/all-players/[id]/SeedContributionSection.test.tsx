@@ -42,7 +42,8 @@ describe('SeedContributionSection', () => {
       render(<SeedContributionSection playerId="player-alpha" />);
 
       await screen.findByRole('heading', { name: 'Сид-вклад' });
-      expect(screen.getByText('Сид за 30 дней')).toBeInTheDocument();
+      // Заголовок виден уже в состоянии загрузки, итог появляется после ответа fetch.
+      expect(await screen.findByText('Сид за 30 дней')).toBeInTheDocument();
       // Одна и та же длительность стоит и в плитке итога, и в строке сервера.
       expect(screen.getAllByText('1ч 1м')).toHaveLength(2);
       const serverRow = within(screen.getByRole('table'));
