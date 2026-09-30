@@ -10,8 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/seregatipich/squad-admin-panel/apps/bridge/internal/validate"
 )
@@ -23,6 +24,10 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
+	// SavedRoot overrides the per-server saved-data root the sidecar's Logs
+	// bind is resolved under (production default validate.PanelSavedRoot).
+	// Tests point it at a temp dir.
+	SavedRoot string
 	// ComposeDir is the panel deploy directory that holds the compose file,
 	// its env files and scripts/restore.sh. The backup RPCs run `docker compose`
 	// (and the restore script) from here so they inherit RESTIC_PASSWORD/
@@ -68,14 +73,29 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	if err := validate.ContainerName(name); err != nil {
 		return "", err
 	}
-	if _, err := validate.PanelConfigsPath(spec.ConfigsHost); err != nil {
+	configsHost, err := validate.ServerConfigsMount(spec.ConfigsHost, spec.ServerID)
+	if err != nil {
 		return "", fmt.Errorf("configs mount: %w", err)
 	}
-	if _, err := validate.PanelSavedPath(spec.SavedHost); err != nil {
+	savedHost, err := validate.ServerSavedMount(spec.SavedHost, spec.ServerID)
+	if err != nil {
 		return "", fmt.Errorf("saved mount: %w", err)
 	}
 	if spec.DepotVolume != validate.DepotVolumeName {
 		return "", fmt.Errorf("%w: depot volume %q not in allowlist", validate.ErrForbidden, spec.DepotVolume)
+	}
+	for _, port := range []struct {
+		name  string
+		value int
+	}{
+		{"game", spec.GamePort},
+		{"query", spec.QueryPort},
+		{"beacon", spec.BeaconPort},
+		{"rcon", spec.RCONPort},
+	} {
+		if err := validate.ServerPort(port.value); err != nil {
+			return "", fmt.Errorf("%s port: %w", port.name, err)
+		}
 	}
 	if spec.UlimitNofile <= 0 {
 		spec.UlimitNofile = 65536
@@ -97,18 +117,33 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	// entrypoint itself (runuser), NOT the docker --user flag.
 	// Rootfs must be writable because runc creates mount points for the
 	// bind mounts inside it before the container process starts.
+	//
+	// Capabilities are dropped to what the root entrypoint needs before it
+	// drops to uid 1001 (docker/squad-server-entrypoint.sh): CHOWN,
+	// DAC_OVERRIDE and FOWNER for `chown -R` / `chmod` over the bind mounts,
+	// SETUID/SETGID for runuser, and KILL so tini (root, PID 1) can forward
+	// SIGTERM to the uid-1001 game process on `docker stop`. The game process
+	// itself runs unprivileged, so every capability is lost at the uid switch.
 	args := []string{
 		"run", "-d",
 		"--pull", "never",
 		"--name", name,
 		"--restart", "unless-stopped",
 		"--network", "host",
+		"--cap-drop", "ALL",
+		"--cap-add", "CHOWN",
+		"--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "FOWNER",
+		"--cap-add", "SETUID",
+		"--cap-add", "SETGID",
+		"--cap-add", "KILL",
+		"--security-opt", "no-new-privileges",
 	}
 	args = append(args, containerLogRotationArgs...)
 	args = append(args,
 		"-v", spec.DepotVolume+":/squad:ro",
-		"-v", spec.ConfigsHost+":/squad/SquadGame/ServerConfig:rw",
-		"-v", spec.SavedHost+":/squad/SquadGame/Saved:rw",
+		"-v", configsHost+":/squad/SquadGame/ServerConfig:rw",
+		"-v", savedHost+":/squad/SquadGame/Saved:rw",
 		"--ulimit", fmt.Sprintf("nofile=%d:%d", spec.UlimitNofile, spec.UlimitNofile),
 		"--label", "panel.server_id="+spec.ServerID,
 		"--label", "panel.kind=squad-server",
@@ -136,7 +171,7 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	beforeRetry := func() {
 		_, _, _, _ = d.R.Run(ctx, d.Bin, []string{"rm", "-f", name}, nil)
 	}
-	err := retryTransientDockerFailures(ctx, beforeRetry, func() error {
+	err = retryTransientDockerFailures(ctx, beforeRetry, func() error {
 		so, se, exit, runErr := d.R.Run(ctx, d.Bin, args, nil)
 		out = strings.TrimSpace(string(so))
 		if runErr != nil {
@@ -302,7 +337,7 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		return nil, err
 	}
 	serverDir := d.socketRoot() + "/" + spec.ServerID
-	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	logsBind := d.sidecarLogsDir(spec.ServerID) + ":/squad/Logs:ro"
 	socketBind := fmt.Sprintf("%s/sock:/run/panelBridge:rw", serverDir)
 	configBind := fmt.Sprintf("%s/config.json:/app/config.json:ro", serverDir)
 
@@ -318,6 +353,10 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 		"--network", "host",
 		"--user", "1001:1001",
 		"--read-only",
+		// The sidecar (node, uid 1001) needs no capabilities at all.
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pids-limit", "512",
 		"--restart", "unless-stopped",
 		"-v", logsBind,
 		"-v", socketBind,
@@ -334,6 +373,83 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 	}
 	args = append(args, validate.RNSquadJSImage)
 	return args, nil
+}
+
+// savedRoot returns the configured per-server saved-data root, defaulting to
+// the production constant when SavedRoot is unset.
+func (d *DockerRunner) savedRoot() string {
+	if d.SavedRoot != "" {
+		return d.SavedRoot
+	}
+	return validate.PanelSavedRoot
+}
+
+// sidecarLogsComponents is the path of the Squad Logs directory below
+// <savedRoot>/<serverID>, one component per element.
+var sidecarLogsComponents = []string{"SquadGame", "Saved", "Logs"}
+
+// sidecarLogsDir is the host directory bound read-only at /squad/Logs.
+func (d *DockerRunner) sidecarLogsDir(serverID string) string {
+	return d.savedRoot() + "/" + serverID + "/" + strings.Join(sidecarLogsComponents, "/")
+}
+
+// ensureSidecarLogsDir verifies that every component of the sidecar's Logs
+// bind source below the saved root — <id>, SquadGame, Saved, Logs — is a
+// real directory, never a symlink. That tree is owned by the game server
+// (uid 1001, which runs third-party mods), and docker (root) resolves
+// symlinks in a bind source, so a planted symlink would otherwise mount an
+// arbitrary host directory into the sidecar. Each level is opened
+// O_NOFOLLOW|O_DIRECTORY relative to its parent fd; a missing level is
+// created (0o755, chowned to the game uid) instead of being left for docker
+// to create through whatever the path resolves to. The saved root itself is
+// root-owned and may legitimately be reached through a symlink (hosts link
+// /var/lib/squad-panel to their data directory), so it is opened normally.
+//
+// The residual check-to-bind race (a swap after this verification but before
+// dockerd resolves the path) can at worst expose, read-only, a directory the
+// uid-1001 process could already read.
+func (d *DockerRunner) ensureSidecarLogsDir(serverID string) error {
+	root := d.savedRoot()
+	rootFd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open saved root %q: %w", root, err)
+	}
+	parentFd := rootFd
+	defer func() { unix.Close(parentFd) }()
+	for _, name := range append([]string{serverID}, sidecarLogsComponents...) {
+		fd, err := openOrCreateGameDir(parentFd, name)
+		if err != nil {
+			return err
+		}
+		unix.Close(parentFd)
+		parentFd = fd
+	}
+	return nil
+}
+
+// openOrCreateGameDir opens name under parentFd as a real directory
+// (O_NOFOLLOW|O_DIRECTORY), creating it first when absent. A created
+// directory is chowned to the game uid so the game server can write into it;
+// a non-root caller (dev/test) hits EPERM, which is tolerated.
+func openOrCreateGameDir(parentFd int, name string) (int, error) {
+	const flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_DIRECTORY | unix.O_CLOEXEC
+	fd, err := unix.Openat(parentFd, name, flags, 0)
+	if errors.Is(err, unix.ENOENT) {
+		if mkErr := unix.Mkdirat(parentFd, name, 0o755); mkErr != nil && !errors.Is(mkErr, unix.EEXIST) {
+			return -1, fmt.Errorf("create logs dir component %q: %w", name, mkErr)
+		}
+		fd, err = unix.Openat(parentFd, name, flags, 0)
+		if err == nil {
+			if chErr := unix.Fchown(fd, sidecarUID, sidecarUID); chErr != nil && !(errors.Is(chErr, unix.EPERM) && os.Geteuid() != 0) {
+				unix.Close(fd)
+				return -1, fmt.Errorf("chown logs dir component %q: %w", name, chErr)
+			}
+		}
+	}
+	if err != nil {
+		return -1, forbidNonDir("sidecar logs path", name, err)
+	}
+	return fd, nil
 }
 
 // ensureSidecarDir builds the two-level per-server tree the sidecar needs:
@@ -362,23 +478,23 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 			return err
 		}
 	}
-	rootFd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	rootFd, err := unix.Open(root, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return forbidNonDir("sidecar root", root, err)
 	}
-	defer syscall.Close(rootFd)
+	defer unix.Close(rootFd)
 
 	idFd, err := openVerifiedSidecarDir(rootFd, serverID, sidecarServerDirModeRaw, false)
 	if err != nil {
 		return err
 	}
-	defer syscall.Close(idFd)
+	defer unix.Close(idFd)
 
 	sockFd, err := openVerifiedSidecarDir(idFd, "sock", sidecarSockModeRaw, true)
 	if err != nil {
 		return err
 	}
-	return syscall.Close(sockFd)
+	return unix.Close(sockFd)
 }
 
 // openVerifiedSidecarDir creates name under parentFd (tolerating an existing
@@ -392,25 +508,25 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 // caller (dev/test) hits EPERM, tolerated because a non-root bridge cannot
 // drive containers anyway. Returns the open fd; the caller owns closing it.
 func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
-	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
+	if err := unix.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
 	}
-	fd, err := syscall.Openat(parentFd, name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	fd, err := unix.Openat(parentFd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, forbidNonDir("sidecar path", name, err)
 	}
-	if err := syscall.Fchmod(fd, mode); err != nil {
-		syscall.Close(fd)
+	if err := unix.Fchmod(fd, mode); err != nil {
+		unix.Close(fd)
 		return -1, fmt.Errorf("chmod sidecar dir %q: %w", name, err)
 	}
 	if !chownToSidecar {
 		return fd, nil
 	}
-	if err := syscall.Fchown(fd, sidecarUID, -1); err != nil {
-		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
+	if err := unix.Fchown(fd, sidecarUID, -1); err != nil {
+		if errors.Is(err, unix.EPERM) && os.Geteuid() != 0 {
 			return fd, nil
 		}
-		syscall.Close(fd)
+		unix.Close(fd)
 		return -1, fmt.Errorf("chown sidecar dir %q: %w", name, err)
 	}
 	return fd, nil
@@ -421,7 +537,7 @@ func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidec
 // O_DIRECTORY) onto validate.ErrForbidden so callers can match the policy
 // error, and wraps any other open failure verbatim.
 func forbidNonDir(what, path string, err error) error {
-	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
 		return fmt.Errorf("%w: %s %q is not a real directory", validate.ErrForbidden, what, path)
 	}
 	return fmt.Errorf("open %s %q: %w", what, path, err)
@@ -433,6 +549,9 @@ func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) 
 		return "", err
 	}
 	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
+		return "", err
+	}
+	if err := d.ensureSidecarLogsDir(spec.ServerID); err != nil {
 		return "", err
 	}
 	// config.json is rendered by the API into the (root-owned) server dir. If it

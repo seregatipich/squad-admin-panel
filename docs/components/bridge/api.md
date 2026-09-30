@@ -10,7 +10,7 @@ Every frame (request, response, stream chunk) is:
 4-byte big-endian uint32 length  |  UTF-8 JSON payload
 ```
 
-`MaxFrame = 16 MiB` (`BRIDGE_MAX_FRAME_BYTES`). Anything larger drops the connection.
+`MaxFrame = 16 MiB` (`BRIDGE_MAX_FRAME_BYTES`) caps every **encoded** frame. An incoming frame above it drops the connection. A response whose encoding would exceed it (e.g. a `file_read` of a ~10 MiB file whose bytes expand under JSON escaping) is replaced by a `runtime_error` response for the same `id`; use `file_read_stream` for large files. A stream frame that cannot be sent closes the connection. Each frame is written with a single `write(2)`, so concurrent responses on one connection never interleave.
 
 ```json
 // request
@@ -93,6 +93,8 @@ Up to 16 MiB. Anything outside the allowlist returns `forbidden`.
 
 Writes a unique hidden sibling temp file (`os.CreateTemp`, `.<name>.*.tmp`), fsyncs, chmods it to `mode`, then `rename(2)`s it over the target, so concurrent writers of one path never interleave (the last rename wins). Missing parent directories are created at `0755`; directories that already exist keep their mode (the installer's `0750` on `configs/` and `saved/` is never widened).
 
+`mode` is optional: omitted or `0` means `0644`; only `0644`, `0640` and `0600` are accepted, anything else (world-writable, setuid/setgid/sticky bits, bits above the permission mask) is rejected with `forbidden`.
+
 #### `directory_delete({ path })` → `{ removed: boolean }`
 
 `os.RemoveAll(path)` against the **exact** per-server data root. Used by the soft-delete orchestrator after backing up configs into `config_versions`.
@@ -119,7 +121,7 @@ Where `{uuid}` matches the canonical UUID v4/v7 regex. No trailing slash, no tra
 
 #### `ufw_rule({ action, proto, port, comment? })` → `{ output, status }`
 
-Adds/removes a panel-managed firewall rule. Only ports ≥ 1024 are accepted; `proto` is `tcp` | `udp`.
+Adds/removes a panel-managed firewall rule. Only ports ≥ 1024 are accepted; `proto` is `tcp` | `udp`. `comment` is optional; when present it must match `^[a-z][a-z0-9-]{0,63}$` (the panel's own `squad-<kind>-<8 hex>` tags), otherwise `forbidden`.
 
 ### Containers
 
@@ -135,7 +137,7 @@ docker run -d --network host --user 1001:1001 --read-only \
   -v squad-depot:/squad:ro \
   -v /var/lib/squad-panel/configs/{uuid}/ServerConfig:/squad/SquadGame/ServerConfig:rw \
   -v /var/lib/squad-panel/saved/{uuid}:/squad/SquadGame/Saved:rw \
-  squad-server:latest
+  squad-server:latest RANDOM=ALWAYS Port=… QueryPort=… … -log [extra_args…]
 ```
 
 Both `container_run` and `container_run_rnsquadjs` cap container logs at 10 MiB x 5 files, like the compose services' `x-logging`. Docker fixes log options at creation, so containers created before this change keep unbounded logs until they are recreated (reinstall or remove + start the server). The sidecar also gets `--label panel.preserve=true` so `docker_prune` spares it and its `--pull never` image.
@@ -144,7 +146,10 @@ Both `container_run` and `container_run_rnsquadjs` cap container logs at 10 MiB 
 
 - image outside allowlist
 - name not matching `SERVER_CONTAINER_REGEX`
-- mount source outside the allowed roots
+- `configs_host` other than exactly `/var/lib/squad-panel/configs/{server_id}/ServerConfig`, or `saved_host` other than exactly `/var/lib/squad-panel/saved/{server_id}` (the cleaned path is what gets mounted)
+- any port outside `1024..65535`
+- `multihome` that is not a literal IPv4/IPv6 address
+- an `extra_args` token that is not `-?Name[=value]` (no whitespace, quotes, `:` or `[`), or that names `ExecCmds`/`Exec` or a setting the bridge derives itself (`Port`, `QueryPort`, `BeaconPort`, `RCONPORT`, `RCONIP`, `MULTIHOME`, `FIXEDMAXPLAYERS`, `FIXEDMAXTICKRATE`)
 
 #### `container_start({ name })` → `{ status: 'started' }`
 

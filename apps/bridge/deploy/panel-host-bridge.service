@@ -3,6 +3,10 @@ Description=panel-host-bridge privileged daemon (squad-admin-panel)
 Documentation=https://github.com/seregatipich/squad-admin-panel
 Requires=panel-host-bridge.socket
 After=panel-host-bridge.socket network.target docker.service
+# Crash-loop guard: give up after 5 failed starts within 120 s. These are
+# [Unit] keys; under [Service] systemd ignores them and falls back to 10 s.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=notify
@@ -10,8 +14,6 @@ ExecStart=/usr/local/bin/panel-host-bridge
 User=root
 Restart=on-failure
 RestartSec=2s
-StartLimitIntervalSec=120
-StartLimitBurst=5
 WatchdogSec=30s
 
 UMask=0077

@@ -55,6 +55,32 @@
 
 - `list_panel_dirs` also returns `sidecars`: the child directories of `/run/squad-panel/rnsquadjs` (each holds a sidecar `config.json` with a plaintext RCON password).
 - `list_squad_containers` also returns `sidecars`: every `rnsquadjs-{uuid}` container, revalidated against the strict sidecar name regex. Both fields are additive; the API treats their absence (an older bridge) as "no sidecars".
+## 2026-09-28 — Audit hardening (#74)
+
+### Removed
+
+- `file_write` (non-atomic duplicate of `file_atomic_write`) and `process_info` (cmdline/status of any host PID) RPCs, together with `fsx.Write`, the dead `metrics.Metrics` and the unused `validate.ErrInvalidArgs` / `ErrorObject.Detail`. No production caller used them.
+
+### Security
+
+- `file_atomic_write` accepts only modes `0644`/`0640`/`0600` (default `0644`); anything else is `forbidden`. The size cap is checked before directories are created, `<path>.new` is created with `O_EXCL` so a planted symlink is never followed, and the temp file is removed on every failure path.
+- `container_run` binds only the exact `configs/{server_id}/ServerConfig` and `saved/{server_id}` paths (cleaned), and validates ports (`1024..65535`), `multihome` (literal IP) and `extra_args` (token syntax plus a denylist).
+- The squad-server container runs with `--cap-drop ALL` plus `CHOWN DAC_OVERRIDE FOWNER SETUID SETGID KILL` and `--security-opt no-new-privileges`; the rnsquadjs sidecar with `--cap-drop ALL --security-opt no-new-privileges --pids-limit 512`.
+- Before launching the sidecar, every component of its `Logs` bind source below the saved root is verified as a real directory (`O_NOFOLLOW`), and missing levels are created instead of being left to docker.
+- The `ufw_rule` comment must match `^[a-z][a-z0-9-]{0,63}$`.
+
+### Fixed
+
+- A peer whose `SO_PEERCRED` could not be read (it disconnected immediately, or shutdown closed the socket first) crashed the daemon with a nil-pointer panic; `ResolvePeer` now always returns a non-nil peer.
+- Frames are written with one `write(2)` and the invalid-JSON reply goes through the per-connection write lock, so concurrent frames never interleave.
+- A response larger than `MaxFrame` (or one that cannot be encoded) is answered with an error response for the same id instead of being dropped silently; write failures are logged.
+- Error codes are chosen with `errors.Is(err, validate.ErrForbidden)`: docker stderr containing "forbidden" no longer turns a runtime failure into `forbidden`.
+- Docker sizes are parsed with decimal units (kB/MB/GB/TB = 10³/10⁶/10⁹/10¹²), matching go-units `HumanSize`.
+- `panel_disk_usage` skips a volume only on docker's own "no such volume" stderr; any other `docker volume inspect` failure is returned instead of being cached as an empty result.
+- Cancelled or timed-out commands return the context error instead of a fake exit code. Commands run in their own process group, which is killed on cancellation; pipes held by escaped descendants are force-closed after 5 s.
+- `host_metrics` no longer lazily assigns the dispatcher's cache (data race).
+- `StartLimitIntervalSec`/`StartLimitBurst` moved to `[Unit]` (systemd ignored them under `[Service]`). The watchdog interval follows `WATCHDOG_USEC`, `STOPPING=1` is sent as soon as a shutdown signal arrives, and the development socket fallback refuses to steal a live socket and creates it `0660`.
+- `golang.org/x/sys` bumped to v0.47.0 (the newest release that still supports Go 1.25; v0.48.0 requires Go 1.26).
 
 ## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
 

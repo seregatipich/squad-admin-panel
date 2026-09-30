@@ -212,6 +212,11 @@ func (d *Dispatcher) hostAgentRestart(req *rpc.Request) rpc.Response {
 
 // --- read-only / diagnostic ---
 
+// defaultMetricsCache serves host_metrics for a Dispatcher built without its
+// own MetricsCache. It is created once at package init and never reassigned,
+// so concurrent requests share it without a data race.
+var defaultMetricsCache = metrics.NewMetricsCache(nil, nil, 200*time.Millisecond)
+
 func (d *Dispatcher) ping(req *rpc.Request) rpc.Response {
 	hn, _ := os.Hostname()
 	body, _ := json.Marshal(map[string]any{
@@ -236,10 +241,11 @@ func (d *Dispatcher) hostMetrics(req *rpc.Request) rpc.Response {
 	if mp == "" {
 		mp = "/"
 	}
-	if d.MetricsCache == nil {
-		d.MetricsCache = metrics.NewMetricsCache(nil, nil, 200*time.Millisecond)
+	cache := d.MetricsCache
+	if cache == nil {
+		cache = defaultMetricsCache
 	}
-	body, _ := json.Marshal(d.MetricsCache.Sample(mp))
+	body, _ := json.Marshal(cache.Sample(mp))
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
@@ -335,23 +341,26 @@ func (d *Dispatcher) fileReadStream(ctx context.Context, req *rpc.Request, onStr
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
-type fileWriteParams struct {
+// fileAtomicWriteParams is the file_atomic_write payload. Mode is optional;
+// 0 selects validate.DefaultWritableFileMode and any other value must be in
+// validate.WritableFileMode's allowlist.
+type fileAtomicWriteParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	Mode    uint32 `json:"mode,omitempty"`
 }
 
 func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
-	var p fileWriteParams
+	var p fileAtomicWriteParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
 	if err := validateWritablePath(p.Path); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
 	}
-	mode := os.FileMode(0o644)
-	if p.Mode != 0 {
-		mode = os.FileMode(p.Mode)
+	mode, err := validate.WritableFileMode(p.Mode)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
 	}
 	if err := fsx.AtomicWrite(p.Path, []byte(p.Content), mode); err != nil {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
@@ -1321,10 +1330,7 @@ func humanReclaimed(s string) string {
 // returning (int64, error)). The reclaimed-space parser above wraps it.
 
 func isForbidden(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "forbidden")
+	return errors.Is(err, validate.ErrForbidden)
 }
 
 // --- panel disk usage ---
@@ -1442,7 +1448,10 @@ func realStatfs(path string, st *syscall.Statfs_t) error {
 }
 
 // parseHumanSize parses a human-readable byte string like "1.2GB", "512MB", "0B"
-// produced by `docker system df --format '{{json .}}'`. Returns 0 on empty input.
+// produced by `docker system df --format '{{json .}}'` and the "Total
+// reclaimed space" line of `docker system prune`. Docker formats both with
+// go-units HumanSize, which is decimal (kB=1e3, MB=1e6, GB=1e9, TB=1e12), so
+// the multipliers are powers of 1000, not 1024. Returns 0 on empty input.
 func parseHumanSize(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "0" || s == "0B" {
@@ -1452,11 +1461,11 @@ func parseHumanSize(s string) (int64, error) {
 		unit  string
 		scale float64
 	}{
-		{"TB", 1 << 40},
-		{"GB", 1 << 30},
-		{"MB", 1 << 20},
-		{"kB", 1 << 10},
-		{"KB", 1 << 10},
+		{"TB", 1e12},
+		{"GB", 1e9},
+		{"MB", 1e6},
+		{"kB", 1e3},
+		{"KB", 1e3},
 		{"B", 1},
 	}
 	for _, suffix := range suffixes {

@@ -94,6 +94,11 @@ export interface SquadLogListResult {
   files: SquadLogFileEntry[];
 }
 
+/**
+ * Params of `file_atomic_write`. `mode` is optional: omitted (or 0) writes
+ * 0o644; otherwise the bridge accepts only 0o644, 0o640 or 0o600 and rejects
+ * anything else with a `forbidden` error.
+ */
 export interface FileWriteParams {
   path: string;
   content: string;

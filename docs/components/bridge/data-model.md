@@ -61,14 +61,13 @@ Source: `apps/bridge/internal/rpc/types.go`.
 ```json
 {
   "code":    "forbidden",
-  "message": "path \"/etc/passwd\" outside allowed roots",
-  "detail":  null
+  "message": "path \"/etc/passwd\" outside allowed roots"
 }
 ```
 
 | `code` | Meaning |
 |---|---|
-| `forbidden` | Path, image, or container name rejected by policy. |
+| `forbidden` | Path, image, container name, mode, port or argument rejected by policy (the error wraps `validate.ErrForbidden`; the code is chosen by `errors.Is`, never by matching error text). |
 | `invalid_args` | JSON unmarshal failure or missing required field. |
 | `not_found` | A file read targeted a path that does not exist. |
 | `runtime_error` | OS-level or Docker CLI failure. |
@@ -193,7 +192,7 @@ After all streaming frames the final response frame is written (same framing, `o
 }
 ```
 
-`mode` is an octal file permission as a decimal integer (default 0644 = 420). Optional.
+`mode` is an octal file permission as a decimal integer. Optional: omitted or `0` means `0644` (420); otherwise only `0644` (420), `0640` (416) and `0600` (384) are accepted and anything else is `forbidden`.
 
 **Result:**
 ```json
@@ -243,11 +242,11 @@ Used exclusively by the soft-delete orchestrator after backing up `.cfg` files t
   "action":  "allow",
   "port":    7787,
   "proto":   "udp",
-  "comment": "squad-{uuid}-game"
+  "comment": "squad-game-0190abcd"
 }
 ```
 
-`action`: `"allow"` or `"delete"`. `proto`: `"tcp"`, `"udp"`, or `"tcp/udp"`. `port`: 1–65535.
+`action`: `"add"` or `"remove"`. `proto`: `"tcp"` or `"udp"`. `port`: 1024–65535. `comment` (optional): `^[a-z][a-z0-9-]{0,63}$`.
 
 **Result:**
 ```json
@@ -270,14 +269,14 @@ Used exclusively by the soft-delete orchestrator after backing up `.cfg` files t
   "max_players":  100,
   "tickrate":     50,
   "multihome":    "0.0.0.0",
-  "configs_host": "/var/lib/squad-panel/configs/{uuid}",
+  "configs_host": "/var/lib/squad-panel/configs/{uuid}/ServerConfig",
   "saved_host":   "/var/lib/squad-panel/saved/{uuid}",
   "depot_volume": "squad-depot",
   "ulimit_nofile": 65536
 }
 ```
 
-`server_id` must be a valid UUID v4/v7 (lowercase hex). `image` must be one of the two allowlisted images (see below). `configs_host` and `saved_host` must pass `PanelConfigsPath` and `PanelSavedPath` validation respectively. `depot_volume` must equal `"squad-depot"`.
+`server_id` must be a valid UUID v4/v7 (lowercase hex). `image` must be one of the two allowlisted images (see below). `configs_host` must be exactly `/var/lib/squad-panel/configs/{server_id}/ServerConfig` and `saved_host` exactly `/var/lib/squad-panel/saved/{server_id}` after cleaning (`validate.ServerConfigsMount` / `validate.ServerSavedMount`); the cleaned paths are what get mounted. `depot_volume` must equal `"squad-depot"`. Ports must be in `1024..65535`, `multihome` a literal IP address, and each `extra_args` token must pass `validate.ServerExtraArg`.
 
 **Result:**
 ```json

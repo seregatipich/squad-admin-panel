@@ -569,6 +569,7 @@ func TestRunRNSquadJS(t *testing.T) {
 	f := &Fake{Stdout: []byte("rns-container-id\n")}
 	d := NewDocker(f)
 	d.SocketRoot = root
+	d.SavedRoot = t.TempDir()
 	spec := RNSquadJSRunSpec{
 		ServerID: "0196f0a2-1111-2222-3333-444444444444",
 		Env:      map[string]string{"PANEL_BRIDGE_MODE": "shadow"},

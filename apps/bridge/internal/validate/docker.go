@@ -202,7 +202,9 @@ func panelServerRoot(p, root, label string) (string, error) {
 // IPv4/IPv6 literal could append extra launch flags.
 func Multihome(addr string) error {
 	if net.ParseIP(addr) == nil {
-		return fmt.Errorf("%w: multihome %q is not an IP address", ErrInvalidArgs, addr)
+		// Both sentinels: a malformed address is structurally invalid and, being
+		// a launch-flag injection vector, a policy violation (RPC code forbidden).
+		return fmt.Errorf("%w: %w: multihome %q is not an IP address", ErrForbidden, ErrInvalidArgs, addr)
 	}
 	return nil
 }

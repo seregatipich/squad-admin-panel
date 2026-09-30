@@ -125,7 +125,7 @@ Writes via a unique temp file plus rename (atomic on Linux ext4/XFS; concurrent 
 |---|---|---|
 | `path` | `string` | yes |
 | `content` | `string` | yes |
-| `mode` | `number` | no (defaults to `0644`) |
+| `mode` | `number` | no — omitted means `0644`; otherwise only `0o644`, `0o640`, `0o600`, anything else rejects with `BridgeError('forbidden')` |
 
 ---
 
@@ -136,9 +136,9 @@ Adds or removes a UFW firewall rule.
 | Param | Type | Values |
 |---|---|---|
 | `action` | `'add' \| 'remove'` | |
-| `port` | `number` | 1–65535 |
+| `port` | `number` | 1024–65535 |
 | `proto` | `'tcp' \| 'udp'` | |
-| `comment` | `string` | optional |
+| `comment` | `string` | optional; must match `^[a-z][a-z0-9-]{0,63}$` or the bridge rejects with `forbidden` |
 
 ---
 

@@ -9,7 +9,9 @@ package fsx
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,13 +296,17 @@ func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 	// fsync the parent directory so the rename survives a power loss
 	// (POSIX requires the directory entry change to be flushed in a
 	// separate fsync from the file's data fsync). Best-effort: the rename
-	// already committed, and on filesystems where directory fsync is a
-	// no-op this can return EINVAL.
+	// already committed, so a failure does not fail the request but is
+	// logged so a durability problem is visible. EINVAL means the filesystem
+	// does not support directory fsync.
 	dirF, err := root.Open(filepath.Dir(rel))
 	if err != nil {
+		slog.Warn("open parent directory after atomic write", "path", p, "err", err)
 		return nil
 	}
 	defer func() { _ = dirF.Close() }()
-	_ = dirF.Sync()
+	if err := dirF.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) {
+		slog.Warn("fsync parent directory after atomic write", "path", p, "err", err)
+	}
 	return nil
 }

@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestRealRunEcho(t *testing.T) {
@@ -124,4 +126,58 @@ func TestFakeOnRunCallback(t *testing.T) {
 func TestRunnerInterfaceCompliance(t *testing.T) {
 	var _ Runner = Real{}
 	var _ Runner = &Fake{}
+}
+
+// Regression for #74 (finding #420): a cancelled or timed-out command was
+// reported as an ordinary non-zero exit with err == nil, so callers could not
+// tell a timeout from a failing command.
+func TestRealRunReportsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, _, _, err := Real{}.Run(ctx, "sleep", []string{"30"}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestRealStreamReportsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := Real{}.Stream(ctx, "sleep", []string{"30"}, nil, nil, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+// Regression for #74 (finding #420): cancelling Stream killed only the direct
+// child. A grandchild (e.g. the docker CLI started by restore.sh) kept the
+// stdout/stderr pipes open, so Stream blocked until it exited on its own and
+// the work carried on orphaned. The whole process group must die.
+func TestRealStreamCancellationKillsDescendants(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := Real{}.Stream(ctx, "sh", []string{"-c", "sleep 30 & wait"}, nil, nil, nil)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Stream returned after %s; cancellation did not reach the grandchild", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+// A descendant that escapes the process group (setsid) still cannot hold
+// Stream hostage after cancellation: the pipes are force-closed after
+// streamWaitDelay.
+func TestRealStreamCancellationDoesNotWaitForEscapedDescendant(t *testing.T) {
+	prev := streamWaitDelay
+	streamWaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { streamWaitDelay = prev })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _ = Real{}.Stream(ctx, "sh", []string{"-c", "setsid sleep 3 & sleep 30"}, nil, nil, nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Stream returned after %s; escaped descendant held the pipes", elapsed)
+	}
 }

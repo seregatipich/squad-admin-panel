@@ -78,9 +78,9 @@ func Info() (HostInfo, error) {
 }
 
 // MetricsCache holds the last raw sample so consecutive host_metrics RPC
-// calls produce real CPU / network rate deltas. The previous implementation
-// captured two samples back-to-back inside one RPC call, which made dt
-// effectively microseconds and the resulting rate always 0.
+// calls produce real CPU / network rate deltas. It is the only host_metrics
+// sampling path: capturing two samples back-to-back inside one RPC call would
+// make dt effectively microseconds and every rate 0.
 type MetricsCache struct {
 	mu        sync.Mutex
 	last      *sample

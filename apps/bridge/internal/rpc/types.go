@@ -20,7 +20,8 @@ type Response struct {
 	Error  *ErrorObject    `json:"error,omitempty"`
 }
 
-// StreamFrame is produced by streaming methods (steamcmd_run, journalctl_follow).
+// StreamFrame is produced by the streaming methods (container_logs_follow,
+// file_read_stream, depot_update, docker_prune, backup_run, backup_restore).
 // It is written as a standalone frame on the same socket between the
 // request and the final Response. Consumers see the frames interleaved.
 type StreamFrame struct {

@@ -1,7 +1,8 @@
 // Command panel-host-bridge serves privileged operations on behalf of
-// the containerised panel over a unix domain socket. It uses systemd
-// socket activation so it can stay unprivileged at restart and let
-// systemd own the socket lifecycle.
+// the containerised panel over a unix domain socket. It runs as root (see
+// deploy/panel-host-bridge.service) and uses systemd socket activation so
+// systemd owns the socket: its path, ownership and inode stay stable across
+// daemon restarts, and connections queue while the daemon is restarting.
 package main
 
 import (
@@ -11,10 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -59,8 +63,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Watchdog ping every 10 s keeps systemd happy.
-	go watchdog(ctx)
+	if interval, enabled := watchdogInterval(); enabled {
+		go watchdog(ctx, interval)
+	}
 
 	// Shutdown on SIGTERM/SIGINT.
 	sigs := make(chan os.Signal, 1)
@@ -72,6 +77,10 @@ func main() {
 			"version": Version,
 		})
 		log.Info("shutdown signal received", "signal", sig.String())
+		// Tell systemd right away that we are stopping, not only after every
+		// connection has drained, so the unit reports "deactivating" while it
+		// waits instead of looking healthy.
+		_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
 		_ = listener.Close()
 		cancel()
 	}()
@@ -100,7 +109,6 @@ func main() {
 	}
 
 	wg.Wait()
-	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
 }
 
 func pickListener() (net.Listener, error) {
@@ -111,28 +119,82 @@ func pickListener() (net.Listener, error) {
 	if len(listeners) >= 1 {
 		return listeners[0], nil
 	}
-	// Fallback for local development.
+	// Fallback for local development, when no .socket unit handed us a
+	// listener. Production always runs socket-activated.
 	sock := os.Getenv("PANEL_BRIDGE_SOCK")
 	if sock == "" {
 		sock = "/run/panel-host-bridge/bridge.sock"
 	}
-	_ = os.Remove(sock)
+	slog.Warn("no systemd socket activation; using development socket fallback", "sock", sock)
+	if err := removeStaleSocket(sock); err != nil {
+		return nil, err
+	}
+	// Create the socket 0660 directly (umask 0117 on the default 0777) so it
+	// is never reachable by other users, not even before a chmod could run.
+	// The umask is process-wide, which is safe here: this runs once at
+	// startup before any other goroutine creates files.
+	prevUmask := syscall.Umask(0o117)
 	l, err := net.Listen("unix", sock)
+	syscall.Umask(prevUmask)
 	if err != nil {
 		return nil, fmt.Errorf("listen %q: %w", sock, err)
 	}
-	if err := os.Chmod(sock, 0o660); err != nil {
-		return nil, fmt.Errorf("chmod %q: %w", sock, err)
+	// Best effort, mirroring the production .socket unit: a non-root
+	// developer usually cannot chgrp to the panel group.
+	if g, err := user.LookupGroup(auth.PeerGroup); err == nil {
+		if gid, err := strconv.Atoi(g.Gid); err == nil {
+			_ = os.Chown(sock, -1, gid)
+		}
 	}
 	return l, nil
 }
 
-func watchdog(ctx context.Context) {
+// removeStaleSocket clears a socket file left behind by a previous bridge
+// process so the development fallback can listen again. It refuses to touch
+// a path that is not a socket, or a socket that another listener is still
+// serving (a successful probe dial), instead of silently stealing it.
+func removeStaleSocket(sock string) error {
+	st, err := os.Lstat(sock)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat %q: %w", sock, err)
+	}
+	if st.Mode().Type() != fs.ModeSocket {
+		return fmt.Errorf("%q exists and is not a socket", sock)
+	}
+	if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("socket %q is already served by another listener", sock)
+	}
+	if err := os.Remove(sock); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove stale socket %q: %w", sock, err)
+	}
+	return nil
+}
+
+// watchdogInterval reports how often to ping the systemd watchdog: half of
+// the WatchdogSec= systemd advertises through WATCHDOG_USEC/WATCHDOG_PID, the
+// margin sd_watchdog_enabled(3) recommends. enabled is false when systemd
+// did not request watchdog pings for this process.
+func watchdogInterval() (interval time.Duration, enabled bool) {
+	timeout, err := daemon.SdWatchdogEnabled(false)
+	if err != nil || timeout <= 0 {
+		return 0, false
+	}
+	return timeout / 2, true
+}
+
+// watchdog pings the systemd watchdog every interval until ctx is cancelled.
+func watchdog(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-ticker.C:
 			_, _ = daemon.SdNotify(false, daemon.SdNotifyWatchdog)
 		}
 	}
@@ -202,20 +264,38 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 	// connection, so this is the only cancellation signal it has.
 	connCtx, connCancel := context.WithCancel(ctx)
 
+	// Every frame on this connection goes through writeMu so concurrent
+	// handlers never interleave their output.
 	var writeMu sync.Mutex
-	writeFrame := func(v any) {
-		payload, err := json.Marshal(v)
-		if err != nil {
-			return
-		}
+	writeFrame := func(payload []byte) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		if err := rpc.WriteFrame(conn, payload); err != nil {
+			log.Warn("write frame failed; closing connection", "err", err, "pid", peer.PID)
 			connCancel()
 		}
 	}
-	writeResp := func(resp rpc.Response) { writeFrame(resp) }
-	writeStream := func(sf rpc.StreamFrame) { writeFrame(sf) }
+	writeResp := func(resp rpc.Response) {
+		payload, err := encodeResponse(resp)
+		if err != nil {
+			log.Warn("response replaced by an error response", "id", resp.ID, "err", err)
+		}
+		writeFrame(payload)
+	}
+	writeStream := func(sf rpc.StreamFrame) {
+		payload, err := json.Marshal(sf)
+		if err == nil && len(payload) > rpc.MaxFrame {
+			err = rpc.ErrFrameTooLarge
+		}
+		if err != nil {
+			// A dropped frame would silently corrupt the stream, so end the
+			// connection; the caller sees the disconnect instead of a gap.
+			log.Warn("stream frame not sendable; closing connection", "id", sf.ID, "err", err)
+			connCancel()
+			return
+		}
+		writeFrame(payload)
+	}
 
 	// Each request runs in its own goroutine so a long-running streaming
 	// method (container_logs_follow, depot_update) cannot block other
@@ -244,7 +324,7 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 		}
 		var req rpc.Request
 		if err := json.Unmarshal(payload, &req); err != nil {
-			writeError(conn, "", rpc.CodeInvalidArgs, "invalid JSON: "+err.Error())
+			writeResp(rpc.NewErrorResponse("", rpc.CodeInvalidArgs, "invalid JSON: "+err.Error()))
 			continue
 		}
 		inflight.Add(1)
@@ -256,6 +336,26 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 	}
 }
 
+// encodeResponse marshals resp for the wire. When resp cannot be encoded, or
+// its encoding exceeds rpc.MaxFrame, it returns a compact error Response for
+// the same id instead, together with the reason, so the caller always gets an
+// answer rather than waiting for its RPC timeout.
+func encodeResponse(resp rpc.Response) ([]byte, error) {
+	payload, err := json.Marshal(resp)
+	if err != nil {
+		fallback, _ := json.Marshal(rpc.NewErrorResponse(resp.ID, rpc.CodeInternal, "encode response: "+err.Error()))
+		return fallback, fmt.Errorf("encode response: %w", err)
+	}
+	if len(payload) > rpc.MaxFrame {
+		msg := fmt.Sprintf("response of %d bytes exceeds the %d-byte frame limit", len(payload), rpc.MaxFrame)
+		fallback, _ := json.Marshal(rpc.NewErrorResponse(resp.ID, rpc.CodeRuntimeError, msg))
+		return fallback, fmt.Errorf("%w: %s", rpc.ErrFrameTooLarge, msg)
+	}
+	return payload, nil
+}
+
+// writeError writes a single error Response frame. It is only safe before
+// any request goroutine of the connection has started (no writeMu).
 func writeError(w io.Writer, id, code, msg string) {
 	payload, _ := json.Marshal(rpc.NewErrorResponse(id, code, msg))
 	_ = rpc.WriteFrame(w, payload)

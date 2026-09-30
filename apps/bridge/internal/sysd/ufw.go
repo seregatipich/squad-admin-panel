@@ -26,6 +26,9 @@ func (u *UFW) Rule(ctx context.Context, action, proto string, port int, comment 
 	if err := validate.UFWPort(port); err != nil {
 		return "", err
 	}
+	if err := validate.UFWComment(comment); err != nil {
+		return "", err
+	}
 
 	// Map panel-level action to ufw CLI verb: add → "allow", remove → "delete allow".
 	var args []string

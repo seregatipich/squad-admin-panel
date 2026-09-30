@@ -67,3 +67,36 @@ func TestEOFPartialFrame(t *testing.T) {
 		t.Fatalf("expected ErrUnexpectedEOF, got %v", err)
 	}
 }
+
+// countingWriter records every Write call so a test can assert how a frame
+// reached the underlying connection.
+type countingWriter struct {
+	writes [][]byte
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes = append(w.writes, append([]byte(nil), p...))
+	return len(p), nil
+}
+
+// Regression for #74 (finding #414): WriteFrame issued the 4-byte header and
+// the payload as two Write calls, so a concurrent writer on the same
+// connection could land its frame between them and desynchronise the stream.
+// A net.Conn holds its fd write lock for one whole Write, so a single Write
+// makes each frame atomic against other writers.
+func TestWriteFrame_EmitsHeaderAndPayloadInOneWrite(t *testing.T) {
+	var w countingWriter
+	if err := WriteFrame(&w, []byte(`{"id":"1"}`)); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	if len(w.writes) != 1 {
+		t.Fatalf("WriteFrame made %d Write calls, want exactly 1", len(w.writes))
+	}
+	got, err := ReadFrame(bytes.NewReader(w.writes[0]))
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if string(got) != `{"id":"1"}` {
+		t.Fatalf("payload=%q", got)
+	}
+}
