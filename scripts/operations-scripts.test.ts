@@ -1102,6 +1102,35 @@ describe('the stand host release deploy', { concurrency: true }, () => {
     }
   });
 
+  it('generates missing Redis secrets into .env.stand once and never rotates them', async () => {
+    const fixture = deployFixture();
+    const envFile = path.join(fixture.root, '.env.stand');
+    writeFileSync(envFile, 'SAFE_TEST_VALUE=1\nREDIS_SIDECAR_PASSWORD=\nAPP_DOMAIN=stand.example');
+    const secrets = () =>
+      Object.fromEntries(
+        readFileSync(envFile, 'utf8')
+          .split('\n')
+          .filter((line) => /^REDIS_(SIDECAR_)?PASSWORD=/.test(line))
+          .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+      );
+    const env = { DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a2,web w2,caddy c2,worker-rcon k2' };
+
+    const first = await deploy(fixture, env);
+    assert.equal(first.status, 0, first.stderr);
+    const generated = secrets();
+    assert.match(generated.REDIS_PASSWORD ?? '', /^[0-9a-f]{64}$/);
+    assert.match(generated.REDIS_SIDECAR_PASSWORD ?? '', /^[0-9a-f]{64}$/);
+    assert.notEqual(generated.REDIS_PASSWORD, generated.REDIS_SIDECAR_PASSWORD);
+    const lines = readFileSync(envFile, 'utf8').split('\n');
+    assert.ok(lines.includes('APP_DOMAIN=stand.example'), 'the last line kept its value');
+    assert.equal(lines.filter((line) => line.startsWith('REDIS_SIDECAR_PASSWORD=')).length, 1);
+
+    const second = await deploy(fixture, env);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(secrets(), generated);
+    assert.doesNotMatch(second.stdout, /generated REDIS/);
+  });
+
   it('refuses a Compose too old to merge both env files, before changing anything', async () => {
     for (const version of ['2.16.0', 'v1.29.2', '']) {
       const fixture = deployFixture();

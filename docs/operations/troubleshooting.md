@@ -61,7 +61,7 @@ Sources:
 
 ```bash
 docker compose logs worker-rcon --since 5m            # or whichever worker
-redis-cli -h $REDIS_HOST GET worker:heartbeat:rcon    # should be a recent JSON blob
+docker compose exec redis redis-cli GET worker:heartbeat:rcon   # should be a recent JSON blob
 docker compose restart worker-rcon
 ```
 
