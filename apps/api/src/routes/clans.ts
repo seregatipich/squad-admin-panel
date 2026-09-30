@@ -1374,7 +1374,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       // from searching this same paginated/sorted page for the viewer's own
       // row, which can (and, once searched/sorted/paged, routinely does) fall
       // off it (#509).
-      const viewerManageLevel = await clanManageLevel(clan.id, req.user);
+      const viewerManageLevel = await clanManageLevel(clan.id, requestUser(req));
 
       return {
         clan_id: clan.id,

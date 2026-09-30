@@ -56,7 +56,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/auth/steam/login',
     { config: { audit: false, public: true, rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (_req, reply) => {
+    async (req, reply) => {
       const nonce = randomBytes(16).toString('base64url');
       const returnTo = allowedReturnPath((req.query as { return_to?: unknown }).return_to);
       await app.redis.set(
