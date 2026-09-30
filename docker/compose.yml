@@ -643,7 +643,9 @@ services:
     # user (REDIS_PASSWORD) is the panel's; `rnsquadjs` (REDIS_SIDECAR_PASSWORD)
     # is the third-party sidecar's and may only write its own event stream,
     # status and heartbeat keys, never session:* or command queues. Both are
-    # embedded in redis:// URLs below, so keep them URL-safe (hex).
+    # embedded in redis:// URLs below, so keep them URL-safe (hex). maxmemory stays
+    # below the container's mem_limit; noeviction makes a full Redis reject
+    # writes instead of silently dropping stream entries.
     command:
       - redis-server
       - --appendonly
@@ -651,8 +653,6 @@ services:
       - --save
       - '60'
       - '1000'
-      # Bound memory below the container's mem_limit; noeviction makes a full
-      # Redis reject writes instead of silently dropping stream entries.
       - --maxmemory
       - 768mb
       - --maxmemory-policy
