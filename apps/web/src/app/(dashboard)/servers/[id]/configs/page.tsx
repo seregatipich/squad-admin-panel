@@ -9,7 +9,6 @@ import {
   AlertDialog,
   type AlertDialogTone,
   Badge,
-  type BadgeTone,
   Button,
   Card,
   CardHeader,
@@ -28,6 +27,8 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { type DriftDiff, type DriftItem, DriftPanel } from './DriftPanel';
+import { BEHAVIOR_BADGE, type FileItem, FileList } from './FileList';
 import { managedSegmentLineRange } from './managed-segment';
 
 const POLL_MS = 8000;
@@ -48,14 +49,6 @@ const MonacoDiff = dynamic(
   () => import('@monaco-editor/react').then((m) => ({ default: m.DiffEditor })),
   { ssr: false },
 );
-
-interface FileItem {
-  name: string;
-  size: number;
-  sha256: string | null;
-  behavior: 'hot_reload' | 'requires_restart' | 'rotation';
-  exists: boolean;
-}
 
 interface Version {
   id: string;
@@ -81,43 +74,9 @@ interface BlameResponse {
   truncated?: boolean;
 }
 
-// CFG-2 (#64): generic drift status for the non-managed config files.
-interface DriftItem {
-  name: string;
-  state: 'in_sync' | 'drift' | 'missing' | 'unreachable' | 'unknown';
-  disk_sha256: string | null;
-  version_sha256: string | null;
-  tip_version_id: string | null;
-}
-
 /** Files whose drift/reset story is owned by dedicated machinery — no
  *  reset-to-depot-default button for them. */
 const RESET_EXCLUDED_FILES = ['License.cfg', 'Admins.cfg', 'LayerRotation.cfg'];
-
-/**
- * Когда правка доедет до игры. Метка русская и короткая, а полное объяснение
- * живёт в `title`: в списке из двадцати файлов на подпись есть одна строка.
- */
-const BEHAVIOR_BADGE: Record<
-  FileItem['behavior'],
-  { label: string; hint: string; tone: BadgeTone }
-> = {
-  hot_reload: {
-    label: 'на лету',
-    hint: 'Squad перечитает файл сам, в течение примерно 60 секунд',
-    tone: 'good',
-  },
-  rotation: {
-    label: 'со следующим матчем',
-    hint: 'Правка применится, когда начнётся следующий матч',
-    tone: 'accent',
-  },
-  requires_restart: {
-    label: 'рестарт',
-    hint: 'Правка применится только после перезапуска сервера',
-    tone: 'warn',
-  },
-};
 
 type Tab = 'editor' | 'history' | 'blame';
 
@@ -265,9 +224,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   // Config drift banner + resolution (CFG-2, #64).
   const [driftItems, setDriftItems] = useState<DriftItem[]>([]);
-  const [driftDiff, setDriftDiff] = useState<{ name: string; tip: string; disk: string } | null>(
-    null,
-  );
+  const [driftDiff, setDriftDiff] = useState<DriftDiff | null>(null);
   const [driftBusy, setDriftBusy] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
 
@@ -651,29 +608,49 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }
 
-  async function openDriftDiff(item: DriftItem) {
-    setErr(null);
-    try {
-      let tip = '';
-      if (item.tip_version_id) {
-        const r = await fetch(
-          `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
-          { credentials: 'include' },
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        tip = ((await r.json()) as { content: string }).content;
+  const openDriftDiff = useCallback(
+    async (item: DriftItem) => {
+      setErr(null);
+      try {
+        let tip = '';
+        if (item.tip_version_id) {
+          const r = await fetch(
+            `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
+            { credentials: 'include' },
+          );
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          tip = ((await r.json()) as { content: string }).content;
+        }
+        const diskR = await fetch(`/api/v1/servers/${id}/configs/${item.name}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!diskR.ok) throw new Error(`HTTP ${diskR.status}`);
+        const disk = ((await diskR.json()) as { content: string }).content;
+        setDriftDiff({ name: item.name, tip, disk });
+      } catch (e) {
+        setErr((e as Error).message);
       }
-      const diskR = await fetch(`/api/v1/servers/${id}/configs/${item.name}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!diskR.ok) throw new Error(`HTTP ${diskR.status}`);
-      const disk = ((await diskR.json()) as { content: string }).content;
-      setDriftDiff({ name: item.name, tip, disk });
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }
+    },
+    [id],
+  );
+
+  const selectFile = useCallback(
+    (name: string) => {
+      if (dirty) {
+        setConfirmation({ kind: 'switch-file', name });
+        return;
+      }
+      void load(name);
+    },
+    [dirty, load],
+  );
+
+  const closeDriftDiff = useCallback(() => setDriftDiff(null), []);
+  const requestDriftResolution = useCallback(
+    (name: string, action: 'accept' | 'revert') => setConfirmation({ kind: 'drift', name, action }),
+    [],
+  );
 
   async function resetToDefault(name: string) {
     if (resetting) return;
@@ -852,117 +829,17 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         </div>
       ) : null}
 
-      {driftItems.length > 0 ? (
-        <div data-testid="config-drift-banner" className="space-y-3">
-          <InlineBanner
-            tone="warn"
-            title={`Конфиги изменены на диске вне панели (${driftItems.length})`}
-            description={
-              <ul className="space-y-1">
-                {driftItems.map((item) => (
-                  <li key={item.name} className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-mono text-xs text-ink-2">{item.name}</span>
-                    <span className="flex items-center gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => void openDriftDiff(item)}>
-                        Diff
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={driftBusy !== null}
-                        onClick={() =>
-                          setConfirmation({ kind: 'drift', name: item.name, action: 'accept' })
-                        }
-                      >
-                        Принять
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={driftBusy !== null}
-                        onClick={() =>
-                          setConfirmation({ kind: 'drift', name: item.name, action: 'revert' })
-                        }
-                      >
-                        Откатить
-                      </Button>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            }
-          />
-          {driftDiff ? (
-            <div data-testid="config-drift-diff">
-              <Card padding="none">
-                <CardHeader
-                  title={`${driftDiff.name}: версия панели → диск`}
-                  actions={
-                    <Button size="sm" variant="ghost" onClick={() => setDriftDiff(null)}>
-                      Закрыть сравнение
-                    </Button>
-                  }
-                />
-                <MonacoDiff
-                  height="45vh"
-                  language="ini"
-                  theme="vs-dark"
-                  original={driftDiff.tip}
-                  modified={driftDiff.disk}
-                  options={{
-                    readOnly: true,
-                    minimap: { enabled: false },
-                    fontSize: 13,
-                    renderSideBySide: true,
-                    scrollBeyondLastLine: false,
-                  }}
-                />
-              </Card>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <DriftPanel
+        items={driftItems}
+        diff={driftDiff}
+        busy={driftBusy !== null}
+        onOpenDiff={openDriftDiff}
+        onCloseDiff={closeDriftDiff}
+        onResolve={requestDriftResolution}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-        <Card padding="none">
-          <CardHeader title="Файлы" count={files.length} />
-          <ul className="max-h-[70vh] divide-y divide-line overflow-y-auto">
-            {files.map((f) => {
-              const badge = BEHAVIOR_BADGE[f.behavior];
-              return (
-                <li key={f.name}>
-                  <button
-                    type="button"
-                    aria-current={selected === f.name || undefined}
-                    onClick={() => {
-                      if (dirty) {
-                        setConfirmation({ kind: 'switch-file', name: f.name });
-                        return;
-                      }
-                      void load(f.name);
-                    }}
-                    className={`flex h-9 w-full items-center justify-between gap-2 px-3 text-left text-xs transition-colors duration-150 hover:bg-raised/40 ${
-                      selected === f.name ? 'bg-raised' : ''
-                    } ${f.exists ? '' : 'text-ink-3'}`}
-                  >
-                    <span className="truncate font-mono">{f.name}</span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {driftItems.some((d) => d.name === f.name) ? (
-                        <span data-testid="file-drift-marker">
-                          <Badge tone="crit" size="sm" title="Изменён на диске вне панели">
-                            изменён
-                          </Badge>
-                        </span>
-                      ) : null}
-                      <Badge tone={badge.tone} size="sm" title={badge.hint}>
-                        {badge.label}
-                      </Badge>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
+        <FileList files={files} selected={selected} driftItems={driftItems} onSelect={selectFile} />
 
         <Card padding="none" as="section">
           {!selected ? (
