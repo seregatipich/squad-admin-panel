@@ -89,3 +89,16 @@ describe('deserialize', () => {
     expect(deserialize(buf)).toEqual(blob);
   });
 });
+
+describe('deserialize validation', () => {
+  it('rejects bytes that are not JSON', () => {
+    expect(() => deserialize(Buffer.from('not json'))).toThrow(/not valid JSON/);
+  });
+
+  it('rejects a blob missing required fields', () => {
+    expect(() => deserialize(Buffer.from(JSON.stringify({ v: 1, kv: 1, iv: 'x' })))).toThrow(
+      /unexpected format/,
+    );
+    expect(() => deserialize(Buffer.from('null'))).toThrow(/unexpected format/);
+  });
+});

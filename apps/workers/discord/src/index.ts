@@ -3,8 +3,9 @@ import { createDatabaseClient } from '@squad/db';
 import { createDiscordRedactingStream, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
-import { runNotifyLoop } from './consume.js';
+import { DEFAULT_RECLAIM_MIN_IDLE_MS, runNotifyLoop } from './consume.js';
 import { loadEncryptionKey } from './crypto.js';
+import { positiveIntEnv } from './env.js';
 import { runRoleSyncLoop } from './role-sync-consume.js';
 import type { DeliveryResult, SenderDeps } from './sender.js';
 import { DEFAULT_STATUS_CHANNEL_TICK_MS, runStatusChannelLoop } from './status-channel-loop.js';
@@ -78,9 +79,10 @@ async function main() {
     };
 
     log.info('worker-discord started — notify, role-sync and status-channel loops active');
-    const reclaimMinIdleMs = process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS
-      ? Number(process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS)
-      : undefined;
+    const reclaimMinIdleMs = positiveIntEnv(
+      'DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS',
+      DEFAULT_RECLAIM_MIN_IDLE_MS,
+    );
     notifyLoop = runNotifyLoop({
       ...deps,
       redis,
@@ -100,9 +102,10 @@ async function main() {
     // and the same encryption key, and adding a container buys nothing.
     // `loadDiscordBotContext` gates it: until an operator stores a guild id and
     // a bot token it consumes requests and does nothing.
-    const reconcileIntervalMs = process.env.DISCORD_ROLE_SYNC_RECONCILE_MS
-      ? Number(process.env.DISCORD_ROLE_SYNC_RECONCILE_MS)
-      : DEFAULT_ROLE_SYNC_RECONCILE_MS;
+    const reconcileIntervalMs = positiveIntEnv(
+      'DISCORD_ROLE_SYNC_RECONCILE_MS',
+      DEFAULT_ROLE_SYNC_RECONCILE_MS,
+    );
     roleSyncLoop = runRoleSyncLoop({
       redis,
       db: deps.db,

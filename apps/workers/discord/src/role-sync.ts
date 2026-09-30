@@ -48,10 +48,7 @@ export async function loadDiscordBotContext(
   const row = rows[0];
   if (!row || !row.enabled) return null;
   if (!row.guildId || row.botTokenEncrypted == null) return null;
-  const botToken = decryptString(
-    encryptionKey,
-    deserialize(Buffer.from(row.botTokenEncrypted as unknown as Buffer)),
-  );
+  const botToken = decryptString(encryptionKey, deserialize(row.botTokenEncrypted));
   return { guildId: row.guildId, botToken };
 }
 

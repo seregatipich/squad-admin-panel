@@ -51,7 +51,30 @@ export function decryptString(key: Buffer, blob: EncryptedBlob): string {
   return decrypt(key, blob).toString('utf-8');
 }
 
-/** Parses the JSON-serialized blob stored in a bytea column (matches the API's `serialize()`). */
+function isEncryptedBlob(value: unknown): value is EncryptedBlob {
+  if (value === null || typeof value !== 'object') return false;
+  const blob = value as Record<string, unknown>;
+  return (
+    blob.v === 1 &&
+    typeof blob.kv === 'number' &&
+    typeof blob.iv === 'string' &&
+    typeof blob.tag === 'string' &&
+    typeof blob.ct === 'string'
+  );
+}
+
+/**
+ * Parses the JSON-serialized blob stored in a bytea column (matches the API's `serialize()`).
+ *
+ * @throws Error when the bytes are not JSON or lack the `{ v: 1, kv, iv, tag, ct }` shape.
+ */
 export function deserialize(buf: Buffer): EncryptedBlob {
-  return JSON.parse(buf.toString('utf-8')) as EncryptedBlob;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buf.toString('utf-8'));
+  } catch {
+    throw new Error('encrypted blob is not valid JSON');
+  }
+  if (!isEncryptedBlob(parsed)) throw new Error('encrypted blob has an unexpected format');
+  return parsed;
 }

@@ -48,13 +48,20 @@ export function parseStreamEnvelope(fields: string[]): EventEnvelope | null {
   }
 }
 
-/** Creates the consumer group for `stream` if it doesn't already exist (idempotent). */
+/**
+ * Creates the consumer group for `stream` if it doesn't already exist (idempotent).
+ *
+ * @param startId - `'$'` delivers only entries added after creation (streams present at worker
+ *   start, whose history is not replayed); `'0'` delivers the whole stream (a stream that
+ *   appeared after start, whose first events must not be missed).
+ */
 export async function ensureConsumerGroup(
   redis: Redis,
   stream: string,
   group: string,
+  startId: '$' | '0' = '$',
 ): Promise<void> {
-  await redis.xgroup('CREATE', stream, group, '$', 'MKSTREAM').catch((err: Error) => {
+  await redis.xgroup('CREATE', stream, group, startId, 'MKSTREAM').catch((err: Error) => {
     if (!String(err.message).includes('BUSYGROUP')) throw err;
   });
 }
@@ -231,6 +238,7 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
   } = opts;
 
   const knownStreams = new Set<string>();
+  let initialStreamsRegistered = false;
 
   while (!shouldStop()) {
     let streams: string[];
@@ -246,11 +254,15 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
       continue;
     }
 
+    // Streams found on the first pass predate this worker; anything discovered later was created
+    // after start, so its group starts at '0' to keep the events written before discovery.
+    const newStreamStartId = initialStreamsRegistered ? '0' : '$';
     for (const stream of streams) {
       if (knownStreams.has(stream)) continue;
-      await ensureConsumerGroup(redis, stream, group);
+      await ensureConsumerGroup(redis, stream, group, newStreamStartId);
       knownStreams.add(stream);
     }
+    initialStreamsRegistered = true;
 
     // Reclaim before reading new entries: an entry orphaned by a crashed
     // consumer (this process's own previous incarnation, or another replica)

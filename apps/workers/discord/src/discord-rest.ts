@@ -20,6 +20,10 @@ export const DISCORD_API_BASE = 'https://discord.com/api/v10';
 /** Hard ceiling on consecutive 429 retries for a single call. */
 const MAX_RATE_LIMIT_RETRIES = 5;
 const DEFAULT_RATE_LIMIT_WAIT_MS = 1000;
+/** A `Retry-After` longer than this is not waited out: the call reports `rate_limited` and the next sweep retries. */
+const MAX_RETRY_AFTER_MS = 30_000;
+/** Upper bound for one Discord HTTP request, so a stalled connection cannot block a sync loop. */
+export const DISCORD_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface DiscordRestDeps {
   guildId: string;
@@ -53,7 +57,7 @@ export function missingPermissionsFailure(): DiscordFailure {
 }
 
 /** Reads Discord's rate-limit wait: `Retry-After` header (seconds) first, then the JSON `retry_after` field. */
-async function readRetryAfterMs(res: Response): Promise<number> {
+export async function readRetryAfterMs(res: Response): Promise<number> {
   const header = res.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
@@ -94,7 +98,11 @@ async function roleCall(
   for (;;) {
     let res: Response;
     try {
-      res = await deps.fetchImpl(url, { method, headers: authHeaders(deps) });
+      res = await deps.fetchImpl(url, {
+        method,
+        headers: authHeaders(deps),
+        signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
+      });
     } catch (err) {
       return {
         ok: false,
@@ -107,7 +115,8 @@ async function roleCall(
 
     if (res.status === 429) {
       rateLimitRetries++;
-      if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+      const waitMs = await readRetryAfterMs(res);
+      if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES || waitMs > MAX_RETRY_AFTER_MS) {
         return {
           ok: false,
           failure: {
@@ -116,7 +125,7 @@ async function roleCall(
           },
         };
       }
-      await deps.sleep(await readRetryAfterMs(res));
+      await deps.sleep(waitMs);
       continue;
     }
 
@@ -160,66 +169,61 @@ export function removeGuildMemberRole(
  * `PATCH /channels/{id}` carries its own, unusually harsh bucket: Discord
  * allows **two** channel updates per ten minutes per channel, and going over it
  * costs a multi-minute lockout rather than the usual sub-second `Retry-After`.
- * The caller (`status-channel.ts`) is therefore responsible for the budget; the
- * 429 handling here is only a backstop for a bucket shared with another client.
+ * The caller (`status-channel.ts`) is therefore responsible for the budget; a
+ * 429 here is reported as `rate_limited` without retrying, since the lockout
+ * outlasts any sensible in-loop wait.
  */
 export async function patchChannelName(
   deps: DiscordRestDeps,
   channelId: string,
   name: string,
 ): Promise<RoleCallResult> {
-  const url = `${DISCORD_API_BASE}/channels/${channelId}`;
-  let rateLimitRetries = 0;
-  for (;;) {
-    let res: Response;
-    try {
-      res = await deps.fetchImpl(url, {
-        method: 'PATCH',
-        headers: authHeaders(deps),
-        body: JSON.stringify({ name }),
-      });
-    } catch (err) {
-      return {
-        ok: false,
-        failure: {
-          reason: 'network_error',
-          message: `Discord недоступен: ${(err as Error).message}`,
-        },
-      };
-    }
-
-    if (res.status === 429) {
-      rateLimitRetries++;
-      if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
-        return {
-          ok: false,
-          failure: {
-            reason: 'rate_limited',
-            message: 'Discord ограничивает переименование канала — попробуем на следующем тике.',
-          },
-        };
-      }
-      await deps.sleep(await readRetryAfterMs(res));
-      continue;
-    }
-
-    if (res.ok) return { ok: true };
-
-    if (res.status === 403) {
-      deps.log.error({ channelId }, 'discord rejected a channel rename (Missing Permissions)');
-      return {
-        ok: false,
-        failure: {
-          reason: 'missing_permissions',
-          message: 'У бота нет права Manage Channels для статус-канала.',
-        },
-      };
-    }
+  let res: Response;
+  try {
+    res = await deps.fetchImpl(`${DISCORD_API_BASE}/channels/${channelId}`, {
+      method: 'PATCH',
+      headers: authHeaders(deps),
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
     return {
       ok: false,
-      failure: { reason: 'http_error', message: `Discord вернул ${res.status}` },
+      failure: {
+        reason: 'network_error',
+        message: `Discord недоступен: ${(err as Error).message}`,
+      },
     };
   }
+
+  // A 429 here means a multi-minute lockout; waiting it out would stall the
+  // loop, so the rename is left for the next tick.
+  if (res.status === 429) {
+    return {
+      ok: false,
+      failure: {
+        reason: 'rate_limited',
+        message: 'Discord ограничивает переименование канала — попробуем на следующем тике.',
+      },
+    };
+  }
+
+  if (res.ok) return { ok: true };
+
+  if (res.status === 403) {
+    deps.log.error({ channelId }, 'discord rejected a channel rename (Missing Permissions)');
+    return {
+      ok: false,
+      failure: {
+        reason: 'missing_permissions',
+        message: 'У бота нет права Manage Channels для статус-канала.',
+      },
+    };
+  }
+  return {
+    ok: false,
+    failure: { reason: 'http_error', message: `Discord вернул ${res.status}` },
+  };
 }
 
 export type GuildMemberResult =
@@ -248,6 +252,7 @@ export async function fetchGuildMemberRoles(
     res = await deps.fetchImpl(memberUrl(deps, discordUserId), {
       method: 'GET',
       headers: authHeaders(deps),
+      signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     return {

@@ -230,4 +230,49 @@ describe('runNotifyLoop', () => {
     expect(deliverEnvelopeMock).toHaveBeenCalledTimes(1);
     expect(redis.calls).toContain('xack:events:global:1-0');
   });
+
+  it("creates groups at '$' for streams present at start and at '0' for streams that appear later", async () => {
+    const redis = fakeRedis();
+    let iteration = 0;
+    const xgroup = vi.fn(async () => 'OK');
+    const redisFull = {
+      ...redis,
+      scan: vi.fn(async () => ['0', []]),
+      xgroup,
+      xautoclaim: vi.fn(async () => ['0-0', [], []]),
+      xreadgroup: vi.fn(async () => null),
+    };
+
+    await runNotifyLoop({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal fake redis matching only what consume.ts calls
+      redis: redisFull as any,
+      db: {} as never,
+      encryptionKey: Buffer.alloc(32),
+      fetchImpl: vi.fn(),
+      sleep: vi.fn(async () => undefined),
+      log: silentLog,
+      panelBaseUrl: null,
+      shouldStop: () => iteration >= 2,
+      discoverStreams: async () => {
+        iteration++;
+        return iteration === 1 ? ['events:global'] : ['events:global', 'events:server:new'];
+      },
+    });
+
+    const createCalls = xgroup.mock.calls.map((call) => call as unknown as string[]);
+    expect(createCalls).toContainEqual([
+      'CREATE',
+      'events:global',
+      NOTIFY_CONSUMER_GROUP,
+      '$',
+      'MKSTREAM',
+    ]);
+    expect(createCalls).toContainEqual([
+      'CREATE',
+      'events:server:new',
+      NOTIFY_CONSUMER_GROUP,
+      '0',
+      'MKSTREAM',
+    ]);
+  });
 });
