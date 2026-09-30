@@ -646,6 +646,35 @@ describe('POST /api/v1/servers/:id/stop', () => {
     expect(statusAtStopCall).toBe('stopping');
   });
 
+  it('skips the 15 s shutdown wait when the AdminBroadcast could not be delivered (finding #340)', async () => {
+    const containerStop = vi.fn(async () => ({ status: 'ok' }));
+    h.bridge.containerStop = containerStop;
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'stop-broadcast-failed' },
+      })
+    ).json<{ id: string }>();
+    // Nothing listens on this RCON endpoint, so the broadcast fails and nobody was warned.
+    await h.db
+      .update(serverCredentials)
+      .set({ rconHost: '127.0.0.1', rconPort: 1 })
+      .where(eq(serverCredentials.serverId, id));
+
+    const startedAt = Date.now();
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(containerStop).toHaveBeenCalledWith({ name: `squad-${id}`, timeout_sec: 60 });
+  }, 20_000);
+
   it('stops the rnsquadjs sidecar alongside the squad container', async () => {
     const containerStop = vi.fn(async () => ({ status: 'ok' }));
     h.bridge.containerStop = containerStop;
