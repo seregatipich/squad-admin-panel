@@ -32,6 +32,8 @@ let managerCookie: string;
 let nobodyCookie: string;
 let serverId: string;
 let reserveRoleId: string;
+/** A `panel_access` role without `can_manage_clans`, held by clan deputies acting through the panel. */
+let panelMemberRoleId: string;
 
 let playerSeq = 895100;
 let clanSeq = 0;
@@ -184,10 +186,18 @@ beforeAll(async () => {
     roleName: 'PriorityNobodyRole',
     steamId64: NOBODY_STEAM,
     canManageClans: false,
-    panelAccess: false,
+    panelAccess: true,
   });
   managerCookie = await makeCookieFor(managerId);
   nobodyCookie = await makeCookieFor(nobodyId);
+
+  panelMemberRoleId = uuidv7();
+  await h.db.insert(roles).values({
+    id: panelMemberRoleId,
+    name: 'PriorityPanelMemberRole',
+    color: '#557799',
+    panelAccess: true,
+  });
 
   reserveRoleId = uuidv7();
   await h.db.insert(roles).values({
@@ -235,6 +245,10 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
     const clan = await seedClan({ leaderHasPriority: true });
     const deputy = await seedPlayer('ЗаместительПриоритета');
     const otherDeputy = await seedPlayer('ВторойЗаместитель');
+    await h.db
+      .update(players)
+      .set({ roleId: panelMemberRoleId })
+      .where(eq(players.steamId64, deputy.steamId64));
     await h.db.insert(clanMembers).values([
       { clanId: clan.clanId, playerId: deputy.id, memberRole: 'deputy', hasPriority: false },
       { clanId: clan.clanId, playerId: otherDeputy.id, memberRole: 'deputy', hasPriority: false },

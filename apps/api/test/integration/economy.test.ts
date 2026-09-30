@@ -220,14 +220,14 @@ describeIfDb('GET /api/v1/players/:id/bonus-balance', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${balancePlayerId}/bonus-balance`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 
   it('returns 404 for an unknown player', async () => {
@@ -590,13 +590,13 @@ describeIfDb('GET /api/v1/players/:id/bonus-transactions', () => {
     expect((filtered.json() as { count: number }).count).toBe(3);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${pagePlayerId}/bonus-transactions`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 

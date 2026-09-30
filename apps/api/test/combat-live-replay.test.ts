@@ -186,6 +186,14 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     };
     const denied = await connectRecordingTypes(false);
     const allowed = await connectRecordingTypes(true);
+    // `combat.vehicle` is an opt-in frame (routes/live.ts, #40): both sockets ask for it,
+    // and only the combat:view one may get it.
+    const subscribe = JSON.stringify({ type: 'subscribe', events: ['combat.vehicle'] });
+    denied.ws.send(subscribe);
+    allowed.ws.send(subscribe);
+    await waitFor(
+      () => allowed.types.includes('subscribed') && denied.types.includes('subscribed'),
+    );
 
     app.liveBus.publish(vehicle);
     await waitFor(() => allowed.types.includes('combat.vehicle'));

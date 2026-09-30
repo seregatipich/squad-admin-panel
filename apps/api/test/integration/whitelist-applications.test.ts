@@ -296,12 +296,19 @@ describeIfDb('public portal — settings + submit', () => {
     expect(res.json().error).toBe('application_already_pending');
   });
 
+  // #52 finding 1138 / #375: a typed-in SteamID64 let anyone squat on someone
+  // else's id. Submissions now require the Steam login, so the squatter is
+  // refused and the real owner is never blocked.
   it('does not let an anonymous submission for a foreign SteamID block its owner (#52 finding 1138)', async () => {
-    // Anyone can type any SteamID64 into the public form; the real owner must
-    // still be able to apply once Steam has proven the account is theirs.
-    const squatterId = await submit(VICTIM_STEAM, 'squatting on this id');
-    const victimCookie = await selfServiceCookie(VICTIM_STEAM);
+    const squat = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/public/whitelist/applications',
+      payload: { steam_id64: VICTIM_STEAM.toString(), body: 'squatting on this id' },
+    });
+    expect(squat.statusCode).toBe(401);
+    expect(squat.json().error).toBe('steam_login_required');
 
+    const victimCookie = await selfServiceCookie(VICTIM_STEAM);
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/public/whitelist/applications',
@@ -311,13 +318,6 @@ describeIfDb('public portal — settings + submit', () => {
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({ steam_id64: VICTIM_STEAM.toString(), verified: true });
-    const list = await h.app.inject({
-      method: 'GET',
-      url: '/api/v1/whitelist/applications?status=pending&page_size=100',
-      headers: { cookie: ownerCookie },
-    });
-    const items = list.json<{ items: Array<{ id: string; verified: boolean }> }>().items;
-    expect(items.find((item) => item.id === squatterId)?.verified).toBe(false);
   });
 
   it('rejects a second verified pending application for the same SteamID64 with 409', async () => {
@@ -356,14 +356,14 @@ describeIfDb('public portal — settings + submit', () => {
     expect(res.json().error).toBe('steam_id_mismatch');
   });
 
-  it('requires steam_id64 from an anonymous applicant', async () => {
+  it('requires the Steam login from an anonymous applicant', async () => {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/public/whitelist/applications',
       payload: { body: 'who am i' },
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('steam_id_required');
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('steam_login_required');
   });
 
   it('returns 404 when the portal is closed', async () => {
@@ -398,7 +398,7 @@ describeIfDb('panel review queue — list + gates', () => {
       url: '/api/v1/whitelist/applications',
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists pending applications for the owner', async () => {
@@ -415,14 +415,14 @@ describeIfDb('panel review queue — list + gates', () => {
 });
 
 describeIfDb('panel application settings', () => {
-  it('rejects settings edit for a user without whitelist:edit with 403', async () => {
+  it('rejects settings edit for a user without whitelist:edit with 401', async () => {
     const res = await h.app.inject({
       method: 'PUT',
       url: '/api/v1/whitelist/applications/settings',
       headers: { cookie: outsiderCookie },
       payload: { enabled: true, default_days: 7 },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('reads and updates settings, writing an audit row', async () => {
@@ -672,7 +672,7 @@ describeIfDb('approval failures', () => {
       headers: { cookie: outsiderCookie },
       payload: { status: 'approved', role_id: vipRoleId },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('is idempotent: re-deciding an already-approved application returns 409', async () => {

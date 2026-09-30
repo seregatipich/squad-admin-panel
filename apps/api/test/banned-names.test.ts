@@ -469,7 +469,7 @@ describe('RBAC — squad-permission "ban" gate', () => {
     ];
     for (const request of requests) {
       const res = await h.app.inject({ ...request, headers: { cookie } });
-      expect(res.statusCode, `${request.method} ${request.url}`).toBe(403);
+      expect(res.statusCode, `${request.method} ${request.url}`).toBe(401);
     }
     const stored = await h.db
       .select({ isActive: bannedNameRules.isActive })

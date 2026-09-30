@@ -3,6 +3,8 @@ import { encodeLogEntry, PANEL_LOGS_STREAM } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { narrowedOwnerHeaders } from './helpers/narrowed-token.js';
+import { VIEWER_PERMISSIONS } from './helpers/viewer-fixture.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -294,28 +296,11 @@ describe('GET /api/v1/logs/export', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for Viewer role (missing host:metrics permission)', async () => {
-    const viewerRows = await h.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.name, 'Viewer'))
-      .limit(1);
-    const viewerRoleId = viewerRows[0]?.id;
-    if (!viewerRoleId || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
-      throw new Error('Viewer role missing');
-    }
-
-    await h.db
-      .update(players)
-      .set({ roleId: viewerRoleId })
-      .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without host:metrics (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/logs/export',
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });

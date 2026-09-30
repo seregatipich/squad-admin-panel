@@ -141,7 +141,7 @@ describeIfDb('layers API (ROT-1)', () => {
       url: '/api/v1/layers',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists all layers for a panel:access reader', async () => {

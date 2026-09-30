@@ -286,8 +286,8 @@ describeIfDb('role-members bulk toolkit', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain(`${PLAYER_A};"'=HYPERLINK(""http://evil"",""x"")";'+cmd|calc`);
-    expect(res.body).toContain(`${PLAYER_B};'@SUM(A1);-1`);
+    expect(res.body).toContain(`${PLAYER_A};"'=HYPERLINK(""http://evil"",""x"")";"'+cmd|calc"`);
+    expect(res.body).toContain(`${PLAYER_B};"'@SUM(A1)";-1`);
     for (const line of res.body.split(/\r?\n/)) {
       for (const cell of line.split(';')) {
         expect(cell.replace(/^"/, '')).not.toMatch(/^[=+@\t\r]/);

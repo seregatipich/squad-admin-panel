@@ -249,7 +249,7 @@ describeIfDb('POST /api/v1/players/:id/marks', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await h.app.inject({
       method: 'POST',
@@ -257,8 +257,8 @@ describeIfDb('POST /api/v1/players/:id/marks', () => {
       headers: { cookie, 'content-type': 'application/json' },
       payload: JSON.stringify({ mark_type_id: 4 }),
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden', required: ['player:set_flags'] });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 
   it('returns 409 when a concurrent writer wins the race past the pre-check', async () => {

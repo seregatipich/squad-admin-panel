@@ -100,7 +100,7 @@ describe('compose secrets (#1034, #1258)', () => {
 describe('stand persistence and backups (#1030)', () => {
   it('runs Redis with append-only persistence on both deployments', () => {
     expect(block('docker/compose.yml', 'redis')).toMatch(
-      /command: \['redis-server', '--appendonly', 'yes'/,
+      /^ {6}- redis-server\n {6}- --appendonly\n {6}- 'yes'$/m,
     );
     const stand = block('docker/compose.stand.yml', 'redis');
     expect(stand).not.toContain("'--appendonly', 'no'");

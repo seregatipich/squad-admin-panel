@@ -16,12 +16,15 @@ import {
 const OWNER_STEAM = testSteamId(892001);
 const MANAGER_STEAM = testSteamId(892002);
 const NOBODY_STEAM = testSteamId(892005);
+const PANEL_NOBODY_STEAM = testSteamId(892006);
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let managerCookie: string;
 let nobodyCookie: string;
+/** A `panel_access` player who neither holds `can_manage_clans` nor belongs to the clan under test. */
+let panelNobodyCookie: string;
 
 let serverId: string;
 let unaffiliatedId: string;
@@ -176,6 +179,14 @@ beforeAll(async () => {
     canonicalName: 'НиктоРостера',
   });
 
+  const panelNobodyId = await seedRoleWithPlayer({
+    roleName: 'RosterPanelNobodyRole',
+    steamId64: PANEL_NOBODY_STEAM,
+    canManageClans: false,
+    panelAccess: true,
+    canonicalName: 'ПанельНикто',
+  });
+
   panelOnlyRoleId = uuidv7();
   await h.db.insert(roles).values({
     id: panelOnlyRoleId,
@@ -190,6 +201,7 @@ beforeAll(async () => {
 
   managerCookie = await makeCookieFor(managerId);
   nobodyCookie = await makeCookieFor(nobodyId);
+  panelNobodyCookie = await makeCookieFor(panelNobodyId);
 }, 60_000);
 
 afterAll(async () => {
@@ -263,7 +275,7 @@ describeIfDb('GET /api/v1/clans/:id/members', () => {
       url: `/api/v1/clans/${clan.clanId}/members`,
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('reports the viewer_manage_level for a global manager, a leader, a deputy and a rank-and-file member', async () => {
@@ -414,7 +426,7 @@ describeIfDb('POST /api/v1/clans/:id/members', () => {
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/clans/${clan.clanId}/members`,
-      headers: jsonHeaders(nobodyCookie),
+      headers: jsonHeaders(panelNobodyCookie),
       payload: JSON.stringify({ player_id: target }),
     });
     expect(res.statusCode).toBe(403);
@@ -560,7 +572,7 @@ describeIfDb('DELETE /api/v1/clans/:id/members/:playerId', () => {
     const res = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}`,
-      headers: { cookie: nobodyCookie },
+      headers: { cookie: panelNobodyCookie },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -691,6 +703,6 @@ describeIfDb('GET /api/v1/players/search', () => {
       url: '/api/v1/players/search?q=Ростер',
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });

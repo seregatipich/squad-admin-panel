@@ -355,8 +355,8 @@ describe('global notes feed edge cases (#70)', () => {
     });
     expect(res.statusCode).toBe(200);
     const cells = res.body.trim().split('\r\n').slice(1).join(',').split(',');
-    expect(cells).toContain("'=1+1");
-    expect(cells).toContain("'@SUM(A1)");
+    expect(cells).toContain(`"'=1+1"`);
+    expect(cells).toContain(`"'@SUM(A1)"`);
     expect(cells).not.toContain('=1+1');
   });
 });

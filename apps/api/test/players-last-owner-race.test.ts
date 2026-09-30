@@ -1,6 +1,5 @@
 import { players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
-import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
@@ -10,7 +9,6 @@ import { buildIntegrationApp, type IntegrationHarness } from './integration/harn
 
 const FIRST_OWNER_STEAM = testSteamId(715001);
 const SECOND_OWNER_STEAM = testSteamId(715002);
-const ROLE_MANAGER_STEAM = testSteamId(715003);
 
 /**
  * Audit #71 (#237): the route's "last Owner" pre-check runs outside the
@@ -22,8 +20,8 @@ const ROLE_MANAGER_STEAM = testSteamId(715003);
  * behaviour: the loser gets a 409 and exactly one Owner survives.
  *
  * The concurrent demotion of the first Owner is held open in a transaction
- * until the request — a non-Owner role manager demoting the second Owner —
- * blocks on the guard's advisory lock, so the interleaving is deterministic.
+ * until the request — the second Owner demoting themselves — blocks on the
+ * guard's advisory lock, so the interleaving is deterministic.
  */
 describe('last-Owner demotion race', () => {
   let h: IntegrationHarness;
@@ -52,28 +50,11 @@ describe('last-Owner demotion race', () => {
     if (!second) throw new Error('second owner insert failed');
     secondOwnerId = second.id;
 
-    const managerRoleId = uuidv7();
-    await h.db.insert(roles).values({
-      id: managerRoleId,
-      name: `RoleManager-${managerRoleId}`,
-      color: 'neutral',
-      isSystemRole: false,
-      panelAccess: true,
-      canAssignRoles: true,
-    });
-    const [manager] = await h.db
-      .insert(players)
-      .values({
-        steamId64: ROLE_MANAGER_STEAM,
-        canonicalName: 'RoleManager',
-        canonicalNameNormalized: 'rolemanager',
-        roleId: managerRoleId,
-      })
-      .returning({ id: players.id });
-    if (!manager) throw new Error('role manager insert failed');
-    invalidatePermissionCache(manager.id);
+    // Only an Owner may demote an Owner (role hierarchy, #233), so the second
+    // Owner is the caller and the target of every request below.
+    invalidatePermissionCache(second.id);
     const { token } = await createSession(h.db, h.redis, {
-      playerId: manager.id,
+      playerId: second.id,
       ip: null,
       userAgent: 'last-owner-race-test',
       ttlMs: 21_600_000,

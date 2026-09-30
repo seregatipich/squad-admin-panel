@@ -355,10 +355,12 @@ describe('POST /api/v1/servers/:id/update', () => {
       expect(lastUpdate.error).toContain('exit code 8');
     });
 
-    // Regression (#43 finding 322): the lock TTL equalled the RPC timeout and
-    // the job deleted the key unconditionally, so a stale job could release a
-    // lock another update had taken since.
-    it('holds the lock longer than the RPC timeout and never releases a lock it does not own', async () => {
+    // Regression (#43 finding 322): the job deleted the key unconditionally,
+    // so a stale job could release a lock another update had taken since. The
+    // lock is now renewed for as long as the job runs (depot-lock.ts, covered
+    // by depot-lock.test.ts) instead of relying on one TTL that outlasts the
+    // RPC timeout, so the key only has to carry a full TTL while the job runs.
+    it('holds the lock with a full TTL and never releases a lock it does not own', async () => {
       const id = await seedServer(h, 'stopped');
       let ttlDuringRun = 0;
       h.bridge.depotUpdate = async () => {
@@ -377,7 +379,7 @@ describe('POST /api/v1/servers/:id/update', () => {
 
       await waitForStreamEntries(h, 1);
       await vi.waitFor(() => expect(openUpdateJobs).toBe(0));
-      expect(ttlDuringRun).toBeGreaterThan(3600);
+      expect(ttlDuringRun).toBeGreaterThan(3500);
       expect(await h.redis.get('depot:updating')).toBe('other-holder');
     });
   });

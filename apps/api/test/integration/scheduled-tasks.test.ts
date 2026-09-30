@@ -10,6 +10,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { narrowedOwnerHeaders } from '../helpers/narrowed-token.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -355,11 +356,11 @@ describe('POST /api/v1/servers/:id/scheduled-tasks', () => {
   it('returns 403 for a restart task without the server:restart permission', async () => {
     const ownerCookie = await login();
     const serverId = await createServer(ownerCookie);
-    const cookie = await asRole({ panelAccess: false, squadPermissions: [] });
+    // A panel_access session derives server:restart, so only a narrowed token can lack it.
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/servers/${serverId}/scheduled-tasks`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, ['server:view']),
       payload: {
         name: 'Restart',
         task_type: 'restart',

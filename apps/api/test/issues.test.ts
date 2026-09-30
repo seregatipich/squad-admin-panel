@@ -130,7 +130,7 @@ describeIfDb('issues API — create, RBAC, comments, audit', () => {
     ];
     for (const request of requests) {
       const res = await h.app.inject({ ...request, headers: { cookie } });
-      expect(res.statusCode, `${request.method} ${request.url}`).toBe(403);
+      expect(res.statusCode, `${request.method} ${request.url}`).toBe(401);
     }
   });
 

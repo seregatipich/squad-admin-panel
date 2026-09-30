@@ -268,7 +268,7 @@ describeIfDb('GET /api/v1/chat/messages — RBAC', () => {
       url: '/api/v1/chat/messages',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('rejects the count endpoint without panel_access with 403', async () => {
@@ -277,7 +277,7 @@ describeIfDb('GET /api/v1/chat/messages — RBAC', () => {
       url: '/api/v1/chat/messages/count',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 
@@ -490,7 +490,7 @@ describeIfDb('GET /api/v1/chat/messages — playerId (per-player history)', () =
       url: `/api/v1/chat/messages?playerId=${p2Id}`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 

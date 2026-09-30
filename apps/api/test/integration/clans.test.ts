@@ -127,14 +127,14 @@ describeIfDb('GET /api/v1/clans', () => {
     expect(body.items.some((c) => c.id === deletedId)).toBe(false);
   });
 
-  it('rejects an authenticated user without panel access with 403', async () => {
+  it('rejects an authenticated user without panel access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/clans',
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('forbidden');
+    expect(res.statusCode).toBe(401);
+    expect((res.json() as { error: string }).error).toBe('unauthenticated');
   });
 });
 
@@ -182,13 +182,13 @@ describeIfDb('GET /api/v1/clans/:id', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('rejects an authenticated user without panel access with 403', async () => {
+  it('rejects an authenticated user without panel access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/clans/${clanId}`,
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('forbidden');
+    expect(res.statusCode).toBe(401);
+    expect((res.json() as { error: string }).error).toBe('unauthenticated');
   });
 });

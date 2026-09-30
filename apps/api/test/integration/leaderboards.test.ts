@@ -212,7 +212,7 @@ describeIfDb('GET /api/v1/leaderboards', () => {
   it('requires panel_access', async () => {
     const noPanelCookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchLeaderboard('?metric=online', noPanelCookie);
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('ranks the all-servers rollup by online time', async () => {

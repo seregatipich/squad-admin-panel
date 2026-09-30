@@ -231,7 +231,7 @@ describeIfDb('GET /api/v1/analytics/reports', () => {
 
   it('rejects a role that keeps can_handle_reports but lost panel_access (#250)', async () => {
     const res = await fetchAnalytics('', await loginAsSteam(REPORTS_NO_PANEL_STEAM));
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('ranks top_reporters within the requested server_id and window (#251)', async () => {

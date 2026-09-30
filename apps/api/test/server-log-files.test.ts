@@ -13,6 +13,8 @@ import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
+import { narrowedOwnerHeaders } from './helpers/narrowed-token.js';
+import { VIEWER_PERMISSIONS } from './helpers/viewer-fixture.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
@@ -49,17 +51,6 @@ async function ownerRoleId(): Promise<string> {
     .limit(1);
   const id = rows[0]?.id;
   if (!id) throw new Error('Owner role missing — migration 0009 not applied?');
-  return id;
-}
-
-async function viewerRoleId(): Promise<string> {
-  const rows = await h.db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.name, 'Viewer'))
-    .limit(1);
-  const id = rows[0]?.id;
-  if (!id) throw new Error('Viewer fixture role missing');
   return id;
 }
 
@@ -119,13 +110,11 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for a role without server:download_logs (Viewer)', async () => {
-    await assignRole(await viewerRoleId());
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without server:download_logs (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: `/api/v1/servers/${SERVER_ID}/logs/files`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });
@@ -215,13 +204,11 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
     expect(resp.statusCode).toBe(401);
   });
 
-  it('returns 403 for a role without server:download_logs (Viewer)', async () => {
-    await assignRole(await viewerRoleId());
-    const cookie = await loginAsOwner(h);
+  it('returns 403 for a caller without server:download_logs (Viewer permissions)', async () => {
     const resp = await h.app.inject({
       method: 'GET',
       url: `/api/v1/servers/${SERVER_ID}/logs/files/SquadGame.log/download`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, VIEWER_PERMISSIONS),
     });
     expect(resp.statusCode).toBe(403);
   });

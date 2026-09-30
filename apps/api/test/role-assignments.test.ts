@@ -128,7 +128,7 @@ describeIfDb('GET /api/v1/role-assignments', () => {
       url: '/api/v1/role-assignments',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('only returns players with an assigned role, across roles', async () => {

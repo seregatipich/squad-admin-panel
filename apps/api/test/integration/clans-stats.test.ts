@@ -303,7 +303,7 @@ describeIfDb('GET /api/v1/clans/:id/stats', () => {
       url: `/api/v1/clans/${clanId}/stats`,
       headers: { cookie: await loginAsSteam(NO_PANEL_STEAM) },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns 404 for an unknown clan id', async () => {

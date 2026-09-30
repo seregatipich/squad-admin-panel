@@ -170,7 +170,7 @@ describeIfDb('GET /api/v1/seasons', () => {
       url: '/api/v1/seasons',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists seasons for a panel user without can_edit_roles', async () => {

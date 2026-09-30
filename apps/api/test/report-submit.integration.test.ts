@@ -181,7 +181,7 @@ describeIfDb('POST /api/v1/reports', () => {
       headers: { cookie: await loginAsSteam(NO_PANEL_STEAM), 'content-type': 'application/json' },
       payload: JSON.stringify({ server_id: serverId, target_player_id: targetId, body: 'x' }),
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('creates a source=ui pending report and returns it in the queue', async () => {

@@ -1,13 +1,9 @@
-import { roles, servers } from '@squad/db/schema';
+import { servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { invalidatePermissionCache } from '../src/lib/rbac.js';
-import {
-  buildIntegrationApp,
-  type IntegrationHarness,
-  loginAsOwner,
-} from './integration/harness.js';
+import { narrowedOwnerHeaders } from './helpers/narrowed-token.js';
+import { buildIntegrationApp, type IntegrationHarness } from './integration/harness.js';
 
 // Regression test for finding #342: POST /api/v1/servers/:id/reconcile
 // triggers a bridge containerInspect call, a DB status write, a live-event
@@ -30,21 +26,6 @@ afterAll(async () => {
 
 describe('POST /api/v1/servers/:id/reconcile', () => {
   it('rejects a Viewer (server:view only) with 403', async () => {
-    const [viewerRole] = await h.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.name, 'Viewer'))
-      .limit(1);
-    if (!viewerRole || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
-      throw new Error('viewer role or seeded owner missing');
-    }
-    const { players } = await import('@squad/db/schema');
-    await h.db
-      .update(players)
-      .set({ roleId: viewerRole.id })
-      .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId);
-
     const serverId = uuidv7();
     await h.db.insert(servers).values({
       id: serverId,
@@ -53,11 +34,10 @@ describe('POST /api/v1/servers/:id/reconcile', () => {
       status: 'running',
     });
 
-    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
       url: `/api/v1/servers/${serverId}/reconcile`,
-      headers: { cookie },
+      headers: await narrowedOwnerHeaders(h, ['server:view']),
     });
 
     expect(resp.statusCode).toBe(403);

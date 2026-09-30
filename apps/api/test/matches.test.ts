@@ -231,7 +231,7 @@ describeIfDb('matches API (MATCH-4)', () => {
     expect(card.statusCode).toBe(401);
   });
 
-  it('rejects players without panel_access with 403 (AC)', async () => {
+  it('rejects players without panel_access with 401 (AC)', async () => {
     const noAccessRole = await seedRole(h.db, { panelAccess: false });
     const player = await seedPlayer(h.db, { roleId: noAccessRole });
     const deniedCookie = await loginAs(h, player);
@@ -242,8 +242,8 @@ describeIfDb('matches API (MATCH-4)', () => {
       `/api/v1/matches/${uuidv7()}`,
     ]) {
       const res = await h.app.inject({ method: 'GET', url, headers: { cookie: deniedCookie } });
-      expect(res.statusCode).toBe(403);
-      expect(res.json()).toMatchObject({ error: 'forbidden' });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toMatchObject({ error: 'unauthenticated' });
     }
   });
 
@@ -844,7 +844,7 @@ describeIfDb('matches API (MATCH-4)', () => {
     });
     expect(res.statusCode).toBe(200);
     const row = res.body.split('\r\n')[1] ?? '';
-    expect(row.split(',')).toContain("'=1+1");
+    expect(row.split(',')).toContain(`"'=1+1"`);
     expect(row.split(',')).not.toContain('=1+1');
   });
 });

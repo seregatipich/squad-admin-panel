@@ -242,13 +242,13 @@ describeIfDb('GET /api/v1/players/:playerId/seed-contribution', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${seededPlayerId}/seed-contribution`,
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 });

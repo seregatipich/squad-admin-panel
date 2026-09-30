@@ -94,6 +94,9 @@ async function seedRoleCookie(
     color: 'neutral',
     isSystemRole: false,
     panelAccess: true,
+    // `config:edit` is an infrastructure key: panel_access alone no longer
+    // grants it (#36), and these roles exist to edit configs.
+    canManageInfrastructure: true,
     canAssignRoles: opts.canAssignRoles ?? false,
   });
   for (const key of opts.squadPermissions ?? []) {

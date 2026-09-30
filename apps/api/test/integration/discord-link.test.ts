@@ -574,7 +574,7 @@ describeIfDb('GET /api/v1/players/:playerId/discord', () => {
       headers: { cookie },
     });
 
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('is 401 without a session', async () => {

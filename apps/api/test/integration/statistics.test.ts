@@ -230,11 +230,11 @@ describeIfDb('GET /api/v1/statistics', () => {
     expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
-  it('rejects a role without panel_access with 403', async () => {
+  it('rejects a role without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchStatistics(`?from=${FROM}&to=${TO}`, cookie);
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('returns a dense day axis covering the whole window', async () => {

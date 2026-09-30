@@ -49,6 +49,7 @@ vi.mock('@squad/shared-config', () => ({
   SQUAD_PERMISSIONS: [],
   decodeLogEntry: vi.fn(),
   LOG_LEVELS: ['debug', 'info', 'warn', 'error'],
+  LOG_SOURCES: [],
   sourceCode: vi.fn(),
   PANEL_LOGS_STREAM: 'panel:logs',
   SERVER_CONTAINER_PREFIX: 'squad-',

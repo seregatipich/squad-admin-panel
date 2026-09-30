@@ -274,8 +274,8 @@ describeIfDb('GET /api/v1/players/:playerId/external-bans', () => {
       url: `/api/v1/players/${playerId}/external-bans`,
       headers: { cookie: noAccessCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe('forbidden');
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('unauthenticated');
   });
 
   it('returns 404 for an unknown playerId', async () => {
@@ -392,7 +392,7 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
       url: '/api/v1/external-bans',
       headers: { cookie: noAccessCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('searches by nickname substring', async () => {

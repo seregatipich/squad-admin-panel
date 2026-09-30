@@ -154,13 +154,13 @@ beforeAll(async () => {
     roleName: 'ClanLeaderRole',
     steamId64: LEADER_STEAM,
     canManageClans: false,
-    panelAccess: false,
+    panelAccess: true,
   });
   await seedRoleWithPlayer({
     roleName: 'ClanNobodyRole',
     steamId64: NOBODY_STEAM,
     canManageClans: false,
-    panelAccess: false,
+    panelAccess: true,
   });
 
   managerCookie = await loginAsSteam(MANAGER_STEAM);

@@ -118,7 +118,7 @@ describeIfDb('GET/PUT /api/v1/whitelist/settings', () => {
       url: '/api/v1/whitelist/settings',
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns null before any whitelist role is configured', async () => {
@@ -227,7 +227,7 @@ describeIfDb('POST/DELETE /api/v1/whitelist/members', () => {
       headers: { cookie: outsiderCookie },
       payload: { player_id: memberBId },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('removes the whitelist role via DELETE and is idempotent', async () => {
@@ -317,7 +317,7 @@ describeIfDb('POST /api/v1/whitelist/import', () => {
       headers: { cookie: outsiderCookie },
       payload: { csv: `${IMPORT_KNOWN_STEAM}` },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 
@@ -342,7 +342,7 @@ describeIfDb('GET /api/v1/whitelist/export', () => {
       url: '/api/v1/whitelist/export',
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 

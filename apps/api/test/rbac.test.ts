@@ -97,13 +97,16 @@ describeIfDb('loadUserPermissions', () => {
     expect(ctx.roleId).toBeNull();
   });
 
-  it('returns Viewer permissions for a Viewer-roled player', async () => {
+  it('returns the derived panel permissions, without infrastructure keys, for a Viewer-roled player', async () => {
     invalidatePermissionCache(pid(PLAYER_B));
     const ctx = await loadUserPermissions(db, pid(PLAYER_B));
     expect(ctx.roleId).toBe(viewerRoleId);
     expect(ctx.permissions.has('server:view')).toBe(true);
     expect(ctx.permissions.has('player:view')).toBe(true);
-    expect(ctx.permissions.has('server:start')).toBe(false);
+    // The Viewer fixture holds panel_access, which derives every key outside
+    // the role-flag gates; infrastructure keys still need the flag (#36).
+    expect(ctx.permissions.has('server:install')).toBe(false);
+    expect(ctx.permissions.has('host:manage')).toBe(false);
   });
 
   it('caches result on second call (same object identity)', async () => {

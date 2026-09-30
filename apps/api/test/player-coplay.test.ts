@@ -152,7 +152,7 @@ describeIfDb('player coplay API (ALT-3)', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a player without panel_access with 403', async () => {
+  it('rejects a player without panel_access with 401', async () => {
     const noAccessRole = await seedRole(h.db, { panelAccess: false });
     const denied = await seedPlayer(h.db, { roleId: noAccessRole });
     const deniedCookie = await loginAs(h, denied);
@@ -161,8 +161,8 @@ describeIfDb('player coplay API (ALT-3)', () => {
       url: `/api/v1/players/${uuidv7()}/coplay`,
       headers: { cookie: deniedCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('shows a co-play pair to both players with the same overlap (AC)', async () => {

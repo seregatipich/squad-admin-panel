@@ -179,7 +179,7 @@ describe('POST /api/v1/media', () => {
       headers: { cookie, 'content-type': contentType },
       payload: body,
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('stores a valid PNG upload, writes a row + file on disk, and audit-logs the upload', async () => {

@@ -14,6 +14,17 @@ const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2d';
 let app: ReturnType<typeof Fastify>;
 let port: number;
 
+/** Subscribes the socket to the opt-in chat stream and resolves once the server acknowledged it. */
+async function subscribeToChat(ws: WebSocket): Promise<void> {
+  const acknowledged = new Promise<void>((resolve) => {
+    ws.on('message', (raw) => {
+      if ((JSON.parse(raw.toString()) as { type: string }).type === 'subscribed') resolve();
+    });
+  });
+  ws.send(JSON.stringify({ type: 'subscribe', events: ['chat.message'] }));
+  await acknowledged;
+}
+
 function chat(id: number, messageBytes: number): LiveEvent {
   return {
     type: 'chat.message',
@@ -64,6 +75,8 @@ describe('/api/v1/ws/live backpressure', () => {
       if (frame.type === 'chat.message') received.push(frame.data.id);
     });
     await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    // `chat.message` is opt-in per socket (#69) and replays the buffered tail on subscribe.
+    await subscribeToChat(ws);
     received.length = 0;
 
     for (let index = 0; index < 20; index++) {
@@ -78,6 +91,7 @@ describe('/api/v1/ws/live backpressure', () => {
   it('drops a client that stops reading once its send buffer exceeds the limit', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
     await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    await subscribeToChat(ws);
     const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
 
     // Stop reading: the server's kernel buffers fill and further frames

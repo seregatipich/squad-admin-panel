@@ -347,7 +347,7 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
     invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/players', headers: { cookie } });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 });
 

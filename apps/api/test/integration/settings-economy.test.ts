@@ -134,7 +134,7 @@ describeIfDb('GET /api/v1/settings/economy', () => {
       url: '/api/v1/settings/economy',
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('rejects an unauthenticated request', async () => {

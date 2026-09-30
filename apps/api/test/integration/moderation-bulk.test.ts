@@ -735,7 +735,7 @@ describeIfDb('POST /api/v1/moderation-actions/bulk — RBAC', () => {
     expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
-  it('rejects a signed-in user without panel access with 403', async () => {
+  it('rejects a signed-in user without panel access with 401', async () => {
     const actorId = await seedActorWithSquadPermissions({
       steamId64: NO_PANEL_STEAM,
       panelAccess: false,
@@ -754,8 +754,8 @@ describeIfDb('POST /api/v1/moderation-actions/bulk — RBAC', () => {
         confirm_bulk: true,
       },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('lets a mod:kick role bulk-kick but denies a permanent bulk ban with required mod:ban_perm', async () => {

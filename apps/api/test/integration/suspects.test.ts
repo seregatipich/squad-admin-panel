@@ -113,15 +113,15 @@ describeIfDb('GET /api/v1/suspects', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a user without panel_access with 403', async () => {
+  it('rejects a user without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/suspects',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 
   it('rejects an invalid mark_type_ids param with 400', async () => {
@@ -160,11 +160,11 @@ describeIfDb('GET /api/v1/suspects', () => {
   });
 
   it('rejects a cursor with an out-of-range millis timestamp with 400', async () => {
-    // 1e17 ms is outside the range new Date() can represent, so it becomes
-    // Invalid Date and toISOString() would throw a RangeError downstream.
+    // The cursor key is microseconds since the epoch. 9e18 µs is past year
+    // 9999 (and close to the bigint limit), so Postgres would fail on it.
     const res = await h.app.inject({
       method: 'GET',
-      url: `/api/v1/suspects?cursor=100000000000000000_019dbac8-ceb0-77ab-859b-bfa9a282ee2c`,
+      url: `/api/v1/suspects?cursor=9000000000000000000_019dbac8-ceb0-77ab-859b-bfa9a282ee2c`,
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(400);

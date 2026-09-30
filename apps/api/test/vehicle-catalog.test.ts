@@ -101,7 +101,7 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
   });
 
   it('returns 403 on read for a role without combat:view', async () => {
-    const role = await seedRole(h.db, { panelAccess: false, combatView: false });
+    const role = await seedRole(h.db, { panelAccess: true, combatView: false });
     const player = await seedPlayer(h.db, role);
     const cookie = await loginAs(h, player);
     const res = await h.app.inject({
@@ -113,7 +113,7 @@ describeIfDb('vehicle-catalog API (DOSSIER-1)', () => {
   });
 
   it('returns 403 on write for a role without the config-edit right', async () => {
-    const role = await seedRole(h.db, { panelAccess: false, combatView: false });
+    const role = await seedRole(h.db, { panelAccess: true, combatView: false });
     const player = await seedPlayer(h.db, role);
     const cookie = await loginAs(h, player);
     const res = await h.app.inject({

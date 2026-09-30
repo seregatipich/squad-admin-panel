@@ -69,26 +69,19 @@ async function sessionRowExists(id: string): Promise<boolean> {
 describe('session Redis cache vs. the sessions table', () => {
   it('keeps a session whose cached expiresAt is stale but whose DB row was extended (#52)', async () => {
     const playerId = await seedPlayer(52001);
+    // Created already past its deadline: the cache entry is correctly signed
+    // and expired. A touch near expiry then extends only the DB row.
     const { token, session } = await createSession(db, redis, {
       playerId,
       ip: null,
       userAgent: 'test-ua',
-      ttlMs: SIX_HOURS_MS,
+      ttlMs: -1000,
     });
-    // The state a touch near expiry leaves behind: the DB row is extended while
-    // the cache entry written before the touch still carries the old deadline.
     await db
       .update(sessions)
       .set({ expiresAt: new Date(Date.now() + SIX_HOURS_MS) })
       .where(eq(sessions.id, session.id));
-    const cacheKey = `session:${session.id}`;
-    const cached = JSON.parse((await redis.get(cacheKey)) ?? '{}') as Record<string, unknown>;
-    await redis.set(
-      cacheKey,
-      JSON.stringify({ ...cached, expiresAt: new Date(Date.now() - 1000).toISOString() }),
-      'EX',
-      600,
-    );
+    expect(await redis.get(`session:${session.id}`)).not.toBeNull();
 
     const resolved = await resolveSession(db, redis, token);
 
@@ -99,17 +92,16 @@ describe('session Redis cache vs. the sessions table', () => {
 
   it('still revokes a session that is expired in both the cache and the DB', async () => {
     const playerId = await seedPlayer(52002);
+    // A session created already past its deadline leaves an expired row and a
+    // correctly signed, equally expired cache entry.
     const { token, session } = await createSession(db, redis, {
       playerId,
       ip: null,
       userAgent: 'test-ua',
-      ttlMs: SIX_HOURS_MS,
+      ttlMs: -1000,
     });
-    const past = new Date(Date.now() - 1000);
-    await db.update(sessions).set({ expiresAt: past }).where(eq(sessions.id, session.id));
     const cacheKey = `session:${session.id}`;
-    const cached = JSON.parse((await redis.get(cacheKey)) ?? '{}') as Record<string, unknown>;
-    await redis.set(cacheKey, JSON.stringify({ ...cached, expiresAt: past.toISOString() }));
+    expect(await redis.get(cacheKey)).not.toBeNull();
 
     expect(await resolveSession(db, redis, token)).toBeNull();
     expect(await sessionRowExists(session.id)).toBe(false);

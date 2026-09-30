@@ -116,7 +116,7 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
-  it('rejects a logged-in player without panel_access with 403', async () => {
+  it('rejects a logged-in player without panel_access with 401', async () => {
     const roleId = uuidv7();
     await h.db
       .insert(roles)
@@ -129,8 +129,8 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
       url: `/api/v1/players/${uuidv7()}/compare-online?other=${uuidv7()}`,
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('returns 404 when the target player does not exist', async () => {

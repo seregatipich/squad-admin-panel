@@ -156,21 +156,22 @@ describeIfDb('role management guards (#41)', () => {
   });
 
   describe('privilege ceiling on role assignment (#259)', () => {
-    it('refuses to add the actor to a role carrying flags they lack', async () => {
-      const assignerId = await seedPlayer(ASSIGNER_STEAM, 'Assigner', assignerRoleId);
+    it('refuses to add a player to a role carrying flags the actor lacks', async () => {
+      await seedPlayer(ASSIGNER_STEAM, 'Assigner', assignerRoleId);
+      const targetId = await seedPlayer(TARGET_STEAM, 'Target', null);
       const cookie = await login(ASSIGNER_STEAM);
       const res = await h.app.inject({
         method: 'POST',
         url: `/api/v1/roles/${strongRoleId}/members`,
         headers: { cookie },
-        payload: { player_id: assignerId },
+        payload: { player_id: targetId },
       });
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ error: 'role_exceeds_actor_permissions' });
       expect((res.json() as { capabilities: string[] }).capabilities).toEqual(
         expect.arrayContaining(['can_edit_roles', 'can_view_ips', 'squad:ban']),
       );
-      expect(await roleOf(ASSIGNER_STEAM)).toBe(assignerRoleId);
+      expect(await roleOf(TARGET_STEAM)).toBeNull();
     });
 
     it('still lets the actor assign a role within their own permissions', async () => {
@@ -216,7 +217,9 @@ describeIfDb('role management guards (#41)', () => {
       expect(await roleOf(TARGET_STEAM)).toBe(weakRoleId);
     });
 
-    it('applies the ceiling to PUT /players/:id/role (self-escalation)', async () => {
+    // #233 (role hierarchy) is stricter than the ceiling for self-assignment:
+    // a non-Owner may not change their own role at all.
+    it('refuses PUT /players/:id/role self-escalation', async () => {
       const assignerId = await seedPlayer(ASSIGNER_STEAM, 'Assigner', assignerRoleId);
       const cookie = await login(ASSIGNER_STEAM);
       const res = await h.app.inject({
@@ -226,7 +229,7 @@ describeIfDb('role management guards (#41)', () => {
         payload: { role_id: strongRoleId },
       });
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toMatchObject({ error: 'role_exceeds_actor_permissions' });
+      expect(res.json()).toMatchObject({ error: 'cannot_change_own_role' });
       expect(await roleOf(ASSIGNER_STEAM)).toBe(assignerRoleId);
     });
 
@@ -244,7 +247,28 @@ describeIfDb('role management guards (#41)', () => {
   });
 
   describe('privilege ceiling on role editing (#1237)', () => {
-    it('refuses to grant the editor’s own role a flag the editor lacks', async () => {
+    it('refuses to grant a role a flag the editor lacks', async () => {
+      await seedPlayer(EDITOR_STEAM, 'Editor', editorRoleId);
+      const cookie = await login(EDITOR_STEAM);
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/roles/${weakRoleId}`,
+        headers: { cookie },
+        payload: { can_view_ips: true, can_assign_roles: true },
+      });
+      expect(res.statusCode).toBe(403);
+      expect((res.json() as { capabilities: string[] }).capabilities).toEqual([
+        'can_assign_roles',
+        'can_view_ips',
+      ]);
+      const row = await h.db.select().from(roles).where(eq(roles.id, weakRoleId)).limit(1);
+      expect(row[0]?.canViewIps).toBe(false);
+      expect(row[0]?.canAssignRoles).toBe(false);
+    });
+
+    // #233 (role hierarchy) is stricter than the flag ceiling: a non-Owner
+    // cannot edit the role they hold at all, so no self-escalation is possible.
+    it('refuses a non-Owner editing their own role', async () => {
       await seedPlayer(EDITOR_STEAM, 'Editor', editorRoleId);
       const cookie = await login(EDITOR_STEAM);
       const res = await h.app.inject({
@@ -254,10 +278,7 @@ describeIfDb('role management guards (#41)', () => {
         payload: { can_view_ips: true, can_assign_roles: true },
       });
       expect(res.statusCode).toBe(403);
-      expect((res.json() as { capabilities: string[] }).capabilities).toEqual([
-        'can_assign_roles',
-        'can_view_ips',
-      ]);
+      expect(res.json()).toMatchObject({ error: 'cannot_edit_own_role' });
       const row = await h.db.select().from(roles).where(eq(roles.id, editorRoleId)).limit(1);
       expect(row[0]?.canViewIps).toBe(false);
       expect(row[0]?.canAssignRoles).toBe(false);
@@ -293,7 +314,10 @@ describeIfDb('role management guards (#41)', () => {
       expect(rows).toHaveLength(0);
     });
 
-    it('allows edits that grant nothing new, even on a stronger role', async () => {
+    // #233 (role hierarchy) refuses any edit of a role that grants more than
+    // the editor holds, stricter than #1237, which would allow an edit that
+    // adds nothing.
+    it('refuses editing a role stronger than the editor’s even when the edit grants nothing new', async () => {
       await seedPlayer(EDITOR_STEAM, 'Editor', editorRoleId);
       const cookie = await login(EDITOR_STEAM);
       const res = await h.app.inject({
@@ -302,7 +326,8 @@ describeIfDb('role management guards (#41)', () => {
         headers: { cookie },
         payload: { color: 'green', can_view_ips: true },
       });
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'role_exceeds_actor_permissions' });
     });
   });
 

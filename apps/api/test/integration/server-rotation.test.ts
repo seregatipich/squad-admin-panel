@@ -177,7 +177,7 @@ describe('GET /api/v1/servers/:id/rotation', () => {
       url: `/api/v1/servers/${serverId}/rotation`,
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns 404 for a nonexistent server', async () => {

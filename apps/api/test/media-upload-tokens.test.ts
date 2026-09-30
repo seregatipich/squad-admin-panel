@@ -103,7 +103,7 @@ describe('POST /api/v1/media/upload-tokens', () => {
       headers: { cookie },
       payload: {},
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('mints a token and persists only its sha-256 hash, never the raw value', async () => {

@@ -667,7 +667,7 @@ describeIfDb('issue links API — player card and auto-ticket (ISSUE-3 #156)', (
       url: `/api/v1/players/${offender}/issues`,
       headers: { cookie: outsiderCookie },
     });
-    expect(denied.statusCode).toBe(403);
+    expect(denied.statusCode).toBe(401);
   });
 
   it('creates a ticket and its links atomically — auto-ticket from a moderation action (AC5)', async () => {

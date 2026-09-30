@@ -161,7 +161,7 @@ describeIfDb('GET /api/v1/leaderboards/bonuses', () => {
   it('requires panel_access', async () => {
     const noPanelCookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchBonuses('', noPanelCookie);
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('period=all ranks by balance and includes EOS-only players', async () => {

@@ -158,15 +158,18 @@ describe('GET /api/v1/me', () => {
     });
     expect(first.statusCode).toBe(200);
     // The touch extended the row, so the cache must not keep the old deadline.
-    const cachedRaw = await h.redis.get(cacheKey);
-    if (cachedRaw) {
-      const cached = JSON.parse(cachedRaw) as { expiresAt: string };
-      expect(new Date(cached.expiresAt).getTime()).toBeGreaterThan(nearExpiry.getTime());
-    }
+    // The cache entry is `{ payload, mac }` (HMAC-signed), the payload a JSON string.
+    const cachedExpiry = async (): Promise<number> => {
+      const raw = await h.redis.get(cacheKey);
+      if (!raw) return 0;
+      const { payload } = JSON.parse(raw) as { payload: string };
+      return new Date((JSON.parse(payload) as { expiresAt: string }).expiresAt).getTime();
+    };
+    const afterFirst = await cachedExpiry();
+    if (afterFirst > 0) expect(afterFirst).toBeGreaterThan(nearExpiry.getTime());
 
     await h.app.inject({ method: 'GET', url: '/api/v1/me', cookies: { [SESSION_COOKIE]: token } });
-    const refreshed = JSON.parse((await h.redis.get(cacheKey)) ?? '{}') as { expiresAt?: string };
-    expect(new Date(refreshed.expiresAt ?? 0).getTime()).toBeGreaterThan(nearExpiry.getTime());
+    expect(await cachedExpiry()).toBeGreaterThan(nearExpiry.getTime());
   });
 });
 

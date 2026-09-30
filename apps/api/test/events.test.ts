@@ -190,14 +190,14 @@ describeIfDb('events API (EVT-2)', () => {
     }
   });
 
-  it('rejects players without panel_access with 403', async () => {
+  it('rejects players without panel_access with 401', async () => {
     const noAccessRole = await seedRole(h.db, { panelAccess: false });
     const player = await seedPlayer(h.db, { roleId: noAccessRole });
     const deniedCookie = await loginAs(h, player);
     for (const url of ['/api/v1/events', '/api/v1/events/count', `/api/v1/events/${uuidv7()}`]) {
       const res = await h.app.inject({ method: 'GET', url, headers: { cookie: deniedCookie } });
-      expect(res.statusCode).toBe(403);
-      expect(res.json()).toMatchObject({ error: 'forbidden' });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toMatchObject({ error: 'unauthenticated' });
     }
   });
 

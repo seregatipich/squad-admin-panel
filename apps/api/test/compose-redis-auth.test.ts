@@ -32,12 +32,34 @@ function serviceBlock(yaml: string, name: string): string {
   return lines.slice(start, end).join('\n');
 }
 
-/** The redis service's exec-form command as a list of unquoted arguments. */
+/** Splits a shell line into words, honouring single quotes and dropping line continuations. */
+function shellWords(line: string): string[] {
+  return [...line.replace(/\\\n/g, ' ').matchAll(/'([^']*)'|(\S+)/g)].map(
+    (m) => m[1] ?? m[2] ?? '',
+  );
+}
+
+/**
+ * The redis service's `redis-server` arguments as a list of unquoted words:
+ * either the exec-form list (docker/compose.yml) or the final `exec
+ * docker-entrypoint.sh redis-server ...` statement of the stand's `sh -c`
+ * bootstrap script, which first converts an existing RDB into the AOF (#47).
+ */
 function redisCommand(yaml: string): string[] {
   const block = serviceBlock(yaml, 'redis');
   const lines = block.split('\n');
   const start = lines.findIndex((l) => /^ {4}command:\s*$/.test(l));
   if (start === -1) return [];
+  const script = lines.findIndex((l) => /^ {8}exec docker-entrypoint\.sh redis-server /.test(l));
+  if (script !== -1) {
+    let statement = '';
+    for (const line of lines.slice(script)) {
+      statement += `${line}\n`;
+      if (!line.trimEnd().endsWith('\\')) break;
+    }
+    const words = shellWords(statement);
+    return words.slice(words.indexOf('redis-server'));
+  }
   const args: string[] = [];
   for (const line of lines.slice(start + 1)) {
     const item = /^ {6}- (.*)$/.exec(line);

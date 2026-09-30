@@ -442,7 +442,7 @@ describeIfDb('server map-vote routes', () => {
       url: `/api/v1/servers/${serverId}/map-vote`,
       headers: { cookie: noPanelCookie },
     });
-    expect(forbiddenGet.statusCode).toBe(403);
+    expect(forbiddenGet.statusCode).toBe(401);
 
     const noChangemapCookie = await asRoleWithSquadPermissions([]);
     const forbiddenPut = await h.app.inject({

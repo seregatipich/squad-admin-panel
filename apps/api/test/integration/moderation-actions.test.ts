@@ -591,8 +591,8 @@ describe('POST /api/v1/moderation-actions/:id/revert', () => {
   // Bans.cfg, so the ledger said "unbanned" (and EVT-1 fired) while the
   // Banned: line stayed in the file and the player stayed banned in game.
   it('answers 502 and leaves the ledger alone when Bans.cfg cannot be read', async () => {
-    const targetId = await seedPlayer(testSteamId(977125), 'BridgeDownTarget');
-    const line = `Banned:${String(testSteamId(977125))}:0 // ban\n`;
+    const targetId = await seedPlayer(testSteamId(977126), 'BridgeDownTarget');
+    const line = `Banned:${String(testSteamId(977126))}:0 // ban\n`;
     h.bridge.files.set(bansCfgPath(serverId), Buffer.from(line, 'utf-8'));
     const [action] = await h.db
       .insert(moderationActions)
@@ -636,10 +636,10 @@ describe('POST /api/v1/moderation-actions/:id/revert', () => {
   });
 
   it('answers 502 and leaves the ledger alone when the verify read fails', async () => {
-    const targetId = await seedPlayer(testSteamId(977126), 'VerifyDownTarget');
+    const targetId = await seedPlayer(testSteamId(977128), 'VerifyDownTarget');
     h.bridge.files.set(
       bansCfgPath(serverId),
-      Buffer.from(`Banned:${String(testSteamId(977126))}:0 // ban\n`, 'utf-8'),
+      Buffer.from(`Banned:${String(testSteamId(977128))}:0 // ban\n`, 'utf-8'),
     );
     const [action] = await h.db
       .insert(moderationActions)
@@ -1094,7 +1094,7 @@ describe('MOD-3 evidence on moderation actions', () => {
     expect(loaded).toBe(baseline + 1);
   });
 
-  it('rejects a history read from a user without panel access with 403', async () => {
+  it('rejects a history read from a user without panel access with 401', async () => {
     const targetId = await seedPlayer(testSteamId(988010), 'EvidenceTarget10');
     const [noPanelRole] = await h.db
       .insert(roles)
@@ -1124,7 +1124,7 @@ describe('MOD-3 evidence on moderation actions', () => {
       url: `/api/v1/players/${targetId}/moderation-actions`,
       headers: { cookie: outsiderCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'unauthenticated' });
   });
 });

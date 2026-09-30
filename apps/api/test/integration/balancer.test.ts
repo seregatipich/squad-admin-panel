@@ -238,8 +238,8 @@ describeIfDb('GET/PUT /api/v1/balancer/settings', () => {
       url: '/api/v1/balancer/settings',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: 'forbidden' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
   });
 
   it('returns the documented defaults before any row exists', async () => {
@@ -271,7 +271,7 @@ describeIfDb('GET/PUT /api/v1/balancer/settings', () => {
       headers: { cookie: noPanelCookie },
       payload: { enabled: true },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('rejects an out-of-range pass threshold with 400 and persists nothing', async () => {
@@ -666,7 +666,7 @@ describeIfDb('GET /api/v1/balancer/proposals', () => {
       url: '/api/v1/balancer/proposals',
       headers: { cookie: noPanelCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('evaluates stored signals against the configured thresholds', async () => {
@@ -849,7 +849,7 @@ describeIfDb('POST /api/v1/balancer/proposals/:id/decision', () => {
       headers: { cookie: noPanelCookie },
       payload: { decision: 'acknowledge' },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
     expect(await h.db.select().from(balancerDecisions)).toHaveLength(0);
   });
 

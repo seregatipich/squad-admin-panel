@@ -163,7 +163,7 @@ describe('GET /api/v1/host/backups', () => {
       url: '/api/v1/host/backups',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 
   it('returns 401 without a session', async () => {
@@ -258,7 +258,7 @@ describe('POST /api/v1/host/backups', () => {
       url: '/api/v1/host/backups',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 
   it('returns 401 without a session', async () => {
@@ -405,7 +405,7 @@ describe('POST /api/v1/host/backups/:id/restore', () => {
       headers: { cookie },
       payload: { confirm: SNAPSHOT_ID },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 
   it('returns 401 without a session', async () => {

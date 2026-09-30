@@ -834,7 +834,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
       readSpy.mockRestore();
     }
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'bans_cfg_unavailable' });
+    expect(res.json()).toEqual({ error: 'bans_cfg_unavailable', partial_revert: null });
 
     const [appeal] = await h.db
       .select({ status: banAppeals.status })
@@ -915,8 +915,8 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
   });
 
   it('reports and audits a partial revert when a later server conflicts (#93)', async () => {
-    const steamId64 = testSteamId(987195);
-    const appealId = await openAppeal(steamId64, 'AppealTarget195');
+    const steamId64 = testSteamId(987196);
+    const appealId = await openAppeal(steamId64, 'AppealTarget196');
     const [player] = await h.db
       .select({ id: players.id })
       .from(players)
@@ -1121,7 +1121,7 @@ describeIfDb('approve that cannot edit Bans.cfg (#37)', () => {
         payload: JSON.stringify({ status: 'approved', decision_note: 'снимаю бан' }),
       });
       expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ error: 'bans_cfg_conflict' });
+      expect(res.json()).toEqual({ error: 'bans_cfg_conflict', partial_revert: null });
     } finally {
       h.bridge.fileRead = stockFileRead;
     }

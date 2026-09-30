@@ -201,7 +201,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('role.name is null-safe when player has no role (LEFT JOIN scenario)', async () => {

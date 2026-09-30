@@ -201,7 +201,7 @@ describe('GET /api/v1/host/info', () => {
       url: '/api/v1/host/info',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 });
 
@@ -252,6 +252,6 @@ describe('GET /api/v1/host/metrics/history', () => {
       url: '/api/v1/host/metrics/history',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 });

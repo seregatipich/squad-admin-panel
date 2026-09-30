@@ -196,7 +196,7 @@ describeIfDb('GET /api/v1/reports', () => {
       url: '/api/v1/reports',
       headers: { cookie: await loginAsSteam(NO_PANEL_STEAM) },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('lists all reports sorted by created_at desc', async () => {

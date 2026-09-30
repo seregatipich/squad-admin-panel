@@ -133,7 +133,7 @@ describe('GET /api/v1/host/disk-usage', () => {
       url: '/api/v1/host/disk-usage',
       headers: { cookie },
     });
-    expect(resp.statusCode).toBe(403);
+    expect(resp.statusCode).toBe(401);
   });
 
   it('returns 401 without a session', async () => {

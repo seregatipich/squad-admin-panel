@@ -97,7 +97,7 @@ describe('GET /api/v1/settings/chat-flag-rules', () => {
       url: '/api/v1/settings/chat-flag-rules',
       headers: { cookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('allows a panel viewer to list but marks can_mutate false', async () => {

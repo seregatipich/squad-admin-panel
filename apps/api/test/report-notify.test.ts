@@ -34,7 +34,24 @@ describe('notifyReporter keeps its "never throws" contract (#66)', () => {
 
   it('reports a Redis failure inside the worker handoff as worker_unavailable', async () => {
     const db = dbReturning([{ id: 'player-1', eosId: 'eos-1', steamId64: 76561198000000001n }]);
-    const roster = JSON.stringify({ players: [{ eos_id: 'eos-1', steam_id64: null }] });
+    // parseStoredRoster (#318) only accepts a fully formed snapshot.
+    const roster = JSON.stringify({
+      server_id: OPTS.serverId,
+      polled_at: '2026-01-01T00:00:00.000Z',
+      players: [
+        {
+          rcon_id: 1,
+          eos_id: 'eos-1',
+          steam_id64: null,
+          name: 'Reporter',
+          team_id: 1,
+          squad_id: null,
+          is_leader: false,
+          role: null,
+          first_seen_at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
     const redis = {
       get: vi.fn((key: string) =>
         key.startsWith('rcon:roster:')

@@ -111,7 +111,7 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
       url: `/api/v1/clans/${clanId}/roster/export`,
       headers: { cookie: nobodyCookie },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
   });
 
   it('returns 404 for an unknown clan id', async () => {
@@ -127,7 +127,7 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
     const [formulaPlayer] = await h.db
       .insert(players)
       .values({
-        steamId64: testSteamId(895004),
+        steamId64: testSteamId(895005),
         canonicalName: '=HYPERLINK("http://evil","x")',
         canonicalNameNormalized: 'hyperlinkevilx',
       })
@@ -143,7 +143,7 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
         headers: { cookie: ownerCookie },
       });
       expect(res.statusCode).toBe(200);
-      const row = res.body.split('\r\n').find((line) => line.includes('HYPERLINK'));
+      const row = res.body.split('\r\n').find((line) => line.includes('http://evil'));
       expect(row?.startsWith(`"'=HYPERLINK(""http://evil"",""x"")"`)).toBe(true);
     } finally {
       await h.db.delete(clanMembers).where(eq(clanMembers.playerId, formulaPlayer.id));
