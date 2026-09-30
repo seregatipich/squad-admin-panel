@@ -804,7 +804,7 @@ describe('POST /api/v1/servers/:id/restart — container state', () => {
       labels: {},
     });
     h.bridge.containerRun = async ({ server_id }) => {
-      runs.push(server_id);
+      runs.push(String(server_id));
       return { container_id: 'fake-container-id', status: 'started' };
     };
     h.bridge.containerStart = async () => {

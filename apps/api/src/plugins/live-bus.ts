@@ -72,6 +72,11 @@ export type LiveEvent =
       data: { state: 'up' | 'down'; down_for_s: number };
     }
   | {
+      type: 'worker.heartbeat';
+      ts: string;
+      data: { worker: string; healthy: boolean };
+    }
+  | {
       type: 'note.created';
       ts: string;
       data: {
@@ -355,6 +360,7 @@ export const LIVE_EVENT_AUDIENCE = {
   'rcon.roster': 'server',
   'server.seeding': 'server',
   'bridge.connection': 'server',
+  'worker.heartbeat': 'server',
   'note.created': 'server',
   'mark_type.changed': 'server',
   'session.revoked': 'server',

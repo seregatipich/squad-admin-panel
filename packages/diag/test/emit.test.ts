@@ -5,8 +5,8 @@ describe('diag.emit', () => {
   it('XADDs the event to diag:queue with all fields serialized', async () => {
     const xadd = vi.fn().mockResolvedValue('1700000000000-0');
     const redis = { xadd } as never;
-    const log = { warn: vi.fn(), debug: vi.fn() } as never;
-    const diag = createDiag({ redis, log });
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const diag = createDiag({ redis, log: log as never });
 
     await diag.emit({
       component: 'api',

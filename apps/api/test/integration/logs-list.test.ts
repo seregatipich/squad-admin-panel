@@ -157,9 +157,11 @@ describe('GET /api/v1/logs', () => {
       newest_scanned_id: string | null;
     };
     expect(body.entries.map((e) => e.msg)).toEqual(['old-error']);
-    const [[tipId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
-      [string, string[]]
-    >;
+    const tipId = (
+      (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+        [string, string[]]
+      >
+    )[0]?.[0];
     expect(body.newest_scanned_id).toBe(tipId);
   });
 
@@ -196,9 +198,11 @@ describe('GET /api/v1/logs', () => {
 
   it('returns the newest scanned id even when a live-tail poll matches nothing', async () => {
     await seed([{ source: 'api', level: 'error', msg: 'first-error' }]);
-    const [[afterId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
-      [string, string[]]
-    >;
+    const afterId = (
+      (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+        [string, string[]]
+      >
+    )[0]?.[0];
     await seed(
       Array.from({ length: 5 }, (_, i) => ({
         source: 'api' as const,
@@ -206,9 +210,11 @@ describe('GET /api/v1/logs', () => {
         msg: `noise-${i}`,
       })),
     );
-    const [[tipId]] = (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
-      [string, string[]]
-    >;
+    const tipId = (
+      (await h.redis.xrevrange(PANEL_LOGS_STREAM, '+', '-', 'COUNT', 1)) as Array<
+        [string, string[]]
+      >
+    )[0]?.[0];
 
     const res = await h.app.inject({
       method: 'GET',

@@ -83,7 +83,7 @@ describe('BonusSection — race between loadMore() and a filter-driven load() (#
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<BonusSection playerId={PLAYER_ID} />);
+    render(<BonusSection playerId={PLAYER_ID} canManage canAssign />);
     await screen.findByText('initial comment');
 
     fireEvent.click(screen.getByRole('button', { name: /показать ещё/i }));

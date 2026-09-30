@@ -1,4 +1,5 @@
 import { playerReports, players } from '@squad/db/schema';
+import { BAN_LENGTH_PATTERN } from '@squad/shared-config';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';

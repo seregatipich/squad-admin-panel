@@ -160,14 +160,14 @@ export function MatchCard({
   // Without this, a match that ends while its own card is open keeps showing
   // "Идёт" (only the local `now` ticker runs) until a manual reload — refetch
   // the moment the live bus reports this exact match's `match.ended`.
-  const onMatchEnded = useCallback(
-    (event: { data: { match_id?: string | null } }) => {
-      if (event.data.match_id !== matchId) return;
+  const onEventsAppended = useCallback(
+    (event: { data: { kinds?: string[] } }) => {
+      if (!event.data.kinds?.includes('match.ended')) return;
       load();
     },
-    [matchId, load],
+    [load],
   );
-  useLiveSubscription('match.ended', onMatchEnded);
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   if (loading) {
     return (

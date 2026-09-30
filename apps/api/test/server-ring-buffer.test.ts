@@ -18,6 +18,7 @@ function chat(serverId: string, id: string): ChatEvent {
       player_name: 'Alpha',
       steam_id64: '76561198012345678',
       eos_id: null,
+      source: 'log',
       message: 'hi',
     },
   };

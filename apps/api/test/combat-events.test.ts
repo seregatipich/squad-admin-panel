@@ -250,7 +250,7 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
       `?serverId=${serverB}&attackerName=${encodeURIComponent('[TAG]  Medic')}`,
     );
     expect(body.rows).toHaveLength(1);
-    expect(body.rows[0].attacker?.current_name).toBe('FieldMedic');
+    expect(body.rows[0]?.attacker?.current_name).toBe('FieldMedic');
   });
 
   it('paginates deep via keyset with correct ordering and no gaps, each page < 500ms', async () => {

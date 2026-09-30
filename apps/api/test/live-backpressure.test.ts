@@ -27,6 +27,7 @@ function chat(id: number, messageBytes: number): LiveEvent {
       player_name: 'Flooder',
       steam_id64: '76561198012345678',
       eos_id: null,
+      source: 'log',
       message: 'x'.repeat(messageBytes),
     },
   };

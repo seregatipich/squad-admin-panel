@@ -357,8 +357,8 @@ describe('POST /api/v1/depot/update with servers that are not running (#135)', (
       return { status: 'ok' };
     };
     h.bridge.containerRun = async ({ server_id }) => {
-      ranContainers.push(server_id);
-      return { status: 'ok', container_id: 'x' };
+      ranContainers.push(String(server_id));
+      return { status: 'started', container_id: 'x' };
     };
 
     const res = await h.app.inject({

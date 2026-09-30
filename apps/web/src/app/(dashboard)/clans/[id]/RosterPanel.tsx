@@ -176,6 +176,9 @@ export function deriveCapabilities(
 ): Capabilities {
   const canManageFull = Boolean(me?.can_manage_clans) || viewerManageLevel === 'full';
   const isDeputy = viewerManageLevel === 'deputy';
+  // 'full' also covers a global clan manager; the leader is the viewer whose
+  // full control comes from the clan itself.
+  const isLeader = viewerManageLevel === 'full' && !me?.can_manage_clans;
   return {
     canManageFull,
     canAdd: canManageFull || isDeputy,

@@ -83,16 +83,16 @@ export interface FakeBridge {
     mode?: number;
   }) => Promise<{ status: string }>;
   containerInspect: (p: { name: string }) => Promise<{
-    name: string;
+    name?: string;
     state: string;
-    running: boolean;
-    pid: number;
-    started_at: string;
-    finished_at: string;
-    exit_code: number;
-    image: string;
-    restart_count: number;
-    labels: Record<string, string>;
+    running?: boolean;
+    pid?: number;
+    started_at?: string;
+    finished_at?: string;
+    exit_code?: number;
+    image?: string;
+    restart_count?: number;
+    labels?: Record<string, string>;
     oom_killed?: boolean;
     error?: string;
   }>;
@@ -108,13 +108,18 @@ export interface FakeBridge {
   }>;
   containerRun: (
     p: Record<string, unknown>,
-  ) => Promise<{ container_id: string; status: 'started' }>;
+  ) => Promise<{ container_id: string; status?: 'started' }>;
   containerRunRnsquadjs: (p: {
     server_id: string;
     env: Record<string, string>;
-  }) => Promise<{ container_id: string; status: 'started' }>;
+  }) => Promise<{ container_id: string; status?: 'started' }>;
   containerStart: (p: { name: string }) => Promise<{ status: string }>;
   containerStop: (p: { name: string; timeout_sec?: number }) => Promise<{ status: string }>;
+  dockerPrune: () => Promise<{
+    exit_code: number;
+    reclaimed_bytes: number;
+    reclaimed_human: string;
+  }>;
   containerRm: (p: { name: string; force?: boolean }) => Promise<{ status: string }>;
   containerLogsFollow: (
     p: { name: string; tail?: number },
@@ -244,6 +249,7 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     containerRun: async () => ({ container_id: 'fake-container-id', status: 'started' }),
     containerRunRnsquadjs: async () => ({ container_id: 'fake-rnsquadjs-id', status: 'started' }),
     containerStart: async () => ({ status: 'ok' }),
+    dockerPrune: async () => ({ exit_code: 0, reclaimed_bytes: 0, reclaimed_human: '0B' }),
     containerStop: async () => ({ status: 'ok' }),
     containerRm: async () => ({ status: 'ok' }),
     containerLogsFollow: async () => ({ exit_code: 0 }),

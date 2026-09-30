@@ -120,6 +120,7 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
         canonicalNameNormalized: 'hyperlinkevilx',
       })
       .returning({ id: players.id });
+    if (!formulaPlayer) throw new Error('failed to seed the formula player');
     await h.db
       .insert(clanMembers)
       .values({ clanId, playerId: formulaPlayer.id, memberRole: 'member', hasPriority: false });

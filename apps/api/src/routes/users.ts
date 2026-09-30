@@ -57,7 +57,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         WHERE p.role_id IS NOT NULL
           ${roleId ? sql`AND r.id = ${roleId}` : sql``}
           ${
-            namePattern
+            q && namePattern
               ? sql`AND (p.canonical_name_normalized LIKE ${namePattern} OR ${steamId64Equals(sql`p.steam_id64`, q)})`
               : sql``
           }

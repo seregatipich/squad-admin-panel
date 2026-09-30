@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import fp from 'fastify-plugin';
+import { v7 as uuidv7 } from 'uuid';
 import { als } from '../lib/logger.js';
 
 const MAX_REQUEST_ID_LENGTH = 128;

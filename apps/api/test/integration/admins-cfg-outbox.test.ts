@@ -264,15 +264,19 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('commits each published row on its own so one failing server never blocks or re-publishes the others', async () => {
     const [failingServer, healthyServer] = await activeServerIds();
     if (!failingServer || !healthyServer) throw new Error('expected two active servers');
-    const [{ id: failingId }] = await h.db
+    const [failingRow] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId: failingServer, payload: makeEvent('poisoned-stream') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    const failingId = failingRow?.id;
+    if (!failingId) throw new Error('outbox insert returned no row');
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const [{ id: healthyId }] = await h.db
+    const [healthyRow] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId: healthyServer, payload: makeEvent('healthy-stream') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    const healthyId = healthyRow?.id;
+    if (!healthyId) throw new Error('outbox insert returned no row');
     const poisonedRedis: OutboxRelayRedis = {
       xadd: async (key, ...args) => {
         if (key === `${ADMINS_CFG_SYNC_STREAM_PREFIX}${failingServer}`) {
@@ -309,10 +313,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('refuses a non-object payload instead of spreading it into the stream event', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id }] = await h.db
+    const [outboxRow] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: ['not', 'an', 'object'] })
       .returning({ id: adminsCfgSyncOutbox.id });
+    const id = outboxRow?.id;
+    if (!id) throw new Error('outbox insert returned no row');
 
     await expect(
       relayAdminsCfgSyncOutbox(h.db, h.redis, { streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX }),

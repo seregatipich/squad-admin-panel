@@ -51,7 +51,7 @@ export function parseBanLengthToExpiry(
   if (!Number.isFinite(amount) || amount === 0) return null;
 
   const unit = match[2] ?? 'd';
-  const unitMs = UNIT_MILLISECONDS[unit] ?? UNIT_MILLISECONDS.d ?? 86_400_000;
+  const unitMs = BAN_LENGTH_UNIT_MILLISECONDS[unit] ?? BAN_LENGTH_UNIT_MILLISECONDS.d ?? 86_400_000;
   const expiry = new Date(issuedAt.getTime() + amount * unitMs);
   // A duration past the Date range (e.g. '300000y') yields an Invalid Date,
   // which every `expiresAt > now` comparison reads as "already expired".

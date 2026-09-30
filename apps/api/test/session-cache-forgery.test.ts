@@ -33,7 +33,7 @@ async function buildApp(dbUrl: string) {
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as never);
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',

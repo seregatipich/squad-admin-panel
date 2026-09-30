@@ -389,8 +389,8 @@ describe('POST /api/v1/depot/update', () => {
       depotCalled = true;
       return { exit_code: 0 };
     };
-    h.bridge.containerStop = async () => undefined;
-    h.bridge.containerStart = async () => undefined;
+    h.bridge.containerStop = async () => ({ status: 'ok' });
+    h.bridge.containerStart = async () => ({ status: 'ok' });
 
     try {
       const cookie = await loginAsOwner(h);

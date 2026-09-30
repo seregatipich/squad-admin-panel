@@ -188,7 +188,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
     const app: FastifyInstance = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
-    app.decorate('db', inertDb());
+    app.decorate('db', inertDb() as never);
     for (const name of [
       'redis',
       'bridge',

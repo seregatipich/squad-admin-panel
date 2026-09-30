@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
+import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import {
   isAdminsCfgSafeRoleName,
   isRoleColor,

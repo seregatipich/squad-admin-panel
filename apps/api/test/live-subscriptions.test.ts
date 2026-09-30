@@ -32,6 +32,7 @@ function chat(id: string, serverId = SERVER_A): LiveEvent {
       player_name: 'Alpha',
       steam_id64: '76561198012345678',
       eos_id: null,
+      source: 'log',
       message: `message ${id}`,
     },
   };

@@ -284,6 +284,15 @@ async function createPanelRole(
   return id;
 }
 
+/** A broadcast event a socket receives regardless of its subscriptions or role. */
+function heartbeatMarker(worker: string): LiveEvent {
+  return {
+    type: 'worker.heartbeat',
+    ts: new Date().toISOString(),
+    data: { worker, healthy: true },
+  };
+}
+
 function combatEvent(): LiveEvent {
   const now = new Date().toISOString();
   return {

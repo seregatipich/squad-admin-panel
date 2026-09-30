@@ -11,7 +11,7 @@ import { desc, eq, inArray, or } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
+import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
 
 /**
  * Upper bound on the links `GET /players/:playerId/links` returns, newest
@@ -92,7 +92,7 @@ function snapshot(row: PlayerLinkRow) {
 }
 
 async function auditMutation(
-  db: Pick<DatabaseClient, 'insert'>,
+  db: DatabaseClient | AuditTransaction,
   req: FastifyRequest,
   input: { action: string; targetId: string; before: unknown; after: unknown },
 ): Promise<void> {

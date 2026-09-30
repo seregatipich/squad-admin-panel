@@ -43,7 +43,7 @@ const forceStopRoutes: FastifyPluginAsync = async (app) => {
       // reads it to tell this exit apart from a crash.
       await app.redis.set(`stop:requested:${s.id}`, '1', 'EX', 300);
 
-      await app.bridge.containerRm({ name: `squad-${s.id}`, force: true });
+      await app.bridge.containerRm({ name: `squad-${s.id}` });
 
       // The sidecar would otherwise keep reconnecting to the dead server's
       // RCON. Best-effort: it is not load-bearing for the stop.

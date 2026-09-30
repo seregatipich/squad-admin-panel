@@ -7,6 +7,13 @@ function v(id: string, author: string | null, created_at: string, content: strin
 
 const BUDGET = { timeoutMs: 5_000 };
 
+/** Runs computeBlame and fails the test if it ran out of its time budget. */
+function mustBlame(versions: BlameVersion[], opts: { timeoutMs: number }) {
+  const result = computeBlame(versions, opts);
+  if (!result) throw new Error('computeBlame ran out of its time budget');
+  return result;
+}
+
 describe('computeBlame', () => {
   it('#283: gives up with undefined once the diff budget is spent', () => {
     const lines = (prefix: string) =>
@@ -24,11 +31,11 @@ describe('computeBlame', () => {
   });
 
   it('returns an empty array for no versions', () => {
-    expect(computeBlame([], BUDGET)).toEqual([]);
+    expect(mustBlame([], BUDGET)).toEqual([]);
   });
 
   it('attributes every line to the sole version when only one exists', () => {
-    const result = computeBlame(
+    const result = mustBlame(
       [v('v1', 'alice', '2026-04-01T00:00:00Z', 'line-a\nline-b\n')],
       BUDGET,
     );
@@ -42,7 +49,7 @@ describe('computeBlame', () => {
       v('v1', 'alice', '2026-04-01T00:00:00Z', 'keep\nkeep'),
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'keep\nkeep'),
     ];
-    const result = computeBlame(versions, BUDGET);
+    const result = mustBlame(versions, BUDGET);
     expect(result).toHaveLength(2);
     expect(result.every((l) => l.version_id === 'v1')).toBe(true);
   });
@@ -52,7 +59,7 @@ describe('computeBlame', () => {
       v('v1', 'alice', '2026-04-01T00:00:00Z', 'keep'),
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'keep\nnew-line'),
     ];
-    const result = computeBlame(versions, BUDGET);
+    const result = mustBlame(versions, BUDGET);
     expect(result[0]?.version_id).toBe('v1');
     expect(result[1]?.version_id).toBe('v2');
     expect(result[1]?.author_player_id).toBe('bob');
@@ -63,7 +70,7 @@ describe('computeBlame', () => {
       v('v1', 'alice', '2026-04-01T00:00:00Z', 'a\nb\nc'),
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'a\nc'),
     ];
-    const result = computeBlame(versions, BUDGET);
+    const result = mustBlame(versions, BUDGET);
     expect(result.map((l) => l.text)).toEqual(['a', 'c']);
     expect(result.every((l) => l.version_id === 'v1')).toBe(true);
   });
@@ -73,7 +80,7 @@ describe('computeBlame', () => {
       v('v1', 'alice', '2026-04-01T00:00:00Z', 'one\ntwo\nthree'),
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'one\nTWO\nthree'),
     ];
-    const result = computeBlame(versions, BUDGET);
+    const result = mustBlame(versions, BUDGET);
     expect(result[0]?.version_id).toBe('v1');
     expect(result[1]?.version_id).toBe('v2');
     expect(result[1]?.author_player_id).toBe('bob');
@@ -86,7 +93,7 @@ describe('computeBlame', () => {
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'x\nY\nz'),
       v('v3', 'carol', '2026-04-03T00:00:00Z', 'x\nY\nZZ'),
     ];
-    const result = computeBlame(versions, BUDGET);
+    const result = mustBlame(versions, BUDGET);
     expect(result[0]?.author_player_id).toBe('alice');
     expect(result[1]?.author_player_id).toBe('bob');
     expect(result[2]?.author_player_id).toBe('carol');
@@ -99,20 +106,18 @@ describe('computeBlame', () => {
       v('v1', 'alice', '2026-04-01T00:00:00.000Z', 'one\ntwo'),
       v('v2', 'bob', '2026-04-01T00:00:00.000Z', 'one\nTWO'),
     ];
-    expect(computeBlame(versions, BUDGET).map((l) => [l.text, l.version_id])).toEqual([
+    expect(mustBlame(versions, BUDGET).map((l) => [l.text, l.version_id])).toEqual([
       ['one', 'v1'],
       ['TWO', 'v2'],
     ]);
-    expect(
-      computeBlame([...versions].reverse(), BUDGET).map((l) => [l.text, l.version_id]),
-    ).toEqual([
+    expect(mustBlame([...versions].reverse(), BUDGET).map((l) => [l.text, l.version_id])).toEqual([
       ['one', 'v2'],
       ['two', 'v1'],
     ]);
   });
 
   it('handles CRLF line endings', () => {
-    const result = computeBlame([v('v1', 'alice', '2026-04-01T00:00:00Z', 'a\r\nb\r\nc')], BUDGET);
+    const result = mustBlame([v('v1', 'alice', '2026-04-01T00:00:00Z', 'a\r\nb\r\nc')], BUDGET);
     expect(result.map((l) => l.text)).toEqual(['a', 'b', 'c']);
   });
 });
