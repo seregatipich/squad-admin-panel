@@ -186,5 +186,6 @@ describe('CombatLog — COMBAT-529 live cap does not create a pagination gap', (
     const rows = screen.getAllByRole('row');
     // header row + 300 history rows + 1 live row
     expect(rows.length).toBe(302);
-  });
+    // Renders and re-renders a 300-row table, so the default 5s is too tight under coverage load.
+  }, 20_000);
 });
