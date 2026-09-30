@@ -34,7 +34,6 @@ export function middleware(req: NextRequest) {
   const nonce = createNonce();
   const policy = contentSecurityPolicy({
     nonce,
-    pathname,
     production: process.env.NODE_ENV === 'production',
   });
   const requestHeaders = new Headers(req.headers);

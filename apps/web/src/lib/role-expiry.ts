@@ -51,7 +51,7 @@ export function formatRoleExpiryLabel(expiresAt: string | null | undefined): str
   const dateValue = toRoleExpiryDateValue(expiresAt);
   const formatted = formatRoleExpiryDate(dateValue);
   if (!formatted) return 'Некорректный срок';
-  return `До ${formatted} включительно`;
+  return `До ${formatted} включительно (UTC)`;
 }
 
 /**

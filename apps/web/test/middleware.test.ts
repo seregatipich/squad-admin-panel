@@ -119,7 +119,7 @@ describe('Content-Security-Policy (#60, finding 424)', () => {
     );
   });
 
-  it('gives the config editor its Monaco directives', () => {
+  it('gives every page the Monaco and avatar directives', () => {
     const res = middleware(makeRequest('/servers/abc/configs', true)) as unknown as PassThrough;
 
     expect(res.headers.get('content-security-policy')).toContain("worker-src 'self' blob:");

@@ -798,3 +798,14 @@ The Статус header's client-side online sort, the `только онлай�
 - Баннер дрейфа Admins.cfg показывает кнопки синхронизации только с правом `admin_group:edit` (#765, #766).
 - График метрик размещает точки по времени: пропуски в данных видны как разрывы (#786).
 - `formatDurationRu` и `formatHours` вынесены в `apps/web/src/lib/format.ts` (#1350).
+
+## 2026-09-30 — Аудит web-библиотек (#91)
+
+### Changed
+
+- Срок роли в подписи показывается как «До ДД/ММ/ГГГГ включительно (UTC)»: дата всегда считается по UTC (#835).
+- Политика CSP одинакова для всех страниц: разрешены `img-src` для аватаров Steam и `data:`, `font-src data:` и `worker-src blob:` для Monaco; клиентская навигация на вкладку «Конфиги» больше не теряет шрифт и воркеры (#1306, #1307).
+- Переподключение live-bus использует общую функцию `jitteredBackoffMs` из `ws-backoff.ts` (#838).
+- Пороги покрытия web подняты до реально достигнутых: lines/statements 85%, functions 72% (#839).
+- В `tsconfig.json` web включены `noImplicitReturns`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch` (#1320).
+- Кнопка входа через Steam вынесена в `SteamLoginLink` (#771); из `apps/web` удалена лишняя devDependency `playwright` (#431).
