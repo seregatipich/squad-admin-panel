@@ -22,8 +22,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setError(params.get('error'));
+    const errorCode = params.get('error');
+    setError(errorCode);
     setSteamId(params.get('steam_id64'));
+    // A failed logout leaves the session alive; bouncing to the dashboard would hide that.
+    if (errorCode === 'logout_failed') return;
     (async () => {
       const meRes = await fetch('/api/v1/me', { credentials: 'include' });
       if (meRes.ok) window.location.href = '/dashboard';
@@ -39,6 +42,9 @@ export default function LoginPage() {
             Отказ в доступе обратимым не является и объявляется критическим. */}
         {error === 'auth_failed' && (
           <InlineBanner tone="warn" title={t('login.error.authFailed')} />
+        )}
+        {error === 'logout_failed' && (
+          <InlineBanner tone="warn" title={t('login.error.logoutFailed')} />
         )}
         {error === 'not_authorized' && (
           <InlineBanner

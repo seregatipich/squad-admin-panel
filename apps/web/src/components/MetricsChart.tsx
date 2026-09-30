@@ -13,6 +13,7 @@ interface Props {
   label: string;
   unit: string;
   color: string;
+  /** Minimum top of the Y axis; grows to fit the data when a value exceeds it. */
   maxY?: number;
   formatValue?: (v: number) => string;
 }
@@ -52,7 +53,9 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
   }
 
   const values = points.map((p) => p.value);
-  const yMax = maxY ?? (Math.max(...values) * 1.1 || 1);
+  const dataMax = Math.max(...values);
+  // `maxY` is a floor, not a ceiling: container CPU is summed across cores and can exceed 100 %.
+  const yMax = maxY === undefined ? dataMax * 1.1 || 1 : Math.max(maxY, dataMax);
   const yMin = 0;
 
   const xScale = (i: number) => PAD.left + (i / (points.length - 1 || 1)) * INNER_W;

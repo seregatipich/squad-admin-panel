@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
+import { players, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import {
   isAdminsCfgSafeRoleName,
   isRoleColor,
@@ -360,4 +360,3 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
 };
 
 export default rolesRoutes;
-void rolePermissions;

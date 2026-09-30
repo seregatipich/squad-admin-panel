@@ -83,6 +83,40 @@ describe('PlayerMarks', () => {
         expect.objectContaining({ method: 'POST' }),
       ),
     );
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/marks?')).length).toBe(
+        2,
+      ),
+    );
+    // The reference list is loaded once, not on every marks reload.
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/mark-types')).toHaveLength(1);
+  });
+
+  it('does not show the marks of the previous player when its late answer arrives', async () => {
+    let resolveFirst: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/mark-types') {
+          return Promise.resolve(new Response(JSON.stringify([MARK_TYPE]), { status: 200 }));
+        }
+        if (url.includes('/players/player-1/')) {
+          return new Promise<Response>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+      }),
+    );
+    const { rerender } = render(<PlayerMarks playerId="player-1" />);
+    rerender(<PlayerMarks playerId="player-2" />);
+    await screen.findByText('Активных меток нет');
+
+    resolveFirst(new Response(JSON.stringify({ items: [ACTIVE_MARK] }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.getByText('Активных меток нет')).toBeInTheDocument();
   });
 
   it('asks for confirmation in a dialog before clearing a mark', async () => {

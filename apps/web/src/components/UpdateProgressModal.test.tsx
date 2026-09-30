@@ -109,6 +109,22 @@ describe('UpdateProgressModal', () => {
     expect(screen.getByText('Ожидание первого сообщения…')).toBeInTheDocument();
   });
 
+  it('drops a frame without a text message instead of crashing the console', async () => {
+    render(
+      <UpdateProgressModal
+        open
+        onOpenChange={() => {}}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление"
+      />,
+    );
+    act(() => latestSocket().emitOpen());
+    act(() => latestSocket().emitMessage({ step: 'heartbeat' }));
+    act(() => latestSocket().emitMessage({ message: 'после служебного кадра' }));
+
+    expect(screen.getByText('после служебного кадра')).toBeInTheDocument();
+  });
+
   it('ignores a done frame received before backfill_complete (stale/historical)', async () => {
     const onDone = vi.fn();
     render(

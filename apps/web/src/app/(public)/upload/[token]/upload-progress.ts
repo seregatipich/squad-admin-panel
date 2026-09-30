@@ -1,10 +1,7 @@
-/** MIME types the panel accepts for evidence uploads, mirroring the API allowlist. */
-export const ACCEPTED_UPLOAD_TYPES = [
-  'video/mp4',
-  'video/webm',
-  'image/png',
-  'image/jpeg',
-] as const;
+import { MEDIA_UPLOAD_MIME_TYPES } from '@squad/shared-types';
+
+/** MIME types the panel accepts for evidence uploads; the API allowlist itself. */
+export const ACCEPTED_UPLOAD_TYPES = MEDIA_UPLOAD_MIME_TYPES;
 
 const BYTES_PER_MB = 1024 * 1024;
 

@@ -68,6 +68,8 @@ export function ServerBar() {
   // на месте: полоса серверов переносится на вторую строку, когда серверов
   // много, поэтому её высота не константа. Липкие шапки таблиц отсчитываются
   // от этой переменной и без неё уезжали бы под полосу.
+  const hasBar = inContext && servers.length > 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `hasBar` decides whether `barRef` is mounted.
   useLayoutEffect(() => {
     const root = document.documentElement;
     const bar = barRef.current;
@@ -79,20 +81,19 @@ export function ServerBar() {
       root.style.setProperty('--chrome-h', `calc(var(--nav-h) + ${bar.offsetHeight}px)`);
     };
     apply();
-    // Эффект и так пересчитывает высоту на каждый рендер, поэтому наблюдатель
-    // нужен только для переносов строки при изменении ширины окна. В jsdom его
-    // нет, и это не повод падать.
+    // Наблюдатель следит за переносами строки при смене ширины окна и числа
+    // серверов. В jsdom его нет, и это не повод падать.
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply);
     observer?.observe(bar);
     return () => {
       observer?.disconnect();
       root.style.removeProperty('--chrome-h');
     };
-  });
+  }, [hasBar]);
 
   // Nothing to switch between, or nothing to switch on: render no strip at all
   // rather than an empty bar that costs a row of vertical space.
-  if (!inContext || servers.length === 0) return null;
+  if (!hasBar) return null;
 
   return (
     <nav

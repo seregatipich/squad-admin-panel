@@ -2,17 +2,11 @@
 
 import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
 import { type DossierKit, formatPlayTime, sortKits } from './dossier';
+import { formatMatchDate } from './recent-matches';
 
-/** Same field set as `formatMatchDate` in `recent-matches.ts`; `—` for a never-played kit. */
+/** `—` for a never-played kit, otherwise the shared match-date format. */
 function formatKitDate(iso: string | null): string {
-  if (iso === null) return '—';
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return iso === null ? '—' : formatMatchDate(iso);
 }
 
 /**

@@ -39,7 +39,6 @@ Controls which Steam users can log into the panel and what they can do once insi
 | DB schema — panel_meta | [`packages/db/src/schema/panel-meta.ts`](../../../packages/db/src/schema/panel-meta.ts) |
 | Web — roles list + editor | [`apps/web/src/app/(dashboard)/roles/`](../../../apps/web/src/app/(dashboard)/roles/) |
 | Web — users table | [`apps/web/src/app/(dashboard)/users/page.tsx`](../../../apps/web/src/app/(dashboard)/users/page.tsx) |
-| Web — shared role editor | [`apps/web/src/components/RoleEditor.tsx`](../../../apps/web/src/components/RoleEditor.tsx) |
 | Web — role color dot | [`apps/web/src/components/RoleColorDot.tsx`](../../../apps/web/src/components/RoleColorDot.tsx) |
 
 ## Dependencies

@@ -88,7 +88,7 @@ apps/web config editor component
 `log-stream-sink.ts` imports `node:stream` (a Node.js built-in). Next.js 15's bundler cannot resolve `node:stream` in client components. The `./role-colors` and `./permissions` sub-path exports are browser-safe and contain only pure TypeScript with no Node.js imports.
 
 ```
-apps/web/src/components/RoleEditor.tsx
+apps/web/src/components/RoleColorDot.tsx
   └─ import { ROLE_COLORS, isRoleColor } from '@squad/shared-config/role-colors'
        OK: no node:stream dependency
 

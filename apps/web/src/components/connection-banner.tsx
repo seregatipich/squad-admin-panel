@@ -12,9 +12,11 @@ import { getLiveBus } from '@/lib/live-bus';
 // Behavior now:
 //   - On mount, fire-and-forget retain on the live bus (so the WS
 //     opens if it's going to). Do not visualise the WS state.
-//   - Probe `/api/v1/me` once per minute. If it consistently fails
-//     for more than a minute, render a small bottom-right toast that
-//     can be dismissed but does not block the UI.
+//   - Probe `/api/v1/me` every 30 seconds. If two probes in a row fail
+//     (about a minute), render a small bottom-right toast that can be
+//     dismissed but does not block the UI.
+//   - A 401 means the session ended while the panel is reachable, so the
+//     tab is sent to `/login` instead of showing the toast.
 //   - Never sticky-block the top of the page.
 
 const HTTP_PROBE_INTERVAL_MS = 30_000;
@@ -51,6 +53,8 @@ export function ConnectionBanner() {
         failCount.current = 0;
         setReachable(true);
         setDismissed(false);
+      } else if (res.status === 401) {
+        window.location.href = '/login';
       } else {
         failCount.current += 1;
         if (failCount.current >= FAIL_THRESHOLD) setReachable(false);
@@ -63,12 +67,16 @@ export function ConnectionBanner() {
 
   useEffect(() => {
     if (!hydrated) return;
+    let cancelled = false;
     const tick = async () => {
       await probe();
+      // The component may have unmounted while the probe was in flight.
+      if (cancelled) return;
       probeTimer.current = setTimeout(tick, HTTP_PROBE_INTERVAL_MS);
     };
     probeTimer.current = setTimeout(tick, HTTP_PROBE_INTERVAL_MS);
     return () => {
+      cancelled = true;
       if (probeTimer.current) clearTimeout(probeTimer.current);
       probeTimer.current = null;
     };

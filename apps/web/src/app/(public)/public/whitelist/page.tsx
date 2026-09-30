@@ -91,6 +91,10 @@ export default function PublicWhitelistPage() {
         setError('Заявка с этим SteamID64 уже на рассмотрении.');
         return;
       }
+      if (res.status === 429) {
+        setError('Слишком много заявок с этого адреса. Попробуйте позже.');
+        return;
+      }
       if (res.status === 400) {
         setError('Проверьте правильность заполнения полей.');
         return;

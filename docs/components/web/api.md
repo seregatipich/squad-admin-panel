@@ -40,8 +40,8 @@ All require a valid session. Permission gating is noted where applicable.
 | `/audit` | `(dashboard)/audit/page.tsx` | none | Full audit log (last 200 entries), filterable by action_type, target, or actor. Expandable context JSON per row. Polls every 6 s. |
 | `/logs` | `(dashboard)/logs/page.tsx` | `host:view` (top-bar link gated) | Live log stream from `GET /api/v1/logs`. `LogList` component with source, level, server, and text filters. Export button. |
 | `/roles` | `(dashboard)/roles/page.tsx` | `role:view` | Role list with color dot, description, user count. Create link (requires `role:create`). Edit/Delete buttons gated by `role:edit` / `role:delete`. Owner role is protected. |
-| `/roles/new` | `(dashboard)/roles/new/page.tsx` | `role:create` (API-enforced) | `RoleEditor` component in create mode. POST /api/v1/roles on submit. |
-| `/roles/[id]` | `(dashboard)/roles/[id]/page.tsx` | `role:edit` (API-enforced) | `RoleEditor` in edit mode; read-only for the Owner system role. PUT /api/v1/roles/:id on submit. |
+| `/roles/new` | `(dashboard)/roles/new/page.tsx` | none | Redirects to `/settings/groups`. |
+| `/roles/[id]` | `(dashboard)/roles/[id]/page.tsx` | none | Redirects to `/settings/groups`. |
 | `/users` | `(dashboard)/users/page.tsx` | `user:view` | Users with panel roles (players where role_id IS NOT NULL). `AssignModal` (player search + role select) shown when caller has `user:manage_roles`; assigns role via PUT /api/v1/players/:steam_id64/role. Owner role assignment requires confirm dialog. |
 | `/settings/account` | `(dashboard)/(account)/settings/account/page.tsx` | none | Account name (in-game, Steam persona as fallback) plus nickname history in the page header. Profile (SteamID64, permissions count). Own in-game statistics first, profile below it: the «Игровая статистика» block (the shared `DossierSection`, retitled, `serverFilter={false}`) and «Последние матчи», both keyed on `player_id` from `GET /api/v1/me`. Full width — the route sits in the `(account)` group so the section's `reading` layout does not wrap it. Active sessions table with individual and bulk revoke. Logout lives in the top-nav user menu, not on this page. Polls every 30 s. |
 | `/settings/tokens` | `(dashboard)/settings/tokens/page.tsx` | none | API token management. Create a named token with a subset of the user's own permissions (scopes). Token plaintext shown once on creation. Revoke existing tokens. |
@@ -196,31 +196,6 @@ function RoleColorDot(props: {
 ```
 
 Renders a small colored circle representing a role. Uses a static `CLASS_MAP` from `@squad/shared-config/role-colors`. Aria-hidden. 16 supported colors: red, rose, pink, fuchsia, purple, violet, indigo, blue, sky, cyan, teal, emerald, green, lime, amber, neutral.
-
-### `RoleEditor`
-
-```ts
-interface RoleEditorProps {
-  initial?: {
-    name: string;
-    color: RoleColor;
-    description: string | null;
-    permissions: string[];
-    isSystemRole?: boolean;
-    isOwner?: boolean;     // makes the form fully read-only
-  };
-  onSubmit: (data: {
-    name: string;
-    color: RoleColor;
-    description: string | null;
-    permissions: string[];
-  }) => Promise<void>;
-  onCancel: () => void;
-  submitLabel: string;
-}
-```
-
-Full role creation/editing form. Fields: name (text), color (color picker using `RoleColorDot`), description (textarea), permissions (grouped checkboxes loaded from `GET /api/v1/permissions`, filterable by search). When `isOwner` is true the entire form is read-only and only a Back button is shown. Permission categories render in a fixed order defined by `CATEGORY_ORDER`.
 
 ---
 

@@ -18,6 +18,30 @@ const TEMPLATES = [
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
   },
+  {
+    id: 't2',
+    title: 'Добро пожаловать',
+    body: 'Добро пожаловать на {server}',
+    category: 'info',
+    locale: 'ru',
+    sort_order: 1,
+    is_enabled: true,
+    created_by: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 't3',
+    title: 'Личное предупреждение',
+    body: '{player}, не мешайте игре',
+    category: 'warn',
+    locale: 'ru',
+    sort_order: 2,
+    is_enabled: true,
+    created_by: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  },
 ];
 
 function mockFetch(overrides: { broadcast?: () => Promise<Response> } = {}) {
@@ -51,7 +75,9 @@ afterEach(() => {
 
 describe('BroadcastComposer', () => {
   it('renders nothing without the chat permission', () => {
-    const { container } = render(<BroadcastComposer serverId="srv-1" canChat={false} />);
+    const { container } = render(
+      <BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={false} />,
+    );
     expect(container).toBeEmptyDOMElement();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -59,7 +85,7 @@ describe('BroadcastComposer', () => {
   it(
     'disables send while the message is shorter than 2 characters',
     async () => {
-      render(<BroadcastComposer serverId="srv-1" canChat={true} />);
+      render(<BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       const send = screen.getByRole('button', { name: 'Отправить' });
       expect(send).toBeDisabled();
@@ -76,7 +102,7 @@ describe('BroadcastComposer', () => {
   it(
     'asks for confirmation in a dialog and posts the broadcast on confirm',
     async () => {
-      render(<BroadcastComposer serverId="srv-1" canChat={true} />);
+      render(<BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       fireEvent.change(input, { target: { value: 'Server restarting soon' } });
       fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
@@ -104,7 +130,7 @@ describe('BroadcastComposer', () => {
   it(
     'does not send when the confirmation is cancelled',
     async () => {
-      render(<BroadcastComposer serverId="srv-1" canChat={true} />);
+      render(<BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       fireEvent.change(input, { target: { value: 'Server restarting soon' } });
       fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
@@ -125,12 +151,28 @@ describe('BroadcastComposer', () => {
   it(
     'lets the operator pick a template to fill the message',
     async () => {
-      render(<BroadcastComposer serverId="srv-1" canChat={true} />);
+      render(<BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={true} />);
       fireEvent.click(await screen.findByRole('button', { name: /шаблоны/i }));
       fireEvent.click(await screen.findByText('Разминка'));
 
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       expect(input).toHaveValue('Всем привет, разминка через 5 минут');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'fills the server name into a template and hides player-addressed templates',
+    async () => {
+      render(<BroadcastComposer serverId="srv-1" serverName="Alpha" canChat={true} />);
+      fireEvent.click(await screen.findByRole('button', { name: /шаблоны/i }));
+      await screen.findByText('Добро пожаловать');
+      expect(screen.queryByText('Личное предупреждение')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Добро пожаловать'));
+
+      expect(await screen.findByPlaceholderText(/текст объявления/i)).toHaveValue(
+        'Добро пожаловать на Alpha',
+      );
     },
     TEST_TIMEOUT_MS,
   );

@@ -20,6 +20,18 @@ import { TemplatePicker } from './TemplatePicker';
 const MESSAGE_MIN = 2;
 const MESSAGE_MAX = 300;
 
+/** Russian texts for the machine error codes of `POST /api/v1/servers/:id/players/:id/message`. */
+const SEND_ERROR_MESSAGES: Record<string, string> = {
+  forbidden: 'Недостаточно прав для отправки сообщений',
+  player_not_found: 'Игрок не найден',
+  player_not_addressable: 'Игрока нельзя адресовать: неизвестен его идентификатор в игре',
+  message_failed: 'Не удалось доставить сообщение на сервер',
+};
+
+function describeSendError(code: string | undefined, status: number): string {
+  return (code && SEND_ERROR_MESSAGES[code]) ?? `Не удалось отправить сообщение (HTTP ${status})`;
+}
+
 interface ServerOption {
   id: string;
   display_name: string;
@@ -129,7 +141,7 @@ export function DirectMessageModal({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+        throw new Error(describeSendError(body.error, res.status));
       }
       setFeedback({ kind: 'ok', text: 'Сообщение отправлено' });
       setMessage('');

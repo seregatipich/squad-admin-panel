@@ -2,6 +2,7 @@ import {
   isRoleColorHex,
   isRoleColorPaletteName,
   type RoleColor,
+  type RoleColorName,
 } from '@squad/shared-config/role-colors';
 
 /*
@@ -12,7 +13,7 @@ import {
  * поэтому набор задан здесь целиком: собрать `bg-${color}-500` в рантайме
  * нельзя, сканер Tailwind 4 читает исходники как текст и таких имён не видит.
  */
-const CLASS_MAP: Record<string, string> = {
+const CLASS_MAP: Record<RoleColorName, string> = {
   red: 'bg-red-500',
   rose: 'bg-rose-500',
   pink: 'bg-pink-500',

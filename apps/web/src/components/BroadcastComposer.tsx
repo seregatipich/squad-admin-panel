@@ -26,7 +26,21 @@ const BROADCAST_MAX = 300;
  * подтверждает `AlertDialog` с полным текстом: системный `confirm()` не даёт ни
  * ловушки фокуса, ни возврата фокуса на кнопку, а его вид зависит от браузера.
  */
-export function BroadcastComposer({ serverId, canChat }: { serverId: string; canChat: boolean }) {
+/**
+ * Composer for the server-wide in-game announcement.
+ *
+ * `serverName` fills the `{server}` template token; templates addressed to a single
+ * player (`{player}`) are not offered because a broadcast has no recipient to name.
+ */
+export function BroadcastComposer({
+  serverId,
+  serverName,
+  canChat,
+}: {
+  serverId: string;
+  serverName: string;
+  canChat: boolean;
+}) {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [message, setMessage] = useState('');
@@ -99,8 +113,8 @@ export function BroadcastComposer({ serverId, canChat }: { serverId: string; can
       <CardBody className="space-y-3">
         {showTemplates ? (
           <TemplatePicker
-            templates={templates}
-            context={{}}
+            templates={templates.filter((template) => !template.body.includes('{player}'))}
+            context={{ server: serverName }}
             onSelect={(text) => {
               setMessage(text.slice(0, BROADCAST_MAX));
               setShowTemplates(false);

@@ -64,32 +64,6 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 
 ---
 
-## Role editor — create
-
-1. Admin opens `/roles` (requires `role:view`) and clicks "Создать роль" (requires `role:create`).
-2. Browser navigates to `/roles/new`.
-3. `RoleEditor` renders with empty defaults. `GET /api/v1/permissions` loads the full permission registry.
-4. Admin fills in name, picks a color, optionally writes a description, checks permissions.
-5. Admin clicks "Создать".
-6. `POST /api/v1/roles` fires with `{name, color, description, permissions}`.
-7. On 409 (name taken): error message shown inline.
-8. On 201: `router.push('/roles')`.
-
----
-
-## Role editor — edit
-
-1. Admin opens `/roles` and clicks "Редактировать" on a role.
-2. Browser navigates to `/roles/:id`.
-3. Page fetches `GET /api/v1/roles/:id`; `RoleEditor` pre-fills with the fetched data.
-4. If the role is the system Owner role, `isOwner: true` is passed → the form is read-only, only a Back button is shown.
-5. For non-Owner roles: admin edits fields, clicks "Сохранить".
-6. `PUT /api/v1/roles/:id` fires.
-7. On 409 (name taken) or 400 (Owner protected): error shown inline.
-8. On 200: `router.push('/roles')`.
-
----
-
 ## Server delete + archive + restore
 
 ### Delete (from `/servers/[id]`)

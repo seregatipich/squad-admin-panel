@@ -124,6 +124,8 @@ export const ru = {
   'nav.lastPoll': 'Последний опрос: {when}',
 
   'login.heading': 'Squad Admin Panel',
+  'login.error.logoutFailed':
+    'Не удалось завершить сессию на сервере. Выход не выполнен, попробуйте ещё раз.',
   'login.error.authFailed': 'Не удалось проверить вход через Steam. Попробуйте ещё раз.',
   'login.error.notAuthorized':
     'Steam ID {steamId} не имеет доступа к панели. Обратитесь к администратору.',

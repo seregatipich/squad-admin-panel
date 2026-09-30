@@ -448,7 +448,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       {/* 3. Чат и объявления — то, что оператор отправляет в игру. */}
       <ChatPanel serverId={id} canBan={canBan} />
 
-      <BroadcastComposer serverId={server.id} canChat={canChat} />
+      <BroadcastComposer serverId={server.id} serverName={server.display_name} canChat={canChat} />
 
       <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 

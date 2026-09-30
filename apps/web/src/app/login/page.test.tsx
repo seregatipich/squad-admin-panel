@@ -36,6 +36,15 @@ describe('LoginPage', () => {
     );
   });
 
+  it('shows the logout_failed banner and does not probe the session', async () => {
+    window.history.replaceState({}, '', '/login?error=logout_failed');
+    render(<LoginPage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Не удалось завершить сессию на сервере/)).toBeInTheDocument(),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('interpolates the Steam ID into the not_authorized error', async () => {
     window.history.replaceState({}, '', '/login?error=not_authorized&steam_id64=76561198000000001');
     render(<LoginPage />);

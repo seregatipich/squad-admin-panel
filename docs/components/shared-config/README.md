@@ -12,7 +12,7 @@ The package exposes the full barrel (`@squad/shared-config`) and two browser-saf
 | `@squad/shared-config/role-colors` | `ROLE_COLORS`, `RoleColor`, `ROLE_COLOR_SET`, `isRoleColor` |
 | `@squad/shared-config/permissions` | `PERMISSIONS`, `PERMISSION_KEYS`, `PermissionDef`, `PermissionKey`, `isPermissionKey` |
 
-Client components (e.g. `RoleEditor`, `RoleColorDot`) import from the sub-paths to avoid pulling in `log-stream-sink.ts` which depends on `node:stream`.
+Client components (e.g. `RoleColorDot`, `MetricHistoryModal`) import from the sub-paths to avoid pulling in `log-stream-sink.ts` which depends on `node:stream`.
 
 ## Contents
 

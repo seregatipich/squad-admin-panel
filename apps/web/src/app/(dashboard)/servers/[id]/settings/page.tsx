@@ -527,17 +527,21 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           <TagInput
             tags={tags}
             onChange={async (newTags) => {
+              const previousTags = tags;
               setTags(newTags);
               try {
-                await fetch(`/api/v1/servers/${id}`, {
+                const res = await fetch(`/api/v1/servers/${id}`, {
                   method: 'PATCH',
                   credentials: 'include',
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ tags: newTags }),
                 });
+                if (res.ok) return;
               } catch {
-                /* best effort */
+                // Falls through to the rollback below.
               }
+              setTags(previousTags);
+              setErr('Не удалось сохранить теги');
             }}
           />
         </div>

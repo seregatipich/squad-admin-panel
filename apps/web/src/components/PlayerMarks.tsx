@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -62,19 +62,31 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [pendingClear, setPendingClear] = useState<PlayerMark | null>(null);
 
+  // The reference list of mark types does not depend on the player or on live events.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' });
+      if (res.ok && !cancelled) setTypes((await res.json()) as MarkTypeOption[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // A reload that finishes after the component moved to another player must not overwrite
+  // that player's marks, so every response is checked against the player it was requested for.
+  const currentPlayerId = useRef(playerId);
+  currentPlayerId.current = playerId;
+
   const reload = useCallback(async () => {
-    const [typesRes, marksRes] = await Promise.all([
-      fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' }),
-      fetch(`/api/v1/players/${playerId}/marks?include_cleared=true`, {
-        credentials: 'include',
-        cache: 'no-store',
-      }),
-    ]);
-    if (typesRes.ok) setTypes((await typesRes.json()) as MarkTypeOption[]);
-    if (marksRes.ok) {
-      const body = (await marksRes.json()) as { items: PlayerMark[] };
-      setMarks(body.items);
-    }
+    const res = await fetch(`/api/v1/players/${playerId}/marks?include_cleared=true`, {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { items: PlayerMark[] };
+    if (currentPlayerId.current === playerId) setMarks(body.items);
   }, [playerId]);
 
   useEffect(() => {
