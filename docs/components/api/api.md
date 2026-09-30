@@ -431,7 +431,7 @@ Aggregated logs from every panel component (api, workers, bridge events, depot/i
 |---|---|---|
 | GET | `/health` | Liveness — DB + Redis ping. |
 | GET | `/ready` | Readiness — also requires bridge ping success. |
-| GET | `/metrics` | Prometheus metrics from `prom-client`, labelled by route template (unmatched requests share `__unmatched__`). **Exception to this table: requires `host:metrics`** and is not routed by Caddy (#9). |
+| GET | `/metrics` | Prometheus metrics from `@prometheus-io/client`, labelled by route template (unmatched requests share `__unmatched__`). **Exception to this table: requires `host:metrics`** and is not routed by Caddy (#9). |
 | GET | `/api/v1/health/workers` | Per-worker `worker:heartbeat:{name}` aggregate (alive / age_ms / details). |
 | GET | `/api/v1/health/reconciler` | Status-reconciler diagnostics — `last_tick_at`, `last_tick_duration_ms`, `last_tick_servers_inspected`, `consecutive_tick_errors`, `stuck_servers[]` (rows in `starting`/`stopping`/`installing` with `updated_at` older than 90 s — `{id, status, updated_at, age_ms}`), `bridge_failures_by_server` (per-id consecutive `container_inspect` failures), and a derived `healthy` boolean (true ⇔ last tick within 12 s, no consecutive errors, no stuck rows). Unauthenticated, no permission gate — same threat model as `/health`. |
 

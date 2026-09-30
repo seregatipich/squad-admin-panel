@@ -145,4 +145,4 @@ docker compose logs api -f --tail=50
 curl -sk https://${APP_DOMAIN}/metrics | grep '^http_'
 ```
 
-`prom-client` ships HTTP duration buckets, route-level counters, and pool stats for Postgres and Redis under `/metrics`.
+`@prometheus-io/client` ships HTTP duration buckets, route-level counters, and pool stats for Postgres and Redis under `/metrics`.
