@@ -66,6 +66,29 @@ describe('RconClient', () => {
     expect(() => new RconClient(makeOpts())).not.toThrow();
   });
 
+  it('refuses a password with CR, LF or NUL before opening a socket (#34)', async () => {
+    const received: Buffer[] = [];
+    let connections = 0;
+    const server = createServer((sock) => {
+      connections++;
+      sock.on('data', (chunk) => received.push(chunk));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      for (const password of ['x\r\nSET session:forged 1', 'x\ny', 'x\u0000y']) {
+        const client = new RconClient(makeOpts({ port, password }));
+        await expect(client.connect()).rejects.toThrow(/line break or NUL/);
+        await client.close();
+      }
+      await sleep(50);
+      expect(connections).toBe(0);
+      expect(received).toHaveLength(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('exec() throws "rcon not connected" when not connected', async () => {
     const client = new RconClient(makeOpts());
     await expect(client.exec('ShowServerInfo')).rejects.toThrow('rcon not connected');

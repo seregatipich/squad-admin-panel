@@ -19,7 +19,7 @@ The worker:
 
 ## AUTO-1 (#72) — trigger rules
 
-- Loads enabled `automation_rules` (cached ~15s) and, for each event, builds a trigger input and evaluates every in-scope rule with the pure engine (`@squad/shared-types`'s `evaluate`). Event-driven conditions handled here: `player_count` (off `rcon.players_polled`), `player_flag` (off `player.connected`, flags resolved from the `players` row), and `time_of_day` (off any event, gated by a per-rule cooldown). The `chat_keyword` condition is evaluated in `@squad/worker-log-ingest` (chat is not on the event stream).
+- Loads enabled `automation_rules` (cached ~15s) and, for each event, builds a trigger input and evaluates every in-scope rule with the pure engine (`@squad/shared-types`'s `evaluate`). Event-driven conditions handled here: `player_count` (off `rcon.players_polled`, edge-triggered per server — fires when the condition becomes true, not on every poll), `player_flag` (off `player.connected`, flags resolved from the `players` row), and `time_of_day` (off any event, gated by a per-rule cooldown). The `chat_keyword` condition is evaluated in `@squad/worker-log-ingest` (chat is not on the event stream).
 - Executes a match's action via the shared `runMatch`: `rcon_command`/`kick`/`warn` enqueue an operator command onto `rcon:commands:<serverId>` for worker-rcon; `notify_admin` is recorded (durable admin-facing history) and logged.
 - Records every firing to `automation_runs` and `audit_log`. Rules are managed via `POST/PUT/DELETE /api/v1/automation-rules` and tested (without executing the action) via `POST /api/v1/automation-rules/:id/dry-run` — see [api.md](./api.md).
 
@@ -39,7 +39,7 @@ apps/workers/automation/
     loader.ts     — loadPlugins() + BUILTIN_PLUGINS (empty)
     dispatch.ts   — Redis consumer-group loop, permission gate, timeout/error isolation, dedup, onEnvelope hook
     rules/
-      runtime.ts  — AUTO-1: map an envelope → trigger input, evaluate rules, fire matches (time_of_day cooldown)
+      runtime.ts  — AUTO-1: map an envelope → trigger input, evaluate rules, fire matches (time_of_day cooldown, player_count edge latch)
       deps.ts     — AUTO-1: load rules, resolve player flags, enqueue RCON, record run + audit
       engine.ts   — re-exports the pure evaluate() from @squad/shared-types
       actions.ts  — re-exports the pure runMatch() from @squad/shared-types

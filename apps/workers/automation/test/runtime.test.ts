@@ -73,6 +73,8 @@ describe('processAutomationEnvelope — mapping & cooldown (mocked deps)', () =>
           setCalls.push(args);
           return 'OK';
         }),
+        del: vi.fn(async () => 0),
+        expire: vi.fn(async () => 1),
       } as never,
       ...overrides,
     };
@@ -148,6 +150,94 @@ describe('processAutomationEnvelope — mapping & cooldown (mocked deps)', () =>
     await processAutomationEnvelope(deps, envelope({ type: 'server.ready', payload: {} }));
     expect(setImpl).toHaveBeenCalledTimes(2);
     expect(fired).toHaveLength(1);
+  });
+});
+
+describe('processAutomationEnvelope — player_count is edge-triggered (real Redis, #34)', () => {
+  let redis: Redis;
+
+  beforeAll(() => {
+    redis = new Redis(
+      process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/13',
+    );
+  });
+
+  afterAll(async () => {
+    await redis?.quit().catch(() => undefined);
+  });
+
+  function edgeDeps(rule: AutomationRuleInput): { deps: AutomationRuntimeDeps; fired: string[] } {
+    const fired: string[] = [];
+    const deps: AutomationRuntimeDeps = {
+      loadRules: async () => [rule],
+      resolvePlayerFlags: async () => [],
+      runMatch: async (match) => {
+        fired.push(match.serverId ?? 'global');
+        return {
+          ruleId: match.ruleId,
+          serverId: match.serverId,
+          matched: {},
+          actionResult: {},
+          dryRun: false,
+          status: 'executed',
+        };
+      },
+      redis,
+    };
+    return { deps, fired };
+  }
+
+  const poll = (serverId: string, count: number) =>
+    envelope({
+      type: 'rcon.players_polled',
+      server_id: serverId,
+      payload: { players: Array.from({ length: count }, () => ({})) },
+    });
+
+  it('fires once while the count stays above the threshold, again only after it drops', async () => {
+    const rule = playerCountRule();
+    const serverId = randomUUID();
+    const { deps, fired } = edgeDeps(rule);
+
+    await processAutomationEnvelope(deps, poll(serverId, 3));
+    await processAutomationEnvelope(deps, poll(serverId, 3));
+    await processAutomationEnvelope(deps, poll(serverId, 4));
+    expect(fired).toHaveLength(1);
+
+    await processAutomationEnvelope(deps, poll(serverId, 1));
+    await processAutomationEnvelope(deps, poll(serverId, 3));
+    expect(fired).toHaveLength(2);
+
+    await redis.del(`automation:pc:${rule.id}:${serverId}`);
+  });
+
+  it('tracks the edge per server for a global rule', async () => {
+    const rule = playerCountRule();
+    const [serverA, serverB] = [randomUUID(), randomUUID()];
+    const { deps, fired } = edgeDeps(rule);
+
+    await processAutomationEnvelope(deps, poll(serverA, 3));
+    await processAutomationEnvelope(deps, poll(serverB, 3));
+    await processAutomationEnvelope(deps, poll(serverA, 3));
+    expect(fired).toEqual([serverA, serverB]);
+
+    await redis.del(`automation:pc:${rule.id}:${serverA}`, `automation:pc:${rule.id}:${serverB}`);
+  });
+
+  it('a player.connected event carries no count and never re-arms the latch', async () => {
+    const rule = playerCountRule();
+    const serverId = randomUUID();
+    const { deps, fired } = edgeDeps(rule);
+
+    await processAutomationEnvelope(deps, poll(serverId, 3));
+    await processAutomationEnvelope(
+      deps,
+      envelope({ type: 'player.connected', server_id: serverId, payload: {} }),
+    );
+    await processAutomationEnvelope(deps, poll(serverId, 3));
+    expect(fired).toHaveLength(1);
+
+    await redis.del(`automation:pc:${rule.id}:${serverId}`);
   });
 });
 

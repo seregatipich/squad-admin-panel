@@ -21,6 +21,7 @@ The plugin host (INT-4) itself has no tables — plugin registration is in-code 
 | `events:server:<id>` | read | Per-server event stream (discovered via `SCAN events:server:*`) |
 | `rcon:commands:<serverId>` | write | AUTO-1 actions (`rcon_command`/`kick`/`warn`) enqueue an operator command here for worker-rcon to run |
 | `automation:tod:<ruleId>` | read/write | Per-rule cooldown so a `time_of_day` rule fires at most once per window instead of on every event inside it |
+| `automation:pc:<ruleId>:<serverId>` | read/write/delete | Edge latch of a `player_count` rule (TTL 600 s, refreshed while the condition holds): set when the rule fires, deleted by the first roster poll on which it no longer matches |
 | `dedup:automation-dispatch:v1:<event_id>` | read/write | Consumer-side idempotency: an entry already claimed here is ack'd without re-dispatching |
 | `worker:heartbeat:automation` | write | Liveness heartbeat (`@squad/shared-config`'s `startHeartbeat`) |
 

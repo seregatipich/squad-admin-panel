@@ -27,3 +27,4 @@ Defined in `src/index.ts` / `src/rules/runtime.ts` (AUTO-1):
 |---|---:|---|
 | `RULES_CACHE_TTL_MS` | 15,000 | How long the enabled-rules snapshot is reused before reloading from Postgres |
 | `DEFAULT_TIME_OF_DAY_COOLDOWN_SECONDS` | 3,600 | Per-rule cooldown so a `time_of_day` rule fires at most once per window |
+| `PLAYER_COUNT_LATCH_TTL_SECONDS` | 600 | Lifetime of a `player_count` rule's per-server "already fired" latch; refreshed by every matching roster poll, so it lapses only when polls stop |
