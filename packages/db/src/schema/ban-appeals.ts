@@ -26,7 +26,7 @@ import { players } from './players.js';
  * best-effort at submit time, and approving an appeal without a resolved
  * player simply has no bans to revert.
  *
- * {@link trackingToken} is the applicant's only handle on the appeal: it is
+ * {@link trackingTokenHash} is the applicant's only handle on the appeal: it is
  * returned once at submission and is the sole key to the public status page.
  * Only the sha-256 hash of that value is stored (mirroring
  * `media_upload_tokens.token_hash` / `player_api_tokens.token_hash`), so a
@@ -57,7 +57,14 @@ export const banAppeals = pgTable(
     }),
     decisionNote: text('decision_note'),
     internalNote: text('internal_note'),
-    trackingTokenHash: text('tracking_token_hash').notNull(),
+    /**
+     * Legacy plaintext token, kept nullable only so the previous release still
+     * works after a rollback. The current release never writes it; drop it
+     * (and its unique index) in a later release.
+     */
+    trackingToken: text('tracking_token'),
+    /** sha-256 (base64url) of the tracking token; filled by trigger for legacy inserts. */
+    trackingTokenHash: text('tracking_token_hash'),
     submitterIp: inet('submitter_ip'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -65,6 +72,7 @@ export const banAppeals = pgTable(
   },
   (table) => ({
     numberKey: uniqueIndex('ban_appeals_number_key').on(table.number),
+    trackingTokenKey: uniqueIndex('ban_appeals_tracking_token_key').on(table.trackingToken),
     trackingTokenHashKey: uniqueIndex('ban_appeals_tracking_token_hash_key').on(
       table.trackingTokenHash,
     ),

@@ -355,6 +355,7 @@ Programmatic bearer tokens for automation scripts and external integrations. The
 | Name | Columns |
 |---|---|
 | `player_api_tokens_steam_id64_idx` | `steam_id64` |
+| `player_api_tokens_token_hash_key` | `token_hash` (UNIQUE; serves the Bearer-token lookup on every authenticated request) |
 
 **Example row:**
 
@@ -820,7 +821,8 @@ MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so ro
 | `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
 | `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
 | `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
-| `tracking_token` | `text` | NO | | `randomBytes(24).toString('base64url')`; returned once, the applicant's only handle |
+| `tracking_token` | `text` | YES | `null` | **Legacy plaintext**, kept nullable (migration `0119`) so the previous release still works after a rollback; the current release never writes it. Dropped with its index in a later release |
+| `tracking_token_hash` | `text` | YES | `null` | base64url SHA-256 of the `randomBytes(24).toString('base64url')` token that is returned once as the applicant's only handle; backfilled for existing rows, and a `BEFORE INSERT` trigger (`ban_appeals_fill_tracking_token_hash`) derives it from a legacy plaintext insert |
 | `submitter_ip` | `inet` | YES | `null` | Abuse forensics |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
@@ -829,11 +831,32 @@ MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so ro
 **Indexes**
 
 - `ban_appeals_number_key` UNIQUE on `(number)`
-- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)`
+- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)` (legacy, dropped with the column later)
+- `ban_appeals_tracking_token_hash_key` UNIQUE on `(tracking_token_hash)` — the public status page looks appeals up by the hash of the URL token
 - `ban_appeals_status_created_idx` on `(status, created_at)`
 - `ban_appeals_player_idx` on `(player_id)`
 - `ban_appeals_action_idx` on `(moderation_action_id)`
 - `ban_appeals_open_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status IN ('pending','in_review')` — one open appeal per SteamID64
+
+## `geoip_settings`
+
+Singleton row (`id = 00000000-0000-0000-0000-0000006e01ff`, `GEOIP_SETTINGS_SINGLETON_ID`) holding the MaxMind GeoLite2 configuration, managed through `GET`/`PUT /api/v1/integrations/geoip` (`integration:manage`; an unauthenticated request gets `401`).
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | | Singleton id |
+| `account_id` | `text` | YES | `null` | MaxMind account id. **Required for refresh**: the download endpoint (`https://download.maxmind.com/geoip/databases/GeoLite2-City/download`) authenticates with HTTP Basic (account id + license key), so a license key without an account id is treated as no credentials |
+| `license_key_encrypted` | `bytea` | YES | `null` | License key, AES-256-GCM; sent only in the `Authorization` header, never in the URL |
+| `db_path` | `text` | YES | `null` | Where the refreshed MMDB was stored |
+| `last_refreshed_at` | `timestamptz` | YES | `null` | Last successful refresh |
+| `enabled` | `boolean` | NO | `false` | |
+| `key_version` | `integer` | NO | `1` | |
+| `country_switch_window_hours` | `integer` | NO | `24` | Geo-anomaly threshold |
+| `multi_country_threshold` | `integer` | NO | `3` | Geo-anomaly threshold |
+| `updated_at` | `timestamptz` | NO | `now()` | |
+
+`refreshGeoLite2Db` (`packages/db/src/geoip/refresh.ts`) returns one of `skipped_no_key` (account id or license key missing), `download_failed` (non-2xx HTTP status), `archive_too_large` (the archive exceeds `GEOIP_MAX_ARCHIVE_BYTES`, 200 MiB, by `Content-Length` or after buffering) or `ok`. The request aborts after `GEOIP_DOWNLOAD_TIMEOUT_MS` (30 s).
+
 ## Balancer tables (GAME-2)
 
 GAME-2 (#81) team balancer, migration `0103_balancer`. The panel is a **review
