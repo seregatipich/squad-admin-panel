@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -79,7 +79,7 @@ describe('DiscordLinkSection', () => {
       stubFetch(401);
       const { container } = render(<DiscordLinkSection playerId="player-alpha" me={SELF} />);
 
-      await vi.waitFor(() => expect(container).toBeEmptyDOMElement());
+      await waitFor(() => expect(container).toBeEmptyDOMElement());
     },
     TEST_TIMEOUT_MS,
   );
@@ -90,7 +90,7 @@ describe('DiscordLinkSection', () => {
       stubFetch(403);
       const { container } = render(<DiscordLinkSection playerId="player-alpha" me={SELF} />);
 
-      await vi.waitFor(() => expect(container).toBeEmptyDOMElement());
+      await waitFor(() => expect(container).toBeEmptyDOMElement());
     },
     TEST_TIMEOUT_MS,
   );

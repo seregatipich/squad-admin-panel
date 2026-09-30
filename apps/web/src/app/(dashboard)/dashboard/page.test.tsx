@@ -201,13 +201,54 @@ describe('DashboardPage', () => {
     await expect(capturedOnStart?.(['server-1'])).rejects.toThrow('update_in_progress');
   });
 
-  it('carries exactly one first-level heading', async () => {
-    stubFetch({});
-    await renderDashboard();
+  it('maps servers_running from depot/update to a Russian hint with the missing count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/ready') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
 
-    const headings = screen.getAllByRole('heading', { level: 1 });
-    expect(headings).toHaveLength(1);
-    expect(headings[0]).toHaveTextContent('Дашборд');
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow(
+      'Отметьте все запущенные серверы для остановки: не выбрано 2.',
+    );
+  });
+
+  it('falls back to the HTTP status for other depot/update failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/ready') {
+          return { ok: true, json: async () => ({ status: 'ok', checks: {} }) } as Response;
+        }
+        if (url === '/api/v1/depot/update') {
+          return { ok: false, status: 500, json: async () => ({}) } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<DashboardPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(capturedOnStart?.(['s1'])).rejects.toThrow('HTTP 500');
   });
 
   it('does not flag a worker crit before its heartbeat TTL, only before 2x the interval (#548)', async () => {

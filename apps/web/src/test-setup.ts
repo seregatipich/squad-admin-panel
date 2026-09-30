@@ -16,10 +16,10 @@ import '@testing-library/jest-dom/vitest';
  * real host contention: several suites here run in parallel worker threads,
  * and a component whose `useEffect` fetch only resolves a macrotask or two
  * late (GC pause, scheduler backlog) can miss the window even though nothing
- * about the component is actually broken. Every call already uses
- * `findBy*`/`waitFor` correctly (no bare fixed `setTimeout` waits) — the gap
- * is purely this thin default margin — so raising it here, once, gives every
- * test file headroom without touching the tests themselves.
+ * about the component is actually broken. This covers testing-library's
+ * `findBy*`/`waitFor` only: vitest's own `vi.waitFor` keeps its separate 1000ms
+ * default and must be given `{ timeout }` explicitly (or replaced with the
+ * testing-library `waitFor`) where a suite still uses it.
  */
 configure({ asyncUtilTimeout: 5000 });
 

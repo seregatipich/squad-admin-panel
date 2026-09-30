@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SubscriptionGrantSection } from './SubscriptionGrantSection';
@@ -180,7 +180,7 @@ describe('SubscriptionGrantSection', () => {
       stubApi([{ match: '/subscriptions', status: 403 }]);
       const { container } = render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await vi.waitFor(() => expect(container).toBeEmptyDOMElement());
+      await waitFor(() => expect(container).toBeEmptyDOMElement());
     },
     TEST_TIMEOUT_MS,
   );
@@ -191,7 +191,7 @@ describe('SubscriptionGrantSection', () => {
       stubApi([{ match: '/subscriptions', status: 401 }]);
       const { container } = render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await vi.waitFor(() => expect(container).toBeEmptyDOMElement());
+      await waitFor(() => expect(container).toBeEmptyDOMElement());
     },
     TEST_TIMEOUT_MS,
   );

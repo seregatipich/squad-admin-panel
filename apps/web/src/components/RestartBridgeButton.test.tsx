@@ -118,8 +118,14 @@ describe('RestartBridgeButton', () => {
     render(<RestartBridgeButton />);
     openDialog();
     fireEvent.click(confirmButton());
-    await vi.waitFor(() =>
-      expect(screen.getByText('Агент перезапускается. Ожидание подключения…')).toBeInTheDocument(),
+    // vi.waitFor не читает asyncUtilTimeout из testing-library: свой лимит 1 с
+    // приходится задавать явно, иначе под нагрузкой хоста тест мигает.
+    await vi.waitFor(
+      () =>
+        expect(
+          screen.getByText('Агент перезапускается. Ожидание подключения…'),
+        ).toBeInTheDocument(),
+      { timeout: 5000 },
     );
     act(() => {
       vi.advanceTimersByTime(8_000);
