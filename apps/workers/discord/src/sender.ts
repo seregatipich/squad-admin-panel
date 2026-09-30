@@ -3,6 +3,7 @@ import { discordMessageTemplates, discordWebhooks, servers } from '@squad/db/sch
 import {
   type DiscordEmbedTemplate,
   defaultDiscordTemplate,
+  isDiscordEmbedTemplate,
   renderDiscordTemplate,
 } from '@squad/shared-config';
 import type { EventEnvelope } from '@squad/shared-types';
@@ -180,7 +181,7 @@ async function resolveTemplate(
     .where(eq(discordMessageTemplates.eventType, discordType))
     .limit(1);
   const row = rows[0];
-  if (row) return row.template as DiscordEmbedTemplate;
+  if (row && isDiscordEmbedTemplate(row.template)) return row.template;
   const fallback = defaultDiscordTemplate(discordType);
   return fallback?.template ?? null;
 }

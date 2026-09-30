@@ -6,6 +6,22 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
+### Заметки игрока переживают удаление автора (migration 0137, #78, 1137)
+
+**Files:** `packages/db/drizzle/0137_player_notes_author_set_null.sql`, `packages/db/src/schema/player-notes.ts`, `apps/api/test/notes-deleted-author.test.ts`
+
+- `player_notes.author_id` стал nullable, FK `player_notes_author_id_players_id_fk` пересоздан с `ON DELETE SET NULL` (было `CASCADE`: удаление игрока-автора стирало все его заметки о других игроках).
+- Совместимо с предыдущим релизом: ослабляется ограничение, данные не меняются; внутренние join'ы прежних маршрутов просто пропускают заметку без автора.
+
+### Схема TS приведена к фактическому DDL, jsonb типизированы (#78, 1123, 1126, 1127)
+
+**Files:** `packages/db/src/schema/{events,combat-events,players,vip-tiers,seasons,servers,discord,external-ban-sources}.ts`, `packages/db/test/schema-ddl-parity.test.ts`
+
+- Объявлены индексы `events_seeding_kind_occurred_idx` (без `INCLUDE`, его drizzle не выражает), `combat_events_match_uuid_occurred_idx`, `players_bonus_balance_desc_idx`, `vip_tiers_role_id_idx`, `vip_tiers_purchasable_idx`, `seasons_start_day_key` и CHECK-и `vip_tiers_*` и `discord_message_templates_event_type_chk`/`_locale_chk`; `servers_status_enum` переименован в фактическое имя `servers_status_check`. DDL не менялся.
+- `schema-ddl-parity.test.ts` сверяет мигрированную БД (`pg_indexes`, `pg_constraint`) с объявлениями в схеме в обе стороны; оставшиеся необъявленные CHECK-и перечислены в тесте явным списком.
+- `discord_message_templates.template` типизирован как `DiscordEmbedTemplate`, `external_ban_sources.parser_config` как `Record<string, unknown>`: касты `as` у потребителей убраны.
+- `discord_message_templates.locale` остаётся описательной меткой языка текста шаблона, а не ключом выбора: `event_type` уникален, один шаблон на событие. Мультиязычность потребовала бы ослабить уникальность до `(event_type, locale)`, что ломает однострочные выборки предыдущего релиза; решение отложено до двухрелизной миграции.
+
 ### Неиспользуемые индексы и один open-снимок балансировщика (migration 0136, #78)
 
 **Files:** `packages/db/drizzle/0136_index_cleanup_balancer_open_key.sql`, `packages/db/src/schema/{balancer-proposals,external-ban-sources,media-upload-tokens,reporter-stats,sessions,diagnostic-events}.ts`, `packages/db/test/index-cleanup.migration.test.ts`

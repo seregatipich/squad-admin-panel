@@ -9,9 +9,8 @@ export const playerNotes = pgTable(
     playerId: uuid('player_id')
       .notNull()
       .references(() => players.id, { onDelete: 'cascade' }),
-    authorId: uuid('author_id')
-      .notNull()
-      .references(() => players.id, { onDelete: 'cascade' }),
+    /** `null` once the author's player row was deleted; the note itself is kept. */
+    authorId: uuid('author_id').references(() => players.id, { onDelete: 'set null' }),
     body: text('body').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),

@@ -1,5 +1,11 @@
 # `shared-config` — changelog
 
+## 2026-09-30 — Проверка формы шаблона Discord (#78)
+
+### Added
+
+- `isDiscordEmbedTemplate(value)` в `discord-template.ts`: структурная проверка jsonb-значения шаблона для потребителей без zod (воркер discord). Тест: `test/discord-template.test.ts`.
+
 ## 2026-09-27 — Аудит маршрутов API (#38)
 
 ### Added
