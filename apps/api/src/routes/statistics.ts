@@ -250,6 +250,9 @@ type DailyRow = {
   peak_admins: number;
 };
 
+/** Numeric `server_daily_stats` columns charted as per-server daily series; a typo in a metric name fails typecheck. */
+type DailyMetric = Exclude<keyof DailyRow, 'server_id' | 'day' | 'modes' | 'maps'>;
+
 /** `${serverId}|${key}` → value, the lookup shape {@link buildSeries} consumes. */
 type Grid = Map<string, number>;
 
@@ -309,13 +312,13 @@ async function computeStatistics(
   // parameter, which produces invalid SQL.
   const filter = requested.length > 0 ? requested.join(',') : null;
 
-  const serverRows = (await app.db.execute<{ id: string; display_name: string }>(sql`
+  const serverRows = await app.db.execute<{ id: string; display_name: string }>(sql`
     SELECT s.id, s.display_name
     FROM servers s
     WHERE s.deleted_at IS NULL
       AND (${filter}::text IS NULL OR s.id = ANY(string_to_array(${filter}::text, ',')::uuid[]))
     ORDER BY s.display_name ASC, s.id ASC
-  `)) as unknown as Array<{ id: string; display_name: string }>;
+  `);
 
   const serverIds = serverRows.map((row) => row.id);
   const serverIdCsv = serverIds.join(',');
@@ -327,16 +330,16 @@ async function computeStatistics(
   const dailyRows =
     serverIds.length === 0
       ? []
-      : ((await app.db.execute<DailyRow>(sql`
+      : await app.db.execute<DailyRow>(sql`
           SELECT server_id, day::text AS day, avg_online, peak_online, avg_queue, matches,
                  modes, maps, new_players, chat_messages, teamkills, punishments,
                  avg_admins, peak_admins
           FROM server_daily_stats
           WHERE day >= ${fromDay}::date AND day <= ${toDay}::date
             AND server_id = ANY(string_to_array(${serverIdCsv}::text, ',')::uuid[])
-        `)) as unknown as DailyRow[]);
+        `);
 
-  const grids: Record<string, Grid> = {
+  const grids: Record<DailyMetric, Grid> = {
     avg_online: new Map(),
     peak_online: new Map(),
     avg_queue: new Map(),
@@ -354,16 +357,16 @@ async function computeStatistics(
 
   for (const row of dailyRows) {
     const cell = gridKey(row.server_id, row.day);
-    grids.avg_online?.set(cell, Number(row.avg_online));
-    grids.peak_online?.set(cell, Number(row.peak_online));
-    grids.avg_queue?.set(cell, Number(row.avg_queue));
-    grids.matches?.set(cell, Number(row.matches));
-    grids.new_players?.set(cell, Number(row.new_players));
-    grids.chat_messages?.set(cell, Number(row.chat_messages));
-    grids.teamkills?.set(cell, Number(row.teamkills));
-    grids.punishments?.set(cell, Number(row.punishments));
-    grids.avg_admins?.set(cell, Number(row.avg_admins));
-    grids.peak_admins?.set(cell, Number(row.peak_admins));
+    grids.avg_online.set(cell, Number(row.avg_online));
+    grids.peak_online.set(cell, Number(row.peak_online));
+    grids.avg_queue.set(cell, Number(row.avg_queue));
+    grids.matches.set(cell, Number(row.matches));
+    grids.new_players.set(cell, Number(row.new_players));
+    grids.chat_messages.set(cell, Number(row.chat_messages));
+    grids.teamkills.set(cell, Number(row.teamkills));
+    grids.punishments.set(cell, Number(row.punishments));
+    grids.avg_admins.set(cell, Number(row.avg_admins));
+    grids.peak_admins.set(cell, Number(row.peak_admins));
 
     const weekdayCell = gridKey(row.server_id, weekdayKeyOf(row.day));
     const bucket = weekdaySums.get(weekdayCell) ?? { sum: 0, days: 0 };
@@ -386,7 +389,7 @@ async function computeStatistics(
   const hourRows =
     serverIds.length === 0
       ? []
-      : ((await app.db.execute<{ server_id: string; hour: number; seconds: number | string }>(sql`
+      : await app.db.execute<{ server_id: string; hour: number; seconds: number | string }>(sql`
           SELECT seg.server_id,
                  (seg.hour_number % 24)::int AS hour,
                  SUM(seg.seconds)::bigint AS seconds
@@ -434,7 +437,7 @@ async function computeStatistics(
           ) seg
           WHERE seg.seconds > 0
           GROUP BY seg.server_id, hour
-        `)) as unknown as Array<{ server_id: string; hour: number; seconds: number | string }>);
+        `);
 
   const hourGrid: Grid = new Map();
   const hourDenominator = Math.max(1, days.length) * HOUR_SECONDS;
@@ -443,8 +446,7 @@ async function computeStatistics(
     hourGrid.set(gridKey(row.server_id, key), Number(row.seconds) / hourDenominator);
   }
 
-  const daily = (metric: string) =>
-    buildSeries(days, serverIds, readGrid(grids[metric] ?? new Map()));
+  const daily = (metric: DailyMetric) => buildSeries(days, serverIds, readGrid(grids[metric]));
 
   return {
     days,

@@ -183,9 +183,9 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
   }
 
   async function loadApplication(id: string): Promise<ApplicationRow | null> {
-    const rows = (await baseSelection()
+    const rows: ApplicationRow[] = await baseSelection()
       .where(eq(whitelistApplications.id, id))
-      .limit(1)) as unknown as ApplicationRow[];
+      .limit(1);
     return rows[0] ?? null;
   }
 
@@ -252,8 +252,8 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             verified: true,
           })
           .returning({ id: whitelistApplications.id });
-        // biome-ignore lint/style/noNonNullAssertion: insert...returning yields the row
-        const loaded = await loadApplication(inserted!.id);
+        if (!inserted) throw new Error('whitelist_applications insert returned no row');
+        const loaded = await loadApplication(inserted.id);
         if (!loaded) throw new Error('whitelist_applications insert returned no row');
         created = loaded;
       } catch (err) {
@@ -341,11 +341,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         .where(where);
       const total = countRows[0]?.total ?? 0;
 
-      const rows = (await baseSelection()
+      const rows: ApplicationRow[] = await baseSelection()
         .where(where)
         .orderBy(desc(whitelistApplications.createdAt), desc(whitelistApplications.id))
         .limit(pageSize)
-        .offset((page - 1) * pageSize)) as unknown as ApplicationRow[];
+        .offset((page - 1) * pageSize);
 
       return {
         items: rows.map(serializeApplication),
@@ -395,8 +395,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'application_not_pending' };
         }
         const updated = await loadApplication(existing.id);
-        // biome-ignore lint/style/noNonNullAssertion: row exists, just updated
-        const after = serializeApplication(updated!);
+        if (!updated) {
+          reply.code(404);
+          return { error: 'not_found' };
+        }
+        const after = serializeApplication(updated);
         await writeAuditEntry(app.db, {
           actor: actorFrom(req),
           actorIp: req.ip ?? null,
@@ -519,8 +522,11 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const updated = await loadApplication(existing.id);
-      // biome-ignore lint/style/noNonNullAssertion: row exists, just updated
-      const after = serializeApplication(updated!);
+      if (!updated) {
+        reply.code(404);
+        return { error: 'not_found' };
+      }
+      const after = serializeApplication(updated);
       await writeAuditEntry(app.db, {
         actor: actorFrom(req),
         actorIp: req.ip ?? null,

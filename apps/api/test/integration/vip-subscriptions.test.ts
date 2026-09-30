@@ -394,8 +394,14 @@ describeIfDb('VIPSUB-5 self-service one-off purchase', () => {
     expect(ledger[0]?.amount).toBe(-TIER_PRICE);
     expect(ledger[0]?.referenceId).toBe(tierId);
 
-    const audit = await assertAuditRow(h, { action: 'me.purchase.create' });
+    const audit = await assertAuditRow(h, { action: 'me.purchase.create', targetId: playerId });
     expect(audit.actorPlayerId).toBe(playerId);
+    expect(audit.afterSnapshot).toMatchObject({
+      tier_id: tierId,
+      price_bonuses: TIER_PRICE,
+      renews_every_days: TIER_DAYS,
+      balance: 150,
+    });
   });
 
   it('refuses a purchase the balance cannot cover and leaves the balance intact', async () => {
@@ -508,8 +514,17 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
       (stored.roleExpiresAt as Date).getTime() - VIP_RENEWAL_LEAD_MS,
     );
 
-    const audit = await assertAuditRow(h, { action: 'me.subscription.create' });
+    const audit = await assertAuditRow(h, {
+      action: 'me.subscription.create',
+      targetId: playerId,
+    });
     expect(audit.actorPlayerId).toBe(playerId);
+    expect(audit.afterSnapshot).toMatchObject({
+      tier_id: tierId,
+      price_bonuses: TIER_PRICE,
+      renews_every_days: TIER_DAYS,
+      subscription_id: body.subscription.id,
+    });
   });
 
   it('keeps the snapshot price when the catalog is repriced afterwards', async () => {
@@ -601,7 +616,12 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
     expect(sub?.status).toBe('cancelled');
     expect(sub?.cancelledAt).toBeTruthy();
 
-    await assertAuditRow(h, { action: 'me.subscription.cancel', targetId: subId });
+    const cancelAudit = await assertAuditRow(h, {
+      action: 'me.subscription.cancel',
+      targetId: subId,
+    });
+    expect(cancelAudit.beforeSnapshot).toMatchObject({ status: 'active', tier_id: tierId });
+    expect(cancelAudit.afterSnapshot).toMatchObject({ status: 'cancelled' });
   });
 
   it("refuses to cancel another player's subscription", async () => {
@@ -739,7 +759,16 @@ describeIfDb('VIPSUB-5 admin subscription grant', () => {
     expect(sub?.priceBonuses).toBe(TIER_PRICE);
     expect((await storedPlayer(playerId)).roleId).toBe(vipRoleId);
 
-    await assertAuditRow(h, { action: 'player.subscription.grant', targetId: playerId });
+    const grantAudit = await assertAuditRow(h, {
+      action: 'player.subscription.grant',
+      targetId: playerId,
+    });
+    expect(grantAudit.afterSnapshot).toMatchObject({
+      tier_id: tierId,
+      price_bonuses: TIER_PRICE,
+      renews_every_days: TIER_DAYS,
+      subscription_id: sub?.id,
+    });
   });
 
   it('honours explicit renews_every_days and price_bonuses overrides', async () => {
