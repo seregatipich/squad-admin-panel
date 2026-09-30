@@ -31,6 +31,18 @@ x-hardening: &hardening
   # Bound fork bombs and reap zombies in every hardened service.
   pids_limit: 256
   init: true
+  # Read-only root filesystem: the services write only to their volumes and
+  # bind mounts (checked with `docker diff` on the stand). /tmp is an
+  # in-memory scratch directory; web adds its Next.js cache next to it.
+  read_only: true
+  tmpfs: ['/tmp']
+
+# Resource limits sized from the usage measured on the stand after two days of
+# uptime (workers 20-50 MiB, worker-diag-flush 116 MiB), with generous headroom.
+# See docs/operations/deployment.md for how to change them.
+x-worker-limits: &worker-limits
+  mem_limit: 512m
+  cpus: 1.0
 
 services:
   postgres:
@@ -38,6 +50,7 @@ services:
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
     pids_limit: 256
+    mem_limit: 4g
     # The per-process pools (DATABASE_POOL_MAX) sum to ~134 connections, more
     # than the stock limit of 100 connections (#1097).
     command: ['postgres', '-c', 'max_connections=200']
@@ -71,6 +84,7 @@ services:
     # embedded in redis:// URLs below, so keep them URL-safe (hex).
     security_opt: ['no-new-privileges:true']
     pids_limit: 256
+    mem_limit: 1g
     # Redis Streams carry the domain events and consumer-group offsets, so the
     # stand persists every write to the AOF like docker/compose.yml (#47).
     # Redis started with --appendonly yes ignores an existing dump.rdb and
@@ -97,6 +111,7 @@ services:
           wait "$$pid" || true
         fi
         exec docker-entrypoint.sh redis-server --appendonly yes --save 60 1 \
+          --maxmemory 768mb --maxmemory-policy noeviction \
           --requirepass '${REDIS_PASSWORD:?REDIS_PASSWORD must be set (see .env.example)}' \
           --user rnsquadjs on '>${REDIS_SIDECAR_PASSWORD:?REDIS_SIDECAR_PASSWORD must be set (see .env.example)}' \
           resetchannels '~events:server:*' '~rnsquadjs:status:*' '~worker:heartbeat:rnsquadjs:*' \
@@ -142,6 +157,8 @@ services:
     # chown of the rnsquadjs sidecar config to the sidecar uid (lib/rnsquadjs.ts).
     cap_add: ['CHOWN']
     <<: *hardening
+    mem_limit: 1g
+    cpus: 2.0
     environment:
       NODE_ENV: production
       API_HOST: 0.0.0.0
@@ -219,7 +236,7 @@ services:
   worker-log-ingest:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: log-ingest
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -247,7 +264,7 @@ services:
   worker-config-sync:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: config-sync
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -268,7 +285,7 @@ services:
   worker-rcon:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     network_mode: host
     environment:
       WORKER: rcon
@@ -291,7 +308,7 @@ services:
   worker-audit-archiver:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: audit-archiver
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -304,7 +321,7 @@ services:
   worker-event-partition:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: event-partition
       # Always the schema owner: it creates and drops partitions (DDL).
@@ -318,7 +335,7 @@ services:
   worker-presence-daily:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: presence-daily
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -331,7 +348,7 @@ services:
   worker-role-expirer:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: role-expirer
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -349,7 +366,7 @@ services:
   worker-seed-reward:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: seed-reward
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -368,7 +385,7 @@ services:
   worker-steam-refresh:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: steam-refresh
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -388,7 +405,7 @@ services:
   worker-media-publisher:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: media-publisher
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -417,7 +434,7 @@ services:
   worker-clan-guard:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: clan-guard
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -435,7 +452,7 @@ services:
   worker-automation:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: automation
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -450,7 +467,7 @@ services:
   worker-scheduler:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: scheduler
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -472,7 +489,7 @@ services:
   worker-ban-sync:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: ban-sync
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -489,7 +506,7 @@ services:
   worker-clan-priority-expirer:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: clan-priority-expirer
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -505,7 +522,7 @@ services:
   worker-leaderboard-aggregator:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: leaderboard-aggregator
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -520,7 +537,7 @@ services:
   worker-diag-flush:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: diag-flush
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -545,7 +562,7 @@ services:
   worker-metrics-sampler:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: metrics-sampler
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -562,7 +579,7 @@ services:
   worker-discord:
     image: ${WORKERS_IMAGE:?WORKERS_IMAGE_is_required}
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       WORKER: discord
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
@@ -581,6 +598,13 @@ services:
     image: ${WEB_IMAGE:?WEB_IMAGE_is_required}
     restart: unless-stopped
     <<: *hardening
+    mem_limit: 1g
+    cpus: 2.0
+    # next start writes its image-optimisation cache here; owned by the image's
+    # unprivileged node user (uid 1000).
+    tmpfs:
+      - /tmp
+      - /app/apps/web/.next/cache:uid=1000,gid=1000
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
@@ -610,6 +634,7 @@ services:
     # Binds :80/:443 as root inside the container.
     cap_add: ['NET_BIND_SERVICE']
     <<: *hardening
+    mem_limit: 256m
     ports:
       - '443:443'
     environment:
