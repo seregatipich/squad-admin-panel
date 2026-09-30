@@ -263,6 +263,8 @@ describe('isDiscordEmbedTemplate (#1126)', () => {
     ['fields that are not an array', { ...banTemplate, fields: 'x' }],
     ['a malformed field', { ...banTemplate, fields: [{ name: 'a', value: 1, inline: true }] }],
     ['a non-string url', { ...banTemplate, url: 5 }],
+    ['a null field', { ...banTemplate, fields: [null] }],
+    ['a non-object field', { ...banTemplate, fields: ['name'] }],
   ])('rejects %s', (_label, value) => {
     expect(isDiscordEmbedTemplate(value)).toBe(false);
   });
