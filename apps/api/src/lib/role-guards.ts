@@ -199,12 +199,17 @@ export function capabilitiesBeyondActor(
   return beyond.sort();
 }
 
-/** Response body for a request refused by the privilege ceiling. */
+/**
+ * Response body for a request refused by the privilege ceiling. The offending
+ * capabilities are listed under `capabilities` and, for clients of the role
+ * hierarchy refusals (`role-hierarchy.ts`), under `missing` as well.
+ */
 export function roleCeilingError(beyond: readonly RoleCapability[]): {
   error: 'role_exceeds_actor_permissions';
   capabilities: readonly RoleCapability[];
+  missing: readonly RoleCapability[];
 } {
-  return { error: 'role_exceeds_actor_permissions', capabilities: beyond };
+  return { error: 'role_exceeds_actor_permissions', capabilities: beyond, missing: beyond };
 }
 
 /**

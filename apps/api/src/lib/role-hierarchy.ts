@@ -30,6 +30,8 @@ export interface RoleHierarchyRefusal {
     | 'role_exceeds_actor_permissions'
     | 'target_outranks_actor';
   missing?: string[];
+  /** Same list as `missing`, under the name the privilege-ceiling refusals (`role-guards.ts`) use. */
+  capabilities?: string[];
 }
 
 /**
@@ -110,5 +112,7 @@ export function checkGrantsWithinActor(
   if (!actor) return { error: 'role_exceeds_actor_permissions' };
   if (actor.permissions.isOwner) return null;
   const missing = grantsBeyond(actor.permissions, role);
-  return missing.length > 0 ? { error: 'role_exceeds_actor_permissions', missing } : null;
+  return missing.length > 0
+    ? { error: 'role_exceeds_actor_permissions', missing, capabilities: missing }
+    : null;
 }

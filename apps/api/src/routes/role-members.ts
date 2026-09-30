@@ -202,11 +202,6 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403);
         return { error: 'owner_assignment_forbidden' };
       }
-      const beyond = await roleGrantBeyondActor(app.db, role.id, req.user?.permissions);
-      if (beyond.length > 0) {
-        reply.code(403);
-        return roleCeilingError(beyond);
-      }
       const playerId = req.body.player_id;
       const rawComment = req.body.comment?.trim() ?? null;
       const comment = rawComment === '' ? null : rawComment;
@@ -226,6 +221,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       if (hierarchyRefusal) {
         reply.code(403);
         return hierarchyRefusal;
+      }
+      // After the hierarchy check so a self-assignment reads `cannot_change_own_role`.
+      const beyond = await roleGrantBeyondActor(app.db, role.id, req.user?.permissions);
+      if (beyond.length > 0) {
+        reply.code(403);
+        return roleCeilingError(beyond);
       }
       await app.db.transaction(async (tx) => {
         await tx

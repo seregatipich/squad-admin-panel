@@ -406,11 +406,6 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           reply.code(403);
           return { error: 'owner_assignment_forbidden' };
         }
-        const beyond = await roleGrantBeyondActor(app.db, target.id, req.user?.permissions);
-        if (beyond.length > 0) {
-          reply.code(403);
-          return roleCeilingError(beyond);
-        }
         newRolePanelAccess = target.panelAccess;
       }
 
@@ -437,6 +432,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       if (hierarchyRefusal) {
         reply.code(403);
         return hierarchyRefusal;
+      }
+      // Runs after the hierarchy check so a self-assignment is reported as
+      // `cannot_change_own_role`; the ceiling here also covers explicit grants.
+      if (newRoleId !== null) {
+        const beyond = await roleGrantBeyondActor(app.db, newRoleId, req.user?.permissions);
+        if (beyond.length > 0) {
+          reply.code(403);
+          return roleCeilingError(beyond);
+        }
       }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;

@@ -149,6 +149,15 @@ export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<Pe
 
 const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
 
+/**
+ * Flag-gated keys a role may also hold through an explicit `role_permissions`
+ * row, without the flag that derives them.
+ */
+const EXPLICITLY_GRANTABLE_GATED_KEYS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  ...PANEL_PERMS_GATED_BY_TRIGGER_EDIT,
+  ...PANEL_PERMS_GATED_BY_EDIT_OR_GRANT,
+]);
+
 /** The role flags {@link keyPassesFlagGates} checks a key against. */
 interface RoleFlagGates {
   canAssignRoles: boolean;
@@ -388,11 +397,16 @@ export function buildRolePermissionContext(
   };
 
   const permissions = derivePanelPermissions(panelAccess, isOwner, flags);
-  // Explicit rows are legacy (no route writes them; migration 0122 wiped the
-  // stored ones) and pass the same flag gates as the derived set, so a stray
-  // row can never grant a key the role's flags withhold (#36).
+  // Explicit rows pass the same flag gates as the derived set, so a stray row
+  // can never grant a key the role's flags withhold (#36). The two keys whose
+  // gate is documented as "or an explicit grant" — `trigger:edit` (#111) and
+  // `message_template:manage` (#70) — are the exception: an explicit row is
+  // their intended way to reach a role without also handing it role editing.
   for (const key of explicitKeys) {
-    if (isPermissionKey(key) && keyPassesFlagGates(key, flags)) permissions.add(key);
+    if (!isPermissionKey(key)) continue;
+    if (EXPLICITLY_GRANTABLE_GATED_KEYS.has(key) || keyPassesFlagGates(key, flags)) {
+      permissions.add(key);
+    }
   }
 
   return {

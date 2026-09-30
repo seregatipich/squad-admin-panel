@@ -352,15 +352,12 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           canManageClans: req.body.can_manage_clans ?? roleRow.canManageClans,
           canManageEconomy: req.body.can_manage_economy ?? roleRow.canManageEconomy,
           canHandleReports: req.body.can_handle_reports ?? roleRow.canHandleReports,
+          canManageInfrastructure:
+            req.body.can_manage_infrastructure ?? roleRow.canManageInfrastructure,
           squadPermissions: req.body.squad_permissions ?? currentSquad.map((entry) => entry.key),
         },
         explicit.map((entry) => entry.key),
       );
-      const proposedRefusal = checkGrantsWithinActor(req.user, proposed);
-      if (proposedRefusal) {
-        reply.code(403);
-        return proposedRefusal;
-      }
       const merged = {
         panel_access: req.body.panel_access ?? roleRow.panelAccess,
         can_assign_roles: req.body.can_assign_roles ?? roleRow.canAssignRoles,
@@ -403,6 +400,12 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       if (beyond.length > 0) {
         reply.code(403);
         return roleCeilingError(beyond);
+      }
+      // Also covers derived keys the flag-level ceiling above cannot name.
+      const proposedRefusal = checkGrantsWithinActor(req.user, proposed);
+      if (proposedRefusal) {
+        reply.code(403);
+        return proposedRefusal;
       }
       const before = await loadRoleSnapshot(app.db, req.params.id);
       const memberIds = await listMemberIds(req.params.id);
