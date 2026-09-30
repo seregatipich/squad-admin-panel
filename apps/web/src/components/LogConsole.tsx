@@ -19,7 +19,7 @@ export interface LogConsoleErrorBanner {
 
 interface LogConsoleProps {
   lines: LogEntry[];
-  /** Visual height; number of pixels. Defaults to 24rem. */
+  /** CSS length of the log area (for example `24rem`). Defaults to 24rem. */
   height?: string;
   /** Label placed above the console. */
   title?: string;

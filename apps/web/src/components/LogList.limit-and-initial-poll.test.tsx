@@ -48,7 +48,7 @@ afterEach(() => {
 describe('LogList', () => {
   it('renders the entries as a table with Russian column headers', async () => {
     stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
 
     expect(await screen.findByRole('columnheader', { name: 'Сообщение' })).toBeInTheDocument();
     for (const name of ['Время', 'Уровень', 'Источник', 'Сервер']) {
@@ -60,7 +60,7 @@ describe('LogList', () => {
 
   it('names the level in text, so the row does not rely on colour alone', async () => {
     stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
 
     await screen.findByText('запрос обработан');
     expect(screen.getByText('error')).toBeInTheDocument();
@@ -69,7 +69,7 @@ describe('LogList', () => {
 
   it('offers a disclosure only for entries that carry a context', async () => {
     stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
 
     const disclosure = await screen.findByRole('button', { name: 'соединение с мостом потеряно' });
     expect(disclosure).toHaveAttribute('aria-expanded', 'false');
@@ -85,7 +85,7 @@ describe('LogList', () => {
 
   it('separates «nothing found» under a filter from «nothing recorded yet»', async () => {
     stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
     await screen.findByText('запрос обработан');
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по записям' }), {
@@ -103,7 +103,7 @@ describe('LogList', () => {
 
   it('announces the paused state on the pause button', async () => {
     stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
 
     const pause = await screen.findByRole('button', { name: 'Пауза' });
     expect(pause).toHaveAttribute('aria-pressed', 'false');
@@ -117,7 +117,7 @@ describe('LogList', () => {
 
   it('keeps the source filter in the request', async () => {
     const fetchMock = stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
     await screen.findByText('запрос обработан');
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'rcon' }));
@@ -129,7 +129,7 @@ describe('LogList', () => {
 
   it('requests the 1000 entries the subtitle promises (LOGS: subtitle vs. the API default of 500)', async () => {
     const fetchMock = stubFetch();
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
     await screen.findByText('запрос обработан');
 
     const [url] = fetchMock.mock.calls[0] as [string];
@@ -147,7 +147,7 @@ describe('LogList', () => {
       return Promise.resolve(new Response(JSON.stringify({ entries }), { status: 200 }));
     });
     vi.stubGlobal('fetch', fetchMock);
-    render(<LogList servers={SERVERS} />);
+    render(<LogList servers={SERVERS} canExport={true} />);
 
     await vi.waitFor(() => expect(screen.getByText('Записей нет')).toBeInTheDocument());
 

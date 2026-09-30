@@ -144,6 +144,25 @@ describe('PublicWhitelistPage', () => {
   );
 
   it(
+    'shows the throttling message on a 429',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ enabled: true, postStatus: 429 }));
+      render(<PublicWhitelistPage />);
+
+      fireEvent.change(await screen.findByPlaceholderText('76561198000000000'), {
+        target: { value: '76561198000000001' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/расскажите о себе/i), {
+        target: { value: 'частые заявки' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /отправить заявку/i }));
+
+      await waitFor(() => expect(screen.getByText(/слишком много заявок/i)).toBeInTheDocument());
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows an error banner on a 500',
     async () => {
       vi.stubGlobal('fetch', mockFetch({ enabled: true, postStatus: 500 }));

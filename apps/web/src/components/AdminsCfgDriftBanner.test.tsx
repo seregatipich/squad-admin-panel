@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdminsCfgDriftBanner } from './AdminsCfgDriftBanner';
 
@@ -91,5 +91,47 @@ describe('AdminsCfgDriftBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Синхронизировать' }));
 
     await waitFor(() => expect(calls).toContain('POST /api/v1/admins-cfg/sync'));
+  });
+
+  it('shows an error instead of an unhandled rejection when the sync request fails', async () => {
+    const drift = {
+      state: 'drift',
+      last_synced_at: null,
+      last_segment_hash: 'aaa',
+      last_db_hash: 'bbb',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).includes('/drift')
+          ? Promise.resolve(new Response(JSON.stringify({ server_id: 's1', status: drift })))
+          : Promise.reject(new TypeError('offline')),
+      ),
+    );
+    render(<AdminsCfgDriftBanner serverId="s1" />);
+
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'Синхронизировать' }));
+
+    expect(await screen.findByText('Не удалось связаться с API')).toBeInTheDocument();
+  });
+
+  it('stops polling once the drift endpoint answers 403', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 403 })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(<AdminsCfgDriftBanner serverId="s1" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

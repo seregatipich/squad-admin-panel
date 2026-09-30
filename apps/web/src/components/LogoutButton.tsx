@@ -5,20 +5,25 @@ import { useTranslator } from '@/i18n/LocaleProvider';
 /**
  * Завершает сессию и уводит на страницу входа.
  *
- * Переход выполняется в `finally`: даже если запрос не дошёл, оставлять
- * оператора в панели с протухшей сессией хуже, чем показать ему вход.
+ * Переход выполняется всегда: даже если запрос не дошёл, оставлять оператора
+ * в панели с протухшей сессией хуже, чем показать ему вход. Если сервер ответил
+ * ошибкой, сессия осталась живой, поэтому вход открывается с `?error=logout_failed`
+ * и не перенаправляет обратно в панель.
  */
 export async function logout(): Promise<void> {
+  let destination = '/login';
   try {
-    await fetch('/api/v1/auth/logout', {
+    const response = await fetch('/api/v1/auth/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
       credentials: 'include',
     });
-  } finally {
-    window.location.href = '/login';
+    if (!response.ok) destination = '/login?error=logout_failed';
+  } catch {
+    // Сеть недоступна: страница входа сама проверит, жива ли сессия.
   }
+  window.location.href = destination;
 }
 
 /**

@@ -48,7 +48,6 @@ import MetricHistoryChart from '../src/components/MetricHistoryChart';
 import { MetricHistoryModal } from '../src/components/MetricHistoryModal';
 import { RestartBridgeButton } from '../src/components/RestartBridgeButton';
 import { RoleColorDot } from '../src/components/RoleColorDot';
-import { RoleEditor } from '../src/components/RoleEditor';
 import { ServerBar } from '../src/components/ServerBar';
 import { TopNav } from '../src/components/TopNav';
 
@@ -95,10 +94,6 @@ describe('components static import graph', () => {
 
   it('RoleColorDot is a function', () => {
     expect(typeof RoleColorDot).toBe('function');
-  });
-
-  it('RoleEditor is a function', () => {
-    expect(typeof RoleEditor).toBe('function');
   });
 
   it('TopNav is a function', () => {

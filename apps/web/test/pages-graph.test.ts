@@ -53,9 +53,6 @@ vi.mock('../src/components/AdminsCfgDriftBanner', () => ({
 vi.mock('../src/components/RoleColorDot', () => ({
   RoleColorDot: () => null,
 }));
-vi.mock('../src/components/RoleEditor', () => ({
-  RoleEditor: () => null,
-}));
 vi.mock('../src/lib/use-live-bus', () => ({
   useLiveSubscription: vi.fn(),
   useLiveBusState: vi.fn(() => 'closed'),

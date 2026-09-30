@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -69,6 +69,11 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
    * would skip `setBusy(false)` (freezing the widget) or go unhandled. A
    * failure is reported through `loadError` instead.
    */
+  // A reload that finishes after the component moved to another player must not overwrite
+  // that player's marks, so every response is checked against the player it was requested for.
+  const currentPlayerId = useRef(playerId);
+  currentPlayerId.current = playerId;
+
   const reload = useCallback(async () => {
     try {
       const [typesRes, marksRes] = await Promise.all([
@@ -82,11 +87,12 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
       if (!marksRes.ok) throw new Error(`HTTP ${marksRes.status}`);
       const nextTypes = (await typesRes.json()) as MarkTypeOption[];
       const body = (await marksRes.json()) as { items: PlayerMark[] };
+      if (currentPlayerId.current !== playerId) return;
       setTypes(nextTypes);
       setMarks(body.items);
       setLoadError(null);
     } catch (e) {
-      setLoadError((e as Error).message);
+      if (currentPlayerId.current === playerId) setLoadError((e as Error).message);
     }
   }, [playerId]);
 

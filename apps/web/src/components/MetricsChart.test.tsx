@@ -44,4 +44,19 @@ describe('MetricsChart', () => {
     const svg = container.querySelector('svg');
     expect(svg).not.toHaveAttribute('preserveAspectRatio', 'none');
   });
+
+  it('keeps the line inside the frame when a value exceeds maxY', () => {
+    const points = [
+      { timestamp: '2026-08-22T09:00:00.000Z', value: 50 },
+      { timestamp: '2026-08-22T09:01:00.000Z', value: 240 },
+    ];
+    const { container } = render(
+      <MetricsChart points={points} label="CPU" unit="%" color="#30d158" maxY={100} />,
+    );
+    const d = container.querySelector('path')?.getAttribute('d') ?? '';
+    const ys = [...d.matchAll(/[ML] [\d.]+ (-?[\d.]+)/g)].map((m) => Number(m[1]));
+
+    expect(ys).toHaveLength(2);
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(10);
+  });
 });

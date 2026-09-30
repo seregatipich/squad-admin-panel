@@ -142,12 +142,13 @@ function toMenuItems(items: NavItem[], ctx: ItemContext): MenuItem[] {
 /**
  * Сколько пунктов панели помещается в её ширину.
  *
- * Ширины пунктов кэшируются при первом полном рендере и переиспользуются: как
- * только часть пунктов уезжает в «Ещё», измерить их в полосе уже нельзя.
- * Меняются они только вместе с языком, а смена языка перерисовывает панель
- * целиком, так что кэш живёт ровно столько, сколько подписи.
+ * Ширины пунктов кэшируются при полном рендере и переиспользуются: как только
+ * часть пунктов уезжает в «Ещё», измерить их в полосе уже нельзя. Кэш
+ * сбрасывается, когда меняется `measureKey`, то есть подписи, число пунктов или
+ * значок счётчика жалоб.
  *
  * @param count Сколько всего пунктов в панели.
+ * @param measureKey Описание содержимого пунктов, от которого зависят их ширины.
  * @returns Ссылки на полосу и кнопку «Ещё» плюс число помещающихся пунктов.
  */
 function useNavOverflow(count: number, measureKey: string) {
@@ -262,7 +263,7 @@ export function TopNav({
 }: {
   permissions: string[];
   displayName: string;
-  /** Navigation tree; defaults to the panel's own {@link NAV_GROUPS}. */
+  /** Navigation tree; the layout passes the panel's own {@link NAV_GROUPS}. */
   groups: NavGroup[];
   /** ECON-5 (#165): items with `requiresEconomy` are hidden while false. */
   economyEnabled?: boolean;

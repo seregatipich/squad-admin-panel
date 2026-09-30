@@ -85,10 +85,12 @@ export function UpdateProgressModal({ open, onOpenChange, wsUrl, title, onDone }
           const final: 'done' | 'error' = frame.final === 'done' ? 'done' : 'error';
           setStatus(final);
           setConnectionError(null);
-          onDone?.(final, frame.error);
+          onDone?.(final, typeof frame.error === 'string' ? frame.error : undefined);
           ws.close();
           return;
         }
+        // LogConsole builds its keys from `message`, so a frame without one would crash the render.
+        if (typeof frame.message !== 'string') return;
         setLines((prev) => {
           const next = [...prev, frame as LogEntry];
           return next.length > MAX_PROGRESS_LINES ? next.slice(-MAX_PROGRESS_LINES) : next;

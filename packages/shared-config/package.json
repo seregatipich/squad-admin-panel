@@ -29,6 +29,11 @@
       "development": "./src/banned-names.ts",
       "default": "./dist/banned-names.js"
     },
+    "./metrics-pack": {
+      "types": "./dist/metrics-pack.d.ts",
+      "development": "./src/metrics-pack.ts",
+      "default": "./dist/metrics-pack.js"
+    },
     "./role-colors": {
       "types": "./dist/role-colors.d.ts",
       "development": "./src/role-colors.ts",

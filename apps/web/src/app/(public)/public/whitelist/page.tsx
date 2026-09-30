@@ -113,6 +113,10 @@ export default function PublicWhitelistPage() {
         setError('SteamID64 не совпадает с аккаунтом Steam, под которым вы вошли.');
         return;
       }
+      if (res.status === 429) {
+        setError('Слишком много заявок с этого адреса. Попробуйте позже.');
+        return;
+      }
       if (res.status === 400) {
         setError('Проверьте правильность заполнения полей.');
         return;

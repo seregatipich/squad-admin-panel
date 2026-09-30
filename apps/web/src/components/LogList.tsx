@@ -12,6 +12,7 @@ import {
   Card,
   Checkbox,
   EmptyState,
+  InlineBanner,
   SearchField,
   Select,
   SkeletonTable,
@@ -62,13 +63,35 @@ interface LogsResponse {
   oldest_scanned_id?: string | null;
 }
 
+/** Wall-clock time with milliseconds in the operator's zone, like the rest of the panel. */
+function formatLogTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString('ru-RU', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+  });
+}
+
 interface ServersResponse {
   items: Array<{ id: string; display_name: string }>;
 }
 
-export function LogList(props: { servers: Array<{ id: string; display_name: string }> }) {
+/**
+ * Live panel log table.
+ *
+ * `canExport` mirrors the `host:metrics` permission that `GET /api/v1/logs/export` requires;
+ * without it the download link is not rendered.
+ */
+export function LogList(props: {
+  servers: Array<{ id: string; display_name: string }>;
+  canExport: boolean;
+}) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [src, setSrc] = useState<Set<string>>(new Set(LOG_SOURCES));
   const [lvl, setLvl] = useState<Level>(DEFAULT_LEVEL);
   const [srv, setSrv] = useState<string>('');
@@ -96,15 +119,20 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
     [src, lvl, srv, q],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the initial load on «Повторить».
   useEffect(() => {
     setEntries([]);
     setLoaded(false);
+    setLoadFailed(false);
     lastIdRef.current = null;
     const controller = new AbortController();
     void (async () => {
       try {
         const r = await fetch(buildUrl(), { credentials: 'include', signal: controller.signal });
-        if (!r.ok) return;
+        if (!r.ok) {
+          setLoadFailed(true);
+          return;
+        }
         const body = (await r.json()) as LogsResponse;
         setEntries(body.entries);
         setLoaded(true);
@@ -113,11 +141,11 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
         // An empty stream tails from its very beginning.
         lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? '0-0';
       } catch {
-        // swallowed (likely AbortError)
+        if (!controller.signal.aborted) setLoadFailed(true);
       }
     })();
     return () => controller.abort();
-  }, [buildUrl]);
+  }, [buildUrl, attempt]);
 
   useEffect(() => {
     if (paused) return;
@@ -206,9 +234,11 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
         <Button size="sm" onClick={() => setPaused((p) => !p)} aria-pressed={paused}>
           {paused ? 'Возобновить' : 'Пауза'}
         </Button>
-        <a href="/api/v1/logs/export" download className={DOWNLOAD_LINK_CLASS}>
-          Экспорт
-        </a>
+        {props.canExport ? (
+          <a href="/api/v1/logs/export" download className={DOWNLOAD_LINK_CLASS}>
+            Экспорт
+          </a>
+        ) : null}
       </>
     ),
   };
@@ -236,7 +266,19 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
       </fieldset>
 
       <Card padding="none">
-        {!loaded && entries.length === 0 ? (
+        {loadFailed ? (
+          <div className="p-4">
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить записи"
+              action={
+                <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                  Повторить
+                </Button>
+              }
+            />
+          </div>
+        ) : !loaded && entries.length === 0 ? (
           <div className="p-4">
             <SkeletonTable rows={10} cols={5} label="Записи загружаются" />
           </div>
@@ -277,7 +319,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
                   <Fragment key={e.id}>
                     <TableRow interactive>
                       <Td className="whitespace-nowrap font-mono text-xs tabular-nums text-ink-3">
-                        {new Date(e.ts).toISOString().slice(11, 23)}
+                        {formatLogTime(e.ts)}
                       </Td>
                       <Td>
                         <Badge tone={LEVEL_TONE[e.level]} size="sm">

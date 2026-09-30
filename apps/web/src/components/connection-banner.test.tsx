@@ -60,4 +60,50 @@ describe('ConnectionBanner', () => {
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Скрыть' })).toBeInTheDocument();
   });
+
+  it('sends the tab to the login page on 401 instead of reporting the panel unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('unauthorized', { status: 401 }))),
+    );
+    const location = { href: '' };
+    vi.stubGlobal('location', location);
+    render(
+      <LocaleProvider locale="ru">
+        <ConnectionBanner />
+      </LocaleProvider>,
+    );
+    await driveToUnreachable();
+
+    expect(location.href).toBe('/login');
+    expect(screen.queryByTestId('connection-banner')).not.toBeInTheDocument();
+  });
+
+  it('stops probing once unmounted while a probe is in flight', async () => {
+    let finishProbe: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishProbe = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { unmount } = render(
+      <LocaleProvider locale="ru">
+        <ConnectionBanner />
+      </LocaleProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      finishProbe(new Response('{}', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 3);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

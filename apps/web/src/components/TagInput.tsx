@@ -7,6 +7,8 @@ interface Props {
   tags: string[];
   onChange: (tags: string[]) => void;
   maxTags?: number;
+  /** Длина тега не больше этого значения; совпадает с ограничением API (50). */
+  maxTagLength?: number;
   /**
    * Доступное имя поля ввода. Видимой подписи у него нет — её даёт заголовок
    * группы настроек, — поэтому имя живёт в скрытом `<label>`.
@@ -26,14 +28,22 @@ interface Props {
  * строки, поэтому щелчок по пустому месту попадает именно в него.
  *
  * @param label Доступное имя поля; по умолчанию «Теги».
+ * @param maxTagLength Максимальная длина тега; поле не даёт ввести больше.
  */
-export function TagInput({ tags, onChange, maxTags = 20, label = 'Теги' }: Props) {
+export function TagInput({
+  tags,
+  onChange,
+  maxTags = 20,
+  maxTagLength = 50,
+  label = 'Теги',
+}: Props) {
   const [input, setInput] = useState('');
   const inputId = useId();
 
   function addTag(value: string) {
     const trimmed = value.trim().toLowerCase();
-    if (!trimmed || tags.includes(trimmed) || tags.length >= maxTags) return;
+    if (!trimmed || trimmed.length > maxTagLength) return;
+    if (tags.includes(trimmed) || tags.length >= maxTags) return;
     onChange([...tags, trimmed]);
     setInput('');
   }
@@ -65,6 +75,7 @@ export function TagInput({ tags, onChange, maxTags = 20, label = 'Теги' }: P
       <input
         id={inputId}
         value={input}
+        maxLength={maxTagLength}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {

@@ -311,6 +311,31 @@ describe('DirectMessageModal', () => {
   );
 
   it(
+    'shows a Russian explanation instead of the raw API error code',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({
+          message: () =>
+            Promise.resolve(
+              new Response(JSON.stringify({ error: 'player_not_addressable' }), { status: 409 }),
+            ),
+        }),
+      );
+      render(<DirectMessageModal target={TARGET} onOpenChange={() => undefined} />);
+      fireEvent.change(await screen.findByPlaceholderText(/текст сообщения/i), {
+        target: { value: 'Stop teamkilling' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+      fireEvent.click(within(confirmDialog()).getByRole('button', { name: 'Отправить сообщение' }));
+
+      expect(await screen.findByText(/Игрока нельзя адресовать/)).toBeInTheDocument();
+      expect(screen.queryByText('player_not_addressable')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows a server select and blocks send until a server is chosen when serverId is null',
     async () => {
       render(
