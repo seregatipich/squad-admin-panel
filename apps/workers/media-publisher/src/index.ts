@@ -17,13 +17,29 @@ const log = pino({
 });
 
 /**
+ * Reads an integer environment variable within `[min, max]`, exiting on a
+ * malformed value: a typo would otherwise become NaN and spin the tick loop
+ * (`setInterval(fn, NaN)` fires every millisecond) or break the claim query.
+ */
+function integerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    log.fatal(`${name} must be an integer between ${min} and ${max}, got "${raw}"`);
+    process.exit(1);
+  }
+  return value;
+}
+
+/**
  * Poll interval for the publication queue. A minute is deliberate: publishing
  * is a showcase side-channel, uploads take far longer than the interval, and
  * both destinations meter their APIs.
  */
-const TICK_INTERVAL_MS = Number(process.env.MEDIA_PUBLISHER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = integerEnv('MEDIA_PUBLISHER_INTERVAL_MS', 60_000, 1_000, 3_600_000);
 /** Publications handled per tick — bounded so one large upload cannot stall the loop indefinitely. */
-const BATCH_SIZE = Number(process.env.MEDIA_PUBLISHER_BATCH_SIZE ?? 3);
+const BATCH_SIZE = integerEnv('MEDIA_PUBLISHER_BATCH_SIZE', 3, 1, 50);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

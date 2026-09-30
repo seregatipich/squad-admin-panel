@@ -341,4 +341,40 @@ describe('youtube publisher — request shape', () => {
 
     expect(initiateBody).toMatchObject({ snippet: { title: 'clip.mp4', description: '' } });
   });
+
+  it('strips angle brackets and cuts the title on code points, not UTF-16 units', async () => {
+    let initiateBody: { snippet: { title: string; description: string } } | undefined;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) {
+        return jsonResponse(200, { access_token: ACCESS_TOKEN });
+      }
+      if (url === RESUMABLE_URL) return jsonResponse(200, { id: 'yt-video-1' });
+      initiateBody = JSON.parse(String(init?.body));
+      return new Response(null, { status: 200, headers: { location: RESUMABLE_URL } });
+    }) as unknown as typeof fetch;
+    const publisher = makePublisher(fetchImpl);
+
+    await publisher(makeJob({ title: `<b>${'😀'.repeat(120)}`, description: 'a > b < c' }));
+
+    expect(initiateBody?.snippet.title).toBe(`b${'😀'.repeat(99)}`);
+    expect(initiateBody?.snippet.title).not.toMatch(/[<>]/);
+    expect(initiateBody?.snippet.description).toBe('a  b  c');
+  });
+});
+
+describe('youtube publisher — transient throttling', () => {
+  it.each([408, 429])('treats HTTP %i from the token endpoint as retryable', async (status) => {
+    const { fetch: fetchImpl } = scriptedFetch({ token: () => jsonResponse(status, {}) });
+    const outcome = await makePublisher(fetchImpl)(makeJob());
+    expect(outcome).toMatchObject({ ok: false, retryable: true });
+  });
+
+  it.each([408, 429])('treats HTTP %i without a quota reason as retryable', async (status) => {
+    const { fetch: fetchImpl } = scriptedFetch({
+      initiate: () => new Response('<html>slow down</html>', { status }),
+    });
+    const outcome = await makePublisher(fetchImpl)(makeJob());
+    expect(outcome).toMatchObject({ ok: false, retryable: true });
+  });
 });

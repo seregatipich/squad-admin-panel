@@ -107,7 +107,7 @@ export function createYouTubePublisher(config: YouTubePublisherConfig): MediaPub
           grant_type: 'refresh_token',
         }).toString(),
       });
-      if (tokenRes.status >= 500) {
+      if (tokenRes.status >= 500 || isTransientClientStatus(tokenRes.status)) {
         return {
           ok: false,
           retryable: true,
@@ -144,8 +144,8 @@ export function createYouTubePublisher(config: YouTubePublisherConfig): MediaPub
         },
         body: JSON.stringify({
           snippet: {
-            title: (job.title ?? job.originalFilename).slice(0, 100),
-            description: job.description ?? '',
+            title: truncateCodePoints(stripAngleBrackets(job.title ?? job.originalFilename), 100),
+            description: stripAngleBrackets(job.description ?? ''),
           },
           // Unlisted, not public: this is moderation evidence fanned out to a
           // community channel, and the panel must not silently make every clip
@@ -220,7 +220,7 @@ async function classifyFailure(
   }
 
   if (isQuotaError(body)) return quotaOutcome();
-  if (response.status >= 500) {
+  if (response.status >= 500 || isTransientClientStatus(response.status)) {
     return { ok: false, retryable: true, error: `${prefix}_server_error_${response.status}` };
   }
   const message = (body as GoogleErrorBody | undefined)?.error?.message;
@@ -229,4 +229,18 @@ async function classifyFailure(
     retryable: false,
     error: scrub(`${prefix}_rejected_${response.status}: ${message ?? ''}`.trim()),
   };
+}
+
+/** 408 and 429 are throttling signals: the request is worth repeating later. */
+function isTransientClientStatus(status: number): boolean {
+  return status === 408 || status === 429;
+}
+
+/** The Data API rejects titles and descriptions containing `<` or `>` with a 400. */
+function stripAngleBrackets(text: string): string {
+  return text.replace(/[<>]/g, '');
+}
+
+function truncateCodePoints(text: string, maxCodePoints: number): string {
+  return Array.from(text).slice(0, maxCodePoints).join('');
 }
