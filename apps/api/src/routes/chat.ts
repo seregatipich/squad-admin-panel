@@ -3,7 +3,9 @@ import { and, desc, eq, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { playerNameMatch } from '../lib/player-name-search.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const LIMIT_MAX = 300;
 const LIMIT_DEFAULT = 100;

@@ -15,6 +15,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { panelGuard } from '../lib/panel-guard.js';
 import { requestUser } from '../lib/request-user.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const matchTypeSchema = z.enum(BANNED_NAME_MATCH_TYPES);
 const actionSchema = z.enum(BANNED_NAME_ACTIONS);

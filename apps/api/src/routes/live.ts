@@ -44,6 +44,7 @@ const EVENT_DELIVERY: Record<LiveEvent['type'], 'broadcast' | 'opt_in'> = {
   'bridge.connection': 'broadcast',
   'chat.message': 'opt_in',
   'combat.event': 'opt_in',
+  'combat.vehicle': 'opt_in',
   'externalban.matched': 'opt_in',
   'issue.comment.created': 'broadcast',
   'issue.created': 'broadcast',

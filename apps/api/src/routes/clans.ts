@@ -24,6 +24,7 @@ import { isCalendarDay } from '../lib/calendar-day.js';
 import { csvCell } from '../lib/csv.js';
 import { steamId64Equals } from '../lib/player-search.js';
 import { requestUser } from '../lib/request-user.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const NAME_MAX = 32;
 const TAG_MAX = 32;

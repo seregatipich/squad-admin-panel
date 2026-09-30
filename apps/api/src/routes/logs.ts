@@ -17,7 +17,7 @@ import { streamBundle } from '../lib/log-export.js';
 const SOURCE_CODES: ReadonlySet<string> = new Set(LOG_SOURCES.map(sourceCode));
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 /** Longest `src` filter: every source code once, comma-separated. */
-const SRC_FILTER_MAX = SOURCE_CODES.length * 2 - 1;
+const SRC_FILTER_MAX = SOURCE_CODES.size * 2 - 1;
 
 /**
  * Everything `streamBundle` puts in a support bundle, each gated by its own
