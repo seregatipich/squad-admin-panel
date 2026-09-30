@@ -95,7 +95,9 @@ function stubFetch(routes: Record<string, RouteBody>): FetchCall[] {
     '/api/v1/host/metrics': { body: null, status: 500 },
     '/api/v1/servers': { body: { items: SERVERS } },
     '/api/v1/audit': { body: { items: AUDIT } },
-    '/ready': { body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } } },
+    '/api/v1/health/dependencies': {
+      body: { status: 'ok', checks: { postgres: 'ok', redis: 'ok' } },
+    },
     '/api/v1/health/workers': { body: { items: [] } },
     '/api/v1/host/disk-usage': { body: null, status: 500 },
     '/api/v1/analytics/': { body: null, status: 500 },
@@ -147,7 +149,7 @@ describe('DashboardPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url === '/ready') {
+        if (url === '/api/v1/health/dependencies') {
           return {
             ok: true,
             json: async () => ({ status: 'ok', checks: {} }),
@@ -172,6 +174,14 @@ describe('DashboardPage', () => {
     });
 
     expect(capturedBody).toEqual({ server_ids: ['server-1', 'server-2'] });
+  });
+
+  it('reads PostgreSQL and Redis state from the authenticated API, not the public /ready path', async () => {
+    const calls = stubFetch({});
+    await renderDashboard();
+    const urls = calls.map((call) => call.url);
+    expect(urls).toContain('/api/v1/health/dependencies');
+    expect(urls).not.toContain('/ready');
   });
 
   it('carries exactly one first-level heading', async () => {
