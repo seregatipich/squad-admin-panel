@@ -207,7 +207,13 @@ export function LeaderboardsBrowser() {
       <PageHeader title="Лидерборды" meta={<span>всего: {formatCount(totalRows)}</span>} />
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <FilterRail filters={filters} servers={servers} seasons={seasons} onChange={navigate} />
+        <FilterRail
+          filters={filters}
+          servers={servers}
+          seasons={seasons}
+          resolvedSeasonStart={data?.period === 'season' ? data.period_start : ''}
+          onChange={navigate}
+        />
 
         <div className="min-w-0 flex-1 space-y-3">
           {error ? (
@@ -264,11 +270,13 @@ function FilterRail({
   filters,
   servers,
   seasons,
+  resolvedSeasonStart,
   onChange,
 }: {
   filters: LeaderboardFilters;
   servers: ServerOption[];
   seasons: Season[];
+  resolvedSeasonStart: string;
   onChange: (partial: Partial<LeaderboardFilters>) => void;
 }) {
   return (
@@ -298,7 +306,12 @@ function FilterRail({
           </Select>
         </FieldRow>
 
-        <PeriodPicker filters={filters} seasons={seasons} onChange={onChange} />
+        <PeriodPicker
+          filters={filters}
+          seasons={seasons}
+          resolvedSeasonStart={resolvedSeasonStart}
+          onChange={onChange}
+        />
       </Card>
     </aside>
   );
@@ -307,17 +320,21 @@ function FilterRail({
 function PeriodPicker({
   filters,
   seasons,
+  resolvedSeasonStart,
   onChange,
 }: {
   filters: LeaderboardFilters;
   seasons: Season[];
+  /** `period_start` the API resolved to the active season when the URL has no `start`. */
+  resolvedSeasonStart: string;
   onChange: (partial: Partial<LeaderboardFilters>) => void;
 }) {
   const navigable = canNavigatePeriod(filters.period);
   const atLatest = isFuturePeriod(filters.period, filters.periodStart);
   const seasonMode = filters.period === 'season';
   const orderedSeasons = useMemo(() => sortSeasonsForSelector(seasons), [seasons]);
-  const selectedSeason = seasonMode ? findSeason(seasons, filters.periodStart) : null;
+  const seasonStart = filters.periodStart || resolvedSeasonStart;
+  const selectedSeason = seasonMode ? findSeason(seasons, seasonStart) : null;
 
   function selectPeriod(period: Period) {
     if (period === 'season') {
@@ -353,7 +370,7 @@ function PeriodPicker({
           <div className="space-y-1">
             <Select
               aria-label="Сезон"
-              value={filters.periodStart}
+              value={seasonStart}
               onChange={(event) => onChange({ periodStart: event.target.value, page: 1 })}
             >
               {orderedSeasons.map((season) => (

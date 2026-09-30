@@ -110,7 +110,7 @@ export function ExternalBansBrowser() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/v1/ban-sources', {
+    fetch('/api/v1/ban-sources/options', {
       credentials: 'include',
       cache: 'no-store',
       signal: controller.signal,

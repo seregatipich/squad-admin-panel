@@ -243,6 +243,26 @@ describeIfDb('ban-sources reading = panel_access', () => {
     expect(list.length).toBeGreaterThan(0);
   });
 
+  it('serves a lightweight id/name options list without record counts or parser config (#561)', async () => {
+    await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/ban-sources/options',
+      headers: { cookie: viewerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const options = res.json() as Array<Record<string, unknown>>;
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(Object.keys(option).sort()).toEqual(['id', 'name']);
+    }
+  });
+
+  it('rejects unauthenticated options read with 401', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/ban-sources/options' });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('rejects unauthenticated read with 401', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/ban-sources' });
     expect(res.statusCode).toBe(401);

@@ -99,7 +99,7 @@ A route guard that checks only `panel_access` lets an API token through as soon 
 |---|---|
 | `GET /api/v1/chat/messages`, `GET /api/v1/chat/messages/count` | `events:view` |
 | `GET /api/v1/automation-rules`, `GET /api/v1/automation-runs` | `trigger:view` |
-| `GET /api/v1/ban-sources`, `GET /api/v1/ban-sources/:id` | `ban_source:view` |
+| `GET /api/v1/ban-sources`, `GET /api/v1/ban-sources/options`, `GET /api/v1/ban-sources/:id` | `ban_source:view` |
 | `GET /api/v1/analytics/dashboard` | `server:view` |
 
 Session users with `panel_access` are unaffected: `derivePanelPermissions` grants them every catalogue key.

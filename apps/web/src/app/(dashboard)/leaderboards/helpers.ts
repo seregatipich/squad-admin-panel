@@ -304,18 +304,6 @@ export function isFuturePeriod(
   return periodStart >= currentPeriodStart(period, now);
 }
 
-export function defaultFilters(): LeaderboardFilters {
-  return {
-    metric: 'online',
-    period: 'alltime',
-    periodStart: '',
-    serverId: 'all',
-    search: '',
-    order: 'desc',
-    page: 1,
-  };
-}
-
 export function parseFilters(params: ParamsLike, now: Date = new Date()): LeaderboardFilters {
   const period = isPeriod(params.get('period')) ? (params.get('period') as Period) : 'alltime';
   const rawStart = params.get('start');
@@ -395,20 +383,6 @@ export function medalFor(rank: number): string | null {
   return MEDALS[rank] ?? null;
 }
 
-export function shouldNavigateRow(modifiers: {
-  ctrlKey?: boolean;
-  metaKey?: boolean;
-  altKey?: boolean;
-  shiftKey?: boolean;
-  hasSelection?: boolean;
-}): boolean {
-  if (modifiers.ctrlKey || modifiers.metaKey || modifiers.altKey || modifiers.shiftKey) {
-    return false;
-  }
-  if (modifiers.hasSelection) return false;
-  return true;
-}
-
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0м';
   const total = Math.floor(seconds);
@@ -435,13 +409,9 @@ export function pageInfoLabel(page: number, totalPages: number, totalRows: numbe
   )} · Всего ${numberFmt.format(totalRows)}`;
 }
 
-export function periodRangeLabel(period: Period, periodStart: string, season?: Season): string {
+export function periodRangeLabel(period: Period, periodStart: string): string {
   if (period === 'alltime') return 'Всё время';
-  // A season is identified by its name; the calendar date it starts on is an
-  // implementation detail the operator never named.
-  if (period === 'season') {
-    return season ? season.name : (PERIODS.find((p) => p.value === 'season')?.label ?? 'Сезон');
-  }
+  if (period === 'season') return PERIODS.find((p) => p.value === 'season')?.label ?? 'Сезон';
   if (!isDateString(periodStart)) return PERIODS.find((p) => p.value === period)?.label ?? period;
   const fmt = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
   const start = new Date(`${periodStart}T00:00:00.000Z`);

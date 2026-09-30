@@ -200,6 +200,20 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Picker feed for the registry filter: id and name only, so a page that just
+  // needs a dropdown does not pay for the `external_bans` aggregate (#561).
+  fast.get(
+    '/api/v1/ban-sources/options',
+    { config: { audit: false, permissions: ['ban_source:view'] } },
+    async (req, reply) => {
+      if (denyRead(req, reply)) return;
+      return app.db
+        .select({ id: externalBanSources.id, name: externalBanSources.name })
+        .from(externalBanSources)
+        .orderBy(externalBanSources.createdAt);
+    },
+  );
+
   fast.get(
     '/api/v1/ban-sources/:id',
     { schema: { params: idParam }, config: { audit: false, permissions: ['ban_source:view'] } },

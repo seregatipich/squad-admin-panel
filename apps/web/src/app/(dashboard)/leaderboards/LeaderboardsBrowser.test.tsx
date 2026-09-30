@@ -54,7 +54,9 @@ function emptyLeaderboard(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function stubFetch(opts: { seasons?: unknown[]; seasonsStatus?: number } = {}): {
+function stubFetch(
+  opts: { seasons?: unknown[]; seasonsStatus?: number; leaderboard?: Record<string, unknown> } = {},
+): {
   fn: ReturnType<typeof vi.fn>;
   calls: string[];
 } {
@@ -75,14 +77,16 @@ function stubFetch(opts: { seasons?: unknown[]; seasonsStatus?: number } = {}): 
     if (url.startsWith('/api/v1/servers')) {
       return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
     }
-    return Promise.resolve(new Response(JSON.stringify(emptyLeaderboard()), { status: 200 }));
+    return Promise.resolve(
+      new Response(JSON.stringify(emptyLeaderboard(opts.leaderboard)), { status: 200 }),
+    );
   });
   return { fn, calls };
 }
 
 async function renderWith(
   params: string,
-  opts: { seasons?: unknown[]; seasonsStatus?: number } = {},
+  opts: { seasons?: unknown[]; seasonsStatus?: number; leaderboard?: Record<string, unknown> } = {},
 ): Promise<{ calls: string[] }> {
   currentParams = new URLSearchParams(params);
   const stub = stubFetch(opts);
@@ -130,6 +134,20 @@ describe('LeaderboardsBrowser season selector', () => {
       await screen.findByLabelText('Сезон');
       expect(screen.getByText(/01\.06\.2026/)).toBeInTheDocument();
       expect(screen.queryByText(/только просмотр/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'selects the season the API resolved when the URL carries period=season without start (#573)',
+    async () => {
+      await renderWith('period=season', {
+        leaderboard: { period: 'season', period_start: '2026-06-01', season: ACTIVE_SEASON },
+      });
+
+      const picker = (await screen.findByLabelText('Сезон')) as HTMLSelectElement;
+      await waitFor(() => expect(picker.value).toBe('2026-06-01'));
+      expect(screen.getByText(/01\.06\.2026/)).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
