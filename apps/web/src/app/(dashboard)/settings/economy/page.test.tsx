@@ -358,6 +358,27 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     expect(scope.getByText('Новый тир')).toBeInTheDocument();
   });
 
+  it('maps role_grants_panel_access to a friendly message', async () => {
+    stubFetch({
+      tiers: [],
+      tierMutationError: { status: 403, body: { error: 'role_grants_panel_access' } },
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    const scope = within(section);
+
+    fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
+    fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
+
+    expect(
+      await scope.findByText(
+        'Ошибка сохранения тира: Тир нельзя привязать к системной роли или роли с доступом к панели.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('falls back to the raw error code for unknown tier save errors', async () => {
     stubFetch({
       tiers: [],

@@ -9,6 +9,7 @@ import {
   auditLog,
   players,
   ROLE_EXPIRY_ALERT_RULE_ID,
+  roles,
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
@@ -41,7 +42,9 @@ export type RenewalFailureReason =
   | 'insufficient_balance'
   | 'role_conflict'
   | 'role_permanent'
-  | 'player_not_found';
+  | 'player_not_found'
+  /** The tier now maps to a panel-access or system role, which a renewal must never grant. */
+  | 'role_grants_panel_access';
 
 export interface ChargeRenewalInput {
   subscriptionId: string;
@@ -61,6 +64,7 @@ export type ChargeRenewalResult =
   | { status: 'role_conflict' }
   | { status: 'role_permanent' }
   | { status: 'player_not_found' }
+  | { status: 'role_grants_panel_access' }
   /** Cancelled between the scan and the charge — nothing was billed. */
   | { status: 'not_active' };
 
@@ -291,6 +295,12 @@ export async function findDueSubscriptions(
  * Charges one period and moves the billing date, atomically. Re-checks that the
  * subscription is still `active` and still due inside the transaction, so a
  * cancellation racing the tick cannot be billed.
+ *
+ * Also re-applies the purchase-time escalation guard (`resolveTier` in
+ * `apps/api/src/routes/vip-subscriptions.ts`): the role is read from the tier
+ * at renewal time, and a tier re-pointed at a panel-access or system role
+ * after the player subscribed must end the subscription rather than grant
+ * that role (#31). `applyVipGrant` itself performs no such check.
  */
 export async function chargeRenewal(
   db: DatabaseClient,
@@ -309,6 +319,15 @@ async function chargeRenewalTx(
   input: ChargeRenewalInput,
 ): Promise<ChargeRenewalResult> {
   return db.transaction(async (tx) => {
+    const [role] = await tx
+      .select({ panelAccess: roles.panelAccess, isSystemRole: roles.isSystemRole })
+      .from(roles)
+      .where(eq(roles.id, input.roleId))
+      .limit(1);
+    if (!role || role.panelAccess || role.isSystemRole) {
+      return { status: 'role_grants_panel_access' as const };
+    }
+
     const applied = await applyVipGrant(tx, {
       playerId: input.playerId,
       tier: { roleId: input.roleId, days: input.days, price: input.price },

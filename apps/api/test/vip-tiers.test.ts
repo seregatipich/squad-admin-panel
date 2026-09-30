@@ -32,14 +32,14 @@ const playerSteams = new Map<string, bigint>();
 
 async function seedRole(
   db: DatabaseClient,
-  opts: { panelAccess?: boolean; canEditRoles?: boolean } = {},
+  opts: { panelAccess?: boolean; canEditRoles?: boolean; isSystemRole?: boolean } = {},
 ): Promise<string> {
   const id = uuidv7();
   await db.insert(roles).values({
     id,
     name: `VipTierRole-${id}`,
     color: 'neutral',
-    isSystemRole: false,
+    isSystemRole: opts.isSystemRole ?? false,
     panelAccess: opts.panelAccess ?? false,
     canEditRoles: opts.canEditRoles ?? false,
   });
@@ -92,7 +92,7 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     });
     // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
-    tierRoleId = await seedRole(h.db, { panelAccess: true });
+    tierRoleId = await seedRole(h.db);
   });
 
   afterAll(async () => {
@@ -139,6 +139,52 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: 'role_not_found' });
+  });
+
+  it('refuses to create a tier on a panel-access or system role (403)', async () => {
+    // Regression (#31, finding 362): the renewal tick grants vip_tiers.role_id
+    // without the purchase-path escalation guard, so the catalog itself must
+    // never point at a role that opens the panel or is a system role.
+    for (const opts of [{ panelAccess: true }, { isSystemRole: true }]) {
+      const roleId = await seedRole(h.db, opts);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/vip-tiers',
+        headers: { cookie: ownerCookie },
+        payload: { name: `VIP Escalate ${uuidv7()}`, role_id: roleId },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'role_grants_panel_access' });
+      const rows = await h.db.select().from(vipTiers).where(eq(vipTiers.roleId, roleId));
+      expect(rows).toHaveLength(0);
+    }
+  });
+
+  it('refuses to re-point a tier at a panel-access or system role (403) and leaves it unchanged', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP Repoint ${uuidv7()}`, role_id: tierRoleId, default_days: 30 },
+    });
+    expect(created.statusCode).toBe(201);
+    const tier = created.json() as { id: string };
+    createdTierIds.push(tier.id);
+
+    for (const opts of [{ panelAccess: true }, { isSystemRole: true }]) {
+      const roleId = await seedRole(h.db, opts);
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/vip-tiers/${tier.id}`,
+        headers: { cookie: ownerCookie },
+        payload: { role_id: roleId },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'role_grants_panel_access' });
+    }
+
+    const [row] = await h.db.select().from(vipTiers).where(eq(vipTiers.id, tier.id)).limit(1);
+    expect(row?.roleId).toBe(tierRoleId);
   });
 
   it('creates a tier, lists it, and writes a create audit row', async () => {
@@ -228,7 +274,7 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
   });
 
   it('refuses to delete a tier with active assignments (409) and allows it once cleared', async () => {
-    const deleteRoleId = await seedRole(h.db, { panelAccess: true });
+    const deleteRoleId = await seedRole(h.db);
     const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/vip-tiers',
@@ -271,7 +317,7 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     // Regression (#169, VIPSUB-3): vip_tiers.role_id is ON DELETE RESTRICT
     // (migration 0035). Deleting a referenced role used to surface the raw
     // Postgres FK violation as a 500; it must be a clean 409 instead.
-    const referencedRoleId = await seedRole(h.db, { panelAccess: true });
+    const referencedRoleId = await seedRole(h.db);
     const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/vip-tiers',
@@ -411,7 +457,7 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
   });
 
   it('treats an expired grant as inactive so its tier can be deleted', async () => {
-    const expiredRoleId = await seedRole(h.db, { panelAccess: true });
+    const expiredRoleId = await seedRole(h.db);
     const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/vip-tiers',
