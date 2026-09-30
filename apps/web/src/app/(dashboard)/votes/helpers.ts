@@ -124,16 +124,30 @@ export function defaultFilters(): VoteFilters {
   };
 }
 
+/** The API validates `serverId` as a uuid and answers 400 for the whole list otherwise. */
+const SERVER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** API limit for `initiatorQuery` (apps/api/src/routes/votes.ts). */
+export const INITIATOR_QUERY_MAX_LENGTH = 128;
+
+/** Maps a failed list request to Russian text; raw `HTTP 500` never reaches the operator. */
+export function describeLoadError(error: unknown): string {
+  const status = error instanceof Error ? /^HTTP (\d+)$/.exec(error.message)?.[1] : undefined;
+  return status
+    ? `Сервер вернул ошибку (код ${status}).`
+    : 'Не удалось связаться с сервером. Проверьте подключение.';
+}
+
 export function parseFilters(params: ParamsLike): VoteFilters {
   const servers = (params.get('servers') ?? '')
     .split(',')
     .map((entry) => entry.trim())
-    .filter(Boolean);
+    .filter((entry) => SERVER_ID_RE.test(entry));
   return {
     servers,
     voteType: isVoteType(params.get('type')) ? (params.get('type') as VoteType) : '',
     result: isResult(params.get('result')) ? (params.get('result') as VoteResult) : '',
-    initiatorQuery: params.get('q')?.trim() ?? '',
+    initiatorQuery: (params.get('q')?.trim() ?? '').slice(0, INITIATOR_QUERY_MAX_LENGTH),
     preset: isPreset(params.get('preset')) ? (params.get('preset') as DatePreset) : 'all',
     from: params.get('from')?.trim() ?? '',
     to: params.get('to')?.trim() ?? '',
@@ -178,7 +192,10 @@ function parseDateInput(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
   const parsed = new Date(year, month - 1, day);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  // `new Date(2024, 1, 31)` rolls over to 2 March: reject days that do not exist.
+  const isRealDay =
+    parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day;
+  return isRealDay ? parsed : null;
 }
 
 export interface DateRange {
@@ -261,13 +278,6 @@ export const RESULT_TONE_LABELS: Record<ResultTone, string> = {
   failed: 'Отклонено',
   cancelled: 'Отменено',
   pending: 'В процессе',
-};
-
-export const RESULT_TONE_CLASSES: Record<ResultTone, string> = {
-  passed: 'border-emerald-800 bg-emerald-950/60 text-emerald-300',
-  failed: 'border-red-900 bg-red-950/50 text-red-300',
-  cancelled: 'border-amber-900 bg-amber-950/40 text-amber-300',
-  pending: 'border-neutral-800 bg-neutral-900 text-neutral-400',
 };
 
 export function resultLabel(result: string | null): string {

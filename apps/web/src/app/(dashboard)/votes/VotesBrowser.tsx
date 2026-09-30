@@ -31,8 +31,10 @@ import {
   buildListApiQuery,
   buildQueryString,
   DATE_PRESETS,
+  describeLoadError,
   formatDateTime,
   formatDuration,
+  INITIATOR_QUERY_MAX_LENGTH,
   mapChain,
   mergeVotePage,
   PAGE_LIMIT,
@@ -122,7 +124,7 @@ export function VotesBrowser() {
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (current()) setError(describeLoadError(err));
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -136,22 +138,26 @@ export function VotesBrowser() {
     };
   }, [loadFirstPage]);
 
-  useEffect(() => {
+  const loadTotal = useCallback(() => {
     let cancelled = false;
-    setTotal(null);
     fetch(`/api/v1/votes/count?${buildCountApiQuery(filters)}`, {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : { total: 0 }))
+      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
       .then((data) => {
-        if (!cancelled) setTotal(data.total);
+        if (!cancelled && data) setTotal(data.total);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [filters]);
+
+  useEffect(() => {
+    setTotal(null);
+    return loadTotal();
+  }, [loadTotal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,7 +192,7 @@ export function VotesBrowser() {
       setItems((prev) => appendVotePage(prev, data.items));
       setNextCursor(data.next_cursor);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeLoadError(err));
     } finally {
       setLoadingMore(false);
     }
@@ -204,6 +210,7 @@ export function VotesBrowser() {
   }, [loadMore, nextCursor]);
 
   const refreshHead = useCallback(() => {
+    loadTotal();
     if (filters.order !== 'desc') return;
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
       credentials: 'include',
@@ -215,7 +222,7 @@ export function VotesBrowser() {
         setItems((prev) => mergeVotePage(data.items, prev));
       })
       .catch(() => {});
-  }, [filters]);
+  }, [filters, loadTotal]);
   useLiveSubscription('vote.ended', refreshHead);
 
   const serverOptions = useMemo(() => {
@@ -325,7 +332,9 @@ function FilterPanel({
       <FieldRow label="Инициатор">
         <SearchField
           value={filters.initiatorQuery}
-          onCommit={(value) => onChange({ initiatorQuery: value.trim() })}
+          onCommit={(value) =>
+            onChange({ initiatorQuery: value.trim().slice(0, INITIATOR_QUERY_MAX_LENGTH) })
+          }
           label="Поиск по инициатору"
           placeholder="Ник инициатора"
           clearLabel="Очистить поиск по инициатору"

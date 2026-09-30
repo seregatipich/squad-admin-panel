@@ -5,7 +5,9 @@ import {
   buildListApiQuery,
   buildQueryString,
   defaultFilters,
+  describeLoadError,
   formatDuration,
+  INITIATOR_QUERY_MAX_LENGTH,
   mapChain,
   mergeVotePage,
   parseFilters,
@@ -45,16 +47,39 @@ function makeVote(overrides: Partial<VoteListItem> = {}): VoteListItem {
   };
 }
 
+const A = '11111111-1111-4111-8111-111111111111';
+const B = '22222222-2222-4222-8222-222222222222';
+
 describe('parseFilters', () => {
+  it('drops server ids that are not uuids instead of sending them to the API', () => {
+    expect(parseFilters(params(`servers=abc,${A},,not-a-uuid`)).servers).toEqual([A]);
+  });
+
+  it('caps the initiator query at the API limit', () => {
+    const parsed = parseFilters(params(`q=${'x'.repeat(200)}`));
+    expect(parsed.initiatorQuery).toHaveLength(INITIATOR_QUERY_MAX_LENGTH);
+  });
+
+  it('ignores custom dates that do not exist on the calendar', () => {
+    const range = resolveDateRange({
+      ...defaultFilters(),
+      preset: 'custom',
+      from: '2024-02-31',
+      to: '2024-02-29',
+    });
+    expect(range.dateFrom).toBeUndefined();
+    expect(range.dateTo?.getDate()).toBe(29);
+  });
+
   it('returns defaults for empty params', () => {
     expect(parseFilters(params(''))).toEqual(defaultFilters());
   });
 
   it('parses all filters from the query string', () => {
     const parsed = parseFilters(
-      params('servers=a,b&type=map_change&result=failed&q=Rambo&preset=week&order=asc'),
+      params(`servers=${A},${B}&type=map_change&result=failed&q=Rambo&preset=week&order=asc`),
     );
-    expect(parsed.servers).toEqual(['a', 'b']);
+    expect(parsed.servers).toEqual([A, B]);
     expect(parsed.voteType).toBe('map_change');
     expect(parsed.result).toBe('failed');
     expect(parsed.initiatorQuery).toBe('Rambo');
@@ -74,7 +99,7 @@ describe('parseFilters', () => {
 describe('buildQueryString round-trip', () => {
   it('preserves filters through parse', () => {
     const filters: VoteFilters = {
-      servers: ['s1', 's2'],
+      servers: [A, B],
       voteType: 'admin',
       result: 'cancelled',
       initiatorQuery: 'Ghost',
@@ -207,5 +232,16 @@ describe('mergeVotePage / appendVotePage', () => {
     const existing = [makeVote({ id: 'v1' })];
     const incoming = [makeVote({ id: 'v1' }), makeVote({ id: 'v2' })];
     expect(appendVotePage(existing, incoming).map((vote) => vote.id)).toEqual(['v1', 'v2']);
+  });
+});
+
+describe('describeLoadError', () => {
+  it('turns an HTTP status into Russian text', () => {
+    expect(describeLoadError(new Error('HTTP 500'))).toBe('Сервер вернул ошибку (код 500).');
+  });
+
+  it('falls back to a connection message for network failures and non-Error rejections', () => {
+    expect(describeLoadError(new TypeError('Failed to fetch'))).toMatch(/связаться с сервером/);
+    expect(describeLoadError(undefined)).toMatch(/связаться с сервером/);
   });
 });
