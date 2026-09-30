@@ -89,8 +89,9 @@ export class RconCommandQueue {
     this.stream = rconCommandStream(opts.serverId);
     this.blockMs = opts.blockMs ?? DEFAULT_BLOCK_MS;
     this.count = opts.count ?? DEFAULT_COUNT;
-    this.consumerName =
-      opts.consumerName ?? `worker-rcon-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    // Stable per server: the queue is rebuilt on every RCON reconnect, and a
+    // random name per instance would leave one dead consumer in the group each time.
+    this.consumerName = opts.consumerName ?? `worker-rcon-${opts.serverId}`;
     this.resultTtlSeconds = opts.resultTtlSeconds ?? RESULT_TTL_SECONDS;
     this.reclaimMinIdleMs = opts.reclaimMinIdleMs ?? DEFAULT_RECLAIM_MIN_IDLE_MS;
     this.reclaimIntervalMs = opts.reclaimIntervalMs ?? DEFAULT_RECLAIM_INTERVAL_MS;
@@ -207,35 +208,46 @@ export class RconCommandQueue {
       await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
       return;
     }
+    let result: RconCommandResult;
     try {
       const command = buildOperatorCommand(request);
       const response = await this.opts.execute(command);
-      if (requestId) {
-        await this.writeResult({
-          ok: true,
-          server_id: this.opts.serverId,
-          request_id: requestId,
-          ...(commandName ? { command: commandName } : {}),
-          response,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
-        });
-      }
-      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      result = {
+        ok: true,
+        server_id: this.opts.serverId,
+        request_id: requestId ?? '',
+        ...(commandName ? { command: commandName } : {}),
+        response,
+        completed_at: new Date().toISOString(),
+        duration_ms: Date.now() - startedAt,
+      };
     } catch (err) {
-      if (requestId) {
-        await this.writeResult({
-          ok: false,
-          server_id: this.opts.serverId,
-          request_id: requestId,
-          ...(commandName ? { command: commandName } : {}),
-          error: (err as Error).message,
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
-        });
-      }
-      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      result = {
+        ok: false,
+        server_id: this.opts.serverId,
+        request_id: requestId ?? '',
+        ...(commandName ? { command: commandName } : {}),
+        error: (err as Error).message,
+        completed_at: new Date().toISOString(),
+        duration_ms: Date.now() - startedAt,
+      };
     }
+
+    if (requestId) {
+      try {
+        await this.writeResult(result);
+      } catch (err) {
+        // A command that already ran must not be reported as failed nor run again
+        // on redelivery, so a lost success result is logged and acknowledged.
+        // A lost failure result stays pending and is retried after reclaim.
+        if (!result.ok) throw err;
+        this.opts.log.error(
+          { err: (err as Error).message, requestId, serverId: this.opts.serverId },
+          'rcon command executed but its result could not be stored',
+        );
+      }
+    }
+    await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
   }
 
   private async writeResult(result: RconCommandResult): Promise<void> {
@@ -286,14 +298,13 @@ function validateBroadcastText(args: string[]): string {
 /**
  * Builds `AdminWarn <target> <message>`, reusing the same text-safety checks
  * as AdminBroadcast (no CR/LF/NUL, length cap) for the warning message. The
- * target is the player's EOS id, SteamID64, or in-game name — whatever the
- * caller resolved from the live roster.
+ * target must be a single token: the player's EOS id or SteamID64.
  */
 function buildAdminWarnCommand(args: string[]): string {
   if (args.length !== 2) {
     throw new Error('AdminWarn expects exactly two arguments: target id and message');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminWarn target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminWarn target');
   const message = assertSafeSingleLineText(args[1], 'AdminWarn message', BROADCAST_MAX_CHARS);
   return `AdminWarn ${target} ${message}`;
 }
@@ -301,7 +312,7 @@ function buildAdminWarnCommand(args: string[]): string {
 /**
  * Builds `AdminKick <target> <reason>`, reusing the same text-safety checks as
  * AdminWarn (no CR/LF/NUL, length cap). The target is the player's EOS id,
- * SteamID64, or in-game name resolved by the caller; the reason is surfaced to
+ * SteamID64 (a single token) resolved by the caller; the reason is surfaced to
  * the kicked player. Automated kicks (banned-name / external-ban / clan-tag
  * enforcement) enqueue this command via the worker-rcon queue.
  */
@@ -309,7 +320,7 @@ function buildAdminKickCommand(args: string[]): string {
   if (args.length !== 2) {
     throw new Error('AdminKick expects exactly two arguments: target id and reason');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminKick target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminKick target');
   const reason = assertSafeSingleLineText(args[1], 'AdminKick reason', BROADCAST_MAX_CHARS);
   return `AdminKick ${target} ${reason}`;
 }
@@ -326,7 +337,7 @@ function buildAdminBanCommand(args: string[]): string {
   if (args.length !== 3) {
     throw new Error('AdminBan expects exactly three arguments: target id, ban length and reason');
   }
-  const target = assertSafeSingleLineText(args[0], 'AdminBan target', TARGET_MAX_CHARS);
+  const target = assertSafeTarget(args[0], 'AdminBan target');
   const banLength = assertValidBanLength(args[1]);
   const reason = assertSafeSingleLineText(args[2], 'AdminBan reason', BROADCAST_MAX_CHARS);
   return `AdminBan ${target} ${banLength} ${reason}`;
@@ -350,6 +361,18 @@ function assertSafeSingleLineText(
   if (!text) throw new Error(`${label} is required`);
   if (text.length > maxChars) throw new Error(`${label} exceeds ${maxChars} characters`);
   if (/[\r\n\0]/u.test(text)) throw new Error(`unsafe ${label}`);
+  return text;
+}
+
+/**
+ * Squad reads the first word after the command as the target and the rest as
+ * the reason, so a target containing whitespace (an in-game name such as
+ * `Bob Smith`) would silently address a different player. It is rejected
+ * instead; callers should pass the EOS id or SteamID64.
+ */
+function assertSafeTarget(value: string | undefined, label: string): string {
+  const text = assertSafeSingleLineText(value, label, TARGET_MAX_CHARS);
+  if (/\s/u.test(text)) throw new Error(`${label} must not contain whitespace`);
   return text;
 }
 
