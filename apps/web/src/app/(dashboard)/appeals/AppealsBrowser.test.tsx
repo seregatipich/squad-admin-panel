@@ -229,6 +229,23 @@ describe('AppealsBrowser', () => {
   );
 
   it(
+    'shows a Russian message instead of rendering when the list response has a wrong shape (#491)',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() =>
+          Promise.resolve(new Response(JSON.stringify({ items: 'oops' }), { status: 200 })),
+        ),
+      );
+      render(<AppealsBrowser />);
+      await waitFor(() =>
+        expect(screen.getByText(/Неожиданный формат ответа сервера/)).toBeInTheDocument(),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'jumps back to the last page when a decision empties the current one (#487)',
     async () => {
       vi.mocked(useSearchParams).mockReturnValue(
