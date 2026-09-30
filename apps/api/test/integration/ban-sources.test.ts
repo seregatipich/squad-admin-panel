@@ -153,6 +153,13 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.on_match).toBe('alert');
   });
 
+  it('rejects a discord_url on a non-http(s) scheme (#445)', async () => {
+    const { statusCode } = await createSource(managerCookie, {
+      discord_url: 'javascript:alert(document.cookie)',
+    });
+    expect(statusCode).toBe(400);
+  });
+
   it('rejects kick for a non-trusted source with 422', async () => {
     const { statusCode, body } = await createSource(managerCookie, {
       trust_level: 'normal',

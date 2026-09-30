@@ -83,6 +83,49 @@ function parseProfile(value: string): SteamProfile | null {
   }
 }
 
+/** Validates a value parsed from the bans cache actually has the SteamBanInfo shape. */
+function isSteamBanInfo(value: unknown): value is SteamBanInfo {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.steamId64 === 'string' &&
+    typeof v.communityBanned === 'boolean' &&
+    typeof v.vacBanned === 'boolean' &&
+    typeof v.vacBanCount === 'number' &&
+    typeof v.gameBanCount === 'number' &&
+    (v.daysSinceLastBan === null || typeof v.daysSinceLastBan === 'number') &&
+    (v.economyBan === null || typeof v.economyBan === 'string')
+  );
+}
+
+function parseCachedBan(value: string): SteamBanInfo | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isSteamBanInfo(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Validates a value parsed from the owned-games cache actually has the SteamOwnedGames shape. */
+function isSteamOwnedGames(value: unknown): value is SteamOwnedGames {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    (v.ownsSquad === null || typeof v.ownsSquad === 'boolean') &&
+    (v.playtimeMinutes === null || typeof v.playtimeMinutes === 'number')
+  );
+}
+
+function parseCachedOwnedGames(value: string): SteamOwnedGames | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isSteamOwnedGames(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchSteamProfiles(
   steamIds: readonly bigint[],
   deps: SteamApiDeps,
@@ -103,42 +146,57 @@ export async function fetchSteamProfiles(
     cold.push(id);
   }
 
+  let hadFailure = false;
   for (const batch of chunk(cold, STEAM_BATCH_SIZE)) {
     const url = new URL('https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/');
     url.searchParams.set('key', deps.apiKey);
     url.searchParams.set('steamids', batch.join(','));
-    const response = await steamGet(url, deps);
-    if (!response.ok) return null;
-    const payload = (await response.json()) as {
-      response?: {
-        players?: Array<{
-          steamid?: string;
-          personaname?: string;
-          avatarfull?: string;
-          communityvisibilitystate?: number;
-          timecreated?: number;
-        }>;
+    try {
+      const response = await steamGet(url, deps);
+      if (!response.ok) {
+        hadFailure = true;
+        continue;
+      }
+      const payload = (await response.json()) as {
+        response?: {
+          players?: Array<{
+            steamid?: string;
+            personaname?: string;
+            avatarfull?: string;
+            communityvisibilitystate?: number;
+            timecreated?: number;
+          }>;
+        };
       };
-    };
-    for (const raw of payload.response?.players ?? []) {
-      if (!raw.steamid) continue;
-      const profile: SteamProfile = {
-        persona: raw.personaname ?? '',
-        avatarUrl: raw.avatarfull ?? '',
-        visibility: Number.isFinite(raw.communityvisibilitystate)
-          ? Number(raw.communityvisibilitystate)
-          : null,
-        createdAt: Number.isFinite(raw.timecreated) ? Number(raw.timecreated) : null,
-      };
-      result.set(raw.steamid, profile);
-      await deps.redis.set(
-        `${PROFILE_CACHE_PREFIX}${raw.steamid}`,
-        JSON.stringify(profile),
-        'EX',
-        PROFILE_CACHE_TTL_SECONDS,
-      );
+      for (const raw of payload.response?.players ?? []) {
+        if (!raw.steamid) continue;
+        const profile: SteamProfile = {
+          persona: raw.personaname ?? '',
+          avatarUrl: raw.avatarfull ?? '',
+          visibility: Number.isFinite(raw.communityvisibilitystate)
+            ? Number(raw.communityvisibilitystate)
+            : null,
+          createdAt: Number.isFinite(raw.timecreated) ? Number(raw.timecreated) : null,
+        };
+        result.set(raw.steamid, profile);
+        await deps.redis.set(
+          `${PROFILE_CACHE_PREFIX}${raw.steamid}`,
+          JSON.stringify(profile),
+          'EX',
+          PROFILE_CACHE_TTL_SECONDS,
+        );
+      }
+    } catch {
+      // A batch that throws (network error, non-JSON response body, …) is
+      // skipped rather than discarding the results of earlier batches/cache.
+      hadFailure = true;
     }
   }
+  // Only report total failure when nothing at all was recovered, so callers
+  // keep their existing "null means the whole call failed" contract; a
+  // partial success from other batches/the cache is returned instead of
+  // being thrown away.
+  if (hadFailure && result.size === 0) return null;
   return result;
 }
 
@@ -183,36 +241,42 @@ export async function fetchSteamBans(
   const cold: string[] = [];
   for (const id of uniqueIds(steamIds)) {
     const cached = await deps.redis.get(`${BANS_CACHE_PREFIX}${id}`);
-    if (cached) {
-      try {
-        result.set(id, JSON.parse(cached) as SteamBanInfo);
-        continue;
-      } catch {
-        // Corrupt cache entries are replaced by a live answer.
-      }
+    const info = cached ? parseCachedBan(cached) : null;
+    if (info) {
+      result.set(id, info);
+      continue;
     }
     cold.push(id);
   }
 
+  let hadFailure = false;
   for (const batch of chunk(cold, STEAM_BANS_BATCH_SIZE)) {
     const url = new URL('https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/');
     url.searchParams.set('key', deps.apiKey);
     url.searchParams.set('steamids', batch.join(','));
-    const response = await steamGet(url, deps);
-    if (!response.ok) return null;
-    const payload = (await response.json()) as { players?: RawBanEntry[] };
-    for (const raw of payload.players ?? []) {
-      const info = normaliseBan(raw);
-      if (!info) continue;
-      result.set(info.steamId64, info);
-      await deps.redis.set(
-        `${BANS_CACHE_PREFIX}${info.steamId64}`,
-        JSON.stringify(info),
-        'EX',
-        BANS_CACHE_TTL_SECONDS,
-      );
+    try {
+      const response = await steamGet(url, deps);
+      if (!response.ok) {
+        hadFailure = true;
+        continue;
+      }
+      const payload = (await response.json()) as { players?: RawBanEntry[] };
+      for (const raw of payload.players ?? []) {
+        const info = normaliseBan(raw);
+        if (!info) continue;
+        result.set(info.steamId64, info);
+        await deps.redis.set(
+          `${BANS_CACHE_PREFIX}${info.steamId64}`,
+          JSON.stringify(info),
+          'EX',
+          BANS_CACHE_TTL_SECONDS,
+        );
+      }
+    } catch {
+      hadFailure = true;
     }
   }
+  if (hadFailure && result.size === 0) return null;
   return result;
 }
 
@@ -225,11 +289,8 @@ export async function fetchSteamOwnedGames(
   const key = `${OWNED_GAMES_CACHE_PREFIX}${steamId64}`;
   const cached = await deps.redis.get(key);
   if (cached) {
-    try {
-      return JSON.parse(cached) as SteamOwnedGames;
-    } catch {
-      // Corrupt cache entries are replaced by a live answer.
-    }
+    const info = parseCachedOwnedGames(cached);
+    if (info) return info;
   }
 
   const url = new URL('https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/');
@@ -239,11 +300,17 @@ export async function fetchSteamOwnedGames(
   url.searchParams.set('include_played_free_games', 'true');
   url.searchParams.set('appids_filter[0]', String(SQUAD_APP_ID));
 
-  const response = await steamGet(url, deps);
-  if (!response.ok) return null;
-  const payload = (await response.json()) as {
-    response?: { games?: Array<{ appid?: number; playtime_forever?: number }> };
-  };
+  let response: Response;
+  let payload: { response?: { games?: Array<{ appid?: number; playtime_forever?: number }> } };
+  try {
+    response = await steamGet(url, deps);
+    if (!response.ok) return null;
+    payload = (await response.json()) as {
+      response?: { games?: Array<{ appid?: number; playtime_forever?: number }> };
+    };
+  } catch {
+    return null;
+  }
   const games = payload.response?.games;
   const squad = games?.find((game) => game.appid === SQUAD_APP_ID);
   const result: SteamOwnedGames = Array.isArray(games)

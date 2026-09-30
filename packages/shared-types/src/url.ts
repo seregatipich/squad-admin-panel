@@ -34,3 +34,25 @@ export function httpUrlSchema(
       { message: `URL must use one of: ${protocols.join(', ')}` },
     );
 }
+
+/** Schemes an operator-facing `<a href>` may safely navigate to. */
+const SAFE_URL_SCHEMES = new Set(['http:', 'https:']);
+
+/**
+ * Whether `value` parses as an absolute URL on an http(s) scheme.
+ *
+ * The web app calls it before rendering an operator-supplied URL in `href`, in
+ * case an older row was written before {@link httpUrlSchema} validated it (#445).
+ */
+export function isSafeHttpUrl(value: string): boolean {
+  try {
+    return SAFE_URL_SCHEMES.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** {@link httpUrlSchema} restricted to `http:`/`https:`, for URLs rendered as a link. */
+export function httpUrl(maxLength: number) {
+  return httpUrlSchema(maxLength);
+}

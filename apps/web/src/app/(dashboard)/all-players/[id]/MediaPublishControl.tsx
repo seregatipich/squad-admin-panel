@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Checkbox, InlineBanner } from '@/components/ui';
+import { Button, Checkbox, InlineBanner, SafeExternalLink } from '@/components/ui';
 import {
   destinationLabel,
   destinationsForKind,
@@ -135,14 +135,9 @@ export function MediaPublishControl({
                 <span className="text-ink-2">{destinationLabel(publication.destination)}</span>
                 <span className="text-ink-3">{statusLabel(publication)}</span>
                 {publication.external_url && (
-                  <a
-                    href={publication.external_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-accent"
-                  >
+                  <SafeExternalLink href={publication.external_url} className="text-accent">
                     Открыть
-                  </a>
+                  </SafeExternalLink>
                 )}
                 {reason && <span className="text-ink-3">{reason}</span>}
                 {publication.status === 'failed' && (

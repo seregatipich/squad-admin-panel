@@ -16,6 +16,7 @@ import {
   InlineBanner,
   PageContainer,
   PageHeader,
+  SafeExternalLink,
   Select,
   Skeleton,
   Switch,
@@ -451,14 +452,12 @@ export default function BanSourcesPage() {
                   <p className="break-all font-mono text-xs text-ink-3">{source.url}</p>
 
                   {source.discord_url ? (
-                    <a
+                    <SafeExternalLink
                       href={source.discord_url}
-                      target="_blank"
-                      rel="noreferrer"
                       className="inline-block text-xs text-accent no-underline hover:brightness-110"
                     >
                       Discord сообщества
-                    </a>
+                    </SafeExternalLink>
                   ) : null}
 
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

@@ -35,6 +35,7 @@ import {
   formatAmount,
   formatBonusTs,
   isCredit,
+  matchesFilters,
   mergeBonusPage,
   prependTransaction,
   purchaseErrorText,
@@ -57,10 +58,18 @@ interface PurchaseResponse {
   role_expires_at: string;
 }
 
-export function BonusSection({ playerId }: { playerId: string }) {
+export function BonusSection({
+  playerId,
+  canManage,
+  canAssign,
+}: {
+  playerId: string;
+  /** `me.can_manage_economy`, already loaded by the player card (#435). */
+  canManage: boolean;
+  /** `me.permissions.includes('user:manage_roles')`, ditto. */
+  canAssign: boolean;
+}) {
   const [balance, setBalance] = useState<number | null>(null);
-  const [canManage, setCanManage] = useState(false);
-  const [canAssign, setCanAssign] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [filters, setFilters] = useState<BonusFilters>(EMPTY_BONUS_FILTERS);
   const [applied, setApplied] = useState<BonusFilters>(EMPTY_BONUS_FILTERS);
@@ -88,13 +97,6 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   useEffect(() => {
     void loadBalance();
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { can_manage_economy?: boolean; permissions?: string[] } | null) => {
-        setCanManage(body?.can_manage_economy ?? false);
-        setCanAssign(body?.permissions?.includes('user:manage_roles') ?? false);
-      })
-      .catch(() => {});
   }, [loadBalance]);
 
   const load = useCallback(
@@ -163,7 +165,12 @@ export function BonusSection({ playerId }: { playerId: string }) {
 
   function onAdjusted(result: AdjustResponse) {
     setBalance(result.balance);
-    setTransactions((prev) => prependTransaction(prev, result.transaction));
+    // Only splice the new row into the visible table when it would survive
+    // the current filters (#437); otherwise a "Списание"/date-range filter
+    // would show a row that a reload immediately drops again.
+    if (matchesFilters(result.transaction, applied)) {
+      setTransactions((prev) => prependTransaction(prev, result.transaction));
+    }
     setModalOpen(false);
   }
 

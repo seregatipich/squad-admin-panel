@@ -7,8 +7,9 @@ import { DiscordLinkSection } from './DiscordLinkSection';
 import type { DiscordLinkResponse } from './discord-link';
 
 const TEST_TIMEOUT_MS = 15_000;
-const SELF = { player_id: 'player-alpha' };
-const OTHER = { player_id: 'player-omega' };
+const SELF = { player_id: 'player-alpha', permissions: [] };
+const OTHER = { player_id: 'player-omega', permissions: ['user:manage_roles'] };
+const OTHER_WITHOUT_ASSIGN = { player_id: 'player-omega', permissions: [] };
 
 function linked(overrides: Partial<DiscordLinkResponse> = {}): DiscordLinkResponse {
   return {
@@ -189,6 +190,46 @@ describe('DiscordLinkSection', () => {
 
       await screen.findByText('Сквадди');
       expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the force-unlink button up front for a viewer without user:manage_roles (#434)',
+    async () => {
+      stubFetch(200, linked());
+      render(<DiscordLinkSection playerId="player-alpha" me={OTHER_WITHOUT_ASSIGN} />);
+
+      await screen.findByText('Сквадди');
+      expect(
+        screen.queryByRole('button', { name: 'Отвязать принудительно' }),
+      ).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows a dedicated error banner for a failed unlink and retries the unlink, not the load (#434)',
+    async () => {
+      const mock = stubFetchSequence({ status: 200, body: linked() }, { status: 500 });
+      render(<DiscordLinkSection playerId="player-alpha" me={SELF} />);
+
+      const button = await screen.findByRole('button', { name: 'Отвязать' });
+      await userEvent.click(button);
+
+      await screen.findByText('Не удалось отвязать Discord: HTTP 500');
+      expect(mock).toHaveBeenCalledTimes(2);
+
+      mock.mockImplementationOnce(() => Promise.resolve(new Response(null, { status: 200 })));
+      const retry = screen.getByRole('button', { name: 'Повторить' });
+      await userEvent.click(retry);
+
+      await screen.findByText('Discord не привязан.');
+      // The retry re-issued the DELETE, it did not reload the section.
+      expect(mock).toHaveBeenCalledTimes(3);
+      const retryCall = mock.mock.calls[2] as unknown as [string, RequestInit];
+      expect(retryCall[0]).toBe('/api/v1/players/me/discord/link');
+      expect(retryCall[1].method).toBe('DELETE');
     },
     TEST_TIMEOUT_MS,
   );

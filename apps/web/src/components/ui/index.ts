@@ -54,6 +54,8 @@ export type { Breadcrumb, PageHeaderProps } from './PageHeader';
 export { PageHeader } from './PageHeader';
 export type { PaginationLabels, PaginationProps } from './Pagination';
 export { Pagination } from './Pagination';
+export type { SafeExternalLinkProps } from './SafeExternalLink';
+export { SafeExternalLink } from './SafeExternalLink';
 export type { SearchFieldProps } from './SearchField';
 export { SearchField } from './SearchField';
 export type { SegmentedControlItem } from './SegmentedControl';

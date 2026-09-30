@@ -5,6 +5,8 @@ import {
   formatRejectedMark,
   LINK_TYPE_LABELS_RU,
   PLAYER_LINK_TYPES,
+  parseCandidateResponse,
+  parseLinksResponse,
   splitCandidates,
 } from './alt-links';
 
@@ -136,5 +138,35 @@ describe('buildLinkPayload', () => {
       makeCandidate(),
     );
     expect(payload.note).toBe('test note');
+  });
+});
+
+describe('parseLinksResponse (#438)', () => {
+  it('accepts a well-formed response', () => {
+    const body = { links: [] };
+    expect(parseLinksResponse(body)).toEqual(body);
+  });
+
+  it('rejects a response missing the links array', () => {
+    expect(parseLinksResponse({})).toBeNull();
+    expect(parseLinksResponse({ links: 'nope' })).toBeNull();
+  });
+
+  it('rejects a non-object payload, e.g. an HTML error page parsed as JSON', () => {
+    expect(parseLinksResponse(null)).toBeNull();
+    expect(parseLinksResponse('<html>')).toBeNull();
+  });
+});
+
+describe('parseCandidateResponse (#438)', () => {
+  it('accepts a well-formed response', () => {
+    const body = { candidates: [makeCandidate()], total: 1 };
+    expect(parseCandidateResponse(body)).toEqual(body);
+  });
+
+  it('rejects a response missing candidates or total', () => {
+    expect(parseCandidateResponse({ candidates: [] })).toBeNull();
+    expect(parseCandidateResponse({ total: 1 })).toBeNull();
+    expect(parseCandidateResponse({ candidates: 'nope', total: 1 })).toBeNull();
   });
 });

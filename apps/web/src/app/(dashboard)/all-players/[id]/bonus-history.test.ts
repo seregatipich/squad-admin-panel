@@ -8,6 +8,7 @@ import {
   EMPTY_BONUS_FILTERS,
   formatAmount,
   isCredit,
+  matchesFilters,
   mergeBonusPage,
   prependTransaction,
   purchaseErrorText,
@@ -191,5 +192,21 @@ describe('purchaseErrorText', () => {
 
   it('falls back to the raw code for unknown errors', () => {
     expect(purchaseErrorText('mystery_code')).toBe('Ошибка: mystery_code');
+  });
+});
+
+describe('matchesFilters (#437)', () => {
+  it('matches everything against empty filters', () => {
+    expect(matchesFilters(tx(1), EMPTY_BONUS_FILTERS)).toBe(true);
+  });
+
+  it('rejects a transaction of the wrong type', () => {
+    expect(matchesFilters(tx(1, { type: 'earn_online' }), filters({ type: 'spend' }))).toBe(false);
+  });
+
+  it('rejects a transaction outside the applied date range', () => {
+    const applied = filters({ from: '2026-08-01', to: '2026-08-31' });
+    expect(matchesFilters(tx(1, { created_at: '2026-07-15T00:00:00.000Z' }), applied)).toBe(false);
+    expect(matchesFilters(tx(1, { created_at: '2026-08-15T00:00:00.000Z' }), applied)).toBe(true);
   });
 });

@@ -96,6 +96,21 @@ export function prependTransaction(
   return [incoming, ...prev];
 }
 
+/**
+ * Whether a freshly created transaction belongs in the currently filtered
+ * table (#437) — mirrors `chat-history.ts#matchesFilters`, which the live
+ * chat feed already uses for the same "only splice in a row that would
+ * survive a reload" reasoning.
+ */
+export function matchesFilters(tx: BonusTransaction, filters: BonusFilters): boolean {
+  if (filters.type && tx.type !== filters.type) return false;
+  const fromIso = dateInputToIso(filters.from, false);
+  if (fromIso && tx.created_at < fromIso) return false;
+  const toIso = dateInputToIso(filters.to, true);
+  if (toIso && tx.created_at > toIso) return false;
+  return true;
+}
+
 export function typeLabel(type: string): string {
   return TYPE_LABELS.get(type as BonusType) ?? type;
 }

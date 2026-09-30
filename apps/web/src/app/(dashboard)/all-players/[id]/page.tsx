@@ -56,6 +56,7 @@ import { DiscordLinkSection } from './DiscordLinkSection';
 import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
+import { flagEmoji } from './geo';
 import { IssueLinksSection } from './IssueLinksSection';
 import { ModerationHistorySection } from './ModerationHistorySection';
 import { NickBanSection } from './NickBanSection';
@@ -131,6 +132,7 @@ interface Me {
   player_id: string;
   permissions: string[];
   squad_permissions?: string[];
+  can_manage_economy?: boolean;
 }
 
 const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку игроков' } as const;
@@ -212,6 +214,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canChat = me?.squad_permissions?.includes('chat') ?? false;
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
+  const canManageEconomy = me?.can_manage_economy ?? false;
 
   async function copyEosId() {
     if (!player.eos_id) return;
@@ -341,7 +344,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <DiscordLinkSection playerId={playerId} me={me} />
 
-      <BonusSection playerId={playerId} />
+      <BonusSection playerId={playerId} canManage={canManageEconomy} canAssign={canManageRoles} />
 
       <SubscriptionGrantSection playerId={playerId} />
 
@@ -836,16 +839,6 @@ function PanelAccessSection({
       ) : null}
     </Card>
   );
-}
-
-function flagEmoji(countryCode: string | null): string {
-  if (!countryCode || countryCode.length !== 2) return '🏳️';
-  const base = 0x1f1e6;
-  const upper = countryCode.toUpperCase();
-  const first = upper.charCodeAt(0) - 65;
-  const second = upper.charCodeAt(1) - 65;
-  if (first < 0 || first > 25 || second < 0 || second > 25) return '🏳️';
-  return String.fromCodePoint(base + first) + String.fromCodePoint(base + second);
 }
 
 function locationLabel(ip: IpHistory): string {
