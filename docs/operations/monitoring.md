@@ -102,6 +102,35 @@ The dashboard reads the same checks (without the reason for a failure) from the 
 
 Do not use `audit_log` for diagnostic log noise. It covers only POST/PUT/PATCH/DELETE operations that mutate state. Read-only routes set `config.audit: false`.
 
+## Live events feed: NOTIFY load
+
+The API's live event list (`server.events.appended` frames) is driven by a
+Postgres trigger on `events` that calls `pg_notify('events_appended', …)` once per
+insert statement (migration 0132); `apps/api/src/plugins/events-feed.ts` LISTENs
+and coalesces over 250 ms. Every transaction that calls `pg_notify` takes
+Postgres's single notification-queue lock at commit, so the design only becomes a
+bottleneck when a very large number of separate commits write `events`.
+
+Measured on the dev stand (2026-09-23 to 2026-09-30): about 1,200 rows a day
+(only `squad.*` and `server.seeding_*` kinds, combat hits live in their own
+table), busiest second 5 rows, the whole database about 4 commits a second, queue
+usage 0. That is three orders of magnitude below where the lock matters, so the
+trigger is kept on purpose (audit finding #1327, issue #51).
+
+Check it any time:
+
+```bash
+docker compose exec postgres psql -U admin -d admin -c "select pg_notification_queue_usage()"
+docker compose exec postgres psql -U admin -d admin -c "select max(c) from (select date_trunc('second', occurred_at) s, count(*) c from events where occurred_at > now() - interval '24 hours' group by 1) t"
+```
+
+Revisit when `pg_notification_queue_usage()` stays above 0.1, or when the busiest
+second regularly exceeds 100 rows. The rollback-safe path is two releases: first
+add a second delivery channel (a Redis publish from the `events` writers, or an
+API-side poll of new rows) while the trigger stays, because the previous release's
+API receives live events only through `LISTEN events_appended`; drop the trigger
+in the release after that.
+
 ## Diagnostic checklist
 
 | Symptom | First steps |
