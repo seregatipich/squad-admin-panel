@@ -70,6 +70,34 @@ describe('#1047 throwing onStream callback', () => {
   });
 });
 
+describe('#1047 onStream callback throwing a non-Error', () => {
+  it('fails the call with the stringified value', async () => {
+    server.on('connection', (conn) => {
+      conn.on('data', (chunk) => {
+        const { id } = readReq(chunk);
+        conn.write(encodeFrame({ id, stream: 'stdout', data: 'aGk=' }));
+      });
+    });
+    const onLog = vi.fn();
+    const client = new BridgeClient({ socketPath, onLog, defaultTimeoutMs: 1_000 });
+    try {
+      const err = await client
+        .fileReadStream({ path: '/x' } as never, () => {
+          throw 'plain string failure';
+        })
+        .catch((e: unknown) => e);
+      expect((err as { code?: string }).code).toBe('internal');
+      expect((err as Error).message).toContain('stream callback failed: plain string failure');
+      expect(onLog).toHaveBeenCalledWith('bridge onStream callback threw', {
+        method: 'file_read_stream',
+        err: 'plain string failure',
+      });
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('#1048 reconnect', () => {
   it('drops a partial frame of the old socket and does not reject calls of the new socket', async () => {
     let first = true;
@@ -101,7 +129,7 @@ describe('#1048 reconnect', () => {
     server.on('connection', (conn) => {
       conn.on('data', (chunk) => {
         const { id } = readReq(chunk);
-        if (conns.length === 2) setTimeout(() => conn.write(pong(id)), 50);
+        if (conns.length === 2) setTimeout(() => conn.write(pong(id)), 300);
       });
     });
     await client.connect();
@@ -115,6 +143,25 @@ describe('#1048 reconnect', () => {
     oldClientSocket.destroy();
     oldSock.destroy();
     expect((await call).hostname).toBe('h');
+    await client.close();
+  });
+
+  it('ignores data arriving on a socket that is no longer the active one', async () => {
+    const onLog = vi.fn();
+    const client = new BridgeClient({ socketPath, onLog, defaultTimeoutMs: 1_000 });
+    await client.connect();
+    const replacedSock = conns[0] as Socket;
+    (client as unknown as { socket: Socket | undefined }).socket = undefined;
+    // A header promising more than the frame limit would drop the socket
+    // if the stale connection's bytes were decoded.
+    const oversized = Buffer.alloc(4);
+    oversized.writeUInt32BE(0xffff_ffff, 0);
+    replacedSock.write(oversized);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onLog).not.toHaveBeenCalledWith(
+      'bridge frame decode error; dropping socket',
+      expect.anything(),
+    );
     await client.close();
   });
 });
