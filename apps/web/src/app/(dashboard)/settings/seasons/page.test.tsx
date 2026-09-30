@@ -288,6 +288,41 @@ describe('seasons settings page', () => {
   );
 
   it(
+    'reports a network failure while closing a season and blocks a double click',
+    async () => {
+      const { fn, calls } = stubFetch({ items: [ACTIVE] });
+      let rejectClose: (reason: Error) => void = () => {};
+      const stubbed = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'PATCH') {
+          calls.push({ url: String(input), init });
+          return new Promise<Response>((_, reject) => {
+            rejectClose = reject;
+          });
+        }
+        return fn(input, init);
+      });
+      vi.stubGlobal('fetch', stubbed);
+      render(<SeasonsSettingsPage />);
+      await screen.findByText('Лето 2026');
+
+      const closeButton = screen.getByRole('button', { name: 'Закрыть' });
+      fireEvent.click(closeButton);
+      await waitFor(() => expect(closeButton).toBeDisabled());
+      fireEvent.click(closeButton);
+      expect(calls.filter((c) => c.init?.method === 'PATCH')).toHaveLength(1);
+
+      rejectClose(new TypeError('Failed to fetch'));
+
+      expect(
+        await screen.findByText('Не удалось связаться с сервером. Проверьте подключение.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Закрыть' })).toBeEnabled());
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'hides the management surface for good once a mutation returns 403',
     async () => {
       await renderPage({ items: [UPCOMING], mutationStatus: 403 });

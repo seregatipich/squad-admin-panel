@@ -64,6 +64,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   forbidden: 'Недостаточно прав.',
 };
 
+const NETWORK_ERROR_MESSAGE = 'Не удалось связаться с сервером. Проверьте подключение.';
+
 function describeError(code: unknown, status: number): string {
   if (typeof code === 'string' && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
   return `Ошибка ${status}`;
@@ -78,7 +80,12 @@ function isoToDay(iso: string): string {
   return iso.slice(0, 10);
 }
 
+/*
+ * Границы сезона хранятся как полночь UTC (`dayToIso`), поэтому и показываются
+ * в UTC: в поясе браузера западнее UTC дата сместилась бы на предыдущий день.
+ */
 const dateFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'UTC',
   day: '2-digit',
   month: '2-digit',
   year: 'numeric',
@@ -105,6 +112,7 @@ export default function SeasonsSettingsPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -182,33 +190,40 @@ export default function SeasonsSettingsPage() {
       setNotice(editingId ? 'Сезон обновлён.' : 'Сезон создан.');
       resetForm();
       await load();
-    } catch (err) {
-      setError((err as Error).message);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
     } finally {
       setSubmitting(false);
     }
   }
 
   async function closeSeason(season: Season) {
+    setClosingId(season.id);
     setError(null);
     setNotice(null);
-    const res = await fetch(`/api/v1/seasons/${season.id}`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'closed' }),
-    });
-    if (res.status === 401 || res.status === 403) {
-      setCanManage(false);
-      return;
+    try {
+      const res = await fetch(`/api/v1/seasons/${season.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'closed' }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        setCanManage(false);
+        return;
+      }
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+        setError(describeError(body.error, res.status));
+        return;
+      }
+      setNotice('Сезон закрыт.');
+      await load();
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
+    } finally {
+      setClosingId(null);
     }
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: unknown };
-      setError(describeError(body.error, res.status));
-      return;
-    }
-    setNotice('Сезон закрыт.');
-    await load();
   }
 
   if (hidden) return null;
@@ -264,7 +279,11 @@ export default function SeasonsSettingsPage() {
                           Изменить
                         </Button>
                         {season.status === 'active' ? (
-                          <Button size="sm" onClick={() => void closeSeason(season)}>
+                          <Button
+                            size="sm"
+                            disabled={closingId !== null}
+                            onClick={() => void closeSeason(season)}
+                          >
                             Закрыть
                           </Button>
                         ) : null}
@@ -302,14 +321,14 @@ export default function SeasonsSettingsPage() {
                   <option value="active">Активный</option>
                 </Select>
               </FieldRow>
-              <FieldRow label="Начало">
+              <FieldRow label="Начало (UTC)">
                 <TextInput
                   type="date"
                   value={form.startsAt}
                   onChange={(event) => setForm({ ...form, startsAt: event.target.value })}
                 />
               </FieldRow>
-              <FieldRow label="Окончание">
+              <FieldRow label="Окончание (UTC, не включительно)">
                 <TextInput
                   type="date"
                   value={form.endsAt}
