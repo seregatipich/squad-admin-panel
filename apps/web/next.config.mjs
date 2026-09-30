@@ -18,7 +18,7 @@ function devEval() {
 }
 
 function baseCsp() {
-  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'`;
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com`;
 }
 
 /**
@@ -35,7 +35,7 @@ function baseCsp() {
  *   from blob URLs.
  */
 function configsCsp() {
-  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'`;
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'`;
 }
 
 /** @type {import('next').NextConfig} */

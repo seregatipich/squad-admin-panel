@@ -32,6 +32,7 @@ describe('middleware', () => {
     const res = middleware(makeRequest('/dashboard', false));
     expect(res.type).toBe('redirect');
     expect(res.url).toContain('/login');
+    expect(res.url).not.toContain('next=');
   });
 
   it('passes through authenticated requests', () => {

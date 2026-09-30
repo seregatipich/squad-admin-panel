@@ -13,20 +13,19 @@ export function useLiveSubscription<T extends LiveEvent['type']>(
   }, [type, handler]);
 }
 
-export function useLiveBusState() {
-  const bus = typeof window !== 'undefined' ? getLiveBus() : null;
-  return useSyncExternalStore(
-    (cb) => (bus ? bus.onStateChange(cb) : () => {}),
-    () => (bus ? bus.state() : 'closed'),
-    () => 'closed' as const,
-  );
+function subscribeToBusState(callback: () => void): () => void {
+  return getLiveBus().onStateChange(callback);
 }
 
-export function useBridgeState() {
-  const bus = typeof window !== 'undefined' ? getLiveBus() : null;
-  return useSyncExternalStore(
-    (cb) => (bus ? bus.onBridgeChange(cb) : () => {}),
-    () => (bus ? bus.bridgeState() : 'unknown'),
-    () => 'unknown' as const,
-  );
+function getBusState() {
+  return getLiveBus().state();
+}
+
+/**
+ * Current live-bus connection state. `subscribe` and the snapshot getters are
+ * module-level so their identity is stable across renders: an inline subscribe
+ * would make React unsubscribe and resubscribe on every render.
+ */
+export function useLiveBusState() {
+  return useSyncExternalStore(subscribeToBusState, getBusState, () => 'closed' as const);
 }

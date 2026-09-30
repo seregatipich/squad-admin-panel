@@ -1,16 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { useBridgeState, useLiveBusState, useLiveSubscription } from './use-live-bus';
+// @vitest-environment happy-dom
+import { renderHook } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
-describe('use-live-bus exports', () => {
-  it('useLiveSubscription is a function', () => {
-    expect(typeof useLiveSubscription).toBe('function');
+const onStateChange = vi.fn(() => () => {});
+vi.mock('./live-bus', () => ({
+  getLiveBus: () => ({ onStateChange, state: () => 'open', subscribe: () => () => {} }),
+}));
+
+import { useLiveBusState } from './use-live-bus';
+
+describe('useLiveBusState', () => {
+  it('returns the bus state', () => {
+    const { result } = renderHook(() => useLiveBusState());
+    expect(result.current).toBe('open');
   });
 
-  it('useLiveBusState is a function', () => {
-    expect(typeof useLiveBusState).toBe('function');
-  });
-
-  it('useBridgeState is a function', () => {
-    expect(typeof useBridgeState).toBe('function');
+  it('subscribes once across re-renders', () => {
+    onStateChange.mockClear();
+    const { rerender } = renderHook(() => useLiveBusState());
+    rerender();
+    rerender();
+    expect(onStateChange).toHaveBeenCalledTimes(1);
   });
 });

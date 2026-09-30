@@ -25,8 +25,12 @@ export default function LoginPage() {
     setError(params.get('error'));
     setSteamId(params.get('steam_id64'));
     (async () => {
-      const meRes = await fetch('/api/v1/me', { credentials: 'include' });
-      if (meRes.ok) window.location.href = '/dashboard';
+      try {
+        const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (meRes.ok) window.location.href = '/dashboard';
+      } catch {
+        // Сбой проверки сессии не мешает войти: страница входа остаётся доступной.
+      }
     })();
   }, []);
 

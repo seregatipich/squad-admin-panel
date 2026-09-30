@@ -26,8 +26,8 @@ export interface TokenContext {
 
 export function substituteTokens(body: string, context: TokenContext): string {
   return body
-    .replace(/\{player\}/g, context.player ?? '{player}')
-    .replace(/\{server\}/g, context.server ?? '{server}');
+    .replace(/\{player\}/g, () => context.player ?? '{player}')
+    .replace(/\{server\}/g, () => context.server ?? '{server}');
 }
 
 export function pickableTemplates(templates: MessageTemplate[]): MessageTemplate[] {

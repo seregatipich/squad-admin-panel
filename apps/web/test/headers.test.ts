@@ -108,19 +108,29 @@ describe('next.config.mjs headers()', () => {
     });
   });
 
-  it('leaves the production base policy byte-for-byte unchanged', async () => {
+  it('leaves the production base policy byte-for-byte as expected', async () => {
     vi.stubEnv('NODE_ENV', 'production');
 
     expect(await cspFor(BASE_ROUTE)).toBe(
-      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com",
     );
   });
 
-  it('leaves the production configs policy byte-for-byte unchanged', async () => {
+  it('leaves the production configs policy byte-for-byte as expected', async () => {
     vi.stubEnv('NODE_ENV', 'production');
 
     expect(await cspFor(CONFIGS_ROUTE)).toBe(
-      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'",
+      "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'",
     );
   });
+
+  it.each([BASE_ROUTE, CONFIGS_ROUTE])(
+    'allows Steam avatars and data: images on %s',
+    async (source) => {
+      const csp = await cspFor(source);
+
+      expect(csp).toContain("img-src 'self' data: https://avatars.steamstatic.com");
+      expect(csp).toContain('https://avatars.akamai.steamstatic.com');
+    },
+  );
 });

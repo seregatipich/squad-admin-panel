@@ -22,6 +22,21 @@ afterEach(() => {
 
 describe('SetupPage', () => {
   it(
+    'shows the retry banner when the status endpoint answers with an error',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => Promise.resolve(new Response('{"error":"boom"}', { status: 500 }))),
+      );
+      render(<SetupPage />);
+
+      expect(await screen.findByText('Не удалось загрузить статус.')).toBeInTheDocument();
+      expect(screen.queryByText(/Войдите через Steam/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'asks for the organization name once the first owner is claimed',
     async () => {
       stubStatus({ setup_completed: false, first_owner_claimed: true });
