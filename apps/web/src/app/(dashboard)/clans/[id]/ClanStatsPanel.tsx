@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -135,34 +135,41 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
   const [loading, setLoading] = useState(true);
   const [hoverDay, setHoverDay] = useState<string | null>(null);
 
-  const window = useMemo(() => {
+  const latestLoadRef = useRef(0);
+
+  const statsWindow = useMemo(() => {
     const to = todayUtcDay();
     return { from: subtractDays(to, range - 1), to };
   }, [range]);
 
   const load = useCallback(async () => {
+    const requestId = ++latestLoadRef.current;
     setLoading(true);
     setError(null);
     try {
-      const query = new URLSearchParams({ from: window.from, to: window.to });
+      const query = new URLSearchParams({ from: statsWindow.from, to: statsWindow.to });
       const res = await fetch(`/api/v1/clans/${clanId}/stats?${query.toString()}`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`Не удалось загрузить статистику (${res.status})`);
-      setData((await res.json()) as ClanStatsResponse);
+      const body = (await res.json()) as ClanStatsResponse;
+      // Ответ на устаревший период (7/30/90) не должен перезаписать актуальный.
+      if (requestId !== latestLoadRef.current) return;
+      setData(body);
     } catch (e) {
+      if (requestId !== latestLoadRef.current) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (requestId === latestLoadRef.current) setLoading(false);
     }
-  }, [clanId, window]);
+  }, [clanId, statsWindow]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const exportHref = `/api/v1/clans/${clanId}/stats/export?from=${window.from}&to=${window.to}&format=csv`;
+  const exportHref = `/api/v1/clans/${clanId}/stats/export?from=${statsWindow.from}&to=${statsWindow.to}&format=csv`;
   const maxDaySeconds = useMemo(
     () =>
       data

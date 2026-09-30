@@ -119,7 +119,23 @@ describe('ClanSettingsPanel', () => {
     render(<ClanSettingsPanel clanId="clan-1" initial={INITIAL} servers={[]} onSaved={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
     expect(
-      await screen.findByText('Не удалось сохранить изменения: clan_name_taken'),
+      await screen.findByText('Не удалось сохранить изменения: название уже занято'),
+    ).toBeInTheDocument();
+  });
+
+  it('never shows a raw API code or English network error to the user', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        patchClan: () =>
+          Promise.resolve(new Response(JSON.stringify({ error: 'weird_code' }), { status: 500 })),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ClanSettingsPanel clanId="clan-1" initial={INITIAL} servers={[]} onSaved={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(
+      await screen.findByText('Не удалось сохранить изменения: неизвестная ошибка'),
     ).toBeInTheDocument();
   });
 

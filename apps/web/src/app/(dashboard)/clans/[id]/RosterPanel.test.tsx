@@ -412,6 +412,53 @@ describe('RosterPanel (rendered)', () => {
   });
 });
 
+describe('RosterPanel paging', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('steps back to the last existing page when the current one becomes empty', async () => {
+    const pageOf = (page: number) => {
+      const emptied = page === 2;
+      return new Response(
+        JSON.stringify({
+          clan_id: 'clan-1',
+          items: emptied
+            ? []
+            : [member({ player_id: `p-${page}`, canonical_name: 'Боец страницы' })],
+          total: emptied ? 25 : 60,
+          page,
+          limit: 25,
+          priority_count: 0,
+          max_priority_slots: 5,
+        }),
+        { status: 200 },
+      );
+    };
+    const fetchSpy = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/me') return Promise.resolve(new Response('{}', { status: 200 }));
+      const page = Number(new URL(url, 'http://x').searchParams.get('page'));
+      return Promise.resolve(pageOf(page));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Вперёд' }));
+
+    await waitFor(() => {
+      const pages = fetchSpy.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.includes('/members'))
+        .map((url) => new URL(url, 'http://x').searchParams.get('page'));
+      expect(pages).toEqual(['1', '2', '1']);
+    });
+    expect(screen.queryByText('В клане пока нет участников')).not.toBeInTheDocument();
+  });
+});
+
 describe('RosterPanel — подтверждение удаления', () => {
   const ordinary = member({
     player_id: 'p-member',

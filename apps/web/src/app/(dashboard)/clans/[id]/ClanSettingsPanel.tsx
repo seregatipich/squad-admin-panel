@@ -41,8 +41,20 @@ const EXPIRE_PRESETS = [
   { label: '90 дней', days: 90 },
 ] as const;
 
+const API_ERROR_MESSAGES: Record<string, string> = {
+  forbidden: 'недостаточно прав',
+  unauthenticated: 'сессия истекла, войдите заново',
+  clan_not_found: 'клан не найден',
+  clan_name_taken: 'название уже занято',
+  invalid_primary_server: 'выбран недопустимый сервер',
+  invalid_body: 'некорректные данные',
+};
+
+const NETWORK_ERROR_MESSAGE = 'Не удалось связаться с сервером. Повторите попытку.';
+
 function errorMessage(prefix: string, body: { error?: string }): string {
-  return `${prefix}: ${body.error ?? 'unknown'}`;
+  const reason = (body.error && API_ERROR_MESSAGES[body.error]) ?? 'неизвестная ошибка';
+  return `${prefix}: ${reason}`;
 }
 
 /**
@@ -81,6 +93,7 @@ export default function ClanSettingsPanel({
   const [error, setError] = useState<string | null>(null);
   const [armed, setArmed] = useState(false);
   const [cooldownRemainingMs, setCooldownRemainingMs] = useState(0);
+  const [armedUntil, setArmedUntil] = useState(0);
   const [disbanding, setDisbanding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -110,12 +123,16 @@ export default function ClanSettingsPanel({
   ]);
 
   useEffect(() => {
-    if (!armed || cooldownRemainingMs <= 0) return;
+    if (!armed) return;
+    // Остаток считается от момента окончания, а не накоплением тиков: один
+    // интервал на всё ожидание и без дрейфа при троттлинге фоновой вкладки.
     const tick = setInterval(() => {
-      setCooldownRemainingMs((prev) => Math.max(0, prev - 100));
+      const remaining = Math.max(0, armedUntil - Date.now());
+      setCooldownRemainingMs(remaining);
+      if (remaining === 0) clearInterval(tick);
     }, 100);
     return () => clearInterval(tick);
-  }, [armed, cooldownRemainingMs]);
+  }, [armed, armedUntil]);
 
   const saveCore = useCallback(async () => {
     const trimmedName = name.trim();
@@ -148,8 +165,8 @@ export default function ClanSettingsPanel({
         return;
       }
       onSaved();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
     } finally {
       setSaving(false);
     }
@@ -174,8 +191,8 @@ export default function ClanSettingsPanel({
           return;
         }
         onSaved();
-      } catch (e) {
-        setError((e as Error).message);
+      } catch {
+        setError(NETWORK_ERROR_MESSAGE);
       } finally {
         setSaving(false);
       }
@@ -201,8 +218,8 @@ export default function ClanSettingsPanel({
       }
       setIsPublic(next);
       onSaved();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
     } finally {
       setSaving(false);
     }
@@ -210,6 +227,7 @@ export default function ClanSettingsPanel({
 
   const arm = useCallback(() => {
     setArmed(true);
+    setArmedUntil(Date.now() + DISBAND_COOLDOWN_MS);
     setCooldownRemainingMs(DISBAND_COOLDOWN_MS);
   }, []);
 
@@ -229,8 +247,8 @@ export default function ClanSettingsPanel({
         return;
       }
       router.push('/clans');
-    } catch (e) {
-      setError((e as Error).message);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
       setDisbanding(false);
       setConfirmOpen(false);
     }
