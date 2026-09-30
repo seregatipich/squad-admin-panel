@@ -10,7 +10,8 @@ import type { AutomationMatch } from '../src/automation-engine.js';
 
 const SERVER = '00000000-0000-0000-0000-0000000000aa';
 
-function match(overrides: Partial<AutomationMatch>): AutomationMatch {
+/** Builds a match; `overrides` may carry any actionType/action pair (including invalid ones under test). */
+function match(overrides: Record<string, unknown>): AutomationMatch {
   return {
     ruleId: 'rule-1',
     ruleName: 'r',
@@ -21,7 +22,7 @@ function match(overrides: Partial<AutomationMatch>): AutomationMatch {
     matched: { keyword: 'hello' },
     player: { playerId: 'p1', steamId64: '76561190000000001', eosId: null, name: 'Alice' },
     ...overrides,
-  };
+  } as AutomationMatch;
 }
 
 function makeDeps() {
@@ -99,6 +100,22 @@ describe('runMatch — real firing', () => {
     expect(notified).toEqual([{ message: 'wake up', channels: ['email'] }]);
     expect(draft.status).toBe('executed');
     expect(runs[0]?.actionResult).toMatchObject({ delivered: true });
+  });
+
+  it('records skipped, not executed, when notify_admin was not delivered (finding #1171)', async () => {
+    const { deps, runs } = makeDeps();
+    deps.notifyAdmin = vi.fn(async () => ({ delivered: false, detail: { via: 'audit_log' } }));
+    const draft = await runMatch(
+      deps,
+      match({ actionType: 'notify_admin', action: { message: 'wake up', channels: ['email'] } }),
+      { dryRun: false },
+    );
+    expect(draft.status).toBe('skipped');
+    expect(runs[0]?.actionResult).toMatchObject({
+      delivered: false,
+      reason: 'not_delivered',
+      detail: { via: 'audit_log' },
+    });
   });
 
   it('records skipped when a kick has no resolvable target', async () => {

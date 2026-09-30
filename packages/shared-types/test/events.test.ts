@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   altBanEvasionSuspectedPayload,
   bannameMatchedPayload,
@@ -7,6 +7,7 @@ import {
   externalBanMatchedPayload,
   matchStateChangedPayload,
   moderationActionPayload,
+  type PlayerConnectedPayload,
   playerConnectedPayload,
   playerDisconnectedPayload,
   playerReportPayload,
@@ -226,7 +227,9 @@ describe('validatePayload dispatcher', () => {
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect((res.data as { name: string }).name).toBe('P');
+      // Compile-time check: data is the inferred payload, not `unknown` (finding #1179).
+      expectTypeOf(res.data).toEqualTypeOf<PlayerConnectedPayload>();
+      expect(res.data.name).toBe('P');
     }
   });
 

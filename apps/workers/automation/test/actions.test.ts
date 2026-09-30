@@ -10,7 +10,8 @@ import type { AutomationMatch } from '../src/rules/engine.js';
 
 const SERVER = '00000000-0000-0000-0000-0000000000aa';
 
-function match(overrides: Partial<AutomationMatch>): AutomationMatch {
+/** Builds a match; `overrides` may carry any actionType/action pair (including invalid ones under test). */
+function match(overrides: Record<string, unknown>): AutomationMatch {
   return {
     ruleId: 'rule-1',
     ruleName: 'r',
@@ -21,7 +22,7 @@ function match(overrides: Partial<AutomationMatch>): AutomationMatch {
     matched: { keyword: 'hello' },
     player: { playerId: 'p1', steamId64: '76561190000000001', eosId: null, name: 'Alice' },
     ...overrides,
-  };
+  } as AutomationMatch;
 }
 
 function makeDeps() {

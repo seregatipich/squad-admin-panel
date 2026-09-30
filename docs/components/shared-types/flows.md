@@ -58,9 +58,7 @@ HTTP request body
   │
   └─ Fastify route handler
        └─ z.parse / z.safeParse
-            ├─ serverCreateInput.parse(body)   → ServerCreateInput (typed)
-            ├─ serverRow.parse(dbRow)           → ServerRow
-            └─ paginated(serverRow).parse(...)  → { items, total, page, page_size }
+            └─ serverCreateInput.parse(body)   → ServerCreateInput (typed)
 
 On parse failure:
   └─ Zod throws ZodError → Fastify error handler → 400 with issues array

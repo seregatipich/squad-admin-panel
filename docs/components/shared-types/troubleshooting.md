@@ -13,7 +13,6 @@ grep -n 'fieldName' packages/shared-types/src/api.ts
 
 Common causes:
 - `id` fields must be valid UUIDs (use `uuidString = z.string().uuid()`). Sending an integer or an empty string fails.
-- `auditEntry.id` is `z.string()` not `z.number()` — `bigserial` IDs must be serialized as strings.
 - `.strict()` on all schemas: any extra key in the request body triggers a `ZodError`. Remove unknown fields before parsing.
 
 ## `EventEnvelope.type` causes a `ZodError` with "Invalid enum value"
@@ -36,21 +35,6 @@ Common causes:
 - `name` is longer than 128 characters.
 
 **Fix**: Ensure the producer serializes `steam_id64` as a string with `String(bigIntSteamId)` before embedding in the envelope payload.
-
-## `paginated` schema rejects response from the API
-
-**Symptom**: Client-side TypeScript or a consumer's `z.parse` fails on a paginated response.
-
-**Cause**: The API is returning a non-paginated response shape, or `total`/`page`/`page_size` fields are missing.
-
-**Diagnostic**:
-```bash
-curl -s https://squad-panel.lan/api/v1/servers | jq keys
-```
-
-Expected: `["items","page","page_size","total"]`.
-
-**Fix**: Ensure the API route uses `reply.send({ items, total, page, page_size })`. If a route was added without the paginated wrapper, update it to match.
 
 ## Type errors after adding a new `EventType`
 

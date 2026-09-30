@@ -1,11 +1,4 @@
-import type {
-  AutomationNotifyChannel,
-  AutomationRunStatus,
-  KickAction,
-  NotifyAdminAction,
-  RconCommandAction,
-  WarnAction,
-} from './automation.js';
+import type { AutomationNotifyChannel, AutomationRunStatus } from './automation.js';
 import type { AutomationMatch } from './automation-engine.js';
 import type { RconOperatorCommandName } from './rcon-commands.js';
 
@@ -79,26 +72,33 @@ function buildRconDispatch(
   if (match.serverId === null) return { error: 'no_server' };
   switch (match.actionType) {
     case 'rcon_command': {
-      const action = match.action as RconCommandAction;
-      return { dispatch: { serverId: match.serverId, command: action.command, args: action.args } };
+      return {
+        dispatch: {
+          serverId: match.serverId,
+          command: match.action.command,
+          args: match.action.args,
+        },
+      };
     }
     case 'kick': {
-      const action = match.action as KickAction;
       const target = resolveTarget(match);
       if (!target) return { error: 'no_target' };
       return {
-        dispatch: { serverId: match.serverId, command: 'AdminKick', args: [target, action.reason] },
+        dispatch: {
+          serverId: match.serverId,
+          command: 'AdminKick',
+          args: [target, match.action.reason],
+        },
       };
     }
     case 'warn': {
-      const action = match.action as WarnAction;
       const target = resolveTarget(match);
       if (!target) return { error: 'no_target' };
       return {
         dispatch: {
           serverId: match.serverId,
           command: 'AdminWarn',
-          args: [target, action.message],
+          args: [target, match.action.message],
         },
       };
     }
@@ -109,8 +109,11 @@ function buildRconDispatch(
 
 function describeIntent(match: AutomationMatch): Record<string, unknown> {
   if (match.actionType === 'notify_admin') {
-    const action = match.action as NotifyAdminAction;
-    return { kind: 'notify_admin', message: action.message, channels: action.channels };
+    return {
+      kind: 'notify_admin',
+      message: match.action.message,
+      channels: match.action.channels,
+    };
   }
   const built = buildRconDispatch(match);
   if (built && 'dispatch' in built) {
@@ -143,19 +146,24 @@ export async function runMatch(
     status = 'matched';
     actionResult = { skipped: true, dryRun: true, intent };
   } else if (match.actionType === 'notify_admin') {
-    const action = match.action as NotifyAdminAction;
     try {
       const outcome = await deps.notifyAdmin(match, {
-        message: action.message,
-        channels: action.channels,
+        message: match.action.message,
+        channels: match.action.channels,
       });
-      status = 'executed';
-      actionResult = {
-        executed: true,
-        intent,
-        delivered: outcome.delivered,
-        detail: outcome.detail,
-      };
+      if (outcome.delivered) {
+        status = 'executed';
+        actionResult = { executed: true, intent, delivered: true, detail: outcome.detail };
+      } else {
+        // Nothing reached an operator, so the history must not claim it did.
+        status = 'skipped';
+        actionResult = {
+          intent,
+          reason: 'not_delivered',
+          delivered: false,
+          detail: outcome.detail,
+        };
+      }
     } catch (err) {
       status = 'failed';
       actionResult = { intent, error: err instanceof Error ? err.message : String(err) };

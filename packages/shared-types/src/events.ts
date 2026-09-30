@@ -317,7 +317,12 @@ export const squadDisbandedPayload = z
   .strict();
 export type SquadDisbandedPayload = z.infer<typeof squadDisbandedPayload>;
 
-export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
+/**
+ * Payload schema per event type that has a typed payload. `satisfies` (rather
+ * than an annotation) keeps each entry's exact schema type, which is what lets
+ * {@link validatePayload} return the matching inferred payload type.
+ */
+export const PAYLOAD_SCHEMAS = {
   'player.connected': playerConnectedPayload,
   'player.disconnected': playerDisconnectedPayload,
   player_report: playerReportPayload,
@@ -343,13 +348,29 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'squad.created': squadCreatedPayload,
   'squad.leader_changed': squadLeaderChangedPayload,
   'squad.disbanded': squadDisbandedPayload,
-};
+} satisfies Partial<Record<EventType, z.ZodTypeAny>>;
 
-export function validatePayload<T extends EventType>(
+/** Event types that have a registered payload schema. */
+export type ValidatedEventType = keyof typeof PAYLOAD_SCHEMAS;
+
+export type PayloadValidation<D> = { ok: true; data: D } | { ok: false; errors: z.ZodIssue[] };
+
+/**
+ * Validates `payload` against the schema registered for `type`. For a type with
+ * a schema, `data` is the parsed payload typed as that schema's output; types
+ * without a schema (forward-compat) pass through as `unknown`.
+ *
+ * Not yet called by consumers: worker consumers still narrow `event.payload`
+ * with assertions (see `docs/components/shared-types/flows.md`).
+ */
+export function validatePayload<T extends ValidatedEventType>(
   type: T,
   payload: unknown,
-): { ok: true; data: unknown } | { ok: false; errors: z.ZodIssue[] } {
-  const schema = PAYLOAD_SCHEMAS[type];
+): PayloadValidation<z.infer<(typeof PAYLOAD_SCHEMAS)[T]>>;
+export function validatePayload(type: EventType, payload: unknown): PayloadValidation<unknown>;
+export function validatePayload(type: EventType, payload: unknown): PayloadValidation<unknown> {
+  const schemas: Partial<Record<EventType, z.ZodTypeAny>> = PAYLOAD_SCHEMAS;
+  const schema = schemas[type];
   if (!schema) return { ok: true, data: payload };
   const res = schema.safeParse(payload);
   if (res.success) return { ok: true, data: res.data };
