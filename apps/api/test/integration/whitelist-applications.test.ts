@@ -13,12 +13,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 // the chain is driven here from the real production tick to prove the acceptance
 // criterion "an expired term automatically clears the role and syncs Admins.cfg".
 import {
-  clearExpiredAssignments,
-  findExpiredAssignments,
+  createRoleExpiryDeps,
   type RoleExpiryTickDeps,
-  revokeAllSessionsForPlayer,
   runRoleExpiryTick,
-  writeRoleExpiryAuditEntry,
 } from '../../../workers/role-expirer/src/tick.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -738,11 +735,7 @@ describeIfDb('auto-expiry chain (VIPSUB-1 reuse — acceptance criterion)', () =
     // 3. Run the production role-expirer tick against the outbox publisher.
     await h.db.delete(adminsCfgSyncOutbox);
     const deps: RoleExpiryTickDeps = {
-      findExpiredAssignments: (now) => findExpiredAssignments(h.db, now, 500),
-      clearExpiredAssignments: (ids, now, event) => clearExpiredAssignments(h.db, ids, now, event),
-      writeAuditEntry: (entry) => writeRoleExpiryAuditEntry(h.db, entry),
-      invalidatePermissionCache: () => undefined,
-      revokeAllForPlayer: (playerId) => revokeAllSessionsForPlayer(h.db, h.redis, playerId),
+      ...createRoleExpiryDeps(h.db, h.redis),
       diag: { emit: async () => undefined },
     };
     const result = await runRoleExpiryTick(deps);

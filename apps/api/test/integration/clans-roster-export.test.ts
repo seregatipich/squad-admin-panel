@@ -55,7 +55,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'hyperlink formula',
     })
     .returning({ id: players.id });
-  formulaPlayerId = formulaMember.id;
+  formulaPlayerId = formulaMember!.id;
 
   clanId = uuidv7();
   await h.db.insert(clans).values({
