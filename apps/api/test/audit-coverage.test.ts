@@ -113,17 +113,7 @@ const LEGACY_SELF_AUDITED = new Set<string>([
   'PATCH /api/v1/notes/:noteId',
   'DELETE /api/v1/notes/:noteId',
   'POST /api/v1/players/:playerId/external-bans/:externalBanId/local-ban',
-  'PUT /api/v1/integrations/discord',
-  'POST /api/v1/integrations/discord/webhooks',
-  'PUT /api/v1/integrations/discord/webhooks/:id',
-  'DELETE /api/v1/integrations/discord/webhooks/:id',
-  'POST /api/v1/integrations/discord/webhooks/:id/test',
-  'PUT /api/v1/integrations/discord/templates/:eventType',
-  'POST /api/v1/integrations/discord/templates/:eventType/reset',
-  'POST /api/v1/integrations/discord/templates/:eventType/preview',
-  'PUT /api/v1/integrations/discord/servers/:serverId/status-channel',
   'POST /api/v1/integrations/discord/interactions',
-  'PUT /api/v1/integrations/geoip',
   'POST /api/v1/public/appeals',
   'POST /api/v1/public/media',
   'PUT /api/v1/whitelist/settings',
@@ -302,9 +292,12 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
         .filter((r) => r.config.audit === 'manual')
         .map((r) => r.file),
     );
-    const silent = [...manualFiles].filter(
-      (file) => !readFileSync(path.join(routesDir, file), 'utf8').includes('writeAuditEntry('),
-    );
+    const silent = [...manualFiles].filter((file) => {
+      const source = readFileSync(path.join(routesDir, file), 'utf8');
+      // The map and messaging modules share auditMapLikeAction (lib/map-guards.ts),
+      // which is the writeAuditEntry call site for those routes.
+      return !source.includes('writeAuditEntry(') && !source.includes('auditMapLikeAction(');
+    });
     expect(silent, "modules declaring audit: 'manual' without a writeAuditEntry call").toEqual([]);
   });
 
