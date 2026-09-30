@@ -29,9 +29,9 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 - `discord_message_templates.template` типизирован как `DiscordEmbedTemplate`, `external_ban_sources.parser_config` как `Record<string, unknown>`: касты `as` у потребителей убраны.
 - `discord_message_templates.locale` остаётся описательной меткой языка текста шаблона, а не ключом выбора: `event_type` уникален, один шаблон на событие. Мультиязычность потребовала бы ослабить уникальность до `(event_type, locale)`, что ломает однострочные выборки предыдущего релиза; решение отложено до двухрелизной миграции.
 
-### Заполнение combat_events.match_uuid для старых событий (migration 0137, #50 / #1073)
+### Заполнение combat_events.match_uuid для старых событий (migration 0138, #50 / #1073)
 
-**Files:** `packages/db/drizzle/0137_combat_events_match_uuid_backfill.sql`, `packages/db/test/combat-events-match-backfill.migration.test.ts`
+**Files:** `packages/db/drizzle/0138_combat_events_match_uuid_backfill.sql`, `packages/db/test/combat-events-match-backfill.migration.test.ts`
 
 Одноразовый идемпотентный UPDATE: события до 0131 получают `match_uuid` матча того же сервера, покрывающего `occurred_at` (как `resolveMatchId` в log-ingest). Затрагиваются только строки с `match_uuid IS NULL` внутри известного матча; остальные остаются NULL. Bigint `match_id` не трогается (в нём никогда не было данных) и удаляется отдельным релизом, когда его не читает ни один выпуск. Совместимо с откатом.
 

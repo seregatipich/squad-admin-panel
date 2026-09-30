@@ -68,7 +68,7 @@ If a migration shipped to production must be reverted, the path is:
 | 0136 | `0136_index_cleanup_balancer_open_key` | Issue #78: drops seven indexes no query reads; partial unique index `balancer_proposals_open_key` (one open snapshot per `(server_id, mode)`). Rollback-safe: indexes only. |
 | 0137 | `0137_player_notes_author_set_null` | Issues #78, #1137: `player_notes.author_id` becomes nullable and its FK `ON DELETE SET NULL` (was `CASCADE`), so deleting an author keeps their notes. Rollback-safe: a constraint is relaxed, no data changes; the previous release's inner joins skip a note without an author. |
 
-| 0137 | `0137_combat_events_match_uuid_backfill` | Issue #50 (#1073): backfills `combat_events.match_uuid` for events stored before 0131, resolving the match like log-ingest (the match of the same server covering `occurred_at`). Touches only rows still NULL inside a known match, idempotent, rollback-safe (the previous release never names the column). |
+| 0138 | `0138_combat_events_match_uuid_backfill` | Issue #50 (#1073): backfills `combat_events.match_uuid` for events stored before 0131, resolving the match like log-ingest (the match of the same server covering `occurred_at`). Touches only rows still NULL inside a known match, idempotent, rollback-safe (the previous release never names the column). |
 | 0020 | `0020_uuid_player_id` | Data-preserving identity migration: gives `players` a UUID primary key, keeps `steam_id64` as a nullable unique external identity, migrates all child FKs to UUID player IDs, and adds setup-wizard metadata. |
 
 ## Adding a migration

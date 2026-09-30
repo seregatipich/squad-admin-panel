@@ -5,7 +5,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * Migration 0137 (issue #50, finding 1073): historical combat_events rows get
+ * Migration 0138 (issue #50, finding 1073): historical combat_events rows get
  * the match they happened in, resolved like log-ingest's resolveMatchId. The
  * migration is re-run here against rows left NULL, which also proves it is
  * idempotent.
@@ -15,7 +15,7 @@ const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKFILL_SQL = readFileSync(
-  path.resolve(__dirname, '../drizzle/0137_combat_events_match_uuid_backfill.sql'),
+  path.resolve(__dirname, '../drizzle/0138_combat_events_match_uuid_backfill.sql'),
   'utf-8',
 );
 
@@ -75,7 +75,7 @@ async function matchOf(eventId: number): Promise<string | null> {
   return row?.match_uuid ?? null;
 }
 
-describeIfDb('migration 0137 combat_events.match_uuid backfill', () => {
+describeIfDb('migration 0138 combat_events.match_uuid backfill', () => {
   it('links old events to the match of their server that covers them, and leaves the rest NULL', async () => {
     const inFirst = await insertEvent(SERVER, '2026-01-10T10:30:00Z');
     const inOpenSecond = await insertEvent(SERVER, '2026-01-10T12:00:00Z');
