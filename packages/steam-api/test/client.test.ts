@@ -276,6 +276,8 @@ describe('Steam request deadline', () => {
   it.each(calls)('%s aborts a hung request after timeoutMs', async (_name, call) => {
     const request = hangingFetch();
     const started = Date.now();
+    // A timed-out request is a failed batch (#80 partial-batch contract): the
+    // call resolves null when nothing was recovered, well before undici's 300 s.
     await expect(
       call({
         apiKey: 'key',
@@ -283,7 +285,7 @@ describe('Steam request deadline', () => {
         fetch: request as unknown as typeof fetch,
         timeoutMs: 50,
       }),
-    ).rejects.toMatchObject({ name: 'TimeoutError' });
+    ).resolves.toBeNull();
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 

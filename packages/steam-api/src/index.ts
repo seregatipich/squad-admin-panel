@@ -28,9 +28,11 @@ export interface SteamApiDeps {
   fetch?: typeof fetch;
   /**
    * Deadline for each Steam Web API request, response body included
-   * (default {@link STEAM_REQUEST_TIMEOUT_MS}). On expiry the call rejects with
-   * a `TimeoutError` `DOMException` instead of waiting out undici's 300 s
-   * default against a hung api.steampowered.com.
+   * (default {@link STEAM_REQUEST_TIMEOUT_MS}). On expiry the request is
+   * aborted with a `TimeoutError` and handled like any other failed request
+   * (its batch is skipped; the call resolves `null` when nothing was
+   * recovered) instead of waiting out undici's 300 s default against a hung
+   * api.steampowered.com.
    */
   timeoutMs?: number;
 }
