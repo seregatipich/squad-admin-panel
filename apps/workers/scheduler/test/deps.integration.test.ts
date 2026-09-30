@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   createDatabaseClient,
   rotationSchedule,
+  scheduledTaskRuns,
   scheduledTasks,
   seedSchedule,
   servers,
@@ -13,6 +14,7 @@ import {
   loadEnabledRotationScheduleEntries,
   loadEnabledScheduledTasks,
   loadEnabledSeedScheduleEntries,
+  pruneScheduledTaskRuns,
 } from '../src/deps.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -152,5 +154,49 @@ describeIfDb('scheduler loaders exclude soft-deleted servers (#1001)', () => {
       { containerStop: async () => undefined, containerStart: async () => undefined } as never,
     );
     await expect(deps.restartServer(externalServerId)).rejects.toThrow(/is external/);
+  });
+});
+
+describeIfDb('restartServer and run retention (#1002, #1016)', () => {
+  it('restartServer flips the server status to starting', async () => {
+    if (!db) throw new Error('database not configured');
+    const bridge = {
+      containerStop: async () => undefined,
+      containerStart: async () => undefined,
+      containerInspect: async () => ({ state: 'exited', running: false }),
+    };
+    const deps = createScheduledTaskDeps(db, { get: async () => null } as never, bridge as never);
+    await deps.restartServer(liveServerId);
+    const row = await db.query.servers.findFirst({
+      where: eq(servers.id, liveServerId),
+      columns: { status: true },
+    });
+    expect(row?.status).toBe('starting');
+  });
+
+  it('pruneScheduledTaskRuns deletes only runs older than the cutoff', async () => {
+    if (!db) throw new Error('database not configured');
+    const [task] = await db
+      .insert(scheduledTasks)
+      .values({
+        serverId: liveServerId,
+        name: 'prune fixture',
+        taskType: 'restart',
+        params: {},
+        scheduledAt: new Date('2026-01-01T00:00:00.000Z'),
+      })
+      .returning({ id: scheduledTasks.id });
+    if (!task) throw new Error('fixture not inserted');
+    await db.insert(scheduledTaskRuns).values([
+      { taskId: task.id, executedAt: new Date('2020-01-01T00:00:00.000Z'), status: 'failed' },
+      { taskId: task.id, executedAt: new Date('2026-06-01T00:00:00.000Z'), status: 'failed' },
+    ]);
+    await pruneScheduledTaskRuns(db, new Date('2025-01-01T00:00:00.000Z'));
+    const left = await db
+      .select({ executedAt: scheduledTaskRuns.executedAt })
+      .from(scheduledTaskRuns)
+      .where(eq(scheduledTaskRuns.taskId, task.id));
+    expect(left).toHaveLength(1);
+    expect(left[0]?.executedAt.getUTCFullYear()).toBe(2026);
   });
 });
