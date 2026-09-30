@@ -45,6 +45,23 @@
   between players, and full-reconcile requests read in one batch are
   coalesced into a single sweep.
 
+## 2026-09-30 — bounded REST calls and first-event delivery (#92)
+
+### Fixed
+
+- A per-server event stream discovered after the worker started gets its consumer group at `0`
+  (was `$`), so the events written before discovery are no longer skipped.
+- A single-player role-sync request for an unlinked player or a non-guild-member no longer resets
+  the published role-sync status to `ok`.
+
+### Changed
+
+- Discord HTTP calls carry a 10 s timeout; a `Retry-After` above 30 s is reported as
+  `rate_limited` instead of being waited out, and a channel-rename 429 is not retried.
+- The encrypted-blob column is validated (`{ v: 1, kv, iv, tag, ct }`) before decrypting.
+- `DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS` and `DISCORD_ROLE_SYNC_RECONCILE_MS` must be positive
+  integers; a bad value fails startup instead of silently disabling reclaim or reconciliation.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed

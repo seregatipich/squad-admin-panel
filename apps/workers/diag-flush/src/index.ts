@@ -42,6 +42,7 @@ const GROUP = 'diag-flush';
 const CONSUMER = `diag-flush-${process.pid}`;
 const BATCH_SIZE = Number.parseInt(process.env.DIAG_FLUSH_BATCH_SIZE ?? '100', 10);
 const BLOCK_MS = 1000;
+const STOPPED_EVENT_TIMEOUT_MS = 2_000;
 
 /** Entries idle (read but unacked) longer than this are reclaimed by the sweep. */
 const RECLAIM_MIN_IDLE_MS = 60_000;
@@ -267,22 +268,28 @@ async function main(): Promise<void> {
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
 
+  let journald: ReturnType<typeof startJournaldForwarder> | null = null;
   const stopHeartbeat = startHeartbeat({
     redis,
     name: 'diag-flush',
-    statusFn: () => 'ok',
+    statusFn: () =>
+      journald && !journald.isRunning() ? 'degraded (journald forwarder down)' : 'ok',
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
   const diag = createDiag({ redis, log });
   let stopped = false;
   let inflight: Promise<void> | null = null;
-  let journald: ReturnType<typeof startJournaldForwarder> | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       stopped = true;
       log.info({ sig }, 'shutdown');
-      await emitStopped(diag, sig);
+      // With Redis unreachable the offline-queued XADD never settles; bound the
+      // wait so the rest of the teardown still runs before Docker's SIGKILL.
+      await Promise.race([
+        emitStopped(diag, sig),
+        new Promise<void>((resolve) => setTimeout(resolve, STOPPED_EVENT_TIMEOUT_MS).unref()),
+      ]);
       stopHeartbeat();
       journald?.stop();
       await journald?.drain();

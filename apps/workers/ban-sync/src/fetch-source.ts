@@ -3,9 +3,10 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { LookupFunction } from 'node:net';
 import { checkOutboundUrl, isPublicUnicastAddress } from '@squad/shared-config';
 import { Agent, type Response, fetch as undiciFetch } from 'undici';
+import { positiveIntEnv } from './env.js';
 
-export const DEFAULT_FETCH_TIMEOUT_MS = Number(process.env.BAN_SYNC_FETCH_TIMEOUT_MS ?? 30_000);
-export const DEFAULT_MAX_BYTES = Number(process.env.BAN_SYNC_MAX_BYTES ?? 20 * 1024 * 1024);
+export const DEFAULT_FETCH_TIMEOUT_MS = positiveIntEnv('BAN_SYNC_FETCH_TIMEOUT_MS', 30_000);
+export const DEFAULT_MAX_BYTES = positiveIntEnv('BAN_SYNC_MAX_BYTES', 20 * 1024 * 1024);
 /** Redirect hops followed before a source is reported as failing. */
 export const MAX_REDIRECTS = 5;
 

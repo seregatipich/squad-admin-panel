@@ -9,6 +9,7 @@ import type { EventEnvelope } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import type { Logger } from 'pino';
 import { decryptString, deserialize } from './crypto.js';
+import { readRetryAfterMs } from './discord-rest.js';
 import { buildTemplateContext, mapEventToDiscordType } from './mapping.js';
 
 /** Hard ceiling on non-429 delivery attempts (network error or non-2xx status) per webhook. */
@@ -16,8 +17,6 @@ const MAX_SEND_ATTEMPTS = 5;
 /** Hard ceiling on consecutive 429 retries per webhook, so a permanently-throttled webhook still gives up. */
 const MAX_RATE_LIMIT_RETRIES = 5;
 const BASE_BACKOFF_MS = 500;
-/** Fallback wait when a 429 response carries no parseable `retry_after`/`Retry-After`. */
-const DEFAULT_RATE_LIMIT_WAIT_MS = 1000;
 /**
  * Longest `Retry-After` the sender is willing to sleep through. Delivery is
  * sequential, so sleeping out a global ban or a Cloudflare block (hundreds or
@@ -65,24 +64,6 @@ export interface DeliveryResult {
 
 function backoffMs(attempt: number): number {
   return BASE_BACKOFF_MS * 2 ** (attempt - 1);
-}
-
-/** Reads Discord's rate-limit wait out of a 429 response: `Retry-After` header (seconds) first, then a JSON `retry_after` body field (seconds). */
-async function readRetryAfterMs(res: Response): Promise<number> {
-  const header = res.headers.get('retry-after');
-  if (header) {
-    const seconds = Number(header);
-    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  }
-  try {
-    const body = (await res.clone().json()) as { retry_after?: unknown };
-    if (typeof body.retry_after === 'number' && Number.isFinite(body.retry_after)) {
-      return Math.max(0, body.retry_after) * 1000;
-    }
-  } catch {
-    // no/invalid JSON body — fall through to the default wait
-  }
-  return DEFAULT_RATE_LIMIT_WAIT_MS;
 }
 
 interface WebhookPayload {

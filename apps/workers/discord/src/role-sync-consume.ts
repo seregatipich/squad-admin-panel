@@ -189,6 +189,9 @@ export async function runRoleSyncLoop(opts: RunRoleSyncLoopOpts): Promise<void> 
       return;
     }
     const result = await syncPlayerDiscordRoles(deps, request.player_id);
+    // An unlinked player or a non-member never exercised the bot's permissions, so
+    // publishing "ok" here would hide an error recorded by the last full reconcile.
+    if (result.outcome === 'not_linked' || result.outcome === 'not_a_guild_member') return;
     await publishStatus(redis, log, result.error ?? null);
   };
 

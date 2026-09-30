@@ -1,4 +1,5 @@
 import type { ParsedBan, ParseResult } from './index.js';
+import { unixSecondsToDate } from './json-generic.js';
 
 export interface CsvColumns {
   steam_id64?: number | string;
@@ -16,6 +17,40 @@ export interface CsvConfig {
     has_header?: boolean;
     columns?: CsvColumns;
   };
+}
+
+/**
+ * Validates the `csv` section of a source's untyped `parser_config`: the
+ * delimiter must be exactly one character (anything else would turn every
+ * row into a single field), `has_header` a boolean and each column a numeric
+ * index or a header name.
+ *
+ * @throws Error naming the offending key when a value has the wrong type.
+ */
+function readCsvConfig(parserConfig: Record<string, unknown>): NonNullable<CsvConfig['csv']> {
+  const csv = parserConfig.csv;
+  if (csv === undefined) return {};
+  if (csv === null || typeof csv !== 'object' || Array.isArray(csv)) {
+    throw new Error('csv: parser_config.csv must be an object');
+  }
+  const { delimiter, has_header: hasHeader, columns } = csv as Record<string, unknown>;
+  if (delimiter !== undefined && (typeof delimiter !== 'string' || delimiter.length !== 1)) {
+    throw new Error('csv: parser_config.csv.delimiter must be a single character');
+  }
+  if (hasHeader !== undefined && typeof hasHeader !== 'boolean') {
+    throw new Error('csv: parser_config.csv.has_header must be a boolean');
+  }
+  if (columns !== undefined) {
+    if (columns === null || typeof columns !== 'object' || Array.isArray(columns)) {
+      throw new Error('csv: parser_config.csv.columns must be an object');
+    }
+    for (const [key, column] of Object.entries(columns)) {
+      if (typeof column !== 'number' && typeof column !== 'string') {
+        throw new Error(`csv: parser_config.csv.columns.${key} must be a number or a string`);
+      }
+    }
+  }
+  return { delimiter, has_header: hasHeader, columns } as NonNullable<CsvConfig['csv']>;
 }
 
 /** Splits one CSV line into fields, honoring double-quoted fields with `""`-escaped quotes. */
@@ -61,7 +96,7 @@ function asString(value: string | undefined): string | null {
 function asDate(value: string | undefined): Date | null {
   const str = asString(value);
   if (!str) return null;
-  if (/^\d+$/.test(str)) return new Date(Number(str) * 1000);
+  if (/^\d+$/.test(str)) return unixSecondsToDate(Number(str));
   const parsed = new Date(str);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -82,7 +117,7 @@ function columnIndex(column: number | string | undefined, header: string[] | nul
  * quote), are skipped rather than aborting the whole sync.
  */
 export function parseCsv(text: string, parserConfig: Record<string, unknown> = {}): ParseResult {
-  const config = (parserConfig as CsvConfig).csv ?? {};
+  const config = readCsvConfig(parserConfig);
   const delimiter = config.delimiter ?? ',';
   const hasHeader = config.has_header ?? true;
   const columns = config.columns ?? {};

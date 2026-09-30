@@ -64,6 +64,8 @@ export interface ClanGuardTickDeps {
   loadProtectedClans(): Promise<ProtectedClan[]>;
   loadOnlinePlayers(): Promise<OnlinePlayer[]>;
   findLastWarn(playerId: string, serverId: string, connectedAt: Date): Promise<LastWarn | null>;
+  /** Whether a `kick` ledger row already exists for this session (since `connectedAt`). */
+  hasRecordedKick(playerId: string, serverId: string, connectedAt: Date): Promise<boolean>;
   sendRconCommand(input: SendRconCommandInput): Promise<void>;
   recordModerationAction(input: RecordModerationActionInput): Promise<void>;
   writeAuditEntry(input: WriteClanGuardAuditInput): Promise<void>;
@@ -233,6 +235,12 @@ export async function runClanGuardTick(deps: ClanGuardTickDeps): Promise<ClanGua
         command: 'AdminKick',
         args: [player.eosId, message],
       });
+      // The kick is re-sent while the session stays open (the command is fire-and-forget),
+      // but the ledger and audit log record one kick per session.
+      if (await deps.hasRecordedKick(player.playerId, player.serverId, player.connectedAt)) {
+        kicked += 1;
+        continue;
+      }
       await deps.recordModerationAction({
         playerId: player.playerId,
         serverId: player.serverId,

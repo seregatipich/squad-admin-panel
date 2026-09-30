@@ -6,6 +6,16 @@
 
 - #872: one bad row no longer strands its whole batch in the pending list. `parseEntry` rejects entries Postgres would refuse (non-UUID ids, an unparseable `ts`, an unknown severity, a non-JSON payload); when the batch INSERT is rejected for a row's data, rows are retried one by one and the rejected ones are logged and dropped; a pending-entry sweep (`XAUTOCLAIM`, at startup and every 30 s, 60 s min-idle) flushes batches whose flush failed and entries of dead consumers.
 
+## 2026-09-30 — journald forwarder resilience (#92)
+
+### Fixed
+
+- `journalctl` exiting unexpectedly is restarted with exponential backoff (1 s up to 30 s) until
+  shutdown, and the heartbeat status reports `degraded (journald forwarder down)` while it is down.
+- Forwarded events take their id from the journald `__CURSOR` (UUIDv5), so the `--since` replay
+  window after a restart is dropped by `ON CONFLICT (id, ts)` instead of duplicating rows.
+- The `diag_flush.stopped` emit is bounded to 2 s so an unreachable Redis cannot stall shutdown.
+
 ## 2026-04-29
 
 ### Fixed

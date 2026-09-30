@@ -174,6 +174,20 @@ describe('runRoleSyncLoop', () => {
     expect(JSON.parse(status?.value ?? '{}')).toMatchObject({ state: 'ok' });
   });
 
+  it.each(['not_linked', 'not_a_guild_member'] as const)(
+    'leaves the published status untouched when the player outcome is %s',
+    async (outcome) => {
+      syncPlayerMock.mockResolvedValue({ outcome, added: [], removed: [] });
+      const redis = fakeRedis([
+        ['7-1', ['payload', JSON.stringify({ player_id: PLAYER_ID, reason: 'role.assign' })]],
+      ]);
+      await runRoleSyncLoop(makeOpts(redis));
+
+      expect(redis.acked).toEqual(['7-1']);
+      expect(redis.statusWrites).toEqual([]);
+    },
+  );
+
   it('creates its consumer group on the dedicated role-sync stream', async () => {
     const redis = fakeRedis([]);
     await runRoleSyncLoop(makeOpts(redis));

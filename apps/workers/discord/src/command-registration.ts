@@ -1,4 +1,8 @@
-import { DISCORD_API_BASE, type DiscordRestDeps } from './discord-rest.js';
+import {
+  DISCORD_API_BASE,
+  DISCORD_REQUEST_TIMEOUT_MS,
+  type DiscordRestDeps,
+} from './discord-rest.js';
 
 /**
  * Application-command registration (DISCORD-6, #153).
@@ -71,6 +75,7 @@ export async function registerApplicationCommands(
       method: 'PUT',
       headers: { authorization: `Bot ${deps.botToken}`, 'content-type': 'application/json' },
       body: JSON.stringify(DISCORD_COMMAND_DEFINITIONS),
+      signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     return { ok: false, status: null, message: `Discord недоступен: ${(err as Error).message}` };

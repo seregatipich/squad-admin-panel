@@ -1,4 +1,5 @@
 import type { ParsedBan, ParseResult } from './index.js';
+import { unixSecondsToDate } from './json-generic.js';
 
 // Matches: optional "[admin prefix] " (anything up to "Banned:"), then
 // "Banned:<17-digit SteamID64>:<unix-expiry>", then an optional
@@ -43,7 +44,8 @@ export function parseSquadBansCfg(text: string): ParseResult {
       continue;
     }
     const expiryNum = Number(expiry);
-    if (!Number.isFinite(expiryNum)) {
+    const expiresAt = expiryNum === 0 ? null : unixSecondsToDate(expiryNum);
+    if (expiryNum !== 0 && !expiresAt) {
       skipped++;
       continue;
     }
@@ -55,7 +57,7 @@ export function parseSquadBansCfg(text: string): ParseResult {
       reason: comment?.trim() || null,
       adminName: extractAdminName(prefix ?? ''),
       issuedAt: null,
-      expiresAt: expiryNum === 0 ? null : new Date(expiryNum * 1000),
+      expiresAt,
       raw: { line },
     });
   }

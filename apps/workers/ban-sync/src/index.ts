@@ -10,6 +10,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { positiveIntEnv } from './env.js';
 import { runManualQueueLoop } from './manual-queue.js';
 import { createSyncSourceDeps, syncSource } from './sync-source.js';
 import type { DueSource } from './tick.js';
@@ -20,7 +21,7 @@ const log = pino({
   base: { service: 'worker-ban-sync' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.BAN_SYNC_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = positiveIntEnv('BAN_SYNC_INTERVAL_MS', 60_000);
 const MANUAL_BLOCK_MS = 5_000;
 
 function requiredEnv(name: string): string {
