@@ -30,6 +30,7 @@ const STEAM_BACKFILL = '76561199220000004';
 const STEAM_CONFLICT_1 = '76561199220000051';
 const STEAM_CONFLICT_2 = '76561199220000052';
 const STEAM_IP = '76561199220000006';
+const STEAM_PRECEDENCE = '76561199220000053';
 
 function connectEvent(payload: Partial<PlayerConnectedPayload>): EventEnvelope {
   return {
@@ -56,6 +57,7 @@ async function cleanup(): Promise<void> {
   // queried by `target_id` stay scoped to a single run regardless. Deleting the
   // players cascades their name/ip history away.
   await db.delete(players).where(inArray(players.eosId, ALL_EOS));
+  await db.delete(players).where(eq(players.steamId64, BigInt(STEAM_PRECEDENCE)));
 }
 
 afterEach(cleanup);
@@ -207,6 +209,56 @@ describe('handlePlayerConnected (real database)', () => {
     expect(player?.steamEosConflict).toBe(true);
     expect(player?.steamId64).toBe(BigInt(STEAM_CONFLICT_2));
     expect(await auditsFor(player?.id ?? '', 'player.eos_steam_conflict')).toHaveLength(1);
+  });
+
+  // Regression for #63 finding 932: lookupIdentity's `or(eq(eosId), eq(steamId64))`
+  // with no ORDER BY had undefined precedence between two *distinct* existing
+  // rows — one carrying only the eos_id, another only this steam_id64 — and
+  // applyToExisting would then try to (back)fill that steam_id64 onto
+  // whichever row it got, which throws on the unique index whenever the
+  // value already belongs to the *other* row. It must resolve the eos-owned
+  // row deterministically and treat the cross-row clash as a conflict to
+  // audit, never a crash.
+  it('flags a cross-row steam_id64 clash as a conflict instead of crashing (deterministic eos precedence)', async () => {
+    // Steam-only row inserted first so an unordered heap scan would be most
+    // likely to surface it before the eos-only row inserted second.
+    await handlePlayerConnected(
+      db,
+      connectEvent({
+        eos_id: null,
+        steam_id64: STEAM_PRECEDENCE,
+        name: 'SteamOnlyPlayer',
+      }),
+    );
+    await handlePlayerConnected(
+      db,
+      connectEvent({
+        eos_id: EOS_CONFLICT,
+        steam_id64: null as unknown as string,
+        name: 'EpicOnlyPlayer',
+      }),
+    );
+
+    const result = await handlePlayerConnected(
+      db,
+      connectEvent({
+        eos_id: EOS_CONFLICT,
+        steam_id64: STEAM_PRECEDENCE,
+        name: 'EpicOnlyPlayer',
+      }),
+    );
+
+    expect(result.outcome).toBe('updated');
+    if (result.outcome !== 'updated') throw new Error('unreachable');
+    expect(result.conflict).toBe(true);
+
+    // The eos-matched row is the one that gets updated (never the
+    // steam-only row picked at random), and it never acquires a steam_id64
+    // that a different row already owns.
+    const eosRow = await playerByEos(EOS_CONFLICT);
+    expect(eosRow?.steamId64).toBeNull();
+    expect(eosRow?.steamEosConflict).toBe(true);
+    expect(await auditsFor(eosRow?.id ?? '', 'player.eos_steam_conflict')).toHaveLength(1);
   });
 
   it('records an IP observation and updates last_known_ip when the connect carries an ip', async () => {

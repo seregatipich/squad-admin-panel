@@ -15,6 +15,7 @@ export interface ExternalBanMatch {
   eosId: string | null;
   nickname: string | null;
   reason: string | null;
+  expiresAt: Date | null;
 }
 
 interface ExternalBanRow {
@@ -27,6 +28,7 @@ interface ExternalBanRow {
   eosId: string | null;
   nickname: string | null;
   reason: string | null;
+  expiresAt: string | Date | null;
 }
 
 function parseAction(value: string): ExternalBanAction {
@@ -46,6 +48,7 @@ export async function loadActiveExternalBans(db: DatabaseClient): Promise<Extern
       eosId: externalBans.eosId,
       nickname: externalBans.nickname,
       reason: externalBans.reason,
+      expiresAt: externalBans.expiresAt,
     })
     .from(externalBans)
     .innerJoin(externalBanSources, eq(externalBanSources.id, externalBans.sourceId))
@@ -67,6 +70,7 @@ export async function loadActiveExternalBans(db: DatabaseClient): Promise<Extern
     eosId: row.eosId,
     nickname: row.nickname,
     reason: row.reason,
+    expiresAt: row.expiresAt == null ? null : new Date(row.expiresAt),
   }));
 }
 
@@ -106,10 +110,11 @@ export class ExternalBanCache {
       this.version = version;
     }
 
+    const now = Date.now();
     const matches = [
       ...(this.byIdentity.get(steamId64) ?? []),
       ...(eosId ? (this.byIdentity.get(eosId) ?? []) : []),
-    ];
+    ].filter((row) => row.expiresAt === null || row.expiresAt.getTime() > now);
     return [...new Map(matches.map((row) => [row.externalBanId, row])).values()];
   }
 }

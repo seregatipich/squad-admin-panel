@@ -182,6 +182,30 @@ describe('handleExternalBanConnect', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('does not let an invalid alert-rule severity abort remaining matches in the same connect', async () => {
+    await db.insert(alertRules).values({
+      id: '00000000-0000-7000-8000-000000000105',
+      name: 'CBAN4 bad-severity rule',
+      type: 'custom',
+      config: { eventKind: 'externalban.matched', severity: 'not-a-real-severity' },
+      channels: ['webpush'],
+    });
+    const redis = makeRedis();
+    const cache = makeCache('alert');
+    const result = await handleExternalBanConnect(db, redis, cache as never, {
+      serverId: SERVER_ID,
+      event: connectEvent(),
+    });
+
+    expect(result).toMatchObject({ outcome: 'handled', alerted: 1, kicked: 0 });
+    const rows = await db
+      .select()
+      .from(alertEvents)
+      .where(eq(alertEvents.ruleId, '00000000-0000-7000-8000-000000000105'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ severity: 'warning' });
+  });
+
   it('fails closed for an invalid kick configuration', async () => {
     const redis = makeRedis();
     const cache = makeCache('kick', 'normal');

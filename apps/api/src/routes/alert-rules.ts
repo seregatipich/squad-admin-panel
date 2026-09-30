@@ -15,6 +15,8 @@ const ALERT_RULE_TYPES = [
   'custom',
 ] as const;
 const ALERT_CHANNELS = ['email', 'webpush'] as const;
+// Mirrors the alert_events_severity_chk DB constraint (packages/db/src/schema/alert-rules.ts).
+const ALERT_EVENT_SEVERITIES = ['info', 'warning', 'critical'] as const;
 
 const configSchema = z.record(z.unknown());
 
@@ -36,6 +38,14 @@ const createBody = z
           message: 'custom rules require a non-empty eventKind',
         });
       }
+      const severity = value.config.severity;
+      if (severity !== undefined && !ALERT_EVENT_SEVERITIES.includes(severity as never)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['config', 'severity'],
+          message: `config.severity must be one of ${ALERT_EVENT_SEVERITIES.join(', ')}`,
+        });
+      }
     }
     if (value.type === 'unusual_activity') {
       const threshold = value.config.connectThreshold;
@@ -49,12 +59,23 @@ const createBody = z
     }
   });
 
-const updateBody = z.object({
-  name: z.string().trim().min(1).max(128).optional(),
-  config: configSchema.optional(),
-  channels: z.array(z.enum(ALERT_CHANNELS)).max(2).optional(),
-  enabled: z.boolean().optional(),
-});
+const updateBody = z
+  .object({
+    name: z.string().trim().min(1).max(128).optional(),
+    config: configSchema.optional(),
+    channels: z.array(z.enum(ALERT_CHANNELS)).max(2).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const severity = value.config?.severity;
+    if (severity !== undefined && !ALERT_EVENT_SEVERITIES.includes(severity as never)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['config', 'severity'],
+        message: `config.severity must be one of ${ALERT_EVENT_SEVERITIES.join(', ')}`,
+      });
+    }
+  });
 
 const idParam = z.object({ id: z.string().uuid() });
 const historyQuery = z.object({

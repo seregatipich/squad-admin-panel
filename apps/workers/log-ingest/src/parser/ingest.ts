@@ -62,8 +62,17 @@ export interface IngestorCallbacks {
 export class LogIngestor {
   private readonly serverId: string;
   private readonly beaconPort: number;
-  private recentJoin: { name: string; ts: number; ip: string | null } | null = null;
-  private recentIp: { ip: string; ts: number } | null = null;
+  // FIFO queues, not single slots: two connects can interleave their
+  // RemoteAddr/Join/EOS lines (e.g. A's RemoteAddr, B's RemoteAddr, A's
+  // Join, B's Join, ...), and a single slot per kind would let the second
+  // connect's line silently overwrite the first's, cross-assigning IP/name
+  // between the two players (#63 finding 931). The game server still emits
+  // each connect's own three lines in order relative to each other, so
+  // matching the oldest pending item of the other kind (within the
+  // correlation window) keeps connects paired correctly.
+  private readonly pendingJoins: Array<{ name: string; ts: number; ip: string | null }> = [];
+  private readonly pendingIps: Array<{ ip: string; ts: number }> = [];
+  private static readonly MAX_PENDING_CORRELATIONS = 64;
   private readonly joinCorrelationWindowMs: number;
   private readonly onParseError?: (report: ParseErrorReport) => void;
   private readonly onSquadFatal?: (report: SquadFatalReport) => void;
@@ -183,22 +192,15 @@ export class LogIngestor {
 
       const remoteAddr = PLAYER_REMOTE_ADDR.exec(message);
       if (remoteAddr) {
-        this.recentIp = { ip: remoteAddr[1] as string, ts: Date.parse(ts) };
+        this.pushCorrelation(this.pendingIps, { ip: remoteAddr[1] as string, ts: Date.parse(ts) });
         return events;
       }
 
       const join = PLAYER_JOIN_SUCCEEDED.exec(message);
       if (join) {
         const joinTs = Date.parse(ts);
-        let ip: string | null = null;
-        if (this.recentIp) {
-          const ipAge = joinTs - this.recentIp.ts;
-          if (ipAge >= 0 && ipAge < this.joinCorrelationWindowMs) {
-            ip = this.recentIp.ip;
-          }
-          this.recentIp = null;
-        }
-        this.recentJoin = { name: join[1] as string, ts: joinTs, ip };
+        const ip = this.consumeCorrelated(this.pendingIps, joinTs)?.ip ?? null;
+        this.pushCorrelation(this.pendingJoins, { name: join[1] as string, ts: joinTs, ip });
         return events;
       }
 
@@ -252,9 +254,16 @@ export class LogIngestor {
         const code = Number(exit[2]);
         const type = code === 143 || code === 0 ? 'server.stopped' : 'server.crashed';
         events.push(this.build(type, ts, { exit_code: code }));
-        if (type === 'server.crashed') {
-          this.feedMatch(this.matchAssembler.onServerDown('server_crashed', ts));
-        }
+        // Either exit path can leave a match assembled in memory (e.g. a
+        // clean stop mid-round); close it out for both, not only a crash,
+        // so a clean restart never leaves an open match record (#63 finding
+        // 933).
+        this.feedMatch(
+          this.matchAssembler.onServerDown(
+            type === 'server.crashed' ? 'server_crashed' : 'server_restarted',
+            ts,
+          ),
+        );
         this.feedVote(this.voteAssembler.onServerDown(ts));
       }
       return events;
@@ -262,24 +271,43 @@ export class LogIngestor {
 
     if (category.startsWith('LogRedpointEOS') || category === 'LogEOS') {
       const eos = PLAYER_EOS_CONNECTION.exec(message);
-      if (eos && this.recentJoin) {
-        const age = Date.parse(ts) - this.recentJoin.ts;
-        if (age >= 0 && age < this.joinCorrelationWindowMs) {
+      if (eos) {
+        const join = this.consumeCorrelated(this.pendingJoins, Date.parse(ts));
+        if (join) {
           events.push(
             this.build('player.connected', ts, {
-              name: this.recentJoin.name,
+              name: join.name,
               eos_id: eos[1],
               steam_id64: eos[2],
-              ip: this.recentJoin.ip,
+              ip: join.ip,
             }),
           );
         }
-        this.recentJoin = null;
       }
       return events;
     }
 
     return events;
+  }
+
+  /** Appends to a correlation queue, dropping the oldest entry past the cap. */
+  private pushCorrelation<T>(queue: T[], entry: T): void {
+    queue.push(entry);
+    while (queue.length > LogIngestor.MAX_PENDING_CORRELATIONS) queue.shift();
+  }
+
+  /**
+   * Pops the oldest queued item that is still within the correlation window
+   * of `ts`, discarding any stale items in front of it. FIFO order (not
+   * "most recent") is what keeps two interleaved connects paired correctly.
+   */
+  private consumeCorrelated<T extends { ts: number }>(queue: T[], ts: number): T | null {
+    while (queue.length > 0) {
+      const item = queue.shift() as T;
+      const age = ts - item.ts;
+      if (age >= 0 && age < this.joinCorrelationWindowMs) return item;
+    }
+    return null;
   }
 
   private feedMatch(commands: MatchCommand[]): void {

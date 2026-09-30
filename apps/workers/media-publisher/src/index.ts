@@ -10,6 +10,7 @@ import pino from 'pino';
 import postgres from 'postgres';
 import { createMediaPublisherDeps } from './deps.js';
 import { runMediaPublisherTick } from './tick.js';
+import { guardOverlappingTicks } from './tick-guard.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -77,10 +78,13 @@ async function main() {
     },
   });
 
-  async function tick(): Promise<void> {
-    const result = await runMediaPublisherTick({ ...runtimeDeps, diag, batchSize: BATCH_SIZE });
-    if (result.claimed > 0) log.info(result, 'media-publisher tick');
-  }
+  const tick = guardOverlappingTicks(
+    async () => {
+      const result = await runMediaPublisherTick({ ...runtimeDeps, diag, batchSize: BATCH_SIZE });
+      if (result.claimed > 0) log.info(result, 'media-publisher tick');
+    },
+    () => log.warn('media-publisher tick skipped: previous tick still in flight'),
+  );
 
   let interval: NodeJS.Timeout | null = null;
   const shutdown = createGracefulShutdownController({
