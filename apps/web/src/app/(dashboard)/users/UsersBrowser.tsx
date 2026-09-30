@@ -70,6 +70,9 @@ const ROLE_ERROR_MESSAGES: Record<string, string> = {
   role_not_found: 'Такой роли больше нет.',
   player_not_found: 'Игрок не найден.',
   owner_assignment_forbidden: 'Роль Owner нельзя выдать через панель.',
+  cannot_change_own_role: 'Нельзя менять собственную роль.',
+  role_exceeds_actor_permissions: 'Эта роль шире ваших прав — выдать её нельзя.',
+  target_outranks_actor: 'У игрока права выше ваших — менять его роль нельзя.',
   role_expiry_must_be_future: 'Срок действия роли должен быть в будущем.',
 };
 

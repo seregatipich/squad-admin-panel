@@ -1,13 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import type { BridgeClient } from '@squad/bridge-client';
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
-import {
-  DEPOT_VOLUME_NAME,
-  PANEL_CONFIGS_ROOT,
-  PANEL_SAVED_ROOT,
-  resolveRconHost,
-  SERVER_IMAGE,
-} from '@squad/shared-config';
+import { PANEL_CONFIGS_ROOT, resolveRconHost } from '@squad/shared-config';
 import {
   externalServerConnectionUpdate,
   externalServerCreateInput,
@@ -26,6 +19,7 @@ import { isUniqueViolation } from '../lib/pg-errors.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar } from '../lib/rnsquadjs.js';
+import { runFreshServerContainer } from '../lib/server-container.js';
 import { softDeleteServer } from '../lib/server-delete.js';
 import { hasContainerPortConflict } from '../lib/server-ports.js';
 import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
@@ -35,46 +29,6 @@ const serverIdParams = z.object({ id: z.string().uuid() });
 
 function containerName(id: string) {
   return `squad-${id}`;
-}
-
-/**
- * Replaces a server's squad container with a fresh `docker run` built from
- * its current `server_settings` (#30, finding #320). Ports, max players,
- * tickrate and MULTIHOME are baked into the container's arguments when it is
- * created, so restarting an existing container with `containerStart` would
- * silently ignore every PUT /settings change since — and leave it listening on
- * ports whose UFW rules that PUT already closed. Only stopped containers reach
- * this: callers short-circuit (start) or stop first (restart).
- *
- * @param bridge - Bridge client.
- * @param serverId - Panel server UUID.
- * @param settings - The server's current settings row.
- * @param exists - Whether a container is present to remove first.
- * @returns The new container's id.
- * @throws when the bridge refuses the remove or the run.
- */
-async function runFreshServerContainer(
-  bridge: Pick<BridgeClient, 'containerRm' | 'containerRun'>,
-  serverId: string,
-  settings: typeof serverSettings.$inferSelect,
-  exists: boolean,
-): Promise<string> {
-  if (exists) await bridge.containerRm({ name: containerName(serverId) });
-  const run = await bridge.containerRun({
-    server_id: serverId,
-    image: SERVER_IMAGE,
-    game_port: settings.gamePort,
-    query_port: settings.queryPort,
-    beacon_port: settings.beaconPort,
-    rcon_port: settings.rconPort,
-    max_players: settings.maxPlayers,
-    tickrate: settings.tickrate,
-    multihome: settings.multihome,
-    configs_host: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`,
-    saved_host: `${PANEL_SAVED_ROOT}/${serverId}`,
-    depot_volume: DEPOT_VOLUME_NAME,
-  });
-  return run.container_id;
 }
 
 /**
