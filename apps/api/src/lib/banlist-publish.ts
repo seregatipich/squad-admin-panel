@@ -30,8 +30,8 @@ const UNIT_MILLISECONDS: Record<string, number> = {
  *
  * Grammar: a bare number of days, or a number followed by a unit suffix
  * (`s`/`m`/`h`/`d`/`w`/`M`/`y`); `0` (with or without a unit) means
- * permanent. A missing, empty, or malformed value is also treated as
- * permanent — this matches `AdminBan`'s own `'0'` default and errs on the
+ * permanent. A missing, empty, or malformed value, and a duration too long
+ * to represent as a `Date`, is also treated as permanent — this matches `AdminBan`'s own `'0'` default and errs on the
  * side of not under-publishing an enforcement action.
  */
 export function parseBanLengthToExpiry(
@@ -49,7 +49,12 @@ export function parseBanLengthToExpiry(
 
   const unit = match[2] ?? 'd';
   const unitMs = UNIT_MILLISECONDS[unit] ?? UNIT_MILLISECONDS.d ?? 86_400_000;
-  return new Date(issuedAt.getTime() + amount * unitMs);
+  const expiry = new Date(issuedAt.getTime() + amount * unitMs);
+  // A duration past the Date range (e.g. '300000y') yields an Invalid Date,
+  // which every `expiresAt > now` comparison reads as "already expired".
+  // Such a ban is permanent for every practical purpose.
+  if (Number.isNaN(expiry.getTime())) return null;
+  return expiry;
 }
 
 /** A single `moderation_actions` ban row as read from the database. */

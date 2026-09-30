@@ -87,7 +87,7 @@ const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/vehicle-catalog/:assetId',
-    { schema: { params: assetIdParam, body: putBody }, config: { audit: false } },
+    { schema: { params: assetIdParam, body: putBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = writeGuard(req, reply);
       if (denied) return denied;

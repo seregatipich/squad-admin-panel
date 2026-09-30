@@ -70,7 +70,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/broadcast',
     {
       schema: { params: serverIdParams, body: messageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -133,7 +133,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/squads/:squadId/message',
     {
       schema: { params: squadParams, querystring: squadQuery, body: messageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -199,7 +199,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/players/:playerId/message',
     {
       schema: { params: playerMessageParams, body: playerMessageBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       if (!req.user) {

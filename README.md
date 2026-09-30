@@ -26,7 +26,6 @@ Default domain is `squad-panel.lan`. For production, edit `.env` before starting
 APP_DOMAIN=admin.example.com
 TLS_ISSUER=acme
 ACME_EMAIL=you@example.com
-COOKIE_SECURE=true
 ```
 
 Open `https://<APP_DOMAIN>/` — the first Steam login claims the Owner role automatically.

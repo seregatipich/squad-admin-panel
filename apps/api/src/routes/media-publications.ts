@@ -93,7 +93,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/:id/publications',
-    { schema: { params: mediaIdParams, body: mediaPublishInput }, config: { audit: false } },
+    { schema: { params: mediaIdParams, body: mediaPublishInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -194,7 +194,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/media/:id/publications/:destination',
-    { schema: { params: publicationParams }, config: { audit: false } },
+    { schema: { params: publicationParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -273,7 +273,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/integrations/media-publishing',
-    { schema: { body: mediaPublishingSettingsInput }, config: { audit: false } },
+    { schema: { body: mediaPublishingSettingsInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;

@@ -311,6 +311,32 @@ describe('POST/DELETE /api/v1/settings/alt-detection/ignored-ips', () => {
     }
   });
 
+  it('rejects an IPv6 zone id and an IPv4-mapped address with 400, not a database 500 (#66)', async () => {
+    const cookie = await loginAsOwner(h);
+    for (const bad of ['fe80::1%eth0', '::ffff:192.0.2.1']) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/settings/alt-detection/ignored-ips',
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ cidr: bad }),
+      });
+      expect(res.statusCode, bad).toBe(400);
+    }
+  });
+
+  it('stores the trimmed value it validated (#66)', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/settings/alt-detection/ignored-ips',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ cidr: '  172.16.0.0/12  ' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const rows = await h.db.select().from(altIgnoredIps);
+    expect(rows.map((r) => r.cidr)).toContain('172.16.0.0/12');
+  });
+
   it('rejects a duplicate CIDR with 409', async () => {
     const cookie = await loginAsOwner(h);
     await h.app.inject({

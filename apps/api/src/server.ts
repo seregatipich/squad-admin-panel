@@ -17,11 +17,11 @@ import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
 import { buildLogger, shouldDisableSensitiveAuthRequestLogging } from './lib/logger.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from './lib/media-storage.js';
-import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
 import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
+import csrfPlugin from './plugins/csrf.js';
 import databasePlugin from './plugins/database.js';
 import dbHealthPlugin from './plugins/db-health.js';
 import errorDiagPlugin from './plugins/error-diag.js';
@@ -57,7 +57,6 @@ export async function buildServer(config: AppConfig) {
 
   app.decorate('encryptionKey', loadEncryptionKey(config.APP_ENCRYPTION_KEY));
   app.decorate('config', config);
-  app.decorate('rcon', createRconClient());
 
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });
@@ -101,6 +100,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
+  await app.register(csrfPlugin);
   await app.register(authPlugin);
   await app.register(auditPlugin);
   await app.register(installProgressPlugin);

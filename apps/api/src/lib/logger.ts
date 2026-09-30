@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Writable } from 'node:stream';
 import { createDiscordRedactingStream } from '@squad/shared-config';
 import pino, { type DestinationStream, multistream } from 'pino';
+import { DISCORD_CALLBACK_PATH } from './discord-oauth.js';
 
 export interface RequestContext {
   requestId: string;
@@ -12,8 +13,26 @@ export interface RequestContext {
 
 export const als = new AsyncLocalStorage<RequestContext>();
 
+/**
+ * Auth callbacks whose query string carries one-time credentials: the Steam
+ * OpenID assertion and the Discord OAuth `code`/`state`.
+ */
+const SENSITIVE_AUTH_CALLBACK_PATHS: ReadonlySet<string> = new Set([
+  '/api/v1/auth/steam/callback',
+  DISCORD_CALLBACK_PATH,
+]);
+
+/**
+ * Fastify `disableRequestLogging` predicate: suppresses the automatic
+ * request/response log lines (which include the full URL) for the sensitive
+ * auth callbacks, so their credentials never reach stdout or the `panel:logs`
+ * stream.
+ *
+ * @param request - the incoming request; only `url` is read.
+ * @returns `true` when the path, ignoring the query string, is a sensitive callback.
+ */
 export function shouldDisableSensitiveAuthRequestLogging(request: { url: string }): boolean {
-  return request.url.split('?', 1)[0] === '/api/v1/auth/steam/callback';
+  return SENSITIVE_AUTH_CALLBACK_PATHS.has(request.url.split('?', 1)[0] ?? '');
 }
 
 class LateSink {

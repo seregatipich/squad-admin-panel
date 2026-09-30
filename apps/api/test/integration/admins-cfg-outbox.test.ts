@@ -4,9 +4,9 @@ import { eq, isNotNull, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
   type AdminsCfgSyncEvent,
-  ensureAdminsCfgSyncGroup,
   publishAdminsCfgSyncForAllServers,
 } from '../../src/lib/admins-cfg-sync.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
@@ -317,7 +317,7 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
       }),
     ).toEqual({ relayed: 1 });
 
-    await ensureAdminsCfgSyncGroup(h.redis, serverId);
+    await h.redis.xgroup('CREATE', stream, ADMINS_CFG_SYNC_GROUP, '0', 'MKSTREAM');
     const read = await h.redis.xreadgroup(
       'GROUP',
       'config-sync',

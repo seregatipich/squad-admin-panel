@@ -395,6 +395,69 @@ describe('POST /api/v1/servers/:newId/restore-configs', () => {
     expect(restoredRows.find((r) => r.filename === 'License.cfg')).toBeUndefined();
   });
 
+  it('never restores a user-written row that merely carries the backup message prefix (#66)', async () => {
+    const forgedFile = 'MOTD.cfg';
+    const seeded = await seedServer(h, { slug: 'forged-backup-source' });
+    // Everything but MOTD.cfg is on disk, so the real backup has no MOTD.cfg row.
+    for (const file of ALLOWED_CONFIG_FILES) {
+      if (file === forgedFile) continue;
+      h.bridge.files.set(
+        `/var/lib/squad-panel/configs/${seeded.id}/ServerConfig/${file}`,
+        Buffer.from(`# ${file}\n`, 'utf-8'),
+      );
+    }
+    // A config:edit user can pick any version message, including the prefix.
+    await h.db.insert(configVersions).values({
+      serverId: seeded.id,
+      filename: forgedFile,
+      content: 'FORGED',
+      sha256: Buffer.alloc(32, 7),
+      authorPlayerId: h.seed.ownerPlayerId,
+      message: 'deletion-backup-marker forged',
+    });
+    await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        actorPlayerId: h.seed.ownerPlayerId ?? null,
+        actorIp: '127.0.0.1',
+        actorLabel: 'test',
+      },
+      seeded.id,
+    );
+
+    const newId = uuidv7();
+    await h.db
+      .insert(servers)
+      .values({ id: newId, displayName: 'Restored', slug: 'forged-target', status: 'ready' });
+    const writes: string[] = [];
+    h.bridge.fileAtomicWrite = vi.fn(
+      async ({ path, content }: { path: string; content: string }) => {
+        writes.push(`${path}=${content}`);
+        return { status: 'ok' };
+      },
+    );
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${newId}/restore-configs`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: { from_archive_id: seeded.id },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { files_missing: string[] }).files_missing).toEqual([forgedFile]);
+    expect(writes.some((w) => w.includes('FORGED'))).toBe(false);
+
+    const archived = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/archive/${seeded.id}/configs/${forgedFile}`,
+      headers: { cookie },
+    });
+    expect(archived.statusCode).toBe(404);
+  });
+
   it('returns 404 when from_archive_id is not soft-deleted', async () => {
     const live = await seedServer(h, { slug: 'live-archive-source' });
     const newId = uuidv7();

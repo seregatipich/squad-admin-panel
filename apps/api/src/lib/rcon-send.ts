@@ -16,12 +16,32 @@ function encodePacket(id: number, type: number, body: string): Buffer {
   return Buffer.concat([header, buf]);
 }
 
-function* decodePackets(
-  source: Buffer,
-): Generator<{ id: number; type: number; body: string }, Buffer, undefined> {
+/** Smallest legal packet body: id + type + two NUL terminators. */
+const MIN_PACKET_SIZE = 10;
+/**
+ * Ceiling on a declared packet size. Squad splits long responses across
+ * packets far below this, so anything larger is a corrupt or hostile header.
+ */
+const MAX_PACKET_SIZE = 1_048_576;
+
+type RconPacket = { id: number; type: number; body: string };
+
+/**
+ * Decodes the complete packets at the head of `source` and returns the
+ * unconsumed remainder.
+ *
+ * @throws {Error} `rcon malformed packet` when a header declares a size outside
+ *   [{@link MIN_PACKET_SIZE}, {@link MAX_PACKET_SIZE}]. Without the check a
+ *   negative size never advances the cursor (an endless synchronous loop that
+ *   blocks the event loop) and a size under 8 reads past the buffer.
+ */
+function* decodePackets(source: Buffer): Generator<RconPacket, Buffer, undefined> {
   let b = source;
   while (b.byteLength >= 4) {
     const size = b.readInt32LE(0);
+    if (size < MIN_PACKET_SIZE || size > MAX_PACKET_SIZE) {
+      throw new Error('rcon malformed packet');
+    }
     if (b.byteLength - 4 < size) break;
     const id = b.readInt32LE(4);
     const type = b.readInt32LE(8);
@@ -90,7 +110,13 @@ export async function rconSendOnce(opts: {
     sock.on('data', (chunk) => {
       buf = Buffer.concat([buf, chunk]);
       const gen = decodePackets(buf);
-      let next = gen.next();
+      let next: IteratorResult<RconPacket, Buffer>;
+      try {
+        next = gen.next();
+      } catch (err) {
+        bail(err as Error);
+        return;
+      }
       while (!next.done) {
         const pkt = next.value;
         if (!authed) {
@@ -110,7 +136,12 @@ export async function rconSendOnce(opts: {
             return;
           }
         }
-        next = gen.next();
+        try {
+          next = gen.next();
+        } catch (err) {
+          bail(err as Error);
+          return;
+        }
       }
       if (next.value) buf = Buffer.from(next.value);
     });

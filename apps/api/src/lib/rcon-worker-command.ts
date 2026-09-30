@@ -37,11 +37,25 @@ export interface SendRconCommandViaWorkerOptions {
   pollIntervalMs?: number;
 }
 
+/**
+ * Hands one whitelisted RCON command to worker-rcon over Redis and waits for
+ * its result. Never throws on a Redis fault:
+ * - before the command is enqueued (status check, XADD) a fault is
+ *   `{ attempted: false, reason: 'worker_unavailable' }` — nothing was sent;
+ * - after enqueue a failed result poll is `{ attempted: true, reason: 'timeout' }`
+ *   with the fault in `detail`, because the worker may still run the command
+ *   and the caller must not retry it through another path.
+ */
 export async function sendRconCommandViaWorker(
   redis: Redis,
   opts: SendRconCommandViaWorkerOptions,
 ): Promise<WorkerRconCommandOutcome> {
-  const connected = await isWorkerRconConnected(redis, opts.serverId);
+  let connected: boolean;
+  try {
+    connected = await isWorkerRconConnected(redis, opts.serverId);
+  } catch (err) {
+    return { attempted: false, reason: 'worker_unavailable', detail: (err as Error).message };
+  }
   if (!connected) return { attempted: false, reason: 'worker_not_connected' };
 
   const enqueuedAt = Date.now();
@@ -79,8 +93,15 @@ export async function sendRconCommandViaWorker(
 
   const resultKey = rconCommandResultKey(request.request_id);
   const pollIntervalMs = opts.pollIntervalMs ?? 100;
+  let pollError: string | undefined;
   while (Date.now() <= deadline) {
-    const raw = await redis.get(resultKey);
+    let raw: string | null;
+    try {
+      raw = await redis.get(resultKey);
+    } catch (err) {
+      pollError = (err as Error).message;
+      raw = null;
+    }
     if (raw) {
       await redis.del(resultKey).catch(() => undefined);
       let resultPayload: unknown;
@@ -137,6 +158,7 @@ export async function sendRconCommandViaWorker(
     ok: false,
     requestId: request.request_id,
     reason: 'timeout',
+    ...(pollError === undefined ? {} : { detail: pollError }),
     via: 'worker-rcon',
   };
 }

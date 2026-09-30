@@ -65,7 +65,18 @@ describe('buildLogger', () => {
 });
 
 describe('sensitive auth request logging', () => {
-  it('disables automatic logs only for the Steam OpenID callback path', () => {
+  it('disables automatic logs for the Discord OAuth callback, whose query carries code/state (#66)', () => {
+    expect(
+      shouldDisableSensitiveAuthRequestLogging({
+        url: '/api/v1/auth/discord/callback?code=secret-code&state=secret-state',
+      }),
+    ).toBe(true);
+    expect(shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/discord/login' })).toBe(
+      false,
+    );
+  });
+
+  it('disables automatic logs only for the OAuth callback paths', () => {
     expect(
       shouldDisableSensitiveAuthRequestLogging({
         url: '/api/v1/auth/steam/callback?n=nonce&openid.sig=secret',

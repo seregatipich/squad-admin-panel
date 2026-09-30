@@ -9,16 +9,23 @@ import net from 'node:net';
  * Postgres (which would otherwise surface an opaque `invalid cidr value`
  * error).
  *
- * IPv4-mapped IPv6 addresses (`::ffff:192.0.2.1`) are not supported and are
- * rejected — the ALT-1 ignore list only needs plain IPv4/IPv6 entries.
+ * IPv4-mapped IPv6 addresses (`::ffff:192.0.2.1`) and IPv6 zone ids
+ * (`fe80::1%eth0`) are rejected, with or without a mask — the ALT-1 ignore list
+ * only needs plain IPv4/IPv6 entries, and Postgres `cidr` refuses zone ids.
+ *
+ * The input is validated exactly as given (no trimming), so callers must trim
+ * before validating — e.g. `z.string().trim().refine(isValidIpOrCidr)` — and
+ * then store the same trimmed value.
  */
 export function isValidIpOrCidr(input: string): boolean {
-  const trimmed = input.trim();
-  const slashIdx = trimmed.indexOf('/');
-  if (slashIdx === -1) return net.isIP(trimmed) !== 0;
+  const slashIdx = input.indexOf('/');
+  if (slashIdx === -1) {
+    const version = net.isIP(input);
+    return version !== 0 && ipToBigInt(input, version) !== null;
+  }
 
-  const address = trimmed.slice(0, slashIdx);
-  const prefixRaw = trimmed.slice(slashIdx + 1);
+  const address = input.slice(0, slashIdx);
+  const prefixRaw = input.slice(slashIdx + 1);
   const version = net.isIP(address);
   if (version === 0 || !/^\d+$/.test(prefixRaw)) return false;
 

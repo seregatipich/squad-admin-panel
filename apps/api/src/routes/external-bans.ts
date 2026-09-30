@@ -234,7 +234,7 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/players/:playerId/external-bans/:externalBanId/local-ban',
-    { schema: { params: localBanParams, body: localBanBody }, config: { audit: false } },
+    { schema: { params: localBanParams, body: localBanBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = localBanGuard(req, reply);
       if (denied) return denied;

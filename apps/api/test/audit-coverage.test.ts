@@ -1,47 +1,32 @@
 /**
  * CI guard for TZ §17.12: every mutating route (POST/PUT/PATCH/DELETE)
- * must declare config.audit as an {action, resource} object that
- * plugins/audit.ts persists for every outcome, denied attempts included.
- * `audit: false` is limited to machine-integration endpoints and to the
- * frozen legacy list of self-audited routes below.
+ * must declare config.audit — either an {action, resource} object that
+ * plugins/audit.ts persists, `'manual'` for a handler that writes its own
+ * audit_log rows (checked below: its module must call writeAuditEntry), or
+ * the explicit `false` for the short allowlist of machine-integration
+ * endpoints that are deliberately unaudited. A frozen legacy list of routes
+ * that predate this guard is also tolerated (see LEGACY_SELF_AUDITED).
  *
- * The check is static on the route table `registerRoutes()` builds — the
- * same one the server serves — so it does not require the compose stack to
- * be up. Paths under /api/docs (Swagger static UI) are excluded.
+ * The route table comes from `registerRoutes()` — the single registration
+ * list `server.ts` and the integration harness use — one route module at a
+ * time, so every route is attributed to its source file. Nothing needs a live
+ * DB/Redis/bridge: the decorations routes touch at registration are inert.
+ * Paths under /api/docs (Swagger static UI) are excluded.
  */
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { describe, expect, it } from 'vitest';
-
-import { registerRoutes } from '../src/routes/index.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SWAGGER_PREFIX = '/api/docs';
 
-/**
- * A stand-in for `app.db`/`app.redis`/`app.bridge`: every property read and
- * call returns the stub again, and awaiting it yields `[]`. A few route
- * plugins touch the database while registering (e.g. seeding system issue
- * labels); the stub lets them register without a live service.
- */
-function inertService(): unknown {
-  const target = () => undefined;
-  const proxy: unknown = new Proxy(target, {
-    get: (_t, prop) => {
-      if (prop === 'then') {
-        return (resolve: (value: unknown) => void) => resolve([]);
-      }
-      return proxy;
-    },
-    apply: () => proxy,
-  });
-  return proxy;
-}
+const here = path.dirname(fileURLToPath(import.meta.url));
+const routesDir = path.resolve(here, '..', 'src', 'routes');
 
 /**
  * Mutating routes that predate this guard covering every module (the guard
@@ -150,15 +135,6 @@ const LEGACY_SELF_AUDITED = new Set<string>([
   'PATCH /api/v1/whitelist/applications/:id',
 ]);
 
-/** Mutating routes registered with no `config.audit` at all (self-audited in the handler). */
-const LEGACY_MISSING_AUDIT = new Set<string>([
-  'POST /api/v1/issues',
-  'PATCH /api/v1/issues/:id',
-  'POST /api/v1/issues/:id/comments',
-  'POST /api/v1/issues/:id/links',
-  'DELETE /api/v1/issues/:id/links/:linkId',
-]);
-
 /** Machine-to-machine endpoints that answer before any panel state changes. */
 const MACHINE_INTEGRATION_EXCEPTIONS = new Set(['POST /api/v1/integrations/balancer/proposals']);
 
@@ -168,85 +144,100 @@ interface RouteRecord {
   method: string;
   url: string;
   config: Record<string, unknown>;
+  /** Route module file name under src/routes/. */
+  file: string;
 }
 
-async function collectRoutes(): Promise<RouteRecord[]> {
-  const app: FastifyInstance = Fastify({ logger: false });
-  app.setValidatorCompiler(validatorCompiler);
-  app.setSerializerCompiler(serializerCompiler);
-  // Minimal stubs for the plugin decorations that routes read from. We
-  // don't need real DB/Redis/Bridge to enumerate routes.
-  // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('db', inertService());
-  // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('redis', inertService());
-  // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('bridge', inertService());
-  for (const name of [
-    'config',
-    'liveBus',
-    'diag',
-    'makeBridgeClient',
-    'installProgress',
-    'statusReconciler',
-  ]) {
-    // biome-ignore lint/suspicious/noExplicitAny: test fixture
-    (app as any).decorate(name, inertService());
+/** Route module file names in `registerRoutes()` order, read from routes/index.ts. */
+function registeredRouteFiles(): string[] {
+  const source = readFileSync(path.join(routesDir, 'index.ts'), 'utf8');
+  const identToFile = new Map<string, string>();
+  for (const match of source.matchAll(/^import (\w+) from '\.\/([\w-]+)\.js';$/gm)) {
+    if (match[1] && match[2]) identToFile.set(match[1], `${match[2]}.ts`);
   }
-  // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('encryptionKey', Buffer.alloc(32));
+  const files: string[] = [];
+  for (const match of source.matchAll(/await app\.register\((\w+)\);/g)) {
+    const file = match[1] ? identToFile.get(match[1]) : undefined;
+    if (file) files.push(file);
+  }
+  return files;
+}
 
+/** A stand-in for every decoration: any property read or call yields itself. */
+const inert: object = new Proxy(() => undefined, {
+  get: (_target, prop) => (prop === 'then' ? undefined : inert),
+  apply: () => inert,
+});
+
+async function collectRoutes(): Promise<RouteRecord[]> {
   const rows: RouteRecord[] = [];
-  app.addHook('onRoute', (route) => {
-    const methods = Array.isArray(route.method) ? route.method : [route.method];
-    for (const m of methods) {
-      rows.push({
-        method: String(m).toUpperCase(),
-        url: route.url,
-        config: (route.config ?? {}) as Record<string, unknown>,
-      });
+  for (const file of registeredRouteFiles()) {
+    const app: FastifyInstance = Fastify({ logger: false });
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    for (const name of [
+      'db',
+      'redis',
+      'bridge',
+      'liveBus',
+      'config',
+      'encryptionKey',
+      'diag',
+      'makeBridgeClient',
+      'installProgress',
+      'statusReconciler',
+    ]) {
+      app.decorate(name, inert);
     }
-  });
-
-  // We intentionally DO NOT register auth/audit/install-progress plugins
-  // here — they run logic that would need live DB/Redis. Route records
-  // still pick up config.audit because it is declared on the route
-  // itself, not injected by plugins.
-  // Register all route modules; skip deps they would use at runtime.
-  // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).setErrorHandler(() => undefined);
-
-  // The same single registration list `server.ts` and the integration
-  // harness use, so a new route module can never sit outside this guard
-  // (audit #102/#116: ban-sources and banned-names did).
-  await registerRoutes(app);
-
-  await app.ready();
-  await app.close();
+    app.addHook('onRoute', (route) => {
+      const methods = Array.isArray(route.method) ? route.method : [route.method];
+      for (const m of methods) {
+        rows.push({
+          method: String(m).toUpperCase(),
+          url: route.url,
+          config: (route.config ?? {}) as Record<string, unknown>,
+          file,
+        });
+      }
+    });
+    const mod = (await import(/* @vite-ignore */ path.join(routesDir, file))) as {
+      default: FastifyPluginAsync;
+    };
+    await app.register(mod.default);
+    await app.ready();
+    await app.close();
+  }
   return rows;
 }
 
+const routesPromise = collectRoutes();
+
+function mutatingRoutes(routes: RouteRecord[]): RouteRecord[] {
+  return routes.filter((r) => MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX));
+}
+
 describe('audit coverage (TZ §17.12 CI guard)', () => {
-  it('every mutating route declares config.audit (either an object or explicit false)', async () => {
-    const routes = await collectRoutes();
-    const mutating = routes.filter(
-      (r) => MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX),
-    );
+  it('collects the full registerRoutes() table, not a hand-picked subset', async () => {
+    const routes = await routesPromise;
+    expect(new Set(routes.map((r) => r.file)).size).toBe(registeredRouteFiles().length);
+    expect(registeredRouteFiles().length).toBeGreaterThan(100);
+  });
+
+  it('every mutating route declares config.audit', async () => {
+    const mutating = mutatingRoutes(await routesPromise);
     expect(mutating.length).toBeGreaterThan(0);
 
-    const missing = mutating.filter(
-      (r) => !Object.hasOwn(r.config, 'audit') && !LEGACY_MISSING_AUDIT.has(routeKey(r)),
-    );
+    const missing = mutating.filter((r) => !Object.hasOwn(r.config, 'audit'));
     if (missing.length > 0) {
-      const lines = missing.map((r) => `  ${r.method} ${r.url}`).join('\n');
+      const lines = missing.map((r) => `  ${r.method} ${r.url} (${r.file})`).join('\n');
       throw new Error(
-        `Routes missing config.audit (add { audit: { action, resource } } or { audit: false }):\n${lines}`,
+        `Routes missing config.audit (add { action, resource }, 'manual' or, allowlisted, false):\n${lines}`,
       );
     }
   });
 
   it('mutating-verb routes with audit: false are limited to explicit machine-integration exceptions', async () => {
-    const routes = await collectRoutes();
+    const routes = await routesPromise;
     const falsy = routes.filter(
       (r) =>
         MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX) && r.config.audit === false,
@@ -272,7 +263,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     'PATCH /api/v1/banned-names/:id',
     'DELETE /api/v1/banned-names/:id',
   ])('%s declares a declarative config.audit', async (key) => {
-    const routes = await collectRoutes();
+    const routes = await routesPromise;
     const route = routes.find((r) => routeKey(r) === key);
     expect(route, `${key} is not registered`).toBeDefined();
     expect(route?.config.audit).toMatchObject({
@@ -281,17 +272,27 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     });
   });
 
-  it('the legacy exception lists only name routes that still need them', async () => {
-    const routes = await collectRoutes();
+  it('the legacy exception list only names routes that still need it', async () => {
+    const routes = await routesPromise;
     const byKey = new Map(routes.map((r) => [routeKey(r), r]));
     for (const key of LEGACY_SELF_AUDITED) {
-      expect(byKey.get(key)?.config.audit, `stale LEGACY_SELF_AUDITED entry ${key}`).toBe(false);
+      const audit = byKey.get(key)?.config.audit;
+      expect(audit === false || audit === 'manual', `stale LEGACY_SELF_AUDITED entry ${key}`).toBe(
+        true,
+      );
     }
-    for (const key of LEGACY_MISSING_AUDIT) {
-      const route = byKey.get(key);
-      expect(route, `stale LEGACY_MISSING_AUDIT entry ${key}`).toBeDefined();
-      expect(Object.hasOwn(route?.config ?? {}, 'audit'), `stale entry ${key}`).toBe(false);
-    }
+  });
+
+  it("every audit: 'manual' route lives in a module that writes audit_log itself", async () => {
+    const manualFiles = new Set(
+      mutatingRoutes(await routesPromise)
+        .filter((r) => r.config.audit === 'manual')
+        .map((r) => r.file),
+    );
+    const silent = [...manualFiles].filter(
+      (file) => !readFileSync(path.join(routesDir, file), 'utf8').includes('writeAuditEntry('),
+    );
+    expect(silent, "modules declaring audit: 'manual' without a writeAuditEntry call").toEqual([]);
   });
 
   it('every status-flipping route emits a server.* diag event in its handler source', async () => {
@@ -303,7 +304,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
       ['POST /api/v1/servers/archive/:id/restore', 'server-archive.ts'],
     ]);
 
-    const routes = await collectRoutes();
+    const routes = await routesPromise;
     const seen = new Set<string>();
     for (const r of routes) {
       const key = `${r.method} ${r.url}`;
@@ -316,8 +317,6 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
       ).toBe(true);
     }
 
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const routesDir = path.resolve(here, '..', 'src', 'routes');
     // Tolerate single/double quotes and arbitrary whitespace + newlines between
     // diag.emit( and the kind: 'server.<x>' literal. Matches both
     // `req.diag.emit({ ... kind: 'server.foo' ... })` and the

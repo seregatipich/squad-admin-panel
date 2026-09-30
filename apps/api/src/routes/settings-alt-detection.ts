@@ -44,6 +44,7 @@ const putBody = z
 const createIgnoredIpBody = z.object({
   cidr: z
     .string()
+    .trim()
     .refine(isValidIpOrCidr, { message: 'invalid_cidr' })
     .refine(isNarrowEnoughToIgnore, { message: 'cidr_too_broad' }),
   note: z.string().trim().max(500).optional(),
@@ -170,7 +171,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection',
     {
       schema: { body: putBody },
-      config: { permissions: ['player:manage_alt_detection'], audit: false },
+      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
@@ -225,7 +226,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips',
     {
       schema: { body: createIgnoredIpBody },
-      config: { permissions: ['player:manage_alt_detection'], audit: false },
+      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
@@ -274,7 +275,7 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips/:id',
     {
       schema: { params: idParam },
-      config: { permissions: ['player:manage_alt_detection'], audit: false },
+      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
     },
     async (req, reply) => {
       const existingRows = await app.db

@@ -400,88 +400,92 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     return { items: rows };
   });
 
-  fast.post('/api/v1/issues', { schema: { body: createBody } }, async (req, reply) => {
-    const user = currentUser(req, reply);
-    if (!user) return;
+  fast.post(
+    '/api/v1/issues',
+    { schema: { body: createBody }, config: { audit: 'manual' } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
 
-    const resolved = await resolveLabelIds(req.body.labels ?? []);
-    if (!resolved.ok) {
-      reply.code(422);
-      return { error: 'unknown_labels', unknown: resolved.unknown };
-    }
+      const resolved = await resolveLabelIds(req.body.labels ?? []);
+      if (!resolved.ok) {
+        reply.code(422);
+        return { error: 'unknown_labels', unknown: resolved.unknown };
+      }
 
-    // Deduplicated so an auto-ticket that names the same entity twice does not
-    // trip the unique index and roll the whole create back.
-    const linkTargets: LinkTarget[] = [];
-    const seenTargets = new Set<string>();
-    for (const raw of req.body.links ?? []) {
-      const key = targetKey(raw);
-      if (seenTargets.has(key)) continue;
-      seenTargets.add(key);
-      linkTargets.push({ entity_type: raw.entity_type, entity_id: raw.entity_id });
-    }
-    const unknownTargets = await findUnknownTargets(linkTargets);
-    if (unknownTargets.length > 0) {
-      reply.code(422);
-      return { error: 'unknown_entity', unknown: unknownTargets };
-    }
+      // Deduplicated so an auto-ticket that names the same entity twice does not
+      // trip the unique index and roll the whole create back.
+      const linkTargets: LinkTarget[] = [];
+      const seenTargets = new Set<string>();
+      for (const raw of req.body.links ?? []) {
+        const key = targetKey(raw);
+        if (seenTargets.has(key)) continue;
+        seenTargets.add(key);
+        linkTargets.push({ entity_type: raw.entity_type, entity_id: raw.entity_id });
+      }
+      const unknownTargets = await findUnknownTargets(linkTargets);
+      if (unknownTargets.length > 0) {
+        reply.code(422);
+        return { error: 'unknown_entity', unknown: unknownTargets };
+      }
 
-    const id = uuidv7();
-    await app.db.transaction(async (tx) => {
-      await tx.insert(issues).values({
-        id,
-        authorPlayerId: user.playerId,
-        title: req.body.title,
-        body: req.body.body,
-        state: 'open',
+      const id = uuidv7();
+      await app.db.transaction(async (tx) => {
+        await tx.insert(issues).values({
+          id,
+          authorPlayerId: user.playerId,
+          title: req.body.title,
+          body: req.body.body,
+          state: 'open',
+        });
+        if (resolved.ids.length > 0) {
+          await tx
+            .insert(issueLabelLinks)
+            .values(resolved.ids.map((labelId) => ({ issueId: id, labelId })));
+        }
+        if (linkTargets.length > 0) {
+          await tx.insert(issueLinks).values(
+            linkTargets.map((target) => ({
+              id: uuidv7(),
+              issueId: id,
+              entityType: target.entity_type,
+              entityId: target.entity_id,
+              createdBy: user.playerId,
+            })),
+          );
+        }
       });
-      if (resolved.ids.length > 0) {
-        await tx
-          .insert(issueLabelLinks)
-          .values(resolved.ids.map((labelId) => ({ issueId: id, labelId })));
-      }
-      if (linkTargets.length > 0) {
-        await tx.insert(issueLinks).values(
-          linkTargets.map((target) => ({
-            id: uuidv7(),
-            issueId: id,
-            entityType: target.entity_type,
-            entityId: target.entity_id,
-            createdBy: user.playerId,
-          })),
-        );
-      }
-    });
 
-    const created = await getIssueRow(id);
-    if (!created) {
-      reply.code(500);
-      return { error: 'insert_failed' };
-    }
-    const labels = (await labelsForIssues([id])).get(id) ?? [];
-    const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
-    const view = serializeIssue(created, labels, names);
-    const links = await linksForIssue(id);
+      const created = await getIssueRow(id);
+      if (!created) {
+        reply.code(500);
+        return { error: 'insert_failed' };
+      }
+      const labels = (await labelsForIssues([id])).get(id) ?? [];
+      const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
+      const view = serializeIssue(created, labels, names);
+      const links = await linksForIssue(id);
 
-    reply.code(201);
-    await writeAuditEntry(app.db, {
-      actor: auditActor(req),
-      actorIp: req.ip ?? null,
-      actionType: 'issue.create',
-      targetType: 'issue',
-      targetId: id,
-      before: null,
-      after: { ...view, links },
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-    app.liveBus.publish({
-      type: 'issue.created',
-      ts: new Date().toISOString(),
-      data: { issue: view },
-    });
-    return { ...view, links };
-  });
+      reply.code(201);
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'issue.create',
+        targetType: 'issue',
+        targetId: id,
+        before: null,
+        after: { ...view, links },
+        context: { requestId: req.id, method: req.method, url: req.url },
+        statusCode: reply.statusCode,
+      });
+      app.liveBus.publish({
+        type: 'issue.created',
+        ts: new Date().toISOString(),
+        data: { issue: view },
+      });
+      return { ...view, links };
+    },
+  );
 
   fast.get('/api/v1/issues', { schema: { querystring: listQuery } }, async (req, reply) => {
     const user = currentUser(req, reply);
@@ -562,7 +566,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/issues/:id',
-    { schema: { params: idParam, body: patchBody } },
+    { schema: { params: idParam, body: patchBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -667,7 +671,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/issues/:id/comments',
-    { schema: { params: idParam, body: commentBody } },
+    { schema: { params: idParam, body: commentBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -728,7 +732,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/issues/:id/links',
-    { schema: { params: idParam, body: linkInput } },
+    { schema: { params: idParam, body: linkInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;
@@ -793,7 +797,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/issues/:id/links/:linkId',
-    { schema: { params: linkIdParam } },
+    { schema: { params: linkIdParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       const user = currentUser(req, reply);
       if (!user) return;

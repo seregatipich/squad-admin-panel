@@ -138,7 +138,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/next',
-    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -194,7 +194,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/change',
-    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -248,7 +248,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/end-match',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;

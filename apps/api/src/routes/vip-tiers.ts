@@ -130,7 +130,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/vip-tiers',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -199,7 +199,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -275,7 +275,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;

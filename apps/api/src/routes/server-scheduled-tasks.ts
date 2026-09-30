@@ -307,7 +307,7 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/scheduled-tasks',
-    { config: { audit: false }, schema: { params: serverIdParams, body: createBody } },
+    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: createBody } },
     async (req, reply) => {
       const denied = taskTypeGuard(req, reply, req.body.task_type);
       if (denied) return denied;
@@ -409,7 +409,7 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/servers/:id/scheduled-tasks/:taskId',
-    { config: { audit: false }, schema: { params: taskParams, body: updateBody } },
+    { config: { audit: 'manual' }, schema: { params: taskParams, body: updateBody } },
     async (req, reply) => {
       const server = await loadServer(req.params.id);
       if (!server) {
@@ -514,7 +514,7 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/scheduled-tasks/:taskId',
-    { config: { audit: false }, schema: { params: taskParams } },
+    { config: { audit: 'manual' }, schema: { params: taskParams } },
     async (req, reply) => {
       const server = await loadServer(req.params.id);
       if (!server) {

@@ -284,16 +284,11 @@ export async function softDeleteServer(
       }
     }
 
-    // (b) Drop the stream itself. UNLINK reclaims memory off-thread; fall back
-    // to DEL for clients/builds without UNLINK.
+    // (b) Drop the stream itself. UNLINK reclaims memory off-thread.
     try {
       await ctx.redis.unlink(streamKey);
-    } catch {
-      try {
-        await ctx.redis.del(streamKey);
-      } catch (err) {
-        result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
-      }
+    } catch (err) {
+      result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
     }
 
     // (c) Drop the per-server sync-status key so no stale `unreachable` alert

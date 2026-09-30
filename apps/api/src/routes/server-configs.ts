@@ -11,6 +11,7 @@ import {
   configFileClass,
   PANEL_CONFIGS_ROOT,
   type PermissionKey,
+  resolveRconHost,
 } from '@squad/shared-config';
 import { createPatch } from 'diff';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -27,7 +28,6 @@ import {
 } from '../lib/config-secrets.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
-import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { DELETION_BACKUP_MARKER } from '../lib/server-delete.js';

@@ -229,7 +229,7 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/marks',
     {
       schema: { params: playerIdParams, body: createMarkBody },
-      config: { permissions: ['player:set_flags'], audit: false },
+      config: { permissions: ['player:set_flags'], audit: 'manual' },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -329,7 +329,7 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/marks/:markId',
     {
       schema: { params: markParams, body: clearMarkBody },
-      config: { permissions: ['player:set_flags'], audit: false },
+      config: { permissions: ['player:set_flags'], audit: 'manual' },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

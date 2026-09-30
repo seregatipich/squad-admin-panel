@@ -201,6 +201,38 @@
 - `POST/PUT /api/v1/automation-rules`: `400` для `kick` без причины, для `rcon_command` с неверным числом аргументов и для `time_of_day` с неизвестным часовым поясом.
 - Вход через Steam: запрос профиля к Steam Web API ограничен 3 с, зависший Steam больше не задерживает вход на минуты.
 
+## 2026-09-28 — Аудит модулей `apps/api/src/lib` (#66)
+
+### Security
+
+- Мутирующие запросы и WebSocket-рукопожатия с cookie `__Host-sid` принимаются только с `Origin` панели (`PANEL_PUBLIC_URL` или совпадающий с `Host`) либо, без `Origin`, с `Sec-Fetch-Site: same-origin`; иначе `403 cross_site_request_forbidden` (`plugins/csrf.ts`). Защищает от соседнего поддомена, для которого `SameSite=Lax` не срабатывает.
+- `license_id`/`license_key` в `PATCH /api/v1/servers/:id` не принимают управляющие символы и переводы строк (`400`); `syncLicenseCfg` отказывается записать такой ключ в `License.cfg`.
+- URL Discord-вебхука принимается только по `https://` (API и форма в веб-интерфейсе).
+- Запросы `GET /api/v1/auth/discord/callback` (с `code`/`state`) больше не пишутся в журнал запросов.
+- Восстановление конфигов из архива и маршруты `/api/v1/servers/archive/*` берут только строки резервной копии, записанные при удалении (по `servers.deletion_backup_marker_id`), а не любые версии с сообщением `deletion-backup-marker…`.
+
+### Fixed
+
+- `rconSendOnce` отвергает пакеты с размером вне `[10, 1 МиБ]` (`rcon malformed packet`) вместо бесконечного цикла или падения процесса.
+- Бан с `ban_length`, выходящим за диапазон дат (например `300000y`), считается перманентным и остаётся в федеративном банлисте.
+- `enforceModerationAction` записывает строку `moderation_actions` и событие `events` в одной транзакции; сбой XADD после применённого RCON-действия логируется и больше не превращается в `500` (то же для `POST /api/v1/reports/:id/actions`).
+- Пересчёт статистики репортёра выставляет `spam_flagged_at` и создаёт алерт атомарно: алерт поднимается один раз при гонке и не теряется при ошибке; недопустимая `severity` правила заменяется на `warning`.
+- Предупреждение ALT-7 перед баном считает кандидатов напрямую (`lib/alt-candidates.ts`), а не через внутренний `app.inject`, который при любом не-`200` молча возвращал пустой список.
+- `sendRconCommandViaWorker` и `notifyReporter` превращают сбои Redis/БД в исход (`worker_unavailable`, `timeout`, `lookup_failed`) вместо исключения.
+- Список игнорируемых IP (`POST /api/v1/settings/alt-detection/ignored-ips`) отвергает IPv6 zone id и IPv4-mapped адреса и сохраняет обрезанное значение (`400` вместо `500` от БД).
+- Кэш ростера с неожиданной структурой или некорректным SteamID64 больше не роняет `GET /api/v1/servers/:id/roster`.
+- Повреждённый зашифрованный blob даёт понятную ошибку `invalid encrypted blob`.
+- Запросы к Discord OAuth ограничены таймаутом 10 с.
+- Периодическая очистка сирот удаляет и сайдкары `rnsquadjs-<uuid>` вместе с каталогом `/run/squad-panel/rnsquadjs/<uuid>` (там пароль RCON) для серверов без строки в БД.
+- Буферы реплея чата и боевых событий забывают удалённый сервер.
+- Кэш прав RBAC ограничен 5000 записями и вытесняет просроченные.
+- Ошибка `UNLINK` при удалении сервера попадает в `errors`, а не маскируется повтором через `DEL`.
+
+### Changed
+
+- `config.audit` мутирующего маршрута — `{ action, resource }`, `'manual'` (обработчик сам вызывает `writeAuditEntry`) или `false` только для allowlist машинных интеграций; `audit-coverage.test.ts` проверяет все маршруты из `registerRoutes()`. Маршруты `issues.ts` получили `config.audit`.
+- Удалены неиспользуемые `COOKIE_SECURE` (строка `false` разбиралась как `true`) и `GLITCHTIP_DSN`, клиент `app.rcon`, реэкспорт `lib/rcon-host.ts`, `ensureAdminsCfgSyncGroup`, `readSentinelHint`; `rotation-segment.ts` использует общие функции из `@squad/shared-config/admins-config`.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

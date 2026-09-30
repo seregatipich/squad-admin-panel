@@ -552,6 +552,40 @@ describeIfDb('POST /api/v1/moderation-actions/bulk', () => {
     expect(streamed.length).toBeGreaterThanOrEqual(5);
   });
 
+  it('counts a ban as applied, with its events row, when only the stream XADD fails (#66)', async () => {
+    const cookie = await loginAsOwner(h);
+    const xadd = vi.spyOn(h.redis, 'xadd').mockRejectedValueOnce(new Error('redis down'));
+    let body: BulkResponse;
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: URL,
+        headers: { cookie },
+        payload: {
+          server_id: serverId,
+          action_type: 'ban',
+          player_ids: targetIds,
+          reason: 'Stream outage',
+          ban_length: '3d',
+          confirm_bulk: true,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      body = res.json() as BulkResponse;
+    } finally {
+      xadd.mockRestore();
+    }
+
+    expect(body.applied).toBe(5);
+    expect(body.failed).toBe(0);
+    const ledger = await ledgerRows(targetIds);
+    const eventRows = await h.db
+      .select({ id: events.eventId })
+      .from(events)
+      .where(and(eq(events.serverId, serverId), eq(events.kind, 'moderation.ban')));
+    expect(eventRows).toHaveLength(ledger.length);
+  });
+
   it('exposes every bulk ban through the public federated banlist', async () => {
     const cookie = await loginAsOwner(h);
     await h.db

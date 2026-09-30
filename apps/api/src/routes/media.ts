@@ -148,7 +148,7 @@ function parseRangeHeader(
 const mediaRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.post('/api/v1/media', { config: { audit: false } }, async (req, reply) => {
+  fast.post('/api/v1/media', { config: { audit: 'manual' } }, async (req, reply) => {
     const denied = panelGuard(req, reply);
     if (denied) return denied;
     const actorId = req.user?.playerId;
@@ -282,7 +282,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/link',
-    { schema: { body: mediaLinkInput }, config: { audit: false } },
+    { schema: { body: mediaLinkInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -397,7 +397,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/media/:id',
-    { schema: { params: idParams }, config: { audit: false } },
+    { schema: { params: idParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

@@ -189,7 +189,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/bonus-adjustments',
     {
       schema: { params: playerIdParams, body: adjustBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       const denied = manageGuard(req, reply);

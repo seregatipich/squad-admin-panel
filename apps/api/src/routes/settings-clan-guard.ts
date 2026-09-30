@@ -98,7 +98,7 @@ const settingsClanGuardRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/settings/clan-guard',
-    { schema: { body: patchBody }, config: { audit: false } },
+    { schema: { body: patchBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
       if (denied) return denied;

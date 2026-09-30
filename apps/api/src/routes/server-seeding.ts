@@ -100,7 +100,7 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/seeding-settings',
-    { schema: { params: serverIdParams, body: seedingSettingsBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: seedingSettingsBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

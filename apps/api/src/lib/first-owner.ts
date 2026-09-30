@@ -4,8 +4,8 @@ import { and, eq, sql } from 'drizzle-orm';
 
 export type ClaimResult = 'claimed' | 'already_claimed' | 'no_owner_role';
 
+/** The one bridge call the claim needs: writing the informational host sentinel. */
 export interface SentinelBridge {
-  fileRead(args: { path: string }): Promise<unknown>;
   fileAtomicWrite(args: { path: string; content: string; mode?: number }): Promise<unknown>;
 }
 
@@ -64,16 +64,4 @@ export async function claimFirstOwner(
     }
   }
   return result;
-}
-
-export async function readSentinelHint(
-  bridge: SentinelBridge,
-): Promise<{ steam_id64: string; claimed_at: string } | null> {
-  try {
-    const result = (await bridge.fileRead({ path: SENTINEL_PATH })) as { content?: string };
-    if (!result?.content) return null;
-    return JSON.parse(result.content) as { steam_id64: string; claimed_at: string };
-  } catch {
-    return null;
-  }
 }

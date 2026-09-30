@@ -26,6 +26,21 @@ function chat(serverId: string, id: string, message = 'hi'): ChatEvent {
 const SERVER_A = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 const SERVER_B = '019dbac8-ceb0-77ab-859b-bfa9a282ffff';
 
+function idsFor(buf: ChatRingBuffer, serverId: string): string[] {
+  return buf
+    .tail()
+    .filter((e) => e.data.server_id === serverId)
+    .map((e) => e.data.id);
+}
+
+function deleted(serverId: string): LiveEvent {
+  return {
+    type: 'server.deleted',
+    ts: '2026-04-23T11:31:00.000Z',
+    data: { server_id: serverId, deleted_at: '2026-04-23T11:31:00.000Z', by: null },
+  };
+}
+
 describe('ChatRingBuffer', () => {
   it('replays pushed messages in insertion order', () => {
     const buf = new ChatRingBuffer(10);
@@ -38,7 +53,7 @@ describe('ChatRingBuffer', () => {
   it('keeps only the last N messages per server (ring eviction)', () => {
     const buf = new ChatRingBuffer(3);
     for (const id of ['1', '2', '3', '4', '5']) buf.push(chat(SERVER_A, id));
-    const ids = buf.tailFor(SERVER_A).map((e) => e.data.id);
+    const ids = idsFor(buf, SERVER_A);
     expect(ids).toEqual(['3', '4', '5']);
   });
 
@@ -49,8 +64,8 @@ describe('ChatRingBuffer', () => {
     buf.push(chat(SERVER_A, 'a2'));
     buf.push(chat(SERVER_B, 'b2'));
     buf.push(chat(SERVER_B, 'b3'));
-    expect(buf.tailFor(SERVER_A).map((e) => e.data.id)).toEqual(['a1', 'a2']);
-    expect(buf.tailFor(SERVER_B).map((e) => e.data.id)).toEqual(['b2', 'b3']);
+    expect(idsFor(buf, SERVER_A)).toEqual(['a1', 'a2']);
+    expect(idsFor(buf, SERVER_B)).toEqual(['b2', 'b3']);
   });
 
   it('tail() aggregates all servers so a global reconnect loses no tail', () => {
@@ -77,12 +92,20 @@ describe('ChatRingBuffer', () => {
   it('returns an empty tail for an unseen server', () => {
     const buf = new ChatRingBuffer(5);
     buf.push(chat(SERVER_A, '1'));
-    expect(buf.tailFor(SERVER_B)).toEqual([]);
+    expect(idsFor(buf, SERVER_B)).toEqual([]);
   });
 
   it('drops empty per-server buckets once fully evicted is not required but capacity is bounded', () => {
     const buf = new ChatRingBuffer(1);
     for (let i = 0; i < 50; i++) buf.push(chat(SERVER_A, String(i)));
-    expect(buf.tailFor(SERVER_A).map((e) => e.data.id)).toEqual(['49']);
+    expect(idsFor(buf, SERVER_A)).toEqual(['49']);
+  });
+
+  it('forgets a deleted server so its chat is not replayed to new clients (#66)', () => {
+    const buf = new ChatRingBuffer(5);
+    buf.push(chat(SERVER_A, 'a1'));
+    buf.push(chat(SERVER_B, 'b1'));
+    buf.push(deleted(SERVER_A));
+    expect(buf.tail().map((e) => e.data.id)).toEqual(['b1']);
   });
 });

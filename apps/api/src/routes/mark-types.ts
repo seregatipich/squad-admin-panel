@@ -80,7 +80,7 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/mark-types',
-    { schema: { body: createBody }, config: { permissions: ['role:edit'], audit: false } },
+    { schema: { body: createBody }, config: { permissions: ['role:edit'], audit: 'manual' } },
     async (req, reply) => {
       const actorId = req.user?.playerId;
       if (!actorId) {
@@ -163,7 +163,7 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/mark-types/:id',
     {
       schema: { params: idParam, body: updateBody },
-      config: { permissions: ['role:edit'], audit: false },
+      config: { permissions: ['role:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       const actorId = req.user?.playerId;
@@ -225,7 +225,7 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/mark-types/reorder',
-    { schema: { body: reorderBody }, config: { permissions: ['role:edit'], audit: false } },
+    { schema: { body: reorderBody }, config: { permissions: ['role:edit'], audit: 'manual' } },
     async (req, reply) => {
       const actorId = req.user?.playerId;
       if (!actorId) {

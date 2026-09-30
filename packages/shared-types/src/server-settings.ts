@@ -42,13 +42,34 @@ export const serverSettingsUpdate = z
   );
 export type ServerSettingsUpdate = z.infer<typeof serverSettingsUpdate>;
 
+/**
+ * Rejects control characters (C0, DEL, C1 — CR/LF included) and the Unicode
+ * line/paragraph separators: License.cfg is rendered as
+ * `LicenseId=<id>\nLicenseKey=<key>\n`, so a line break would inject extra lines.
+ */
+const LICENSE_FIELD_PATTERN = /^[^\p{Cc}\u2028\u2029]*$/u;
+
 export const serverPatch = z
   .object({
     display_name: z.string().min(1).max(120).optional(),
     description: z.string().max(500).nullable().optional(),
     tags: z.array(z.string().min(1).max(50)).max(20).optional(),
-    license_id: z.string().trim().min(1).max(200).nullable().optional(),
-    license_key: z.string().trim().min(1).max(500).nullable().optional(),
+    license_id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(LICENSE_FIELD_PATTERN, 'license_control_characters')
+      .nullable()
+      .optional(),
+    license_key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .regex(LICENSE_FIELD_PATTERN, 'license_control_characters')
+      .nullable()
+      .optional(),
   })
   .strict()
   // SRV-6 (#45): the license is written to License.cfg as an id+key pair, so
@@ -57,7 +78,8 @@ export const serverPatch = z
   // - clearing exactly one side would leave an orphaned half on record.
   // Allowed shapes: {id,key} attach, {key:null[,id:null]} detach, {id} id-only
   // edit (key stays as stored). No format regex: the real key format is not
-  // publicly specified, so only trim/min/max/pairing are enforced.
+  // publicly specified, so only trim/min/max/pairing and the absence of control
+  // characters are enforced.
   .superRefine((d, ctx) => {
     const incomplete =
       (typeof d.license_key === 'string' && typeof d.license_id !== 'string') ||

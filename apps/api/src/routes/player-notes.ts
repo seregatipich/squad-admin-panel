@@ -155,7 +155,7 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/players/:playerId/notes',
-    { schema: { params: playerIdParams, body: noteBody }, config: { audit: false } },
+    { schema: { params: playerIdParams, body: noteBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -217,7 +217,7 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/notes/:noteId',
-    { schema: { params: noteIdParams, body: noteBody }, config: { audit: false } },
+    { schema: { params: noteIdParams, body: noteBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -269,7 +269,7 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/notes/:noteId',
-    { schema: { params: noteIdParams }, config: { audit: false } },
+    { schema: { params: noteIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

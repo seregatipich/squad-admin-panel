@@ -133,7 +133,7 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/:id/links',
-    { schema: { params: mediaIdParams, body: mediaLinkAttachInput }, config: { audit: false } },
+    { schema: { params: mediaIdParams, body: mediaLinkAttachInput }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -216,7 +216,7 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/media/:id/links',
     {
       schema: { params: mediaIdParams, querystring: mediaLinkDetachQuery },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

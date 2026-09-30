@@ -205,7 +205,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: submitBody },
       config: {
-        audit: false,
+        audit: 'manual',
         // `public` so an anonymous caller gets the explicit 401 below;
         // `selfService` so a Steam login without panel access is honoured.
         public: true,
@@ -295,7 +295,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/settings',
     {
       schema: { body: settingsBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req) => {
       const before = await loadSettings();
@@ -361,7 +361,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/:id',
     {
       schema: { params: idParam, body: patchBody },
-      config: { permissions: ['whitelist:edit'], audit: false },
+      config: { permissions: ['whitelist:edit'], audit: 'manual' },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: whitelist:edit gate guarantees req.user

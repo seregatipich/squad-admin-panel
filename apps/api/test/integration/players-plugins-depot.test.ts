@@ -328,6 +328,21 @@ describe('audit plugin', () => {
     expect(after.length).toBe(before.length);
   });
 
+  it("leaves an audit: 'manual' route's rows to its handler, with no hook-written duplicate (#66)", async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/issues',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ title: 'Audit manual marker', body: 'check' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const id = (res.json() as { id: string }).id;
+    await new Promise((r) => setTimeout(r, 150));
+    const rows = await h.db.select().from(auditLog).where(eq(auditLog.targetId, id));
+    expect(rows.map((row) => row.actionType)).toEqual(['issue.create']);
+  });
+
   it('writes an audit row even when an authenticated request returns 4xx', async () => {
     const cookie = await loginAsOwner(h);
     // An empty body fails validation: 400, no role is created.

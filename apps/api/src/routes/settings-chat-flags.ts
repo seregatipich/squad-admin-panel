@@ -194,7 +194,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/settings/chat-flag-rules',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -257,7 +257,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/settings/chat-flag-rules/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -334,7 +334,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/settings/chat-flag-rules/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -361,7 +361,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/settings/chat-flag-rules/reindex',
-    { schema: { body: reindexBody }, config: { audit: false } },
+    { schema: { body: reindexBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;

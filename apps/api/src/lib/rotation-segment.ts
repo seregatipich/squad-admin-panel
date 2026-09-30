@@ -1,68 +1,27 @@
 /**
- * ROT-2 (#145): pure managed-segment mechanics for `LayerRotation.cfg`.
+ * ROT-2 (#145): managed-segment mechanics for `LayerRotation.cfg`.
  *
- * This module intentionally re-implements the generic
- * `findManagedSegment`/`spliceManagedSegment` functions from
- * `apps/workers/config-sync/src/segment.ts` byte-for-byte (marker strings and
- * CRLF joining included). Worker packages are not importable from the API, so
- * the two copies must be kept in sync manually — if the marker strings or the
- * splice semantics ever change here, mirror the change in
- * `apps/workers/config-sync/src/segment.ts` (and vice versa), otherwise the
- * managed segment stops round-tripping between SYNC-3 (Admins.cfg) and this
- * rotation editor.
+ * The generic marker handling (`findManagedSegment`/`spliceManagedSegment`,
+ * marker strings, CRLF joining) is shared with the SYNC-3 `Admins.cfg` writer
+ * through `@squad/shared-config/admins-config`, so both files round-trip the
+ * same managed segment. This module adds only the rotation-specific parsing,
+ * building and validation, and re-exports the shared helpers for its callers.
  */
 
-export const BEGIN_MARKER = '//SQUAD-PANEL BEGIN';
-export const END_MARKER = '//SQUAD-PANEL END';
+import {
+  BEGIN_MARKER,
+  END_MARKER,
+  findManagedSegment,
+  spliceManagedSegment,
+} from '@squad/shared-config/admins-config';
+
+export { BEGIN_MARKER, END_MARKER, findManagedSegment, spliceManagedSegment };
+
 const BEGIN_LINE = `${BEGIN_MARKER} — не редактировать вручную`;
 const SEGMENT_NEWLINE = '\r\n';
 
 /** Upper bound enforced by {@link validateLayerName}. */
 const MAX_LAYER_NAME_LENGTH = 128;
-
-export interface LocatedSegment {
-  segment: string;
-  start: number;
-  end: number;
-}
-
-/**
- * Locate the existing managed segment in a file's content. Returns the full
- * segment string (markers included) and its [start, end) byte offsets, or
- * null if no markers are present.
- */
-export function findManagedSegment(content: string): LocatedSegment | null {
-  const beginIdx = content.indexOf(BEGIN_MARKER);
-  if (beginIdx < 0) return null;
-  const endIdx = content.indexOf(END_MARKER, beginIdx);
-  if (endIdx < 0) return null;
-  const tail = endIdx + END_MARKER.length;
-  return { segment: content.slice(beginIdx, tail), start: beginIdx, end: tail };
-}
-
-/**
- * Splice a freshly generated segment body into the file. Behaviour:
- *   - if existing markers found: replace what's between them (inclusive)
- *   - else if file empty: just emit the segment + trailing CRLF
- *   - else: prepend a new segment + blank line + the existing content,
- *           preserving outside-marker content untouched.
- *
- * CRLF preservation: the function does NOT touch line endings outside the
- * segment. The segment itself is always emitted with \r\n separators (Squad
- * runs on Windows-style endings even on Linux).
- */
-export function spliceManagedSegment(originalContent: string, newSegmentBody: string): string {
-  const located = findManagedSegment(originalContent);
-  if (located) {
-    return (
-      originalContent.slice(0, located.start) + newSegmentBody + originalContent.slice(located.end)
-    );
-  }
-  if (originalContent.length === 0) {
-    return `${newSegmentBody}${SEGMENT_NEWLINE}`;
-  }
-  return `${newSegmentBody}${SEGMENT_NEWLINE}${SEGMENT_NEWLINE}${originalContent}`;
-}
 
 export interface ParsedRotationSegment {
   layers: string[];

@@ -977,3 +977,19 @@ func TestBackupRestorePassesComposeTargetToRestoreScript(t *testing.T) {
 		t.Errorf("expected restore env to keep the bridge environment (PATH), got:\n%s", env)
 	}
 }
+
+func TestListSidecarContainersKeepsOnlyStrictSidecarNames(t *testing.T) {
+	uuid := "019dbb45-3556-751f-9124-d4cf0e6b0053"
+	f := &Fake{Stdout: []byte("rnsquadjs-" + uuid + "\nrnsquadjs-evil\nxrnsquadjs-" + uuid + "\nsquad-" + uuid + "\n")}
+	d := NewDocker(f)
+	names, err := d.ListSidecarContainers(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !reflect.DeepEqual(names, []string{"rnsquadjs-" + uuid}) {
+		t.Errorf("names = %v", names)
+	}
+	if args := strings.Join(f.Calls[0].Args, " "); !strings.Contains(args, "--filter name=^rnsquadjs-") {
+		t.Errorf("expected a rnsquadjs name filter, got: %s", args)
+	}
+}

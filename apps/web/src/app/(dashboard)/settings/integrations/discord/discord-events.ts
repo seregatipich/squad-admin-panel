@@ -37,7 +37,7 @@ export function eventLabel(type: string): string {
 }
 
 export function looksLikeWebhookUrl(url: string): boolean {
-  return /^https?:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i.test(
+  return /^https:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i.test(
     url.trim(),
   );
 }

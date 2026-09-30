@@ -174,7 +174,7 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/seed-subscription',
-    { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (panelGuard(req, reply)) return;
       const server = await app.db.query.servers.findFirst({
@@ -238,7 +238,7 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/seed-call',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

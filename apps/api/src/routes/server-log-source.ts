@@ -151,7 +151,7 @@ const serverLogSourceRoutes: FastifyPluginAsync = async (app) => {
       const now = new Date();
       const needsKey = !existing || body.regenerate_key;
       const keyPair = needsKey
-        ? generateSshKeyPair(`squad-admin-panel@${process.env.APP_DOMAIN ?? 'panel'}`)
+        ? generateSshKeyPair(`squad-admin-panel@${app.config.APP_DOMAIN}`)
         : null;
       // A new host (or port) means a new host key: drop the trust-on-first-use
       // pin so the worker records the next one instead of refusing it.

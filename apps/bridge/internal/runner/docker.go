@@ -766,8 +766,21 @@ func (d *DockerRunner) DepotUpdate(
 // matches the per-server `squad-{uuid}` regex, regardless of running
 // state (so the API can detect orphans whose UUID is no longer in DB).
 func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error) {
+	return d.listContainersNamed(ctx, "squad-")
+}
+
+// ListSidecarContainers returns the names of every RNSquadJS sidecar
+// container (`rnsquadjs-{uuid}`), regardless of running state, so the API
+// can remove a sidecar whose server no longer exists.
+func (d *DockerRunner) ListSidecarContainers(ctx context.Context) ([]string, error) {
+	return d.listContainersNamed(ctx, "rnsquadjs-")
+}
+
+// listContainersNamed lists every container whose name starts with prefix
+// and passes the strict validate.ContainerName allowlist.
+func (d *DockerRunner) listContainersNamed(ctx context.Context, prefix string) ([]string, error) {
 	so, se, exit, err := d.R.Run(ctx, d.Bin,
-		[]string{"ps", "-a", "--no-trunc", "--filter", "name=^squad-", "--format", "{{.Names}}"}, nil)
+		[]string{"ps", "-a", "--no-trunc", "--filter", "name=^" + prefix, "--format", "{{.Names}}"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -780,9 +793,9 @@ func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error
 		if line == "" {
 			continue
 		}
-		// docker ps `name=^squad-` is a substring match (no real anchor),
-		// so revalidate against the strict squad-<uuid> regex.
-		if validate.ContainerName(line) == nil {
+		// docker ps `name=^…` is not a reliable anchor, so revalidate the
+		// prefix and the strict <prefix><uuid> allowlist regex.
+		if strings.HasPrefix(line, prefix) && validate.ContainerName(line) == nil {
 			out = append(out, line)
 		}
 	}

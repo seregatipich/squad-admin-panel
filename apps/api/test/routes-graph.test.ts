@@ -136,10 +136,6 @@ vi.mock('../src/lib/rcon-send.js', () => ({
   rconSendOnce: vi.fn(),
 }));
 
-vi.mock('../src/lib/rcon-host.js', () => ({
-  resolveRconHost: vi.fn(),
-}));
-
 vi.mock('../src/lib/auto-prune.js', () => ({
   fireAutoPrune: vi.fn(),
 }));
@@ -154,6 +150,7 @@ vi.mock('../src/lib/server-delete.js', () => ({
 
 vi.mock('../src/lib/server-restore.js', () => ({
   restoreConfigsFromArchive: vi.fn(),
+  deletionBackupRows: vi.fn(),
 }));
 
 vi.mock('../src/lib/audit.js', () => ({

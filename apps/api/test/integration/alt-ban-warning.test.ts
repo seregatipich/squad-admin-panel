@@ -1,9 +1,11 @@
 import {
   alertEvents,
   alertRules,
+  altDetectionSettings,
   auditLog,
   events,
   moderationActions,
+  playerIpHistory,
   playerLinks,
   playerReports,
   players,
@@ -13,6 +15,7 @@ import {
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadBanAltWarning } from '../../src/lib/ban-alt-warning.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -396,5 +399,37 @@ describeIfDb('report ban through the shared MOD-2 pipeline (#41)', () => {
       .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, altId)));
     expect(failedAudit).toHaveLength(1);
     expect(failedAudit[0]?.afterSnapshot).toMatchObject({ status: 'failed' });
+  });
+});
+
+describeIfDb('loadBanAltWarning candidate lookup (#66)', () => {
+  afterEach(async () => {
+    await h.db.delete(altDetectionSettings);
+  });
+
+  it('computes high-confidence candidates in-process, independent of the caller credentials', async () => {
+    // One shared IP is enough for `high` once the cutoffs are lowered.
+    await h.db
+      .insert(altDetectionSettings)
+      .values({ id: 1, mediumThreshold: 1, highThreshold: 1 })
+      .onConflictDoUpdate({
+        target: altDetectionSettings.id,
+        set: { mediumThreshold: 1, highThreshold: 1 },
+      });
+    const candidateId = await seedPlayer(
+      testSteamId(PAIR_STEAM_BASE + 5000 + pairSeq),
+      'Shared IP candidate',
+    );
+    await h.db.insert(playerIpHistory).values([
+      { playerId: targetId, ip: '198.51.100.77' },
+      { playerId: candidateId, ip: '198.51.100.77' },
+    ]);
+
+    // No cookie/authorization: the old app.inject round-trip answered 401 and
+    // the warning silently degraded to "no candidates".
+    const warning = await loadBanAltWarning(h.app, { playerId: targetId, canViewIps: true });
+
+    expect(warning?.candidates.map((candidate) => candidate.player_id)).toContain(candidateId);
+    expect(warning?.candidate_count).toBeGreaterThanOrEqual(1);
   });
 });

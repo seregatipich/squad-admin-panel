@@ -85,4 +85,16 @@ describe('CombatRingBuffer', () => {
     buf.push(combat(SERVER_A, '2026-07-09T10:00:00.000Z'));
     expect(buf.tailFor(SERVER_B)).toEqual([]);
   });
+
+  it('forgets a deleted server so its combat feed is not replayed to new clients (#66)', () => {
+    const buf = new CombatRingBuffer(5);
+    buf.push(combat(SERVER_A, '2026-07-09T10:00:00.000Z'));
+    buf.push(combat(SERVER_B, '2026-07-09T10:00:01.000Z'));
+    buf.push({
+      type: 'server.deleted',
+      ts: '2026-07-09T10:01:00.000Z',
+      data: { server_id: SERVER_A, deleted_at: '2026-07-09T10:01:00.000Z', by: null },
+    });
+    expect(buf.tail().map((e) => e.data.server_id)).toEqual([SERVER_B]);
+  });
 });

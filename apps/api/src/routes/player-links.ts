@@ -125,7 +125,7 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/links',
     {
       schema: { params: playerIdParams, body: createBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req, reply) => {
       const { playerId } = req.params;
@@ -247,7 +247,7 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/player-links/:linkId',
     {
       schema: { params: linkIdParams, body: patchBody },
-      config: { permissions: ['player:view_ips'], audit: false },
+      config: { permissions: ['player:view_ips'], audit: 'manual' },
     },
     async (req, reply) => {
       const { linkId } = req.params;

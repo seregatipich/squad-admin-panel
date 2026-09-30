@@ -995,7 +995,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans',
-    { schema: { body: createBody }, config: { audit: false } },
+    { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1053,7 +1053,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id',
-    { schema: { params: clanIdParams, body: updateBody }, config: { audit: false } },
+    { schema: { params: clanIdParams, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1132,7 +1132,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/settings',
-    { schema: { params: clanIdParams, body: settingsBody }, config: { audit: false } },
+    { schema: { params: clanIdParams, body: settingsBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1180,7 +1180,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/expire',
-    { schema: { params: clanIdParams, body: expireBody }, config: { audit: false } },
+    { schema: { params: clanIdParams, body: expireBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1241,7 +1241,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/clans/:id',
-    { schema: { params: clanIdParams }, config: { audit: false } },
+    { schema: { params: clanIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1473,7 +1473,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans/:id/members',
-    { schema: { params: clanIdParams, body: addMemberBody }, config: { audit: false } },
+    { schema: { params: clanIdParams, body: addMemberBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1578,7 +1578,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/members/:playerId',
-    { schema: { params: memberParams, body: setMemberRoleBody }, config: { audit: false } },
+    { schema: { params: memberParams, body: setMemberRoleBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1631,7 +1631,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/clans/:id/members/:playerId',
-    { schema: { params: memberParams }, config: { audit: false } },
+    { schema: { params: memberParams }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1697,7 +1697,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/clans/:id/members/:playerId/priority',
-    { schema: { params: memberParams, body: setPriorityBody }, config: { audit: false } },
+    { schema: { params: memberParams, body: setPriorityBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -1838,7 +1838,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans/:id/transfer-leadership',
-    { schema: { params: clanIdParams, body: transferBody }, config: { audit: false } },
+    { schema: { params: clanIdParams, body: transferBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

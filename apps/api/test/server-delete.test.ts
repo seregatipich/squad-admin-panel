@@ -742,4 +742,35 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).not.toBeNull();
   });
+
+  it('reports the UNLINK failure itself instead of masking it with a DEL retry (#66)', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-unlink-fail' });
+    await seedConfigs(h, seeded.id);
+
+    const redisStub = {
+      xgroup: vi.fn(async () => 1),
+      unlink: vi.fn(async () => {
+        throw new Error('UNLINK boom');
+      }),
+      del: vi.fn(async () => 1),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: null,
+        actorIp: null,
+        actorLabel: 'system',
+        redis: redisStub as unknown as IntegrationHarness['redis'],
+      },
+      seeded.id,
+    );
+
+    expect(result.errors).toContainEqual({ phase: 'sync_queue_cleanup', error: 'UNLINK boom' });
+    expect(redisStub.del).not.toHaveBeenCalledWith(
+      expect.stringContaining('events:admins-cfg-sync:'),
+    );
+  });
 });

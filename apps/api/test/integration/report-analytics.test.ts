@@ -14,6 +14,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
+import { recomputeReporterStats } from '../../src/lib/reporter-stats.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
@@ -566,5 +567,62 @@ describeIfDb('reporter stats recompute on report/action mutations (REPORT-5, #11
       expect(row.target_report_count_90d).toBe(3);
       if (row.reporter_player_id === reporterAId) expect(row.reporter_trusted).toBe(true);
     }
+  });
+
+  async function seedRecentRejections(count: number): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      await seedReport({
+        serverId: serverAId,
+        reporterPlayerId: reporterSpamId,
+        targetPlayerId: targetBId,
+        status: 'rejected',
+        createdAt: new Date(),
+        resolvedAt: new Date(),
+      });
+    }
+  }
+
+  async function seedSpamRule(config: Record<string, unknown>): Promise<string> {
+    const ruleId = uuidv7();
+    createdAlertRuleIds.push(ruleId);
+    await h.db.insert(alertRules).values({
+      id: ruleId,
+      name: `Report spam ${ruleId}`,
+      type: 'custom',
+      config: { eventKind: 'reports.spam_flagged', ...config },
+      channels: [],
+      enabled: true,
+    });
+    return ruleId;
+  }
+
+  it('falls back to warning for an invalid rule severity instead of stranding the flag (#66)', async () => {
+    const badRule = await seedSpamRule({ severity: 'bogus' });
+    const goodRule = await seedSpamRule({ severity: 'critical' });
+    await seedRecentRejections(5);
+
+    await recomputeReporterStats(h.db, h.redis, reporterSpamId);
+
+    const [bad] = await h.db.select().from(alertEvents).where(eq(alertEvents.ruleId, badRule));
+    const [good] = await h.db.select().from(alertEvents).where(eq(alertEvents.ruleId, goodRule));
+    expect(bad?.severity).toBe('warning');
+    expect(good?.severity).toBe('critical');
+  });
+
+  it('raises the spam alert exactly once under concurrent recomputes (#66)', async () => {
+    const ruleId = await seedSpamRule({ severity: 'warning' });
+    await seedRecentRejections(5);
+
+    await Promise.all(
+      Array.from({ length: 4 }, () => recomputeReporterStats(h.db, h.redis, reporterSpamId)),
+    );
+
+    const alerts = await h.db.select().from(alertEvents).where(eq(alertEvents.ruleId, ruleId));
+    expect(alerts).toHaveLength(1);
+    const [stats] = await h.db
+      .select()
+      .from(reporterStats)
+      .where(eq(reporterStats.playerId, reporterSpamId));
+    expect(stats?.spamFlaggedAt).not.toBeNull();
   });
 });

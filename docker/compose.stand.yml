@@ -152,7 +152,6 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET_is_required}
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN_is_required}
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:?PANEL_PUBLIC_URL_is_required}
-      COOKIE_SECURE: 'true'
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       # Discord OAuth login and signed interactions (DISCORD-4). Unset leaves
       # /api/v1/auth/discord/login and /integrations/discord/interactions

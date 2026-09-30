@@ -90,7 +90,7 @@ const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/geoip',
     {
       schema: { body: putGeoipBody },
-      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: 'manual' },
     },
     async (req, reply) => {
       if (isForbidden(req, reply)) return;

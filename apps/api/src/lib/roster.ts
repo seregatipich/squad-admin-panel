@@ -90,10 +90,16 @@ export interface RosterApiResponse {
   squads: RosterApiSquad[];
 }
 
+/**
+ * Parses the cached `rcon:roster:{serverId}` value. Returns null for a missing
+ * key, malformed JSON, or a payload without a `players` array, so a stale or
+ * hand-edited cache entry degrades to "no roster" instead of a 500.
+ */
 export function parseStoredRoster(raw: string | null): StoredRoster | null {
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as StoredRoster;
+    const parsed = JSON.parse(raw) as StoredRoster;
+    return Array.isArray(parsed?.players) ? parsed : null;
   } catch {
     return null;
   }
@@ -127,6 +133,13 @@ export function parseStoredCrowns(raw: Record<string, string> | null): Map<strin
   return crowns;
 }
 
+/** A SteamID64 is exactly 17 decimal digits. */
+const STEAM_ID64_PATTERN = /^\d{17}$/;
+
+/**
+ * Collects the identities to resolve against `players`. A malformed
+ * `steam_id64` is skipped rather than passed to `BigInt`, which would throw.
+ */
 export function collectRosterLookups(entries: StoredRosterEntry[]): {
   eosIds: string[];
   steamIds: bigint[];
@@ -134,7 +147,7 @@ export function collectRosterLookups(entries: StoredRosterEntry[]): {
   const eosIds = entries.map((entry) => entry.eos_id).filter((id): id is string => !!id);
   const steamIds = entries
     .map((entry) => entry.steam_id64)
-    .filter((id): id is string => !!id)
+    .filter((id): id is string => typeof id === 'string' && STEAM_ID64_PATTERN.test(id))
     .map((id) => BigInt(id));
   return { eosIds, steamIds };
 }

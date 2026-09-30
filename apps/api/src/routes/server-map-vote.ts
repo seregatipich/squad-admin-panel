@@ -253,7 +253,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/settings',
-    { schema: { params: serverIdParams, body: settingsBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: settingsBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -291,7 +291,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/candidates',
-    { schema: { params: serverIdParams, body: candidatesBody }, config: { audit: false } },
+    { schema: { params: serverIdParams, body: candidatesBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -494,7 +494,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/map-vote/versions/:versionId/restore',
     {
       schema: { params: versionParams, body: restoreBody },
-      config: { audit: false },
+      config: { audit: 'manual' },
     },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);

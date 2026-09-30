@@ -198,7 +198,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/reports/:id/actions',
-    { schema: { params: idParam, body: actionBody }, config: { audit: false } },
+    { schema: { params: idParam, body: actionBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -228,8 +228,6 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           warning = await loadBanAltWarning(app, {
             playerId: report.targetPlayerId,
             canViewIps: req.user?.permissions.permissions.has('player:view_ips') ?? false,
-            cookie: req.headers.cookie,
-            authorization: req.headers.authorization,
           });
         } catch (error) {
           req.log.warn({ error }, 'ALT-7 warning lookup failed; continuing with the ban');
@@ -451,7 +449,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   /** Sends the reporter an AdminWarn status template, if they're online. */
   fast.post(
     '/api/v1/reports/:id/notify-reporter',
-    { schema: { params: idParam, body: notifyBody }, config: { audit: false } },
+    { schema: { params: idParam, body: notifyBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -506,7 +504,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/reports/bulk-resolve',
-    { schema: { body: bulkResolveBody }, config: { audit: false } },
+    { schema: { body: bulkResolveBody }, config: { audit: 'manual' } },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;

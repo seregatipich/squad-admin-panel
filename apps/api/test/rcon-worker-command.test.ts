@@ -130,6 +130,52 @@ describe('sendRconCommandViaWorker', () => {
     });
   });
 
+  it('maps a Redis failure on the status check to worker_unavailable instead of throwing (#66)', async () => {
+    const redis = makeRedis({ state: 'connected' });
+    redis.get.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const result = await sendRconCommandViaWorker(redis, {
+      serverId: 'srv-1',
+      command: 'AdminEndMatch',
+      requestId: 'req-1',
+      timeoutMs: 1,
+      pollIntervalMs: 0,
+    });
+
+    expect(result).toEqual({
+      attempted: false,
+      reason: 'worker_unavailable',
+      detail: 'ECONNREFUSED',
+    });
+    expect(redis.xadd).not.toHaveBeenCalled();
+  });
+
+  it('reports an unobservable result as a timeout when polling Redis fails after enqueue (#66)', async () => {
+    const redis = makeRedis({ state: 'connected' });
+    redis.get.mockImplementation((key: string) =>
+      key.startsWith('rcon:status:')
+        ? Promise.resolve(JSON.stringify({ state: 'connected' }))
+        : Promise.reject(new Error('ECONNRESET')),
+    );
+
+    const result = await sendRconCommandViaWorker(redis, {
+      serverId: 'srv-1',
+      command: 'AdminEndMatch',
+      requestId: 'req-1',
+      timeoutMs: 50,
+      pollIntervalMs: 1,
+    });
+
+    expect(result).toEqual({
+      attempted: true,
+      ok: false,
+      requestId: 'req-1',
+      reason: 'timeout',
+      detail: 'ECONNRESET',
+      via: 'worker-rcon',
+    });
+  });
+
   it('stamps the stream entry with a deadline at the end of its own wait (#36 findings 1337/39)', async () => {
     const redis = makeRedis({ state: 'connected' });
     const before = Date.now();

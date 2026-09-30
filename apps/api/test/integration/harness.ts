@@ -20,6 +20,7 @@ import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
+import csrfPlugin from '../../src/plugins/csrf.js';
 import errorDiagPlugin from '../../src/plugins/error-diag.js';
 import healthPlugin from '../../src/plugins/health.js';
 import heartbeatWatchPlugin from '../../src/plugins/heartbeat-watch.js';
@@ -340,7 +341,6 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     APP_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     SESSION_SECRET: TEST_SESSION_SECRET,
     BRIDGE_SOCKET: '/dev/null',
-    COOKIE_SECURE: false,
     APP_DOMAIN: 'test.localhost',
     LOG_LEVEL: 'info',
     SESSION_TTL_SECONDS: 21600,
@@ -370,6 +370,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   // but leave failing the run to vitest instead of exiting the worker.
   await app.register(errorDiagPlugin, { exitOnUnhandledRejection: false });
   await app.register(heartbeatWatchPlugin);
+  await app.register(csrfPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);
