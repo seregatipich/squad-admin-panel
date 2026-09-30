@@ -225,3 +225,34 @@ describe('computeSeedingTick: full crossing sequence (acceptance criterion 1)', 
     expect(transitions).toEqual(['started', 'ended']);
   });
 });
+
+describe('computeSeedingTick: threshold changes without a transition', () => {
+  it('reports the current live_at when the threshold changed while live', () => {
+    const result = computeSeedingTick(liveState({ live_at: 50 }), {
+      playerCount: 80,
+      liveAt: 70,
+      hysteresis: HYSTERESIS,
+      layer: 'Yehorivka RAAS v11',
+      seedLayer: false,
+      now: '2026-07-14T10:05:00.000Z',
+    });
+    expect(result.transition).toBeNull();
+    expect(result.state.live_at).toBe(70);
+  });
+
+  it('reports the current live_at when the threshold changed while seeding', () => {
+    const result = computeSeedingTick(
+      liveState({ state: 'seeding', started_at: '2026-07-14T10:00:00.000Z', live_at: 50 }),
+      {
+        playerCount: 20,
+        liveAt: 70,
+        hysteresis: HYSTERESIS,
+        layer: 'Sumari Seed v1',
+        seedLayer: true,
+        now: '2026-07-14T10:05:00.000Z',
+      },
+    );
+    expect(result.transition).toBeNull();
+    expect(result.state.live_at).toBe(70);
+  });
+});

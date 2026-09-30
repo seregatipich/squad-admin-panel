@@ -120,6 +120,7 @@ export function computeSeedingTick(
       state: {
         ...prev,
         current_players: playerCount,
+        live_at: liveAt,
         progress_pct: progressPct,
         layer,
         updated_at: now,
@@ -148,6 +149,7 @@ export function computeSeedingTick(
     state: {
       ...prev,
       current_players: playerCount,
+      live_at: liveAt,
       progress_pct: progressPct,
       layer,
       updated_at: now,

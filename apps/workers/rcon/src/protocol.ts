@@ -66,6 +66,14 @@ export function encodePacket(packet: RconPacket): Buffer {
 export const SQUAD_BROKEN_PROBE_TAIL = Buffer.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
 const BROKEN_PROBE_FRAME_LENGTH = 21;
 
+/**
+ * Largest packet `size` field the decoder accepts. Valve RCON bodies are at
+ * most 4096 bytes and Squad's multi-packet ListPlayers replies stay well under
+ * that per frame; 1 MiB leaves ample headroom while a corrupted length can no
+ * longer make the decoder buffer gigabytes waiting for a frame that never ends.
+ */
+export const MAX_RCON_PACKET_SIZE = 1024 * 1024;
+
 export class RconPacketStream {
   private buf: Buffer = Buffer.alloc(0);
 
@@ -84,7 +92,7 @@ export class RconPacketStream {
       }
       if (this.isBrokenProbeTailPrefix()) break;
       const size = this.buf.readInt32LE(0);
-      if (size < 10) {
+      if (size < 10 || size > MAX_RCON_PACKET_SIZE) {
         throw new Error(`invalid RCON packet size: ${size}`);
       }
       // The whole 21-byte broken frame in one go: a size-10 empty packet

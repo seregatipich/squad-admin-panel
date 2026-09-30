@@ -109,6 +109,13 @@ describe('Squad broken probe reply', () => {
     expect(out.map((p) => p.id)).toEqual([12, 11]);
   });
 
+  it('rejects a size field above the packet ceiling instead of buffering forever', () => {
+    const s = new RconPacketStream();
+    const oversized = Buffer.alloc(4);
+    oversized.writeInt32LE(0x7fffffff, 0);
+    expect(() => s.push(oversized)).toThrow(/invalid RCON packet size/);
+  });
+
   it('still rejects a genuinely malformed size', () => {
     const s = new RconPacketStream();
     expect(() => s.push(Buffer.from('03000000ffffffff', 'hex'))).toThrow(

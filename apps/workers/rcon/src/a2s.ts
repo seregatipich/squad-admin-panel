@@ -14,6 +14,7 @@
  */
 
 import dgram from 'node:dgram';
+import { lookup } from 'node:dns/promises';
 
 // A2S_INFO request type
 const A2S_INFO_REQUEST = 0x54;
@@ -57,15 +58,15 @@ export function buildA2SChallengeRequest(challenge: Buffer): Buffer {
 }
 
 /**
- * Reads a null-terminated ASCII string from buf starting at offset.
+ * Reads a null-terminated UTF-8 string from buf starting at offset.
  * Returns the string and the new offset (position after the null byte).
  */
 function readCString(buf: Buffer, offset: number): { value: string; nextOffset: number } {
   const end = buf.indexOf(0x00, offset);
   if (end === -1) {
-    return { value: buf.subarray(offset).toString('ascii'), nextOffset: buf.byteLength };
+    return { value: buf.subarray(offset).toString('utf8'), nextOffset: buf.byteLength };
   }
-  return { value: buf.subarray(offset, end).toString('ascii'), nextOffset: end + 1 };
+  return { value: buf.subarray(offset, end).toString('utf8'), nextOffset: end + 1 };
 }
 
 /**
@@ -165,6 +166,9 @@ export function parseA2SInfoResponse(buf: Buffer): A2SInfoResult | null {
  * Handles the challenge flow: if the server responds with a 0x41 challenge,
  * the request is automatically resent with the challenge bytes appended.
  *
+ * Only datagrams whose source is the resolved host and port are accepted, so a
+ * packet from any other sender cannot pose as the server's reply.
+ *
  * Returns null on timeout, error, or unparseable response.
  */
 export async function queryA2S(
@@ -172,6 +176,13 @@ export async function queryA2S(
   port: number,
   timeoutMs = 2000,
 ): Promise<A2SInfoResult | null> {
+  let serverAddress: string;
+  try {
+    serverAddress = (await lookup(host, { family: 4 })).address;
+  } catch {
+    return null;
+  }
+
   return new Promise<A2SInfoResult | null>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -188,7 +199,8 @@ export async function queryA2S(
 
     socket.on('error', () => finish(null));
 
-    socket.on('message', (msg: Buffer) => {
+    socket.on('message', (msg: Buffer, rinfo: dgram.RemoteInfo) => {
+      if (rinfo.address !== serverAddress || rinfo.port !== port) return;
       // Check for challenge response (0x41)
       if (
         msg.byteLength >= 9 &&

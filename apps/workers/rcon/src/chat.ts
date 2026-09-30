@@ -21,6 +21,14 @@ import type { ChatChannel, ChatInput } from '@squad/chat-ingest';
 const CHAT_LINE =
   /^\[(?<channel>ChatAll|ChatTeam|ChatSquad|ChatAdmin)\]\s*\[Online IDs?:(?<ids>[^\]]*)\]\s*(?<name>.*?)\s:\s(?<message>.*)$/is;
 
+/** Canonical channel names keyed by their lower-cased form, since the line regex is case-insensitive. */
+const CHANNELS: Readonly<Record<string, ChatChannel>> = {
+  chatall: 'ChatAll',
+  chatteam: 'ChatTeam',
+  chatsquad: 'ChatSquad',
+  chatadmin: 'ChatAdmin',
+};
+
 const ID_PAIR = /([^\s:]+)\s*:\s*(\S+)/g;
 
 /**
@@ -57,14 +65,15 @@ export function parseRconChatLine(body: string, ts: string): ChatInput | null {
   // Only the packet's own framing is stripped: a trailing space belongs to
   // the separator of an empty message (`<Name> : `).
   const groups = CHAT_LINE.exec(body.replace(/[\0\r\n]+$/, ''))?.groups;
-  if (!groups?.channel) return null;
+  const channel = CHANNELS[groups?.channel?.toLowerCase() ?? ''];
+  if (!groups || !channel) return null;
   const { eosId, steamId64 } = parseOnlineIds(groups.ids ?? '');
   if (!eosId && !steamId64) return null;
   const name = (groups.name ?? '').trim();
   if (name === '') return null;
   return {
     ts,
-    channel: groups.channel as ChatChannel,
+    channel,
     eosId,
     steamId64,
     playerName: name,
