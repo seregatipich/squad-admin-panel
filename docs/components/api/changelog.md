@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-09-30 — Ограничения и read-only корень контейнеров (#47, #75)
+
+### Changed
+
+- `docker/compose.yml` и `docker/compose.stand.yml`: контейнер `api` работает с `read_only: true`, `tmpfs: /tmp`, `mem_limit: 1g` и `cpus: 2.0`. Запись идёт только в смонтированные тома (`/run/panel-host-bridge`, `/run/squad-panel/rnsquadjs`, `/var/lib/squad-panel/media`). Лимиты выбраны по замеру на стенде (api около 88 MiB). См. `docs/operations/deployment.md`, раздел «Container hardening».
+
 ## 2026-09-30 — Хвосты аудита маршрутов API (#73)
 
 ### Changed

@@ -1,5 +1,11 @@
 # Changelog — worker-config-sync
 
+## 2026-09-30 — Ограничения и read-only корень контейнера (#47, #75)
+
+### Changed
+
+- Все воркеры в `docker/compose.yml` и `docker/compose.stand.yml` получают фрагмент `x-worker-limits` (`mem_limit: 512m`, `cpus: 1.0`) и `read_only: true` с `tmpfs: /tmp` из `x-hardening`; `config-sync` пишет только в `/run/panel-host-bridge`. См. `docs/operations/deployment.md`.
+
 ## 2026-09-28 — восстановление после NOGROUP и отметка начала недоступности (#61)
 
 ### Исправлено

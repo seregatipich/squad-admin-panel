@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-30 — Ограничения и read-only корень контейнера (#47, #75)
+
+### Changed
+
+- `docker/compose.yml` и `docker/compose.stand.yml`: контейнер `web` работает с `read_only: true`, `mem_limit: 1g`, `cpus: 2.0`; `/tmp` и кэш Next.js `/app/apps/web/.next/cache` (uid 1000) смонтированы как tmpfs. Замер на стенде: около 120 MiB. См. `docs/operations/deployment.md`.
+
 ## 2026-09-27 — Флаг инфраструктуры и заметка в Blame (#36)
 
 ### Added

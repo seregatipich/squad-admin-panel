@@ -20,6 +20,18 @@ x-hardening: &hardening
   # Bound fork bombs and reap zombies in every hardened service.
   pids_limit: 256
   init: true
+  # Read-only root filesystem: the services write only to their volumes and
+  # bind mounts (checked with `docker diff` on the stand). /tmp is an
+  # in-memory scratch directory; web adds its Next.js cache next to it.
+  read_only: true
+  tmpfs: ['/tmp']
+
+# Resource limits sized from the usage measured on the stand after two days of
+# uptime (workers 20-50 MiB, worker-diag-flush 116 MiB), with generous headroom.
+# See docs/operations/deployment.md for how to change them.
+x-worker-limits: &worker-limits
+  mem_limit: 512m
+  cpus: 1.0
 
 services:
   caddy:
@@ -29,6 +41,7 @@ services:
     # Binds :80/:443 as root inside the container.
     cap_add: ['NET_BIND_SERVICE']
     <<: *hardening
+    mem_limit: 256m
     ports:
       - '80:80'
       - '443:443'
@@ -79,6 +92,8 @@ services:
     # chown of the rnsquadjs sidecar config to the sidecar uid (lib/rnsquadjs.ts).
     cap_add: ['CHOWN']
     <<: *hardening
+    mem_limit: 1g
+    cpus: 2.0
     environment:
       NODE_ENV: production
       API_HOST: 0.0.0.0
@@ -164,6 +179,13 @@ services:
       dockerfile: docker/web.Dockerfile
     restart: unless-stopped
     <<: *hardening
+    mem_limit: 1g
+    cpus: 2.0
+    # next start writes its image-optimisation cache here; owned by the image's
+    # unprivileged node user (uid 1000).
+    tmpfs:
+      - /tmp
+      - /app/apps/web/.next/cache:uid=1000,gid=1000
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
@@ -180,7 +202,7 @@ services:
       args:
         WORKER: log-ingest
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -218,7 +240,7 @@ services:
       args:
         WORKER: config-sync
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -250,7 +272,7 @@ services:
       args:
         WORKER: rcon
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     network_mode: host
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@127.0.0.1:5432/admin
@@ -276,7 +298,7 @@ services:
   worker-audit-archiver:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -290,7 +312,7 @@ services:
   worker-event-partition:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       # Always the schema owner: it creates and drops partitions (DDL).
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
@@ -305,7 +327,7 @@ services:
   worker-presence-daily:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -319,7 +341,7 @@ services:
   worker-role-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: role-expirer } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -338,7 +360,7 @@ services:
   worker-seed-reward:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -358,7 +380,7 @@ services:
   worker-steam-refresh:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: steam-refresh } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -379,7 +401,7 @@ services:
   worker-media-publisher:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -409,7 +431,7 @@ services:
   worker-leaderboard-aggregator:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -425,7 +447,7 @@ services:
   worker-diag-flush:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -455,7 +477,7 @@ services:
       args:
         WORKER: metrics-sampler
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -476,7 +498,7 @@ services:
   worker-clan-guard:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -495,7 +517,7 @@ services:
   worker-automation:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -511,7 +533,7 @@ services:
   worker-scheduler:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -534,7 +556,7 @@ services:
   worker-ban-sync:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -552,7 +574,7 @@ services:
   worker-clan-priority-expirer:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -569,7 +591,7 @@ services:
   worker-discord:
     build: { context: .., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
     restart: unless-stopped
-    <<: *hardening
+    <<: [*hardening, *worker-limits]
     environment:
       DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -589,6 +611,7 @@ services:
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
     pids_limit: 256
+    mem_limit: 4g
     # The per-process pools (DATABASE_POOL_MAX) sum to ~134 connections, more
     # than the stock limit of 100 connections (#1097).
     command: ['postgres', '-c', 'max_connections=200']
@@ -613,6 +636,7 @@ services:
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
     pids_limit: 256
+    mem_limit: 1g
     # Redis is published on the host loopback, and the bridge starts the game
     # servers and the rnsquadjs sidecars with --network host, so any process
     # there can connect: every client must authenticate (#32). The default
@@ -627,6 +651,12 @@ services:
       - --save
       - '60'
       - '1000'
+      # Bound memory below the container's mem_limit; noeviction makes a full
+      # Redis reject writes instead of silently dropping stream entries.
+      - --maxmemory
+      - 768mb
+      - --maxmemory-policy
+      - noeviction
       - --requirepass
       - '${REDIS_PASSWORD:?REDIS_PASSWORD must be set (see .env.example)}'
       - --user

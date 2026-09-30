@@ -11,6 +11,10 @@ import { describe, expect, it } from 'vitest';
  * - the stand keeps Redis AOF persistence and has the backup service;
  * - containers drop every capability, cannot gain privileges, and run as a
  *   non-root user unless a comment in the file says why not;
+ * - every service but postgres and redis runs on a read-only root filesystem
+ *   with an in-memory /tmp, and every long-running service has memory (and,
+ *   where sized, CPU) limits (#1270);
+ * - redis is capped below its memory limit and never evicts stream data;
  * - the api and workers reach Postgres through the least-privilege login;
  * - the api receives the Discord credentials;
  * - every third-party base image is pinned by digest.
@@ -107,6 +111,19 @@ describe('stand persistence and backups (#1030)', () => {
     expect(stand).toMatch(/^ {8}exec docker-entrypoint\.sh redis-server --appendonly yes /m);
   });
 
+  it('caps Redis below its container limit and never evicts stream data (#1270)', () => {
+    const base = block('docker/compose.yml', 'redis');
+    expect(base).toMatch(
+      /^ {6}- --maxmemory\n {6}- 768mb\n {6}- --maxmemory-policy\n {6}- noeviction$/m,
+    );
+    // The stand keeps requirepass, the rnsquadjs ACL user and AOF on the same command.
+    const stand = block('docker/compose.stand.yml', 'redis');
+    expect(stand).toMatch(
+      /exec docker-entrypoint\.sh redis-server --appendonly yes --save 60 1 \\\n {10}--maxmemory 768mb --maxmemory-policy noeviction \\\n {10}--requirepass /,
+    );
+    expect(stand).toContain('--user rnsquadjs on');
+  });
+
   it("converts the stand's existing RDB into the AOF once instead of starting empty", () => {
     // Redis started with --appendonly yes ignores dump.rdb; without this step
     // the switch would drop every stream, consumer group and cached session.
@@ -153,9 +170,66 @@ describe('container hardening (#1268)', () => {
       );
     });
 
+    it(`${file}: the hardening fragment makes the root filesystem read-only with an in-memory /tmp (#1270)`, () => {
+      const fragment =
+        /\nx-hardening: &hardening\n((?: {2}.*\n|\n| *#.*\n)*?)\n/.exec(yaml)?.[1] ?? '';
+      expect(fragment).toMatch(/^ {2}read_only: true$/m);
+      expect(fragment).toMatch(/^ {2}tmpfs: \['\/tmp'\]$/m);
+    });
+
+    it(`${file}: the worker limits fragment is 512m and 1 CPU (#1270)`, () => {
+      expect(yaml).toMatch(
+        /\nx-worker-limits: &worker-limits\n {2}mem_limit: 512m\n {2}cpus: 1\.0\n/,
+      );
+    });
+
+    it(`${file}: every service except postgres and redis runs with read_only: true (#1270)`, () => {
+      const hardened = /^ {4}<<: (?:\*hardening|\[\*hardening, \*worker-limits\])$/m;
+      const writable = [...services(yaml)]
+        .filter(([, body]) => !hardened.test(body) && !/^ {4}read_only: true$/m.test(body))
+        .map(([name]) => name)
+        .sort();
+      // The remaining services are either stateful (postgres, redis write
+      // their own data directories), profile-only tools (backup runs restic
+      // against host volumes) or one-shot image builders that run /bin/true.
+      expect(writable).toEqual([
+        'backup',
+        'depot-init-image',
+        'postgres',
+        'redis',
+        'rnsquadjs-image',
+        'squad-server-image',
+      ]);
+    });
+
+    it(`${file}: limits memory of every long-running service (#1270)`, () => {
+      const limits: Record<string, string> = {
+        api: '1g',
+        web: '1g',
+        caddy: '256m',
+        postgres: '4g',
+        redis: '1g',
+      };
+      for (const [name, limit] of Object.entries(limits)) {
+        expect(block(file, name), name).toMatch(new RegExp(`^ {4}mem_limit: ${limit}$`, 'm'));
+      }
+      for (const name of ['api', 'web']) {
+        expect(block(file, name), name).toMatch(/^ {4}cpus: 2\.0$/m);
+      }
+      for (const name of panelServices(file).filter((n) => n.startsWith('worker-'))) {
+        expect(block(file, name), name).toMatch(/^ {4}<<: \[\*hardening, \*worker-limits\]$/m);
+      }
+    });
+
+    it(`${file}: web keeps its Next.js cache writable, owned by the node user (#1270)`, () => {
+      expect(block(file, 'web')).toContain('      - /app/apps/web/.next/cache:uid=1000,gid=1000');
+    });
+
     for (const name of panelServices(file)) {
       it(`${file}: ${name} drops all capabilities and cannot gain privileges`, () => {
-        expect(block(file, name)).toMatch(/^ {4}<<: \*hardening$/m);
+        expect(block(file, name)).toMatch(
+          /^ {4}<<: (?:\*hardening|\[\*hardening, \*worker-limits\])$/m,
+        );
       });
     }
 
