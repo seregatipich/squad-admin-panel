@@ -2,9 +2,10 @@ import { createServer as createNetServer, type Socket } from 'node:net';
 import { withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BLAME_MAX_VERSIONS } from '../../src/lib/blame.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -657,6 +658,81 @@ describe('GET /api/v1/servers/:id/configs/:name/history + :vid + /diff + /blame'
     });
     expect(cached.statusCode).toBe(200);
     expect(cached.body).toBe(first.body);
+  });
+});
+
+/**
+ * Inserts a config version straight into `config_versions` with a
+ * microsecond-precise `created_at` literal, the way concurrent saves land.
+ * Returns the new version id.
+ */
+async function insertVersionAt(
+  serverId: string,
+  content: string,
+  createdAt: string,
+  label: string,
+): Promise<string> {
+  const rows = (await h.db.execute(sql`
+    INSERT INTO config_versions (server_id, filename, content, sha256, author_label, created_at)
+    VALUES (${serverId}, 'Admins.cfg', ${content}, digest(${content}, 'sha256'), ${label},
+            ${createdAt}::timestamptz)
+    RETURNING id::text AS id
+  `)) as unknown as Array<{ id: string }>;
+  const row = rows[0];
+  if (!row) throw new Error('config version insert returned no row');
+  return row.id;
+}
+
+describe('GET /api/v1/servers/:id/configs/:name/blame — ordering and depth (#36 finding 19)', () => {
+  it('orders versions saved within one millisecond by their full-precision time', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    // Stored newest-first so an unordered SELECT returns them that way; both
+    // stamps truncate to the same millisecond in toISOString().
+    const later = await insertVersionAt(id, 'a\nB', '2026-09-01 10:00:00.000900+00', 'later');
+    const earlier = await insertVersionAt(id, 'a\nb', '2026-09-01 10:00:00.000100+00', 'earlier');
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/blame`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ lines: Array<{ text: string; version_id: string }> }>();
+    expect(body.lines.map((l) => l.text)).toEqual(['a', 'B']);
+    expect(body.lines[0]?.version_id).toBe(earlier);
+    expect(body.lines[1]?.version_id).toBe(later);
+  });
+
+  it(`diffs at most the ${BLAME_MAX_VERSIONS} newest versions and flags the cut`, async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const total = BLAME_MAX_VERSIONS + 2;
+    const ids: string[] = [];
+    for (let k = 0; k < total; k++) {
+      const second = String(k).padStart(4, '0');
+      ids.push(
+        await insertVersionAt(id, `base\nline-${k}`, `2026-09-02 00:00:00.${second}+00`, `v${k}`),
+      );
+    }
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/blame`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      lines: Array<{ text: string; version_id: string }>;
+      truncated: boolean;
+    }>();
+    expect(body.truncated).toBe(true);
+    // `base` predates the window, so it is attributed to the oldest version inside it.
+    expect(body.lines[0]).toMatchObject({
+      text: 'base',
+      version_id: ids[total - BLAME_MAX_VERSIONS],
+    });
+    expect(body.lines[1]).toMatchObject({ text: `line-${total - 1}`, version_id: ids[total - 1] });
   });
 });
 

@@ -1,5 +1,5 @@
-import { messageTemplates, players, roles } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { type MessageTemplateRow, messageTemplates, players, roles } from '@squad/db/schema';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { auditLogMark, expectAuditRowSince } from './helpers/audit-since.js';
@@ -16,6 +16,8 @@ let h: IntegrationHarness;
 let cookie: string;
 let ownerRoleId: string;
 let auditMark: bigint;
+/** The built-in phrases as migrated into this file's database, captured before any case wipes them. */
+let migrationSeededDefaults: MessageTemplateRow[];
 
 beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
@@ -26,12 +28,17 @@ beforeAll(async () => {
     .limit(1);
   if (!ownerRole) throw new Error('Owner role missing');
   ownerRoleId = ownerRole.id;
+  migrationSeededDefaults = await h.db
+    .select()
+    .from(messageTemplates)
+    .where(isNull(messageTemplates.createdBy))
+    .orderBy(asc(messageTemplates.sortOrder));
 });
 
 beforeEach(async () => {
-  // The listing cases assert the lazily seeded defaults are all there is, and
-  // demoteToViewer() drops the owner to Viewer: start each case with an empty
-  // template table and the seeded owner back on Owner.
+  // The listing cases assert exactly what they inserted, and demoteToViewer()
+  // drops the owner to Viewer: start each case with an empty template table
+  // and the seeded owner back on Owner.
   await h.db.delete(messageTemplates);
   await h.db
     .update(players)
@@ -77,39 +84,47 @@ describe('GET /api/v1/message-templates', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('seeds ~15 default phrases (created_by NULL) on first read', async () => {
+  it('serves the default phrases seeded by migration 0119 (created_by NULL)', () => {
+    expect(migrationSeededDefaults.length).toBeGreaterThanOrEqual(15);
+    for (const row of migrationSeededDefaults) {
+      expect(row.createdBy).toBeNull();
+    }
+    expect(migrationSeededDefaults.some((row) => row.body.includes('{player}'))).toBe(true);
+    expect(migrationSeededDefaults.some((row) => row.locale === 'en')).toBe(true);
+    expect(migrationSeededDefaults.some((row) => row.locale === 'ru')).toBe(true);
+  });
+
+  it('is read-only: a GET inserts nothing into an emptied table (#36 finding 42)', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/message-templates',
       headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
-    const rows = res.json() as Array<Record<string, unknown>>;
-    expect(rows.length).toBeGreaterThanOrEqual(15);
-    for (const row of rows) {
-      expect(row.created_by).toBeNull();
-    }
-    const withPlayerToken = rows.filter((r) => String(r.body).includes('{player}'));
-    expect(withPlayerToken.length).toBeGreaterThan(0);
-    const enTemplates = rows.filter((r) => r.locale === 'en');
-    const ruTemplates = rows.filter((r) => r.locale === 'ru');
-    expect(enTemplates.length).toBeGreaterThan(0);
-    expect(ruTemplates.length).toBeGreaterThan(0);
+    expect(res.json()).toEqual([]);
+    expect(await h.db.select().from(messageTemplates)).toHaveLength(0);
   });
 
-  it('is idempotent: a second read does not duplicate the defaults', async () => {
-    await h.app.inject({ method: 'GET', url: '/api/v1/message-templates', headers: { cookie } });
-    const second = await h.app.inject({
+  it('does not resurrect a deleted default template on the next GET (#36 finding 42)', async () => {
+    const [builtIn] = migrationSeededDefaults;
+    if (!builtIn) throw new Error('no seeded default template');
+    await h.db.insert(messageTemplates).values(migrationSeededDefaults);
+
+    const deleted = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/message-templates/${builtIn.id}`,
+      headers: { cookie },
+    });
+    expect(deleted.statusCode).toBe(200);
+
+    const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/message-templates',
       headers: { cookie },
     });
-    const rows = second.json() as unknown[];
-    const seeded = await h.db
-      .select()
-      .from(messageTemplates)
-      .where(isNull(messageTemplates.createdBy));
-    expect(rows.length).toBe(seeded.length);
+    const ids = (res.json() as Array<{ id: string }>).map((row) => row.id);
+    expect(ids).not.toContain(builtIn.id);
+    expect(ids).toHaveLength(migrationSeededDefaults.length - 1);
   });
 });
 

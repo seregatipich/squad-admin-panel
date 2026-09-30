@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream';
+import { pipeline, Readable } from 'node:stream';
 import { createGzip } from 'node:zlib';
 import { auditLog } from '@squad/db';
 import {
@@ -30,10 +30,8 @@ function fmtEntry(e: LogEntry, serverName?: string): string {
   return `${fmtIso(e.ts)} ${LEVEL_3[e.level] ?? '???'} [${e.source}]${tag} ${e.msg}${ctx}\n`;
 }
 
-async function* iterateLogs(
-  app: FastifyInstance,
-  predicate: (e: LogEntry) => boolean,
-): AsyncGenerator<LogEntry> {
+/** Pages through the whole `panel:logs` stream, oldest first, skipping malformed entries. */
+async function* iterateLogs(app: FastifyInstance): AsyncGenerator<LogEntry> {
   let cursor = '-';
   for (;;) {
     const start = cursor === '-' ? '-' : `(${cursor}`;
@@ -45,8 +43,7 @@ async function* iterateLogs(
       const obj: Record<string, string> = {};
       for (let i = 0; i < fields.length; i += 2) obj[fields[i] ?? ''] = fields[i + 1] ?? '';
       try {
-        const e = decodeLogEntry(id, obj);
-        if (predicate(e)) yield e;
+        yield decodeLogEntry(id, obj);
       } catch {
         // skip malformed
       }
@@ -82,42 +79,96 @@ async function tailContainerOneShot(
   return collected.join('');
 }
 
+/** Formatted `panel:logs` lines, grouped by the export section they belong to. */
+interface LogSections {
+  bridge: string[];
+  rconByServer: Map<string, string[]>;
+  ingestByServer: Map<string, string[]>;
+  workers: string[];
+  depotInstall: string[];
+  api: string[];
+}
+
+/**
+ * Reads `panel:logs` exactly once and sorts every entry into its export
+ * section (#36): one scan per section used to cost 2N+4 full passes of the
+ * stream for N servers. Memory is bounded by the stream's `MAXLEN`
+ * (`PANEL_LOGS_MAXLEN`), the same data the per-section passes already
+ * transferred. RCON/log-ingest entries for a server not in `servers`, and
+ * sources the export has no section for, are dropped as before.
+ */
+async function collectLogSections(
+  app: FastifyInstance,
+  servers: readonly ServerRef[],
+): Promise<LogSections> {
+  const sections: LogSections = {
+    bridge: [],
+    rconByServer: new Map(servers.map((s) => [s.id, []])),
+    ingestByServer: new Map(servers.map((s) => [s.id, []])),
+    workers: [],
+    depotInstall: [],
+    api: [],
+  };
+  const nameById = new Map(servers.map((s) => [s.id, s.display_name]));
+  for await (const e of iterateLogs(app)) {
+    switch (e.source) {
+      case 'bridge':
+        sections.bridge.push(fmtEntry(e));
+        break;
+      case 'rcon':
+      case 'log-ingest': {
+        const name = e.serverId ? nameById.get(e.serverId) : undefined;
+        if (!e.serverId || name === undefined) break;
+        const target = e.source === 'rcon' ? sections.rconByServer : sections.ingestByServer;
+        target.get(e.serverId)?.push(fmtEntry(e, name));
+        break;
+      }
+      case 'worker':
+        sections.workers.push(fmtEntry(e));
+        break;
+      case 'depot':
+      case 'install':
+        sections.depotInstall.push(fmtEntry(e));
+        break;
+      case 'api':
+        sections.api.push(fmtEntry(e));
+        break;
+      default:
+        break;
+    }
+  }
+  return sections;
+}
+
 export async function* exportBundle(
   app: FastifyInstance,
   servers: ServerRef[],
 ): AsyncGenerator<string> {
   yield `===== EXPORT panel-logs ${new Date().toISOString()} =====\n`;
 
+  const logs = await collectLogSections(app, servers);
+
   yield SECTION('BRIDGE');
-  for await (const e of iterateLogs(app, (x) => x.source === 'bridge')) yield fmtEntry(e);
+  yield* logs.bridge;
 
   for (const s of servers) {
     yield SECTION(`RCON server "${s.display_name}" (${s.id})`);
-    for await (const e of iterateLogs(app, (x) => x.source === 'rcon' && x.serverId === s.id)) {
-      yield fmtEntry(e, s.display_name);
-    }
+    yield* logs.rconByServer.get(s.id) ?? [];
   }
 
   for (const s of servers) {
     yield SECTION(`LOG-INGEST server "${s.display_name}" (${s.id})`);
-    for await (const e of iterateLogs(
-      app,
-      (x) => x.source === 'log-ingest' && x.serverId === s.id,
-    )) {
-      yield fmtEntry(e, s.display_name);
-    }
+    yield* logs.ingestByServer.get(s.id) ?? [];
   }
 
   yield SECTION('WORKERS');
-  for await (const e of iterateLogs(app, (x) => x.source === 'worker')) yield fmtEntry(e);
+  yield* logs.workers;
 
   yield SECTION('DEPOT / INSTALL');
-  for await (const e of iterateLogs(app, (x) => x.source === 'depot' || x.source === 'install')) {
-    yield fmtEntry(e);
-  }
+  yield* logs.depotInstall;
 
   yield SECTION('API');
-  for await (const e of iterateLogs(app, (x) => x.source === 'api')) yield fmtEntry(e);
+  yield* logs.api;
 
   yield SECTION('HOST METRICS 24h (CSV)');
   yield 'ts_iso,cpu_pct,ram_used,disk_used,rx_bps,tx_bps,la1,la5,la15\n';
@@ -171,8 +222,21 @@ export async function* exportBundle(
   }
 }
 
+/**
+ * Gzip-compressed stream of {@link exportBundle} for `GET /api/v1/logs/export`.
+ *
+ * Uses `stream.pipeline`, not `.pipe()`: a failure inside the export (Redis or
+ * Postgres down mid-read) must destroy the returned gzip stream so Fastify
+ * aborts the response. With `.pipe()` the source's `error` event had no
+ * listener, became an `uncaughtException` and took down the API process, and
+ * the gzip stream never ended (#36).
+ *
+ * @returns The gzip stream; it errors (and is destroyed) if the export fails.
+ */
 export function streamBundle(app: FastifyInstance, servers: ServerRef[]): NodeJS.ReadableStream {
-  const gen = exportBundle(app, servers);
-  const src = Readable.from(gen, { objectMode: false });
-  return src.pipe(createGzip());
+  const gz = createGzip();
+  pipeline(Readable.from(exportBundle(app, servers), { objectMode: false }), gz, (err) => {
+    if (err) app.log.warn({ err }, 'log export failed');
+  });
+  return gz;
 }

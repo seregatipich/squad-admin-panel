@@ -87,6 +87,7 @@ Worker-rcon owns consumer group `worker-rcon:commands:v1`.
 | Field | Type | Notes |
 |---|---|---|
 | `request` | JSON | `request_id`, `command`, optional `args`, optional `actor_player_id`, optional `enqueued_at` |
+| `deadline_at` | ISO-8601, optional | Set by the API producer to the end of its result wait (`RCON_COMMAND_DEADLINE_FIELD`). Past it the worker does not execute the command, stores an `ok:false` result with `error: "expired"` and `XACK`s (#36). Kept outside `request` so an older worker's strict schema still parses the request. |
 
 Allowed `command` values: `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`.
 

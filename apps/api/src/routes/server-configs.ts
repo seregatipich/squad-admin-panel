@@ -12,7 +12,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type BlameVersion, computeBlame } from '../lib/blame.js';
+import { BLAME_MAX_VERSIONS, type BlameVersion, computeBlame } from '../lib/blame.js';
 import {
   maskConfigSecrets,
   maskConfigSecretsForDiff,
@@ -341,14 +341,15 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
             eq(configVersions.filename, req.params.name),
           ),
         )
-        .orderBy(desc(configVersions.createdAt))
+        .orderBy(desc(configVersions.createdAt), desc(configVersions.id))
         .limit(1);
       if (tip.length === 0) {
-        return { lines: [], authors: {} };
+        return { lines: [], authors: {}, truncated: false };
       }
       const tipId = tip[0]?.id;
       // v2 (#10): payloads cached before masking may hold plaintext secrets.
-      const cacheKey = `config-blame:v2:${tipId}`;
+      // v3 (#36): payloads carry `truncated`.
+      const cacheKey = `config-blame:v3:${tipId}`;
       const cached = await app.redis.get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
@@ -367,8 +368,14 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
             eq(configVersions.serverId, req.params.id),
             eq(configVersions.filename, req.params.name),
           ),
-        );
-      const vs: BlameVersion[] = rows.map((r) => ({
+        )
+        // Newest window first, ordered on the full-precision timestamp; one
+        // extra row tells whether older history was cut off (#36).
+        .orderBy(desc(configVersions.createdAt), desc(configVersions.id))
+        .limit(BLAME_MAX_VERSIONS + 1);
+      const truncated = rows.length > BLAME_MAX_VERSIONS;
+      const window = rows.slice(0, BLAME_MAX_VERSIONS).reverse();
+      const vs: BlameVersion[] = window.map((r) => ({
         id: r.id,
         content: maskConfigSecrets(req.params.name, r.content),
         author_player_id: r.author_player_id ?? null,
@@ -388,7 +395,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           : [];
       const authors: Record<string, string> = {};
       for (const r of playerRows) authors[r.id] = r.canonicalName;
-      const payload = { lines, authors };
+      const payload = { lines, authors, truncated };
       await app.redis.set(cacheKey, JSON.stringify(payload), 'EX', 24 * 3600);
       return payload;
     },

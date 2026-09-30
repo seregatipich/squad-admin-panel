@@ -45,6 +45,7 @@ const createBody = z.object({
   can_manage_clans: z.boolean().default(false),
   can_manage_economy: z.boolean().default(false),
   can_handle_reports: z.boolean().default(false),
+  can_manage_infrastructure: z.boolean().default(false),
 });
 
 const updateBody = z.object({
@@ -62,6 +63,7 @@ const updateBody = z.object({
   can_manage_clans: z.boolean().optional(),
   can_manage_economy: z.boolean().optional(),
   can_handle_reports: z.boolean().optional(),
+  can_manage_infrastructure: z.boolean().optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -82,6 +84,7 @@ interface RoleWithCount extends Record<string, unknown> {
   can_manage_clans: boolean;
   can_manage_economy: boolean;
   can_handle_reports: boolean;
+  can_manage_infrastructure: boolean;
   squad_permissions: string[];
   assigned_users_count: number;
 }
@@ -91,7 +94,7 @@ async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]>
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
       r.panel_access, r.can_view_ips, r.can_assign_roles, r.can_edit_roles, r.can_manage_issues,
       r.can_manage_ban_sources, r.can_manage_integrations, r.can_manage_clans,
-      r.can_manage_economy, r.can_handle_reports,
+      r.can_manage_economy, r.can_handle_reports, r.can_manage_infrastructure,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id), ARRAY[]::text[]
@@ -197,6 +200,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             canManageClans: req.body.can_manage_clans,
             canManageEconomy: req.body.can_manage_economy,
             canHandleReports: req.body.can_handle_reports,
+            canManageInfrastructure: req.body.can_manage_infrastructure,
           });
           if (req.body.squad_permissions.length > 0) {
             await tx.insert(roleSquadPermissions).values(
@@ -324,6 +328,8 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             updates.canManageEconomy = req.body.can_manage_economy;
           if (req.body.can_handle_reports !== undefined)
             updates.canHandleReports = req.body.can_handle_reports;
+          if (req.body.can_manage_infrastructure !== undefined)
+            updates.canManageInfrastructure = req.body.can_manage_infrastructure;
           if (Object.keys(updates).length > 0) {
             await tx.update(roles).set(updates).where(eq(roles.id, req.params.id));
           }

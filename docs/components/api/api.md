@@ -68,7 +68,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 Required headers:
 
-- `x-balancer-timestamp`: ISO timestamp used in the signature payload.
+- `x-balancer-timestamp`: ISO timestamp used in the signature payload. Must be within 300 s of the panel's clock (either direction); a stale or future timestamp is rejected with 401 `invalid_signature`, so a captured request cannot be replayed later.
 - `x-balancer-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-balancer-timestamp>.<canonical-json-body>` using `BALANCER_WEBHOOK_SECRET`.
 
 Body:
@@ -224,7 +224,7 @@ Errors:
 | GET | `/api/v1/servers/:id/configs/:name/history` | Versions (newest first). Includes `author_email`, `author_ip`, `message`, `sha256`, `size`. Query: `limit` (≤500). | `config:view` |
 | GET | `/api/v1/servers/:id/configs/:name/versions/:vid` | Full content of a single past version. `Rcon.cfg`/`License.cfg` secrets are masked, including rows written before #10. | `config:view` |
 | GET | `/api/v1/servers/:id/configs/:name/diff?from=:vid&to=:vid` | Unified-diff patch text between two versions. | `config:view` |
-| GET | `/api/v1/servers/:id/configs/:name/blame` | Tip content with per-line attribution. Diff and blame mask `Rcon.cfg`/`License.cfg` secrets like `versions/:vid`. Cached in Redis (`config-blame:v2:{tip_id}`, TTL 24 h, key auto-invalidates because the tip id changes on the next write). | `config:view` |
+| GET | `/api/v1/servers/:id/configs/:name/blame` | Tip content with per-line attribution. Diff and blame mask `Rcon.cfg`/`License.cfg` secrets like `versions/:vid`. Diffs at most the 200 newest versions, ordered by the full-precision `created_at` then `id`; lines older than that window are attributed to its oldest version and the response carries `truncated: true`. Cached in Redis (`config-blame:v3:{tip_id}`, TTL 24 h, key auto-invalidates because the tip id changes on the next write). | `config:view` |
 | POST | `/api/v1/servers/:id/configs/:name/restore/:vid` | Creates a NEW version with the old content (never destructive). Body: `{ message? }`. `Rcon.cfg` (#10): the masked `Password=` of the restored row is filled with the password that reproduces its stored sha256 (`server_credentials` first, then the file on disk), else with the `server_credentials` copy — an out-of-band password on disk never wins. Drift revert (`POST …/:name/drift/revert`) resolves the tip the same way. | `config:rollback` |
 
 ## Server logs (per-server)

@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { type AuditChainRow, verifyAuditChain } from '../../src/lib/audit-chain.js';
+import {
+  type AuditChainRow,
+  AuditChainVerifier,
+  verifyAuditChain,
+} from '../../src/lib/audit-chain.js';
 
 // Independent reference implementation of the DB trigger's hash, used only to
 // build fixtures here so verifyAuditChain is exercised against hashes it did
@@ -90,5 +94,34 @@ describe('verifyAuditChain', () => {
     expect(result.reason).toBe('row_hash');
     expect(result.brokenAt).toBe('1');
     expect(result.checked).toBe(0);
+  });
+});
+
+describe('AuditChainVerifier (#36 finding 17)', () => {
+  it('verifies a chain fed in batches exactly like the whole-array form', () => {
+    const rows = buildChain(9);
+    const verifier = new AuditChainVerifier();
+    for (let i = 0; i < rows.length; i += 4) {
+      expect(verifier.feed(rows.slice(i, i + 4))).toBe(true);
+    }
+    expect(verifier.result()).toEqual(verifyAuditChain(rows));
+    expect(verifier.result()).toEqual({ ok: true, checked: 9, brokenAt: null, reason: null });
+  });
+
+  it('carries the previous hash across a batch boundary and stops at a break', () => {
+    const rows = buildChain(6);
+    // rows[3] opens the second batch; its prev link must match rows[2] from the first.
+    rows[3] = { ...(rows[3] as AuditChainRow), prev_hash_hex: 'deadbeef'.repeat(8) };
+    const verifier = new AuditChainVerifier();
+    expect(verifier.feed(rows.slice(0, 3))).toBe(true);
+    expect(verifier.feed(rows.slice(3))).toBe(false);
+    expect(verifier.isBroken).toBe(true);
+    expect(verifier.feed(buildChain(1))).toBe(false);
+    expect(verifier.result()).toEqual({
+      ok: false,
+      checked: 3,
+      brokenAt: '4',
+      reason: 'prev_hash',
+    });
   });
 });

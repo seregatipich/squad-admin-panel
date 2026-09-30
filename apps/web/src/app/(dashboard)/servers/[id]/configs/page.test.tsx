@@ -1048,3 +1048,58 @@ describe('ConfigsPage — полоса ошибки', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+describe('ConfigsPage — blame', () => {
+  function installBlame(truncated: boolean) {
+    installTwoFiles();
+    const inner = globalThis.fetch as ReturnType<typeof vi.fn>;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/configs/Server.cfg/blame')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                lines: [
+                  {
+                    text: '[SquadName]',
+                    version_id: 'aaaaaaaa-0000',
+                    author_player_id: null,
+                    created_at: '2026-09-01T00:00:00.000Z',
+                  },
+                ],
+                authors: {},
+                truncated,
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return inner(url, init);
+      }),
+    );
+  }
+
+  it('warns that older history was folded into the oldest shown version (#36)', async () => {
+    installBlame(true);
+    await renderPage();
+    await openFile('Server.cfg');
+    const tab = await screen.findByRole('tab', { name: 'Blame' });
+    await act(async () => {
+      tab.click();
+    });
+    expect(await screen.findByText('Показаны только последние версии файла')).toBeInTheDocument();
+  });
+
+  it('shows no such note for a complete history', async () => {
+    installBlame(false);
+    await renderPage();
+    await openFile('Server.cfg');
+    const tab = await screen.findByRole('tab', { name: 'Blame' });
+    await act(async () => {
+      tab.click();
+    });
+    expect(await screen.findByText('[SquadName]')).toBeInTheDocument();
+    expect(screen.queryByText('Показаны только последние версии файла')).not.toBeInTheDocument();
+  });
+});

@@ -98,8 +98,7 @@ export async function loadBanAltWarning(
           EXISTS (
             SELECT 1 FROM moderation_actions ma
             WHERE ma.player_id = p.id
-              AND ma.action_type LIKE '%ban%'
-              AND ma.action_type NOT LIKE 'ban_source%'
+              AND ma.action_type = 'ban'
               AND ma.reverted_at IS NULL
           )
           OR EXISTS (

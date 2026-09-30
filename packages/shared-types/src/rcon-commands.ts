@@ -3,6 +3,18 @@ import { z } from 'zod';
 export const RCON_COMMAND_STREAM_PREFIX = 'rcon:commands:';
 export const RCON_COMMAND_GROUP = 'worker-rcon:commands:v1';
 export const RCON_COMMAND_RESULT_PREFIX = 'rcon:command-result:';
+/**
+ * Optional stream-entry field (next to `request`) holding an ISO-8601 instant
+ * after which worker-rcon must not execute the command: it acknowledges the
+ * entry and stores an `expired` result instead (#36). A producer that stops
+ * waiting for the result sets it to the end of its wait, so a command the
+ * caller already reported as timed out cannot run later unaudited, or twice
+ * after an operator retry. It lives outside the strict `request` JSON so a
+ * worker that predates it still parses the request.
+ */
+export const RCON_COMMAND_DEADLINE_FIELD = 'deadline_at';
+/** `error` of the result worker-rcon stores for a request past its deadline. */
+export const RCON_COMMAND_EXPIRED_ERROR = 'expired';
 
 export const RCON_OPERATOR_COMMANDS = [
   'AdminBan',

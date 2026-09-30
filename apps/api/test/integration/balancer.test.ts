@@ -26,7 +26,8 @@ const OWNER_STEAM = testSteamId(983001);
 const NO_PANEL_STEAM = testSteamId(983002);
 
 const SECRET = 'balancer-webhook-integration-secret-entropy';
-const SIGNED_AT = '2026-07-27T09:00:00.000Z';
+/** A captured request's timestamp, far outside the 300 s freshness window. */
+const STALE_SIGNED_AT = '2026-07-27T09:00:00.000Z';
 
 const SERVER_ID = '019e0083-0000-7000-8000-0000000000a1';
 const OTHER_SERVER_ID = '019e0083-0000-7000-8000-0000000000b2';
@@ -119,15 +120,19 @@ function snapshotPayload(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-function postSnapshot(payload: Record<string, unknown>, signature?: string) {
+function postSnapshot(
+  payload: Record<string, unknown>,
+  signature?: string,
+  signedAt: string = new Date().toISOString(),
+) {
   return h.app.inject({
     method: 'POST',
     url: '/api/v1/integrations/balancer/proposals',
     headers: {
       'content-type': 'application/json',
-      'x-balancer-timestamp': SIGNED_AT,
+      'x-balancer-timestamp': signedAt,
       'x-balancer-signature':
-        signature ?? createBalancerProposalSignature(SECRET, SIGNED_AT, payload),
+        signature ?? createBalancerProposalSignature(SECRET, signedAt, payload),
     },
     payload: JSON.stringify(payload),
   });
@@ -363,6 +368,14 @@ describeIfDb('POST /api/v1/integrations/balancer/proposals', () => {
 
   it('rejects an invalid signature with 401 and stores nothing', async () => {
     const res = await postSnapshot(snapshotPayload(), 'sha256=deadbeef');
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'invalid_signature' });
+    expect(await h.db.select().from(balancerProposals)).toHaveLength(0);
+  });
+
+  it('rejects a correctly signed snapshot replayed outside the freshness window (#36 finding 15)', async () => {
+    const payload = snapshotPayload();
+    const res = await postSnapshot(payload, undefined, STALE_SIGNED_AT);
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual({ error: 'invalid_signature' });
     expect(await h.db.select().from(balancerProposals)).toHaveLength(0);

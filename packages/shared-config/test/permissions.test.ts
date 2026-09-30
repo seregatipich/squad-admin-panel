@@ -56,6 +56,15 @@ describe('PERMISSIONS registry', () => {
     expect(def?.dangerous).toBe(true);
   });
 
+  // #36: these keys stop riding on panel_access alone — rbac.ts gates them
+  // behind the role's can_manage_infrastructure flag.
+  it('marks the infrastructure keys as dangerous', () => {
+    const byKey = new Map<string, PermissionDef>(PERMISSIONS.map((p) => [p.key, p]));
+    for (const key of ['config:edit', 'config:rollback', 'admin_group:edit', 'api_token:create']) {
+      expect(byKey.get(key)?.dangerous).toBe(true);
+    }
+  });
+
   it('marks every mod:* key as implemented', () => {
     const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
 

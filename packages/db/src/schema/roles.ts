@@ -19,6 +19,12 @@ export const roles = pgTable(
     canManageEconomy: boolean('can_manage_economy').notNull().default(false),
     canManageMedia: boolean('can_manage_media').notNull().default(false),
     canHandleReports: boolean('can_handle_reports').notNull().default(false),
+    /**
+     * Gates the infrastructure permission keys (host daemon, server
+     * install/delete/force-stop/update, config and Admins.cfg edits, API-token
+     * minting) that `panel_access` alone no longer grants (#36).
+     */
+    canManageInfrastructure: boolean('can_manage_infrastructure').notNull().default(false),
     combatView: boolean('combat_view').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },

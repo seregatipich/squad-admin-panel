@@ -1,8 +1,9 @@
 import { chatFlagRules, chatMessages, players, roles, servers } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { CHAT_REINDEX_LOCK_KEY } from '../../src/routes/settings-chat-flags.js';
 import { auditLogMark, expectAuditRowSince } from '../helpers/audit-since.js';
 import {
   assertAuditRow,
@@ -278,5 +279,73 @@ describe('POST /api/v1/settings/chat-flag-rules/reindex', () => {
       .where(and(eq(chatMessages.playerId, playerId)));
     expect(rows[0]?.isFlagged).toBe(false);
     expect(rows[0]?.ruleId).toBeNull();
+  });
+
+  it('updates rows across keyset batch boundaries in one pass (#36 finding 18)', async () => {
+    const cookie = await loginAsOwner(h);
+    const { serverId, playerId } = await seedMessage('warm-up line');
+    const base = Date.now() - 60_000;
+    // More than one REINDEX batch (500), with identical sent_at ties at the boundary.
+    await h.db.insert(chatMessages).values(
+      Array.from({ length: 1_203 }, (_, i) => ({
+        playerId,
+        serverId,
+        sentAt: new Date(base + Math.floor(i / 3)),
+        scope: 'all',
+        message: i % 2 === 0 ? `batchword number ${i}` : `clean number ${i}`,
+        source: 'log',
+        isFlagged: false,
+      })),
+    );
+    await post(cookie, '/api/v1/settings/chat-flag-rules', {
+      pattern: 'batchword',
+      pattern_type: 'word',
+      locale: 'all',
+    });
+
+    const res = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+    expect(res.statusCode).toBe(200);
+    const flaggedCount = (await h.db.execute(sql`
+      SELECT count(*)::int AS n FROM chat_messages
+       WHERE player_id = ${playerId} AND is_flagged AND message LIKE 'batchword%'
+    `)) as unknown as Array<{ n: number }>;
+    expect(flaggedCount[0]?.n).toBe(602);
+    const wrong = (await h.db.execute(sql`
+      SELECT count(*)::int AS n FROM chat_messages
+       WHERE player_id = ${playerId} AND is_flagged AND message NOT LIKE 'batchword%'
+    `)) as unknown as Array<{ n: number }>;
+    expect(wrong[0]?.n).toBe(0);
+  });
+
+  it('refuses a second reindex while one is running (#36 finding 18)', async () => {
+    const cookie = await loginAsOwner(h);
+    await h.redis.set(CHAT_REINDEX_LOCK_KEY, 'other-run', 'PX', 60_000);
+    try {
+      const res = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'reindex_in_progress' });
+    } finally {
+      await h.redis.del(CHAT_REINDEX_LOCK_KEY);
+    }
+    const again = await post(cookie, '/api/v1/settings/chat-flag-rules/reindex', { days: 1 });
+    expect(again.statusCode).toBe(200);
+    expect(await h.redis.get(CHAT_REINDEX_LOCK_KEY)).toBeNull();
+  });
+
+  it('walks the keyset on a (sent_at, id) btree index present on every partition', async () => {
+    const rows = (await h.db.execute(sql`
+      SELECT c.relname AS partition,
+             EXISTS (
+               SELECT 1 FROM pg_index i
+                 JOIN pg_class ic ON ic.oid = i.indexrelid
+                WHERE i.indrelid = c.oid
+                  AND pg_get_indexdef(i.indexrelid) LIKE '%btree (sent_at, id)%'
+             ) AS has_index
+        FROM pg_inherits inh
+        JOIN pg_class c ON c.oid = inh.inhrelid
+       WHERE inh.inhparent = 'chat_messages'::regclass
+    `)) as unknown as Array<{ partition: string; has_index: boolean }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter((r) => !r.has_index)).toEqual([]);
   });
 });

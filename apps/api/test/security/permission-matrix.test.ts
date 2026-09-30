@@ -1,12 +1,22 @@
 import * as schema from '@squad/db/schema';
-import { players, rolePermissions, roles } from '@squad/db/schema';
+import {
+  playerApiTokens,
+  players,
+  rolePermissions,
+  roleSquadPermissions,
+  roles,
+} from '@squad/db/schema';
 import { PERMISSIONS, type PermissionKey } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { mintApiToken } from '../../src/lib/api-tokens.js';
+import {
+  invalidatePermissionCache,
+  PANEL_PERMS_GATED_BY_INFRASTRUCTURE,
+} from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -173,12 +183,61 @@ let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 
 const createdRoleIds: string[] = [];
-const cookies = new Map<string, string>();
+/** Request headers that authenticate each matrix user (session cookie or API token). */
+const authHeaders = new Map<string, Record<string, string>>();
 const userKeys = new Map<string, bigint>();
 const playerIds = new Map<string, string>();
 let steamCounter = 700100;
 
+/**
+ * The role flags an explicit grant of `perms` needs: rbac.ts runs explicit
+ * `role_permissions` rows through the same flag gates as the derived set
+ * (#36), so a key such as `host:manage` only sticks with its flag set.
+ */
+function flagsFor(perms: readonly string[]) {
+  const has = (...keys: string[]) => keys.some((k) => perms.includes(k));
+  return {
+    canAssignRoles: has('user:manage_roles'),
+    canEditRoles: has('role:create', 'role:edit', 'role:delete'),
+    canManageIntegrations: has('integration:manage'),
+    canViewIps: has('player:view_ips'),
+    canManageInfrastructure: perms.some((k) =>
+      PANEL_PERMS_GATED_BY_INFRASTRUCTURE.has(k as PermissionKey),
+    ),
+    squad: [
+      ...(has('mod:kick', 'mod:warn') ? ['kick'] : []),
+      ...(has('mod:ban_temp', 'mod:ban_perm', 'mod:unban') ? ['ban'] : []),
+    ],
+  };
+}
+
+/**
+ * A key set that needs `can_assign_roles`/`can_edit_roles` cannot live on a
+ * role without `panel_access` (DB check `roles_flag_dependency`), and with
+ * `panel_access` the role would derive far more than the set. An API token of
+ * the all-powerful seeded Owner narrowed to exactly `perms` (`role ∩ scopes`,
+ * `narrowToTokenScopes`) is the only way to hold precisely that set.
+ */
+async function createTokenUserWithPerms(key: string, perms: string[]): Promise<void> {
+  const ownerPlayerId = h.seed.ownerPlayerId;
+  if (!ownerPlayerId) throw new Error('matrix needs the seeded owner');
+  const minted = mintApiToken();
+  await db.insert(playerApiTokens).values({
+    id: minted.id,
+    playerId: ownerPlayerId,
+    name: `matrix-${key}`,
+    tokenHash: minted.tokenHash,
+    scopes: perms,
+  });
+  authHeaders.set(key, { authorization: `Bearer ${minted.plaintext}` });
+}
+
 async function createUserWithPerms(key: string, perms: string[]): Promise<void> {
+  const { squad, ...flags } = flagsFor(perms);
+  if (flags.canAssignRoles || flags.canEditRoles) {
+    await createTokenUserWithPerms(key, perms);
+    return;
+  }
   const steamId = testSteamId(steamCounter++);
   userKeys.set(key, steamId);
 
@@ -192,7 +251,13 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
       name: `mx-${roleId}`,
       color: 'neutral',
       isSystemRole: false,
+      ...flags,
     });
+    if (squad.length > 0) {
+      await tx
+        .insert(roleSquadPermissions)
+        .values(squad.map((squadPermissionKey) => ({ roleId, squadPermissionKey })));
+    }
     if (perms.length > 0) {
       await tx
         .insert(rolePermissions)
@@ -221,7 +286,7 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
     userAgent: 'matrix-test',
     ttlMs: 21_600_000,
   });
-  cookies.set(key, `__Host-sid=${token}`);
+  authHeaders.set(key, { cookie: `__Host-sid=${token}` });
 }
 
 async function inject(
@@ -229,9 +294,9 @@ async function inject(
   url: string,
   cookieKey: string,
 ): Promise<{ statusCode: number }> {
-  const cookie = cookies.get(cookieKey);
-  if (!cookie) throw new Error(`no cookie for key "${cookieKey}"`);
-  return h.app.inject({ method, url, headers: { cookie } });
+  const headers = authHeaders.get(cookieKey);
+  if (!headers) throw new Error(`no credentials for key "${cookieKey}"`);
+  return h.app.inject({ method, url, headers });
 }
 
 describe('permission matrix', () => {

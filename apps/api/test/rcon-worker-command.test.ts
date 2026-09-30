@@ -70,6 +70,8 @@ describe('sendRconCommandViaWorker', () => {
       '*',
       'request',
       expect.stringContaining('"command":"AdminReloadServerConfig"'),
+      'deadline_at',
+      expect.any(String),
     );
     expect(result).toMatchObject({
       attempted: true,
@@ -126,5 +128,25 @@ describe('sendRconCommandViaWorker', () => {
       reason: 'worker_rejected',
       via: 'worker-rcon',
     });
+  });
+
+  it('stamps the stream entry with a deadline at the end of its own wait (#36 findings 1337/39)', async () => {
+    const redis = makeRedis({ state: 'connected' });
+    const before = Date.now();
+
+    const result = await sendRconCommandViaWorker(redis, {
+      serverId: 'srv-1',
+      command: 'AdminEndMatch',
+      requestId: 'req-1',
+      timeoutMs: 50,
+      pollIntervalMs: 5,
+    });
+
+    expect(result).toMatchObject({ attempted: true, ok: false, reason: 'timeout' });
+    const args = redis.xadd.mock.calls[0] as string[];
+    expect(args[7]).toBe('deadline_at');
+    const deadline = Date.parse(args[8] ?? '');
+    expect(deadline).toBeGreaterThanOrEqual(before + 50);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 50);
   });
 });

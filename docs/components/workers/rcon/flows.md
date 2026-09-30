@@ -85,7 +85,7 @@ The API writes P0 operator commands to `rcon:commands:{id}`. The worker consumes
    - `AdminBroadcast <message>`
    - `AdminEndMatch`
    - `AdminReloadServerConfig`
-4. The command executes through `RconClient.exec()`, so it shares the same FIFO serialization as polling and keepalive commands.
+4. If the entry carries `deadline_at` and it has passed, the worker skips execution, writes an `ok:false` result with `error: "expired"` and `XACK`s: the API producer already answered `timeout`, so running the command now would leave no audit/ledger record and could double-apply after a retry (#36). Otherwise the command executes through `RconClient.exec()`, so it shares the same FIFO serialization as polling and keepalive commands.
 5. The worker writes `rcon:command-result:{request_id}` with TTL 120 s and then `XACK`s the stream entry.
 6. If validation or RCON execution fails, the worker writes `ok:false` result and still `XACK`s. Malformed entries without a `request_id` are only acknowledged.
 7. Every 30 s the active consumer runs `XAUTOCLAIM` for entries idle longer than 60 s and replays them through the same validation/execution path. Before replay it checks `rcon:command-result:{request_id}`; if a result already exists, it only `XACK`s the claimed entry and does not execute RCON again.

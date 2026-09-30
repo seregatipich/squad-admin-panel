@@ -21,6 +21,7 @@ interface RoleFixture {
   is_system_role?: boolean;
   panel_access?: boolean;
   can_view_ips?: boolean;
+  can_manage_infrastructure?: boolean;
 }
 
 function makeRole(f: RoleFixture) {
@@ -37,6 +38,7 @@ function makeRole(f: RoleFixture) {
     can_manage_ban_sources: false,
     can_manage_clans: false,
     can_manage_economy: false,
+    can_manage_infrastructure: f.can_manage_infrastructure ?? false,
     squad_permissions: f.squad_permissions,
     assigned_users_count: f.assigned_users_count ?? 0,
   };
@@ -238,6 +240,61 @@ describe('access flags — real switches (§6)', () => {
 
     await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
     expect(puts[0]).toMatchObject({ panel_access: false, can_view_ips: false });
+  });
+});
+
+describe('infrastructure flag (#36)', () => {
+  it('saves can_manage_infrastructure from its own switch', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [
+        makeRole({ id: 'r-mod', name: 'Moderator', squad_permissions: [], panel_access: true }),
+      ],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    const flag = await screen.findByRole('switch', { name: 'Может управлять инфраструктурой' });
+    expect(flag).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(flag);
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toEqual({ can_manage_infrastructure: true });
+  });
+
+  it('clears it together with panel access', async () => {
+    const puts: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [
+        makeRole({
+          id: 'r-admin',
+          name: 'Admin',
+          squad_permissions: [],
+          panel_access: true,
+          can_manage_infrastructure: true,
+        }),
+      ],
+      onPut: (b) => puts.push(b),
+    });
+    render(<GroupsPage />);
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Доступ к панели' }));
+
+    await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+    expect(puts[0]).toMatchObject({ panel_access: false, can_manage_infrastructure: false });
+  });
+
+  it('creates new roles without it', async () => {
+    const posted: Record<string, unknown>[] = [];
+    stubFetch({
+      roles: [makeRole({ id: 'r-admin', name: 'Admin', squad_permissions: [] })],
+      onPost: (b) => posted.push(b),
+    });
+    render(<GroupsPage />);
+    await screen.findByLabelText('Скопировать права из роли');
+    fireEvent.click(screen.getByRole('button', { name: /создать роль/i }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.can_manage_infrastructure).toBe(false);
   });
 });
 

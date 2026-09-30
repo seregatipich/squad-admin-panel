@@ -38,6 +38,9 @@ CREATE INDEX IF NOT EXISTS chat_messages_server_sent_idx
   ON chat_messages (server_id, sent_at DESC);
 CREATE INDEX IF NOT EXISTS chat_messages_message_trgm_idx
   ON chat_messages USING gin (message gin_trgm_ops);
+-- Keyset walks ORDER BY sent_at, id (chat-flag reindex, migration 0123).
+CREATE INDEX IF NOT EXISTS chat_messages_sent_id_idx
+  ON chat_messages (sent_at, id);
 CREATE INDEX IF NOT EXISTS chat_messages_sent_at_brin_idx
   ON chat_messages USING brin (sent_at) WITH (pages_per_range = 32);
 

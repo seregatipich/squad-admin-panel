@@ -48,6 +48,7 @@ interface RoleRow {
   can_manage_ban_sources: boolean;
   can_manage_clans: boolean;
   can_manage_economy: boolean;
+  can_manage_infrastructure: boolean;
   squad_permissions: SquadPermissionKey[];
   assigned_users_count: number;
 }
@@ -64,7 +65,8 @@ type FlagKey =
   | 'can_edit_roles'
   | 'can_manage_ban_sources'
   | 'can_manage_clans'
-  | 'can_manage_economy';
+  | 'can_manage_economy'
+  | 'can_manage_infrastructure';
 
 const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: string }> = [
   {
@@ -78,6 +80,12 @@ const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: s
   { key: 'can_manage_ban_sources', label: 'Может управлять источниками банов' },
   { key: 'can_manage_clans', label: 'Может управлять кланами' },
   { key: 'can_manage_economy', label: 'Может управлять экономикой' },
+  {
+    key: 'can_manage_infrastructure',
+    label: 'Может управлять инфраструктурой',
+    description:
+      'Установка, удаление, обновление и force-stop серверов, хост-демон, правка конфигов и Admins.cfg, выпуск API-токенов.',
+  },
 ];
 
 function chunk<T>(arr: readonly T[], cols: number): T[][] {
@@ -136,6 +144,8 @@ export default function GroupsPage() {
       if (patch.can_manage_clans !== undefined) body.can_manage_clans = patch.can_manage_clans;
       if (patch.can_manage_economy !== undefined)
         body.can_manage_economy = patch.can_manage_economy;
+      if (patch.can_manage_infrastructure !== undefined)
+        body.can_manage_infrastructure = patch.can_manage_infrastructure;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
       const res = await fetch(`/api/v1/roles/${role.id}`, {
         method: 'PUT',
@@ -173,6 +183,7 @@ export default function GroupsPage() {
       can_manage_ban_sources: false,
       can_manage_clans: false,
       can_manage_economy: false,
+      can_manage_infrastructure: false,
     };
     let attempt = 0;
     while (attempt < 5) {
@@ -403,6 +414,7 @@ function RoleCard({
       patch.can_manage_ban_sources = false;
       patch.can_manage_clans = false;
       patch.can_manage_economy = false;
+      patch.can_manage_infrastructure = false;
     }
     onLocal(patch);
     debounce(patch);

@@ -6,6 +6,18 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-27
 
+### Audit fixes from #36 (migrations 0119–0123)
+
+**Files:** `packages/db/drizzle/0119_message_templates_seed_once.sql`, `0120_role_can_manage_infrastructure.sql`, `0121_role_permissions_legacy_wipe.sql`, `0122_audit_log_chain_order.sql`, `0123_chat_messages_sent_id_idx.sql`, `packages/db/src/schema/{roles,audit-log,chat-messages}.ts`, `packages/db/sql/chat-messages.sql`
+
+- **0119** seeds the 16 built-in `message_templates` once (`ON CONFLICT (id) DO NOTHING`). The API no longer re-inserts them on every read, so a deleted template stays deleted.
+- **0120** adds `roles.can_manage_infrastructure boolean NOT NULL DEFAULT false` and sets it for Owner, the seeded Admin role and every role with `can_edit_roles`. `rbac.ts` withholds the host/server-lifecycle/config/Admins.cfg/API-token keys without it.
+- **0121** deletes every row of `role_permissions`. No route has written the table since 0015, and the leftover 0009-era rows granted keys that the roles UI could not show.
+- **0122** redefines `audit_log_append()`: it draws `NEW.id` from the column's sequence after taking the chain lock and runs with `SET TimeZone = 'UTC'`. The migration also drops the `audit_log.id` default, so id order is chain order and the hashed `created_at::text` no longer depends on the writer's session. Rows written by the default UTC sessions verify unchanged.
+- **0123** adds `chat_messages_sent_id_idx` btree `(sent_at, id)` on the partitioned parent, which covers every partition, for the chat-flag reindex keyset.
+
+All five are rollback-safe: the previous release ignores the new column and index, never supplies `audit_log.id`, and reads `role_permissions` and `message_templates` as ordinary data.
+
 ### Monthly partitions no longer run out — DEFAULT partitions and look-ahead (migration 0117)
 
 **Files:** `packages/db/drizzle/0117_monthly_partition_defaults.sql`, `packages/db/sql/{chat-messages,bonus-transactions,combat-events,player-sessions}.sql`, `packages/db/test/monthly-partition-defaults.migration.test.ts`

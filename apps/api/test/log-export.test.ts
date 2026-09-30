@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { exportBundle } from '../src/lib/log-export.js';
+import { exportBundle, streamBundle } from '../src/lib/log-export.js';
 
 // The per-container log tail waits on a real 1.5 s deadline because a follow
 // stream never ends on its own; fake timers let the deadline fire instantly.
@@ -18,6 +18,7 @@ function makeFakeApp(
     auditRows?: Array<Record<string, unknown>>;
     containerLogsText?: string;
     bridgeClientError?: Error;
+    xrangeError?: Error;
   } = {},
 ) {
   const callsByStream = new Map<string, number>();
@@ -25,6 +26,7 @@ function makeFakeApp(
   return {
     redis: {
       xrange: vi.fn(async (stream: string) => {
+        if (overrides.xrangeError) throw overrides.xrangeError;
         const streamResults = overrides.xrangeByStream?.[stream];
         if (!streamResults) return [];
         const idx = callsByStream.get(stream) ?? 0;
@@ -43,6 +45,7 @@ function makeFakeApp(
         }),
       }),
     },
+    log: { warn: vi.fn() },
     makeBridgeClient: vi.fn(() => {
       if (overrides.bridgeClientError) throw overrides.bridgeClientError;
       // Like the real bridge, a follow stream stays open until its client closes.
@@ -186,5 +189,72 @@ describe('exportBundle', () => {
     const output = await collectGenerator(exportBundle(app as never, []));
     expect(output).toContain('50.00');
     expect(output).toContain('1073741824');
+  });
+
+  it('reads panel:logs in a single pass and buckets entries per section (#36 finding 28)', async () => {
+    const servers = [
+      { id: 'srv-1', display_name: 'Server Alpha' },
+      { id: 'srv-2', display_name: 'Server Beta' },
+    ];
+    const ts = '1714838400000';
+    const app = makeFakeApp({
+      xrangeByStream: {
+        'panel:logs': [
+          [
+            [`${ts}-0`, ['s', 'B', 'l', 'I', 'm', 'bridge up']],
+            [`${ts}-1`, ['s', 'R', 'l', 'I', 'm', 'rcon beta', 'i', 'srv-2']],
+            [`${ts}-2`, ['s', 'R', 'l', 'W', 'm', 'rcon alpha', 'i', 'srv-1']],
+            [`${ts}-3`, ['s', 'L', 'l', 'I', 'm', 'ingest alpha', 'i', 'srv-1']],
+            [`${ts}-4`, ['s', 'W', 'l', 'I', 'm', 'worker tick']],
+            [`${ts}-5`, ['s', 'I', 'l', 'I', 'm', 'install step']],
+            [`${ts}-6`, ['s', 'A', 'l', 'E', 'm', 'api boom']],
+            [`${ts}-7`, ['s', 'R', 'l', 'I', 'm', 'rcon unknown server', 'i', 'srv-gone']],
+          ],
+          [],
+        ],
+      },
+    });
+
+    const output = await collectGenerator(exportBundle(app as never, servers));
+
+    const panelLogCalls = app.redis.xrange.mock.calls.filter(([stream]) => stream === 'panel:logs');
+    expect(panelLogCalls).toHaveLength(2);
+    const between = (from: string, to: string) =>
+      output.slice(output.indexOf(from), output.indexOf(to, output.indexOf(from)));
+    expect(between('RCON server "Server Alpha"', 'RCON server "Server Beta"')).toContain(
+      '[rcon] [Server Alpha] rcon alpha',
+    );
+    expect(between('RCON server "Server Beta"', 'LOG-INGEST server "Server Alpha"')).toContain(
+      '[rcon] [Server Beta] rcon beta',
+    );
+    expect(
+      between('LOG-INGEST server "Server Alpha"', 'LOG-INGEST server "Server Beta"'),
+    ).toContain('ingest alpha');
+    expect(between('===== WORKERS', '===== DEPOT')).toContain('worker tick');
+    expect(between('===== DEPOT / INSTALL', '===== API')).toContain('install step');
+    expect(between('===== API', '===== HOST METRICS')).toContain('api boom');
+    expect(between('===== BRIDGE', 'RCON server')).toContain('bridge up');
+    expect(output).not.toContain('rcon unknown server');
+  });
+});
+
+describe('streamBundle', () => {
+  it('destroys the gzip stream instead of crashing when the export fails (#36 finding 27)', async () => {
+    vi.useRealTimers();
+    const failure = new Error('redis down');
+    const app = makeFakeApp({ xrangeError: failure });
+    const gz = streamBundle(app as never, []);
+
+    await expect(
+      new Promise((resolve, reject) => {
+        gz.on('error', reject);
+        gz.on('end', resolve);
+        gz.resume();
+      }),
+    ).rejects.toThrow('redis down');
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: failure }),
+      expect.any(String),
+    );
   });
 });

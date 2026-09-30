@@ -729,6 +729,41 @@
       "when": 1788473460000,
       "tag": "0118_clan_members_release_disbanded",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1788473520000,
+      "tag": "0119_message_templates_seed_once",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788473580000,
+      "tag": "0120_role_can_manage_infrastructure",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1788473640000,
+      "tag": "0121_role_permissions_legacy_wipe",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1788473700000,
+      "tag": "0122_audit_log_chain_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1788473760000,
+      "tag": "0123_chat_messages_sent_id_idx",
+      "breakpoints": true
     }
   ]
 }
