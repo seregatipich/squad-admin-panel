@@ -190,31 +190,33 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
     );
     return;
   }
-  if (!mapped.status || mapped.status === row.status) return;
-  // `containerId` is the Docker container id written by the install/start
-  // paths; inspect only reports a PID, so the reconciler leaves it alone (#78).
-  await db
-    .update(servers)
-    .set({ status: mapped.status, updatedAt: new Date() })
-    .where(eq(servers.id, row.id));
-  deps.settledStatus?.set(row.id, mapped.status);
-  log.info(
-    {
-      serverId: row.id,
-      from: row.status,
-      to: mapped.status,
-      raw: res.state,
-      running: res.running,
-    },
-    'reconciler: status updated',
-  );
-  liveBus?.publish({
-    type: 'server.status',
-    ts: new Date().toISOString(),
-    data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
-  });
-  if (row.status === 'running' && mapped.status === 'stopped') {
-    await emitContainerExitDiag(deps, row.id, res);
+  if (!mapped.status) return;
+  if (mapped.status !== row.status) {
+    // `containerId` is the Docker container id written by the install/start
+    // paths; inspect only reports a PID, so the reconciler leaves it alone (#78).
+    await db
+      .update(servers)
+      .set({ status: mapped.status, updatedAt: new Date() })
+      .where(eq(servers.id, row.id));
+    deps.settledStatus?.set(row.id, mapped.status);
+    log.info(
+      {
+        serverId: row.id,
+        from: row.status,
+        to: mapped.status,
+        raw: res.state,
+        running: res.running,
+      },
+      'reconciler: status updated',
+    );
+    liveBus?.publish({
+      type: 'server.status',
+      ts: new Date().toISOString(),
+      data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
+    });
+    if (row.status === 'running' && mapped.status === 'stopped') {
+      await emitContainerExitDiag(deps, row.id, res);
+    }
   }
 
   // Crash detection runs on every successful inspect, not only on a status

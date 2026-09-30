@@ -71,6 +71,8 @@ function decodeStreamEntry(id: string, fields: string[]): DecodedEntry | null {
  * raw entries actually scanned (null when nothing was scanned). A live tail
  * must advance its `after` cursor to `newest_scanned_id` even when `entries`
  * is empty, otherwise a run of non-matching entries would be re-read forever.
+ * `cursor` is the same id, falling back to the id the request resumed from (or
+ * `0-0` on an empty stream), so it is never absent.
  */
 const logsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -154,6 +156,9 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         entries,
         newest_scanned_id: newestScannedId,
         oldest_scanned_id: oldestScannedId,
+        // Always-present tail cursor (#778/#779): the newest scanned id, else
+        // the id the request resumed from, else `0-0` ("from now on").
+        cursor: newestScannedId ?? q.after ?? q.before ?? '0-0',
       };
     },
   );

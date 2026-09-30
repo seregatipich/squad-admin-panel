@@ -114,6 +114,9 @@ function encodeCursor(row: { lastSeenMicros: string; id: string }): string {
   return `${row.lastSeenMicros}_${row.id}`;
 }
 
+/** Year 9999 in µs since the epoch: a bound no real `last_seen_at` reaches, far inside Postgres' `timestamptz` range. */
+const MAX_CURSOR_MICROS = 253_402_300_799_999_999n;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function parseCursor(raw: string): { lastSeenMicros: string; id: string } | null {
@@ -122,6 +125,10 @@ function parseCursor(raw: string): { lastSeenMicros: string; id: string } | null
   const lastSeenMicros = raw.slice(0, sep);
   const id = raw.slice(sep + 1);
   if (!/^-?\d{1,19}$/.test(lastSeenMicros) || !UUID_RE.test(id)) return null;
+  // A value past the bound overflows bigint or `timestamptz` in Postgres and
+  // would answer 500 instead of 400 (#353).
+  const micros = BigInt(lastSeenMicros);
+  if (micros > MAX_CURSOR_MICROS || micros < -MAX_CURSOR_MICROS) return null;
   return { lastSeenMicros, id };
 }
 
