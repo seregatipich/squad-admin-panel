@@ -1205,7 +1205,12 @@ class PerServerSupervisor {
         const squads = parseListSquads(rawSquads);
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
         const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
-        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
+        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null, (player, err) =>
+          this.opts.log.warn(
+            { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
+            'player upsert failed',
+          ),
+        );
         const pollAt = new Date();
         await accruePlayerKitTime(
           this.opts.db,

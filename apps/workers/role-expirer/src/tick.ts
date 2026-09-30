@@ -1,5 +1,5 @@
 import { type DatabaseClient, enqueueAdminsCfgSyncForAllServers } from '@squad/db';
-import { auditLog, players, roles, sessions } from '@squad/db/schema';
+import { auditLog, players, roles, sessions, vipSubscriptions, vipTiers } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, isNotNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
@@ -148,6 +148,27 @@ export function createRoleExpiryDeps(
   };
 }
 
+/**
+ * How far past `role_expires_at` a subscription's `next_renewal_at` may sit
+ * and still count as "about to renew" the role. Creation sets both to
+ * ~now + days a few milliseconds apart, and a renewal that runs late moves
+ * the role from `now` while the billing date keeps its own schedule, so the
+ * two drift by up to one renewal interval (1 h by default).
+ */
+const SUBSCRIPTION_RENEWAL_GRACE = '1 day';
+
+/**
+ * Role assignments whose `role_expires_at` has passed and must be cleared.
+ *
+ * Excludes the system Owner role, and roles an active VIP subscription is
+ * about to renew (#989): the expiry tick runs every minute while renewals run
+ * hourly, so without this the role — and every session — would be dropped at
+ * each period boundary and re-granted up to an hour later. The subscription
+ * protects the role only while it maps to the player's current role and is
+ * due no later than `SUBSCRIPTION_RENEWAL_GRACE` after the role expires; a
+ * cancelled or `expired` subscription never does, so the paid period runs out
+ * normally once the renewal tick gives up.
+ */
 export async function findExpiredAssignments(
   db: DatabaseClient,
   now: Date,
@@ -168,6 +189,15 @@ export async function findExpiredAssignments(
         isNotNull(players.roleExpiresAt),
         lte(players.roleExpiresAt, now),
         sql`NOT (${roles.name} = 'Owner' AND ${roles.isSystemRole} = true)`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${vipSubscriptions}
+          INNER JOIN ${vipTiers} ON ${vipTiers.id} = ${vipSubscriptions.tierId}
+          WHERE ${vipSubscriptions.playerId} = ${players.id}
+            AND ${vipSubscriptions.status} = 'active'
+            AND ${vipTiers.roleId} = ${players.roleId}
+            AND ${vipSubscriptions.nextRenewalAt}
+              <= ${players.roleExpiresAt} + ${SUBSCRIPTION_RENEWAL_GRACE}::interval
+        )`,
       ),
     )
     .orderBy(asc(players.roleExpiresAt))

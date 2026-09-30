@@ -3,7 +3,9 @@ import {
   encodePacket,
   RconPacketStream,
   SERVERDATA_AUTH,
+  SERVERDATA_CHAT_VALUE,
   SERVERDATA_EXECCOMMAND,
+  SERVERDATA_RESPONSE_VALUE,
 } from '../src/protocol.js';
 
 describe('Source RCON codec', () => {
@@ -83,7 +85,9 @@ describe('Squad broken probe reply', () => {
       [10, listPlayers.readInt32LE(0) - 10],
       [11, 0],
     ]);
-    expect(s.push(brokenId11)).toEqual([]);
+    // The second echo's own 14 bytes decode as a harmless duplicate echo
+    // (the client already resolved that probe); only its tail is dropped.
+    expect(s.push(brokenId11)).toEqual([{ id: 11, type: 0, body: '' }]);
     const after = s.push(nextResponse);
     expect(after).toEqual([
       { id: 12, type: 0, body: 'Current level is Gorodok, layer is Gorodok_RAAS_v1' },
@@ -92,8 +96,9 @@ describe('Squad broken probe reply', () => {
 
   it('drops the 7 trailing bytes when the broken frame is split after its first 14 bytes', () => {
     const s = new RconPacketStream();
-    // First 14 bytes of the broken frame look exactly like the legitimate
-    // second probe echo; only the tail identifies the frame.
+    expect(s.push(emptyId11)).toEqual([{ id: 11, type: 0, body: '' }]);
+    // First 14 bytes of the broken frame are the second probe echo; that
+    // repeat is what arms stripping of the tail that follows.
     expect(s.push(brokenId11.subarray(0, 14))).toEqual([{ id: 11, type: 0, body: '' }]);
     expect(s.push(brokenId11.subarray(14, 18))).toEqual([]);
     expect(s.push(brokenId11.subarray(18))).toEqual([]);
@@ -106,7 +111,7 @@ describe('Squad broken probe reply', () => {
     const s = new RconPacketStream();
     s.push(emptyId11);
     const out = s.push(Buffer.concat([brokenId11, nextResponse, emptyId11]));
-    expect(out.map((p) => p.id)).toEqual([12, 11]);
+    expect(out.map((p) => p.id)).toEqual([11, 12, 11]);
   });
 
   it('still rejects a genuinely malformed size', () => {
@@ -114,5 +119,76 @@ describe('Squad broken probe reply', () => {
     expect(() => s.push(Buffer.from('03000000ffffffff', 'hex'))).toThrow(
       /invalid RCON packet size: 3/,
     );
+  });
+});
+
+/**
+ * Regression #977: an unsolicited chat packet (id 0) whose body is exactly
+ * 246 bytes has size 256, so its first 7 bytes equal the broken-probe tail.
+ * The tail may only be stripped right after Squad's second probe echo.
+ */
+describe('chat packet that looks like the broken-probe tail (regression #977)', () => {
+  const chat256 = encodePacket({ id: 0, type: SERVERDATA_CHAT_VALUE, body: 'x'.repeat(246) });
+  const echo = (id: number) => encodePacket({ id, type: SERVERDATA_RESPONSE_VALUE, body: '' });
+  const brokenEcho = (id: number) =>
+    Buffer.concat([echo(id), Buffer.from('00010000000000', 'hex')]);
+  const summary = (packets: Array<{ id: number; type: number; body: string }>) =>
+    packets.map((p) => [p.id, p.type, p.body.length]);
+
+  it('starts with the same 7 bytes as the tail', () => {
+    expect(chat256.subarray(0, 7)).toEqual(Buffer.from('00010000000000', 'hex'));
+  });
+
+  it('decodes the chat packet on its own', () => {
+    const s = new RconPacketStream();
+    expect(summary(s.push(chat256))).toEqual([[0, SERVERDATA_CHAT_VALUE, 246]]);
+  });
+
+  it.each([
+    ['chat, echo, echo', () => Buffer.concat([chat256, echo(1001), echo(1002)])],
+    ['echo, chat, echo', () => Buffer.concat([echo(1001), chat256, echo(1002)])],
+  ])('keeps framing for %s in one chunk', (_label, build) => {
+    const s = new RconPacketStream();
+    const out = s.push(build());
+    expect(out.map((p) => p.type)).toContain(SERVERDATA_CHAT_VALUE);
+    expect(out).toHaveLength(3);
+  });
+
+  it('keeps framing when the chat follows a single echo split across TCP chunks', () => {
+    const s = new RconPacketStream();
+    const wire = Buffer.concat([echo(1001), chat256, echo(1002)]);
+    const out = [];
+    for (let offset = 0; offset < wire.byteLength; offset += 5) {
+      out.push(...s.push(wire.subarray(offset, offset + 5)));
+    }
+    expect(summary(out)).toEqual([
+      [1001, SERVERDATA_RESPONSE_VALUE, 0],
+      [0, SERVERDATA_CHAT_VALUE, 246],
+      [1002, SERVERDATA_RESPONSE_VALUE, 0],
+    ]);
+  });
+
+  it('still strips the real tail and then decodes a chat packet right behind it', () => {
+    const s = new RconPacketStream();
+    const out = s.push(Buffer.concat([echo(1001), brokenEcho(1001), chat256]));
+    expect(out.map((p) => p.type)).toEqual([
+      SERVERDATA_RESPONSE_VALUE,
+      SERVERDATA_RESPONSE_VALUE,
+      SERVERDATA_CHAT_VALUE,
+    ]);
+  });
+
+  it('strips the real tail byte by byte and then decodes the chat packet', () => {
+    const s = new RconPacketStream();
+    const wire = Buffer.concat([echo(1001), brokenEcho(1001), chat256]);
+    const out = [];
+    for (let offset = 0; offset < wire.byteLength; offset += 1) {
+      out.push(...s.push(wire.subarray(offset, offset + 1)));
+    }
+    expect(summary(out)).toEqual([
+      [1001, SERVERDATA_RESPONSE_VALUE, 0],
+      [1001, SERVERDATA_RESPONSE_VALUE, 0],
+      [0, SERVERDATA_CHAT_VALUE, 246],
+    ]);
   });
 });

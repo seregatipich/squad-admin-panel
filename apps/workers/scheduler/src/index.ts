@@ -23,6 +23,7 @@ import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runScheduledTaskTick } from './scheduled-task-tick.js';
 import { runSeasonFinalizeTick } from './season-finalize-tick.js';
 import { runSeedScheduleTick } from './seed-schedule-tick.js';
+import { startTickLoop } from './tick-loop.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -114,11 +115,11 @@ async function main() {
     );
   }
 
-  let interval: NodeJS.Timeout | null = null;
+  let stopTickLoop: (() => void) | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
+      stopTickLoop?.();
       await diag.emit({
         component: 'worker-scheduler',
         kind: 'scheduler.stopped',
@@ -156,9 +157,11 @@ async function main() {
   await tick();
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(() => {
-    tick().catch((err) => log.error({ err: (err as Error).message }, 'seed-schedule tick failed'));
-  }, TICK_INTERVAL_MS);
+  stopTickLoop = startTickLoop({
+    tick,
+    intervalMs: TICK_INTERVAL_MS,
+    onError: (err) => log.error({ err: err.message }, 'scheduler tick failed'),
+  });
 }
 
 function isMainEntrypoint(): boolean {

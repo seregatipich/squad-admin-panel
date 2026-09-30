@@ -8,6 +8,9 @@
 
 - `match_players.squad_name` (and `team`) were always `null`: `handleMatchClose` looked them up in `rcon.players_polled` rows of `events`, but worker-rcon only XADDs that event and nothing persists it. Match close now reads worker-rcon's `rcon:roster:{id}` + `rcon:squads:{id}` snapshots and stores the squad's name (not its number). Players who left before the close keep `null`. Snapshots outside the match window (+120 s) are ignored, and a Redis outage no longer affects whether the roster is written. `handleMatchClose` / `computeMatchRoster` / `computeOpenMatchRoster` take the Redis client as their second argument. Regression test: `test/match-roster-store.test.ts`.
 
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 930): the benign-noise filter ran unanchored regexes over the whole raw line before parsing, so a nickname such as `LogRedpointEOS: Verbose: ` dropped the player's own `Join succeeded` line (no `player.connected`, so no alt-ban / banned-name / external-ban connect checks), and chat text containing a noise marker vanished from the chat archive, flag detector, automations and `!report`. `isBenignNoise` now takes the parsed line and matches `category`, `verbosity` and the start of `message`. Regression tests: `test/patterns.test.ts`.
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 1332): a container tail whose bridge stream ended on its own (bridge restart, socket drop, Docker restarting the container without a status change) stayed registered in `TailManager`, so `reconcile()` never re-dialled it and ingest silently stopped until a worker restart. The tail factory now receives an `onDead` callback; a `stream-end` / `stream-error` stop forgets the tail and the next reconcile (≤15 s) starts a fresh one. Regression tests: `test/manager.test.ts`.
+
 ## 2026-09-09
 
 ### Fixed

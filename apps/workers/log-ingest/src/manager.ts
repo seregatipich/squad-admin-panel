@@ -31,7 +31,13 @@ export interface TailWanted {
   source: TailSource;
 }
 
-export type ManagedTailFactory = (wanted: TailWanted) => TailHandle;
+/**
+ * Starts one tail. The factory must call `onDead` when the tail's stream ends
+ * on its own (not through `abort()`), so the manager forgets it and the next
+ * `reconcile()` dials a fresh one; a tail that reconnects internally (SSH)
+ * never needs to call it.
+ */
+export type ManagedTailFactory = (wanted: TailWanted, onDead: () => void) => TailHandle;
 
 /**
  * Identity of a tail's dial parameters. Two `TailWanted` with the same key
@@ -76,8 +82,22 @@ export class TailManager {
         replaced.push(serverId);
       }
       if (!this.aborters.has(serverId)) {
-        const handle = this.factory(t);
-        this.aborters.set(serverId, () => handle.abort());
+        let registered: (() => void) | null = null;
+        let diedBeforeRegistration = false;
+        const handle = this.factory(t, () => {
+          if (!registered) {
+            diedBeforeRegistration = true;
+            return;
+          }
+          // A replaced or removed tail may still report its death later;
+          // only forget the entry while it is still this tail's.
+          if (this.aborters.get(serverId) !== registered) return;
+          this.aborters.delete(serverId);
+          this.keys.delete(serverId);
+        });
+        if (diedBeforeRegistration) continue;
+        registered = () => handle.abort();
+        this.aborters.set(serverId, registered);
         this.keys.set(serverId, key);
         if (!replaced.includes(serverId)) added.push(serverId);
       }

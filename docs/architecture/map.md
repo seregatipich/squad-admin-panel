@@ -1232,7 +1232,7 @@ sequenceDiagram
 
 **The source is docker logs via the Go bridge, not file tailing.** `tail.ts` calls `bridge.containerLogsFollow({name: 'squad-<serverId>', tail: 100})` over `/run/panel-host-bridge/bridge.sock`; the Go side shells out to `docker logs --follow --timestamps --tail <n>` (`apps/bridge/internal/runner/docker.go:597`). Only `frame.stream === 'stdout'` is consumed; a running buffer splits on `\n` and keeps the partial tail. Bytes/lines per minute are logged at debug every 60 s — the only backpressure *observability*. **There is no backpressure mechanism**: no pause, no queue bound, no drop policy.
 
-One `LogIngestor` per server drives a fixed per-line pipeline: `isBenignNoise()` → `detectSquadFatal()` → `parseLine()` → chat → vote → combat → report → `handleMessage()`. Events carry a **deterministic UUIDv5** over a stable-stringified `{server_id, type, ts, payload}` (`ingest.ts:355-376`) — that is the dedup primitive on which everything downstream rests.
+One `LogIngestor` per server drives a fixed per-line pipeline: `parseLine()` → `isBenignNoise()` → `detectSquadFatal()` → chat → vote → combat → report → `handleMessage()`. Events carry a **deterministic UUIDv5** over a stable-stringified `{server_id, type, ts, payload}` (`ingest.ts:355-376`) — that is the dedup primitive on which everything downstream rests.
 
 | Parser file | Handles |
 |---|---|

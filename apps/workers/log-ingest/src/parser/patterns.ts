@@ -76,19 +76,41 @@ export const PLAYER_DISCONNECT =
 export const PLAYER_REMOTE_ADDR =
   /^AddClientConnection: Added client connection: \[UNetConnection\] RemoteAddr: (\d{1,3}(?:\.\d{1,3}){3}):\d+/;
 
-// Benign noise filter; ingest drops these before ever looking for events.
-export const BENIGN_NOISE = [
-  /LogStreaming: (?:Error|Warning): CreateExport: .+ (?:EngineFailedStartAudio|PropellerMistEffectsAudio|SQCenterOfMassWaterFX)/,
-  /LogSquad: Error: Failed to spawn EquipableItem/,
-  /LogRedpointEOS: Verbose: /,
-  /LogStreaming: Warning: Skipped failed export/,
+/**
+ * Benign engine noise, matched against a parsed line's structural fields —
+ * category, verbosity, and the *start* of the message — never the raw line.
+ * Player-controlled text (nicknames in `LogNet: Join succeeded: <name>`, chat
+ * in `LogSquad: ChatMessage: ... : <text>`) can contain any of these markers,
+ * so an unanchored raw-line match would let a player drop their own join or
+ * chat line (#930).
+ */
+interface BenignNoiseRule {
+  category: string;
+  verbosities: readonly string[];
+  message: RegExp;
+}
+
+export const BENIGN_NOISE: readonly BenignNoiseRule[] = [
+  {
+    category: 'LogStreaming',
+    verbosities: ['Error', 'Warning'],
+    message:
+      /^CreateExport: .+ (?:EngineFailedStartAudio|PropellerMistEffectsAudio|SQCenterOfMassWaterFX)/,
+  },
+  { category: 'LogSquad', verbosities: ['Error'], message: /^Failed to spawn EquipableItem/ },
+  { category: 'LogRedpointEOS', verbosities: ['Verbose'], message: /^/ },
+  { category: 'LogStreaming', verbosities: ['Warning'], message: /^Skipped failed export/ },
 ];
 
-export function isBenignNoise(line: string): boolean {
-  for (const r of BENIGN_NOISE) {
-    if (r.test(line)) return true;
-  }
-  return false;
+/** True when a parsed log line is known engine noise that carries no event. */
+export function isBenignNoise(line: LogLine): boolean {
+  return BENIGN_NOISE.some(
+    (rule) =>
+      rule.category === line.category &&
+      line.verbosity !== null &&
+      rule.verbosities.includes(line.verbosity) &&
+      rule.message.test(line.message),
+  );
 }
 
 export const SQUAD_LOG_EXIT = /^\[(?<ts>[^\]]+)\]\[ *\d+\]LogExit: (?<msg>.*)$/;

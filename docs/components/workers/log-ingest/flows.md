@@ -26,7 +26,7 @@
 2. Only `stream === 'stdout'` frames are processed; stderr is discarded.
 3. Bytes are appended to a line buffer; newline-split lines are dispatched to `onLine`.
 4. Byte and line rate are logged as `debug` every 60 s.
-5. On bridge stream end or error: log `warn 'tail dropped → restart'`, then call `onStopped({ reason })` with `'stream-end'` or `'stream-error'` (with `error: errorMessage`). The reconcile loop will reattach on the next tick.
+5. On bridge stream end or error: log `warn 'tail dropped → restart'`, then call `onStopped({ reason })` with `'stream-end'` or `'stream-error'` (with `error: errorMessage`). The worker's `onStopped` handler calls the `TailManager` factory's `onDead` callback for any reason other than `'aborted'`, which forgets the tail so the reconcile loop reattaches on its next tick.
 6. On explicit abort (`return () => { aborted = true; ... }`): the trailing `onStopped({ reason: 'aborted' })` fires from the IIFE's terminating branch.
 
 The worker translates each `onStopped` into a `tail.stopped` diag emit carrying `{ container, reason, error? }`.
@@ -62,9 +62,9 @@ On success the worker logs `deleted_count`, `deleted_bytes`, `archived_count`, `
 
 For each line:
 
-1. `isBenignNoise(line)` → drop if true (no diag emit).
+1. `parseLine(line)`, then `isBenignNoise(parsed)` → drop if true (no diag emit). Noise rules match the parsed `category`, `verbosity` and the start of `message`, never the raw line, so a nickname or chat text containing a noise marker cannot suppress its own line (#930).
 2. `detectSquadFatal(line)` → if it matches `LogExit:`, `Fatal error:`, or `Assertion failed: … [File:… Line:…]`, fire-and-forget `diag.emit({ kind: 'squad.log.fatal', severity: 'fatal' })` with `{ ts, file, line, raw }`. Detection runs **before** the prefix parser so Assertion lines (which lack the timestamp prefix) still surface. No de-dupe — every matching line emits one diag event.
-3. `parseLine(line)` → extract `category`, `message`, `ts`. If it returns null AND the line started with `[` AND `detectSquadFatal` did not match, fire-and-forget `diag.emit({ kind: 'parser_error', severity: 'warn' })` with `{ lineSample, regex: 'PREFIX', errorMessage }`. Otherwise drop silently.
+3. If `parseLine` returned null AND the line started with `[` AND `detectSquadFatal` did not match, fire-and-forget `diag.emit({ kind: 'parser_error', severity: 'warn' })` with `{ lineSample, regex: 'PREFIX', errorMessage }`. Otherwise drop silently.
 4. `LogIngestor.handleMessage(category, message, ts)` → returns zero or more `EventEnvelope` objects. Wrapped in try/catch — any throw becomes a `parser_error` diag emit with `regex` set to the failing category name.
 5. For each envelope: `publish(redis, envelope)` — dedup check then `XADD`.
 

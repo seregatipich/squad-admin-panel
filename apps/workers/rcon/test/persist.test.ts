@@ -29,9 +29,11 @@ function makeDb(
 
   const selectChain = {
     from: vi.fn().mockReturnValue({
-      where: vi.fn().mockReturnValue({
-        limit: vi.fn().mockImplementation(() => Promise.resolve(existingPlayers)),
-      }),
+      where: vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(existingPlayers.map((row) => ({ steamEosConflict: false, ...row }))),
+        ),
     }),
   };
 
@@ -50,10 +52,12 @@ function makeDb(
   const insertChain = {
     values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
       insertedValues.push({ table: 'unknown', values: vals });
-      return {
+      return Object.assign(Promise.resolve(undefined), {
         onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
-      };
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: vals.id }]),
+        }),
+      });
     }),
   };
 
@@ -61,9 +65,11 @@ function makeDb(
     select: vi.fn().mockReturnValue(selectChain),
     update: vi.fn().mockReturnValue(updateChain),
     insert: vi.fn().mockReturnValue(insertChain),
+    transaction: vi.fn(),
     _insertedValues: insertedValues,
     _updatedValues: updatedValues,
   };
+  db.transaction.mockImplementation((run: (tx: typeof db) => Promise<unknown>) => run(db));
 
   return db as never;
 }
@@ -140,5 +146,27 @@ describe('upsertPlayers', () => {
     )._insertedValues.find((row) => row.values.actionType === 'player.steam_linked');
     expect(auditInsert).toBeUndefined();
     expect(insertMock).toHaveBeenCalled();
+  });
+
+  it('reports a failing player and still upserts the rest of the poll', async () => {
+    const db = makeDb([]);
+    const transaction = (db as { transaction: ReturnType<typeof vi.fn> }).transaction;
+    const passThrough = transaction.getMockImplementation();
+    transaction.mockImplementationOnce(() => Promise.reject(new Error('unique violation')));
+    transaction.mockImplementation(passThrough as never);
+    const onPlayerError = vi.fn();
+
+    await upsertPlayers(
+      db,
+      [makePlayer({ name: 'Broken' }), makePlayer({ name: 'Healthy', steam_id64: null })],
+      null,
+      onPlayerError,
+    );
+
+    expect(onPlayerError).toHaveBeenCalledTimes(1);
+    expect(onPlayerError.mock.calls[0]?.[0].name).toBe('Broken');
+    const inserted = (db as { _insertedValues: Array<{ values: Record<string, unknown> }> })
+      ._insertedValues;
+    expect(inserted.some((row) => row.values.canonicalName === 'Healthy')).toBe(true);
   });
 });

@@ -36,7 +36,7 @@ describe('TailManager.reconcile', () => {
     const first = manager.reconcile([wantA]);
     expect(first).toEqual({ added: ['srv-a'], removed: [], replaced: [], total: 1 });
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(factory).toHaveBeenCalledWith(wantA);
+    expect(factory).toHaveBeenCalledWith(wantA, expect.any(Function));
     expect(diag.emit).toHaveBeenCalledTimes(1);
     const firstEv = diag.emit.mock.calls[0]?.[0] as DiagEvent;
     expect(firstEv.component).toBe('worker-log-ingest');
@@ -165,5 +165,43 @@ describe('TailManager.reconcile', () => {
     expect(tailSourceKey(wantSsh)).not.toContain('PRIVATE');
     expect(tailSourceKey(wantSsh)).toContain('/opt/squad1/');
     expect(tailSourceKey(wantA)).toBe('container:15000');
+  });
+
+  it('restarts a tail whose stream died on the next reconcile (regression #1332)', () => {
+    const onDeadCallbacks: Array<() => void> = [];
+    const factory = vi.fn((_wanted: TailWanted, onDead: () => void): TailHandle => {
+      onDeadCallbacks.push(onDead);
+      return { abort: vi.fn() };
+    });
+    const manager = new TailManager(factory);
+
+    manager.reconcile([wantA]);
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    onDeadCallbacks[0]?.();
+    expect(manager.size()).toBe(0);
+
+    const next = manager.reconcile([wantA]);
+    expect(next.added).toEqual(['srv-a']);
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(manager.size()).toBe(1);
+  });
+
+  it('ignores a late death report from a tail that was already replaced', () => {
+    const onDeadCallbacks: Array<() => void> = [];
+    const factory = vi.fn((_wanted: TailWanted, onDead: () => void): TailHandle => {
+      onDeadCallbacks.push(onDead);
+      return { abort: vi.fn() };
+    });
+    const manager = new TailManager(factory);
+
+    manager.reconcile([wantA]);
+    onDeadCallbacks[0]?.();
+    manager.reconcile([wantA]);
+    onDeadCallbacks[0]?.();
+
+    expect(manager.size()).toBe(1);
+    manager.reconcile([wantA]);
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 });

@@ -9,7 +9,7 @@ The dial target is `resolveRconHost(server_credentials.rcon_host)`: `NULL` (pane
 ## Responsibilities
 
 - Reconcile the set of RCON targets against live DB rows every 15 s.
-- Open TCP connections and authenticate using the Squad two-packet AUTH quirk, and drop Squad's broken second reply to the empty probe (a size-10 frame carrying 7 extra bytes `00 00 00 01 00 00 00`) so later responses stay framed — see `protocol.ts`.
+- Open TCP connections and authenticate using the Squad two-packet AUTH quirk, and drop the 7 extra bytes of Squad's broken second reply to the empty probe (a size-10 frame followed by `00 01 00 00 00 00 00`) — only right after that second echo, since a 246-byte chat packet starts with the same bytes — so later responses stay framed; see `protocol.ts`.
 - Refresh the roster (`ListPlayers` + `ListSquads`) every 2 s and server info (`ShowServerInfo` + `ShowNextMap`) every 5 s, both RCON-only; run the full DB-backed poll (player upserts, kit time, sessions, seeding, A2S) every 30 s.
 - Fill roster and server info immediately after every (re)connect, and re-poll a server at once when a refresh hint arrives on the Redis channel `rcon:refresh` (published by worker-log-ingest on joins, leaves and match boundaries).
 - Consume queued P0 operator commands (`AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`) while the RCON session is connected.
