@@ -14,6 +14,11 @@
       "development": "./src/admins-config.ts",
       "default": "./dist/admins-config.js"
     },
+    "./discord-template": {
+      "types": "./dist/discord-template.d.ts",
+      "development": "./src/discord-template.ts",
+      "default": "./dist/discord-template.js"
+    },
     "./banned-names": {
       "types": "./dist/banned-names.d.ts",
       "development": "./src/banned-names.ts",
