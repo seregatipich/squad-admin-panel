@@ -161,6 +161,25 @@ describe('MeBrowser', () => {
   );
 
   it(
+    'shows Russian text when the network fails during a purchase',
+    async () => {
+      stubApi();
+      render(<MeBrowser displayName="VipPlayer" />);
+      const fetchMock = vi.mocked(fetch);
+      await screen.findByRole('button', { name: 'Купить разово' });
+      fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Купить разово' }));
+
+      expect(
+        await screen.findByText('Не удалось связаться с сервером. Проверьте подключение.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows the active subscription and blocks a second one',
     async () => {
       stubApi([], [SUBSCRIPTION]);
