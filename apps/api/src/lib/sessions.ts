@@ -155,12 +155,13 @@ export async function revokeAllForPlayer(
   playerId: string,
   publisher?: SessionRevokePublisher,
 ): Promise<void> {
+  // One statement: a session created between a separate SELECT and DELETE would
+  // vanish from the DB but keep its Redis cache entry.
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
+    .delete(sessions)
+    .where(eq(sessions.playerId, playerId))
+    .returning({ id: sessions.id });
   if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.playerId, playerId));
     await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
     if (publisher) {
       const ts = new Date().toISOString();

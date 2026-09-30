@@ -46,7 +46,7 @@ renewal tick:
    the matching `alert.triggered` live-bus frame. The role itself is **not**
    removed here — the already-paid period runs out first and the main tick
    removes it on schedule.
-5. Enqueues one Admins.cfg sync for the whole run, not one per subscription.
+5. Enqueues the Admins.cfg sync outbox rows (one per panel-hosted server) inside each renewal transaction, so a charge and its sync are committed or rolled back together.
 
 A subscription cancelled between the scan and the charge is skipped and nothing
 is billed. One failing subscription never aborts the batch.

@@ -1,11 +1,9 @@
 import { type DatabaseClient, enqueueAdminsCfgSyncForAllServers } from '@squad/db';
-import { auditLog, players, roles, sessions } from '@squad/db/schema';
+import { players, roles, sessions } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, isNotNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
-
-/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
-const LIVE_BUS_CHANNEL = 'live-bus';
+import { LIVE_BUS_CHANNEL, writeSystemAuditEntry } from './system-events.js';
 
 export interface ExpiredRoleAssignment {
   playerId: string;
@@ -47,7 +45,6 @@ export interface RoleExpiryTickDeps {
     event: AdminsCfgSyncEvent,
   ): Promise<{ cleared: ExpiredRoleAssignment[]; enqueued: number }>;
   writeAuditEntry(entry: RoleExpiryAuditEntry): Promise<void>;
-  invalidatePermissionCache(playerId: string): void;
   revokeAllForPlayer(playerId: string): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
@@ -106,7 +103,6 @@ export async function runRoleExpiryTick(deps: RoleExpiryTickDeps): Promise<RoleE
         context: { expired_at: now.toISOString() },
         statusCode: 200,
       });
-      deps.invalidatePermissionCache(assignment.playerId);
       await deps.revokeAllForPlayer(assignment.playerId);
     }
 
@@ -142,8 +138,7 @@ export function createRoleExpiryDeps(
     findExpiredAssignments: (now) => findExpiredAssignments(db, now, batchSize),
     clearExpiredAssignments: (assignments, now, event) =>
       clearExpiredAssignments(db, assignments, now, event),
-    writeAuditEntry: (entry) => writeRoleExpiryAuditEntry(db, entry),
-    invalidatePermissionCache: () => undefined,
+    writeAuditEntry: (entry) => writeSystemAuditEntry(db, entry),
     revokeAllForPlayer: (playerId) => revokeAllSessionsForPlayer(db, redis, playerId),
   };
 }
@@ -220,27 +215,6 @@ export async function clearExpiredAssignments(
   });
 }
 
-export async function writeRoleExpiryAuditEntry(
-  db: DatabaseClient,
-  entry: RoleExpiryAuditEntry,
-): Promise<void> {
-  await db.insert(auditLog).values({
-    actorKind: entry.actor.kind,
-    actorPlayerId: null,
-    actorTokenId: null,
-    actorSystemLabel: entry.actor.label,
-    actorIp: entry.actorIp,
-    actionType: entry.actionType,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    beforeSnapshot: entry.before,
-    afterSnapshot: entry.after,
-    context: entry.context,
-    statusCode: entry.statusCode,
-    rowHash: Buffer.from([]),
-  });
-}
-
 /**
  * Deletes every session for `playerId` (DB rows + Redis cache) and pushes one
  * `session.revoked` event per session onto the live-bus channel, so a role that
@@ -254,12 +228,13 @@ export async function revokeAllSessionsForPlayer(
   redis: Pick<Redis, 'del' | 'publish'>,
   playerId: string,
 ): Promise<void> {
+  // One statement, so a session created concurrently is either deleted and
+  // returned here (its Redis key is cleared) or survives untouched in the DB.
   const rows = await db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(eq(sessions.playerId, playerId));
+    .delete(sessions)
+    .where(eq(sessions.playerId, playerId))
+    .returning({ id: sessions.id });
   if (rows.length === 0) return;
-  await db.delete(sessions).where(eq(sessions.playerId, playerId));
   await redis.del(...rows.map((row) => `session:${row.id}`));
   const ts = new Date().toISOString();
   for (const row of rows) {

@@ -17,7 +17,6 @@ describe('runRoleExpiryTick', () => {
       findExpiredAssignments: vi.fn().mockResolvedValue(expired),
       clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: expired, enqueued: 2 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      invalidatePermissionCache: vi.fn(),
       revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
@@ -31,7 +30,6 @@ describe('runRoleExpiryTick', () => {
       now,
       expect.objectContaining({ reason: 'player.role.expire', actor_player_id: null }),
     );
-    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.revokeAllForPlayer).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -68,7 +66,6 @@ describe('runRoleExpiryTick', () => {
       // The conditional UPDATE observes that a renewal already moved the expiry.
       clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: [], enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      invalidatePermissionCache: vi.fn(),
       revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
@@ -80,7 +77,6 @@ describe('runRoleExpiryTick', () => {
       expect.objectContaining({ reason: 'player.role.expire' }),
     );
     expect(deps.writeAuditEntry).not.toHaveBeenCalled();
-    expect(deps.invalidatePermissionCache).not.toHaveBeenCalled();
     expect(deps.revokeAllForPlayer).not.toHaveBeenCalled();
   });
 });

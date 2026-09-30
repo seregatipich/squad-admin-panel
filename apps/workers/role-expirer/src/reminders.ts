@@ -11,9 +11,8 @@ import {
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, gt, isNotNull, lte } from 'drizzle-orm';
 import type Redis from 'ioredis';
+import { publishAlertFrame } from './system-events.js';
 
-/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
-const LIVE_BUS_CHANNEL = 'live-bus';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOWS_DAYS = [7, 3, 1];
 const WINDOW_DAYS_MIN = 1;
@@ -55,11 +54,16 @@ export interface RoleExpiryReminderDeps {
    * key was already claimed by an earlier tick — nothing must be emitted.
    */
   claimNotification(claim: ExpiryNotificationClaim): Promise<{ id: string } | null>;
-  insertAlertEvent(input: {
-    ruleId: string;
-    payload: RoleExpiryAlertPayload;
-  }): Promise<{ id: string }>;
-  linkAlertEvent(notificationId: string, alertEventId: string): Promise<void>;
+  /**
+   * Claims the admin dedup row, inserts the broadcast `alert_events` row and
+   * links the two in ONE transaction, so a failure cannot leave a claimed
+   * window without its alert. Resolves `false` when the window was already
+   * claimed and nothing was written.
+   */
+  claimAdminAlert(
+    claim: Omit<ExpiryNotificationClaim, 'recipient'>,
+    input: { ruleId: string; payload: RoleExpiryAlertPayload },
+  ): Promise<boolean>;
   publishAlertFrame(payload: RoleExpiryAlertPayload): Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
@@ -113,22 +117,16 @@ export async function runRoleExpiryReminderTick(
           expiresAt: grant.roleExpiresAt,
           windowDays,
         };
-        const adminClaim = await deps.claimNotification({ ...claim, recipient: 'admin' });
-        if (adminClaim) {
-          const payload: RoleExpiryAlertPayload = {
-            event_kind: 'role_expiring',
-            player_id: grant.playerId,
-            player_name: grant.playerName,
-            role_id: grant.roleId,
-            role_name: grant.roleName,
-            expires_at: grant.roleExpiresAt.toISOString(),
-            window_days: windowDays,
-          };
-          const alertEvent = await deps.insertAlertEvent({
-            ruleId: ROLE_EXPIRY_ALERT_RULE_ID,
-            payload,
-          });
-          await deps.linkAlertEvent(adminClaim.id, alertEvent.id);
+        const payload: RoleExpiryAlertPayload = {
+          event_kind: 'role_expiring',
+          player_id: grant.playerId,
+          player_name: grant.playerName,
+          role_id: grant.roleId,
+          role_name: grant.roleName,
+          expires_at: grant.roleExpiresAt.toISOString(),
+          window_days: windowDays,
+        };
+        if (await deps.claimAdminAlert(claim, { ruleId: ROLE_EXPIRY_ALERT_RULE_ID, payload })) {
           await deps.publishAlertFrame(payload);
           notified++;
         }
@@ -168,27 +166,22 @@ export function createRoleExpiryReminderDeps(
     findExpiringGrants: (now, maxWindowDays) =>
       findExpiringGrants(db, now, maxWindowDays, batchSize),
     claimNotification: (claim) => claimExpiryNotification(db, claim),
-    insertAlertEvent: async (input) => {
-      const rows = await db
-        .insert(alertEvents)
-        .values({ ruleId: input.ruleId, severity: 'info', payload: input.payload })
-        .returning({ id: alertEvents.id });
-      const row = rows[0];
-      if (!row) throw new Error('alert_events insert returned no row');
-      return row;
-    },
-    linkAlertEvent: async (notificationId, alertEventId) => {
-      await db
-        .update(expiryNotifications)
-        .set({ alertEventId })
-        .where(eq(expiryNotifications.id, notificationId));
-    },
-    publishAlertFrame: async (payload) => {
-      await redis.publish(
-        LIVE_BUS_CHANNEL,
-        JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-      );
-    },
+    claimAdminAlert: (claim, input) =>
+      db.transaction(async (tx) => {
+        const adminClaim = await claimExpiryNotification(tx, { ...claim, recipient: 'admin' });
+        if (!adminClaim) return false;
+        const [alertEvent] = await tx
+          .insert(alertEvents)
+          .values({ ruleId: input.ruleId, severity: 'info', payload: input.payload })
+          .returning({ id: alertEvents.id });
+        if (!alertEvent) throw new Error('alert_events insert returned no row');
+        await tx
+          .update(expiryNotifications)
+          .set({ alertEventId: alertEvent.id })
+          .where(eq(expiryNotifications.id, adminClaim.id));
+        return true;
+      }),
+    publishAlertFrame: (payload) => publishAlertFrame(redis, payload),
   };
 }
 
@@ -245,7 +238,7 @@ export async function findExpiringGrants(
 }
 
 export async function claimExpiryNotification(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, 'insert'>,
   claim: ExpiryNotificationClaim,
 ): Promise<{ id: string } | null> {
   const rows = await db

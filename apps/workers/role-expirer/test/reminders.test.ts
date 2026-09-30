@@ -2,6 +2,7 @@ import { ROLE_EXPIRY_ALERT_RULE_ID } from '@squad/db/schema';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type ExpiryNotificationClaim,
+  type RoleExpiryAlertPayload,
   type RoleExpiryReminderDeps,
   runRoleExpiryReminderTick,
 } from '../src/reminders.js';
@@ -55,8 +56,17 @@ function makeDeps(opts: {
       claimSeq += 1;
       return { id: `claim-${claimSeq}` };
     }),
-    insertAlertEvent: vi.fn().mockResolvedValue({ id: 'alert-event-1' }),
-    linkAlertEvent: vi.fn().mockResolvedValue(undefined),
+    claimAdminAlert: vi.fn(
+      async (
+        claim: Omit<ExpiryNotificationClaim, 'recipient'>,
+        _input: { ruleId: string; payload: RoleExpiryAlertPayload },
+      ) => {
+        const key = claimKey({ ...claim, recipient: 'admin' });
+        if (claimed.has(key)) return false;
+        claimed.add(key);
+        return true;
+      },
+    ),
     publishAlertFrame: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
   } satisfies RoleExpiryReminderDeps;
@@ -71,22 +81,14 @@ describe('runRoleExpiryReminderTick', () => {
 
     expect(result).toEqual({ notified: 1 });
     expect(deps.findExpiringGrants).toHaveBeenCalledWith(NOW, 7);
-    const adminClaims = deps.claimNotification.mock.calls.filter(
-      ([claim]) => claim.recipient === 'admin',
+    expect(deps.claimAdminAlert).toHaveBeenCalledTimes(1);
+    expect(deps.claimAdminAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: PLAYER_ID, roleId: ROLE_ID, windowDays: 3 }),
+      {
+        ruleId: ROLE_EXPIRY_ALERT_RULE_ID,
+        payload: expect.objectContaining({ event_kind: 'role_expiring', window_days: 3 }),
+      },
     );
-    expect(adminClaims).toHaveLength(1);
-    expect(adminClaims[0]?.[0]).toMatchObject({
-      playerId: PLAYER_ID,
-      roleId: ROLE_ID,
-      windowDays: 3,
-      recipient: 'admin',
-    });
-    expect(deps.insertAlertEvent).toHaveBeenCalledTimes(1);
-    expect(deps.insertAlertEvent).toHaveBeenCalledWith({
-      ruleId: ROLE_EXPIRY_ALERT_RULE_ID,
-      payload: expect.objectContaining({ event_kind: 'role_expiring', window_days: 3 }),
-    });
-    expect(deps.linkAlertEvent).toHaveBeenCalledWith('claim-1', 'alert-event-1');
   });
 
   it('re-run does not duplicate (dedup insert returns nothing)', async () => {
@@ -98,7 +100,6 @@ describe('runRoleExpiryReminderTick', () => {
     const result = await runRoleExpiryReminderTick(second.deps);
 
     expect(result).toEqual({ notified: 0 });
-    expect(second.deps.insertAlertEvent).not.toHaveBeenCalled();
     expect(second.deps.publishAlertFrame).not.toHaveBeenCalled();
   });
 
@@ -114,8 +115,9 @@ describe('runRoleExpiryReminderTick', () => {
     const result = await runRoleExpiryReminderTick({ ...renewed.deps, now: laterNow });
 
     expect(result).toEqual({ notified: 1 });
-    expect(renewed.deps.insertAlertEvent).toHaveBeenCalledTimes(1);
-    expect(renewed.deps.insertAlertEvent).toHaveBeenCalledWith(
+    expect(renewed.deps.claimAdminAlert).toHaveBeenCalledTimes(1);
+    expect(renewed.deps.claimAdminAlert).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({ payload: expect.objectContaining({ window_days: 3 }) }),
     );
   });
@@ -126,9 +128,7 @@ describe('runRoleExpiryReminderTick', () => {
     const result = await runRoleExpiryReminderTick(deps);
 
     expect(result).toEqual({ notified: 1 });
-    const adminWindows = deps.claimNotification.mock.calls
-      .filter(([claim]) => claim.recipient === 'admin')
-      .map(([claim]) => claim.windowDays);
+    const adminWindows = deps.claimAdminAlert.mock.calls.map(([claim]) => claim.windowDays);
     expect(adminWindows).toEqual([1]);
   });
 
@@ -178,6 +178,7 @@ describe('runRoleExpiryReminderTick', () => {
 
     expect(result).toEqual({ notified: 0 });
     expect(deps.claimNotification).not.toHaveBeenCalled();
+    expect(deps.claimAdminAlert).not.toHaveBeenCalled();
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'role_expirer.reminders_ok', severity: 'info' }),
     );
@@ -185,7 +186,7 @@ describe('runRoleExpiryReminderTick', () => {
 
   it('emits a failure diagnostic and rethrows when a dep fails', async () => {
     const { deps } = makeDeps({ grants: [grantExpiringIn(2.5 * DAY_MS)] });
-    deps.insertAlertEvent.mockRejectedValueOnce(new Error('db down'));
+    deps.claimAdminAlert.mockRejectedValueOnce(new Error('db down'));
 
     await expect(runRoleExpiryReminderTick(deps)).rejects.toThrow('db down');
     expect(deps.diag.emit).toHaveBeenCalledWith(
