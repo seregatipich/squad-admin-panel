@@ -229,3 +229,78 @@ describe('startJournaldForwarder.drain()', () => {
     expect(xadd).not.toHaveBeenCalled();
   });
 });
+
+describe('journald forwarder resilience', () => {
+  function makeChild() {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      child.exitCode = 0;
+      child.emit('exit', 0, 'SIGTERM');
+      return true;
+    });
+    return child;
+  }
+
+  it('restarts journalctl with backoff after an unexpected exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = makeChild();
+      const second = makeChild();
+      const spawnFn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second) as never;
+      const handle = startJournaldForwarder({ redis: { xadd: vi.fn() } as never, log, spawnFn });
+      expect(handle.isRunning()).toBe(true);
+
+      first.emit('exit', 1, null);
+      expect(handle.isRunning()).toBe(false);
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+      expect(handle.isRunning()).toBe(true);
+
+      handle.stop();
+      expect(second.kill).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restart after stop() cancels a pending restart', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = makeChild();
+      const spawnFn = vi.fn().mockReturnValue(first) as never;
+      const handle = startJournaldForwarder({ redis: { xadd: vi.fn() } as never, log, spawnFn });
+      first.emit('exit', 1, null);
+      handle.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('derives the forwarded id from the journald cursor so replays deduplicate', async () => {
+    const xadd = vi.fn().mockResolvedValue('1-0');
+    const redis = { xadd } as never;
+    const line = JSON.stringify({ __CURSOR: 's=abc;i=1', MESSAGE: SAMPLE_DIAG_INNER });
+
+    await handleJournaldLine(line, { redis, log });
+    await handleJournaldLine(line, { redis, log });
+
+    const idOf = (call: unknown[]) => call[call.indexOf('id') + 1];
+    expect(idOf(xadd.mock.calls[0] ?? [])).toBe(idOf(xadd.mock.calls[1] ?? []));
+  });
+});
