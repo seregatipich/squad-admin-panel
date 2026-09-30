@@ -1,3 +1,4 @@
+import { CONTAINER_METRICS_MAXLEN, CONTAINER_METRICS_TTL_SECONDS } from '@squad/shared-config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectContainerMetrics, getRunningServerIds, runSampler } from '../src/sampler.js';
 
@@ -9,11 +10,22 @@ interface XaddCall {
 function makeRedis(getResponses?: Record<string, string | null>): {
   calls: XaddCall[];
   xadd: (...a: unknown[]) => Promise<string>;
-  get: (key: string) => Promise<string | null>;
+  mget: (...keys: string[]) => Promise<Array<string | null>>;
+  mgetCalls: string[][];
+  expire: (key: string, seconds: number) => Promise<number>;
+  expireCalls: Array<[string, number]>;
 } {
+  const mgetCalls: string[][] = [];
+  const expireCalls: Array<[string, number]> = [];
   const calls: XaddCall[] = [];
   return {
     calls,
+    mgetCalls,
+    expireCalls,
+    expire: async (key: string, seconds: number) => {
+      expireCalls.push([key, seconds]);
+      return 1;
+    },
     xadd: async (...args: unknown[]) => {
       const [stream] = args as [string, ...unknown[]];
       const tail = (args as unknown[]).slice(5);
@@ -24,7 +36,10 @@ function makeRedis(getResponses?: Record<string, string | null>): {
       calls.push({ stream: String(stream), entries });
       return '0-0';
     },
-    get: async (key: string) => getResponses?.[key] ?? null,
+    mget: async (...keys: string[]) => {
+      mgetCalls.push(keys);
+      return keys.map((key) => getResponses?.[key] ?? null);
+    },
   };
 }
 
@@ -112,13 +127,18 @@ describe('runSampler', () => {
 describe('getRunningServerIds', () => {
   function makeScanRedis(data: Record<string, string>) {
     const keys = Object.keys(data);
+    const mgetCalls: string[][] = [];
     return {
       scan: async (cursor: string | number, ..._args: unknown[]): Promise<[string, string[]]> => {
         // Return all keys on first call, then '0' cursor to stop
         if (String(cursor) === '0') return ['0', keys];
         return ['0', []];
       },
-      get: async (key: string): Promise<string | null> => data[key] ?? null,
+      mget: async (...keys: string[]): Promise<Array<string | null>> => {
+        mgetCalls.push(keys);
+        return keys.map((key) => data[key] ?? null);
+      },
+      mgetCalls,
     };
   }
 
@@ -139,6 +159,25 @@ describe('getRunningServerIds', () => {
     });
     const ids = await getRunningServerIds(redis as never);
     expect(ids).toEqual(['aaa']);
+  });
+
+  it('reads every key of a scan page with a single MGET', async () => {
+    const redis = makeScanRedis({
+      'rcon:status:aaa': JSON.stringify({ state: 'connected' }),
+      'rcon:status:bbb': JSON.stringify({ state: 'connecting' }),
+      'rcon:status:ccc': JSON.stringify({ state: 'disconnected' }),
+    });
+    await getRunningServerIds(redis as never);
+    expect(redis.mgetCalls).toEqual([['rcon:status:aaa', 'rcon:status:bbb', 'rcon:status:ccc']]);
+  });
+
+  it('skips JSON values that are not objects', async () => {
+    const redis = makeScanRedis({
+      'rcon:status:aaa': 'null',
+      'rcon:status:bbb': '42',
+      'rcon:status:ccc': JSON.stringify({ state: 'connected' }),
+    });
+    expect(await getRunningServerIds(redis as never)).toEqual(['ccc']);
   });
 
   it('handles empty keys result', async () => {
@@ -224,7 +263,8 @@ describe('collectContainerMetrics', () => {
         xaddArgs.push(args);
         return '0-0';
       },
-      get: async () => null,
+      mget: async (...keys: string[]) => keys.map(() => null),
+      expire: async () => 1,
     };
     const bridge = {
       containerStats: vi.fn(async () => ({
@@ -240,7 +280,32 @@ describe('collectContainerMetrics', () => {
     // args: [streamKey, 'MAXLEN', '~', '2880', '*', 'v', json]
     expect(xaddArgs[0][1]).toBe('MAXLEN');
     expect(xaddArgs[0][2]).toBe('~');
-    expect(xaddArgs[0][3]).toBe('2880');
+    expect(xaddArgs[0][3]).toBe(String(CONTAINER_METRICS_MAXLEN));
+  });
+
+  it('reads all tickrates with one MGET and renews each stream TTL', async () => {
+    const redis = makeRedis({
+      'rcon:status:s1': JSON.stringify({ tickrate_rt: 40 }),
+      'rcon:status:s2': 'null',
+    });
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 1,
+        mem_used_bytes: 1,
+        mem_percent: 1,
+        pids: 1,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1', 's2'], log);
+    expect(redis.mgetCalls).toEqual([['rcon:status:s1', 'rcon:status:s2']]);
+    expect(redis.expireCalls).toEqual([
+      ['container:metrics:s1', CONTAINER_METRICS_TTL_SECONDS],
+      ['container:metrics:s2', CONTAINER_METRICS_TTL_SECONDS],
+    ]);
+    const second = JSON.parse(redis.calls[1].entries.find(([k]) => k === 'v')?.[1] ?? '');
+    expect(second.tickrate).toBeUndefined();
   });
 
   it('includes tickrate when rcon:status contains tickrate_rt', async () => {
@@ -285,7 +350,7 @@ describe('collectContainerMetrics', () => {
   it('tickrate is undefined when redis.get fails', async () => {
     const redis = makeRedis();
     // Override get to throw
-    redis.get = async () => {
+    redis.mget = async () => {
       throw new Error('redis down');
     };
     const bridge = {

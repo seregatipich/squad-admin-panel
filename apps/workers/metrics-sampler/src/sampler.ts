@@ -1,66 +1,91 @@
 import type { BridgeClient } from '@squad/bridge-client';
-import { HOST_METRICS_MAXLEN, HOST_METRICS_STREAM, packHostMetrics } from '@squad/shared-config';
+import {
+  CONTAINER_METRICS_MAXLEN,
+  CONTAINER_METRICS_TTL_SECONDS,
+  HOST_METRICS_MAXLEN,
+  HOST_METRICS_STREAM,
+  packHostMetrics,
+} from '@squad/shared-config';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 
 export interface RunSamplerOpts {
   bridge: Pick<BridgeClient, 'hostMetrics' | 'containerStats'>;
-  redis: Pick<Redis, 'xadd' | 'scan' | 'get'>;
+  redis: Pick<Redis, 'xadd' | 'expire' | 'scan' | 'mget'>;
   log: Logger;
   intervalMs?: number;
 }
 
-export async function getRunningServerIds(redis: Pick<Redis, 'scan' | 'get'>): Promise<string[]> {
+const RCON_STATUS_PREFIX = 'rcon:status:';
+
+/** Parses a stored `rcon:status:<id>` value; anything but a JSON object yields `null`. */
+function parseRconStatus(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lists the servers whose RCON supervisor is connected or connecting. Each SCAN
+ * page is read with a single MGET instead of one GET per key.
+ */
+export async function getRunningServerIds(redis: Pick<Redis, 'scan' | 'mget'>): Promise<string[]> {
   const ids: string[] = [];
   let cursor = '0';
   do {
-    const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'rcon:status:*', 'COUNT', 100);
+    const [nextCursor, keys] = await redis.scan(
+      cursor,
+      'MATCH',
+      `${RCON_STATUS_PREFIX}*`,
+      'COUNT',
+      100,
+    );
     cursor = nextCursor;
-    for (const key of keys) {
-      const raw = await redis.get(key);
-      if (!raw) continue;
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed.state === 'connected' || parsed.state === 'connecting') {
-          ids.push(key.replace('rcon:status:', ''));
-        }
-      } catch {
-        // skip malformed
+    if (keys.length === 0) continue;
+    const values = await redis.mget(...keys);
+    keys.forEach((key, index) => {
+      const state = parseRconStatus(values[index] ?? null)?.state;
+      if (state === 'connected' || state === 'connecting') {
+        ids.push(key.slice(RCON_STATUS_PREFIX.length));
       }
-    }
+    });
   } while (cursor !== '0');
   return ids;
 }
 
 export async function collectContainerMetrics(
   bridge: Pick<BridgeClient, 'containerStats'>,
-  redis: Pick<Redis, 'xadd' | 'get'>,
+  redis: Pick<Redis, 'xadd' | 'expire' | 'mget'>,
   serverIds: string[],
   log: Logger,
 ): Promise<void> {
-  for (const serverId of serverIds) {
+  if (serverIds.length === 0) return;
+
+  // One round trip for every server's tickrate; a failed read only drops tickrate.
+  const statuses = await redis
+    .mget(...serverIds.map((serverId) => `${RCON_STATUS_PREFIX}${serverId}`))
+    .catch(() => serverIds.map(() => null));
+
+  for (const [index, serverId] of serverIds.entries()) {
     try {
       const stats = await bridge.containerStats({ name: `squad-${serverId}` });
       if (!stats.found) continue;
 
-      let tickrate: number | undefined;
-      try {
-        const rconRaw = await redis.get(`rcon:status:${serverId}`);
-        if (rconRaw) {
-          const parsed = JSON.parse(rconRaw);
-          if (typeof parsed.tickrate_rt === 'number') {
-            tickrate = parsed.tickrate_rt;
-          }
-        }
-      } catch {
-        /* non-critical */
-      }
+      const tickrateRt = parseRconStatus(statuses[index] ?? null)?.tickrate_rt;
+      const tickrate = typeof tickrateRt === 'number' ? tickrateRt : undefined;
 
+      const streamKey = `container:metrics:${serverId}`;
       await redis.xadd(
-        `container:metrics:${serverId}`,
+        streamKey,
         'MAXLEN',
         '~',
-        '2880',
+        String(CONTAINER_METRICS_MAXLEN),
         '*',
         'v',
         JSON.stringify({
@@ -72,6 +97,7 @@ export async function collectContainerMetrics(
           tickrate,
         }),
       );
+      await redis.expire(streamKey, CONTAINER_METRICS_TTL_SECONDS);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.debug({ err: msg, serverId }, 'container metrics sample failed');

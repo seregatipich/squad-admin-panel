@@ -83,6 +83,7 @@ export class RconClient {
   private readonly pending = new Map<number, PendingCommand>();
   private keepaliveTimer?: NodeJS.Timeout;
   private closed = false;
+  private lastCommandAt = 0;
   private execQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: RconClientOptions) {}
@@ -154,6 +155,7 @@ export class RconClient {
   private async execNow(command: string): Promise<string> {
     if (this.closed) throw new Error('rcon closed');
     if (!this.socket) throw new Error('rcon not connected');
+    this.lastCommandAt = Date.now();
     const id = ++this.nextId;
     const probeId = ++this.nextId;
 
@@ -264,6 +266,8 @@ export class RconClient {
     const interval = this.opts.keepaliveMs ?? 90_000;
     this.keepaliveTimer = setInterval(() => {
       if (!this.socket) return;
+      // Any command already keeps the connection alive; only an idle one needs the ping.
+      if (Date.now() - this.lastCommandAt < interval) return;
       this.exec('ShowServerInfo').catch((err) =>
         this.opts.log.warn({ err: (err as Error).message }, 'keepalive failed'),
       );

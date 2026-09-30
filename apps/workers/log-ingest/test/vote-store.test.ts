@@ -266,4 +266,30 @@ describe('handleVote', () => {
       await db.delete(players).where(eq(players.id, recentId));
     }
   });
+
+  it('resolves all ballots with a constant number of queries instead of one round trip per voter', async () => {
+    const voter = (n: number) => ({
+      eosId: null,
+      steamId64: null,
+      name: `Stranger${n}`,
+    });
+    const at = new Date().toISOString();
+    const ballots = [
+      ...makeCommand().ballots,
+      ...Array.from({ length: 12 }, (_, n) => ({
+        voter: voter(n),
+        choice: 'yes' as const,
+        votedAt: at,
+      })),
+    ];
+    const select = vi.spyOn(db, 'select');
+    try {
+      const result = await handleVote(db, null, makeCommand({ ballots }));
+      expect(result.ballotCount).toBe(2);
+      // initiator (1) + ids (1) + canonical names (1) + name history (1)
+      expect(select.mock.calls.length).toBeLessThanOrEqual(4);
+    } finally {
+      select.mockRestore();
+    }
+  });
 });
