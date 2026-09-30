@@ -1,12 +1,13 @@
 import { and, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
+import { z } from 'zod';
 import type { DatabaseClient } from './client.js';
 import { alertEvents, alertRules, playerLinks } from './schema/index.js';
 
-interface AltBanAlertRuleConfig {
-  eventKind?: string;
-  severity?: 'info' | 'warning' | 'critical';
-}
+const altBanAlertRuleConfigSchema = z.object({
+  eventKind: z.string().optional(),
+  severity: z.enum(['info', 'warning', 'critical']).optional(),
+});
 
 /** Minimal publisher contract used by the shared ALT-7 alert emitter. */
 export interface AltBanAlertPublisher {
@@ -87,19 +88,30 @@ export async function raiseAltBanAlert(
 
   let raised = 0;
   for (const rule of rules) {
-    const config = rule.config as AltBanAlertRuleConfig;
+    // A malformed or malicious `config` (e.g. an invalid `severity` that would
+    // violate `alert_events_severity_chk`) must skip only this rule, never
+    // abort the loop and silently drop every other enabled rule's alert
+    // (#1094).
+    const parsed = altBanAlertRuleConfigSchema.safeParse(rule.config);
+    if (!parsed.success) continue;
+    const config = parsed.data;
     if (config.eventKind !== 'alt.ban_evasion_suspected') continue;
-    await db.insert(alertEvents).values({
-      id: uuidv7(),
-      ruleId: rule.id,
-      severity: config.severity ?? 'warning',
-      payload,
-    });
-    await publisher.publish(
-      'live-bus',
-      JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
-    );
-    raised++;
+    try {
+      await db.insert(alertEvents).values({
+        id: uuidv7(),
+        ruleId: rule.id,
+        severity: config.severity ?? 'warning',
+        payload,
+      });
+      await publisher.publish(
+        'live-bus',
+        JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
+      );
+      raised++;
+    } catch {
+      // Best-effort per rule; a failure here (insert or publish) must not
+      // prevent the remaining enabled rules from raising their own alerts.
+    }
   }
   return raised;
 }

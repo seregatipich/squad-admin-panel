@@ -193,16 +193,14 @@ export async function recomputeLeaderboardPeriod(
         ${presenceFilter}
         GROUP BY player_id, server_id
       ),
-      matches_agg AS (
+      match_agg AS (
+        -- matches_played and the kill/death/teamkill/revive sums are both
+        -- derived from the same match_players/matches join with the same
+        -- grouping, so computing them as one CTE instead of two (matches_agg,
+        -- combat_agg) halves this join and removes the FULL OUTER JOIN that
+        -- used to reconcile them (#1108).
         SELECT mp.player_id, m.server_id,
-               COUNT(DISTINCT m.id)::int AS matches_played
-        FROM match_players mp
-        JOIN matches m ON m.id = mp.match_id
-        ${matchesFilter}
-        GROUP BY mp.player_id, m.server_id
-      ),
-      combat_agg AS (
-        SELECT mp.player_id, m.server_id,
+               COUNT(DISTINCT m.id)::int AS matches_played,
                COALESCE(SUM(mp.kills), 0)::int AS kills,
                COALESCE(SUM(mp.deaths), 0)::int AS deaths,
                COALESCE(SUM(mp.teamkills), 0)::int AS teamkills,
@@ -214,22 +212,19 @@ export async function recomputeLeaderboardPeriod(
       ),
       combined AS (
         SELECT
-          COALESCE(p.player_id, mm.player_id, c.player_id) AS player_id,
-          COALESCE(p.server_id, mm.server_id, c.server_id) AS server_id,
+          COALESCE(p.player_id, mm.player_id) AS player_id,
+          COALESCE(p.server_id, mm.server_id) AS server_id,
           COALESCE(p.online_seconds, 0) AS online_seconds,
           COALESCE(p.boost_seconds, 0) AS boost_seconds,
           COALESCE(p.seed_seconds, 0) AS seed_seconds,
           COALESCE(mm.matches_played, 0) AS matches_played,
-          COALESCE(c.kills, 0) AS kills,
-          COALESCE(c.deaths, 0) AS deaths,
-          COALESCE(c.teamkills, 0) AS teamkills,
-          COALESCE(c.revives, 0) AS revives
+          COALESCE(mm.kills, 0) AS kills,
+          COALESCE(mm.deaths, 0) AS deaths,
+          COALESCE(mm.teamkills, 0) AS teamkills,
+          COALESCE(mm.revives, 0) AS revives
         FROM presence_agg p
-        FULL OUTER JOIN matches_agg mm
+        FULL OUTER JOIN match_agg mm
           ON p.player_id = mm.player_id AND p.server_id = mm.server_id
-        FULL OUTER JOIN combat_agg c
-          ON COALESCE(p.player_id, mm.player_id) = c.player_id
-         AND COALESCE(p.server_id, mm.server_id) = c.server_id
       ),
       per_server AS (
         SELECT player_id, server_id, online_seconds, boost_seconds, seed_seconds,
@@ -273,9 +268,15 @@ export async function recomputeLeaderboardPeriod(
              ELSE all_rows.kills::numeric / all_rows.deaths END,
         all_rows.matches_played,
         all_rows.boost_seconds,
-        (settings.k_online * all_rows.online_seconds
-          + settings.k_boost * all_rows.boost_seconds
-          + settings.k_seed * all_rows.seed_seconds)::numeric
+        -- k_online/k_boost/k_seed are points-per-hour (accrual.ts:
+        -- round(k * seconds / 3600)); dividing by 3600 here keeps
+        -- bonus_points in the same unit as the real bonus_transactions
+        -- ledger it is meant to mirror, instead of overstating it 3600x (#1103).
+        ROUND(
+          (settings.k_online * all_rows.online_seconds
+            + settings.k_boost * all_rows.boost_seconds
+            + settings.k_seed * all_rows.seed_seconds)::numeric / 3600
+        )
       FROM all_rows CROSS JOIN settings
       RETURNING player_id
     `;
