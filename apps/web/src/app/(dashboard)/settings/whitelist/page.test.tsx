@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WhitelistSettingsPage from './page';
 
 const TEST_TIMEOUT_MS = 15_000;
 
-function mockFetch(opts: { permissions?: string[] } = {}) {
+function mockFetch(
+  opts: { permissions?: string[]; importReply?: { status: number; body: unknown } } = {},
+) {
   const permissions = opts.permissions ?? ['whitelist:view', 'whitelist:edit'];
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.includes('/api/v1/whitelist/applications/settings')) {
       return Promise.resolve(
@@ -21,11 +23,19 @@ function mockFetch(opts: { permissions?: string[] } = {}) {
         }),
       );
     }
+    if (url.endsWith('/api/v1/whitelist/import') && init?.method === 'POST' && opts.importReply) {
+      return Promise.resolve(
+        new Response(JSON.stringify(opts.importReply.body), { status: opts.importReply.status }),
+      );
+    }
     if (url.endsWith('/api/v1/whitelist/settings')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ whitelist_role_id: null, whitelist_role_name: null }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ whitelist_role_id: 'role-vip', whitelist_role_name: 'VIP' }),
+          {
+            status: 200,
+          },
+        ),
       );
     }
     if (url.endsWith('/api/v1/roles')) {
@@ -84,6 +94,46 @@ describe('WhitelistSettingsPage', () => {
       );
       render(<WhitelistSettingsPage />);
       expect(await screen.findByLabelText('Роль для whitelist')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'explains a too_many_rows import failure in Russian with the row limit',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({
+          importReply: { status: 413, body: { error: 'too_many_rows', max_rows: 500 } },
+        }),
+      );
+      render(<WhitelistSettingsPage />);
+      const textarea = await screen.findByRole('textbox', { name: /csv/i });
+      fireEvent.change(textarea, { target: { value: 'steam_id64\n76561198000000001' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Импортировать' }));
+
+      expect(
+        await screen.findByText('Ошибка импорта: в файле слишком много строк (максимум 500)'),
+      ).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'never prints an object error body as [object Object]',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({ importReply: { status: 400, body: { error: { code: 'x' } } } }),
+      );
+      render(<WhitelistSettingsPage />);
+      const textarea = await screen.findByRole('textbox', { name: /csv/i });
+      fireEvent.change(textarea, { target: { value: 'a' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Импортировать' }));
+
+      expect(
+        await screen.findByText('Ошибка импорта: Сервер вернул ошибку (код 400).'),
+      ).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

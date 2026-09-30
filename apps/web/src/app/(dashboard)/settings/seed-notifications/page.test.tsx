@@ -117,7 +117,7 @@ describe('SeedNotificationsPage', () => {
     render(<SeedNotificationsPage />);
     const checkbox = await screen.findByRole('checkbox', { name: 'Web Push' });
     fireEvent.click(checkbox);
-    expect(await screen.findByText('HTTP 503')).toBeInTheDocument();
+    expect(await screen.findByText('Сервер вернул ошибку (код 503).')).toBeInTheDocument();
   });
 
   it('shows a load error when the server list cannot be fetched', async () => {
@@ -132,7 +132,7 @@ describe('SeedNotificationsPage', () => {
       ),
     );
     render(<SeedNotificationsPage />);
-    expect(await screen.findByText('HTTP 503')).toBeInTheDocument();
+    expect(await screen.findByText('Сервер вернул ошибку (код 503).')).toBeInTheDocument();
   });
 
   it('shows a load error when subscriptions cannot be fetched', async () => {
@@ -153,6 +153,6 @@ describe('SeedNotificationsPage', () => {
       }),
     );
     render(<SeedNotificationsPage />);
-    expect(await screen.findByText('HTTP 503')).toBeInTheDocument();
+    expect(await screen.findByText('Сервер вернул ошибку (код 503).')).toBeInTheDocument();
   });
 });

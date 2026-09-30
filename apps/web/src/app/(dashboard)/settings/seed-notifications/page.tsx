@@ -12,6 +12,7 @@ import {
   PageHeader,
   Skeleton,
 } from '@/components/ui';
+import { describeLoadError } from '@/lib/load-error';
 
 type SeedChannel = 'email' | 'webpush';
 
@@ -55,7 +56,7 @@ export default function SeedNotificationsPage() {
       setServers(serverBody.items);
       setSubscriptions(subscriptionBody.subscriptions);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeLoadError(err));
     } finally {
       setLoading(false);
     }
@@ -88,7 +89,7 @@ export default function SeedNotificationsPage() {
           : current.filter((item) => !(item.server_id === serverId && item.channel === channel)),
       );
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeLoadError(err));
     } finally {
       setBusy(null);
     }
