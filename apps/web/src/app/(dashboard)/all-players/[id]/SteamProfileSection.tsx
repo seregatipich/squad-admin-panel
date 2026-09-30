@@ -36,6 +36,7 @@ const DASH = '—';
 function refreshErrorMessage(status: number): string {
   if (status === 403) return 'Недостаточно прав';
   if (status === 409) return 'У игрока нет SteamID';
+  if (status === 429) return 'Слишком много обновлений, попробуйте через минуту';
   if (status === 502) return 'Steam недоступен, попробуйте позже';
   if (status === 503) return 'Steam API не настроен';
   return `Ошибка HTTP ${status}`;

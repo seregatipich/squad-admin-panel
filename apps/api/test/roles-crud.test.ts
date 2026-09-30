@@ -1,5 +1,5 @@
 import * as schema from '@squad/db/schema';
-import { players, rolePermissions, roles } from '@squad/db/schema';
+import { adminsCfgSyncOutbox, players, rolePermissions, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -311,5 +311,111 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
       headers: { cookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describeIfDb('roles HTTP — audit #71', () => {
+  const OWNER_STEAM = testSteamId(718001);
+  let h: IntegrationHarness;
+  let serverId: string;
+
+  beforeAll(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM },
+      bridge: makeFakeBridge(),
+    });
+    serverId = uuidv7();
+    await h.db
+      .insert(servers)
+      .values({ id: serverId, displayName: 'Roles sync target', slug: `roles-sync-${serverId}` });
+  });
+
+  afterEach(() => {
+    if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
+  });
+
+  afterAll(async () => {
+    await h?.cleanup();
+  });
+
+  async function outboxCount(): Promise<number> {
+    const rows = await h.db
+      .select({ id: adminsCfgSyncOutbox.id })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.serverId, serverId));
+    return rows.length;
+  }
+
+  async function createRoleViaApi(name: string, squadPermissions: string[] = []) {
+    return h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie: await loginAsOwner(h) },
+      payload: { name, color: 'blue', squad_permissions: squadPermissions },
+    });
+  }
+
+  it('POST collapses duplicate squad_permissions instead of a false role_name_taken (#273)', async () => {
+    const res = await createRoleViaApi('DupSquadPerms', ['kick', 'kick', 'ban']);
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { squad_permissions: string[] }).squad_permissions).toEqual([
+      'ban',
+      'kick',
+    ]);
+  });
+
+  it('PUT collapses duplicate squad_permissions too (#273)', async () => {
+    const created = await createRoleViaApi('DupSquadPermsPut');
+    const { id } = created.json() as { id: string };
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/roles/${id}`,
+      headers: { cookie: await loginAsOwner(h) },
+      payload: { squad_permissions: ['chat', 'chat'] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { squad_permissions: string[] }).squad_permissions).toEqual(['chat']);
+  });
+
+  it('GET /roles/:id returns the one role with its counts (#275)', async () => {
+    const created = await createRoleViaApi('SingleLookup', ['kick']);
+    const { id } = created.json() as { id: string };
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/roles/${id}`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      id,
+      name: 'SingleLookup',
+      squad_permissions: ['kick'],
+      assigned_users_count: 0,
+    });
+  });
+
+  it('PUT enqueues an Admins.cfg sync only when name or squad_permissions change (#276)', async () => {
+    const created = await createRoleViaApi('SyncScope', ['kick']);
+    const { id } = created.json() as { id: string };
+    const put = async (payload: Record<string, unknown>) => {
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/roles/${id}`,
+        headers: { cookie: await loginAsOwner(h) },
+        payload,
+      });
+      expect(res.statusCode).toBe(200);
+    };
+
+    const start = await outboxCount();
+    await put({ color: 'red', description: 'cosmetic only' });
+    await put({ can_manage_issues: true });
+    await put({ name: 'SyncScope' });
+    expect(await outboxCount()).toBe(start);
+
+    await put({ name: 'SyncScopeRenamed' });
+    expect(await outboxCount()).toBe(start + 1);
+    await put({ squad_permissions: ['kick', 'ban'] });
+    expect(await outboxCount()).toBe(start + 2);
   });
 });

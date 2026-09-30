@@ -9,7 +9,7 @@ import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
 import { enforceModerationAction, type PlayerIdentity } from '../lib/moderation-enforce.js';
 import { panelGuard } from '../lib/panel-guard.js';
-import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
+import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
 import { parseStoredRoster } from '../lib/roster.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
@@ -37,7 +37,7 @@ const bulkResolveBody = z.object({
   resolution_note: z.string().trim().min(1).max(RESOLUTION_NOTE_MAX),
 });
 
-interface ModerationActionApiRow {
+interface ModerationActionApiRow extends Record<string, unknown> {
   id: string;
   action_type: string;
   reason: string | null;
@@ -396,13 +396,13 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const rows = (await app.db.execute(sql`
+      const rows = await app.db.execute<ModerationActionApiRow>(sql`
         SELECT ${ACTION_ROW_SELECT}
         FROM moderation_actions ma
         LEFT JOIN players ap ON ap.id = ma.author_player_id
         LEFT JOIN servers s ON s.id = ma.server_id
         WHERE ma.id = ${insertedId}
-      `)) as unknown as ModerationActionApiRow[];
+      `);
       const row = rows[0];
       return row ? serializeActionRow(row) : { ok: true };
     },
@@ -422,14 +422,14 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'report_not_found' };
       }
 
-      const rows = (await app.db.execute(sql`
+      const rows = await app.db.execute<ModerationActionApiRow>(sql`
         SELECT ${ACTION_ROW_SELECT}
         FROM moderation_actions ma
         LEFT JOIN players ap ON ap.id = ma.author_player_id
         LEFT JOIN servers s ON s.id = ma.server_id
         WHERE ma.report_id = ${report.id}
         ORDER BY ma.created_at DESC, ma.id DESC
-      `)) as unknown as ModerationActionApiRow[];
+      `);
 
       return { actions: rows.map(serializeActionRow) };
     },
@@ -456,7 +456,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
       const outcome = await notifyReporter(app.db, app.redis, {
         serverId: report.serverId,
         reporterPlayerId: report.reporterPlayerId,
-        template: req.body.template as ReporterNotifyTemplate,
+        template: req.body.template,
         // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
         actorPlayerId: req.user!.playerId,
       });

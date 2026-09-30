@@ -324,4 +324,27 @@ describe('GET /api/v1/players — sorting and filters', () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/players?sort=nickname' });
     expect(res.statusCode).toBe(401);
   });
+
+  it('treats LIKE metacharacters in ?q= literally (#238)', async () => {
+    expect(await order('q=%25')).toEqual([]);
+    expect(await order('q=___')).toEqual([]);
+    expect(await order('q=a_p')).toEqual([]);
+    expect(await order('q=lph')).toEqual(['Alphazz']);
+  });
+
+  it('treats LIKE metacharacters in /players/search literally (#238)', async () => {
+    const search = async (q: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/search?q=${encodeURIComponent(q)}`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { items: Array<{ canonical_name: string }> };
+      return body.items.map((i) => i.canonical_name).filter((n) => FIXTURE_NAMES.has(n));
+    };
+    expect(await search('___')).toEqual([]);
+    expect(await search('%%%')).toEqual([]);
+    expect(await search('ravo')).toEqual(['Bravozz']);
+  });
 });

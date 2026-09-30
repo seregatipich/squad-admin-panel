@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
+import { players, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import {
   isAdminsCfgSafeRoleName,
   isRoleColor,
@@ -12,6 +12,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { uniqueViolationConstraint } from '../lib/pg-errors.js';
 import {
   buildRolePermissionContext,
   invalidateAllPermissionCaches,
@@ -33,9 +34,15 @@ const roleNameSchema = z
   .min(1)
   .max(64)
   .refine(isAdminsCfgSafeRoleName, { message: 'role_name_invalid' });
+/**
+ * Squad permission keys of a role, deduplicated: `role_squad_permissions` is
+ * keyed on (role_id, key), so a repeated key would otherwise surface as a
+ * unique violation.
+ */
 const squadPermissionsArraySchema = z
   .array(z.string().refine(isSquadPermissionKey, { message: 'unknown squad permission key' }))
-  .max(SQUAD_PERMISSIONS.length);
+  .max(SQUAD_PERMISSIONS.length)
+  .transform((keys) => [...new Set(keys)]);
 
 const createBody = z.object({
   name: roleNameSchema,
@@ -96,7 +103,12 @@ interface RoleWithCount extends Record<string, unknown> {
   assigned_users_count: number;
 }
 
-async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]> {
+/**
+ * Roles with their squad permissions and assigned-player counts, system roles
+ * first. `roleId` narrows the read to that one role, so single-role responses
+ * do not aggregate every role.
+ */
+async function listRolesWithCounts(db: DatabaseClient, roleId?: string): Promise<RoleWithCount[]> {
   const rows = await db.execute<RoleWithCount>(sql`
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
       r.panel_access, r.can_view_ips, r.can_assign_roles, r.can_edit_roles, r.can_manage_issues,
@@ -108,15 +120,21 @@ async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]>
       ) AS squad_permissions,
       (SELECT count(*)::int FROM players p WHERE p.role_id = r.id) AS assigned_users_count
     FROM roles r
+    ${roleId === undefined ? sql`` : sql`WHERE r.id = ${roleId}`}
     ORDER BY r.is_system_role DESC, r.name ASC
   `);
-  return rows as unknown as RoleWithCount[];
+  return [...rows];
+}
+
+/** True when `err` is the unique violation of the role name (`roles_name_key`). */
+function isRoleNameTaken(err: unknown): boolean {
+  return uniqueViolationConstraint(err) === 'roles_name_key';
 }
 
 /** One role as `GET /api/v1/roles/:id` returns it; also the audit before/after snapshot. */
 async function loadRoleSnapshot(db: DatabaseClient, id: string): Promise<RoleWithCount | null> {
-  const all = await listRolesWithCounts(db);
-  return all.find((r) => r.id === id) ?? null;
+  const [role] = await listRolesWithCounts(db, id);
+  return role ?? null;
 }
 
 function ensureFlagDependency(body: {
@@ -145,8 +163,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/roles/:id',
     { schema: { params: idParam }, config: { permissions: ['role:view'], audit: false } },
     async (req, reply) => {
-      const all = await listRolesWithCounts(app.db);
-      const found = all.find((r) => r.id === req.params.id);
+      const [found] = await listRolesWithCounts(app.db, req.params.id);
       if (!found) {
         reply.code(404);
         return { error: 'role_not_found' };
@@ -256,10 +273,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           });
         });
       } catch (err) {
-        if (
-          (err as { code?: string }).code === '23505' ||
-          (err as { cause?: { code?: string } }).cause?.code === '23505'
-        ) {
+        if (isRoleNameTaken(err)) {
           reply.code(409);
           return { error: 'role_name_taken' };
         }
@@ -416,18 +430,22 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
               );
             }
           }
-          await publishAdminsCfgSyncForAllServers(tx, {
-            reason: 'role.update',
-            actor_player_id: req.user?.playerId ?? null,
-            enqueued_at: new Date().toISOString(),
-            request_id: req.id,
-          });
+          // Admins.cfg carries only a role's name and squad permissions, so
+          // colour, description and panel flags never need a config sync.
+          const affectsAdminsCfg =
+            (req.body.name !== undefined && req.body.name !== roleRow.name) ||
+            req.body.squad_permissions !== undefined;
+          if (affectsAdminsCfg) {
+            await publishAdminsCfgSyncForAllServers(tx, {
+              reason: 'role.update',
+              actor_player_id: req.user?.playerId ?? null,
+              enqueued_at: new Date().toISOString(),
+              request_id: req.id,
+            });
+          }
         });
       } catch (err) {
-        if (
-          (err as { code?: string }).code === '23505' ||
-          (err as { cause?: { code?: string } }).cause?.code === '23505'
-        ) {
+        if (isRoleNameTaken(err)) {
           reply.code(409);
           return { error: 'role_name_taken' };
         }

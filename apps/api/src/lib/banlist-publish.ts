@@ -10,7 +10,11 @@ export type BanlistPublishScope = 'all_active' | 'permanent_only';
 /** Matches the RCON-worker `AdminBan` duration syntax (see commands.ts). */
 const BAN_LENGTH_PATTERN = /^(\d+)([smhdwMy])?$/;
 
-const UNIT_MILLISECONDS: Record<string, number> = {
+/**
+ * Milliseconds per `AdminBan` duration unit. Exported so the SQL prefilter in
+ * `routes/public-banlist.ts` computes expiry with exactly the same table.
+ */
+export const BAN_LENGTH_UNIT_MILLISECONDS: Readonly<Record<string, number>> = {
   s: 1_000,
   m: 60_000,
   h: 3_600_000,

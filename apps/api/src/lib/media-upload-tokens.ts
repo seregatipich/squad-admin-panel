@@ -50,7 +50,10 @@ export async function loadUploadTokenByRaw(
  * uploads racing on the same token exactly one can observe a returned row.
  * `now()` is evaluated by Postgres so the expiry clock is the database's.
  */
-export async function redeemUploadToken(db: DatabaseClient, tokenId: string): Promise<boolean> {
+export async function redeemUploadToken(
+  db: Pick<DatabaseClient, 'update'>,
+  tokenId: string,
+): Promise<boolean> {
   const claimed = await db
     .update(mediaUploadTokens)
     .set({ usedAt: sql`now()` })

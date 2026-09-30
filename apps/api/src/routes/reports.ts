@@ -356,23 +356,27 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      // The report and its evidence rows commit together: an evidence insert
+      // that fails (media deleted since the check above) leaves no orphan
+      // report behind, so a client retry cannot create a duplicate.
       const reportId = uuidv7();
-      await app.db.insert(playerReports).values({
-        id: reportId,
-        serverId: server_id,
-        reporterPlayerId: actorId,
-        targetPlayerId: target_player_id,
-        targetRaw: null,
-        body,
-        source: 'ui',
-        status: 'pending',
+      await app.db.transaction(async (tx) => {
+        await tx.insert(playerReports).values({
+          id: reportId,
+          serverId: server_id,
+          reporterPlayerId: actorId,
+          targetPlayerId: target_player_id,
+          targetRaw: null,
+          body,
+          source: 'ui',
+          status: 'pending',
+        });
+        if (evidenceIds.length > 0) {
+          await tx
+            .insert(reportEvidence)
+            .values(evidenceIds.map((mediaFileId) => ({ reportId, mediaFileId })));
+        }
       });
-
-      if (evidenceIds.length > 0) {
-        await app.db
-          .insert(reportEvidence)
-          .values(evidenceIds.map((mediaFileId) => ({ reportId, mediaFileId })));
-      }
 
       const created = await loadReport(reportId);
       if (!created) throw new Error('player_reports insert returned no row');
@@ -430,6 +434,12 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         }
         if (req.body.status === 'resolved' || req.body.status === 'rejected') {
           updates.resolvedAt = new Date();
+        } else {
+          // Reopening (back to pending/in_review) un-resolves the report, and
+          // back to pending also un-claims it, so the row never pairs an open
+          // status with a stale resolution/claim timestamp.
+          updates.resolvedAt = null;
+          if (req.body.status === 'pending') updates.claimedAt = null;
         }
       }
       if (req.body.resolution_note !== undefined) {
@@ -449,8 +459,9 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
       if (updates.status !== undefined && existing.reporterPlayerId) {
         try {
           await recomputeReporterStats(app.db, app.redis, existing.reporterPlayerId);
-        } catch {
+        } catch (err) {
           recomputeFailed = true;
+          req.log.warn({ err, reportId: existing.id }, 'report: reporter stats recompute failed');
         }
       }
 
@@ -462,9 +473,11 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
       const after = serializeReport(updated, evidence);
 
       // Best-effort reporter notification on claim/resolve/reject (REPORT-3,
-      // #113 P2). Never blocks or fails the PATCH — notify errors are only
-      // recorded in the audit context.
+      // #113 P2). Never blocks or fails the PATCH — a notify error is logged
+      // and recorded in the audit context as `notify_failed`, distinct from
+      // `notified: false` when no notification was due.
       let notified = false;
+      let notifyFailed = false;
       const statusChanged = updates.status !== undefined;
       const notifyTemplate: 'in_review' | 'resolved' | null =
         updates.status === 'in_review'
@@ -481,8 +494,9 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
             actorPlayerId: req.user.playerId,
           });
           notified = outcome.notified;
-        } catch {
-          notified = false;
+        } catch (err) {
+          notifyFailed = true;
+          req.log.warn({ err, reportId: existing.id }, 'report: reporter notification failed');
         }
       }
 
@@ -499,6 +513,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
           method: req.method,
           url: req.url,
           notified,
+          notify_failed: notifyFailed,
           recompute_failed: recomputeFailed,
         },
         statusCode: reply.statusCode,

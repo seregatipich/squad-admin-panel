@@ -106,16 +106,18 @@ const publicClansRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const members = await app.db
-        .select({ nickname: players.canonicalName, role: clanMembers.memberRole })
+        .select({
+          playerId: clanMembers.playerId,
+          nickname: players.canonicalName,
+          role: clanMembers.memberRole,
+        })
         .from(clanMembers)
         .innerJoin(players, eq(players.id, clanMembers.playerId))
         .where(eq(clanMembers.clanId, clan.id))
         .orderBy(asc(clanMembers.joinedAt), asc(players.canonicalName));
-      const memberIds = await app.db
-        .select({ playerId: clanMembers.playerId })
-        .from(clanMembers)
-        .where(eq(clanMembers.clanId, clan.id));
-      const playerIds = memberIds.map((row) => row.playerId);
+      const playerIds = members.map((row) => row.playerId);
+      // Player ids stay internal: the anonymous roster shows name and role only.
+      const roster = members.map(({ nickname, role }) => ({ nickname, role }));
       const { from, to } = publicWindow();
 
       const activity = emptyActivity(from, to);
@@ -172,10 +174,14 @@ const publicClansRoutes: FastifyPluginAsync = async (app) => {
         WHERE public_mp.match_id = ${matches.id}
           AND public_cm.clan_id = ${clan.id}
       )`;
+      // Counted from the clan's own match_players rows instead of scanning every
+      // match with a correlated EXISTS: the cost follows the clan's history,
+      // not the whole panel's.
       const [matchCount] = await app.db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(matches)
-        .where(matchesWhere);
+        .select({ count: sql<number>`count(DISTINCT ${matchPlayers.matchId})::int` })
+        .from(matchPlayers)
+        .innerJoin(clanMembers, eq(clanMembers.playerId, matchPlayers.playerId))
+        .where(eq(clanMembers.clanId, clan.id));
       const history = await app.db
         .select({
           id: matches.id,
@@ -194,7 +200,7 @@ const publicClansRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         ...clan,
-        roster: members,
+        roster,
         activity,
         stats: {
           from,

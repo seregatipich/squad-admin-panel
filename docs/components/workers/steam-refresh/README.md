@@ -16,5 +16,6 @@ The process publishes `worker:heartbeat:steam-refresh` and
 healthy with heartbeat status `disabled` and sends no Steam requests.
 
 The Steam requests and Redis caches live in `@squad/steam-api`, shared with the
-manual player-card refresh route. Cache lifetimes are one hour for profiles,
+manual player-card refresh route (`POST /api/v1/players/:playerId/steam-refresh`,
+limited to 20 requests per minute per user). Cache lifetimes are one hour for profiles,
 six hours for bans, and 24 hours for ownership and Squad playtime.

@@ -12,9 +12,18 @@ import { invalidatePermissionCache } from '../lib/rbac.js';
 import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
 import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer, revokeAllForPlayers } from '../lib/sessions.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const STEAM_ID64_RE = /^\d{17}$/;
 const IMPORT_MAX_ROWS = 5000;
+const IMPORT_MAX_CHARS = 2_000_000;
+/**
+ * Request body cap for the CSV import. Fastify's 1 MiB default rejected
+ * files well inside {@link IMPORT_MAX_ROWS} with a bare 413 before the schema
+ * ran; this fits {@link IMPORT_MAX_CHARS} characters of 3-byte UTF-8 (e.g.
+ * Cyrillic comments) plus JSON escaping, so the row/char limits decide.
+ */
+const IMPORT_BODY_LIMIT_BYTES = 6 * 1024 * 1024;
 const COMMENT_MAX_LEN = 512;
 const BULK_MAX_IDS = 5000;
 
@@ -39,7 +48,7 @@ const memberParam = z.object({
   id: z.string().uuid(),
   playerId: z.string().uuid(),
 });
-const importBody = z.object({ csv: z.string().trim().min(1).max(2_000_000) });
+const importBody = z.object({ csv: z.string().trim().min(1).max(IMPORT_MAX_CHARS) });
 const bulkDeleteBody = z.object({
   player_ids: z.array(z.string().uuid()).min(1).max(BULK_MAX_IDS),
 });
@@ -117,13 +126,15 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_not_found' };
       }
       const q = req.query.q?.toLowerCase().trim();
+      // `%`/`_` in the query match literally; a full SteamID64 is compared as
+      // a bigint so the steam_id64 index serves it.
+      const nameMatch = q
+        ? ilike(players.canonicalNameNormalized, `%${escapeLike(q)}%`)
+        : undefined;
       const where = q
         ? and(
             eq(players.roleId, req.params.id),
-            or(
-              ilike(players.canonicalNameNormalized, `%${q}%`),
-              steamId64Equals(players.steamId64, q),
-            ),
+            or(nameMatch, steamId64Equals(players.steamId64, q)),
           )
         : eq(players.roleId, req.params.id);
       const totalRows = await app.db
@@ -313,6 +324,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
   fast.post(
     '/api/v1/roles/:id/members/import',
     {
+      bodyLimit: IMPORT_BODY_LIMIT_BYTES,
       schema: { params: roleIdParam, body: importBody },
       config: {
         permissions: ['user:manage_roles'],

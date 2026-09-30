@@ -4,7 +4,11 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
-import { EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH } from '../../src/routes/player-links.js';
+import {
+  EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH,
+  PLAYER_LINKS_LIMIT,
+} from '../../src/routes/player-links.js';
+import { withFailingAuditInsert } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -464,5 +468,89 @@ describe('link annotation on GET /api/v1/players/:playerId/alt-candidates', () =
     expect(body.candidates).toHaveLength(1);
     expect(body.candidates[0]?.player_id).toBe(idC);
     expect(body.candidates[0]?.link).toBeNull();
+  });
+});
+
+describe('audit #71: player links query shape and mutation atomicity', () => {
+  it('caps GET /players/:id/links at PLAYER_LINKS_LIMIT and flags truncation (#231)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'LinkHub');
+    const others = await h.db
+      .insert(players)
+      .values(
+        Array.from({ length: PLAYER_LINKS_LIMIT + 1 }, (_, index) => ({
+          steamId64: null,
+          eosId: `links-cap-${index}`,
+          canonicalName: `LinkedAlt${index}`,
+          canonicalNameNormalized: `linkedalt${index}`,
+        })),
+      )
+      .returning({ id: players.id });
+    await h.db.insert(playerLinks).values(
+      others.map((other) => {
+        const [playerAId, playerBId] = idA < other.id ? [idA, other.id] : [other.id, idA];
+        return { playerAId, playerBId, linkType: 'alt' as const, status: 'confirmed' as const };
+      }),
+    );
+    const cookie = await loginAsOwner(h);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      links: Array<{ other_player: { id: string } | null }>;
+      truncated: boolean;
+    };
+    expect(body.links).toHaveLength(PLAYER_LINKS_LIMIT);
+    expect(body.truncated).toBe(true);
+    expect(body.links.every((link) => link.other_player !== null)).toBe(true);
+  });
+
+  it('rolls a PATCH back when its audit row cannot be written (#229)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'AtomicA');
+    const idB = await seedPlayer(PLAYER_B, 'AtomicB');
+    const cookie = await loginAsOwner(h);
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie },
+      payload: { other_player_id: idB, link_type: 'alt' },
+    });
+    const linkId = (created.json() as { id: string }).id;
+
+    const res = await withFailingAuditInsert(h.db, 'player_link.update', () =>
+      h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/player-links/${linkId}`,
+        headers: { cookie },
+        payload: { status: 'rejected' },
+      }),
+    );
+    expect(res.statusCode).toBe(500);
+    const [stored] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    expect(stored?.status).toBe('confirmed');
+  });
+
+  it('rolls a POST back when its audit row cannot be written (#229)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'AtomicPostA');
+    const idB = await seedPlayer(PLAYER_B, 'AtomicPostB');
+    const cookie = await loginAsOwner(h);
+
+    const res = await withFailingAuditInsert(h.db, 'player_link.create', () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${idA}/links`,
+        headers: { cookie },
+        payload: { other_player_id: idB, link_type: 'alt' },
+      }),
+    );
+    expect(res.statusCode).toBe(500);
+    const rows = await h.db
+      .select()
+      .from(playerLinks)
+      .where(inArray(playerLinks.playerAId, [idA, idB]));
+    expect(rows).toHaveLength(0);
   });
 });

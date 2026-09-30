@@ -14,11 +14,12 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
-import { escapeLike, steamId64Equals } from '../lib/player-search.js';
+import { steamId64Equals } from '../lib/player-search.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { roleCeilingError, roleGrantBeyondActor } from '../lib/role-guards.js';
 import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
+import { escapeLike } from '../lib/sql-like.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({

@@ -11,7 +11,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { calendarDaySchema } from '../lib/calendar-day.js';
-import { panelGuard } from '../lib/panel-guard.js';
 
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
@@ -21,6 +20,11 @@ const ONLINE_STATUS_CAP = 1000;
 const BONUS_FORMULA_LABEL = 'online + 2×boost';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
+/**
+ * A real calendar day as `YYYY-MM-DD`. `z.string().date()` rejects impossible
+ * dates such as `2024-13-45` or `2023-02-29` with a 400, where a bare format
+ * regex let them through to `Date.parse` (NaN, a 500) or V8's silent rollover.
+ */
 const presenceQuery = z.object({
   end: calendarDaySchema.optional(),
 });
@@ -61,11 +65,11 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/presence',
-    { schema: { params: playerIdParams, querystring: presenceQuery }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    {
+      schema: { params: playerIdParams, querystring: presenceQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
+    async (req) => {
       const { playerId } = req.params;
       const { weekStart, weekEnd, endDay } = resolveWindow(req.query.end);
 
@@ -157,12 +161,9 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/presence/daily',
     {
       schema: { params: playerIdParams, querystring: dailyPresenceQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    async (req) => {
       const { playerId } = req.params;
       const { rangeDays, fromDay, toDay } = resolveDailyWindow(req.query.range, req.query.end);
 
@@ -219,11 +220,8 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/primetime',
-    { schema: { params: playerIdParams }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
+    async (req) => {
       const { playerId } = req.params;
       const now = new Date();
       const windowEndMs = now.getTime();
@@ -292,18 +290,19 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/players/online-status', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
+  fast.get(
+    '/api/v1/players/online-status',
+    { config: { permissions: ['player:view'], audit: false } },
+    async () => {
+      const rows = await app.db
+        .selectDistinct({ playerId: playerSessions.playerId })
+        .from(playerSessions)
+        .where(isNull(playerSessions.disconnectedAt))
+        .limit(ONLINE_STATUS_CAP);
 
-    const rows = await app.db
-      .selectDistinct({ playerId: playerSessions.playerId })
-      .from(playerSessions)
-      .where(isNull(playerSessions.disconnectedAt))
-      .limit(ONLINE_STATUS_CAP);
-
-    return { online_player_ids: rows.map((row) => row.playerId) };
-  });
+      return { online_player_ids: rows.map((row) => row.playerId) };
+    },
+  );
 };
 
 export default playerPresenceRoutes;
