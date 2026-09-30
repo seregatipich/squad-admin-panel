@@ -158,14 +158,18 @@ export function MatchCard({
   }, [match]);
 
   // Without this, a match that ends while its own card is open keeps showing
-  // "Идёт" (only the local `now` ticker runs) until a manual reload — refetch
-  // the moment the live bus reports this exact match's `match.ended`.
+  // "Идёт" (only the local `now` ticker runs) until a manual reload. The API
+  // announces a match end as a `match.ended` kind inside `server.events.appended`
+  // (#1315), which names the server but not the match, so refetch on this
+  // match's server only.
+  const serverId = match?.server_id;
   const onEventsAppended = useCallback(
-    (event: { data: { kinds?: string[] } }) => {
+    (event: { data: { server_id: string | null; kinds?: string[] } }) => {
       if (!event.data.kinds?.includes('match.ended')) return;
+      if (serverId === undefined || event.data.server_id !== serverId) return;
       load();
     },
-    [load],
+    [load, serverId],
   );
   useLiveSubscription('server.events.appended', onEventsAppended);
 

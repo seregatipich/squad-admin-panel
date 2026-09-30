@@ -190,7 +190,7 @@ describe('MatchCard', () => {
   );
 
   it(
-    'refetches once the live bus reports this exact match has ended (#583)',
+    "refetches once the live bus reports a match ended on this match's server (#583, #1315)",
     async () => {
       const matchId = '018f1e3a-6f3e-7c3e-9a3e-1234567890ab';
       const fetchMock = vi.fn(() =>
@@ -206,12 +206,15 @@ describe('MatchCard', () => {
       await screen.findByText('FullTimer');
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // An unrelated match ending must not trigger a refetch.
-      liveHandlers.get('match.ended')?.({ data: { server_id: 'srv-1', match_id: 'other-match' } });
+      const appended = liveHandlers.get('server.events.appended');
+      // A match ending on another server must not trigger a refetch.
+      appended?.({ data: { server_id: 'srv-other', kinds: ['match.ended'] } });
+      // Neither must other event kinds on this match's server.
+      appended?.({ data: { server_id: 'srv-1', kinds: ['player.connected'] } });
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      liveHandlers.get('match.ended')?.({ data: { server_id: 'srv-1', match_id: matchId } });
+      appended?.({ data: { server_id: 'srv-1', kinds: ['match.ended'] } });
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     },
     TEST_TIMEOUT_MS,
