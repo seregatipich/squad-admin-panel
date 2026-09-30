@@ -156,7 +156,7 @@ describe('getLiveBus in a browser', () => {
       const events: unknown[] = [];
       bus.subscribe((event) => events.push(event));
       const socket = FakeWebSocket.instances[0];
-      for (const frame of frames) socket.onmessage?.({ data: JSON.stringify(frame) });
+      for (const frame of frames) socket?.onmessage?.({ data: JSON.stringify(frame) });
       return events;
     }
 

@@ -261,6 +261,6 @@ describe('apiFetch response validation (#819)', () => {
     const mockFetch = vi.fn().mockResolvedValue(Response.json({ name: 'a' }));
     vi.stubGlobal('fetch', mockFetch);
     await apiFetch('/api/v1/x', { parse: requireName });
-    expect(mockFetch.mock.calls[0][1]).not.toHaveProperty('parse');
+    expect(mockFetch.mock.calls[0]?.[1]).not.toHaveProperty('parse');
   });
 });
