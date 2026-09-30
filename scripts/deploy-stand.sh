@@ -63,6 +63,18 @@ app_domain="${app_domain//[\"\']/}"
 if [[ ! "$app_domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
   fatal "APP_DOMAIN in $APP_DIR/$ENV_FILE must be the stand's host name (got '${app_domain}')"
 fi
+# docker/compose.stand.yml refuses to start without these; fail here with a
+# clear message before any image is pulled or container touched.
+for required in ACME_EMAIL DUCKDNS_TOKEN; do
+  value="$(sed -n "s/^${required}=//p" "$ENV_FILE" | tail -n 1)"
+  value="${value//[\"\']/}"
+  if [[ -z "$value" ]]; then
+    fatal "$required in $APP_DIR/$ENV_FILE must be set (Let's Encrypt contact email / DuckDNS API token for the stand's TLS)"
+  fi
+done
+if [[ "$(sed -n 's/^ACME_EMAIL=//p' "$ENV_FILE" | tail -n 1)" == *@example.com ]]; then
+  fatal "ACME_EMAIL in $APP_DIR/$ENV_FILE must be a real address: Let's Encrypt rejects example.com"
+fi
 if [[ ! "${RELEASE_SHA:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   fatal "RELEASE_SHA must name the release (got '${RELEASE_SHA:-}')"
 fi
