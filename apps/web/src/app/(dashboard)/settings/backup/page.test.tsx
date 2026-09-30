@@ -23,6 +23,8 @@ vi.mock('@/components/RestoreSnapshotButton', () => ({
 
 import BackupPage from './page';
 
+const POLL_MS = 30_000;
+
 function mockFetchOnce(response: Response | (() => Promise<Response>)) {
   const fn = typeof response === 'function' ? response : () => Promise.resolve(response);
   const spy = vi.fn(fn);
@@ -187,6 +189,94 @@ describe('BackupPage', () => {
         vi.advanceTimersByTime(30_000);
       });
       await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders a snapshot whose tags are null or absent without crashing (#674)', async () => {
+    mockFetchOnce(
+      snapshotList([
+        {
+          id: 'a',
+          short_id: 'nulltags1',
+          time: '2026-01-01T00:00:00Z',
+          hostname: 'h',
+          paths: [],
+          tags: null,
+        },
+        { id: 'b', short_id: 'notags22', time: '2026-01-01T00:00:00Z', hostname: 'h', paths: [] },
+      ]),
+    );
+    render(<BackupPage />);
+    await waitFor(() => expect(screen.getByText('nulltags1')).toBeInTheDocument());
+    expect(screen.getByText('notags22')).toBeInTheDocument();
+  });
+
+  it('does not poll while the tab is hidden (#675)', async () => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    try {
+      const fetchSpy = mockFetchOnce(() => Promise.resolve(snapshotList([])));
+      render(<BackupPage />);
+      await vi.waitFor(() => expect(screen.getByText('Снимков пока нет')).toBeInTheDocument());
+      act(() => {
+        vi.advanceTimersByTime(POLL_MS * 3);
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      hidden.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling after a 403 (#675)', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = mockFetchOnce(() => Promise.resolve(new Response('', { status: 403 })));
+      render(<BackupPage />);
+      await vi.waitFor(() => expect(screen.getByText('Недостаточно прав')).toBeInTheDocument());
+      act(() => {
+        vi.advanceTimersByTime(POLL_MS * 3);
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the last good list when a background refresh fails (#675)', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fetchSpy = mockFetchOnce(() => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve(
+              snapshotList([
+                {
+                  id: 'k',
+                  short_id: 'keepme12',
+                  time: '2026-01-01T00:00:00Z',
+                  hostname: 'h',
+                  paths: [],
+                  tags: [],
+                },
+              ]),
+            )
+          : Promise.reject(new Error('boom'));
+      });
+      render(<BackupPage />);
+      await vi.waitFor(() => expect(screen.getByText('keepme12')).toBeInTheDocument());
+      act(() => {
+        vi.advanceTimersByTime(POLL_MS);
+      });
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText('keepme12')).toBeInTheDocument();
+      expect(screen.queryByText(/Не удалось загрузить список бэкапов/)).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

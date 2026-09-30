@@ -46,6 +46,13 @@ export default function BackupPage() {
   // Guards against overlapping polls: a slow request must not race the next
   // tick's request over the same `state` (#675).
   const loadingRef = useRef(false);
+  // Mirrors `state.kind` so the poll tick can stop after a 403 and a failed
+  // background refresh can keep the last good list (#675).
+  const kindRef = useRef<Load['kind']>('loading');
+  const show = useCallback((next: Load) => {
+    kindRef.current = next.kind;
+    setState(next);
+  }, []);
 
   const load = useCallback(async () => {
     if (loadingRef.current) return;
@@ -56,34 +63,36 @@ export default function BackupPage() {
         cache: 'no-store',
       });
       if (res.status === 403) {
-        setState({ kind: 'forbidden' });
+        show({ kind: 'forbidden' });
         return;
       }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { detail?: string };
-        setState({ kind: 'error', text: j.detail ?? `HTTP ${res.status}` });
+        if (kindRef.current === 'ready') return;
+        show({ kind: 'error', text: j.detail ?? `HTTP ${res.status}` });
         return;
       }
       const body = (await res.json()) as { snapshots: Snapshot[] };
       // The bridge/restic contract for a taggless snapshot plausibly omits
       // `tags` or sends null; normalize so `.length`/`.map` never throws.
-      setState({
+      show({
         kind: 'ready',
         snapshots: body.snapshots.map((s) => ({ ...s, tags: s.tags ?? [] })),
       });
     } catch (e) {
-      setState({ kind: 'error', text: (e as Error).message });
+      if (kindRef.current === 'ready') return;
+      show({ kind: 'error', text: (e as Error).message });
     } finally {
       loadingRef.current = false;
     }
-  }, []);
+  }, [show]);
 
   useEffect(() => {
     void load();
     // Paused while the tab is hidden — no point hammering the bridge for a
     // page nobody is looking at (#675).
     const t = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || kindRef.current === 'forbidden') return;
       void load();
     }, POLL_MS);
     const onVisibilityChange = () => {
