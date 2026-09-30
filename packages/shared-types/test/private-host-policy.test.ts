@@ -28,6 +28,8 @@ describe('isPrivateNetworkAddress (#30, finding #333)', () => {
     '2001:db8::1',
     'squad.example.com',
     '::ffff:8.8.8.8',
+    'fd00::zz',
+    '[1:2:3]',
   ])('%s is not private (hostnames are checked after resolution)', (host) => {
     expect(isPrivateNetworkAddress(host)).toBe(false);
   });
