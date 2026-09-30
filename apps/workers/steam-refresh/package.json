@@ -17,7 +17,7 @@
     "@squad/shared-config": "workspace:*",
     "@squad/steam-api": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "ioredis": "^5.4.1",
+    "ioredis": "^6.0.0",
     "pino": "^9.5.0",
     "postgres": "^3.4.5"
   },

@@ -15,7 +15,7 @@
     "@squad/db": "workspace:*",
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
-    "ioredis": "^5.4.1",
+    "ioredis": "^6.0.0",
     "pino": "^9.5.0",
     "postgres": "^3.4.5"
   },

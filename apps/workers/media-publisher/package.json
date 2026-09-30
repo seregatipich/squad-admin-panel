@@ -16,7 +16,7 @@
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "drizzle-orm": "^0.45.0",
-    "ioredis": "^5.4.1",
+    "ioredis": "^6.0.0",
     "pino": "^9.5.0",
     "postgres": "^3.4.5"
   },
