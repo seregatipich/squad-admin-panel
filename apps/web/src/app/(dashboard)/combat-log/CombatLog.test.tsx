@@ -132,7 +132,7 @@ describe('CombatLog — PlayerAutocomplete blur only commits on an actual change
     vi.stubGlobal('fetch', mockFetch());
     render(<CombatLog />);
 
-    const field = (await screen.findAllByLabelText('Кто'))[0];
+    const field = (await screen.findAllByLabelText('Кто'))[0]!;
     fireEvent.focus(field);
     fireEvent.blur(field);
 
@@ -146,7 +146,7 @@ describe('CombatLog — PlayerAutocomplete blur only commits on an actual change
     vi.stubGlobal('fetch', mockFetch());
     render(<CombatLog />);
 
-    const field = (await screen.findAllByLabelText('Кто'))[0];
+    const field = (await screen.findAllByLabelText('Кто'))[0]!;
     fireEvent.change(field, { target: { value: 'NewName' } });
     fireEvent.blur(field);
 

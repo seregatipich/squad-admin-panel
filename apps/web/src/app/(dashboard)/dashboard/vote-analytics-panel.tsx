@@ -254,8 +254,8 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                   })}
                 </div>
                 <div className="flex justify-between text-2xs tabular-nums text-ink-3">
-                  <span>{formatTrendDay(data.trend[0].day)}</span>
-                  <span>{formatTrendDay(data.trend[data.trend.length - 1].day)}</span>
+                  <span>{formatTrendDay(data.trend.at(0)?.day ?? '')}</span>
+                  <span>{formatTrendDay(data.trend.at(-1)?.day ?? '')}</span>
                 </div>
               </>
             )}

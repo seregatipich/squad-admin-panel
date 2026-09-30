@@ -60,7 +60,7 @@ describe('CommandPalette', () => {
     // The field points screen readers at the highlighted row rather than
     // moving focus, which is what keeps typing uninterrupted.
     const field = screen.getByRole('combobox', { name: 'Командная панель: поиск' });
-    expect(field).toHaveAttribute('aria-activedescendant', options[0].id);
+    expect(field).toHaveAttribute('aria-activedescendant', options[0]!.id);
   });
 
   it('moves the highlight with the arrow keys', async () => {
@@ -72,14 +72,14 @@ describe('CommandPalette', () => {
 
     const options = screen.getAllByRole('option');
     expect(options[1]).toHaveAttribute('aria-selected', 'true');
-    expect(field).toHaveAttribute('aria-activedescendant', options[1].id);
+    expect(field).toHaveAttribute('aria-activedescendant', options[1]!.id);
   });
 
   it('navigates to the chosen page and closes', async () => {
     renderPalette();
     await open();
 
-    const first = screen.getAllByRole('option')[0];
+    const first = screen.getAllByRole('option')[0]!;
     fireEvent.click(first);
 
     expect(push).toHaveBeenCalledTimes(1);
@@ -116,7 +116,7 @@ describe('CommandPalette', () => {
 
     const options = screen.getAllByRole('option');
     expect(options.length).toBeGreaterThan(2);
-    fireEvent.mouseEnter(options[1]);
+    fireEvent.mouseEnter(options[1]!);
 
     expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
     expect(screen.getAllByRole('option').at(-1)).toHaveAttribute('aria-selected', 'false');

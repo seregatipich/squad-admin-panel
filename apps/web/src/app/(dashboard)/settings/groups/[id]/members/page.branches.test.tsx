@@ -188,7 +188,7 @@ async function confirmDialog(dialogName: string, confirmLabel: string) {
 async function dismissDialog(dialogName: string) {
   const dialog = await screen.findByRole('dialog', { name: dialogName });
   await act(async () => {
-    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
   });
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 }
@@ -219,7 +219,7 @@ describe('MembersPage — branch coverage', () => {
 
     const del = callsMatching((u, i) => u.includes('/members/bulk-delete') && i?.method === 'POST');
     expect(del.length).toBe(1);
-    expect(JSON.parse(del[0][1]?.body as string)).toEqual({ player_ids: ['p1'] });
+    expect(JSON.parse(del[0]![1]?.body as string)).toEqual({ player_ids: ['p1'] });
     // Successful bulk delete reloads and clears the selection → toolbar disappears.
     await waitFor(() => expect(screen.queryByTestId('bulk-toolbar')).not.toBeInTheDocument());
   });
@@ -273,7 +273,7 @@ describe('MembersPage — branch coverage', () => {
 
     const moved = callsMatching((u, i) => u.includes('/members/move') && i?.method === 'POST');
     expect(moved.length).toBe(1);
-    expect(JSON.parse(moved[0][1]?.body as string)).toEqual({
+    expect(JSON.parse(moved[0]![1]?.body as string)).toEqual({
       player_ids: ['p1'],
       target_role_id: 'role-2',
     });
@@ -326,7 +326,7 @@ describe('MembersPage — branch coverage', () => {
   it('removes a single member on confirm', async () => {
     await renderPage();
     const removeButtons = screen.getAllByRole('button', { name: 'Снять' });
-    fireEvent.click(removeButtons[0]);
+    fireEvent.click(removeButtons[0]!);
     await confirmDialog('Снять роль', 'Снять роль');
     const del = callsMatching((u, i) => /\/members\/p1$/.test(u) && i?.method === 'DELETE');
     expect(del.length).toBe(1);
@@ -335,14 +335,14 @@ describe('MembersPage — branch coverage', () => {
   it('surfaces an error when removing a single member fails', async () => {
     handlers.remove = { status: 403, body: { error: 'forbidden' } };
     await renderPage();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]!);
     await confirmDialog('Снять роль', 'Снять роль');
     expect(await screen.findByText('Ошибка: недостаточно прав')).toBeInTheDocument();
   });
 
   it('does not remove when confirm is dismissed', async () => {
     await renderPage();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]!);
     await dismissDialog('Снять роль');
     expect(callsMatching((u, i) => /\/members\/p1$/.test(u) && i?.method === 'DELETE').length).toBe(
       0,
@@ -420,7 +420,7 @@ describe('MembersPage — branch coverage', () => {
     });
     const add = callsMatching((u, i) => u.endsWith('/members') && i?.method === 'POST');
     expect(add.length).toBe(1);
-    expect(JSON.parse(add[0][1]?.body as string)).toEqual({ player_id: 'p9' });
+    expect(JSON.parse(add[0]![1]?.body as string)).toEqual({ player_id: 'p9' });
   });
 
   it('surfaces an error when adding a player fails', async () => {

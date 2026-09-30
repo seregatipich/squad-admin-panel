@@ -231,7 +231,9 @@ function addDays(reference: Date, amount: number): Date {
 
 function parseDateInput(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+  const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = value
+    .split('-')
+    .map((part) => Number.parseInt(part, 10));
   const parsed = new Date(year, month - 1, day);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

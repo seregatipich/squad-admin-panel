@@ -183,7 +183,7 @@ describe('AccountPage', () => {
 
     const calls = deleteCalls(fetchMock);
     expect(calls).toHaveLength(1);
-    expect(String(calls[0][0])).toBe('/api/v1/me/sessions/sess-other');
+    expect(String(calls[0]![0])).toBe('/api/v1/me/sessions/sess-other');
     expect(await screen.findByText('Сессия завершена.')).toBeInTheDocument();
   });
 
@@ -194,7 +194,7 @@ describe('AccountPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Завершить' }));
     const dialog = await screen.findByRole('dialog', { name: 'Завершить сессию' });
     await act(async () => {
-      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
     });
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -215,7 +215,7 @@ describe('AccountPage', () => {
 
     const calls = deleteCalls(fetchMock);
     expect(calls).toHaveLength(1);
-    expect(String(calls[0][0])).toBe('/api/v1/me/sessions');
+    expect(String(calls[0]![0])).toBe('/api/v1/me/sessions');
   });
 
   it('reports a failed load and retries on demand', async () => {

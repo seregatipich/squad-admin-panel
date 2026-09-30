@@ -639,7 +639,7 @@ describe('RosterPanel — подтверждение удаления', () => {
     // Отказаться можно и крестиком, и кнопкой подвала — у обоих доступное имя
     // «Отмена», поэтому запрос делается внутри самого диалога и берёт первый.
     const dialog = await screen.findByRole('dialog', { name: 'Удалить участника?' });
-    await user.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+    await user.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Удалить участника?' })).not.toBeInTheDocument();

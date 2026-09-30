@@ -61,7 +61,9 @@ function formatDate(iso: string): string {
 /** Parses a `YYYY-MM-DD` `<input type="date">` value into local midnight, or null if malformed. */
 function parseDateInput(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+  const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = value
+    .split('-')
+    .map((part) => Number.parseInt(part, 10));
   const date = new Date(year, month - 1, day);
   date.setHours(0, 0, 0, 0);
   return date;

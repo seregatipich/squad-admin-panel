@@ -352,7 +352,7 @@ describe('DashboardPage', () => {
     await renderDashboard();
 
     const table = screen.getByRole('table', { name: 'Серверы' });
-    const playersHeader = within(table).getAllByRole('columnheader')[2];
+    const playersHeader = within(table).getAllByRole('columnheader')[2]!;
     expect(playersHeader).toHaveAttribute('aria-sort', 'none');
 
     await act(async () => {
@@ -375,7 +375,7 @@ describe('DashboardPage', () => {
     expect(dialog).not.toHaveAttribute('open');
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Перезапуск' })[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Перезапуск' })[0]!);
     });
 
     expect(dialog).toHaveAttribute('open');
@@ -398,7 +398,7 @@ describe('DashboardPage', () => {
     if (!dialog) throw new Error('строка сервера не отрисовала диалог подтверждения');
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Перезапуск' })[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Перезапуск' })[0]!);
     });
     // Крестик окна тоже называется «Отмена», поэтому берётся кнопка подвала.
     const cancel = within(dialog).getAllByRole('button', { name: 'Отмена' }).at(-1);

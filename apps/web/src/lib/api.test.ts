@@ -43,7 +43,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/servers');
 
-    const calledUrl: string = mockFetch.mock.calls[0][0];
+    const calledUrl: string = mockFetch.mock.calls[0]![0];
     expect(calledUrl).toMatch(/\/api\/v1\/servers$/);
   });
 
@@ -56,7 +56,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/me');
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('accept')).toBe('application/json');
   });
 
@@ -84,7 +84,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/me', { cookie: '__Host-sid=abc123' });
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('cookie')).toBe('__Host-sid=abc123');
   });
 
@@ -148,7 +148,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/servers', { method: 'POST', body: JSON.stringify({ name: 'test' }) });
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('content-type')).toBe('application/json');
   });
   it('rejects with an ApiError that carries the HTTP status', async () => {
@@ -175,7 +175,7 @@ describe('apiFetch', () => {
       await apiFetch('/api/v1/me');
 
       expect(timeout).toHaveBeenCalledWith(API_TIMEOUT_MS);
-      expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+      expect(mockFetch.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal);
     });
 
     it('fails fast when the API does not answer in time', async () => {
@@ -203,7 +203,7 @@ describe('apiFetch', () => {
       await apiFetch('/api/v1/me', { signal: controller.signal });
 
       expect(timeout).not.toHaveBeenCalled();
-      expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+      expect(mockFetch.mock.calls[0]![1].signal).toBe(controller.signal);
     });
   });
 });

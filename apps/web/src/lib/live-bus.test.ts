@@ -104,7 +104,7 @@ describe('getLiveBus in a browser', () => {
     unsubscribe();
 
     vi.advanceTimersByTime(10_000);
-    expect(FakeWebSocket.instances[0].readyState).not.toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).not.toBe(3);
     expect(bus.state()).not.toBe('closed');
     release();
   });
@@ -112,7 +112,7 @@ describe('getLiveBus in a browser', () => {
   it('reconnects after a drop when only a retain holder is left', async () => {
     const bus = await freshBus();
     const release = bus.retain();
-    FakeWebSocket.instances[0].onclose?.();
+    FakeWebSocket.instances[0]!.onclose?.();
 
     vi.advanceTimersByTime(2_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
@@ -126,7 +126,7 @@ describe('getLiveBus in a browser', () => {
     first();
     first();
     vi.advanceTimersByTime(10_000);
-    expect(FakeWebSocket.instances[0].readyState).not.toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).not.toBe(3);
     second();
   });
 
@@ -134,14 +134,14 @@ describe('getLiveBus in a browser', () => {
     const bus = await freshBus();
     bus.retain()();
     vi.advanceTimersByTime(5_000);
-    expect(FakeWebSocket.instances[0].readyState).toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).toBe(3);
   });
 
   it('spreads reconnects with jitter within the backoff step', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const bus = await freshBus();
     const release = bus.retain();
-    FakeWebSocket.instances[0].onclose?.();
+    FakeWebSocket.instances[0]!.onclose?.();
 
     vi.advanceTimersByTime(499);
     expect(FakeWebSocket.instances).toHaveLength(1);

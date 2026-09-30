@@ -322,8 +322,8 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
 
     await waitFor(() => expect(puts).toHaveLength(1));
-    expect(puts[0].url).toContain('/api/v1/vip-tiers/tier-1');
-    expect(puts[0].body).toMatchObject({
+    expect(puts[0]!.url).toContain('/api/v1/vip-tiers/tier-1');
+    expect(puts[0]!.body).toMatchObject({
       name: 'VIP Platinum',
       role_id: 'role-1',
       default_days: null,

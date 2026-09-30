@@ -94,7 +94,7 @@ describe('ChatMessageList — BANNAME-3 ban button gating + prefill', () => {
     const buttons = screen.getAllByRole('button', { name: /забанить ник/i });
     expect(buttons).toHaveLength(3);
 
-    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[0]!);
     const patternInput = screen.getByLabelText(/паттерн/i) as HTMLInputElement;
     expect(patternInput.value).toBe('Alpha');
   });

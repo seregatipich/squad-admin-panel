@@ -50,7 +50,7 @@ describe('PageHeader', () => {
 
     const crumbs = within(nav).getAllByRole('listitem');
     expect(crumbs).toHaveLength(3);
-    expect(within(crumbs[crumbs.length - 1]).getByText('Discord')).toHaveAttribute(
+    expect(within(crumbs[crumbs.length - 1]!).getByText('Discord')).toHaveAttribute(
       'aria-current',
       'page',
     );

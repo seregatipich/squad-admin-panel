@@ -135,7 +135,7 @@ describe('ServersPage', () => {
 
     // Сброс возвращает полный список: и в панели инструментов, и в пустом состоянии
     // это одно и то же действие.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Сбросить фильтры' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Сбросить фильтры' })[0]!);
     expect(await screen.findByText('EU Main')).toBeInTheDocument();
   });
 
