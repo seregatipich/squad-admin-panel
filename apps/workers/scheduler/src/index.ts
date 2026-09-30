@@ -77,7 +77,7 @@ async function main() {
     statusFn: () => (lastTickAt ? `running (last tick ${lastTickAt})` : 'starting'),
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
-  const runtimeDeps = createSeedScheduleDeps(db, redis);
+  const runtimeDeps = createSeedScheduleDeps(db, redis, bridge);
   const rotationScheduleDeps = createRotationScheduleDeps(db, redis);
   const rotationProfileDeps = createRotationProfileDeps(db, bridge);
   const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
@@ -115,11 +115,16 @@ async function main() {
     );
   }
 
-  let stopTickLoop: (() => void) | null = null;
+  // startTickLoop (#1000, #1015) skips an interval fire while a tick is
+  // still running instead of starting a concurrent one, and lets shutdown
+  // wait for the in-flight tick before closing the DB/bridge/Redis
+  // connections out from under it.
+  let tickLoop: ReturnType<typeof startTickLoop> | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       log.info({ sig }, 'shutdown');
-      stopTickLoop?.();
+      tickLoop?.stop();
+      await tickLoop?.waitForCurrentTick();
       await diag.emit({
         component: 'worker-scheduler',
         kind: 'scheduler.stopped',
@@ -157,7 +162,7 @@ async function main() {
   await tick();
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
-  stopTickLoop = startTickLoop({
+  tickLoop = startTickLoop({
     tick,
     intervalMs: TICK_INTERVAL_MS,
     onError: (err) => log.error({ err: err.message }, 'scheduler tick failed'),

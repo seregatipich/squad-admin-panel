@@ -1,5 +1,5 @@
 import type { Diag } from '@squad/diag';
-import { expandCron5Occurrences, type RconOperatorCommandName } from '@squad/shared-types';
+import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
 
 /** Server action a scheduled task performs when it becomes due (AUTO-2, #73). */
 export type ScheduledTaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -87,15 +87,28 @@ export interface ScheduledTaskTickResult {
 }
 
 /**
+ * Marks a dispatch failure as permanent — no retry can ever succeed (e.g.
+ * `restartServer` throws this for a `runtime='external'` or soft-deleted
+ * server; deps.ts is the only thrower). {@link runScheduledTaskTick}'s catch
+ * block advances the cursor past a permanent failure instead of leaving it
+ * unset, so the entry is not retried every tick forever (#1016) — a
+ * transient failure (RCON enqueue error, DB hiccup) still leaves the cursor
+ * unset so the next tick retries it.
+ */
+export class PermanentTaskDispatchError extends Error {}
+
+/**
  * Resolves the single cron/one-off occurrence (if any) that is due for `entry`
  * as of `now`, or `null` when nothing is due. Mirrors
  * `seed-schedule-tick.ts`'s `resolveDueOccurrence`:
  *
- * - Recurring (`recurrence !== null`): due when {@link expandCron5Occurrences}
- *   finds at least one matching minute strictly after the last-known cursor
+ * - Recurring (`recurrence !== null`): due when {@link findLastCron5Occurrence}
+ *   finds a matching minute strictly after the last-known cursor
  *   (`lastExecutedAt`, or `createdAt` if never executed) and at or before
  *   `now`. Multiple missed occurrences collapse to the most recent — the tick
- *   fires once and advances the cursor past all of them.
+ *   fires once and advances the cursor past all of them, regardless of how far
+ *   behind the cursor has fallen (a quarterly/annual cron stays due even after
+ *   months of downtime).
  * - One-off (`recurrence === null`, `scheduledAt` set): due once
  *   `scheduledAt <= now`, and only while it has never executed.
  * - Neither set: never due (the DB check constraint forbids this, but a stale
@@ -113,8 +126,7 @@ export function resolveDueOccurrence(entry: ScheduledTaskEntry, now: Date): Date
   const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
   if (from.getTime() > now.getTime()) return null;
 
-  const occurrences = expandCron5Occurrences(entry.recurrence, from, now);
-  return occurrences.length > 0 ? (occurrences.at(-1) ?? null) : null;
+  return findLastCron5Occurrence(entry.recurrence, from, now);
 }
 
 /**
@@ -221,6 +233,7 @@ export async function runScheduledTaskTick(
       } catch (err) {
         failed++;
         const message = err instanceof Error ? err.message : String(err);
+        const permanent = err instanceof PermanentTaskDispatchError;
         await deps.recordRun({
           taskId: entry.id,
           executedAt: now,
@@ -229,6 +242,7 @@ export async function runScheduledTaskTick(
             occurrence: occurrence.toISOString(),
             task_type: entry.taskType,
             error: message,
+            permanent,
           },
         });
         await deps.diag.emit({
@@ -236,8 +250,15 @@ export async function runScheduledTaskTick(
           kind: 'scheduled_task.dispatch_failed',
           severity: 'error',
           message: `scheduled_task ${entry.id} dispatch failed: ${message}`,
-          payload: { task_id: entry.id, server_id: entry.serverId, err: message },
+          payload: { task_id: entry.id, server_id: entry.serverId, err: message, permanent },
         });
+        // A permanent failure (external/deleted server) can never succeed on
+        // retry, so advance the cursor past it — otherwise it dispatches and
+        // fails again on every 30s tick forever (#1016). A transient failure
+        // leaves the cursor unset so the next tick retries it, as before.
+        if (permanent) {
+          await deps.setLastExecutedAt(entry.id, occurrence);
+        }
         continue;
       }
 

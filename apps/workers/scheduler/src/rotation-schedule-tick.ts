@@ -13,11 +13,26 @@ export interface RotationScheduleEntry {
 
 export interface RotationScheduleAuditEntry {
   actor: { kind: 'system'; label: 'rotation-scheduler' };
-  actionType: 'server.rotation_schedule.execute' | 'server.rotation_schedule.skip_depot_update';
+  actionType:
+    | 'server.rotation_schedule.execute'
+    | 'server.rotation_schedule.skip_depot_update'
+    | 'server.rotation_schedule.skip_expired';
   targetType: 'rotation_schedule';
   targetId: string;
   context: Record<string, unknown>;
 }
+
+/**
+ * How late (past `scheduledAt`) a one-off rotation entry may still fire
+ * (#1004). Without a bound, an entry queued while the worker/bridge/Redis was
+ * down fires unconditionally on recovery, changing the map mid-match at an
+ * unpredictable time — worse for `force_change` (`AdminChangeLayer`, which
+ * cuts the round short) than for `set_next` (`AdminSetNextLayer`, which only
+ * takes effect at the next natural map change). Both share one conservative
+ * window here; there is no evidence a longer allowance for `set_next` is
+ * worth the extra branch.
+ */
+export const ROTATION_SCHEDULE_MAX_LATENESS_MS = 15 * 60_000;
 
 export interface RotationScheduleTickDeps {
   now?: Date;
@@ -56,6 +71,36 @@ export async function runRotationScheduleTick(
     for (const entry of await deps.loadEnabledEntries()) {
       const occurrence = resolveDueRotationSchedule(entry, now);
       if (!occurrence) continue;
+
+      // #1004: a one-off entry more than ROTATION_SCHEDULE_MAX_LATENESS_MS
+      // past its scheduledAt is stale — likely queued while the worker,
+      // bridge, or Redis was down — and firing it now would change the map
+      // mid-match at an unpredictable time. Advance the cursor so it is
+      // marked done rather than retried forever, and audit the skip.
+      if (now.getTime() - occurrence.getTime() > ROTATION_SCHEDULE_MAX_LATENESS_MS) {
+        await deps.setLastExecutedAt(entry.id, occurrence);
+        await deps.writeAuditEntry({
+          actor: { kind: 'system', label: 'rotation-scheduler' },
+          actionType: 'server.rotation_schedule.skip_expired',
+          targetType: 'rotation_schedule',
+          targetId: entry.id,
+          context: {
+            server_id: entry.serverId,
+            occurrence: occurrence.toISOString(),
+            late_by_ms: now.getTime() - occurrence.getTime(),
+          },
+        });
+        await deps.diag.emit({
+          component: 'worker-scheduler',
+          kind: 'rotation_schedule.skip_expired',
+          severity: 'warn',
+          message: `rotation_schedule ${entry.id} skipped: ${Math.round(
+            (now.getTime() - occurrence.getTime()) / 60_000,
+          )} minutes late`,
+          payload: { entry_id: entry.id, server_id: entry.serverId },
+        });
+        continue;
+      }
 
       if (await deps.isDepotUpdating()) {
         skippedDepotUpdate++;

@@ -17,7 +17,7 @@ describe('startTickLoop (regression #999)', () => {
       await new Promise((resolve) => setTimeout(resolve, 2.5 * INTERVAL_MS));
       inFlight -= 1;
     });
-    const stop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError: vi.fn() });
+    const loop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError: vi.fn() });
 
     await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     expect(tick).toHaveBeenCalledTimes(1);
@@ -28,19 +28,19 @@ describe('startTickLoop (regression #999)', () => {
     await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     expect(tick).toHaveBeenCalledTimes(2);
     expect(maxInFlight).toBe(1);
-    stop();
+    loop.stop();
   });
 
   it('keeps ticking after a failed tick and reports the error', async () => {
     const onError = vi.fn();
     const tick = vi.fn().mockRejectedValueOnce(new Error('db down')).mockResolvedValue(undefined);
-    const stop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError });
+    const loop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError });
 
     await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     expect(tick).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'db down' }));
-    stop();
+    loop.stop();
   });
 
   it('stops scheduling once stopped, including after an in-flight tick settles', async () => {
@@ -51,12 +51,46 @@ describe('startTickLoop (regression #999)', () => {
           finish = resolve;
         }),
     );
-    const stop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError: vi.fn() });
+    const loop = startTickLoop({ tick, intervalMs: INTERVAL_MS, onError: vi.fn() });
 
     await vi.advanceTimersByTimeAsync(INTERVAL_MS);
-    stop();
+    loop.stop();
     finish();
     await vi.advanceTimersByTimeAsync(5 * INTERVAL_MS);
     expect(tick).toHaveBeenCalledTimes(1);
+  });
+
+  it('waitForCurrentTick resolves only after the in-flight tick settles', async () => {
+    let resolveTick: (() => void) | null = null;
+    const controller = startTickLoop({
+      tick: () =>
+        new Promise<void>((resolve) => {
+          resolveTick = resolve;
+        }),
+      intervalMs: INTERVAL_MS,
+      onError: () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+
+    let settled = false;
+    const waited = controller.waitForCurrentTick().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveTick?.();
+    await waited;
+    expect(settled).toBe(true);
+  });
+
+  it('waitForCurrentTick resolves immediately when no tick is running', async () => {
+    const controller = startTickLoop({
+      tick: async () => {},
+      intervalMs: INTERVAL_MS,
+      onError: () => {},
+    });
+    await expect(controller.waitForCurrentTick()).resolves.toBeUndefined();
   });
 });

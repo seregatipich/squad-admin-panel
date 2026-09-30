@@ -143,6 +143,88 @@ export function expandCron5Occurrences(
   return occurrences;
 }
 
+/**
+ * Day-level cap for {@link findLastCron5Occurrence}: how many calendar days,
+ * scanning backward from `to`, it will inspect before giving up. Unlike
+ * {@link expandCron5Occurrences}'s minute-by-minute forward scan — which caps
+ * out at {@link MAX_EXPANSION_MINUTES} (~40 days) and therefore can never find
+ * an occurrence of a quarterly/annual cron expression once the caller's
+ * cursor falls further behind `to` than that — a day-level backward scan is
+ * cheap enough (at most a few thousand day checks) to cover a multi-year gap.
+ */
+const MAX_LOOKBACK_DAYS = 366 * 5;
+
+/** True when `date`'s calendar fields (UTC) match the day-portion of `expr` (month, day-of-month, day-of-week). */
+function cron5DayMatches(expr: Cron5Expression, date: Date): boolean {
+  const month = date.getUTCMonth() + 1;
+  if (expr.month && !expr.month.includes(month)) return false;
+
+  const dayOfMonth = date.getUTCDate();
+  const dayOfWeek = date.getUTCDay();
+  const domRestricted = expr.dayOfMonth !== null;
+  const dowRestricted = expr.dayOfWeek !== null;
+  if (domRestricted && dowRestricted) {
+    const domMatch = expr.dayOfMonth?.includes(dayOfMonth) ?? false;
+    const dowMatch = expr.dayOfWeek?.includes(dayOfWeek) ?? false;
+    return domMatch || dowMatch;
+  }
+  if (domRestricted) return expr.dayOfMonth?.includes(dayOfMonth) ?? false;
+  if (dowRestricted) return expr.dayOfWeek?.includes(dayOfWeek) ?? false;
+  return true;
+}
+
+/**
+ * Finds the single most recent occurrence of `expression` in `[from, to]`
+ * (inclusive, UTC), or `null` when none falls in that window. Used by the
+ * scheduler ticks' `resolveDueOccurrence` (seed-schedule-tick.ts,
+ * scheduled-task-tick.ts), which only ever need the latest missed occurrence
+ * to fire the tick once and advance the cursor past it.
+ *
+ * Scans backward one calendar day at a time from `to`'s day toward `from`'s
+ * day (bounded by {@link MAX_LOOKBACK_DAYS}), cheaply testing only the
+ * month/day-of-month/day-of-week fields per day; once a day's date fields
+ * match, every matching hour:minute in that day is checked in descending
+ * order (clamped to `[from, to]` for the first and last day) and the first
+ * hit — the latest one — is returned immediately. This makes the cost
+ * independent of how long `from` has trailed behind `to`, unlike
+ * {@link expandCron5Occurrences}'s minute-granularity forward scan.
+ */
+export function findLastCron5Occurrence(expression: string, from: Date, to: Date): Date | null {
+  if (from.getTime() > to.getTime()) return null;
+  const parsed = parseCron5(expression);
+
+  const fromFloor = new Date(from.getTime());
+  fromFloor.setUTCSeconds(0, 0);
+  const toFloor = new Date(to.getTime());
+  toFloor.setUTCSeconds(0, 0);
+
+  const minutes = parsed.minute ? [...parsed.minute].sort((a, b) => b - a) : null;
+  const hours = parsed.hour ? [...parsed.hour].sort((a, b) => b - a) : null;
+
+  const day = new Date(toFloor.getTime());
+  day.setUTCHours(0, 0, 0, 0);
+  const fromDay = new Date(fromFloor.getTime());
+  fromDay.setUTCHours(0, 0, 0, 0);
+
+  for (let i = 0; i < MAX_LOOKBACK_DAYS && day.getTime() >= fromDay.getTime(); i++) {
+    if (cron5DayMatches(parsed, day)) {
+      const candidateHours = hours ?? Array.from({ length: 24 }, (_, h) => 23 - h);
+      for (const hour of candidateHours) {
+        const candidateMinutes = minutes ?? Array.from({ length: 60 }, (_, m) => 59 - m);
+        for (const minute of candidateMinutes) {
+          const candidate = new Date(day.getTime());
+          candidate.setUTCHours(hour, minute, 0, 0);
+          if (candidate.getTime() < fromFloor.getTime()) continue;
+          if (candidate.getTime() > toFloor.getTime()) continue;
+          return candidate;
+        }
+      }
+    }
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+  return null;
+}
+
 /** Start of the fixed probe window used by {@link minCron5IntervalMinutes}: 2024-12-01T00:00:00Z. */
 const PROBE_WINDOW_START_MS = Date.UTC(2024, 11, 1, 0, 0, 0);
 /** Length of the probe window, one full 31-day month (December 2024). */

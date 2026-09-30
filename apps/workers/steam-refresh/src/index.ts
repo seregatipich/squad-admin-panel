@@ -81,7 +81,13 @@ async function main(): Promise<void> {
     message: 'steam-refresh started',
     payload: { intervalMs: TICK_INTERVAL_MS, configured: Boolean(process.env.STEAM_API_KEY) },
   });
-  await tick();
+  // A first-tick failure (e.g. a Steam outage) must not reject main() and
+  // exit the process (#1027) — `restart: unless-stopped` would just crash-
+  // loop it back into the same outage. Handled the same way the interval's
+  // ticks are below.
+  await tick().catch((error) =>
+    log.error({ error: (error as Error).message }, 'steam-refresh tick failed'),
+  );
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
 
