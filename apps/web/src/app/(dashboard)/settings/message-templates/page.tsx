@@ -59,6 +59,9 @@ const EMPTY_DRAFT: DraftForm = {
   sortOrder: 0,
 };
 
+/** Upper bound of `sort_order` accepted by the API (`z.number().int().min(0).max(100000)`). */
+const SORT_ORDER_MAX = 100_000;
+
 export default function MessageTemplatesPage() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [me, setMe] = useState<Me | null>(null);
@@ -141,6 +144,14 @@ export default function MessageTemplatesPage() {
     }
     if (draft.body.length > MESSAGE_BODY_MAX) {
       setMsg({ kind: 'err', text: `Текст длиннее ${MESSAGE_BODY_MAX} символов.` });
+      return;
+    }
+    if (
+      !Number.isInteger(draft.sortOrder) ||
+      draft.sortOrder < 0 ||
+      draft.sortOrder > SORT_ORDER_MAX
+    ) {
+      setMsg({ kind: 'err', text: `Порядок — целое число от 0 до ${SORT_ORDER_MAX}.` });
       return;
     }
     setBusy(true);
@@ -317,6 +328,8 @@ export default function MessageTemplatesPage() {
                     <TextInput
                       type="number"
                       min={0}
+                      max={SORT_ORDER_MAX}
+                      step={1}
                       value={draft.sortOrder}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, sortOrder: Number(e.target.value) || 0 }))
