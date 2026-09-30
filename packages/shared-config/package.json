@@ -24,6 +24,11 @@
       "development": "./src/mark-types.ts",
       "default": "./dist/mark-types.js"
     },
+    "./ban-length": {
+      "types": "./dist/ban-length.d.ts",
+      "development": "./src/ban-length.ts",
+      "default": "./dist/ban-length.js"
+    },
     "./banned-names": {
       "types": "./dist/banned-names.d.ts",
       "development": "./src/banned-names.ts",

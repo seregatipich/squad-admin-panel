@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@squad/shared-config": "workspace:*",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

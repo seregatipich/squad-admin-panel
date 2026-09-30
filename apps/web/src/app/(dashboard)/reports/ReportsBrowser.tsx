@@ -1,6 +1,6 @@
 'use client';
 
-import { isValidBanLength } from '@squad/shared-config';
+import { isValidBanLength } from '@squad/shared-config/ban-length';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
