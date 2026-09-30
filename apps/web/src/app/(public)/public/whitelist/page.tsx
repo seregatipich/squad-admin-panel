@@ -43,7 +43,11 @@ export default function PublicWhitelistPage() {
         setState('error');
         return;
       }
-      const data = (await res.json()) as { enabled: boolean };
+      const data = (await res.json()) as { enabled?: unknown } | null;
+      if (typeof data?.enabled !== 'boolean') {
+        setState('error');
+        return;
+      }
       setState(data.enabled ? 'open' : 'closed');
     } catch {
       setState('error');

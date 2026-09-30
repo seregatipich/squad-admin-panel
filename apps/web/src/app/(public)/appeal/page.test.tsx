@@ -103,6 +103,24 @@ describe('PublicAppealPage', () => {
   );
 
   it(
+    'reports an error instead of a broken tracking link when the 201 body is not an appeal',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => Promise.resolve(new Response('<html>proxy</html>', { status: 201 }))),
+      );
+      render(<PublicAppealPage />);
+
+      fillForm('76561198000000001', 'Меня забанили по ошибке, прошу пересмотреть решение.');
+      fireEvent.click(screen.getByRole('button', { name: /отправить апелляцию/i }));
+
+      expect(await screen.findByText(/не удалось отправить апелляцию/i)).toBeInTheDocument();
+      expect(screen.queryByText(/\/appeal\/undefined/)).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'sends the optional contact field when it is filled in',
     async () => {
       const { fn, calls } = mockFetch();

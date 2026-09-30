@@ -17,7 +17,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
-import { formatOnlineHours, getPublicClan, type PublicClan } from '../clan-data';
+import { formatOnlineHours, getPublicClan } from '../clan-data';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +28,7 @@ interface PublicClanPageProps {
 export async function generateMetadata({ params }: PublicClanPageProps): Promise<Metadata> {
   try {
     const clan = await getPublicClan((await params).id);
+    if (!clan) return { title: 'Клан — Squad Admin Panel' };
     return {
       title: `${clan.name} — Squad Admin Panel`,
       description: clan.description ?? `Публичная страница клана ${clan.name}.`,
@@ -44,12 +45,8 @@ export async function generateMetadata({ params }: PublicClanPageProps): Promise
 /** Public, no-session clan page with a deliberately PII-free roster and history. */
 export default async function PublicClanPage({ params }: PublicClanPageProps) {
   const { id } = await params;
-  let clan: PublicClan;
-  try {
-    clan = await getPublicClan(id);
-  } catch {
-    notFound();
-  }
+  const clan = await getPublicClan(id);
+  if (!clan) notFound();
 
   const activityPeak = Math.max(...clan.activity.map((item) => item.online_seconds), 1);
 

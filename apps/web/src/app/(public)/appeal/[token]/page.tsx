@@ -92,7 +92,9 @@ export default function AppealStatusPage() {
       const res = await fetch(`/api/v1/public/appeals/${encodeURIComponent(token)}`, {
         cache: 'no-store',
       });
-      if (res.status === 404) {
+      // The API answers 400 for a token of the wrong length: a truncated link
+      // is a missing appeal, not an outage worth retrying.
+      if (res.status === 404 || res.status === 400) {
         setState('missing');
         return;
       }
@@ -100,7 +102,12 @@ export default function AppealStatusPage() {
         setState('error');
         return;
       }
-      setAppeal((await res.json()) as AppealStatusView);
+      const view = (await res.json()) as Partial<AppealStatusView> | null;
+      if (typeof view?.number !== 'number' || typeof view.status !== 'string') {
+        setState('error');
+        return;
+      }
+      setAppeal(view as AppealStatusView);
       setState('ready');
     } catch {
       setState('error');

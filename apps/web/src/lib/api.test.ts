@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch } from './api';
+import { ApiError, apiFetch } from './api';
 
 const originalEnv = process.env.API_URL;
 
@@ -149,5 +149,15 @@ describe('apiFetch', () => {
 
     const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
     expect(passedHeaders.get('content-type')).toBe('application/json');
+  });
+});
+
+describe('apiFetch errors', () => {
+  it('throws an ApiError carrying the HTTP status', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 404 })));
+    const error = await apiFetch('/api/v1/x').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+    expect((error as ApiError).message).toBe('API /api/v1/x 404: nope');
   });
 });

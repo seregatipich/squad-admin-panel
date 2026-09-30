@@ -4,6 +4,17 @@ export interface RequestOptions extends RequestInit {
   cookie?: string;
 }
 
+/** A non-2xx API answer; `status` lets callers tell "not found" from an outage. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 /**
  * Fetches a JSON API endpoint.
  *
@@ -27,7 +38,7 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${path} ${res.status}: ${text.slice(0, 200)}`);
+    throw new ApiError(res.status, `API ${path} ${res.status}: ${text.slice(0, 200)}`);
   }
   return (await res.json()) as T;
 }

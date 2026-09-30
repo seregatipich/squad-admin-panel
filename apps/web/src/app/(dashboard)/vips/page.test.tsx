@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 vi.mock('next/headers', () => ({
@@ -22,8 +22,12 @@ vi.mock('@/lib/dal', () => ({
 }));
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
 
+import { apiFetch } from '@/lib/api';
 import VipsPage from './page';
 
+beforeEach(() => {
+  vi.mocked(apiFetch).mockReset().mockResolvedValue([]);
+});
 afterEach(cleanup);
 
 describe('VipsPage', () => {
@@ -62,5 +66,29 @@ describe('VipsPage', () => {
     expect(screen.getByLabelText('Роль')).toHaveAttribute('name', 'role_id');
     expect(screen.getByLabelText('Истекают скоро')).toHaveAttribute('name', 'expiring_soon');
     expect(screen.getByRole('button', { name: 'Применить' })).toHaveAttribute('type', 'submit');
+  });
+
+  it('shows an error banner, not the empty registry, when the assignments request fails', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/v1/role-assignments')) throw new Error('API 500');
+      return [];
+    });
+    render(await VipsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Не удалось загрузить реестр.')).toBeInTheDocument();
+    expect(screen.queryByText('Ролей никому не выдано')).not.toBeInTheDocument();
+  });
+
+  it('uses the first value when a query key is repeated', async () => {
+    render(
+      await VipsPage({
+        searchParams: Promise.resolve({ role_id: ['role-a', 'role-b'] }),
+      }),
+    );
+
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith(
+      '/api/v1/role-assignments?role_id=role-a',
+      expect.anything(),
+    );
   });
 });
