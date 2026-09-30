@@ -68,6 +68,7 @@ export const banAppeals = pgTable(
   },
   (table) => ({
     numberKey: uniqueIndex('ban_appeals_number_key').on(table.number),
+    trackingTokenKey: uniqueIndex('ban_appeals_tracking_token_key').on(table.trackingToken),
     trackingTokenHashKey: uniqueIndex('ban_appeals_tracking_token_hash_key').on(
       table.trackingTokenHash,
     ),
