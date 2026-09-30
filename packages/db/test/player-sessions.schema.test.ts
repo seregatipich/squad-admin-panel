@@ -1,10 +1,5 @@
 import { getTableColumns } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import {
-  crashCloseAt,
-  crashDurationSeconds,
-  sessionDurationSeconds,
-} from '../src/presence/sessions.js';
 import * as schema from '../src/schema/index.js';
 
 describe('player_sessions schema', () => {
@@ -57,39 +52,5 @@ describe('player_sessions schema', () => {
   it('pins the closed_reason and mode vocabularies', () => {
     expect(schema.CLOSED_REASONS).toEqual(['disconnect', 'server_crashed', 'kicked', 'banned']);
     expect(schema.SESSION_MODES).toEqual(['online', 'boost', 'queue', 'seed']);
-  });
-});
-
-describe('session duration math', () => {
-  const connectedAt = new Date('2026-07-05T12:00:00.000Z');
-
-  it('floors elapsed seconds between connect and disconnect', () => {
-    expect(sessionDurationSeconds(connectedAt, new Date('2026-07-05T12:30:45.000Z'))).toBe(1845);
-  });
-
-  it('drops sub-second remainders', () => {
-    expect(sessionDurationSeconds(connectedAt, new Date('2026-07-05T12:00:01.900Z'))).toBe(1);
-  });
-
-  it('clamps a disconnect that precedes the connect to zero', () => {
-    expect(sessionDurationSeconds(connectedAt, new Date('2026-07-05T11:59:00.000Z'))).toBe(0);
-  });
-});
-
-describe('crash-fallback close', () => {
-  const connectedAt = new Date('2026-07-05T12:00:00.000Z');
-
-  it('closes at the last event when it precedes now', () => {
-    const now = new Date('2026-07-05T12:10:00.000Z');
-    const lastEventAt = new Date('2026-07-05T12:05:00.000Z');
-    expect(crashCloseAt(now, lastEventAt)).toEqual(lastEventAt);
-    expect(crashDurationSeconds(connectedAt, now, lastEventAt)).toBe(300);
-  });
-
-  it('closes at now when clock skew puts the last event ahead of now', () => {
-    const now = new Date('2026-07-05T12:03:00.000Z');
-    const lastEventAt = new Date('2026-07-05T12:05:00.000Z');
-    expect(crashCloseAt(now, lastEventAt)).toEqual(now);
-    expect(crashDurationSeconds(connectedAt, now, lastEventAt)).toBe(180);
   });
 });

@@ -11,6 +11,7 @@ function makeEntry(overrides: Partial<ScheduledTaskEntry> = {}): ScheduledTaskEn
   return {
     id: '019f46a1-0000-7000-8000-000000000001',
     serverId: '019f46a1-0000-7000-8000-000000000099',
+    serverName: 'Alpha',
     name: 'Nightly restart',
     taskType: 'restart',
     params: {},
@@ -357,6 +358,25 @@ describe('runScheduledTaskTick', () => {
     expect(d2.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 0);
   });
 
+  it('substitutes {server} with the name of the server the task runs on (#640)', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      serverName: 'Bravo',
+      params: { messages: ['Welcome to {server}! Rules: {server}'] },
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await runScheduledTaskTick(deps);
+
+    expect(deps.sendRconCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ['Welcome to Bravo! Rules: Bravo'] }),
+    );
+  });
+
   it('dispatches a legacy single-message broadcast but never advances the rotation cursor', async () => {
     const entry = makeEntry({
       taskType: 'broadcast',
@@ -506,5 +526,68 @@ describe('runScheduledTaskTick', () => {
         detail: expect.objectContaining({ echo: 'failed' }),
       }),
     );
+  });
+});
+
+describe('runScheduledTaskTick failure isolation and retry limits (#1015, #1016)', () => {
+  it('keeps processing later tasks when bookkeeping after a successful dispatch throws (#1015)', async () => {
+    const first = makeEntry({ id: 'task-a', taskType: 'set_next_layer', params: { layer: 'A' } });
+    const second = makeEntry({ id: 'task-b', taskType: 'set_next_layer', params: { layer: 'B' } });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([first, second]),
+      recordRun: vi.fn().mockRejectedValueOnce(new Error('db down')).mockResolvedValue(undefined),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(deps.sendRconCommand).toHaveBeenCalledTimes(2);
+    expect(deps.setLastExecutedAt).toHaveBeenCalledWith('task-b', second.scheduledAt);
+    expect(result.executed).toBe(1);
+    expect(deps.diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'scheduled_task.bookkeeping_failed', severity: 'error' }),
+    );
+  });
+
+  it('backs off a transiently failing task instead of retrying on every tick (#1016)', async () => {
+    const entry = makeEntry({ taskType: 'set_next_layer', params: { layer: 'A' } });
+    const retries = new Map();
+    const sendRconCommand = vi.fn().mockRejectedValue(new Error('redis unavailable'));
+    const base = new Date('2026-07-11T10:00:05.000Z').getTime();
+    const tickAt = (offsetMs: number) =>
+      runScheduledTaskTick(
+        makeDeps({
+          now: new Date(base + offsetMs),
+          loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+          sendRconCommand,
+          retries,
+        }),
+      );
+
+    await tickAt(0);
+    await tickAt(30_000);
+    expect(sendRconCommand).toHaveBeenCalledTimes(1);
+    await tickAt(65_000);
+    expect(sendRconCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up on an occurrence after the attempt cap and advances the cursor (#1016)', async () => {
+    const entry = makeEntry({ taskType: 'set_next_layer', params: { layer: 'A' } });
+    const retries = new Map();
+    const base = new Date('2026-07-11T10:00:05.000Z').getTime();
+    let setLast = vi.fn();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      setLast = vi.fn().mockResolvedValue(undefined);
+      await runScheduledTaskTick(
+        makeDeps({
+          now: new Date(base + attempt * 3_600_000),
+          loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+          sendRconCommand: vi.fn().mockRejectedValue(new Error('boom')),
+          setLastExecutedAt: setLast,
+          retries,
+        }),
+      );
+    }
+    expect(setLast).toHaveBeenCalledWith(entry.id, entry.scheduledAt);
   });
 });

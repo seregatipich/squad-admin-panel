@@ -59,7 +59,7 @@ apps/workers/rcon/
 - `@squad/db` — Drizzle client, `servers`, `serverCredentials`, `serverSettings` tables
 - `@squad/diag` — `createDiag({ redis, log })` for per-target lifecycle + targets-changed emits to `diag:queue`
 - `@squad/shared-config` — `startHeartbeat`, `resolveRconHost`, `redisSinkStream`
-- `@squad/shared-types` — `EventEnvelope`, `STREAM_NAME`, `CONSUMER_GROUP`, RCON command queue contract
+- `@squad/shared-types` — `EventEnvelope`, `STREAM_NAME`, RCON command queue contract
 - `ioredis` — Redis client
 - `pino` — structured logging with multistream (stdout + `panel:logs` Redis sink)
 

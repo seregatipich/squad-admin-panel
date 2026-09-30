@@ -1,21 +1,7 @@
 import { sql } from 'drizzle-orm';
-import {
-  boolean,
-  check,
-  customType,
-  integer,
-  pgTable,
-  text,
-  timestamp,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { boolean, check, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 import { servers } from './servers.js';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
 
 /**
  * Where worker-log-ingest reads `SquadGame.log` for a server the panel does

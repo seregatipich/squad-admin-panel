@@ -7,7 +7,6 @@ import {
   outcomeSegments,
   peakScale,
   windowRange,
-  winnerLabelRu,
 } from './analytics-data';
 
 describe('formatHour', () => {
@@ -41,14 +40,6 @@ describe('outcomeSegments', () => {
   it('yields zero percentages when there are no matches', () => {
     const segments = outcomeSegments({ team1: 0, team2: 0, draw: 0, unknown: 0, total: 0 });
     expect(segments.every((s) => s.percent === 0)).toBe(true);
-  });
-});
-
-describe('winnerLabelRu', () => {
-  it('maps outcome keys to Russian labels', () => {
-    expect(winnerLabelRu('team1')).toBe('Команда 1');
-    expect(winnerLabelRu('draw')).toBe('Ничья');
-    expect(winnerLabelRu('unknown')).toBe('Неизвестно');
   });
 });
 

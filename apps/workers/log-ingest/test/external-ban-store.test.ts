@@ -33,6 +33,7 @@ function makeRedis() {
       keys.add(key);
       return 'OK';
     }),
+    del: vi.fn(async (key: string) => (keys.delete(key) ? 1 : 0)),
     publish: vi.fn(async () => 1),
     xadd: vi.fn(async () => 'stream-id'),
   };
@@ -147,6 +148,23 @@ describe('handleExternalBanConnect', () => {
     });
     const matched = await db.select().from(events).where(eq(events.serverId, SERVER_ID));
     expect(matched[0]).toMatchObject({ kind: 'externalban.matched' });
+  });
+
+  it('releases the cooldown when the kick could not be queued so the next connect retries (#918)', async () => {
+    const redis = makeRedis();
+    redis.xadd.mockRejectedValueOnce(new Error('redis down'));
+    const cache = makeCache('kick');
+    const first = await handleExternalBanConnect(db, redis, cache as never, {
+      serverId: SERVER_ID,
+      event: connectEvent(),
+    });
+    const second = await handleExternalBanConnect(db, redis, cache as never, {
+      serverId: SERVER_ID,
+      event: connectEvent(),
+    });
+
+    expect(first).toMatchObject({ outcome: 'handled', kicked: 0 });
+    expect(second).toMatchObject({ outcome: 'handled', kicked: 1 });
   });
 
   it('alerts without kicking and honors the BANNAME-style cooldown', async () => {

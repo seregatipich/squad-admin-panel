@@ -17,6 +17,8 @@ describe('parseCron5 / isValidCron5', () => {
       dayOfMonth: null,
       month: null,
       dayOfWeek: [6],
+      dayOfMonthStar: true,
+      dayOfWeekStar: false,
     });
   });
 
@@ -85,6 +87,16 @@ describe('cron5Matches', () => {
     expect(cron5Matches(expr, new Date('2026-07-11T00:00:00.000Z'))).toBe(true);
     // Neither day-of-month nor day-of-week matches.
     expect(cron5Matches(expr, new Date('2026-07-02T00:00:00.000Z'))).toBe(false);
+  });
+
+  it('ANDs a stepped day-of-month with day-of-week like Vixie cron (#1183)', () => {
+    const expr = parseCron5('0 0 */2 * 1');
+    // 2026-09-28 is a Monday with an even day-of-month: the step field rejects it.
+    expect(cron5Matches(expr, new Date('2026-09-28T00:00:00.000Z'))).toBe(false);
+    // 2026-09-21 is a Monday with an odd day-of-month: both fields match.
+    expect(cron5Matches(expr, new Date('2026-09-21T00:00:00.000Z'))).toBe(true);
+    // 2026-09-23 is an odd day-of-month but a Wednesday: day-of-week rejects it.
+    expect(cron5Matches(expr, new Date('2026-09-23T00:00:00.000Z'))).toBe(false);
   });
 
   it('rejects a day outside a day-of-month-only expression', () => {

@@ -36,7 +36,9 @@ describe('role expiry helpers', () => {
   });
 
   it('formats a stored role expiry without time or locale-dependent order', () => {
-    expect(formatRoleExpiryLabel('2099-12-31T23:59:59.999Z')).toBe('До 31/12/2099 включительно');
+    expect(formatRoleExpiryLabel('2099-12-31T23:59:59.999Z')).toBe(
+      'До 31/12/2099 включительно (UTC)',
+    );
   });
 
   it('formats a permanent VIP grant as infinity', () => {

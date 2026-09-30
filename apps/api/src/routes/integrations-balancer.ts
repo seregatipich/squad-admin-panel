@@ -5,7 +5,7 @@ import {
   BALANCER_SCHEMA_VERSION,
   BALANCER_SUBJECT_TYPES,
 } from '@squad/shared-types';
-import { and, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -80,8 +80,10 @@ function headerValue(value: string | string[] | undefined): string | undefined {
  * so an operator's decision keeps matching what they reviewed; a redelivery
  * that names a different `(server_id, mode)` is refused with 409. A genuinely
  * new snapshot additionally marks the previous still-`open` snapshot for the
- * same `(server_id, mode)` pair as `superseded`, so the review UI never shows
- * two competing "current" proposals, and prunes that server's `superseded` and
+ * same `(server_id, mode)` pair as `superseded` — unless it was generated before
+ * the open one (late delivery), in which case the new row itself is stored as
+ * `superseded` — so the review UI never shows two competing "current"
+ * proposals (a partial unique index backs this), and prunes that server's `superseded` and
  * `dismissed` snapshots received more than {@link BALANCER_PROPOSAL_RETENTION_DAYS}
  * days ago (#108) — the table otherwise grows by one row per snapshot forever.
  * `open` and `reviewed` rows are kept: they are either current or carry a
@@ -159,25 +161,17 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
           sql`SELECT pg_advisory_xact_lock(hashtext(${`balancer-proposal:${body.server_id}:${body.mode}`}))`,
         );
 
-        const inserted = await tx
-          .insert(balancerProposals)
-          .values(values)
-          .onConflictDoNothing({ target: balancerProposals.sourceSnapshotId })
-          .returning({ id: balancerProposals.id });
-
-        const created = inserted[0];
-        if (!created) {
-          const [existing] = await tx
-            .select({
-              id: balancerProposals.id,
-              serverId: balancerProposals.serverId,
-              mode: balancerProposals.mode,
-            })
-            .from(balancerProposals)
-            .where(eq(balancerProposals.sourceSnapshotId, body.source_snapshot_id))
-            .for('update')
-            .limit(1);
-          if (!existing) throw new Error('balancer proposal vanished after insert conflict');
+        const [existing] = await tx
+          .select({
+            id: balancerProposals.id,
+            serverId: balancerProposals.serverId,
+            mode: balancerProposals.mode,
+          })
+          .from(balancerProposals)
+          .where(eq(balancerProposals.sourceSnapshotId, body.source_snapshot_id))
+          .for('update')
+          .limit(1);
+        if (existing) {
           if (existing.serverId !== body.server_id || existing.mode !== body.mode) {
             return { conflict: true as const };
           }
@@ -190,17 +184,44 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
           return { conflict: false as const, duplicate: true as const, id: existing.id };
         }
 
-        await tx
-          .update(balancerProposals)
-          .set({ status: 'superseded' })
+        // A snapshot generated before the current open one (late delivery) is
+        // stored as superseded instead of displacing the newer proposal. The
+        // previous open row is superseded before the insert because
+        // balancer_proposals_open_key allows one open row per (server_id, mode).
+        const [newerOpen] = await tx
+          .select({ id: balancerProposals.id })
+          .from(balancerProposals)
           .where(
             and(
               eq(balancerProposals.serverId, body.server_id),
               eq(balancerProposals.mode, body.mode),
               eq(balancerProposals.status, 'open'),
-              ne(balancerProposals.id, created.id),
+              gt(balancerProposals.generatedAt, values.generatedAt),
             ),
-          );
+          )
+          .limit(1);
+        if (!newerOpen) {
+          await tx
+            .update(balancerProposals)
+            .set({ status: 'superseded' })
+            .where(
+              and(
+                eq(balancerProposals.serverId, body.server_id),
+                eq(balancerProposals.mode, body.mode),
+                eq(balancerProposals.status, 'open'),
+              ),
+            );
+        }
+
+        const inserted = await tx
+          .insert(balancerProposals)
+          .values({ ...values, status: newerOpen ? 'superseded' : 'open' })
+          .onConflictDoNothing({ target: balancerProposals.sourceSnapshotId })
+          .returning({ id: balancerProposals.id });
+        const created = inserted[0];
+        // Same source_snapshot_id inserted concurrently for another (server, mode).
+        if (!created) return { conflict: true as const };
+
         await tx
           .delete(balancerProposals)
           .where(

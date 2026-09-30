@@ -33,7 +33,6 @@ export const sessions = pgTable(
   (table) => ({
     playerIdIdx: index('sessions_player_id_idx').on(table.playerId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
-    lastActivityIdx: index('sessions_last_activity_idx').on(table.lastActivityAt),
     scopeChk: check('sessions_scope_chk', sql`${table.scope} IN ('panel','self_service')`),
   }),
 );

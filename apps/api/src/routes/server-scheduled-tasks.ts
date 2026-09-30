@@ -1,5 +1,6 @@
 import {
   layers,
+  SCHEDULED_TASK_TYPES,
   type ScheduledTaskParams,
   type ScheduledTaskType,
   scheduledTaskRuns,
@@ -31,7 +32,7 @@ const BROADCAST_MESSAGE_MAX = 300;
 const MAX_ROTATION_MESSAGES = 10;
 const MAX_FANOUT_SERVERS = 50;
 
-const taskTypeSchema = z.enum(['restart', 'set_next_layer', 'change_layer', 'broadcast']);
+const taskTypeSchema = z.enum(SCHEDULED_TASK_TYPES);
 const paramsSchema = z.object({
   layer: z.string().min(1).max(128).optional(),
   message: z.string().min(1).max(512).optional(),

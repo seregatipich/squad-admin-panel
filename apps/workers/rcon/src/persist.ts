@@ -203,7 +203,8 @@ async function upsertPlayer(db: DatabaseClient, p: RconPlayer): Promise<void> {
 
 /**
  * Accrue per-kit playtime (DOSSIER-3, issue #190) for the players online at
- * this `ListPlayers` poll.
+ * this `ListPlayers` poll, using one identity lookup and one multi-row upsert
+ * per poll regardless of roster size (#971).
  *
  * The elapsed time since `prevPollAt` is attributed, per online player, to
  * the kit they currently hold (their `role` field normalized via
@@ -247,37 +248,65 @@ export async function accruePlayerKitTime(
   const deltaSeconds = Math.round(clampedMs / 1000);
   if (deltaSeconds <= 0) return;
 
-  for (const p of onlinePlayers) {
+  const kitPlayers = onlinePlayers.flatMap((p) => {
     const kit = normalizeRoleName(p.role);
-    if (!kit) continue;
+    return kit ? [{ player: p, kit }] : [];
+  });
+  if (kitPlayers.length === 0) return;
 
-    const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
-    const matchClause =
-      steamBigint === null
-        ? eq(players.eosId, p.eos_id)
-        : or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint));
+  // One lookup for the whole roster instead of one per player (#971).
+  const eosIds = kitPlayers.map(({ player }) => player.eos_id);
+  const steamIds = kitPlayers.flatMap(({ player }) =>
+    player.steam_id64 ? [BigInt(player.steam_id64)] : [],
+  );
+  const identityRows = await db
+    .select({ id: players.id, eosId: players.eosId, steamId64: players.steamId64 })
+    .from(players)
+    .where(
+      steamIds.length === 0
+        ? inArray(players.eosId, eosIds)
+        : or(inArray(players.eosId, eosIds), inArray(players.steamId64, steamIds)),
+    );
+  const idByEos = new Map<string, string>();
+  const idBySteam = new Map<bigint, string>();
+  for (const row of identityRows) {
+    if (row.eosId) idByEos.set(row.eosId, row.id);
+    if (row.steamId64 !== null) idBySteam.set(row.steamId64, row.id);
+  }
 
-    const existing = await db.select({ id: players.id }).from(players).where(matchClause).limit(1);
-    const playerId = existing[0]?.id;
+  // A player listed twice must contribute one row: ON CONFLICT cannot touch
+  // the same target row twice within a single INSERT.
+  const secondsByKey = new Map<string, { playerId: string; kit: string; seconds: number }>();
+  for (const { player, kit } of kitPlayers) {
+    const playerId =
+      idByEos.get(player.eos_id) ??
+      (player.steam_id64 ? idBySteam.get(BigInt(player.steam_id64)) : undefined);
     if (!playerId) continue;
+    const key = `${playerId}:${kit}`;
+    const entry = secondsByKey.get(key) ?? { playerId, kit, seconds: 0 };
+    entry.seconds += deltaSeconds;
+    secondsByKey.set(key, entry);
+  }
+  if (secondsByKey.size === 0) return;
 
-    await db
-      .insert(playerKitTime)
-      .values({
+  await db
+    .insert(playerKitTime)
+    .values(
+      [...secondsByKey.values()].map(({ playerId, kit, seconds }) => ({
         playerId,
         kit,
         serverId,
-        seconds: deltaSeconds,
+        seconds,
         lastPlayedAt: nowPollAt,
-      })
-      .onConflictDoUpdate({
-        target: [playerKitTime.playerId, playerKitTime.kit, playerKitTime.serverId],
-        set: {
-          seconds: sql`${playerKitTime.seconds} + ${deltaSeconds}`,
-          lastPlayedAt: nowPollAt,
-        },
-      });
-  }
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [playerKitTime.playerId, playerKitTime.kit, playerKitTime.serverId],
+      set: {
+        seconds: sql`${playerKitTime.seconds} + excluded.seconds`,
+        lastPlayedAt: nowPollAt,
+      },
+    });
 }
 
 /**

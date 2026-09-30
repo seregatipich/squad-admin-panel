@@ -275,6 +275,7 @@ describeIfDb('server map-vote routes', () => {
 
   it('PUT settings persists the map-vote configuration', async () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
     const resp = await h.app.inject({
       method: 'PUT',
       url: `/api/v1/servers/${serverId}/map-vote/settings`,
@@ -304,8 +305,24 @@ describeIfDb('server map-vote routes', () => {
     });
   });
 
+  it('PUT settings refuses to enable auto-selection without an enabled candidate', async () => {
+    const cookie = await asRoleWithSquadPermissions(['changemap']);
+
+    const empty = await putSettings(cookie);
+    expect(empty.statusCode).toBe(409);
+    expect(empty.json()).toEqual({ error: 'no_enabled_candidates' });
+
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: false }]);
+    expect((await putSettings(cookie)).statusCode).toBe(409);
+    expect((await putSettings(cookie, { enabled: false })).statusCode).toBe(200);
+
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    expect((await putSettings(cookie)).statusCode).toBe(200);
+  });
+
   it('writes audit rows for settings and candidates mutations', async () => {
     const cookie = await asRoleWithSquadPermissions(['changemap']);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
 
     await h.app.inject({
       method: 'PUT',
@@ -326,7 +343,7 @@ describeIfDb('server map-vote routes', () => {
     });
     expect(settingsAudit.afterSnapshot).toMatchObject({ enabled: true });
 
-    await putCandidates(cookie, [{ layer: LAYER_A, weight: 1, enabled: true }]);
+    await putCandidates(cookie, [{ layer: LAYER_A, weight: 2, enabled: true }]);
     const candidatesAudit = await assertAuditRow(h, {
       action: 'server.map_vote.candidates.write',
       resource: 'server',

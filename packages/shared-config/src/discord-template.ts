@@ -408,3 +408,16 @@ export const DEFAULT_DISCORD_TEMPLATES: readonly DefaultTemplate[] = [
 export function defaultDiscordTemplate(eventType: string): DefaultTemplate | undefined {
   return DEFAULT_DISCORD_TEMPLATES.find((entry) => entry.eventType === eventType);
 }
+
+// HTTPS only: the webhook token is part of the URL path, so a plain-HTTP URL
+// would send it over the network in cleartext.
+const DISCORD_WEBHOOK_URL_PATTERN =
+  /^https:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i;
+
+/**
+ * Whether `url` is an https Discord webhook URL (`/api[/vN]/webhooks/<id>/<token>`).
+ * Single source for the API validation and the panel form's pre-check.
+ */
+export function isDiscordWebhookUrl(url: string): boolean {
+  return DISCORD_WEBHOOK_URL_PATTERN.test(url);
+}

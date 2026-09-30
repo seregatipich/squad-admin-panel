@@ -34,6 +34,39 @@ import type { ParsedChat } from '../parser/chat.js';
 /** Minimum gap between two firings of one rule for one player on one server. */
 export const AUTOMATION_CHAT_COOLDOWN_SECONDS = 60;
 
+/** How long the loaded rule set is reused before the next chat line reloads it. */
+export const AUTOMATION_CHAT_RULES_TTL_MS = 5_000;
+
+type ChatKeywordRules = Awaited<ReturnType<typeof loadChatKeywordRules>>;
+
+let cachedRules: { rules: ChatKeywordRules; loadedAt: number } | null = null;
+let loadingRules: Promise<ChatKeywordRules> | null = null;
+
+/** Drops the cached rule set so the next chat line reloads it from the database. */
+export function invalidateAutomationChatRules(): void {
+  cachedRules = null;
+}
+
+/**
+ * Returns the enabled `chat_keyword` rules, reusing one load for
+ * {@link AUTOMATION_CHAT_RULES_TTL_MS} so chat volume does not translate into
+ * one `automation_rules` SELECT per line. Concurrent callers share one load.
+ */
+async function getChatKeywordRules(db: DatabaseClient): Promise<ChatKeywordRules> {
+  if (cachedRules && Date.now() - cachedRules.loadedAt < AUTOMATION_CHAT_RULES_TTL_MS) {
+    return cachedRules.rules;
+  }
+  loadingRules ??= loadChatKeywordRules(db)
+    .then((rules) => {
+      cachedRules = { rules, loadedAt: Date.now() };
+      return rules;
+    })
+    .finally(() => {
+      loadingRules = null;
+    });
+  return loadingRules;
+}
+
 async function loadChatKeywordRules(db: DatabaseClient) {
   const rows = await db
     .select()
@@ -53,13 +86,19 @@ async function loadChatKeywordRules(db: DatabaseClient) {
   }));
 }
 
-function createDeps(db: DatabaseClient, redis: RconEnqueue): RunMatchDeps {
+/**
+ * `redis === null` and `notify_admin` have no delivery path here; both throw so
+ * `runMatch` records the run as `failed` instead of a false `executed`.
+ */
+function createDeps(db: DatabaseClient, redis: RconEnqueue | null): RunMatchDeps {
   return {
-    enqueueRcon: (dispatch) => sendRconCommand(redis, dispatch),
-    notifyAdmin: async (_match, dispatch) => ({
-      delivered: false,
-      detail: { channels: dispatch.channels, via: 'audit_log' },
-    }),
+    enqueueRcon: async (dispatch) => {
+      if (!redis) throw new Error('redis unavailable: RCON command not enqueued');
+      await sendRconCommand(redis, dispatch);
+    },
+    notifyAdmin: async () => {
+      throw new Error('notify_admin has no delivery transport in worker-log-ingest');
+    },
     recordRun: async (draft: AutomationRunDraft) => {
       await db.insert(automationRuns).values({
         ruleId: draft.ruleId,
@@ -107,7 +146,7 @@ export async function handleAutomationChat(
   redis: ChatRedis | null,
   { serverId, chat }: { serverId: string; chat: ParsedChat },
 ): Promise<AutomationRunDraft[]> {
-  const rules = await loadChatKeywordRules(db);
+  const rules = await getChatKeywordRules(db);
   if (rules.length === 0) return [];
   const matches = evaluate(
     {
@@ -124,7 +163,7 @@ export async function handleAutomationChat(
     rules,
   );
   if (matches.length === 0) return [];
-  const deps = createDeps(db, redis ?? { xadd: async () => null });
+  const deps = createDeps(db, redis);
   const drafts: AutomationRunDraft[] = [];
   const identity = chatSenderIdentity(chat);
   for (const match of matches) {

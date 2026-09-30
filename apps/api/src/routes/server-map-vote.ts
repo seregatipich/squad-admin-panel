@@ -248,6 +248,19 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'settings_not_found' };
       }
 
+      // Автовыбор без включённых кандидатов шедулер молча пропускает.
+      if (body.enabled) {
+        const [enabledCandidate] = await app.db
+          .select({ id: mapVoteCandidates.id })
+          .from(mapVoteCandidates)
+          .where(and(eq(mapVoteCandidates.serverId, serverId), eq(mapVoteCandidates.enabled, true)))
+          .limit(1);
+        if (!enabledCandidate) {
+          reply.code(409);
+          return { error: 'no_enabled_candidates' };
+        }
+      }
+
       await app.db
         .update(serverSettings)
         .set({

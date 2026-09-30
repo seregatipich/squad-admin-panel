@@ -43,10 +43,6 @@ export function peakScale(peakByHour: Array<{ peak_players: number }>): number {
   return peakByHour.reduce((max, entry) => Math.max(max, entry.peak_players), 0) || 1;
 }
 
-export function winnerLabelRu(key: OutcomeKey): string {
-  return OUTCOME_LABELS[key];
-}
-
 export interface OutcomeSegment {
   key: OutcomeKey;
   label: string;
@@ -68,19 +64,7 @@ export function outcomeSegments(outcomes: DashboardAnalytics['match_outcomes']):
   });
 }
 
-export function formatDurationRu(seconds: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds)) return '—';
-  const total = Math.max(0, Math.round(seconds));
-  const minutes = Math.floor(total / 60);
-  const rest = total % 60;
-  if (minutes === 0) return `${rest} сек`;
-  return `${minutes} мин ${String(rest).padStart(2, '0')} сек`;
-}
-
-export function formatHours(hours: number): string {
-  const rounded = Math.round(hours * 10) / 10;
-  return `${String(rounded).replace('.', ',')} ч`;
-}
+export { formatDurationRu, formatHours } from '@/lib/format';
 
 export function buildAnalyticsQuery(params: {
   serverId?: string | null;

@@ -6,7 +6,6 @@ import {
   canNavigatePeriod,
   columnMetric,
   currentPeriodStart,
-  defaultFilters,
   defaultSeasonPeriodStart,
   findSeason,
   formatDuration,
@@ -26,7 +25,6 @@ import {
   seasonPeriodStart,
   seasonRangeLabel,
   shiftPeriodStart,
-  shouldNavigateRow,
   sortSeasonsForSelector,
   visibleColumns,
 } from './helpers';
@@ -42,7 +40,7 @@ function normalizeSpaces(value: string): string {
 const NOW = new Date('2026-07-05T12:00:00.000Z');
 
 function withFilters(overrides: Partial<LeaderboardFilters> = {}): LeaderboardFilters {
-  return { ...defaultFilters(), ...overrides };
+  return { ...parseFilters(params('')), ...overrides };
 }
 
 function makeSeason(overrides: Partial<Season> = {}): Season {
@@ -59,7 +57,13 @@ function makeSeason(overrides: Partial<Season> = {}): Season {
 
 describe('parseFilters', () => {
   it('applies defaults for empty params', () => {
-    expect(parseFilters(params(''))).toEqual(defaultFilters());
+    expect(parseFilters(params(''))).toMatchObject({
+      metric: 'online',
+      period: 'alltime',
+      periodStart: '',
+      serverId: 'all',
+      page: 1,
+    });
   });
 
   it('reads every filter from the query-string', () => {
@@ -94,7 +98,7 @@ describe('parseFilters', () => {
 
 describe('query-string round-trip', () => {
   it('omits default values so shareable links stay clean', () => {
-    expect(buildQueryString(defaultFilters())).toBe('');
+    expect(buildQueryString(parseFilters(params('')))).toBe('');
   });
 
   it('serializes then parses back to the same filters', () => {
@@ -276,20 +280,6 @@ describe('medal rendering', () => {
   });
 });
 
-describe('row click guard', () => {
-  it('navigates on a plain left click', () => {
-    expect(shouldNavigateRow({})).toBe(true);
-  });
-
-  it('does not hijack modified clicks or active text selection', () => {
-    expect(shouldNavigateRow({ ctrlKey: true })).toBe(false);
-    expect(shouldNavigateRow({ metaKey: true })).toBe(false);
-    expect(shouldNavigateRow({ altKey: true })).toBe(false);
-    expect(shouldNavigateRow({ shiftKey: true })).toBe(false);
-    expect(shouldNavigateRow({ hasSelection: true })).toBe(false);
-  });
-});
-
 describe('formatting', () => {
   it('formats durations in hours and minutes', () => {
     expect(formatDuration(0)).toBe('0м');
@@ -311,12 +301,7 @@ describe('formatting', () => {
     expect(periodRangeLabel('alltime', '')).toBe('Всё время');
   });
 
-  it('labels a season by its name, not by a calendar year', () => {
-    expect(periodRangeLabel('season', '2026-06-01', makeSeason({ name: 'Лето 2026' }))).toBe(
-      'Лето 2026',
-    );
-    // No season loaded yet (or an unknown period_start): fall back to the
-    // generic chip label rather than inventing a year.
+  it('labels a season with the generic chip label, not a calendar year', () => {
     expect(periodRangeLabel('season', '2026-06-01')).toBe('Сезон');
     expect(periodRangeLabel('season', '')).toBe('Сезон');
   });

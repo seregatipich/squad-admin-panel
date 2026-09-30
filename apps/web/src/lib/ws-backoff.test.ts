@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextBackoffMs } from './ws-backoff';
+import { jitteredBackoffMs, nextBackoffMs } from './ws-backoff';
 
 describe('nextBackoffMs', () => {
   it('returns 1000 ms on the first attempt', () => {
@@ -32,5 +32,26 @@ describe('nextBackoffMs', () => {
   it('treats negative or NaN attempts as the first attempt', () => {
     expect(nextBackoffMs(-1)).toBe(1000);
     expect(nextBackoffMs(Number.NaN)).toBe(1000);
+  });
+});
+
+describe('jitteredBackoffMs', () => {
+  it('spreads the delay over the upper half of the exponential step', () => {
+    expect(jitteredBackoffMs(2, () => 0)).toBe(2000);
+    expect(jitteredBackoffMs(2, () => 0.5)).toBe(3000);
+    expect(jitteredBackoffMs(2, () => 1)).toBe(4000);
+  });
+
+  it('never exceeds the 30 s cap', () => {
+    expect(jitteredBackoffMs(50, () => 1)).toBe(30_000);
+  });
+
+  it('stays within [ceiling / 2, ceiling] for the default random source', () => {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const ceiling = nextBackoffMs(attempt);
+      const delay = jitteredBackoffMs(attempt);
+      expect(delay).toBeGreaterThanOrEqual(ceiling / 2);
+      expect(delay).toBeLessThanOrEqual(ceiling);
+    }
   });
 });

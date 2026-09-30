@@ -105,4 +105,33 @@ describe('runRotationProfileTick', () => {
       expect.objectContaining({ kind: 'rotation_profile.apply_failed' }),
     );
   });
+
+  it('retries a failed apply only after the cooldown instead of on every tick', async () => {
+    const profile = makeProfile({ id: '019f7800-0000-7000-8000-0000000000aa' });
+    const failing = {
+      fileRead: vi.fn().mockRejectedValue(new Error('bridge unavailable')),
+      fileAtomicWrite: vi.fn(),
+    };
+    const at = (iso: string) =>
+      makeDeps({
+        now: new Date(iso),
+        loadProfiles: vi.fn().mockResolvedValue([profile]),
+        bridge: failing,
+      });
+
+    const first = at('2026-07-13T05:00:00.000Z');
+    await expect(runRotationProfileTick(first)).resolves.toEqual({ applied: 0, skipped: 1 });
+
+    const next = at('2026-07-13T05:00:30.000Z');
+    await expect(runRotationProfileTick(next)).resolves.toEqual({ applied: 0, skipped: 0 });
+    expect(next.diag.emit).not.toHaveBeenCalled();
+    expect(failing.fileRead).toHaveBeenCalledTimes(1);
+
+    const afterCooldown = at('2026-07-13T05:11:00.000Z');
+    await expect(runRotationProfileTick(afterCooldown)).resolves.toEqual({
+      applied: 0,
+      skipped: 1,
+    });
+    expect(failing.fileRead).toHaveBeenCalledTimes(2);
+  });
 });

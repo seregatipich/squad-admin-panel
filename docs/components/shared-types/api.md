@@ -21,13 +21,7 @@ import { ... } from '@squad/shared-types/api';      // API DTO schemas only
 | `STREAM_NAME.eventsServer(serverId)` | `string` | `events:server:{serverId}` |
 | `STREAM_NAME.eventsGlobal()` | `string` | `events:global` |
 | `STREAM_NAME.eventsDlq()` | `string` | `events:dlq` |
-| `CONSUMER_GROUP.playersProjector` | `string` | `players-projector:v1` |
-| `CONSUMER_GROUP.auditArchiver` | `string` | `audit-archiver:v1` |
-| `CONSUMER_GROUP.stats` | `string` | `stats:v1` |
 | `DEDUP_TTL_SECONDS` | `number` | `86_400` |
-| `XAUTOCLAIM_IDLE_MS` | `number` | `120_000` |
-| `XAUTOCLAIM_TICK_MS` | `number` | `30_000` |
-| `DLQ_DELIVER_THRESHOLD` | `number` | `5` |
 
 ### `eventEnvelope` (Zod schema)
 

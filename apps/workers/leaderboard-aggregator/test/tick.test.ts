@@ -51,6 +51,31 @@ describe('runLeaderboardAggregatorTick', () => {
     periodsToRecompute.mockClear();
   });
 
+  it('recomputes the unbounded alltime period at most once per hour (#1108)', async () => {
+    const withAlltime = () => [
+      { periodType: 'day', periodStart: '2026-07-05' },
+      { periodType: 'alltime', periodStart: '1970-01-01' },
+    ];
+    periodsToRecompute
+      .mockReturnValueOnce(withAlltime())
+      .mockReturnValueOnce(withAlltime())
+      .mockReturnValueOnce(withAlltime());
+    recomputeLeaderboardPeriods.mockResolvedValue(1);
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const alltimeState = { lastRecomputedAtMs: null as number | null };
+    const sql = {} as never;
+    const at = (iso: string) => ({ sql, diag, alltimeState, now: new Date(iso) });
+
+    await runLeaderboardAggregatorTick(at('2026-07-05T02:00:00.000Z'));
+    await runLeaderboardAggregatorTick(at('2026-07-05T02:15:00.000Z'));
+    await runLeaderboardAggregatorTick(at('2026-07-05T03:00:00.000Z'));
+
+    const typesPerCall = recomputeLeaderboardPeriods.mock.calls.map((call) =>
+      (call[1] as Array<{ periodType: string }>).map((p) => p.periodType),
+    );
+    expect(typesPerCall).toEqual([['day', 'alltime'], ['day'], ['day', 'alltime']]);
+  });
+
   it('recomputes the current periods, invalidates cache and emits run_ok', async () => {
     recomputeLeaderboardPeriods.mockResolvedValue(7);
     const invalidateCache = vi.fn().mockResolvedValue(3);

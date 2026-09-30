@@ -77,15 +77,27 @@ export function resolveTimezoneOffsetMinutes(
   return ianaOffsetMinutes(timezone, at) ?? 0;
 }
 
+/**
+ * Buckets connected time into the 24 local hours of the day.
+ *
+ * `offsetMinutes` is either a fixed UTC offset or a function resolving the
+ * offset in effect at a given UTC instant, so an IANA zone whose DST
+ * transition falls inside the window is bucketed with the right offset on
+ * each side of it. A segment never spans a local-hour boundary, and the
+ * offset is sampled at the segment start.
+ */
 export function bucketSessionsByLocalHour(
   sessions: PrimetimeSession[],
-  offsetMinutes: number,
+  offsetMinutes: number | ((atMs: number) => number),
   windowStartMs: number,
   windowEndMs: number,
   nowMs: number,
 ): number[] {
   const buckets = new Array<number>(HOURS_PER_DAY).fill(0);
-  const offsetMs = offsetMinutes * MINUTE_MS;
+  const offsetMsAt =
+    typeof offsetMinutes === 'function'
+      ? (atMs: number) => offsetMinutes(atMs) * MINUTE_MS
+      : () => offsetMinutes * MINUTE_MS;
 
   for (const session of sessions) {
     const startMs = session.connectedAt.getTime();
@@ -94,21 +106,19 @@ export function bucketSessionsByLocalHour(
 
     const clampedStart = Math.max(startMs, windowStartMs);
     const clampedEnd = Math.min(rawEndMs, windowEndMs);
-    if (clampedEnd <= clampedStart) continue;
 
-    const localStart = clampedStart + offsetMs;
-    const localEnd = clampedEnd + offsetMs;
-
-    let cursor = Math.floor(localStart / HOUR_MS) * HOUR_MS;
-    while (cursor < localEnd) {
-      const bucketStart = Math.max(cursor, localStart);
-      const bucketEnd = Math.min(cursor + HOUR_MS, localEnd);
-      const seconds = Math.floor((bucketEnd - bucketStart) / 1000);
+    let cursorUtc = clampedStart;
+    while (cursorUtc < clampedEnd) {
+      const offsetMs = offsetMsAt(cursorUtc);
+      const localCursor = cursorUtc + offsetMs;
+      const localHourStart = Math.floor(localCursor / HOUR_MS) * HOUR_MS;
+      const segmentEndUtc = Math.min(clampedEnd, localHourStart + HOUR_MS - offsetMs);
+      const seconds = Math.floor((segmentEndUtc - cursorUtc) / 1000);
       if (seconds > 0) {
-        const hour = Math.floor((((cursor % DAY_MS) + DAY_MS) % DAY_MS) / HOUR_MS);
+        const hour = Math.floor((((localHourStart % DAY_MS) + DAY_MS) % DAY_MS) / HOUR_MS);
         buckets[hour] = (buckets[hour] ?? 0) + seconds;
       }
-      cursor += HOUR_MS;
+      cursorUtc = segmentEndUtc;
     }
   }
 
@@ -248,7 +258,7 @@ export function computePlayerPrimetime(input: PlayerPrimetimeInput): PlayerPrime
   const offsetMinutes = resolveTimezoneOffsetMinutes(input.timezone, new Date(input.windowEndMs));
   const histogram = bucketSessionsByLocalHour(
     input.sessions,
-    offsetMinutes,
+    (atMs) => resolveTimezoneOffsetMinutes(input.timezone, new Date(atMs)),
     input.windowStartMs,
     input.windowEndMs,
     input.nowMs,

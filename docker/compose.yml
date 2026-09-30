@@ -581,6 +581,9 @@ services:
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
     pids_limit: 256
+    # The per-process pools (DATABASE_POOL_MAX) sum to ~134 connections, more
+    # than the stock limit of 100 connections (#1097).
+    command: ['postgres', '-c', 'max_connections=200']
     environment:
       POSTGRES_DB: admin
       POSTGRES_USER: admin

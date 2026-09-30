@@ -252,3 +252,49 @@ describe('findBannedNameRuleMatch', () => {
     expect(findBannedNameRuleMatch(rules, 'anything goes')?.id).toBe('fallback');
   });
 });
+
+describe('matchBannedName regex compilation cache (#1159)', () => {
+  it('compiles each regex pattern once across repeated matches', () => {
+    const OriginalRegExp = globalThis.RegExp;
+    let compilations = 0;
+    globalThis.RegExp = new Proxy(OriginalRegExp, {
+      construct(target, args, newTarget) {
+        if (args[0] === 'cache-probe-\\d+') compilations += 1;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    try {
+      for (let i = 0; i < 5; i++) {
+        expect(matchBannedName('cache-probe-\\d+', 'regex', 'CACHE-PROBE-42')).toBe(true);
+      }
+    } finally {
+      globalThis.RegExp = OriginalRegExp;
+    }
+    expect(compilations).toBe(1);
+  });
+
+  it('drops the whole cache once 512 patterns are stored, so the next lookup recompiles', () => {
+    const OriginalRegExp = globalThis.RegExp;
+    let compilations = 0;
+    globalThis.RegExp = new Proxy(OriginalRegExp, {
+      construct(target, args, newTarget) {
+        if (String(args[0]).startsWith('evict-probe-')) compilations += 1;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    try {
+      for (let i = 0; i < 513; i++) {
+        expect(matchBannedName(`evict-probe-${i}`, 'regex', `EVICT-PROBE-${i}`)).toBe(true);
+      }
+      expect(compilations).toBe(513);
+      // Pattern 0 was evicted by the clear on the 513th insert.
+      expect(matchBannedName('evict-probe-0', 'regex', 'EVICT-PROBE-0')).toBe(true);
+      expect(compilations).toBe(514);
+      // The latest pattern survived the clear and stays cached.
+      expect(matchBannedName('evict-probe-512', 'regex', 'EVICT-PROBE-512')).toBe(true);
+      expect(compilations).toBe(514);
+    } finally {
+      globalThis.RegExp = OriginalRegExp;
+    }
+  });
+});

@@ -1,6 +1,7 @@
 import {
   DISCORD_TEMPLATE_EVENT_TYPES,
   type DiscordTemplateEventType,
+  isDiscordWebhookUrl,
 } from '@squad/shared-config/discord-template';
 
 /** Event types a webhook or template can be bound to (single source: shared-config). */
@@ -57,9 +58,7 @@ export function describeApiError(status: number, code?: unknown): string {
 }
 
 export function looksLikeWebhookUrl(url: string): boolean {
-  return /^https:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i.test(
-    url.trim(),
-  );
+  return isDiscordWebhookUrl(url.trim());
 }
 
 export interface TestSendOutcome {

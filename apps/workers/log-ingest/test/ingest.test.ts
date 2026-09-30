@@ -160,13 +160,13 @@ describe('LogIngestor – player connect/disconnect flow', () => {
     expect((events[0]?.payload as Record<string, unknown>).steam_id64).toBe('76561198012345678');
   });
 
-  it('emits rcon.connected on ADMIN COMMAND log line', () => {
+  it('emits rcon.admin_command (not rcon.connected) on ADMIN COMMAND log line', () => {
     const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000 });
     const events = ing.ingest(
       '[2026.04.23-11.30.00:000][0]LogSquad: ADMIN COMMAND: ListPlayers from RCON',
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.type).toBe('rcon.connected');
+    expect(events[0]?.type).toBe('rcon.admin_command');
   });
 
   it('emits a stable event_id when the same log line is replayed', () => {

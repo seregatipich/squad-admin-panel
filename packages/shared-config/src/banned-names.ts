@@ -162,6 +162,30 @@ export function isSafeBannedNameRegex(pattern: string): boolean {
   return stack.length === 1;
 }
 
+const REGEX_CACHE_LIMIT = 512;
+/** Compiled case-insensitive regexes by pattern; `null` marks an unsafe or invalid pattern. */
+const compiledRegexCache = new Map<string, RegExp | null>();
+
+function compileBannedNameRegex(pattern: string): RegExp | null {
+  const cached = compiledRegexCache.get(pattern);
+  if (cached !== undefined) return cached;
+  let compiled: RegExp | null = null;
+  // Rules stored before unsafe patterns were refused must not run either.
+  if (isSafeBannedNameRegex(pattern)) {
+    try {
+      // Case-insensitive to match the log-ingest worker's compiled regex
+      // matcher (apps/workers/log-ingest/src/banname/matcher.ts), so this
+      // preview/check never disagrees with what actually gets enforced.
+      compiled = new RegExp(pattern, 'i');
+    } catch {
+      compiled = null;
+    }
+  }
+  if (compiledRegexCache.size >= REGEX_CACHE_LIMIT) compiledRegexCache.clear();
+  compiledRegexCache.set(pattern, compiled);
+  return compiled;
+}
+
 export function matchBannedName(
   pattern: string,
   matchType: BannedNameMatchType,
@@ -174,16 +198,7 @@ export function matchBannedName(
   if (matchType === 'substring') {
     return nickname.toLowerCase().includes(pattern.toLowerCase());
   }
-  // Rules stored before unsafe patterns were refused must not run either.
-  if (!isSafeBannedNameRegex(pattern)) return false;
-  try {
-    // Case-insensitive to match the log-ingest worker's compiled regex
-    // matcher (apps/workers/log-ingest/src/banname/matcher.ts), so this
-    // preview/check never disagrees with what actually gets enforced.
-    return new RegExp(pattern, 'i').test(nickname);
-  } catch {
-    return false;
-  }
+  return compileBannedNameRegex(pattern)?.test(nickname) ?? false;
 }
 
 /** Minimal shape `findBannedNameRuleMatch` needs from a `banned_name_rules` row. */

@@ -582,8 +582,3 @@ export async function invalidatePermissionCacheForRole(
 export function invalidateAllPermissionCaches(): void {
   cache.clear();
 }
-
-export function hasPermission(ctx: PermissionContext, required: readonly PermissionKey[]): boolean {
-  for (const key of required) if (!ctx.permissions.has(key)) return false;
-  return true;
-}

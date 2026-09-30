@@ -42,17 +42,21 @@ export function validateCandidates(candidates: readonly MapVoteCandidate[]): str
 
 /**
  * Validates the settings form before `PUT /map-vote/settings`.
- * Enabling auto-selection requires at least one candidate.
+ * Enabling auto-selection requires at least one saved, enabled candidate:
+ * `enabledCandidateCount` counts what the server has, not the editor rows.
  */
-export function validateSettings(form: MapVoteSettingsForm, candidateCount: number): string | null {
+export function validateSettings(
+  form: MapVoteSettingsForm,
+  enabledCandidateCount: number,
+): string | null {
   if (!isValidCooldown(form.layerCooldown) || !isValidCooldown(form.mapCooldown)) {
     return 'Кулдауны должны быть целыми числами от 0 до 20.';
   }
   if (form.broadcastTemplate.length > 300) {
     return 'Шаблон объявления не длиннее 300 символов.';
   }
-  if (form.enabled && candidateCount === 0) {
-    return 'Нельзя включить автовыбор без кандидатов — добавьте хотя бы один слой.';
+  if (form.enabled && enabledCandidateCount === 0) {
+    return 'Нельзя включить автовыбор без включённых кандидатов — добавьте и сохраните хотя бы один слой.';
   }
   return null;
 }
@@ -117,4 +121,26 @@ export function removeCandidateAt(
   index: number,
 ): MapVoteCandidate[] {
   return candidates.filter((_, i) => i !== index);
+}
+
+const ERROR_LABELS: Record<string, string> = {
+  deprecated_layer_confirmation_required:
+    'В списке есть устаревшие слои — подтвердите их использование и повторите.',
+  unknown_layer: 'Слоя нет в каталоге.',
+  duplicate_layer: 'Слой указан в списке дважды.',
+  forbidden: 'Недостаточно прав для этого действия.',
+  settings_not_found: 'Настройки сервера не найдены.',
+  no_enabled_candidates: 'Нельзя включить автовыбор без включённых кандидатов.',
+};
+
+/**
+ * Turns a failed map-vote API response into a Russian message: known error
+ * codes get their own text (with the offending layer name when the API sends
+ * one), everything else falls back to a generic message with the HTTP status.
+ */
+export async function describeApiError(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown; layer?: unknown } | null;
+  const label = typeof body?.error === 'string' ? ERROR_LABELS[body.error] : undefined;
+  if (!label) return `Не удалось выполнить запрос (HTTP ${res.status}).`;
+  return typeof body?.layer === 'string' ? `${label} Слой: ${body.layer}.` : label;
 }

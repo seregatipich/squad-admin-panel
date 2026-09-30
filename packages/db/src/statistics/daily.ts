@@ -123,11 +123,17 @@ export async function recomputeServerDailyStats(
           ) AS seg_end
         FROM player_sessions ps
         CROSS JOIN LATERAL generate_series(
-          FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${DAY_SECONDS})::bigint,
-          FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${nowIso}::timestamptz)) / ${DAY_SECONDS})::bigint
+          GREATEST(FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${DAY_SECONDS})::bigint, ${fromDayNumber}::bigint),
+          LEAST(
+            FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${nowIso}::timestamptz)) / ${DAY_SECONDS})::bigint,
+            ${toDayNumber}::bigint
+          )
         ) AS gd(day_number)
         WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
-          AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
+          AND (
+            ps.disconnected_at > to_timestamp(${windowStartEpoch})
+            OR (ps.disconnected_at IS NULL AND ${nowIso}::timestamptz > to_timestamp(${windowStartEpoch}))
+          )
           AND (ps.connected_at >= to_timestamp(${windowStartEpoch - SESSION_PRUNE_LOOKBACK_SECONDS})
                OR ps.disconnected_at IS NULL)
           AND gd.day_number BETWEEN ${fromDayNumber} AND ${toDayNumber}

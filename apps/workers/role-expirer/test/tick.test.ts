@@ -24,7 +24,6 @@ describe('runRoleExpiryTick', () => {
         enqueued: 2,
         revokedSessionIds: new Map([[expired[0].playerId, ['sess-1', 'sess-2']]]),
       }),
-      invalidatePermissionCache: vi.fn(),
       notifySessionsRevoked: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
@@ -38,7 +37,6 @@ describe('runRoleExpiryTick', () => {
       now,
       expect.objectContaining({ reason: 'player.role.expire', actor_player_id: null }),
     );
-    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.notifySessionsRevoked).toHaveBeenCalledWith(expired[0].playerId, [
       'sess-1',
       'sess-2',
@@ -65,7 +63,6 @@ describe('runRoleExpiryTick', () => {
       clearExpiredAssignments: vi
         .fn()
         .mockResolvedValue({ cleared: [], enqueued: 0, revokedSessionIds: new Map() }),
-      invalidatePermissionCache: vi.fn(),
       notifySessionsRevoked: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
@@ -76,7 +73,6 @@ describe('runRoleExpiryTick', () => {
       now,
       expect.objectContaining({ reason: 'player.role.expire' }),
     );
-    expect(deps.invalidatePermissionCache).not.toHaveBeenCalled();
     expect(deps.notifySessionsRevoked).not.toHaveBeenCalled();
   });
 
@@ -107,7 +103,6 @@ describe('runRoleExpiryTick', () => {
           [expired[1].playerId, ['sess-2']],
         ]),
       }),
-      invalidatePermissionCache: vi.fn(),
       notifySessionsRevoked: vi
         .fn()
         .mockRejectedValueOnce(new Error('redis down'))

@@ -39,7 +39,7 @@ afterAll(async () => {
 
 describe('persistAndPublish', () => {
   it('stores the envelope once across retries without a processed_events row', async () => {
-    // biome-ignore lint/suspicious/noExplicitAny: fake exposes only set/xadd/publish
+    // biome-ignore lint/suspicious/noExplicitAny: fake exposes only set/xadd
     const redis = makeRedis() as any;
 
     await persistAndPublish(db, redis, envelope);
@@ -53,5 +53,17 @@ describe('persistAndPublish', () => {
       .from(processedEvents)
       .where(eq(processedEvents.eventId, envelope.event_id));
     expect(processed).toHaveLength(0);
+  });
+
+  // regression (#858): bansync.* payloads name sources and fetch errors, and the
+  // live-bus channel is broadcast to every WebSocket viewer with no consumer.
+  it('never publishes to the live-bus channel', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: fake exposes only set/xadd
+    const redis = makeRedis() as any;
+
+    await persistAndPublish(db, redis, envelope);
+
+    expect(redis.publish).not.toHaveBeenCalled();
+    expect(redis.xadd).toHaveBeenCalledTimes(1);
   });
 });

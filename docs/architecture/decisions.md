@@ -191,7 +191,7 @@ The user requirement was that the panel own the destructive lifecycle end-to-end
 
 5. **Restore = re-install + overlay, not container-resurrection.** `POST /api/v1/servers/archive/:id/restore` mints a new server (UUIDv7, copies `serverSettings` from the archive, generates a fresh RCON password). Caller drives the standard install flow. Then `POST /api/v1/servers/:newId/restore-configs { from_archive_id }` reads the latest `deletion-backup-marker` rows and overlays them via `bridge.fileAtomicWrite`, skipping `Rcon.cfg` and (since #10) `License.cfg`. Each overlaid file lands as a new `config_versions` row with `message = 'restored from server <id>...'`, so blame and history stay consistent.
 
-6. **Live-bus replaces polling for status.** New plugin `apps/api/src/plugins/live-bus.ts` + route `GET /api/v1/ws/live`. Typed events: `server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`. Producers: status-reconciler emits on edge transitions, bridge-heartbeat on up/down flips, worker-rcon `PUBLISH`es on a separate Redis channel that the API re-emits. Web client uses `useSyncExternalStore` for instant card updates and renders a sticky `ConnectionBanner` when WS or bridge drop.
+6. **Live-bus replaces polling for status.** New plugin `apps/api/src/plugins/live-bus.ts` + route `GET /api/v1/ws/live`. Typed events: `server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`. Producers: status-reconciler emits on edge transitions, bridge-heartbeat on up/down flips, worker-rcon `PUBLISH`es on a separate Redis channel that the API re-emits. Web client uses `useSyncExternalStore` for instant card updates and renders a sticky `ConnectionBanner` when WS or bridge drop.
 
 ### Rationale
 
@@ -235,7 +235,7 @@ The panel had an RBAC schema that was never fully enforced: `player_role_assignm
 5. **Five seeded roles in SQL** — Owner (system, `is_system_role = true`), Senior Admin, Admin, Moderator, Viewer — with full permission sets INSERTed in `0009`. No application-layer seeder.
 6. **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta.first_owner_claimed` and a Postgres advisory lock to assign the Owner role to the first Steam login on a fresh panel. The Owner claim no longer belongs to setup routes; the current `/setup` page only finalizes panel metadata after the Owner session exists.
 7. **16-color palette** — `roles.color` constrained by a DB CHECK to 16 Tailwind slug names mirrored in `ROLE_COLORS`. Unit test asserts TS constant ↔ SQL constraint sync.
-8. **Point-invalidated in-memory cache** — `loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s. `invalidatePermissionCache` and `invalidatePermissionCacheForRole` clear entries immediately on role mutations; TTL is a safety-net only.
+8. **Point-invalidated in-memory cache** — `loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s. `invalidatePermissionCache` and `invalidatePermissionCacheForRole` clear entries immediately on role mutations; TTL is a safety-net only. The in-process cache belongs to the API: `worker-role-expirer` runs in another process and cannot invalidate it, so a role expired or a subscription renewed by the worker reaches an API process within the 30 s TTL (sessions of an expired role are revoked immediately).
 
 ### Rationale
 

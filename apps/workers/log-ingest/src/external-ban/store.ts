@@ -1,13 +1,10 @@
 import {
   alertEvents,
   alertRules,
-  auditLog,
   type DatabaseClient,
   moderationActions,
-  playerNameHistory,
   players,
 } from '@squad/db';
-import { normalizePlayerName } from '@squad/shared-config';
 import {
   type EventEnvelope,
   type ExternalBanMatchedPayload,
@@ -19,6 +16,7 @@ import { and, eq, or } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { persistEventEnvelope } from '../event-store.js';
+import { createPlayerWithHistory } from '../player-identity/create-player.js';
 import { publish } from '../publish.js';
 import type { ExternalBanAction, ExternalBanCache, ExternalBanMatch } from './cache.js';
 
@@ -67,42 +65,14 @@ async function resolvePlayer(
     .limit(1);
   if (existing[0]) return existing[0].id;
 
-  const playerId = uuidv7();
-  try {
-    await db.insert(players).values({
-      id: playerId,
-      steamId64: BigInt(identity.steamId64),
-      eosId: identity.eosId,
-      canonicalName: identity.name,
-      canonicalNameNormalized: normalizePlayerName(identity.name),
-    });
-    await db.insert(playerNameHistory).values({
-      playerId,
-      name: identity.name,
-      nameNormalized: normalizePlayerName(identity.name),
-    });
-    await db.insert(auditLog).values({
-      actorKind: 'system',
-      actorSystemLabel: EXTERNAL_BAN_SYSTEM_LABEL,
-      actionType: 'player.created',
-      targetType: 'player',
-      targetId: playerId,
-      context: {
-        steam_id64: identity.steamId64,
-        eos_id: identity.eosId,
-        canonical_name: identity.name,
-      },
-      rowHash: Buffer.from([]),
-    });
-    return playerId;
-  } catch {
-    const raced = await db
-      .select({ id: players.id })
-      .from(players)
-      .where(filters.length === 1 ? filters[0] : or(...filters))
-      .limit(1);
-    return raced[0]?.id ?? null;
-  }
+  const created = await createPlayerWithHistory(db, identity, EXTERNAL_BAN_SYSTEM_LABEL);
+  if (created) return created;
+  const raced = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(filters.length === 1 ? filters[0] : or(...filters))
+    .limit(1);
+  return raced[0]?.id ?? null;
 }
 
 async function enqueueKick(
@@ -198,10 +168,12 @@ export async function handleExternalBanConnect(
   if (matches.length === 0) return { outcome: 'no_match' };
 
   const identity = payload.eos_id ?? payload.steam_id64;
+  const cooldownKey = (match: ExternalBanMatch) =>
+    `externalban:cooldown:${identity}:${match.externalBanId}`;
   const uncooldedMatches: ExternalBanMatch[] = [];
   for (const match of matches) {
     const claimed = await redis.set(
-      `externalban:cooldown:${identity}:${match.externalBanId}`,
+      cooldownKey(match),
       '1',
       'EX',
       EXTERNAL_BAN_COOLDOWN_SECONDS,
@@ -213,11 +185,19 @@ export async function handleExternalBanConnect(
     return { outcome: 'cooldown', externalBanId: matches[0]?.externalBanId ?? '' };
   }
 
-  const playerId = await resolvePlayer(db, {
-    steamId64: payload.steam_id64,
-    eosId: payload.eos_id,
-    name: payload.name,
-  });
+  // A claim only suppresses duplicates of a handled match: when handling fails
+  // before the kick is queued, release it so the next connect can retry.
+  let playerId: string | null;
+  try {
+    playerId = await resolvePlayer(db, {
+      steamId64: payload.steam_id64,
+      eosId: payload.eos_id,
+      name: payload.name,
+    });
+  } catch (err) {
+    await Promise.all(uncooldedMatches.map((match) => redis.del(cooldownKey(match))));
+    throw err;
+  }
   let kicked = 0;
   let alerted = 0;
 
@@ -240,6 +220,7 @@ export async function handleExternalBanConnect(
           )
         : false;
     if (action === 'kick' && kickEnqueued) kicked++;
+    if (action === 'kick' && !kickEnqueued) await redis.del(cooldownKey(match));
 
     if (action === 'kick' && playerId) {
       await db.insert(moderationActions).values({

@@ -28,8 +28,6 @@ export const diagnosticEvents = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.id, table.ts] }),
     tsIdx: index('diagnostic_events_ts_idx').on(table.ts),
-    serverTsIdx: index('diagnostic_events_server_ts_idx').on(table.serverId, table.ts),
-    kindTsIdx: index('diagnostic_events_kind_ts_idx').on(table.component, table.severity, table.ts),
     severityChk: check(
       'diagnostic_events_severity_chk',
       sql`severity IN ('debug','info','warn','error','fatal')`,

@@ -848,6 +848,13 @@
       "when": 1788474480000,
       "tag": "0135_audit_log_chain_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1788474540000,
+      "tag": "0136_index_cleanup_balancer_open_key",
+      "breakpoints": true
     }
   ]
 }

@@ -57,6 +57,60 @@ export interface BonusPage {
   next_cursor: number | null;
 }
 
+export interface AdjustResponse {
+  player_id: string;
+  balance: number;
+  transaction: BonusTransaction;
+}
+
+export interface PurchaseResponse {
+  ok: boolean;
+  balance: number;
+  role_id: string;
+  role_expires_at: string;
+}
+
+function asRecord(json: unknown): Record<string, unknown> | null {
+  return json && typeof json === 'object' && !Array.isArray(json)
+    ? (json as Record<string, unknown>)
+    : null;
+}
+
+/** Narrows a decoded bonus-transactions page; `null` on any shape mismatch. */
+export function parseBonusPage(json: unknown): BonusPage | null {
+  const value = asRecord(json);
+  if (!value || !Array.isArray(value.items)) return null;
+  const cursor = value.next_cursor;
+  if (cursor !== null && typeof cursor !== 'number') return null;
+  return { items: value.items as BonusTransaction[], next_cursor: cursor };
+}
+
+/** Extracts the numeric balance from a bonus-balance body; `null` on mismatch. */
+export function parseBalance(json: unknown): number | null {
+  const value = asRecord(json);
+  return value && typeof value.balance === 'number' ? value.balance : null;
+}
+
+/** Extracts the tier list from a bonus-shop body; `null` on mismatch. */
+export function parseShopTiers(json: unknown): ShopTier[] | null {
+  const value = asRecord(json);
+  return value && Array.isArray(value.tiers) ? (value.tiers as ShopTier[]) : null;
+}
+
+/** Narrows a bonus adjustment response; `null` on any shape mismatch. */
+export function parseAdjustResponse(json: unknown): AdjustResponse | null {
+  const value = asRecord(json);
+  if (!value || typeof value.balance !== 'number' || !asRecord(value.transaction)) return null;
+  return value as unknown as AdjustResponse;
+}
+
+/** Narrows a bonus purchase response; `null` on any shape mismatch. */
+export function parsePurchaseResponse(json: unknown): PurchaseResponse | null {
+  const value = asRecord(json);
+  if (!value || typeof value.ok !== 'boolean' || typeof value.balance !== 'number') return null;
+  return value as unknown as PurchaseResponse;
+}
+
 export function buildBonusQuery(
   filters: BonusFilters,
   cursor?: number | null,

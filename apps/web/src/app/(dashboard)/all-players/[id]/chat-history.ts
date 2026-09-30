@@ -73,6 +73,23 @@ export interface ChatPage {
   next_cursor: string | null;
 }
 
+/** Narrows a decoded chat-messages page; `null` on any shape mismatch. */
+export function parseChatPage(json: unknown): ChatPage | null {
+  if (!json || typeof json !== 'object') return null;
+  const value = json as Record<string, unknown>;
+  if (!Array.isArray(value.items)) return null;
+  const cursor = value.next_cursor;
+  if (cursor !== null && typeof cursor !== 'string') return null;
+  return { items: value.items as ChatMsg[], next_cursor: cursor };
+}
+
+/** Extracts the numeric count from a chat-count body; `null` on mismatch. */
+export function parseChatCount(json: unknown): number | null {
+  if (!json || typeof json !== 'object') return null;
+  const count = (json as Record<string, unknown>).count;
+  return typeof count === 'number' ? count : null;
+}
+
 export function buildChatQuery(
   playerId: string,
   filters: ChatFilters,

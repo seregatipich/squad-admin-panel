@@ -1,14 +1,7 @@
+import { isDiscordWebhookUrl } from '@squad/shared-config/discord-template';
+
 const WEBHOOK_URL_PARTS = /\/webhooks\/(\d+)\/([A-Za-z0-9_.-]+)/;
-// HTTPS only: the webhook token is part of the URL path, so a plain-HTTP URL
-// would send it over the network in cleartext.
-const WEBHOOK_URL_VALIDATION =
-  /^https:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_.-]+$/i;
-
 export const BOT_TOKEN_MASK = '****';
-
-export function isDiscordWebhookUrl(url: string): boolean {
-  return WEBHOOK_URL_VALIDATION.test(url);
-}
 
 export function maskWebhookUrl(url: string): string {
   const parts = url.match(WEBHOOK_URL_PARTS);
@@ -16,3 +9,5 @@ export function maskWebhookUrl(url: string): string {
   if (!webhookId) return '…/****';
   return `…/${webhookId.slice(0, 4)}…/****`;
 }
+
+export { isDiscordWebhookUrl };

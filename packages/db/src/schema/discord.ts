@@ -1,20 +1,6 @@
-import {
-  boolean,
-  customType,
-  integer,
-  jsonb,
-  pgTable,
-  text,
-  timestamp,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bytea } from './_types.js';
 import { servers } from './servers.js';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
 
 export const DISCORD_EVENT_TYPES = [
   'server_crashed',

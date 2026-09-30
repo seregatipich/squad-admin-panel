@@ -140,6 +140,41 @@ describe('handleChat flag detection failures', () => {
   });
 });
 
+describe('resolvePlayerId name fallback (#1057)', () => {
+  it('does not match by name when the sender has ids that match nobody', async () => {
+    const unknown = unknownSenderDb();
+    expect(await resolvePlayerId(unknown, chat({ playerName: '[XYZ] Bob' }))).toBeNull();
+    expect(
+      (unknown as unknown as { select: ReturnType<typeof vi.fn> }).select,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it('still falls back to the name for a sender without any id', async () => {
+    const { db, select } = knownSenderDb();
+    const nameOnly = chat({ eosId: null, steamId64: null });
+    expect(await resolvePlayerId(db, nameOnly)).toBe(PLAYER_ID);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('handleChat publish failure (#1058)', () => {
+  it('archives the line and reports the error when the live-bus publish rejects', async () => {
+    const { db, values } = knownSenderDb();
+    const publish = vi.fn().mockRejectedValue(new Error('redis down'));
+    const onPublishError = vi.fn();
+
+    const frame = await handleChat(
+      db,
+      { publish },
+      { serverId: SERVER_ID, chat: chat(), onPublishError },
+    );
+
+    expect(onPublishError).toHaveBeenCalledWith(expect.objectContaining({ message: 'redis down' }));
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ playerId: PLAYER_ID }));
+    expect(frame.data.message).toBe('hello panel');
+  });
+});
+
 describe('resolvePlayerId with a PlayerIdCache', () => {
   it('answers a repeat sender from the cache without querying', async () => {
     const { db, select } = knownSenderDb();
@@ -157,10 +192,10 @@ describe('resolvePlayerId with a PlayerIdCache', () => {
     const unknown = unknownSenderDb();
     expect(await resolvePlayerId(unknown, chat(), cache)).toBeNull();
     expect(await resolvePlayerId(unknown, chat(), cache)).toBeNull();
-    // Each miss runs the ID lookup plus the two name lookups again.
+    // Each miss runs the ID lookup again; a sender with ids is never name-matched.
     expect(
       (unknown as unknown as { select: ReturnType<typeof vi.fn> }).select,
-    ).toHaveBeenCalledTimes(6);
+    ).toHaveBeenCalledTimes(2);
 
     const { db, select } = knownSenderDb();
     const nameOnly = chat({ eosId: null, steamId64: null });

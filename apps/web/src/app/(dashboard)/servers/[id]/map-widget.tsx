@@ -1,5 +1,5 @@
 'use client';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -17,7 +17,10 @@ import { announcesMatchBoundary } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { canSubmitLayer, filterLayers, formatMatchElapsed } from './map-widget-helpers';
 
-const REFRESH_INTERVAL_MS = 10_000;
+/** Резервный опрос: изменения карты приходят по live-шине, воркер обновляет статус раз в ~30 с. */
+const REFRESH_INTERVAL_MS = 30_000;
+/** Метка «идёт N мин» точна до минуты, чаще перерисовывать виджет незачем. */
+const ELAPSED_TICK_MS = 30_000;
 
 interface MapSide {
   layer: string;
@@ -81,19 +84,27 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
   const [confirmDeprecated, setConfirmDeprecated] = useState(false);
   const [changeConfirmOpen, setChangeConfirmOpen] = useState(false);
   const [endMatchConfirmOpen, setEndMatchConfirmOpen] = useState(false);
+  const catalogRequested = useRef(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
+  /** Номер последнего запроса: запоздавший ответ не должен затирать более свежий. */
+  const latestLoad = useRef(0);
+
   const load = useCallback(async () => {
+    const request = ++latestLoad.current;
     try {
       const res = await fetch(`/api/v1/servers/${serverId}/map`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as MapResponse);
+      const next = (await res.json()) as MapResponse;
+      if (request !== latestLoad.current) return;
+      setData(next);
       setErr(null);
     } catch (e) {
+      if (request !== latestLoad.current) return;
       setErr((e as Error).message);
     }
   }, [serverId]);
@@ -105,12 +116,14 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
   }, [load]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    if (!canChangeMap) return;
+    // Каталог слоёв большой: грузим его при первом открытии окна выбора.
+    if (!canChangeMap || pickerMode === null || catalogRequested.current) return;
+    catalogRequested.current = true;
     let cancelled = false;
     void (async () => {
       try {
@@ -125,7 +138,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
     return () => {
       cancelled = true;
     };
-  }, [canChangeMap]);
+  }, [canChangeMap, pickerMode]);
 
   const onMapChanged = useCallback(
     (event: { data: { server_id: string } }) => {
@@ -213,6 +226,11 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
       setBusy(false);
     }
   }
+
+  const dialogError =
+    feedback?.kind === 'err' ? (
+      <InlineBanner tone="crit" title="Не удалось выполнить действие" description={feedback.text} />
+    ) : null;
 
   const canSubmit = canSubmitLayer(pickerSelected, confirmDeprecated);
 
@@ -327,6 +345,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
         }
       >
         <div className="space-y-3">
+          {dialogError}
           {pickerMode === 'change' ? (
             <InlineBanner
               tone="warn"
@@ -407,7 +426,12 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
         open={changeConfirmOpen}
         onClose={() => setChangeConfirmOpen(false)}
         title="Сменить карту сейчас?"
-        body={`Матч будет сброшен, и сервер загрузит «${pickerSelected?.name ?? ''}».`}
+        body={
+          <>
+            <p>{`Матч будет сброшен, и сервер загрузит «${pickerSelected?.name ?? ''}».`}</p>
+            {dialogError}
+          </>
+        }
         confirmLabel="Сменить карту"
         cancelLabel="Отмена"
         tone="default"
@@ -419,7 +443,12 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
         open={endMatchConfirmOpen}
         onClose={() => setEndMatchConfirmOpen(false)}
         title="Завершить матч?"
-        body="Текущий матч на сервере будет немедленно завершён (AdminEndMatch)."
+        body={
+          <>
+            <p>Текущий матч на сервере будет немедленно завершён (AdminEndMatch).</p>
+            {dialogError}
+          </>
+        }
         confirmLabel="Завершить"
         cancelLabel="Отмена"
         tone="default"

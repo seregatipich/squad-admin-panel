@@ -1,6 +1,6 @@
 import type { Diag } from '@squad/diag';
-import { findLastCron5Occurrence, type RconOperatorCommandName } from '@squad/shared-types';
-import type { SendRconCommandInput } from './due-occurrence.js';
+import type { RconOperatorCommandName } from '@squad/shared-types';
+import { resolveCronDueOccurrence, type SendRconCommandInput } from './due-occurrence.js';
 
 /** One row of the `seed_schedule` table (SEED-3, #142). */
 export interface SeedScheduleEntry {
@@ -50,32 +50,11 @@ export interface SeedScheduleTickResult {
 
 /**
  * Resolves the single cron/one-off occurrence (if any) that is due for
- * `entry` as of `now`, or `null` when nothing is due.
- *
- * - One-off (`recurrence === null`): due once `startsAt <= now`, and only if
- *   it has never executed (`lastExecutedAt === null`).
- * - Recurring: due when {@link findLastCron5Occurrence} finds a matching
- *   minute strictly after the last-known cursor (`lastExecutedAt`, or
- *   `createdAt` if it has never executed) and at or before `now`. When
- *   multiple occurrences were missed between ticks, only the most recent is
- *   returned — the tick fires once, advancing the cursor past every missed
- *   occurrence at once, rather than replaying each one — regardless of how
- *   far behind the cursor has fallen.
+ * `entry` as of `now`, or `null` when nothing is due. A one-off entry fires
+ * once at `startsAt`; see {@link resolveCronDueOccurrence} for the rules.
  */
 export function resolveDueOccurrence(entry: SeedScheduleEntry, now: Date): Date | null {
-  if (entry.recurrence === null) {
-    if (entry.lastExecutedAt !== null) return null;
-    return entry.startsAt.getTime() <= now.getTime() ? entry.startsAt : null;
-  }
-
-  const hasPriorOccurrence = entry.lastExecutedAt !== null;
-  const cursor = entry.lastExecutedAt ?? entry.createdAt;
-  // The prior cursor (when it is itself a previously-fired occurrence) must
-  // be excluded from the scan window, or the same minute would re-match.
-  const from = hasPriorOccurrence ? new Date(cursor.getTime() + 60_000) : cursor;
-  if (from.getTime() > now.getTime()) return null;
-
-  return findLastCron5Occurrence(entry.recurrence, from, now);
+  return resolveCronDueOccurrence({ ...entry, oneOffAt: entry.startsAt }, now);
 }
 
 /**

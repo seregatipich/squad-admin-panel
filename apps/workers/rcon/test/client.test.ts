@@ -361,3 +361,24 @@ describe('RconClient restricted-address guard (#30, finding #333)', () => {
     }
   });
 });
+
+describe('RconClient keepalive (#976)', () => {
+  it('pings an idle connection but stays silent while commands keep it busy', async () => {
+    const { server, port, commands } = await makeSquadLikeServer();
+    const client = new RconClient(makeOpts({ port, commandTimeoutMs: 1500, keepaliveMs: 100 }));
+    try {
+      await client.connect();
+      for (let i = 0; i < 6; i++) {
+        await client.exec('ListPlayers');
+        await sleep(40);
+      }
+      expect(commands.filter((command) => command === 'ShowServerInfo')).toEqual([]);
+
+      await sleep(350);
+      expect(commands).toContain('ShowServerInfo');
+    } finally {
+      await client.close();
+      await closeServer(server);
+    }
+  });
+});

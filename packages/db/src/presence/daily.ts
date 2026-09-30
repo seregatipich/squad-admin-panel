@@ -1,5 +1,4 @@
 import type postgres from 'postgres';
-import type { SessionMode } from '../schema/player-sessions.js';
 import { SESSION_PRUNE_LOOKBACK_SECONDS } from '../session-window.js';
 
 const DAY_MS = 86_400_000;
@@ -38,48 +37,6 @@ export function splitSessionSecondsByUtcDay(connectedAt: Date, endAt: Date): Day
     cursorMs = segmentEndMs;
   }
   return segments;
-}
-
-export interface SessionInput {
-  connectedAt: Date;
-  endAt: Date;
-  mode?: SessionMode;
-}
-
-export interface DailyBucket {
-  day: string;
-  onlineSeconds: number;
-  boostSeconds: number;
-  queueSeconds: number;
-  seedSeconds: number;
-  sessionCount: number;
-}
-
-export function aggregateSessionsByDay(sessions: SessionInput[]): DailyBucket[] {
-  const byDay = new Map<string, DailyBucket>();
-  for (const session of sessions) {
-    const mode = session.mode ?? 'online';
-    for (const segment of splitSessionSecondsByUtcDay(session.connectedAt, session.endAt)) {
-      let bucket = byDay.get(segment.day);
-      if (!bucket) {
-        bucket = {
-          day: segment.day,
-          onlineSeconds: 0,
-          boostSeconds: 0,
-          queueSeconds: 0,
-          seedSeconds: 0,
-          sessionCount: 0,
-        };
-        byDay.set(segment.day, bucket);
-      }
-      if (mode === 'boost') bucket.boostSeconds += segment.seconds;
-      else if (mode === 'queue') bucket.queueSeconds += segment.seconds;
-      else if (mode === 'seed') bucket.seedSeconds += segment.seconds;
-      else bucket.onlineSeconds += segment.seconds;
-      bucket.sessionCount += 1;
-    }
-  }
-  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 export interface RecomputeDailyPresenceInput {
@@ -182,6 +139,13 @@ export async function recomputeDailyPresence(
   });
 }
 
+/**
+ * Full-history backfill of `player_daily_presence`: recomputes every day from
+ * the earliest session to `now` through {@link recomputeDailyPresence}, the
+ * single source of truth for the aggregation. Not called by the presence-daily
+ * worker (it recomputes a rolling window); it is the operator/test entry point
+ * for rebuilding the table from `player_sessions`.
+ */
 export async function recomputeDailyPresenceForAllSessions(
   sql: postgres.Sql,
   now: Date = new Date(),

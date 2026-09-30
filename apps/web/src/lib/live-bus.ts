@@ -1,3 +1,5 @@
+import { jitteredBackoffMs } from './ws-backoff';
+
 export type LiveEvent =
   | {
       type: 'server.status';
@@ -410,8 +412,9 @@ export interface LiveBusHandle {
   forceReconnect(): void;
 }
 
-const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 const IDLE_CLOSE_DELAY_MS = 5_000;
+/** Failed reconnects in a row after which the session is probed before the next try. */
+const SESSION_PROBE_AFTER_ATTEMPTS = 3;
 
 let singleton: LiveBusHandle | null = null;
 
@@ -505,16 +508,39 @@ function makeLiveBus(): LiveBusHandle {
   const scheduleReconnect = (): void => {
     if (refCount() === 0) return;
     clearReconnect();
-    // Полный джиттер: после рестарта API вкладки не должны возвращаться
-    // одновременной волной.
-    const ceiling = BACKOFF_STEPS_MS[Math.min(attempts, BACKOFF_STEPS_MS.length - 1)];
-    const delay = Math.round(ceiling * (0.5 + Math.random() / 2));
+    // Джиттер: после рестарта API вкладки не должны возвращаться одновременной волной.
+    const delay = jitteredBackoffMs(attempts);
     attempts++;
     debug(`reconnect in ${delay}ms (attempt ${attempts})`);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      open();
+      void reconnect();
     }, delay);
+  };
+
+  /**
+   * A browser WebSocket never exposes the 401 of a rejected upgrade, so a tab
+   * whose session expired would retry forever. After repeated failures the
+   * session is probed over HTTP; on 401 reconnecting stops and the tab goes to
+   * the login page. Any other outcome (including a network error) keeps retrying.
+   */
+  const reconnect = async (): Promise<void> => {
+    if (attempts >= SESSION_PROBE_AFTER_ATTEMPTS) {
+      let sessionExpired = false;
+      try {
+        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        sessionExpired = res.status === 401;
+      } catch (err) {
+        debug('session probe failed', err);
+      }
+      if (!started) return;
+      if (sessionExpired) {
+        stop();
+        window.location.href = '/login';
+        return;
+      }
+    }
+    open();
   };
 
   const open = (): void => {

@@ -1,5 +1,16 @@
 # Changelog — worker-log-ingest
 
+## 2026-09-30
+
+### Fixed
+
+- [#93](https://github.com/seregatipich/squad-admin-panel/issues/93): `ADMIN COMMAND:` log lines are now published as `rcon.admin_command` (new in `EVENT_TYPES`, label «Админ-команда RCON» in the events filter) instead of `rcon.connected`, which only worker-rcon emits for a real RCON connection. Custom alert rules keyed on `rcon.connected` no longer fire for admin commands. Test: `test/ingest.test.ts`.
+- #93: chat automation loads enabled `chat_keyword` rules once per 5 s (`AUTOMATION_CHAT_RULES_TTL_MS`) instead of one `automation_rules` SELECT per chat line. Without Redis, or for `notify_admin` (no transport here), the run is recorded as `failed` instead of a false `executed`. Test: `test/automation-chat.test.ts`.
+- #93: a reconnecting confirmed alt of a banned player raises `alt.ban_evasion_suspected` at most once per 10 min (`altban:cooldown:<player>`, `ALT_BAN_EVASION_COOLDOWN_SECONDS`). An external-ban match whose kick could not be queued (or whose player resolution failed) releases its cooldown key so the next connect retries. Tests: `test/alt-ban-store.test.ts`, `test/external-ban-store.test.ts`.
+- #93: the three copies of player creation (banname, combat, external-ban) share `createPlayerWithHistory` (`src/player-identity/create-player.ts`): one transaction for `players`, `player_name_history` and the `player.created` audit row; only a unique violation is treated as a lost race, other errors propagate. Test: `test/create-player.test.ts`.
+- #93: `occupiedVehicleByPlayer` is cleared for a player on disconnect and entirely on a new game or server exit (`test/vehicle-ingest.test.ts`); `deserialize` validates the encrypted blob with zod (`test/crypto.test.ts`); the `!report` parser reuses the chat line grammar from `parser/chat.ts`.
+- Removed the unused API helpers `hasPermission` (`lib/rbac.ts`) and `getArchivedServer` (`lib/server-restore.ts`).
+
 ## 2026-09-28
 
 ### Fixed

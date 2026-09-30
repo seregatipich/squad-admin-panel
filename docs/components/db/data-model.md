@@ -211,8 +211,6 @@ Per-day range-partitioned table for panel-internal diagnostic events emitted by 
 |---|---|---|
 | `diagnostic_events_pkey` | `(id, ts)` | Composite PK; partition key must be part of any unique index |
 | `diagnostic_events_ts_idx` | `(ts DESC)` | Time-range scans for the bundle endpoint |
-| `diagnostic_events_server_ts_idx` | `(server_id, ts DESC)` | Per-server filter for incident reconstruction |
-| `diagnostic_events_kind_ts_idx` | `(component, severity, ts DESC)` | "What did component X log at level error?" |
 
 **Constraints**
 
@@ -711,7 +709,6 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 |---|---|
 | `sessions_steam_id64_idx` | `steam_id64` |
 | `sessions_expires_at_idx` | `expires_at` |
-| `sessions_last_activity_idx` | `last_activity_at` |
 
 ---
 
@@ -931,6 +928,7 @@ UI's green/gray/red colouring.
 **Indexes**
 
 - `balancer_proposals_source_snapshot_key` UNIQUE on `(source_snapshot_id)` — makes redelivery idempotent
+- `balancer_proposals_open_key` UNIQUE on `(server_id, mode)` WHERE `status = 'open'` — one current snapshot per granularity (migration 0136)
 - `balancer_proposals_server_generated_idx` on `(server_id, generated_at DESC)`
 - `balancer_proposals_status_idx` on `(status, generated_at DESC)`
 

@@ -38,3 +38,10 @@ describe('role-colors with hex support', () => {
     expect(roleColorToHex('not-a-color')).toBe('#737373');
   });
 });
+
+describe('roleColorToHex prototype keys (#1165)', () => {
+  it('falls back to the neutral hex for inherited property names', () => {
+    expect(roleColorToHex('constructor')).toBe('#737373');
+    expect(roleColorToHex('toString')).toBe('#737373');
+  });
+});

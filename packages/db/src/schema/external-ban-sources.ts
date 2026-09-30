@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
-  customType,
   index,
   integer,
   jsonb,
@@ -12,12 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
+import { bytea } from './_types.js';
 
 export const externalBanSources = pgTable(
   'external_ban_sources',
@@ -99,7 +93,6 @@ export const externalBans = pgTable(
       .on(table.steamId64)
       .where(sql`steam_id64 IS NOT NULL`),
     eosIdIdx: index('external_bans_eos_id_idx').on(table.eosId).where(sql`eos_id IS NOT NULL`),
-    sourceIdIdx: index('external_bans_source_id_idx').on(table.sourceId),
     activeSourceIdx: index('external_bans_active_source_idx')
       .on(table.sourceId)
       .where(sql`revoked_at IS NULL`),

@@ -42,10 +42,22 @@ describe('палитра графиков', () => {
     ['cpu', CHART_SERIES.cpu, 'good'],
     ['ram', CHART_SERIES.ram, 'accent'],
     ['disk', CHART_SERIES.disk, 'purple-500'],
+    ['memory', CHART_SERIES.memory, 'purple-500'],
     ['rx', CHART_SERIES.rx, 'accent'],
     ['tx', CHART_SERIES.tx, 'warn'],
   ])('серия %s взята из палитры состояний', (_key, value, tokenName) => {
     expect(value.toLowerCase()).toBe(token(tokenName));
+  });
+
+  it('страница мониторинга берёт цвета серий из токенов, а не из литералов', () => {
+    const page = readFileSync(
+      fileURLToPath(
+        new URL('../app/(dashboard)/servers/[id]/monitoring/page.tsx', import.meta.url),
+      ),
+      'utf8',
+    );
+    expect(page).not.toMatch(/color="#bf5af2"/i);
+    expect(page).toContain('CHART_SERIES.memory');
   });
 
   it('подсказка не изобретает собственную рамку', () => {
