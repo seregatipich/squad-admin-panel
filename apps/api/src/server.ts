@@ -34,6 +34,7 @@ import metricsPlugin from './plugins/metrics.js';
 import orphanSweepPlugin from './plugins/orphan-sweep.js';
 import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
+import sessionPrunePlugin from './plugins/session-prune.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
 import { registerRoutes } from './routes/index.js';
 
@@ -105,6 +106,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(installProgressPlugin);
   await app.register(statusReconcilerPlugin);
   await app.register(orphanSweepPlugin);
+  await app.register(sessionPrunePlugin);
 
   await registerRoutes(app as unknown as FastifyInstance);
 

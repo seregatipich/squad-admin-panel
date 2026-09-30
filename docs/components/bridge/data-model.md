@@ -70,6 +70,7 @@ Source: `apps/bridge/internal/rpc/types.go`.
 |---|---|
 | `forbidden` | Path, image, or container name rejected by policy. |
 | `invalid_args` | JSON unmarshal failure or missing required field. |
+| `not_found` | A file read targeted a path that does not exist. |
 | `runtime_error` | OS-level or Docker CLI failure. |
 | `timeout` | Operation exceeded its context deadline. |
 | `internal` | Unexpected internal error. |

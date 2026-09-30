@@ -92,6 +92,21 @@ async function settle(ms = 200): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Connects a socket and records the type of every frame it receives. */
+async function connectRecordingTypes(
+  combatView: boolean,
+): Promise<{ ws: WebSocket; types: string[] }> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, {
+    headers: { [COMBAT_VIEW_HEADER]: String(combatView) },
+  });
+  const types: string[] = [];
+  ws.on('message', (raw) => {
+    types.push((JSON.parse(raw.toString()) as { type: string }).type);
+  });
+  await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+  return { ws, types };
+}
+
 describe('/api/v1/ws/live combat replay buffer', () => {
   it('forwards live combat.event events to a socket with combat:view', async () => {
     const { ws, received } = await connect(true);
@@ -144,5 +159,33 @@ describe('/api/v1/ws/live combat replay buffer', () => {
     await settle();
     expect(received).toHaveLength(0);
     await close(ws);
+  });
+
+  it('withholds combat.vehicle frames from a socket without combat:view (#37)', async () => {
+    const vehicle: LiveEvent = {
+      type: 'combat.vehicle',
+      ts: '2026-07-09T11:04:00.000Z',
+      data: {
+        server_id: SERVER_ID,
+        match_id: null,
+        kind: 'vehicle_destroyed',
+        attacker_player_id: 'attacker-1',
+        victim_vehicle: 'BP_BTR80',
+        attacker_vehicle: null,
+        weapon: 'BP_RPG7',
+        damage: 1500,
+        occurred_at: '2026-07-09T11:04:00.000Z',
+      },
+    };
+    const denied = await connectRecordingTypes(false);
+    const allowed = await connectRecordingTypes(true);
+
+    app.liveBus.publish(vehicle);
+    await waitFor(() => allowed.types.includes('combat.vehicle'));
+    await settle();
+
+    expect(denied.types).not.toContain('combat.vehicle');
+    await close(denied.ws);
+    await close(allowed.ws);
   });
 });

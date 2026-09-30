@@ -14,10 +14,10 @@ interface BuiltApp {
   captured: DiagEvent[];
 }
 
-async function buildAppWithRedisPlugin(): Promise<BuiltApp> {
+async function buildAppWithRedisPlugin(redisUrl = TEST_REDIS_URL): Promise<BuiltApp> {
   const app = Fastify({ logger: false });
   await app.register(redisPlugin, {
-    config: { REDIS_URL: TEST_REDIS_URL } as Parameters<typeof redisPlugin>[1]['config'],
+    config: { REDIS_URL: redisUrl } as Parameters<typeof redisPlugin>[1]['config'],
   });
   await app.register(diagPlugin);
 
@@ -88,6 +88,39 @@ describe('redis listeners emit diag events', () => {
     expect(ev?.component).toBe('api');
     expect(ev?.severity).toBe('error');
     expect(ev?.payload).toEqual({ err: 'ECONNREFUSED' });
+  });
+});
+
+describe('redis outage handling (#37)', () => {
+  it('emits redis.ping.fail and redis.reconnect.attempt once per outage, not on every retry', async () => {
+    const { app, captured } = await buildAppWithRedisPlugin();
+    activeApps.push(app);
+    const count = (kind: string) => captured.filter((e) => e.kind === kind).length;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      app.redis.emit('error', new Error('connect ECONNREFUSED'));
+      app.redis.emit('reconnecting', 400);
+    }
+    await flushMicrotasks();
+    expect(count('redis.ping.fail')).toBe(1);
+    expect(count('redis.reconnect.attempt')).toBe(1);
+
+    app.redis.emit('ready');
+    app.redis.emit('error', new Error('connect ECONNREFUSED'));
+    app.redis.emit('reconnecting', 400);
+    await flushMicrotasks();
+    expect(count('redis.ping.fail')).toBe(2);
+    expect(count('redis.reconnect.attempt')).toBe(2);
+  });
+
+  it('rejects a command issued while Redis is unreachable instead of queueing it forever', async () => {
+    // Nothing listens on port 1, so every connection attempt is refused.
+    const { app } = await buildAppWithRedisPlugin('redis://127.0.0.1:1/0');
+    activeApps.push(app);
+
+    const started = Date.now();
+    await expect(app.redis.get('never-answered')).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(8_000);
   });
 });
 

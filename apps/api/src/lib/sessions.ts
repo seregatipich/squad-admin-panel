@@ -192,9 +192,15 @@ export async function revokeAllForPlayer(
   }
 }
 
+/**
+ * Deletes every session whose `expires_at` has passed. Called on a timer by
+ * the `session-prune` plugin.
+ *
+ * @returns the number of rows deleted (postgres.js reports it as `count`).
+ */
 export async function pruneExpired(db: DatabaseClient): Promise<number> {
   const result = await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
-  return (result as unknown as { rowCount?: number }).rowCount ?? 0;
+  return result.count;
 }
 
 export interface TouchSessionInput {

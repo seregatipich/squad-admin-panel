@@ -7,6 +7,7 @@ import { CombatRingBuffer } from '../lib/combat-ring-buffer.js';
 import { loadUserPermissions, type PermissionContext } from '../lib/rbac.js';
 import { resolveSession } from '../lib/sessions.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
+import { LIVE_EVENT_AUDIENCE } from '../plugins/live-bus.js';
 
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
@@ -215,7 +216,7 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         if (event.type === 'media.uploaded' && event.data.player_id !== connectionPlayerId) {
           return;
         }
-        if (event.type === 'combat.event' && !canViewCombat) return;
+        if (LIVE_EVENT_AUDIENCE[event.type] === 'combat' && !canViewCombat) return;
         safeSend(event);
       });
 

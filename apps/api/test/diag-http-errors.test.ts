@@ -1,6 +1,6 @@
 import type { Diag, DiagEvent } from '@squad/diag';
 import Fastify from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import diagPlugin from '../src/lib/diag.js';
 import errorDiagPlugin from '../src/plugins/error-diag.js';
 
@@ -166,21 +166,89 @@ describe('http error diag emits', () => {
     expect(stack.length).toBe(2000);
   });
 
-  it('preserves Fastify default JSON error envelope on 5xx', async () => {
+  it('answers a 5xx with a generic body that never carries the error message (#37)', async () => {
+    const { app, captured } = await buildApp();
+
+    app.route({
+      method: 'GET',
+      url: '/__test/throw-query',
+      handler: async () => {
+        // drizzle-orm's DrizzleQueryError message embeds the SQL text and
+        // its bound parameters.
+        throw new Error(
+          'Failed query: select "id" from "players" where "ip" = $1\nparams: 203.0.113.7',
+        );
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/__test/throw-query',
+      headers: { 'x-request-id': 'req-generic-5xx' },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain('Failed query');
+    expect(res.body).not.toContain('203.0.113.7');
+    expect(res.json()).toEqual({
+      statusCode: 500,
+      error: 'internal_error',
+      requestId: expect.any(String),
+    });
+    // The detail stays server-side, in the diag event.
+    const ev = captured.find((e) => e.kind === 'http.5xx');
+    expect((ev?.payload as { err: string }).err).toContain('Failed query');
+  });
+
+  it('keeps the error message in 4xx responses', async () => {
     const { app } = await buildApp();
 
     app.route({
       method: 'GET',
-      url: '/__test/throw-shape',
+      url: '/__test/conflict',
       handler: async () => {
-        throw new Error('shape error');
+        throw Object.assign(new Error('slug already taken'), { statusCode: 409 });
       },
     });
 
-    const res = await app.inject({ method: 'GET', url: '/__test/throw-shape' });
-    expect(res.statusCode).toBe(500);
-    const body = res.json() as { statusCode: number; error: string; message: string };
-    expect(body.statusCode).toBe(500);
-    expect(body.message).toBe('shape error');
+    const res = await app.inject({ method: 'GET', url: '/__test/conflict' });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { message: string }).message).toBe('slug already taken');
+  });
+});
+
+describe('unhandled promise rejections', () => {
+  function rejectionListeners(): Array<(reason: unknown) => void> {
+    return process.listeners('unhandledRejection') as Array<(reason: unknown) => void>;
+  }
+
+  it('reports the rejection, then exits the process with code 1 (#37)', async () => {
+    const before = new Set(rejectionListeners());
+    const { captured } = await buildApp();
+    const added = rejectionListeners().filter((listener) => !before.has(listener));
+    expect(added).toHaveLength(1);
+
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      // Invoke the plugin's listener directly: emitting the real event would
+      // also reach vitest's own handler and fail the run.
+      added[0]?.(new Error('lost promise'));
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    } finally {
+      exit.mockRestore();
+    }
+    const ev = captured.find((e) => e.kind === 'http.unhandled_rejection');
+    expect(ev?.severity).toBe('fatal');
+    expect(ev?.message).toContain('lost promise');
+  });
+
+  it('gives every app instance its own listener and removes it on close', async () => {
+    const baseline = process.listenerCount('unhandledRejection');
+    const first = await buildApp();
+    const second = await buildApp();
+    expect(process.listenerCount('unhandledRejection')).toBe(baseline + 2);
+
+    await first.app.close();
+    await second.app.close();
+    expect(process.listenerCount('unhandledRejection')).toBe(baseline);
   });
 });

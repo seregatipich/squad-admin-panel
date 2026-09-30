@@ -31,15 +31,19 @@ type StreamFrame struct {
 
 // ErrorObject maps application-level errors (not transport).
 type ErrorObject struct {
-	Code    string          `json:"code"` // forbidden | invalid_args | runtime_error | timeout | internal
+	Code    string          `json:"code"` // forbidden | invalid_args | not_found | runtime_error | timeout | internal
 	Message string          `json:"message"`
 	Detail  json.RawMessage `json:"detail,omitempty"`
 }
 
 // Well-known error codes.
 const (
-	CodeForbidden    = "forbidden"
-	CodeInvalidArgs  = "invalid_args"
+	CodeForbidden   = "forbidden"
+	CodeInvalidArgs = "invalid_args"
+	// CodeNotFound reports that a file a read targeted does not exist, so
+	// callers can tell "absent" from a real I/O failure without parsing the
+	// OS error text.
+	CodeNotFound     = "not_found"
 	CodeRuntimeError = "runtime_error"
 	CodeTimeout      = "timeout"
 	CodeInternal     = "internal"

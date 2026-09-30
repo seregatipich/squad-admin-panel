@@ -22,9 +22,9 @@ Most common causes:
 
 Almost always a bridge / `panel`-group issue. See [`components/bridge/troubleshooting.md`](../bridge/troubleshooting.md).
 
-## `DELETE /servers/:id` returns 500 `delete_failed: no config files could be backed up`
+## `DELETE /servers/:id` returns 500 `delete_failed: … could not back up <files>`
 
-**Cause**: Phase 1 of [`server-delete.ts`](../../../apps/api/src/lib/server-delete.ts) tried `bridge.fileRead` on every `ALLOWED_CONFIG_FILES` entry under `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/` and got zero hits. Either the directory is missing entirely (server was never installed, or files were already wiped manually), or the bridge can't read them (permissions, allowlist mismatch).
+**Cause**: Phase 1 of [`server-delete.ts`](../../../apps/api/src/lib/server-delete.ts) tried `bridge.fileRead` on every `ALLOWED_CONFIG_FILES` entry under `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/` and at least one file failed for a reason other than `not_found` (bridge timeout or transport error, permissions, a file over the 10 MB `fsx.MaxReadBytes` cap). The delete aborts before anything is removed, because deleting the configs dir would destroy the only copy of that file. Files the bridge reports as `not_found` are skipped; when every file is `not_found` the server is treated as never installed and deleted without a backup.
 
 **Diagnostics**:
 

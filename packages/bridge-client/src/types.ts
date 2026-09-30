@@ -3,6 +3,7 @@ import type { BridgeMethod } from '@squad/shared-config';
 export type BridgeErrorCode =
   | 'forbidden'
   | 'invalid_args'
+  | 'not_found'
   | 'runtime_error'
   | 'timeout'
   | 'internal'

@@ -82,7 +82,7 @@ func TestStreamFrameJSON(t *testing.T) {
 }
 
 func TestErrorCodes(t *testing.T) {
-	codes := []string{CodeForbidden, CodeInvalidArgs, CodeRuntimeError, CodeTimeout, CodeInternal}
+	codes := []string{CodeForbidden, CodeInvalidArgs, CodeNotFound, CodeRuntimeError, CodeTimeout, CodeInternal}
 	seen := make(map[string]bool)
 	for _, c := range codes {
 		if c == "" {

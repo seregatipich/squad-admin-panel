@@ -26,6 +26,8 @@ vi.mock('@squad/bridge-client', () => ({
 
 vi.mock('@squad/shared-config', () => ({
   HEARTBEAT_PREFIX: 'worker:heartbeat:',
+  MONITORED_WORKERS: [],
+  heartbeatKey: (name: string) => `worker:heartbeat:${name}`,
   HOST_METRICS_STREAM: 'host:metrics',
   PERMISSION_KEYS: [],
 }));

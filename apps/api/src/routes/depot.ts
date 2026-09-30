@@ -306,7 +306,9 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
       // singleton would queue every other route's Redis command behind it
       // for up to 5s at a time. Each connection gets its own duplicate,
       // matching the pattern in plugins/live-bus.ts.
-      const redis = app.redis.duplicate();
+      // XREAD BLOCK 5000 outlives the shared client's command timeout, so
+      // this connection waits for replies without one.
+      const redis = app.redis.duplicate({ commandTimeout: undefined });
       redis.on('error', () => {
         // connection lost; the read loop's catch block ends the socket.
       });

@@ -106,7 +106,7 @@ If the API process crashes between the eager UPDATE and `container_stop`, the ro
 UI delete confirm                 api                                    bridge
 ─────────────────                 ───                                    ──────
 DELETE /servers/:id ─────────▶  softDeleteServer(ctx, id):
-                                 phase 1 (THROWS on total fail):
+                                 phase 1 (THROWS if any file fails other than not_found):
                                    for cfg in ALLOWED_CONFIG_FILES:
                                      ─bridge.fileRead({path})───────▶   read configs/{id}/ServerConfig/<cfg>
                                                               ◀────    {content}

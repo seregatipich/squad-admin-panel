@@ -1,14 +1,6 @@
+import { heartbeatKey, MONITORED_WORKERS } from '@squad/shared-config';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
-
-const KNOWN_WORKERS = [
-  'rcon',
-  'log-ingest',
-  'audit-archiver',
-  'event-partition',
-  'diag-flush',
-  'metrics-sampler',
-] as const;
 
 const HEARTBEAT_LOST_THRESHOLD_MS = 30_000;
 const HEARTBEAT_TICK_MS = 30_000;
@@ -30,8 +22,8 @@ export const heartbeatWatchPlugin = fp(
       inFlight = true;
       try {
         const now = Date.now();
-        for (const name of KNOWN_WORKERS) {
-          const ttl = await app.redis.pttl(`worker:heartbeat:${name}`);
+        for (const name of MONITORED_WORKERS) {
+          const ttl = await app.redis.pttl(heartbeatKey(name));
           if (ttl < 0) {
             const since = lostSince.get(name) ?? now;
             lostSince.set(name, since);

@@ -192,35 +192,41 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
     );
     return;
   }
-  if (!mapped.status || mapped.status === row.status) return;
-  await db
-    .update(servers)
-    .set({
-      status: mapped.status,
-      updatedAt: new Date(),
-      containerId: res.pid ? String(res.pid) : null,
-    })
-    .where(eq(servers.id, row.id));
-  log.info(
-    {
-      serverId: row.id,
-      from: row.status,
-      to: mapped.status,
-      raw: res.state,
-      running: res.running,
-    },
-    'reconciler: status updated',
-  );
-  liveBus?.publish({
-    type: 'server.status',
-    ts: new Date().toISOString(),
-    data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
-  });
-  if (row.status === 'running' && mapped.status === 'stopped') {
-    await emitContainerExitDiag(deps, row.id, res);
+  if (!mapped.status) return;
+  if (mapped.status !== row.status) {
+    await db
+      .update(servers)
+      .set({
+        status: mapped.status,
+        updatedAt: new Date(),
+        containerId: res.pid ? String(res.pid) : null,
+      })
+      .where(eq(servers.id, row.id));
+    log.info(
+      {
+        serverId: row.id,
+        from: row.status,
+        to: mapped.status,
+        raw: res.state,
+        running: res.running,
+      },
+      'reconciler: status updated',
+    );
+    liveBus?.publish({
+      type: 'server.status',
+      ts: new Date().toISOString(),
+      data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
+    });
+    if (row.status === 'running' && mapped.status === 'stopped') {
+      await emitContainerExitDiag(deps, row.id, res);
+    }
   }
 
-  // Crash detection: check if restart_count incremented since last observation.
+  // Crash detection runs on every successful inspect, not only on a status
+  // change: Docker's restart policy usually brings a crashed container back
+  // between two ticks, so the reconciler sees running → running with a higher
+  // restart_count (#37).
+  const currentStatus = mapped.status;
   const crashInfo = detectCrash(
     row.id,
     {
@@ -243,7 +249,7 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
       liveBus?.publish({
         type: 'server.status',
         ts: new Date().toISOString(),
-        data: { server_id: row.id, status: row.status, source: 'crash_detected' },
+        data: { server_id: row.id, status: currentStatus, source: 'crash_detected' },
       });
 
       // Check for crash loop
