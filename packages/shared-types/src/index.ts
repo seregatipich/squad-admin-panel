@@ -1,4 +1,5 @@
 export * from './api.js';
+export * from './appeals.js';
 export * from './automation.js';
 export * from './automation-actions.js';
 export * from './automation-engine.js';
