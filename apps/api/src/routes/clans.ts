@@ -22,6 +22,7 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { csvCell } from '../lib/csv.js';
 import { steamId64Equals } from '../lib/player-search.js';
+import { requestUser } from '../lib/request-user.js';
 
 const NAME_MAX = 32;
 const TAG_MAX = 32;
@@ -41,10 +42,17 @@ const matchesQuery = z.object({
   server_id: z.string().uuid().optional(),
 });
 
-interface MatchesCursor {
-  v: number;
-  id: string;
-}
+/**
+ * Keyset cursor of the clan matches feed: `v` is the page boundary's
+ * `started_at` in epoch ms, bounded to the range `Date` can represent so an
+ * absurd value is an `invalid_cursor` rather than an Invalid Date that fails
+ * serialisation with a 500 (#132).
+ */
+const matchesCursorSchema = z.object({
+  v: z.number().int().min(0).max(8.64e15),
+  id: z.string().uuid(),
+});
+type MatchesCursor = z.infer<typeof matchesCursorSchema>;
 
 function encodeMatchesCursor(cursor: MatchesCursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf-8').toString('base64url');
@@ -52,11 +60,9 @@ function encodeMatchesCursor(cursor: MatchesCursor): string {
 
 function parseMatchesCursor(raw: string): MatchesCursor | null {
   try {
-    const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8')) as MatchesCursor;
-    if (!decoded || typeof decoded !== 'object') return null;
-    if (typeof decoded.v !== 'number' || !Number.isFinite(decoded.v)) return null;
-    if (typeof decoded.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(decoded.id)) return null;
-    return decoded;
+    const decoded: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8'));
+    const parsed = matchesCursorSchema.safeParse(decoded);
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
@@ -142,7 +148,11 @@ const setPriorityBody = z.object({ enabled: z.boolean() });
 
 const rosterExportQuery = z.object({ format: z.literal('csv').default('csv') });
 
-/** Escapes a CSV field per RFC 4180 when it contains a comma, quote, or newline. */
+/** Escapes LIKE wildcards so a roster search matches them literally (#131). */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 interface RosterRow {
   player_id: string;
   member_role: string;
@@ -210,8 +220,11 @@ function pgError(err: unknown): { code?: string; constraint?: string } {
 }
 
 function auditActor(req: FastifyRequest) {
-  if (!req.user) throw new Error('audit actor requires an authenticated user');
-  return { kind: 'steam' as const, playerId: req.user.playerId, tokenId: req.apiTokenId ?? null };
+  return {
+    kind: 'steam' as const,
+    playerId: requestUser(req).playerId,
+    tokenId: req.apiTokenId ?? null,
+  };
 }
 
 const STATS_DAY_MS = 86_400_000;
@@ -403,11 +416,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
   }
 
   fast.get('/api/v1/clans', { config: { audit: false } }, async (req, reply) => {
-    if (!req.user) {
-      reply.code(401);
-      return { error: 'unauthenticated' };
-    }
-    if (!req.user.permissions.panelAccess) {
+    const user = requestUser(req);
+    if (!user.permissions.panelAccess) {
       reply.code(403);
       return { error: 'forbidden' };
     }
@@ -454,11 +464,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     { schema: { params: clanIdParams }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -503,11 +510,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/online',
     { schema: { params: clanIdParams }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -581,11 +585,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/matches',
     { schema: { params: clanIdParams, querystring: matchesQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -925,11 +926,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/stats',
     { schema: { params: clanIdParams, querystring: statsQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -951,12 +949,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/stats/export',
     { schema: { params: clanIdParams, querystring: statsExportQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.header('content-type', 'application/json; charset=utf-8');
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.header('content-type', 'application/json; charset=utf-8');
         reply.code(403);
         return { error: 'forbidden' };
@@ -997,25 +991,40 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans',
     { schema: { body: createBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.canManageClans) {
+      const user = requestUser(req);
+      if (!user.permissions.canManageClans) {
         reply.code(403);
         return { error: 'forbidden' };
       }
       const id = uuidv7();
+      let created: ClanRow;
       try {
-        await app.db.insert(clans).values({
-          id,
-          name: req.body.name,
-          description: req.body.description ?? null,
-          tags: req.body.tags ?? [],
-          maxPrioritySlots: req.body.max_priority_slots ?? 10,
-          primaryServerId: req.body.primary_server_id ?? null,
-          isPublic: req.body.is_public ?? false,
-          isTagProtected: req.body.is_tag_protected ?? false,
+        created = await app.db.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(clans)
+            .values({
+              id,
+              name: req.body.name,
+              description: req.body.description ?? null,
+              tags: req.body.tags ?? [],
+              maxPrioritySlots: req.body.max_priority_slots ?? 10,
+              primaryServerId: req.body.primary_server_id ?? null,
+              isPublic: req.body.is_public ?? false,
+              isTagProtected: req.body.is_tag_protected ?? false,
+            })
+            .returning();
+          if (!row) throw new Error('clans insert returned no row');
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'clan.create',
+            targetType: 'clan',
+            targetId: id,
+            before: null,
+            after: clanSnapshot(row),
+            context: { requestId: req.id, method: req.method, url: req.url },
+          });
+          return row;
         });
       } catch (err) {
         const { code, constraint } = pgError(err);
@@ -1031,21 +1040,6 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         }
         throw err;
       }
-      const created = await loadActiveClan(id);
-      if (!created) {
-        reply.code(500);
-        return { error: 'insert_failed' };
-      }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.create',
-        targetType: 'clan',
-        targetId: id,
-        before: null,
-        after: clanSnapshot(created),
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
       reply.code(201);
       return toClanDto(created);
     },
@@ -1055,10 +1049,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     { schema: { params: clanIdParams, body: updateBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
@@ -1070,8 +1061,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         body.tags !== undefined ||
         body.max_priority_slots !== undefined ||
         body.primary_server_id !== undefined;
-      if (!req.user.permissions.canManageClans) {
-        const role = await membershipRole(clan.id, req.user.playerId);
+      if (!user.permissions.canManageClans) {
+        const role = await membershipRole(clan.id, user.playerId);
         if (role !== 'leader' && role !== 'deputy') {
           reply.code(403);
           return { error: 'forbidden' };
@@ -1088,11 +1079,27 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       if (body.tags !== undefined) updates.tags = body.tags;
       if (body.max_priority_slots !== undefined) updates.maxPrioritySlots = body.max_priority_slots;
       if (body.primary_server_id !== undefined) updates.primaryServerId = body.primary_server_id;
+      let updated: ClanRow | undefined;
       try {
-        await app.db
-          .update(clans)
-          .set(updates)
-          .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
+        updated = await app.db.transaction(async (tx) => {
+          const [row] = await tx
+            .update(clans)
+            .set(updates)
+            .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)))
+            .returning();
+          if (!row) return undefined;
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'clan.update',
+            targetType: 'clan',
+            targetId: clan.id,
+            before,
+            after: clanSnapshot(row),
+            context: { requestId: req.id, method: req.method, url: req.url },
+          });
+          return row;
+        });
       } catch (err) {
         const { code, constraint } = pgError(err);
         if (code === '23505') {
@@ -1111,21 +1118,10 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         }
         throw err;
       }
-      const updated = await loadActiveClan(clan.id);
       if (!updated) {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.update',
-        targetType: 'clan',
-        targetId: clan.id,
-        before,
-        after: clanSnapshot(updated),
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
       return toClanDto(updated);
     },
   );
@@ -1134,17 +1130,14 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/settings',
     { schema: { params: clanIdParams, body: settingsBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      if (!req.user.permissions.canManageClans) {
-        const role = await membershipRole(clan.id, req.user.playerId);
+      if (!user.permissions.canManageClans) {
+        const role = await membershipRole(clan.id, user.playerId);
         if (role !== 'leader' && role !== 'deputy') {
           reply.code(403);
           return { error: 'forbidden' };
@@ -1155,25 +1148,29 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.is_public !== undefined) updates.isPublic = req.body.is_public;
       if (req.body.is_tag_protected !== undefined)
         updates.isTagProtected = req.body.is_tag_protected;
-      await app.db
-        .update(clans)
-        .set(updates)
-        .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
-      const updated = await loadActiveClan(clan.id);
+      const updated = await app.db.transaction(async (tx) => {
+        const [row] = await tx
+          .update(clans)
+          .set(updates)
+          .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)))
+          .returning();
+        if (!row) return undefined;
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'clan.settings.update',
+          targetType: 'clan',
+          targetId: clan.id,
+          before,
+          after: clanSnapshot(row),
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
+        return row;
+      });
       if (!updated) {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.settings.update',
-        targetType: 'clan',
-        targetId: clan.id,
-        before,
-        after: clanSnapshot(updated),
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
       return toClanDto(updated);
     },
   );
@@ -1182,16 +1179,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/expire',
     { schema: { params: clanIdParams, body: expireBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      if (!req.user.permissions.canManageClans) {
+      if (!user.permissions.canManageClans) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -1204,37 +1198,39 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       // so priorities re-materialize on the next sync without any manual
       // toggling — see clan-priority-expirer/src/tick.ts.
       const resetsExpiry = expiresAt === null || expiresAt > now;
-      await app.db.transaction(async (tx) => {
-        await tx
+      const updated = await app.db.transaction(async (tx) => {
+        const [row] = await tx
           .update(clans)
           .set({
             priorityExpiresAt: expiresAt,
             updatedAt: now,
             ...(resetsExpiry ? { priorityExpiryProcessed: false } : {}),
           })
-          .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
+          .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)))
+          .returning();
+        if (!row) return undefined;
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'clan.expire.update',
-          actor_player_id: req.user?.playerId ?? null,
+          actor_player_id: user.playerId ?? null,
           enqueued_at: now.toISOString(),
           request_id: req.id,
         });
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'clan.expire.update',
+          targetType: 'clan',
+          targetId: clan.id,
+          before,
+          after: clanSnapshot(row),
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
+        return row;
       });
-      const updated = await loadActiveClan(clan.id);
       if (!updated) {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.expire.update',
-        targetType: 'clan',
-        targetId: clan.id,
-        before,
-        after: clanSnapshot(updated),
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
       return toClanDto(updated);
     },
   );
@@ -1243,16 +1239,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     { schema: { params: clanIdParams }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      if (!req.user.permissions.canManageClans) {
+      if (!user.permissions.canManageClans) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -1263,11 +1256,12 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       // released roster. Soft-deleting the clan row first takes its row lock,
       // so a concurrent member add either commits before the roster delete or
       // sees the clan as deleted.
-      const released = await app.db.transaction(async (tx) => {
-        await tx
+      await app.db.transaction(async (tx) => {
+        const [after] = await tx
           .update(clans)
           .set({ deletedAt: disbandedAt, updatedAt: disbandedAt })
-          .where(eq(clans.id, clan.id));
+          .where(eq(clans.id, clan.id))
+          .returning();
         const releasedMembers = await tx
           .delete(clanMembers)
           .where(eq(clanMembers.clanId, clan.id))
@@ -1278,23 +1272,20 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           });
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'clan.disband',
-          actor_player_id: req.user?.playerId ?? null,
+          actor_player_id: user.playerId ?? null,
           enqueued_at: disbandedAt.toISOString(),
           request_id: req.id,
         });
-        return releasedMembers;
-      });
-      const afterRows = await app.db.select().from(clans).where(eq(clans.id, clan.id)).limit(1);
-      const after = afterRows[0];
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.disband',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: { ...clanSnapshot(clan), members: released },
-        after: after ? clanSnapshot(after) : null,
-        context: { requestId: req.id, method: req.method, url: req.url },
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'clan.disband',
+          targetType: 'clan',
+          targetId: clan.id,
+          before: { ...clanSnapshot(clan), members: releasedMembers },
+          after: after ? clanSnapshot(after) : null,
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
       });
       return { ok: true };
     },
@@ -1304,11 +1295,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members',
     { schema: { params: clanIdParams, querystring: rosterQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.code(403);
         return { error: 'forbidden' };
       }
@@ -1325,7 +1313,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         const nameMatch = normalizePlayerName(q);
         const exactMatch = q.toLowerCase();
         filters.push(
-          sql`(p.canonical_name_normalized LIKE ${`%${nameMatch}%`} OR ${steamId64Equals(sql`p.steam_id64`, q.trim())} OR p.eos_id = ${exactMatch})`,
+          sql`(p.canonical_name_normalized LIKE ${`%${escapeLike(nameMatch)}%`} OR ${steamId64Equals(sql`p.steam_id64`, q.trim())} OR p.eos_id = ${exactMatch})`,
         );
       }
       const whereSql = and(...filters);
@@ -1416,12 +1404,8 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/roster/export',
     { schema: { params: clanIdParams, querystring: rosterExportQuery }, config: { audit: false } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.header('content-type', 'application/json; charset=utf-8');
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
-      if (!req.user.permissions.panelAccess) {
+      const user = requestUser(req);
+      if (!user.permissions.panelAccess) {
         reply.header('content-type', 'application/json; charset=utf-8');
         reply.code(403);
         return { error: 'forbidden' };
@@ -1475,16 +1459,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members',
     { schema: { params: clanIdParams, body: addMemberBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      const level = await clanManageLevel(clan.id, req.user);
+      const level = await clanManageLevel(clan.id, user);
       if (!level) {
         reply.code(403);
         return { error: 'forbidden' };
@@ -1531,6 +1512,16 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
             memberRole,
             hasPriority: false,
           });
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'clan.member.add',
+            targetType: 'clan',
+            targetId: clan.id,
+            before: null,
+            after: { player_id: req.body.player_id, member_role: memberRole },
+            context: { requestId: req.id, method: req.method, url: req.url },
+          });
         });
       } catch (err) {
         const { code } = pgError(err);
@@ -1552,16 +1543,6 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.member.add',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: null,
-        after: { player_id: req.body.player_id, member_role: memberRole },
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
       reply.code(201);
       const roleOverridden = memberRole !== req.body.member_role;
       return {
@@ -1580,16 +1561,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId',
     { schema: { params: memberParams, body: setMemberRoleBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      const level = await clanManageLevel(clan.id, req.user);
+      const level = await clanManageLevel(clan.id, user);
       if (level !== 'full') {
         reply.code(403);
         return { error: 'forbidden' };
@@ -1603,23 +1581,25 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'cannot_demote_leader' };
       }
-      if (currentRole !== req.body.member_role) {
-        await app.db
-          .update(clanMembers)
-          .set({ memberRole: req.body.member_role })
-          .where(
-            and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
-          );
-      }
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.member.role',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: { player_id: req.params.playerId, member_role: currentRole },
-        after: { player_id: req.params.playerId, member_role: req.body.member_role },
-        context: { requestId: req.id, method: req.method, url: req.url },
+      await app.db.transaction(async (tx) => {
+        if (currentRole !== req.body.member_role) {
+          await tx
+            .update(clanMembers)
+            .set({ memberRole: req.body.member_role })
+            .where(
+              and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
+            );
+        }
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'clan.member.role',
+          targetType: 'clan',
+          targetId: clan.id,
+          before: { player_id: req.params.playerId, member_role: currentRole },
+          after: { player_id: req.params.playerId, member_role: req.body.member_role },
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
       });
       return {
         clan_id: clan.id,
@@ -1633,16 +1613,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId',
     { schema: { params: memberParams }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      const level = await clanManageLevel(clan.id, req.user);
+      const level = await clanManageLevel(clan.id, user);
       if (!level) {
         reply.code(403);
         return { error: 'forbidden' };
@@ -1660,36 +1637,33 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'sole_leader_removal' };
       }
-      const [removedMember] = await app.db
-        .select({ hasPriority: clanMembers.hasPriority })
-        .from(clanMembers)
-        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)))
-        .limit(1);
-      const hadPriority = removedMember?.hasPriority ?? false;
       await app.db.transaction(async (tx) => {
-        await tx
+        // The deleted row itself says whether a reserve slot was released
+        // (#129): reading has_priority beforehand raced a concurrent toggle.
+        const [removed] = await tx
           .delete(clanMembers)
           .where(
             and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
-          );
-        if (hadPriority) {
+          )
+          .returning({ hasPriority: clanMembers.hasPriority });
+        if (removed?.hasPriority) {
           await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'clan.member.remove',
-            actor_player_id: req.user?.playerId ?? null,
+            actor_player_id: user.playerId ?? null,
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
         }
-      });
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.member.remove',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: { player_id: req.params.playerId, member_role: currentRole },
-        after: null,
-        context: { requestId: req.id, method: req.method, url: req.url },
+        await writeAuditEntry(tx, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'clan.member.remove',
+          targetType: 'clan',
+          targetId: clan.id,
+          before: { player_id: req.params.playerId, member_role: currentRole },
+          after: null,
+          context: { requestId: req.id, method: req.method, url: req.url },
+        });
       });
       return { ok: true };
     },
@@ -1699,16 +1673,13 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId/priority',
     { schema: { params: memberParams, body: setPriorityBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      const level = await clanManageLevel(clan.id, req.user);
+      const level = await clanManageLevel(clan.id, user);
       if (!level) {
         reply.code(403);
         return { error: 'forbidden' };
@@ -1777,15 +1748,22 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         await app.db.transaction(async (tx) => {
           if (enabled) {
             // Serialize concurrent toggles against the same clan so the
-            // pool-limit check below can't race past max_priority_slots.
-            await tx.execute(sql`SELECT id FROM clans WHERE id = ${clan.id} FOR UPDATE`);
+            // pool-limit check below can't race past max_priority_slots, and
+            // re-read the limit under that lock: a concurrent PATCH may have
+            // lowered it since the clan was loaded (#130).
+            const [locked] = await tx
+              .select({ maxPrioritySlots: clans.maxPrioritySlots })
+              .from(clans)
+              .where(eq(clans.id, clan.id))
+              .for('update');
+            const limit = locked?.maxPrioritySlots ?? clan.maxPrioritySlots;
             const countRows = await tx
               .select({ count: sql<number>`count(*)::int` })
               .from(clanMembers)
               .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.hasPriority, true)));
             const used = Number(countRows[0]?.count ?? 0);
-            if (used + 1 > clan.maxPrioritySlots) {
-              throw new PriorityPoolLimitError(used, clan.maxPrioritySlots);
+            if (used + 1 > limit) {
+              throw new PriorityPoolLimitError(used, limit);
             }
             priorityCount = used + 1;
           } else {
@@ -1803,9 +1781,19 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
             );
           await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'clan.priority.toggle',
-            actor_player_id: req.user?.playerId ?? null,
+            actor_player_id: user.playerId ?? null,
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
+          });
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'clan.member.priority',
+            targetType: 'clan',
+            targetId: clan.id,
+            before: { player_id: req.params.playerId, has_priority: member.hasPriority },
+            after: { player_id: req.params.playerId, has_priority: enabled },
+            context: { requestId: req.id, method: req.method, url: req.url },
           });
         });
       } catch (err) {
@@ -1813,19 +1801,14 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           reply.code(409);
           return { error: 'priority_pool_limit', limit: err.limit, used: err.used };
         }
+        // The deferred clan_members_priority_limit trigger is the last line
+        // of defence against a limit change that slipped past the lock.
+        if (pgError(err).code === '23514') {
+          reply.code(409);
+          return { error: 'priority_pool_limit' };
+        }
         throw err;
       }
-
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.member.priority',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: { player_id: req.params.playerId, has_priority: member.hasPriority },
-        after: { player_id: req.params.playerId, has_priority: enabled },
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
 
       return {
         player_id: req.params.playerId,
@@ -1840,66 +1823,78 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/transfer-leadership',
     { schema: { params: clanIdParams, body: transferBody }, config: { audit: 'manual' } },
     async (req, reply) => {
-      if (!req.user) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+      const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
         reply.code(404);
         return { error: 'clan_not_found' };
       }
-      const level = await clanManageLevel(clan.id, req.user);
+      const level = await clanManageLevel(clan.id, user);
       if (level !== 'full') {
         reply.code(403);
         return { error: 'forbidden' };
       }
-      const newLeaderRole = await membershipRole(clan.id, req.body.player_id);
-      if (!newLeaderRole) {
-        reply.code(404);
-        return { error: 'member_not_found' };
-      }
-      if (newLeaderRole === 'leader') {
-        reply.code(409);
-        return { error: 'already_leader' };
-      }
-      const [currentLeader] = await app.db
-        .select({ playerId: clanMembers.playerId })
-        .from(clanMembers)
-        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.memberRole, 'leader')))
-        .limit(1);
-      const previousLeaderId = currentLeader?.playerId ?? null;
-      await app.db.transaction(async (tx) => {
-        if (previousLeaderId) {
+      // The clan row lock serialises concurrent transfers (#130): each one
+      // re-reads the roster under it, so the second demotes whoever the first
+      // promoted instead of both racing into the single-leader trigger.
+      let outcome:
+        | { ok: true; previousLeaderId: string | null }
+        | { ok: false; code: 404 | 409; error: string };
+      try {
+        outcome = await app.db.transaction(async (tx) => {
+          await tx.select({ id: clans.id }).from(clans).where(eq(clans.id, clan.id)).for('update');
+          const roster = await tx
+            .select({ playerId: clanMembers.playerId, role: clanMembers.memberRole })
+            .from(clanMembers)
+            .where(eq(clanMembers.clanId, clan.id));
+          const candidate = roster.find((row) => row.playerId === req.body.player_id);
+          if (!candidate) return { ok: false, code: 404, error: 'member_not_found' } as const;
+          if (candidate.role === 'leader') {
+            return { ok: false, code: 409, error: 'already_leader' } as const;
+          }
+          const previousLeaderId = roster.find((row) => row.role === 'leader')?.playerId ?? null;
+          if (previousLeaderId) {
+            await tx
+              .update(clanMembers)
+              .set({ memberRole: 'deputy' })
+              .where(
+                and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, previousLeaderId)),
+              );
+          }
           await tx
             .update(clanMembers)
-            .set({ memberRole: 'deputy' })
+            .set({ memberRole: 'leader' })
             .where(
-              and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, previousLeaderId)),
+              and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.body.player_id)),
             );
+          await writeAuditEntry(tx, {
+            actor: auditActor(req),
+            actorIp: req.ip ?? null,
+            actionType: 'clan.leadership.transfer',
+            targetType: 'clan',
+            targetId: clan.id,
+            before: { leader_id: previousLeaderId },
+            after: { leader_id: req.body.player_id },
+            context: { requestId: req.id, method: req.method, url: req.url },
+          });
+          return { ok: true, previousLeaderId } as const;
+        });
+      } catch (err) {
+        if (pgError(err).code === '23514') {
+          reply.code(409);
+          return { error: 'leadership_conflict' };
         }
-        await tx
-          .update(clanMembers)
-          .set({ memberRole: 'leader' })
-          .where(
-            and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.body.player_id)),
-          );
-      });
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'clan.leadership.transfer',
-        targetType: 'clan',
-        targetId: clan.id,
-        before: { leader_id: previousLeaderId },
-        after: { leader_id: req.body.player_id },
-        context: { requestId: req.id, method: req.method, url: req.url },
-      });
+        throw err;
+      }
+      if (!outcome.ok) {
+        reply.code(outcome.code);
+        return { error: outcome.error };
+      }
       return {
         ok: true,
         clan_id: clan.id,
         leader_id: req.body.player_id,
-        previous_leader_id: previousLeaderId,
+        previous_leader_id: outcome.previousLeaderId,
       };
     },
   );

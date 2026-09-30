@@ -68,6 +68,16 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
   'role:edit',
   'role:delete',
 ]);
+/**
+ * Automation rules run RCON actions as the system actor on every server
+ * (#111), so `trigger:edit` is never handed to every `panel_access` user.
+ * Role editors keep it (the rules used to be gated by `role:edit`); any other
+ * role gets it only through an explicit `role_permissions` row, and an API
+ * token only when `trigger:edit` itself is a delegated scope.
+ */
+const PANEL_PERMS_GATED_BY_TRIGGER_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'trigger:edit',
+]);
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
@@ -118,6 +128,7 @@ export const PANEL_PERMS_GATED_BY_INFRASTRUCTURE: ReadonlySet<PermissionKey> =
 export const PANEL_PERMS_WITH_FLAG_GATE: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   ...PANEL_PERMS_GATED_BY_ASSIGN,
   ...PANEL_PERMS_GATED_BY_EDIT,
+  ...PANEL_PERMS_GATED_BY_TRIGGER_EDIT,
   ...PANEL_PERMS_GATED_BY_INTEGRATIONS,
   ...PANEL_PERMS_GATED_BY_VIEW_IPS,
   ...PANEL_PERMS_GATED_BY_VIEW_IPS_AND_EDIT,
@@ -153,6 +164,7 @@ interface RoleFlagGates {
 function keyPassesFlagGates(key: PermissionKey, flags: RoleFlagGates): boolean {
   if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !flags.canAssignRoles) return false;
   if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !flags.canEditRoles) return false;
+  if (PANEL_PERMS_GATED_BY_TRIGGER_EDIT.has(key) && !flags.canEditRoles) return false;
   if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !flags.canManageIntegrations) return false;
   if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !flags.canViewIps) return false;
   if (

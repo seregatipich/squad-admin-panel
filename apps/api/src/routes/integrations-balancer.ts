@@ -5,12 +5,19 @@ import {
   BALANCER_SCHEMA_VERSION,
   BALANCER_SUBJECT_TYPES,
 } from '@squad/shared-types';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, inArray, lt, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { verifyBalancerProposalSignature } from '../lib/balancer-proposal-signature.js';
 
+/**
+ * How long a `superseded` or `dismissed` snapshot is kept after the panel
+ * received it (#108). Pruned on the ingest of the next snapshot for the same
+ * server.
+ */
+export const BALANCER_PROPOSAL_RETENTION_DAYS = 30;
+const DAY_MS = 86_400_000;
 const SNAPSHOT_ID_MAX = 160;
 const LABEL_MAX = 160;
 
@@ -67,7 +74,10 @@ function headerValue(value: string | string[] | undefined): string | undefined {
  * refreshes the stored row instead of duplicating it. A genuinely new snapshot
  * additionally marks the previous still-`open` snapshot for the same
  * `(server_id, mode)` pair as `superseded`, so the review UI never shows two
- * competing "current" proposals.
+ * competing "current" proposals, and prunes that server's `superseded` and
+ * `dismissed` snapshots received more than {@link BALANCER_PROPOSAL_RETENTION_DAYS} days ago
+ * (#108) — the table otherwise grows by one row per snapshot forever. `open`
+ * and `reviewed` rows are kept: they are either current or carry a decision.
  *
  * `config: { audit: false }` matches the VIP lifecycle precedent — this is a
  * machine-to-machine ingestion endpoint carrying no operator action, and its
@@ -158,6 +168,18 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
               eq(balancerProposals.mode, body.mode),
               eq(balancerProposals.status, 'open'),
               ne(balancerProposals.id, created.id),
+            ),
+          );
+        await tx
+          .delete(balancerProposals)
+          .where(
+            and(
+              eq(balancerProposals.serverId, body.server_id),
+              inArray(balancerProposals.status, ['superseded', 'dismissed']),
+              lt(
+                balancerProposals.receivedAt,
+                new Date(now.getTime() - BALANCER_PROPOSAL_RETENTION_DAYS * DAY_MS),
+              ),
             ),
           );
         return { duplicate: false as const, id: created.id };

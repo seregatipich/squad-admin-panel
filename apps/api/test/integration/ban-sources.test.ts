@@ -1,5 +1,5 @@
 import { externalBanSources, externalBans, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, loadUserPermissions } from '../../src/lib/rbac.js';
@@ -492,6 +492,115 @@ describeIfDb('ban-sources audit covers denied and rejected attempts', () => {
     expect(row.beforeSnapshot).toMatchObject({ trust_level: 'trusted', has_auth_header: true });
     expect(row.afterSnapshot).toMatchObject({ trust_level: 'low', has_auth_header: true });
     expect(JSON.stringify(row.afterSnapshot)).not.toContain('super-secret-token-xyz');
+  });
+});
+
+describeIfDb('ban-sources input and exposure hardening (#103, #104, #107, #112)', () => {
+  it('rejects a non-https discord_url on create and update (#104)', async () => {
+    for (const discordUrl of ['javascript:alert(1)', 'data:text/html,x', 'http://discord.gg/x']) {
+      const { statusCode } = await createSource(managerCookie, { discord_url: discordUrl });
+      expect(statusCode).toBe(400);
+    }
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id as string}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ discord_url: 'file:///etc/passwd' }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a feed URL that embeds credentials (#103)', async () => {
+    const { statusCode } = await createSource(managerCookie, {
+      url: 'https://user:hunter2@collabans.example.com/bans.cfg',
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it('masks query values of the feed URL in responses and audit snapshots (#103)', async () => {
+    const { statusCode, body } = await createSource(managerCookie, {
+      url: 'https://api.example.com/bans?key=s3cr3t-api-key&format=json',
+    });
+    expect(statusCode).toBe(201);
+    const id = body.id as string;
+    expect(body.url).toBe('https://api.example.com/bans?key=***&format=***');
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/ban-sources',
+      headers: { cookie: viewerCookie },
+    });
+    expect(list.body).not.toContain('s3cr3t-api-key');
+
+    const audit = await assertAuditRow(h, {
+      action: 'ban_source.create',
+      resource: 'ban_source',
+      targetId: id,
+    });
+    expect(JSON.stringify(audit.afterSnapshot)).not.toContain('s3cr3t-api-key');
+
+    // Echoing the masked URL back (GET → PUT round-trip) keeps the stored secret.
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ url: body.url, enabled: false }),
+    });
+    const [stored] = await h.db
+      .select({ url: externalBanSources.url })
+      .from(externalBanSources)
+      .where(eq(externalBanSources.id, id));
+    expect(stored?.url).toBe('https://api.example.com/bans?key=s3cr3t-api-key&format=json');
+  });
+
+  it('counts only active (not revoked) records (#107)', async () => {
+    const { body } = await createSource(managerCookie);
+    const sourceId = body.id as string;
+    await h.db.insert(externalBans).values([
+      { sourceId, steamId64: '76561198000000011' },
+      { sourceId, steamId64: '76561198000000012', revokedAt: new Date() },
+    ]);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/ban-sources',
+      headers: { cookie: viewerCookie },
+    });
+    const source = (res.json() as Array<{ id: string; record_count: number }>).find(
+      (entry) => entry.id === sourceId,
+    );
+    expect(source?.record_count).toBe(1);
+    const single = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/ban-sources/${sourceId}`,
+      headers: { cookie: viewerCookie },
+    });
+    expect((single.json() as { record_count: number }).record_count).toBe(1);
+  });
+
+  it('refuses a second manual sync while one is still queued (#112)', async () => {
+    const { body } = await createSource(managerCookie);
+    const id = body.id as string;
+    const before = await h.redis.xlen('bansync:manual');
+    const sync = () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/ban-sources/${id}/sync`,
+        headers: { cookie: managerCookie },
+      });
+    expect((await sync()).statusCode).toBe(200);
+    const again = await sync();
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toEqual({ error: 'sync_already_queued' });
+    expect(await h.redis.xlen('bansync:manual')).toBe(before + 1);
+  });
+
+  it('backs the active record count with a partial index (#107)', async () => {
+    const rows = await h.db.execute<{ indexdef: string }>(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND indexname = 'external_bans_active_source_idx'
+    `);
+    expect(rows[0]?.indexdef).toContain('WHERE (revoked_at IS NULL)');
   });
 });
 

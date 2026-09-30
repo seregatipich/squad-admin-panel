@@ -109,6 +109,22 @@ describe('GET /api/v1/audit/verify-chain', () => {
     expect(body.items[0]?.row_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('reports the total row count, not the page size (#94)', async () => {
+    await insertAuditRow('action.total', 'server', 'srv-1', { seq: 1 });
+    await insertAuditRow('action.total', 'server', 'srv-1', { seq: 2 });
+    const expected = await auditRowCount();
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit?page=2&page_size=1',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: unknown[]; total: number; page: number };
+    expect(body.items).toHaveLength(1);
+    expect(body.page).toBe(2);
+    expect(body.total).toBe(expected);
+  });
+
   it('detects a tampered row and reports the break at the right id', async () => {
     const ids: string[] = [];
     for (let i = 0; i < 5; i++) {

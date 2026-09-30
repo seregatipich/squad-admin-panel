@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
  * `prev_hash_hex`/`row_hash_hex` are the lowercase `encode(..,'hex')` of the
  * `bytea` hash columns; `prev_hash_hex` is `null` for the genesis row.
  */
-export interface AuditChainRow {
+export interface AuditChainRow extends Record<string, unknown> {
   id: string;
   action_type: string;
   target_type: string | null;

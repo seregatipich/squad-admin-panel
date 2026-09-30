@@ -278,6 +278,65 @@ describe('POST /api/v1/depot/update background orchestration', () => {
     expect(lastStream).toBe('event');
     expect(JSON.parse(lastText)).toEqual({ done: true, final: 'error', error: 'steamcmd failed' });
   });
+
+  async function progressLines(stream: string): Promise<string[]> {
+    const entries = (await h.redis.xrange('depot:progress', '-', '+')) as Array<[string, string[]]>;
+    return entries
+      .map(([, fields]) => fields)
+      .filter((fields) => fields[fields.indexOf('stream') + 1] === stream)
+      .map((fields) => fields[fields.indexOf('text') + 1] ?? '');
+  }
+
+  it('reports a server that failed to stop instead of swallowing the error (#143)', async () => {
+    const id = await seedRunning(h);
+    const cookie = await loginAsOwner(h);
+    h.bridge.containerStop = async () => {
+      throw new Error('container stop timed out');
+    };
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [id] },
+    });
+    await waitForDepotUpdate();
+
+    const stderr = await progressLines('stderr');
+    expect(stderr.some((line) => line.includes(`squad-${id}`) && line.includes('timed out'))).toBe(
+      true,
+    );
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('running');
+  });
+
+  it('does not mark a server starting when it could not be restarted (#143)', async () => {
+    const id = await seedRunning(h);
+    await h.db.delete(serverSettings).where(eq(serverSettings.serverId, id));
+    const cookie = await loginAsOwner(h);
+    h.bridge.containerStart = async () => {
+      throw new Error('no such container');
+    };
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [id] },
+    });
+    await waitForDepotUpdate();
+
+    const [row] = await h.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, id));
+    expect(row?.status).toBe('stopped');
+    const stderr = await progressLines('stderr');
+    expect(stderr.some((line) => line.includes(`squad-${id}`))).toBe(true);
+  });
 });
 
 describe('POST /api/v1/depot/update with servers that are not running (#135)', () => {

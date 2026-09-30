@@ -906,6 +906,74 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     ).toBeTruthy();
   });
 
+  it('reports and audits a partial revert when a later server conflicts (#93)', async () => {
+    const steamId64 = testSteamId(987195);
+    const appealId = await openAppeal(steamId64, 'AppealTarget195');
+    const [player] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, steamId64))
+      .limit(1);
+    if (!player) throw new Error('appellant player missing');
+
+    const conflictServerId = uuidv7();
+    await h.db.insert(servers).values({
+      id: conflictServerId,
+      displayName: 'Appeal Conflict Server',
+      slug: `appeals-conflict-${conflictServerId}`,
+    });
+    await h.db.insert(moderationActions).values({
+      playerId: player.id,
+      serverId: conflictServerId,
+      actionType: 'ban',
+      authorPlayerId: unbannerId,
+      reason: 'второй сервер',
+      context: { ban_length: '0' },
+    });
+    // A concurrent editor keeps restoring the ban line on the second server,
+    // so every read-verify-write attempt there loses the race.
+    const conflictPath = bansCfgPath(conflictServerId);
+    const originalRead = h.bridge.fileRead;
+    const readSpy = vi
+      .spyOn(h.bridge, 'fileRead')
+      .mockImplementation(async (p) =>
+        p.path === conflictPath
+          ? { content: `Banned:${steamId64}:0 // AppealTarget195\n` }
+          : originalRead(p),
+      );
+
+    try {
+      const res = await patch(appealId, { status: 'approved' });
+      expect(res.statusCode).toBe(409);
+      const body = res.json() as {
+        error: string;
+        partial_revert: { reverted_action_ids: string[]; unban_action_ids: string[] };
+      };
+      expect(body.error).toBe('bans_cfg_conflict');
+      expect(body.partial_revert.reverted_action_ids).toHaveLength(1);
+      expect(body.partial_revert.unban_action_ids).toHaveLength(1);
+
+      const [appeal] = await h.db
+        .select({ status: banAppeals.status })
+        .from(banAppeals)
+        .where(eq(banAppeals.id, appealId));
+      expect(appeal?.status).toBe('pending');
+
+      const audit = await assertAuditRow(h, {
+        action: 'appeal.unban_partial',
+        resource: 'ban_appeal',
+        targetId: appealId,
+      });
+      expect(audit.context).toMatchObject({
+        reverted_action_ids: body.partial_revert.reverted_action_ids,
+        unban_action_ids: body.partial_revert.unban_action_ids,
+        conflict_server_id: conflictServerId,
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it('publishes the decision to the applicant status page', async () => {
     const steamId64 = testSteamId(987191);
     await seedBannedPlayer(steamId64, 'AppealTarget191');

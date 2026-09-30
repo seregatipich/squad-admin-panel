@@ -2,6 +2,7 @@ import cookie from '@fastify/cookie';
 import type { BridgeClient } from '@squad/bridge-client';
 import { players } from '@squad/db/schema';
 import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -37,6 +38,9 @@ let noRoleCookie: string;
  */
 async function buildBareApp(harness: IntegrationHarness) {
   const app = Fastify({ logger: false });
+  // Same compilers as server.ts: the Steam callback validates its query with zod.
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', harness.db);
   app.decorate('redis', harness.redis);
   app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);

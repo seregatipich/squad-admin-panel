@@ -358,19 +358,22 @@ const balancerRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'veto_reason_required' };
       }
 
-      const [proposal] = await app.db
-        .select({ id: balancerProposals.id })
-        .from(balancerProposals)
-        .where(eq(balancerProposals.id, req.params.id))
-        .limit(1);
-      if (!proposal) {
-        reply.code(404);
-        return { error: 'proposal_not_found' };
-      }
-
       const status = STATUS_AFTER_DECISION[body.decision];
       const decisionId = uuidv7();
-      await app.db.transaction(async (tx) => {
+      // The row lock serialises this decision with the ingest that supersedes
+      // the snapshot (integrations-balancer.ts), so a decision can never
+      // overwrite `superseded` (#106).
+      const outcome = await app.db.transaction(async (tx) => {
+        const [proposal] = await tx
+          .select({ id: balancerProposals.id, status: balancerProposals.status })
+          .from(balancerProposals)
+          .where(eq(balancerProposals.id, req.params.id))
+          .limit(1)
+          .for('update');
+        if (!proposal) return { ok: false, code: 404, error: 'proposal_not_found' } as const;
+        if (proposal.status === 'superseded') {
+          return { ok: false, code: 409, error: 'proposal_superseded' } as const;
+        }
         await tx.insert(balancerDecisions).values({
           id: decisionId,
           proposalId: proposal.id,
@@ -383,7 +386,13 @@ const balancerRoutes: FastifyPluginAsync = async (app) => {
           .update(balancerProposals)
           .set({ status })
           .where(eq(balancerProposals.id, proposal.id));
+        return { ok: true, proposal } as const;
       });
+      if (!outcome.ok) {
+        reply.code(outcome.code);
+        return { error: outcome.error };
+      }
+      const { proposal } = outcome;
 
       reply.code(201);
       return {

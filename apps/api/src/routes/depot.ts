@@ -174,7 +174,32 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         const dedicated = app.makeBridgeClient();
         const stoppedIds: string[] = [];
 
-        /** Restart each stopped server via containerStart, falling back to containerRun. */
+        /**
+         * Logs a per-server failure and mirrors it onto depot:progress as a
+         * stderr line (#143), so the operator watching the update sees which
+         * server was left running or down. Publishing is best-effort.
+         */
+        async function reportServerFailure(sid: string, action: string, error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          app.log.error({ err: error, server_id: sid }, `depot update: ${action} failed`);
+          await publishDepotProgressLine(
+            app.redis,
+            'stderr',
+            `Failed to ${action} server squad-${sid}: ${message}`,
+          ).catch((publishError: unknown) => {
+            app.log.error(
+              { err: publishError, server_id: sid },
+              'failed to publish depot failure line',
+            );
+          });
+        }
+
+        /**
+         * Restart each stopped server via containerStart, falling back to
+         * containerRun. A server is marked `starting` only once one of them
+         * actually launched it; otherwise it stays `stopped` and the failure
+         * is reported (#143).
+         */
         async function restartServers(ids: string[]) {
           for (const sid of ids) {
             try {
@@ -192,34 +217,34 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
               });
               try {
                 await app.bridge.containerStart({ name: `squad-${sid}` });
-              } catch {
+              } catch (startError) {
                 // containerStart failed — container might have been removed; try containerRun.
                 const settings = await app.db.query.serverSettings.findFirst({
                   where: eq(serverSettings.serverId, sid),
                 });
-                if (settings) {
-                  await app.bridge.containerRun({
-                    server_id: sid,
-                    image: SERVER_IMAGE,
-                    game_port: settings.gamePort,
-                    query_port: settings.queryPort,
-                    beacon_port: settings.beaconPort,
-                    rcon_port: settings.rconPort,
-                    max_players: settings.maxPlayers,
-                    tickrate: settings.tickrate,
-                    multihome: settings.multihome,
-                    configs_host: `${PANEL_CONFIGS_ROOT}/${sid}/ServerConfig`,
-                    saved_host: `${PANEL_SAVED_ROOT}/${sid}`,
-                    depot_volume: DEPOT_VOLUME_NAME,
-                  });
-                }
+                if (!settings) throw startError;
+                await app.bridge.containerRun({
+                  server_id: sid,
+                  image: SERVER_IMAGE,
+                  game_port: settings.gamePort,
+                  query_port: settings.queryPort,
+                  beacon_port: settings.beaconPort,
+                  rcon_port: settings.rconPort,
+                  max_players: settings.maxPlayers,
+                  tickrate: settings.tickrate,
+                  multihome: settings.multihome,
+                  configs_host: `${PANEL_CONFIGS_ROOT}/${sid}/ServerConfig`,
+                  saved_host: `${PANEL_SAVED_ROOT}/${sid}`,
+                  depot_volume: DEPOT_VOLUME_NAME,
+                });
               }
               await app.db
                 .update(servers)
                 .set({ status: 'starting', updatedAt: new Date() })
                 .where(eq(servers.id, sid));
-            } catch {
-              // Best-effort restart; don't abort the loop for one failure.
+            } catch (error) {
+              // One failed restart must not abort the loop for the others.
+              await reportServerFailure(sid, 'restart', error);
             }
           }
         }
@@ -250,8 +275,10 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
                 .set({ status: 'stopped', updatedAt: new Date() })
                 .where(eq(servers.id, sid));
               stoppedIds.push(sid);
-            } catch {
-              // Best-effort; continue with remaining servers.
+            } catch (error) {
+              // Continue with the remaining servers; this one keeps running
+              // through the update, which the operator must see.
+              await reportServerFailure(sid, 'stop', error);
             }
           }
 

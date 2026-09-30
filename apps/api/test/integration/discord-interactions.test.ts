@@ -143,6 +143,18 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('rejects a validly signed interaction whose timestamp is stale (#141)', async () => {
+    const stale = String(Math.floor(Date.now() / 1000) - 10 * 60);
+    const res = await signedInject({ type: 1 }, { timestamp: stale });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'stale_timestamp' });
+  });
+
+  it('rejects a signed interaction whose timestamp is not a unix time (#141)', async () => {
+    const res = await signedInject({ type: 1 }, { timestamp: 'not-a-number' });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('rejects an interaction with no signature headers at all', async () => {
     const res = await h.app.inject({
       method: 'POST',

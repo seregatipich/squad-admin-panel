@@ -95,6 +95,14 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('ban_source:view')?.unimplemented).toBeUndefined();
   });
 
+  it('exposes enforced trigger:view/trigger:edit keys for automation rules (#111)', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('trigger:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('trigger:edit')?.unimplemented).toBeUndefined();
+    expect(byKey.get('trigger:edit')?.dangerous).toBe(true);
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

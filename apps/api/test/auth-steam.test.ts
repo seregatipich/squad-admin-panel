@@ -5,6 +5,7 @@ import { panelMeta, players, roles, sessions } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
@@ -16,6 +17,8 @@ const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15'
 
 async function buildApp(opts: { dbUrl: string; steamApiKey?: string }) {
   const app = Fastify({ logger: false });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
   const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test type coercion
   const db = drizzle(sql, { schema }) as any;
@@ -286,6 +289,31 @@ describe('GET /api/v1/auth/steam/callback', () => {
       cookies: { '__Host-steam-nonce': NONCE_B },
     });
     expect(replay.statusCode).toBe(400);
+  });
+
+  it('rejects a repeated openid.* parameter instead of silently dropping it (#96)', async () => {
+    const NONCE = 'repeated-param';
+    await h.redis.set(`steam-nonce:${NONCE}`, '{}', 'EX', 300);
+    const u = new URLSearchParams({
+      n: NONCE,
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'id_res',
+      'openid.claimed_id': 'https://steamcommunity.com/openid/id/76561198000000102',
+      'openid.identity': 'https://steamcommunity.com/openid/id/76561198000000102',
+      'openid.return_to': `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+      'openid.response_nonce': '2026-04-25T12:00:00Zrepeated',
+      'openid.signed': 'signed,op_endpoint',
+    });
+    u.append('openid.sig', 'first');
+    u.append('openid.sig', 'second');
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${u.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+    expect(res.statusCode).toBe(400);
+    const [session] = await h.db.select().from(sessions).limit(1);
+    expect(session).toBeUndefined();
   });
 
   it('return_to host mismatch is rejected', async () => {

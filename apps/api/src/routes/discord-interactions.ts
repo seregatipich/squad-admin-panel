@@ -30,6 +30,13 @@ const EPHEMERAL = 64;
 const INTERACTION_PING = 1;
 const INTERACTION_APPLICATION_COMMAND = 2;
 
+/**
+ * Largest accepted distance between `X-Signature-Timestamp` and now (#141).
+ * The signature covers the timestamp, so bounding it stops a captured request
+ * from being replayed indefinitely.
+ */
+const SIGNATURE_MAX_AGE_SECONDS = 5 * 60;
+
 interface InteractionOption {
   name?: string;
   value?: unknown;
@@ -40,6 +47,27 @@ interface InteractionBody {
   data?: { name?: string; options?: InteractionOption[] };
   member?: { user?: { id?: string; username?: string } };
   user?: { id?: string; username?: string };
+}
+
+/** What this plugin's JSON content-type parser hands the route. */
+interface ParsedInteraction {
+  raw: string;
+  parsed: InteractionBody;
+}
+
+function isParsedInteraction(value: unknown): value is ParsedInteraction {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { raw?: unknown }).raw === 'string' &&
+    typeof (value as { parsed?: unknown }).parsed === 'object'
+  );
+}
+
+/** True when `timestamp` is a unix-seconds value within the replay window. */
+function isFreshTimestamp(timestamp: string, nowMs: number): boolean {
+  if (!/^\d{1,12}$/.test(timestamp)) return false;
+  return Math.abs(nowMs / 1000 - Number(timestamp)) <= SIGNATURE_MAX_AGE_SECONDS;
 }
 
 function ephemeral(content: string) {
@@ -58,9 +86,14 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
   // changing how the rest of the API parses JSON.
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     try {
-      done(null, { raw: String(body), parsed: JSON.parse(String(body)) as InteractionBody });
+      const parsed: ParsedInteraction = {
+        raw: String(body),
+        parsed: JSON.parse(String(body)) as InteractionBody,
+      };
+      done(null, parsed);
     } catch {
-      done(null, { raw: String(body), parsed: {} as InteractionBody });
+      const unparsable: ParsedInteraction = { raw: String(body), parsed: {} };
+      done(null, unparsable);
     }
   });
 
@@ -74,9 +107,8 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'discord_interactions_not_configured' };
       }
 
-      const payload = req.body as { raw?: string; parsed?: InteractionBody } | undefined;
-      const rawBody = payload?.raw ?? '';
-      const body = payload?.parsed ?? {};
+      const rawBody = isParsedInteraction(req.body) ? req.body.raw : '';
+      const body: InteractionBody = isParsedInteraction(req.body) ? req.body.parsed : {};
 
       const signature = req.headers['x-signature-ed25519'];
       const timestamp = req.headers['x-signature-timestamp'];
@@ -89,6 +121,10 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
       ) {
         reply.code(401);
         return { error: 'invalid_signature' };
+      }
+      if (!isFreshTimestamp(timestamp, Date.now())) {
+        reply.code(401);
+        return { error: 'stale_timestamp' };
       }
 
       if (body.type === INTERACTION_PING) return { type: PONG };
@@ -187,7 +223,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
               canonical_name: found.canonicalName,
               steam_id64: found.steamId64 ? String(found.steamId64) : null,
             },
-            (app.config as { PANEL_PUBLIC_URL?: string }).PANEL_PUBLIC_URL ?? '',
+            app.config.PANEL_PUBLIC_URL,
           ),
         );
       }

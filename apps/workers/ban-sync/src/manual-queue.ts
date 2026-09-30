@@ -1,10 +1,11 @@
+import { BAN_SYNC_MANUAL_STREAM } from '@squad/shared-types';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import type { SyncReport } from './sync-source.js';
 import { type DueSource, syncExclusively } from './tick.js';
 
 /** Stream the API's `POST /api/v1/ban-sources/:id/sync` appends manual sync jobs to. */
-export const MANUAL_STREAM = 'bansync:manual';
+export const MANUAL_STREAM = BAN_SYNC_MANUAL_STREAM;
 /** Consumer group every ban-sync process shares on {@link MANUAL_STREAM}. */
 export const MANUAL_GROUP = 'ban-sync';
 

@@ -377,6 +377,25 @@ describeIfDb('GET /api/v1/chat/messages — filters', () => {
     expect(await count(ownerCookie, '?playerQuery=nonexistentnickname')).toBe(0);
   });
 
+  it('answers an out-of-int8 numeric playerQuery with no rows instead of a 500 (#119)', async () => {
+    const body = await list(ownerCookie, '?playerQuery=99999999999999999999&limit=300');
+    expect(body.items).toHaveLength(0);
+    expect(await count(ownerCookie, '?playerQuery=9999999999999999999')).toBe(0);
+  });
+
+  it('rejects a cursor whose id overflows bigint with 400 invalid_cursor (#119)', async () => {
+    const cursor = Buffer.from('2026-01-01T00:00:00.000Z~99999999999999999999').toString(
+      'base64url',
+    );
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/chat/messages?cursor=${cursor}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
   it('searches message text beyond the competitor 17-char limit', async () => {
     const longNeedle = 'massive flanking maneuver on the eastern';
     expect(longNeedle.length).toBeGreaterThan(17);

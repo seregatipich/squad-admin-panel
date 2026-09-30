@@ -307,6 +307,19 @@ describeIfDb('GET /api/v1/clans/:id/matches', () => {
     expect(second.next_cursor).toBeNull();
   });
 
+  it('rejects a cursor with an out-of-range timestamp with 400 invalid_cursor (#132)', async () => {
+    const cursor = Buffer.from(JSON.stringify({ v: 1e300, id: uuidv7() }), 'utf-8').toString(
+      'base64url',
+    );
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/matches?cursor=${cursor}`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_cursor' });
+  });
+
   it('rejects an invalid cursor with 400', async () => {
     const res = await h.app.inject({
       method: 'GET',

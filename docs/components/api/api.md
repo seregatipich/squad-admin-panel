@@ -64,7 +64,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. | HMAC only |
+| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. A new snapshot supersedes the open one for the same server and mode and prunes that server's `superseded`/`dismissed` snapshots received more than 30 days ago. | HMAC only |
 
 Required headers:
 
@@ -108,7 +108,7 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 | PUT | `/api/v1/balancer/settings` | Partial upsert of the singleton. Body accepts any subset of `enabled`, `win_streak_threshold` (≥1), `ticket_diff_threshold` (≥0), `one_sided_rounds_threshold` (≥1), `quorum` (≥0), `pass_threshold_pct` (0–100), `require_moderator_veto`, `prefer_squad_grouping`, `player_level_enabled`; an empty body is 400. Audit: `balancer.settings.update`. | `balancer:edit` |
 | GET | `/api/v1/balancer/proposals` | Cursor page of stored snapshots, newest `generated_at` first. Query: `server_id` (uuid or `all`), `status`, `mode`, `cursor`, `limit` (≤100). Each item carries the raw `signals`/`proposal` blobs plus an `evaluation` verdict (`{triggered, reasons[]}`) computed from the current thresholds. Returns `{ items: [], next_cursor: null }` with HTTP 200 when no snapshot has ever arrived. Malformed cursor → 400 `invalid_cursor`. | `balancer:view` |
 | GET | `/api/v1/balancer/proposals/:id` | One snapshot plus its `decisions[]` history, newest first. 404 `proposal_not_found`. | `balancer:view` |
-| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
+| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`; a `superseded` snapshot is 409 `proposal_superseded` and keeps its status. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
 
 ## RBAC reference
 
@@ -392,13 +392,13 @@ not ban may not lift a ban through an appeal either.
 | GET | `/api/v1/public/appeals/:token` | Applicant status page data. Returns exactly `{ number, status, created_at, decided_at, decision_note }` — never `internal_note`, `contact`, `player_id`, `steam_id64`, `moderation_action_id` or `submitter_ip`. `404 appeal_not_found`. Rate limit 60/min. | none (public) |
 | GET | `/api/v1/appeals?status=&player_id=&page=&page_size=` | Paginated review queue (newest first), joined to the appellant, the appealed ban and the handler. | `mod:unban` |
 | GET | `/api/v1/appeals/:id` | One appeal card. `404 appeal_not_found`. | `mod:unban` |
-| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server; bans whose server was deleted (`server_id` NULL) are reverted in the ledger with one server-less `unban` row. The transition is claimed with a compare-and-set on the current status, so of two concurrent decisions only one succeeds; on `bans_cfg_conflict` the appeal returns to its previous status. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `409 appeal_status_changed` (another moderator moved it first, not to a final status), `400 invalid_transition`, `409 bans_cfg_conflict`, `502 bans_cfg_unavailable` (the bridge could not read `Bans.cfg`; nothing in the ledger changes and the appeal stays open). Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
+| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server; bans whose server was deleted (`server_id` NULL) are reverted in the ledger with one server-less `unban` row. The transition is claimed with a compare-and-set on the current status, so of two concurrent decisions only one succeeds; on `bans_cfg_conflict` or `bans_cfg_unavailable` the appeal returns to its previous status. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `409 appeal_status_changed` (another moderator moved it first, not to a final status), `400 invalid_transition`, `409 { error: 'bans_cfg_conflict', partial_revert }`, `502 { error: 'bans_cfg_unavailable', partial_revert }` (the bridge could not read `Bans.cfg`). Servers are unbanned one by one; on either failure the servers before it stay unbanned, `partial_revert` lists them (`null` when none) and `appeal.unban_partial` is audited with their ids and `conflict_server_id`, while the appeal stays open for a retry. Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
 
 ## Audit
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/audit?page=&page_size=` | Page-paginated list (default 50, max 200). `id` is stringified bigserial. | `audit:view` |
+| GET | `/api/v1/audit?page=&page_size=` | Page-paginated list (default 50, max 200). Returns `{ items, total, page, page_size }`; `total` is the full `audit_log` row count. `id` is stringified bigserial. | `audit:view` |
 
 ## Host
 

@@ -1,4 +1,5 @@
 import { clanMembers, clans, players, roles } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -108,6 +109,32 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
       headers: { cookie: ownerCookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('neutralises spreadsheet formulas in player-controlled names (#128)', async () => {
+    const [formulaPlayer] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(895004),
+        canonicalName: '=HYPERLINK("http://evil","x")',
+        canonicalNameNormalized: 'hyperlinkevilx',
+      })
+      .returning({ id: players.id });
+    await h.db
+      .insert(clanMembers)
+      .values({ clanId, playerId: formulaPlayer.id, memberRole: 'member', hasPriority: false });
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/clans/${clanId}/roster/export`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      const row = res.body.split('\r\n').find((line) => line.includes('HYPERLINK'));
+      expect(row?.startsWith(`"'=HYPERLINK(""http://evil"",""x"")"`)).toBe(true);
+    } finally {
+      await h.db.delete(clanMembers).where(eq(clanMembers.playerId, formulaPlayer.id));
+    }
   });
 
   it('returns a CSV attachment with a header row and one row per member', async () => {

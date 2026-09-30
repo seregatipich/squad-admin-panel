@@ -257,6 +257,35 @@
 
 - `fastify` обновлён до 5.12.5. `pnpm --filter @squad/api typecheck` теперь проверяет и `test/` (`tsconfig.test.json`).
 
+## 2026-09-28 — Аудит маршрутов API: права, гонки, валидация (#68)
+
+### Security
+
+- Правила автоматизации (`/api/v1/automation-rules`) закрыты ключами `trigger:view` (чтение) и `trigger:edit` (изменение, dry-run) вместо `panel_access`/`role:edit`. `trigger:edit` выводится только для ролей с правом редактировать роли или выдаётся явно; кроме того, создать или изменить правило можно, только имея право на само действие: `mod:kick`/`mod:warn` для `kick`/`warn`, для `rcon_command` — `mod:ban_perm`, `mod:kick`, `mod:warn` или Squad-право `chat`/`changemap`/`manageserver`, иначе `403 { error: 'forbidden', required }`. PUT и DELETE пишут снимки before/after в аудит.
+- `POST /api/v1/integrations/discord/interactions` отклоняет запрос с `X-Signature-Timestamp` старше 5 минут (`401 stale_timestamp`).
+- Источники банов: URL фида с логином/паролем отклоняется (`400`), query-параметры URL в ответах API и снимках аудита заменяются на `***`; `discord_url` принимает только `https:`.
+- Экспорт ростера клана в CSV экранирует значения, начинающиеся с `=`, `+`, `-`, `@`, табуляции или CR, апострофом.
+
+### Fixed
+
+- `PUT /api/v1/alert-rules/:id` проверяет `config` по типу правила и отвечает `400 invalid_config` вместо молчаливого отключения правила.
+- `GET /api/v1/audit` возвращает в `total` число всех записей, а не размер страницы.
+- `PATCH /api/v1/appeals/:id`: при `bans_cfg_conflict` на одном из серверов ответ `409` содержит `partial_revert` с уже снятыми банами, а в аудит пишется `appeal.unban_partial`.
+- Привязка Discord: `state` расходуется атомарно (`GETDEL`), гонка двух привязок одного игрока даёт `409 already_linked_self`.
+- Steam-колбэк проверяет querystring схемой: повторяющийся параметр `openid.*` — `400`.
+- `automation-rules`: несуществующий `server_id` — `404 server_not_found` вместо `500`.
+- Решение по `superseded`-снапшоту балансировщика — `409 proposal_superseded`, статус не затирается.
+- `record_count` источника банов считает только неотозванные записи; повторный ручной sync источника в течение 60 с — `409 sync_already_queued`.
+- Поиск в `banned-names` и ростере клана экранирует `%`, `_`, `\`; PATCH правила, удалённого параллельно, — `404 rule_not_found`.
+- Чат: 18–20-значный `playerQuery` и курсор с id вне `bigint` больше не дают `500`.
+- Кланы: аудит пишется в той же транзакции, что и изменение; параллельные передачи лидерства и включение приоритета при уменьшенном лимите отвечают `200`/`409` вместо `500`; курсор матчей с неверным временем — `400 invalid_cursor`.
+- `combat-events`: `approxTotal` считается только для первой страницы, на страницах с курсором — `null`.
+- Обновление depot: ошибки остановки и перезапуска серверов логируются и попадают в `depot:progress` строкой stderr; сервер без настроек для перезапуска остаётся `stopped`.
+
+### Changed
+
+- Миграция `0119_list_query_indexes`: индекс `balancer_proposals (generated_at DESC, id DESC)` и частичный индекс активных записей `external_bans (source_id) WHERE revoked_at IS NULL`. Приём нового снапшота балансировщика удаляет `superseded`/`dismissed` снапшоты этого сервера, полученные более 30 дней назад.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

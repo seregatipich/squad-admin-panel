@@ -181,7 +181,7 @@ export const PERMISSIONS = [
     key: 'trigger:edit',
     category: 'triggers',
     label: 'Редактировать авто-правила',
-    unimplemented: true,
+    dangerous: true,
   },
   {
     key: 'scheduler:view',

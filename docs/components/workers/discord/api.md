@@ -11,7 +11,10 @@ not to this worker — `POST /api/v1/integrations/discord/interactions` in
 `apps/api/src/routes/discord-interactions.ts`. This worker only *registers* the
 command definitions (`command-registration.ts`, `PUT
 /applications/{id}/commands`, gated on `DISCORD_APPLICATION_ID`); it never
-receives an invocation itself.
+receives an invocation itself. The API route verifies the Ed25519 signature
+over `X-Signature-Timestamp` + body and then rejects a timestamp more than
+5 minutes from now with `401 stale_timestamp`, so a captured request cannot be
+replayed.
 
 ## Heartbeat key: `worker:heartbeat:discord`
 

@@ -51,6 +51,9 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(desc(auditLog.id))
         .limit(page_size)
         .offset(offset);
+      // `total` counts the whole log (#94), matching the appeals/players list
+      // contract, so a client can page past the first `page_size` rows.
+      const [countRow] = await app.db.select({ total: sql<number>`count(*)::int` }).from(auditLog);
       const items = rows.map((r) => ({
         ...r,
         id: String(r.id),
@@ -58,7 +61,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
       }));
       return {
         items,
-        total: items.length,
+        total: countRow?.total ?? 0,
         page,
         page_size,
       };

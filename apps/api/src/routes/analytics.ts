@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { csvCell } from '../lib/csv.js';
+import { requestUser } from '../lib/request-user.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -80,15 +81,18 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
 }
 
 /**
- * `panel_access` gate for the dashboard, which also declares
+ * Answers 403 for a caller without `panel_access`. The dashboard also declares
  * `config.permissions: ['server:view']` so an API token reaches it only when
- * delegated that scope (audit #89). The auth hook has already answered 401 to
- * an anonymous caller.
+ * delegated that scope (audit #89). Authentication itself is enforced by the
+ * fail-closed hook in `plugins/auth.ts`, which answers 401 before this handler
+ * can run (#98).
  */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (req.user?.permissions.panelAccess) return null;
-  reply.code(403);
-  return { error: 'forbidden' };
+  if (!requestUser(req).permissions.panelAccess) {
+    reply.code(403);
+    return { error: 'forbidden' };
+  }
+  return null;
 }
 
 /**
@@ -116,12 +120,12 @@ export async function computeAnalyticsAggregates(
         FROM matches m
         WHERE ${matchFilter}
       `);
-  const summaryRow = (
-    summaryRows as unknown as Array<{ total_matches: number; avg_duration: number | null }>
-  )[0];
+  const summaryRow = summaryRows[0];
 
+  // `sum(...)::bigint` arrives as a decimal string (postgres-js keeps int8
+  // precision), hence the Number() conversion below.
   const presenceRows = await app.db.execute<{
-    online_seconds: number;
+    online_seconds: string;
     unique_players: number;
   }>(sql`
         SELECT COALESCE(sum(p.online_seconds), 0)::bigint AS online_seconds,
@@ -131,12 +135,7 @@ export async function computeAnalyticsAggregates(
           AND p.day <= ${toIso}::date
           AND (${serverId}::uuid IS NULL OR p.server_id = ${serverId}::uuid)
       `);
-  const presenceRow = (
-    presenceRows as unknown as Array<{
-      online_seconds: number | string;
-      unique_players: number;
-    }>
-  )[0];
+  const presenceRow = presenceRows[0];
 
   const outcomeRows = await app.db.execute<{ winner: string | null; count: number }>(sql`
         SELECT m.winner AS winner, count(*)::int AS count
@@ -145,7 +144,7 @@ export async function computeAnalyticsAggregates(
         GROUP BY m.winner
       `);
   const outcomes = { team1: 0, team2: 0, draw: 0, unknown: 0, total: 0 };
-  for (const row of outcomeRows as unknown as Array<{ winner: string | null; count: number }>) {
+  for (const row of outcomeRows) {
     const count = Number(row.count);
     outcomes.total += count;
     if (row.winner === 'team1') outcomes.team1 += count;
@@ -229,7 +228,7 @@ export async function computeAnalyticsAggregates(
         GROUP BY 1
       `);
   const peakByHourMap = new Map<number, number>();
-  for (const row of peakRows as unknown as Array<{ hour: number; peak: number }>) {
+  for (const row of peakRows) {
     peakByHourMap.set(Number(row.hour), Number(row.peak));
   }
   const peakByHour = Array.from({ length: 24 }, (_, hour) => ({
@@ -248,13 +247,11 @@ export async function computeAnalyticsAggregates(
     },
     peak_by_hour: peakByHour,
     match_outcomes: outcomes,
-    popular_maps: (mapRows as unknown as Array<{ map: string; matches: number }>).map((row) => ({
+    popular_maps: mapRows.map((row) => ({
       map: row.map,
       matches: Number(row.matches),
     })),
-    popular_layers: (layerRows as unknown as Array<{ layer: string; matches: number }>).map(
-      (row) => ({ layer: row.layer, matches: Number(row.matches) }),
-    ),
+    popular_layers: layerRows.map((row) => ({ layer: row.layer, matches: Number(row.matches) })),
   };
 }
 

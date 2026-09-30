@@ -392,6 +392,90 @@ describeIfDb('GET /api/v1/auth/discord/callback', () => {
     expect(rows[0]?.discordUserId).toBe('111222333444555666');
   });
 
+  it('consumes a state once even when two callbacks race on it (#95)', async () => {
+    const playerId = await seedPlayerWithRole({
+      name: 'Linker',
+      panelAccess: true,
+      canAssignRoles: false,
+    });
+    const cookie = await login(playerId);
+    const state = await startLogin(cookie);
+    stubDiscord({ id: '111222333444555666', username: 'squaddie' });
+
+    const responses = await Promise.all(
+      [1, 2, 3, 4].map(() =>
+        h.app.inject({
+          method: 'GET',
+          url: callbackUrl(state),
+          headers: { cookie: `${cookie}; ${STATE_COOKIE}=${state}` },
+        }),
+      ),
+    );
+
+    expect(responses.map((r) => r.statusCode).sort()).toEqual([302, 400, 400, 400]);
+    const exchanges = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input).includes('/oauth2/token'));
+    expect(exchanges).toHaveLength(1);
+  });
+
+  it('answers already_linked_self when two links of one player race (#95)', async () => {
+    const playerId = await seedPlayerWithRole({
+      name: 'Linker',
+      panelAccess: true,
+      canAssignRoles: false,
+    });
+    const cookie = await login(playerId);
+    const firstState = await startLogin(cookie);
+    const secondState = await startLogin(cookie);
+
+    // Hold both callbacks at users/@me until each has arrived, so both are
+    // past the state check and exchange before either one inserts.
+    let arrived = 0;
+    let release: () => void = () => {};
+    const bothArrived = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: { headers?: Record<string, string> }) => {
+        const url = String(input);
+        if (url.includes('/oauth2/token')) {
+          const body = String((init as { body?: unknown } | undefined)?.body ?? '');
+          const token = body.includes('code=race-b') ? 'token-b' : 'token-a';
+          return new Response(JSON.stringify({ access_token: token }));
+        }
+        if (url.includes('/users/@me')) {
+          arrived += 1;
+          if (arrived === 2) release();
+          await bothArrived;
+          const auth = init?.headers?.Authorization ?? init?.headers?.authorization ?? '';
+          const id = auth.includes('token-b') ? '999888777666555444' : '111222333444555666';
+          return new Response(JSON.stringify({ id, username: `acct-${id}`, global_name: null }));
+        }
+        throw new Error(`unexpected fetch to ${url}`);
+      }),
+    );
+
+    const responses = await Promise.all([
+      h.app.inject({
+        method: 'GET',
+        url: callbackUrl(firstState, 'race-a'),
+        headers: { cookie: `${cookie}; ${STATE_COOKIE}=${firstState}` },
+      }),
+      h.app.inject({
+        method: 'GET',
+        url: callbackUrl(secondState, 'race-b'),
+        headers: { cookie: `${cookie}; ${STATE_COOKIE}=${secondState}` },
+      }),
+    ]);
+
+    const codes = responses.map((r) => r.statusCode).sort();
+    expect(codes).toEqual([302, 409]);
+    const conflict = responses.find((r) => r.statusCode === 409);
+    expect(conflict?.json()).toMatchObject({ error: 'already_linked_self' });
+  });
+
   it('answers 502 discord_exchange_failed when Discord rejects the token exchange', async () => {
     const playerId = await seedPlayerWithRole({
       name: 'Linker',

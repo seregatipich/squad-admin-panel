@@ -887,7 +887,11 @@ One row per dry-run snapshot delivered by
 `generated_at timestamptz NOT NULL`, `signals jsonb NOT NULL DEFAULT '{}'`,
 `proposal jsonb NOT NULL DEFAULT '[]'`,
 `status text NOT NULL DEFAULT 'open'` (CHECK IN `open`,`reviewed`,`dismissed`,`superseded`),
-`received_at`, `created_at`.
+`received_at`, `created_at`. Indexes: unique `source_snapshot_id`,
+`(server_id, generated_at DESC)`, `(status, generated_at DESC)` and
+`(generated_at DESC, id DESC)` for the unfiltered keyset listing (migration
+`0119`). Retention: each newly ingested snapshot deletes that server's
+`superseded`/`dismissed` rows received more than 30 days earlier.
 
 `signals` and `proposal` are stored verbatim and versioned by `schema_version`,
 so a change in the exporter's payload is a value change rather than a
