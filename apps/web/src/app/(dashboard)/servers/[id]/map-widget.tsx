@@ -133,8 +133,6 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
     [serverId, load],
   );
   useLiveSubscription('server.map.changed', onMapChanged);
-  useLiveSubscription('match.started', onMapChanged);
-  useLiveSubscription('match.ended', onMapChanged);
   useLiveSubscription('rcon.status', onMapChanged);
 
   const filteredCatalog = useMemo(() => filterLayers(catalog, pickerQuery), [catalog, pickerQuery]);

@@ -304,8 +304,17 @@ export function MatchesBrowser() {
       })
       .catch(() => {});
   }, [filters]);
-  useLiveSubscription('match.started', refreshHead);
-  useLiveSubscription('match.ended', refreshHead);
+  // Матчи не публикуются в live-bus отдельными кадрами: об их начале и конце
+  // сообщает только общая лента событий.
+  const onEventsAppended = useCallback(
+    (event: { data: { kinds: string[] } }) => {
+      if (event.data.kinds.some((kind) => kind === 'match.started' || kind === 'match.ended')) {
+        refreshHead();
+      }
+    },
+    [refreshHead],
+  );
+  useLiveSubscription('server.events.appended', onEventsAppended);
 
   const serverOptions = useMemo(() => {
     const merged = new Map<string, ServerOption>();
