@@ -130,14 +130,6 @@ const SERVER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 /** API limit for `initiatorQuery` (apps/api/src/routes/votes.ts). */
 export const INITIATOR_QUERY_MAX_LENGTH = 128;
 
-/** Maps a failed list request to Russian text; raw `HTTP 500` never reaches the operator. */
-export function describeLoadError(error: unknown): string {
-  const status = error instanceof Error ? /^HTTP (\d+)$/.exec(error.message)?.[1] : undefined;
-  return status
-    ? `Сервер вернул ошибку (код ${status}).`
-    : 'Не удалось связаться с сервером. Проверьте подключение.';
-}
-
 export function parseFilters(params: ParamsLike): VoteFilters {
   const servers = (params.get('servers') ?? '')
     .split(',')

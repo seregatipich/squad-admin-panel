@@ -24,6 +24,7 @@ import {
   StatusDot,
   TextInput,
 } from '@/components/ui';
+import { describeLoadError } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendVotePage,
@@ -31,7 +32,6 @@ import {
   buildListApiQuery,
   buildQueryString,
   DATE_PRESETS,
-  describeLoadError,
   formatDateTime,
   formatDuration,
   INITIATOR_QUERY_MAX_LENGTH,

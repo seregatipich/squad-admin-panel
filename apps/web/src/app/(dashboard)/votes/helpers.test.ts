@@ -5,7 +5,6 @@ import {
   buildListApiQuery,
   buildQueryString,
   defaultFilters,
-  describeLoadError,
   formatDuration,
   INITIATOR_QUERY_MAX_LENGTH,
   mapChain,
@@ -232,16 +231,5 @@ describe('mergeVotePage / appendVotePage', () => {
     const existing = [makeVote({ id: 'v1' })];
     const incoming = [makeVote({ id: 'v1' }), makeVote({ id: 'v2' })];
     expect(appendVotePage(existing, incoming).map((vote) => vote.id)).toEqual(['v1', 'v2']);
-  });
-});
-
-describe('describeLoadError', () => {
-  it('turns an HTTP status into Russian text', () => {
-    expect(describeLoadError(new Error('HTTP 500'))).toBe('Сервер вернул ошибку (код 500).');
-  });
-
-  it('falls back to a connection message for network failures and non-Error rejections', () => {
-    expect(describeLoadError(new TypeError('Failed to fetch'))).toMatch(/связаться с сервером/);
-    expect(describeLoadError(undefined)).toMatch(/связаться с сервером/);
   });
 });
