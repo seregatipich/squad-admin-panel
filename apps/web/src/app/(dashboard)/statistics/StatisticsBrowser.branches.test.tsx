@@ -461,14 +461,14 @@ describe('StatisticsBrowser — branch coverage', () => {
     await act(async () => {
       pendingStats[2]?.(new Response(JSON.stringify(newer), { status: 200 }));
     });
-    expect(avgOnlineKpiText()).toMatch(/Среднее 2 · Максимум 2 · Всего 4/);
+    expect(avgOnlineKpiText()).toMatch(/^Среднее 2 · Максимум 2$/);
 
     // …then the older, now-stale ("week") request resolves after it. It must
     // not overwrite the newer data that is already on screen.
     await act(async () => {
       pendingStats[1]?.(new Response(JSON.stringify(stale), { status: 200 }));
     });
-    expect(avgOnlineKpiText()).toMatch(/Среднее 2 · Максимум 2 · Всего 4/);
+    expect(avgOnlineKpiText()).toMatch(/^Среднее 2 · Максимум 2$/);
     expect(avgOnlineKpiText()).not.toMatch(/150/);
   });
 });
