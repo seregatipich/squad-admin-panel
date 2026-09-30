@@ -91,4 +91,33 @@ describe('VipsPage', () => {
       expect.anything(),
     );
   });
+
+  it('shows "Был(а)" in UTC regardless of the server time zone (#747)', async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = 'Asia/Tokyo';
+    try {
+      vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+        if (!path.startsWith('/api/v1/role-assignments')) return [];
+        return [
+          {
+            id: 'a1',
+            steam_id64: '76561198000000001',
+            eos_id: null,
+            canonical_name: 'Player',
+            role: { id: 'r1', name: 'VIP', color: 'gray' },
+            role_expires_at: null,
+            role_comment: null,
+            last_seen_at: '2026-07-01T23:30:00.000Z',
+          },
+        ];
+      });
+      render(await VipsPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.getByText('01.07.2026, 23:30:00')).toBeInTheDocument();
+      expect(screen.getByText('Был(а) (UTC)')).toBeInTheDocument();
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
 });

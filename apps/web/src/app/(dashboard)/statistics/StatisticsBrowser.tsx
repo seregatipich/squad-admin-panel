@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -473,7 +473,11 @@ function ServerLegend({
   );
 }
 
-function ChartCard({
+/*
+ * Мемоизирован: открытие списка серверов и клики по чекбоксам меняют только состояние
+ * родителя, а пропсы карточек (серия, серверы, модульные `labelOf`) остаются теми же.
+ */
+const ChartCard = memo(function ChartCard({
   title,
   series,
   servers,
@@ -534,7 +538,7 @@ function ChartCard({
       </figure>
     </Card>
   );
-}
+});
 
 function RankedBars({
   title,
