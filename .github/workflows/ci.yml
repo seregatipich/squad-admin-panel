@@ -78,6 +78,8 @@ jobs:
         run: bash scripts/test-bridge-package-scripts.sh
       - name: Run compose-env-passthrough test suite
         run: bash scripts/test-compose-env-passthrough.sh
+      - name: Run postgres-max-connections test suite
+        run: bash scripts/test-postgres-max-connections.sh
 
   lint:
     runs-on: ubuntu-24.04

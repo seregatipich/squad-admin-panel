@@ -510,3 +510,39 @@ describeIfDb('accrueDailyBonuses with a negative recompute delta (#18)', () => {
     expect(await ledgerSum(PLAYER_STEAM)).toBe(0);
   });
 });
+
+describeIfDb('accrueDailyBonuses statement count', () => {
+  it('rewrites the ledger and balances with a fixed number of statements, not one per player (#1107)', async () => {
+    for (const playerId of [PLAYER_STEAM, PLAYER_EOS]) {
+      await seedSession({
+        playerId,
+        serverId: SERVER_1,
+        connectedAt: `${DAY}T10:00:00.000Z`,
+        disconnectedAt: `${DAY}T12:00:00.000Z`,
+      });
+    }
+    await setEconomy({ enabled: true, kOnline: 5, seedThreshold: 1 });
+    await recompute();
+
+    const statements: string[] = [];
+    const counting = postgres(DATABASE_URL as string, {
+      max: 1,
+      onnotice: () => undefined,
+      debug: (_connection, query) => {
+        statements.push(query);
+      },
+    });
+    try {
+      await accrueDailyBonuses(counting, { day: DAY, now: NOW });
+    } finally {
+      await counting.end({ timeout: 5 });
+    }
+
+    const count = (pattern: RegExp) => statements.filter((s) => pattern.test(s)).length;
+    expect(count(/DELETE FROM bonus_transactions/)).toBe(1);
+    expect(count(/INSERT INTO bonus_transactions/)).toBe(1);
+    expect(count(/UPDATE players/)).toBe(1);
+    expect(await balanceOf(PLAYER_STEAM)).toBe(10);
+    expect(await balanceOf(PLAYER_EOS)).toBe(10);
+  });
+});

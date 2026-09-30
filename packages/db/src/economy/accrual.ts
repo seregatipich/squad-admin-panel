@@ -458,86 +458,121 @@ export async function accrueDailyBonuses(
       GROUP BY player_id
     `;
 
-    let playersAccrued = 0;
-    let transactionsWritten = 0;
-    let balanceDelta = 0;
-    let shortfallForgiven = 0;
-
+    // Set-based ledger rewrite (#1107): one DELETE, one INSERT, one balance
+    // read and one balance UPDATE for the whole day instead of a round-trip
+    // per player, so the `players` row locks are held for milliseconds and VIP
+    // grants (`SELECT ... FOR UPDATE`) no longer queue behind a long loop.
+    const desiredRows: Array<{
+      player_id: string;
+      type: (typeof ACCRUAL_TX_TYPES)[number];
+      amount: number;
+    }> = [];
     for (const row of aggregates) {
-      const playerId = row.player_id;
-      const desired: Array<{ type: (typeof ACCRUAL_TX_TYPES)[number]; amount: number }> = [
-        {
-          type: 'earn_online',
-          amount: Math.round((kOnline * Number(row.online_seconds)) / SECONDS_PER_HOUR),
-        },
-        {
-          type: 'earn_boost',
-          amount: Math.round((kBoost * Number(row.boost_seconds)) / SECONDS_PER_HOUR),
-        },
-        {
-          type: 'earn_seed',
-          amount: Math.round((kSeed * Number(row.seed_seconds)) / SECONDS_PER_HOUR),
-        },
-      ];
+      const hours = {
+        earn_online: (kOnline * Number(row.online_seconds)) / SECONDS_PER_HOUR,
+        earn_boost: (kBoost * Number(row.boost_seconds)) / SECONDS_PER_HOUR,
+        earn_seed: (kSeed * Number(row.seed_seconds)) / SECONDS_PER_HOUR,
+      } as const;
+      for (const type of ACCRUAL_TX_TYPES) {
+        desiredRows.push({ player_id: row.player_id, type, amount: Math.round(hours[type]) });
+      }
+    }
+    const playerIds = aggregates.map((row) => row.player_id);
 
-      const removed = await tx<{ amount: number }[]>`
-        DELETE FROM bonus_transactions
-        WHERE player_id = ${playerId}::uuid
-          AND reference_type = ${DAILY_PRESENCE_REFERENCE_TYPE}
-          AND reference_id = ${day}
-          AND type IN ('earn_online', 'earn_boost', 'earn_seed')
-        RETURNING amount
+    const removed =
+      playerIds.length === 0
+        ? []
+        : await tx<{ player_id: string; amount: number }[]>`
+            DELETE FROM bonus_transactions
+            WHERE player_id = ANY(${playerIds}::uuid[])
+              AND reference_type = ${DAILY_PRESENCE_REFERENCE_TYPE}
+              AND reference_id = ${day}
+              AND type IN ('earn_online', 'earn_boost', 'earn_seed')
+            RETURNING player_id, amount
+          `;
+    const removedByPlayer = new Map<string, number>();
+    for (const r of removed) {
+      removedByPlayer.set(r.player_id, (removedByPlayer.get(r.player_id) ?? 0) + Number(r.amount));
+    }
+
+    const insertRows = desiredRows.filter((r) => r.amount !== 0);
+    if (insertRows.length > 0) {
+      await tx`
+        INSERT INTO bonus_transactions
+          (player_id, amount, type, reference_type, reference_id, created_at)
+        SELECT r.player_id, r.amount, r.type, ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
+               to_timestamp(${dayStartSec})
+        FROM jsonb_to_recordset(${tx.json(insertRows)})
+          AS r(player_id uuid, type text, amount int)
       `;
-      const removedSum = removed.reduce((acc, r) => acc + Number(r.amount), 0);
+    }
+    const addedByPlayer = new Map<string, number>();
+    for (const r of insertRows) {
+      addedByPlayer.set(r.player_id, (addedByPlayer.get(r.player_id) ?? 0) + r.amount);
+    }
 
-      let addedSum = 0;
-      for (const { type, amount } of desired) {
-        if (amount === 0) continue;
-        await tx`
-          INSERT INTO bonus_transactions
-            (player_id, amount, type, reference_type, reference_id, created_at)
-          VALUES
-            (${playerId}::uuid, ${amount}, ${type}, ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
-             to_timestamp(${dayStartSec}))
-        `;
-        addedSum += amount;
-        transactionsWritten += 1;
-      }
+    const deltaByPlayer = new Map<string, number>();
+    for (const playerId of playerIds) {
+      deltaByPlayer.set(
+        playerId,
+        (addedByPlayer.get(playerId) ?? 0) - (removedByPlayer.get(playerId) ?? 0),
+      );
+    }
 
-      const delta = addedSum - removedSum;
-      let shortfall = 0;
-      if (delta < 0) {
-        // A recompute can shrink an accrual the player has already spent
-        // (coefficient lowered, seed time re-attributed, late sessions). The
-        // balance must never go negative (`players_bonus_balance_nonneg_chk`),
-        // so the part it cannot cover is forgiven through an `adjust` row that
-        // keeps the ledger summing to the balance.
-        const [player] = await tx<{ bonus_balance: number }[]>`
-          SELECT bonus_balance FROM players WHERE id = ${playerId}::uuid FOR UPDATE
-        `;
-        shortfall = Math.max(0, -(Number(player?.bonus_balance ?? 0) + delta));
+    // A recompute can shrink an accrual the player has already spent
+    // (coefficient lowered, seed time re-attributed, late sessions). The
+    // balance must never go negative (`players_bonus_balance_nonneg_chk`),
+    // so the part it cannot cover is forgiven through an `adjust` row that
+    // keeps the ledger summing to the balance. Locks are taken in id order so
+    // concurrent writers cannot deadlock against this batch.
+    const shrinkingIds = [...deltaByPlayer].filter(([, delta]) => delta < 0).map(([id]) => id);
+    const shortfallByPlayer = new Map<string, number>();
+    if (shrinkingIds.length > 0) {
+      const balances = await tx<{ id: string; bonus_balance: number }[]>`
+        SELECT id, bonus_balance FROM players
+        WHERE id = ANY(${shrinkingIds}::uuid[])
+        ORDER BY id
+        FOR UPDATE
+      `;
+      for (const { id, bonus_balance } of balances) {
+        const delta = deltaByPlayer.get(id) ?? 0;
+        const shortfall = Math.max(0, -(Number(bonus_balance) + delta));
+        if (shortfall > 0) shortfallByPlayer.set(id, shortfall);
       }
-      if (shortfall > 0) {
+      if (shortfallByPlayer.size > 0) {
         await tx`
           INSERT INTO bonus_transactions
             (player_id, amount, type, reference_type, reference_id, comment, created_at)
-          VALUES
-            (${playerId}::uuid, ${shortfall}, 'adjust', ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
-             ${SHORTFALL_ADJUST_COMMENT}, to_timestamp(${dayStartSec}))
+          SELECT r.player_id, r.amount, 'adjust', ${DAILY_PRESENCE_REFERENCE_TYPE}, ${day},
+                 ${SHORTFALL_ADJUST_COMMENT}, to_timestamp(${dayStartSec})
+          FROM jsonb_to_recordset(${tx.json(
+            [...shortfallByPlayer].map(([player_id, amount]) => ({ player_id, amount })),
+          )}) AS r(player_id uuid, amount int)
         `;
-        shortfallForgiven += shortfall;
       }
-      const balanceChange = delta + shortfall;
-      if (balanceChange !== 0) {
-        await tx`
-          UPDATE players
-          SET bonus_balance = bonus_balance + ${balanceChange}, updated_at = now()
-          WHERE id = ${playerId}::uuid
-        `;
-        balanceDelta += balanceChange;
-      }
-      if (addedSum !== 0 || removedSum !== 0) playersAccrued += 1;
     }
+
+    const balanceChanges = [...deltaByPlayer]
+      .map(([player_id, delta]) => ({
+        player_id,
+        change: delta + (shortfallByPlayer.get(player_id) ?? 0),
+      }))
+      .filter((row) => row.change !== 0);
+    if (balanceChanges.length > 0) {
+      await tx`
+        UPDATE players
+        SET bonus_balance = bonus_balance + c.change, updated_at = now()
+        FROM jsonb_to_recordset(${tx.json(balanceChanges)}) AS c(player_id uuid, change int)
+        WHERE players.id = c.player_id
+      `;
+    }
+
+    const playersAccrued = playerIds.filter(
+      (id) => (addedByPlayer.get(id) ?? 0) !== 0 || (removedByPlayer.get(id) ?? 0) !== 0,
+    ).length;
+    const transactionsWritten = insertRows.length;
+    const balanceDelta = balanceChanges.reduce((acc, row) => acc + row.change, 0);
+    const shortfallForgiven = [...shortfallByPlayer.values()].reduce((acc, v) => acc + v, 0);
 
     return {
       day,
