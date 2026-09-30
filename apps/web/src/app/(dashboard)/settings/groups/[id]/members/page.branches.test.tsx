@@ -337,7 +337,7 @@ describe('MembersPage — branch coverage', () => {
     await renderPage();
     fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
     await confirmDialog('Снять роль', 'Снять роль');
-    expect(await screen.findByText('Ошибка: forbidden')).toBeInTheDocument();
+    expect(await screen.findByText('Ошибка: недостаточно прав')).toBeInTheDocument();
   });
 
   it('does not remove when confirm is dismissed', async () => {
@@ -414,6 +414,7 @@ describe('MembersPage — branch coverage', () => {
       await new Promise((r) => setTimeout(r, 320));
     });
     const assign = await screen.findByRole('button', { name: 'Назначить' });
+    expect(callsMatching((u) => u === '/api/v1/players/search?q=New').length).toBe(1);
     await act(async () => {
       fireEvent.click(assign);
     });
@@ -435,6 +436,146 @@ describe('MembersPage — branch coverage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Назначить' }));
     });
     expect(await screen.findByText('Ошибка: already_member')).toBeInTheDocument();
+  });
+
+  it('keeps the table and shows a dismissible banner when a mutation fails (#700)', async () => {
+    handlers.bulkDelete = { status: 409, body: { error: 'cannot_remove_last_owner' } };
+    await renderPage();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Выбрать Alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
+    await confirmDialog('Снять роль с выбранных', 'Снять роль');
+
+    expect(
+      await screen.findByText('Ошибка: нельзя снять роль с последнего владельца'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть сообщение об ошибке' }));
+    expect(screen.queryByText(/последнего владельца/)).not.toBeInTheDocument();
+  });
+
+  it('reports a network failure of a mutation instead of an unhandled rejection (#701)', async () => {
+    await renderPage();
+    const original = fetchMock().getMockImplementation() as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock().mockImplementation((input: string, init?: RequestInit) =>
+      String(input).includes('/members/bulk-delete')
+        ? Promise.reject(new TypeError('offline'))
+        : original(input, init),
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Выбрать Alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
+    await confirmDialog('Снять роль с выбранных', 'Снять роль');
+
+    expect(await screen.findByText(/сетевая ошибка/)).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+  });
+
+  it('re-enables the import button after a network failure (#701)', async () => {
+    await renderPage();
+    const original = fetchMock().getMockImplementation() as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock().mockImplementation((input: string, init?: RequestInit) =>
+      String(input).includes('/members/import')
+        ? Promise.reject(new TypeError('offline'))
+        : original(input, init),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Импорт CSV' }));
+    fireEvent.change(await screen.findByTestId('import-textarea'), {
+      target: { value: '76561198000000001' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Импортировать' }));
+    });
+
+    expect(await screen.findByText(/сетевая ошибка/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Импортировать' })).not.toBeDisabled();
+  });
+
+  it('shows an error instead of an endless skeleton when the members request rejects (#697)', async () => {
+    const original = fetchMock().getMockImplementation() as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock().mockImplementation((input: string, init?: RequestInit) =>
+      String(input).includes('/members?')
+        ? Promise.reject(new TypeError('offline'))
+        : original(input, init),
+    );
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <MembersPage params={Promise.resolve({ id: 'role-1' })} />
+        </Suspense>,
+      );
+    });
+    expect(await screen.findByText('Сетевая ошибка')).toBeInTheDocument();
+  });
+
+  it('does not refetch /me and /roles when paginating (#698)', async () => {
+    handlers.members = membersResponse(150);
+    await renderPage();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    });
+    await screen.findByText('Страница 2 из 2');
+    expect(callsMatching((u) => u === '/api/v1/me').length).toBe(1);
+    expect(callsMatching((u) => u === '/api/v1/roles').length).toBe(1);
+  });
+
+  it('ignores a slow earlier members response that arrives after a newer one (#697)', async () => {
+    handlers.members = membersResponse(150);
+    const original = fetchMock().getMockImplementation() as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    let releaseSecondPage: (r: Response) => void = () => {};
+    const stale = { ...membersResponse(150), items: [] as unknown[] };
+    fetchMock().mockImplementation((input: string, init?: RequestInit) => {
+      if (String(input).includes('offset=100')) {
+        return new Promise<Response>((resolve) => {
+          releaseSecondPage = resolve;
+        });
+      }
+      return original(input, init);
+    });
+    await renderPage();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Вперёд' }));
+    });
+    // A newer request (offset=0 again) completes before the pending offset=100 one.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+    });
+    await act(async () => {
+      releaseSecondPage(new Response(JSON.stringify(stale), { status: 200 }));
+    });
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Страница 1 из 2')).toBeInTheDocument();
+  });
+
+  it('shows a search error and a not-found state in the add modal (#699)', async () => {
+    await renderPage();
+    const original = fetchMock().getMockImplementation() as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock().mockImplementation((input: string, init?: RequestInit) =>
+      String(input).startsWith('/api/v1/players/search')
+        ? Promise.resolve(new Response('{}', { status: 403 }))
+        : original(input, init),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить игрока' }));
+    const input = await screen.findByPlaceholderText('Ник или SteamID64…');
+    expect(screen.getByText('Введите хотя бы 3 символа для поиска…')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: 'New' } });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 320));
+    });
+    expect(await screen.findByText('Не удалось выполнить поиск: 403')).toBeInTheDocument();
   });
 
   it('hides management controls for users without manage_roles', async () => {
