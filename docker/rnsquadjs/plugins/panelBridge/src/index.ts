@@ -1,6 +1,6 @@
 import type { EventEmitter } from 'node:events';
 import { Redis } from 'ioredis';
-import { mapEvent } from './eventMap';
+import { isPublishablePayload, type KnownPlayer, mapEvent, type PlayerLookup } from './eventMap';
 import { Heartbeat } from './heartbeat';
 import { RconUnixServer } from './rconUnixServer';
 import { type Mode, RedisPublisher } from './redisPublisher';
@@ -10,6 +10,12 @@ export interface PanelBridgeContext {
   emitter: EventEmitter;
   rconExec: (method: string, args: unknown[]) => Promise<string>;
   onStatus: (cb: (state: 'connected' | 'disconnected') => void) => (() => void) | void;
+  /**
+   * Looks up an online player in RNSquadJS's `state.players` by lower-case
+   * EOS id. Optional: without it only identities remembered from earlier
+   * connect events resolve.
+   */
+  findPlayer?: PlayerLookup;
 }
 
 const RN_EVENTS = [
@@ -56,12 +62,40 @@ export async function startPanelBridge(
   let stopped = false;
   const eventHandlers: Array<[(typeof RN_EVENTS)[number], RnEventHandler]> = [];
 
+  // RNSquadJS re-polls ListPlayers on a timer, so by the time a disconnect is
+  // logged the player may already be gone from `state.players`. Identities
+  // resolved at connect are kept until that player's disconnect so the
+  // disconnect can still carry its steam id; the map holds one entry per
+  // online player (plus any whose disconnect line was never logged).
+  const connectedPlayers = new Map<string, KnownPlayer>();
+  const findPlayer: PlayerLookup = (eosId) =>
+    ctx.findPlayer?.(eosId) ?? connectedPlayers.get(eosId);
+
+  const trackIdentity = (type: string, payload: Record<string, unknown>): void => {
+    const { eos_id: eosId, steam_id64: steamID, name } = payload;
+    if (typeof eosId !== 'string') return;
+    if (type === 'player.disconnected') {
+      connectedPlayers.delete(eosId);
+      return;
+    }
+    if (type === 'player.connected' && typeof steamID === 'string' && typeof name === 'string') {
+      connectedPlayers.set(eosId, { steamID, name });
+    }
+  };
+
   for (const evt of RN_EVENTS) {
     const handler: RnEventHandler = (raw) => {
       if (stopped) return;
-      const envelope = mapEvent(ctx.serverId, evt, raw);
+      const envelope = mapEvent(ctx.serverId, evt, raw, findPlayer);
       if (!envelope) return;
+      trackIdentity(envelope.type, envelope.payload);
       if (mode === 'production' && !PRODUCTION_TYPES.has(envelope.type)) return;
+      // Production consumers validate against the strict shared schemas; an
+      // event without a resolvable player identity would be rejected there.
+      if (mode === 'production' && !isPublishablePayload(envelope)) {
+        console.warn('panelBridge dropped unpublishable event', envelope.type, envelope.payload);
+        return;
+      }
       publisher.publishEvent(envelope).catch((err) => {
         console.error('panelBridge publishEvent', err);
       });
