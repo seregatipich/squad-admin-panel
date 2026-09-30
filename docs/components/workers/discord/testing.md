@@ -26,7 +26,19 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 The notify path: template resolution, per-webhook filtering, 429 handling,
 consumer-group bookkeeping, and the encryption round-trip against a local
-reimplementation of the API's `encrypt()`.
+reimplementation of the API's `encrypt()`. Since #62 also: a failed delivery is
+left pending without a dedup key and acknowledged only after
+`MAX_DELIVERY_ATTEMPTS`, the per-webhook ledger skips webhooks that already got
+the embed, a hung POST is aborted by the request timeout, a `Retry-After` above
+the cap fails fast, a `NOGROUP` read recreates the group, and a failed group
+creation is retried instead of ending the loop.
+
+### `index-wiring.test.ts` (#62)
+
+Boots `index.ts` with the loops mocked: notify and role sync each get their own
+Redis connection distinct from the heartbeat's, a loop that rejects or returns
+before shutdown exits the process with code 1, and SIGTERM interrupts the notify
+chain's retry sleep.
 
 ### `discord-rest.test.ts` (DISCORD-5)
 
@@ -34,7 +46,8 @@ The three guild-member REST calls against an injected `fetchImpl`: the exact
 URLs and the `Bot` header, `403` → `missing_permissions`, `404` →
 "not in the guild", non-2xx → `http_error`, network throw → `network_error`,
 `Retry-After` honoured from both the header and the JSON body, and the ceiling
-on consecutive 429 retries.
+on consecutive 429 retries — including the member lookup, which retries a
+429 and reports `rate_limited` once the retries run out (#62).
 
 ### `role-sync.test.ts` (DISCORD-5)
 
@@ -43,7 +56,8 @@ Discord: grant, revoke on role change, revoke-all on role removal, an unmanaged
 Discord role never touched, a disabled mapping ignored, no-op without a link,
 no-op for a non-member, `Missing Permissions` surfaced rather than swallowed,
 `Retry-After` respected, reconcile restoring a hand-removed role and stripping a
-hand-granted one, and the `loadDiscordBotContext` gate in all four
+hand-granted one, the reconcile's two-query budget and its stop between players
+on shutdown (#62), and the `loadDiscordBotContext` gate in all four
 not-configured shapes plus the configured one.
 
 The fake client honours `where(eq(col, value))` rather than ignoring it —
@@ -54,8 +68,10 @@ bugs the suite exists to catch would pass.
 
 The stream loop against a fake Redis: request parsing, per-player vs
 full-reconcile dispatch, acking a malformed entry, acking without syncing while
-the bot is unconfigured, the consumer group created on `discord:role-sync`, and
-the ok/error status written to `discord:role-sync:status`.
+the bot is unconfigured, the consumer group created on `discord:role-sync` (and
+retried when Redis is still loading), full-reconcile requests in one batch
+coalesced into one sweep that receives the loop's `shouldStop`, and the
+ok/error status written to `discord:role-sync:status`.
 
 ### `status-channel.test.ts` (DISCORD-6)
 

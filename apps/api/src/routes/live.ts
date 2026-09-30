@@ -230,7 +230,16 @@ const liveRoutes: FastifyPluginAsync<LiveRoutesOptions> = async (app, opts) => {
         if (event.type === 'media.uploaded' && event.data.player_id !== connectionPlayerId) {
           return;
         }
-        if (LIVE_EVENT_AUDIENCE[event.type] === 'combat' && !canViewCombat) return;
+        // Every `combat.*` frame carries combat data (log-ingest also publishes
+        // `combat.vehicle`), so the gate also matches the prefix, not only the
+        // types the audience table lists.
+        if (
+          (LIVE_EVENT_AUDIENCE[event.type] === 'combat' ||
+            (event.type as string).startsWith('combat.')) &&
+          !canViewCombat
+        ) {
+          return;
+        }
         safeSend(event);
       });
 

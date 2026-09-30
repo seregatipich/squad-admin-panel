@@ -1142,8 +1142,8 @@ Group creation is uniformly `XGROUP CREATE … MKSTREAM` with `BUSYGROUP` swallo
 Deduplication is two-layer: a **producer-side** best-effort claim and a **consumer-side** authoritative one, both on `DEDUP_KEY(group, eventId)` = `dedup:<group>:<event_id>` with `DEDUP_TTL_SECONDS = 86_400` (`events.ts:291-292`). log-ingest's `publish.ts:12` sets it `NX` and returns early if it loses the race. Consumers then re-claim under their own group — but in **opposite orders**, over the same streams:
 
 - **automation** claims *before* work (`SET NX` → dispatch): at-most-once. A crash mid-dispatch loses the event (`dispatch.ts:214-224`).
-- **discord** delivers *first*, then claims, then `XACK`s: deliberate at-least-once, documented at `consume.ts:88-101`.
-- **log-ingest event persistence** uses a third mechanism entirely — a *database* claim, `INSERT … ON CONFLICT DO NOTHING` into `processed_events` in the same transaction as the `events` insert (`event-store.ts:16-27`).
+- **discord** delivers *first*, then claims, then `XACK`s: deliberate at-least-once, documented on `processEntry` in `consume.ts`. Since #62 a delivery that failed for any webhook is left pending and retried by the reclaim sweep (per-webhook ledger, up to 10 attempts).
+- **log-ingest event persistence** relies on the `events` primary key alone — `INSERT … ON CONFLICT DO NOTHING` on `(event_id, occurred_at)` (`event-store.ts`). Until #62 it also claimed a `processed_events` row per event, which duplicated that guarantee and was never pruned.
 
 Pending-entry recovery is `XAUTOCLAIM` from `0-0` with a min-idle threshold, present in `discord` (30 s, boot sweep plus per-iteration), `rcon` (60 s idle, every 30 s) and `config-sync`. **`automation` has no reclaim path at all**, and its consumer name is `automation-dispatch-${process.pid}` (`dispatch.ts:260`) — entries pending when a process dies are never revisited. `diag-flush` likewise has no reclaim.
 
@@ -1824,6 +1824,9 @@ Until issue #6 the last four tables had **no rotator at all**: `player_sessions`
 | `config_versions` | PG | never pruned | same append-only triggers (`0003:28-39`) | unbounded |
 | `processed_events` | PG | never pruned (`0000_init.sql:280`) | — | unbounded |
 | `sessions` | PG | `pruneExpired()` via `plugins/session-prune.ts` | hourly | expired rows deleted (#37) |
+
+| `processed_events` | PG | pruned past the 24-month `events` cutoff by `worker-event-partition` (`pruneProcessedEvents`, #62) | — | bounded |
+| `sessions` | PG | `pruneExpired()` exists but has **no caller** | — | dead code; expired rows accumulate |
 | `moderation_actions`, `external_bans`, `player_ip_history` | PG | never pruned | — | `player_ip_history` is bounded by distinct IPs per player (UPSERT on `(playerId, ip)`, `geoip/observe.ts:22-42`) — the one natural brake |
 | `media_files` rows + blobs | PG + disk | soft delete only (`routes/media.ts:361`) | — | blob is **never unlinked**; dedup lookup filters `isNull(deletedAt)`, so soft-deleting the last active row orphans the file *and* makes the next identical upload write a second copy. No reaper exists. |
 | `diag:queue` | Redis stream | `MAXLEN ~ 100_000` (`shared-config/src/diag.ts:20`) | every emitter | silent, approximate eviction |
@@ -2660,7 +2663,7 @@ sequenceDiagram
     SQ->>BR: docker logs --follow --timestamps
     BR->>LI: rpc.StreamFrame (stdout only)
     LI->>LI: reassemble → parseLine → build EventEnvelope (uuidv5)
-    LI->>P: processed_events claim + events (onConflictDoNothing)
+    LI->>P: events (onConflictDoNothing)
     LI->>P: tx: combat_events + dossier aggregates
     LI->>R: XADD events:server:<id> MAXLEN ~10000
     LI->>R: PUBLISH live-bus (combat.event, chat.message)
@@ -2672,7 +2675,7 @@ The panel ingests **container stdout, never the log file**: `DockerRunner.LogsFo
 
 `LogIngestor.ingest` (`src/parser/ingest.ts:108`) is the single funnel: benign-noise drop → fatal detection → prefix parse → chat → vote → combat/vehicle → report → `handleMessage`. Two stateful correlations run in-process, both windowed by `joinCorrelationWindowMs` (2500 ms): the `AddClientConnection` IP / `Join succeeded` name / `LogRedpointEOS` triple collapses into one `player.connected`, and an `OnPossess`/`OnUnPossess` map attributes kills to vehicles. `build()` mints an `EventEnvelope` whose `event_id` is a **UUIDv5 over a stable stringification of `{server_id, type, ts, payload}`** — content-addressed, so the same line re-read after a restart yields the same id.
 
-That id is the whole idempotency story, because there is **no checkpoint or offset store**: resume is `--tail 100` plus the `processed_events` claim and `onConflictDoNothing` on `(event_id, occurred_at)`. Any outage longer than the docker log buffer is simply lost; no backfill exists. Ordering is per-domain: three serial promise chains (`matchChain`, `voteChain`, `combatChain`) preserve log order within a server, while envelope persistence and stream publish are fire-and-forget `.catch()` calls, unordered relative to each other.
+That id is the whole idempotency story, because there is **no checkpoint or offset store**: resume is `--tail 100` plus `onConflictDoNothing` on `(event_id, occurred_at)`. Any outage longer than the docker log buffer is simply lost; no backfill exists. Ordering is per-domain: three serial promise chains (`matchChain`, `voteChain`, `combatChain`) preserve log order within a server, while envelope persistence and stream publish are fire-and-forget `.catch()` calls, unordered relative to each other.
 
 Two fan-out channels exist and are not the same mechanism. The Redis **stream** `events:server:{id}` (`src/publish.ts:11`, `SET NX` dedup 24 h then `XADD … MAXLEN ~10000`) feeds the automation, discord, config-sync and ban-sync workers; `CONSUMER_GROUP.stats` is declared but no consumer implements it. The Redis **pub/sub** channel `live-bus` carries ready-made UI frames straight from `combat/store.ts` and `chat/store.ts` to the WebSocket described in §12.3.
 

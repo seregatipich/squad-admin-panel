@@ -1,7 +1,11 @@
 import { bannedNameRules, type DatabaseClient } from '@squad/db';
 import { isBannedNameAction, isBannedNameMatchType } from '@squad/shared-config/banned-names';
 import { asc, eq } from 'drizzle-orm';
-import type { BannedNameMatch, CompiledBannedNameRuleSet } from './matcher.js';
+import type {
+  BannedNameMatch,
+  CompiledBannedNameRuleSet,
+  MatchBannedNicknameOptions,
+} from './matcher.js';
 import { compileBannedNameRules, matchBannedNickname } from './matcher.js';
 
 const DEFAULT_TTL_MS = 30_000;
@@ -16,9 +20,16 @@ export class BannedNameRuleCache {
   private compiled: CompiledBannedNameRuleSet = { exact: [], substring: [], regex: [] };
   private loadedAt = 0;
 
+  /**
+   * @param db - Database the active rules are loaded from.
+   * @param ttlMs - How long a loaded rule set is reused before reloading.
+   * @param matchOptions - Hooks forwarded to every `matchBannedNickname` call,
+   *   e.g. logging a regex rule that exceeded its time budget.
+   */
   constructor(
     private readonly db: DatabaseClient,
     private readonly ttlMs: number = DEFAULT_TTL_MS,
+    private readonly matchOptions: MatchBannedNicknameOptions = {},
   ) {}
 
   /** Forces the next `match` call to reload from the database. */
@@ -53,6 +64,6 @@ export class BannedNameRuleCache {
 
   async match(nickname: string): Promise<BannedNameMatch | null> {
     await this.ensureLoaded();
-    return matchBannedNickname(nickname, this.compiled);
+    return matchBannedNickname(nickname, this.compiled, this.matchOptions);
   }
 }

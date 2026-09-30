@@ -8,6 +8,10 @@
 - `pruneScheduledTaskRuns(sql)`: удаляет строки `scheduled_task_runs` старше 90 дней и все, кроме 1000 последних, для каждой задачи — задача с постоянно падающей отправкой писала строку каждые 30 с (#52).
 - Обе функции вызываются в `runPartitionTick`; `test/retention.test.ts` проверяет их на реальной базе.
 
+### Fixed
+
+- [#62](https://github.com/seregatipich/squad-admin-panel/issues/62): `processed_events` was never pruned. New exported `pruneProcessedEvents(sql)`, wired into `runPartitionTick`, deletes markers older than the `events` retention cutoff (the first day of the month 24 months back), after which the event they guarded can no longer be replayed. Test: `test/processed-events-prune.test.ts`.
+
 ## 2026-09-27
 
 ### Fixed

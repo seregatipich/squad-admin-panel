@@ -76,13 +76,18 @@ async function seedLink(status: 'confirmed' | 'rejected'): Promise<void> {
   });
 }
 
-async function seedBan(revertedAt: Date | null = null): Promise<void> {
+async function seedBan(
+  revertedAt: Date | null = null,
+  expiresAt: Date | null = null,
+): Promise<void> {
   await db.insert(moderationActions).values({
     playerId: bannedPlayerId,
     actionType: 'ban',
     authorSystemLabel: 'alt-ban-test',
     reason: 'ALT-7 active ban',
     revertedAt,
+    // Same shape apps/api/src/lib/moderation-enforce.ts writes for a temp ban.
+    context: { expires_at: expiresAt ? expiresAt.toISOString() : null },
   });
 }
 
@@ -217,5 +222,26 @@ describe('handleAltBanConnect', () => {
     expect(await db.select().from(alertEvents).where(eq(alertEvents.ruleId, RULE_ID))).toHaveLength(
       0,
     );
+  });
+
+  it('ignores a temporary ban that has already expired (#901)', async () => {
+    await seedRule();
+    await seedLink('confirmed');
+    await seedBan(null, new Date(Date.now() - 24 * 3600 * 1000));
+
+    const result = await handleAltBanConnect(db, makeRedis(), connectEvent());
+
+    expect(result).toMatchObject({ outcome: 'no_active_ban', connectingPlayerId });
+    expect(await db.select().from(events).where(eq(events.serverId, SERVER_ID))).toHaveLength(0);
+  });
+
+  it('still raises the signal for a temporary ban that has not expired yet (#901)', async () => {
+    await seedRule();
+    await seedLink('confirmed');
+    await seedBan(null, new Date(Date.now() + 24 * 3600 * 1000));
+
+    const result = await handleAltBanConnect(db, makeRedis(), connectEvent());
+
+    expect(result).toMatchObject({ outcome: 'detected', bannedPlayerIds: [bannedPlayerId] });
   });
 });

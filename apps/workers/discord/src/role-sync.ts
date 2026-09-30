@@ -99,41 +99,38 @@ async function loadDiscordUserId(deps: RoleSyncDeps, playerId: string): Promise<
   return rows[0]?.discordUserId ?? null;
 }
 
-/**
- * Drives one player's Discord roles to what the panel says they should be.
- *
- * The panel is the source of truth, but only over the Discord roles that
- * appear in an enabled `discord_role_mappings` row: a role outside that set is
- * never added and never removed, so operators keep full manual control of
- * everything the panel does not manage.
- *
- * The same code path serves both the reactive stream request and the hourly
- * reconcile — it always reads the member's current Discord roles first, which
- * makes it idempotent and makes drift repair fall out for free.
- */
-export async function syncPlayerDiscordRoles(
-  deps: RoleSyncDeps,
-  playerId: string,
-): Promise<PlayerSyncResult> {
-  const empty: PlayerSyncResult = { outcome: 'not_linked', added: [], removed: [] };
-  const discordUserId = await loadDiscordUserId(deps, playerId);
-  if (!discordUserId) return empty;
+/** One linked player with everything the sync needs, loaded up front. */
+interface LinkedMember {
+  playerId: string;
+  discordUserId: string;
+  panelRoleId: string | null;
+}
 
-  const { managed, byPanelRole } = await loadMappings(deps);
-  const panelRoleId = await loadPanelRoleId(deps, playerId);
+/**
+ * Reads the member's current Discord roles and applies the difference between
+ * them and what `mappings` says the member's panel role should grant. Shared
+ * by the per-player sync and the reconcile sweep so both follow the same rules.
+ */
+async function syncLinkedMember(
+  deps: RoleSyncDeps,
+  member: LinkedMember,
+  mappings: MappingSet,
+): Promise<PlayerSyncResult> {
+  const { playerId, discordUserId, panelRoleId } = member;
+  const { managed, byPanelRole } = mappings;
   const desired: ReadonlySet<string> =
     (panelRoleId ? byPanelRole.get(panelRoleId) : undefined) ?? new Set<string>();
 
-  const member = await fetchGuildMemberRoles(deps, discordUserId);
-  if (!member.ok && member.notAMember) {
+  const guildMember = await fetchGuildMemberRoles(deps, discordUserId);
+  if (!guildMember.ok && guildMember.notAMember) {
     deps.log.debug({ playerId, discordUserId }, 'discord role sync: not a guild member');
     return { outcome: 'not_a_guild_member', added: [], removed: [] };
   }
-  if (!member.ok) {
-    return { outcome: 'error', added: [], removed: [], error: member.failure };
+  if (!guildMember.ok) {
+    return { outcome: 'error', added: [], removed: [], error: guildMember.failure };
   }
 
-  const current = new Set(member.roles);
+  const current = new Set(guildMember.roles);
   const toAdd = [...desired].filter((roleId) => !current.has(roleId));
   const toRemove = [...current].filter((roleId) => managed.has(roleId) && !desired.has(roleId));
 
@@ -156,6 +153,30 @@ export async function syncPlayerDiscordRoles(
   return { outcome: 'synced', added, removed };
 }
 
+/**
+ * Drives one player's Discord roles to what the panel says they should be.
+ *
+ * The panel is the source of truth, but only over the Discord roles that
+ * appear in an enabled `discord_role_mappings` row: a role outside that set is
+ * never added and never removed, so operators keep full manual control of
+ * everything the panel does not manage.
+ *
+ * The same rules serve both the reactive stream request and the hourly
+ * reconcile — it always reads the member's current Discord roles first, which
+ * makes it idempotent and makes drift repair fall out for free.
+ */
+export async function syncPlayerDiscordRoles(
+  deps: RoleSyncDeps,
+  playerId: string,
+): Promise<PlayerSyncResult> {
+  const discordUserId = await loadDiscordUserId(deps, playerId);
+  if (!discordUserId) return { outcome: 'not_linked', added: [], removed: [] };
+
+  const mappings = await loadMappings(deps);
+  const panelRoleId = await loadPanelRoleId(deps, playerId);
+  return syncLinkedMember(deps, { playerId, discordUserId, panelRoleId }, mappings);
+}
+
 export interface ReconcileSummary {
   /** Linked players examined. */
   checked: number;
@@ -167,6 +188,11 @@ export interface ReconcileSummary {
   lastError: DiscordFailure | null;
 }
 
+export interface ReconcileOptions {
+  /** Checked before each player; once it returns `true` the sweep ends early. */
+  shouldStop?: () => boolean;
+}
+
 /**
  * Hourly drift repair: walks every `player_discord_links` row and re-derives
  * its Discord roles. Restores a role an admin removed by hand in Discord and
@@ -175,8 +201,17 @@ export interface ReconcileSummary {
  * Iterates the link table rather than listing guild members on purpose: the
  * batch member listing needs the privileged `GUILD_MEMBERS` intent, and an
  * unlinked guild member is not the panel's business anyway.
+ *
+ * The mappings and every link joined with its player's panel role are loaded
+ * once up front (two queries per sweep, not three per player); the Discord
+ * calls stay sequential. `shouldStop` is checked between players so a
+ * shutdown does not wait for a full sweep.
  */
-export async function reconcileLinkedPlayers(deps: RoleSyncDeps): Promise<ReconcileSummary> {
+export async function reconcileLinkedPlayers(
+  deps: RoleSyncDeps,
+  options: ReconcileOptions = {},
+): Promise<ReconcileSummary> {
+  const shouldStop = options.shouldStop ?? (() => false);
   const summary: ReconcileSummary = {
     checked: 0,
     added: 0,
@@ -185,12 +220,24 @@ export async function reconcileLinkedPlayers(deps: RoleSyncDeps): Promise<Reconc
     errors: 0,
     lastError: null,
   };
-  const links = await deps.db.select().from(playerDiscordLinks);
-  for (const link of links) {
+  const mappings = await loadMappings(deps);
+  const members: LinkedMember[] = await deps.db
+    .select({
+      playerId: playerDiscordLinks.playerId,
+      discordUserId: playerDiscordLinks.discordUserId,
+      panelRoleId: players.roleId,
+    })
+    .from(playerDiscordLinks)
+    .leftJoin(players, eq(players.id, playerDiscordLinks.playerId));
+  for (const member of members) {
+    if (shouldStop()) {
+      deps.log.info({ ...summary }, 'discord role reconcile interrupted by shutdown');
+      return summary;
+    }
     summary.checked++;
     let result: PlayerSyncResult;
     try {
-      result = await syncPlayerDiscordRoles(deps, link.playerId);
+      result = await syncLinkedMember(deps, member, mappings);
     } catch (err) {
       summary.errors++;
       summary.lastError = {
@@ -198,12 +245,12 @@ export async function reconcileLinkedPlayers(deps: RoleSyncDeps): Promise<Reconc
         message: `Ошибка синхронизации: ${(err as Error).message}`,
       };
       deps.log.error(
-        { playerId: link.playerId, err: (err as Error).message },
+        { playerId: member.playerId, err: (err as Error).message },
         'discord role reconcile failed for one player; continuing',
       );
       continue;
     }
-    if (result.outcome === 'not_linked' || result.outcome === 'not_a_guild_member') {
+    if (result.outcome === 'not_a_guild_member') {
       summary.skipped++;
       continue;
     }

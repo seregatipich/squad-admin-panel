@@ -182,4 +182,42 @@ describe('fetchGuildMemberRoles', () => {
     await fetchGuildMemberRoles(deps, USER_ID);
     expect(auth).toBe(`Bot ${BOT_TOKEN}`);
   });
+
+  it('retries a rate-limited member lookup after the advertised Retry-After delay (#884)', async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const deps = makeDeps(
+      async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response(null, { status: 429, headers: { 'retry-after': '1.5' } });
+        }
+        return new Response(JSON.stringify({ roles: [ROLE_ID] }), { status: 200 });
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+
+    expect(await fetchGuildMemberRoles(deps, USER_ID)).toEqual({ ok: true, roles: [ROLE_ID] });
+    expect(waits).toEqual([1500]);
+    expect(calls).toBe(2);
+  });
+
+  it('reports rate_limited, not an HTTP error, once the member lookup keeps answering 429 (#884)', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'retry-after': '0' } }),
+    );
+    const res = await fetchGuildMemberRoles(makeDeps(fetchImpl), USER_ID);
+
+    expect(res).toEqual({
+      ok: false,
+      notAMember: false,
+      failure: {
+        reason: 'rate_limited',
+        message: 'Discord ограничивает частоту запросов — синхронизация отложена.',
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
 });

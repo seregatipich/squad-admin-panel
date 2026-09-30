@@ -18,6 +18,15 @@ const MAX_RATE_LIMIT_RETRIES = 5;
 const BASE_BACKOFF_MS = 500;
 /** Fallback wait when a 429 response carries no parseable `retry_after`/`Retry-After`. */
 const DEFAULT_RATE_LIMIT_WAIT_MS = 1000;
+/**
+ * Longest `Retry-After` the sender is willing to sleep through. Delivery is
+ * sequential, so sleeping out a global ban or a Cloudflare block (hundreds or
+ * thousands of seconds) would stall every other event; a longer wait counts
+ * as a failed delivery and the consumer's retry takes it from there.
+ */
+export const MAX_RETRY_AFTER_MS = 60_000;
+/** Default per-request timeout for one webhook POST (headers and body). */
+export const DEFAULT_WEBHOOK_TIMEOUT_MS = 10_000;
 
 export interface SenderDeps {
   db: DatabaseClient;
@@ -29,6 +38,20 @@ export interface SenderDeps {
   log: Logger;
   /** Used to build `{player_url}` links; `null` disables them. */
   panelBaseUrl: string | null;
+  /** Per-request timeout for one webhook POST; defaults to `DEFAULT_WEBHOOK_TIMEOUT_MS`. */
+  requestTimeoutMs?: number;
+}
+
+/**
+ * Remembers which webhooks already received a given event, so a retried
+ * delivery (see `apps/workers/discord/src/consume.ts`) re-posts only to the
+ * webhooks that failed last time.
+ */
+export interface WebhookDeliveryLedger {
+  /** Resolves `true` when `webhookId` already received this event's embed. */
+  isDelivered(webhookId: string): Promise<boolean>;
+  /** Records a successful POST of this event's embed to `webhookId`. */
+  markDelivered(webhookId: string): Promise<void>;
 }
 
 export interface DeliveryResult {
@@ -81,9 +104,11 @@ function buildPayload(embed: DiscordEmbedTemplate, mentionEveryone: boolean): We
  * POSTs one rendered embed to one webhook URL. 429 responses wait for
  * Discord's advertised retry delay and are retried without counting against
  * `MAX_SEND_ATTEMPTS` (capped separately by `MAX_RATE_LIMIT_RETRIES` so a
- * webhook stuck in a 429 loop still eventually gives up); any other
- * non-2xx status or a network error counts as a normal attempt with
- * exponential backoff. Never throws — callers get `{ok:false}` instead.
+ * webhook stuck in a 429 loop still eventually gives up); an advertised delay
+ * above `MAX_RETRY_AFTER_MS` gives up at once instead of sleeping. Any other
+ * non-2xx status, a network error or a request exceeding the per-request
+ * timeout counts as a normal attempt with exponential backoff. Never throws —
+ * callers get `{ok:false}` instead.
  */
 async function postWebhook(
   deps: SenderDeps,
@@ -101,6 +126,7 @@ async function postWebhook(
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(deps.requestTimeoutMs ?? DEFAULT_WEBHOOK_TIMEOUT_MS),
       });
     } catch (err) {
       attempt++;
@@ -122,7 +148,12 @@ async function postWebhook(
         deps.log.error('discord webhook post gave up after repeated 429 rate limiting');
         return { ok: false, rateLimited };
       }
-      await deps.sleep(await readRetryAfterMs(res));
+      const waitMs = await readRetryAfterMs(res);
+      if (waitMs > MAX_RETRY_AFTER_MS) {
+        deps.log.error({ waitMs }, 'discord webhook rate limit wait exceeds the cap; giving up');
+        return { ok: false, rateLimited };
+      }
+      await deps.sleep(waitMs);
       continue;
     }
 
@@ -175,10 +206,15 @@ async function resolveTemplate(
  * per-webhook delivery failure (only a DB error propagates, so the caller's
  * dedup/ack bookkeeping can tell "no webhooks matched" apart from "the DB
  * lookup itself failed").
+ *
+ * With a `ledger`, webhooks it already marks delivered are skipped (counted
+ * in neither `sent` nor `failed`) and every successful POST is recorded, so a
+ * retry after a partial failure re-posts only to the webhooks that failed.
  */
 export async function deliverEnvelope(
   deps: SenderDeps,
   envelope: EventEnvelope,
+  ledger?: WebhookDeliveryLedger,
 ): Promise<DeliveryResult> {
   const result: DeliveryResult = { sent: 0, failed: 0, rateLimited: 0 };
   const discordType = mapEventToDiscordType(envelope.type);
@@ -220,14 +256,19 @@ export async function deliverEnvelope(
 
   for (const row of candidates) {
     try {
+      if (await ledger?.isDelivered(row.id)) continue;
       const url = decryptString(
         deps.encryptionKey,
         deserialize(Buffer.from(row.webhookUrlEncrypted as unknown as Buffer)),
       );
       const outcome = await postWebhook(deps, url, buildPayload(embed, row.mentionEveryone));
       if (outcome.rateLimited) result.rateLimited++;
-      if (outcome.ok) result.sent++;
-      else result.failed++;
+      if (outcome.ok) {
+        result.sent++;
+        await ledger?.markDelivered(row.id);
+      } else {
+        result.failed++;
+      }
     } catch (err) {
       result.failed++;
       deps.log.error(

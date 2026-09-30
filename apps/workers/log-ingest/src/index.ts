@@ -100,7 +100,10 @@ async function main() {
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
 
   const chatFlagDetector = new ChatFlagDetector(db);
-  const bannedNameCache = new BannedNameRuleCache(db);
+  const bannedNameCache = new BannedNameRuleCache(db, undefined, {
+    onRegexTimeout: (ruleId) =>
+      log.warn({ ruleId }, 'banned-name regex rule exceeded its time budget; treated as no match'),
+  });
   const externalBanCache = new ExternalBanCache(db, redis);
   const alertRuleCache = new AlertRuleCache(db, {
     onInvalidRule: (ruleId, reason) =>

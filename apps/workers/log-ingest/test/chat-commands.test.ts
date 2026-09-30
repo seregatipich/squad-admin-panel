@@ -133,6 +133,11 @@ afterEach(async () => {
   await db.delete(playerReports).where(eq(playerReports.serverId, SERVER_ID));
   await redis.del(rconCommandStream(SERVER_ID));
   await redis.del(rconCommandStream(SERVER_DISABLED_ID));
+  // Each test starts outside the per-player command cooldown (#62).
+  for (const serverId of [SERVER_ID, SERVER_DISABLED_ID]) {
+    const keys = await redis.keys(`chat-command:cooldown:${serverId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+  }
 });
 
 afterAll(async () => {
@@ -294,5 +299,34 @@ describe('handleChatCommand', () => {
       .from(chatCommandInvocations)
       .where(eq(chatCommandInvocations.serverId, SERVER_ID));
     expect(rows).toHaveLength(0);
+  });
+
+  it('answers a repeated command from the same player only once per cooldown window (#62)', async () => {
+    const chat = parseChatLine(chatLine(ALPHA_SENDER, '!stats'));
+    if (!chat) throw new Error('fixture line failed to parse');
+
+    const first = await handleChatCommand(db, redis, { serverId: SERVER_ID, chat });
+    const second = await handleChatCommand(db, redis, { serverId: SERVER_ID, chat });
+    const third = await handleChatCommand(db, redis, { serverId: SERVER_ID, chat });
+
+    expect(first?.command).toBe('stats');
+    expect(second).toBeNull();
+    expect(third).toBeNull();
+    const requests = await readRconRequests(SERVER_ID);
+    expect(requests).toHaveLength(1);
+    const rows = await db
+      .select()
+      .from(chatCommandInvocations)
+      .where(eq(chatCommandInvocations.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('keeps the cooldown per command, so a different command is still answered (#62)', async () => {
+    const stats = parseChatLine(chatLine(ALPHA_SENDER, '!stats'));
+    const rules = parseChatLine(chatLine(ALPHA_SENDER, '!rules'));
+    if (!stats || !rules) throw new Error('fixture line failed to parse');
+
+    expect(await handleChatCommand(db, redis, { serverId: SERVER_ID, chat: stats })).not.toBeNull();
+    expect(await handleChatCommand(db, redis, { serverId: SERVER_ID, chat: rules })).not.toBeNull();
   });
 });

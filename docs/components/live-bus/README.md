@@ -15,7 +15,7 @@ Process-local `EventEmitter` plus a Redis `PUB`/`SUB` fan-out, exposed to UI cli
 
 - It does NOT persist events. The event stream is a transient hot path; durable history lives in `events:server:{id}` Redis Streams + Postgres `events` table (see the [shared-types](../shared-types/README.md) component).
 - It does NOT replay missed events on reconnect, **except** `chat.message` and `combat.event`: the route keeps a small in-memory `ChatRingBuffer`/`CombatRingBuffer` (last 100 per server) and replays each buffer's tail — chat first, then combat — right after a socket connects. Every other event type still starts from the next published event onward; the web client falls back to a single REST refresh on connect for those.
-- It does NOT enforce per-event authorization for most event types — auth is at socket-open (the `server:view` permission, re-checked every 30 s while the socket stays open) and every connected client sees every event — **except** `combat.event`, which is additionally dropped (both live and from the replay buffer) for connections whose user lacks the `combat:view` permission.
+- It does NOT enforce per-event authorization for most event types — auth is at socket-open (the `server:view` permission, re-checked every 30 s while the socket stays open) and every connected client sees every event — **except** combat frames: every `combat.*` type (`combat.event`, and the `combat.vehicle` frame worker-log-ingest publishes outside the `LiveEvent` union) is additionally dropped (both live and from the replay buffer) for connections whose user lacks the `combat:view` permission.
 
 ## Code location
 

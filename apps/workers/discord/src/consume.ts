@@ -7,8 +7,15 @@ import {
 } from '@squad/shared-types';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
+
 import { mapEventToDiscordType } from './mapping.js';
-import { type DeliveryResult, deliverEnvelope, type SenderDeps } from './sender.js';
+
+import {
+  type DeliveryResult,
+  deliverEnvelope,
+  type SenderDeps,
+  type WebhookDeliveryLedger,
+} from './sender.js';
 
 /** Consumer group name every worker-discord process shares when reading event streams. */
 export const NOTIFY_CONSUMER_GROUP = 'discord-notify:v1';
@@ -37,6 +44,36 @@ export const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
  * discovery is missed.
  */
 export const DEFAULT_STREAM_REFRESH_MS = 30_000;
+
+/**
+ * How many times an entry whose delivery failed for at least one webhook is
+ * retried before it is acknowledged anyway. Each retry happens when the
+ * reclaim sweep picks the entry up again (after `reclaimMinIdleMs`), so the
+ * default 30 s idle window rides out roughly five minutes of Discord or DNS
+ * outage without holding a poisoned entry forever.
+ */
+export const MAX_DELIVERY_ATTEMPTS = 10;
+
+/** Redis counter of failed delivery attempts for one event in one consumer group. */
+function deliveryAttemptsKey(group: string, eventId: string): string {
+  return `discord:notify:attempts:${group}:${eventId}`;
+}
+
+/**
+ * Per-webhook delivery marks for one event, stored next to the per-event
+ * dedup key (`dedup:<group>:<event_id>:<webhook_id>`) with the same TTL. A
+ * retried entry skips every webhook that already received the embed, so a
+ * failure on one webhook never re-posts the message to the others.
+ */
+function redisDeliveryLedger(redis: Redis, group: string, eventId: string): WebhookDeliveryLedger {
+  const keyFor = (webhookId: string) => DEDUP_KEY(group, `${eventId}:${webhookId}`);
+  return {
+    isDelivered: async (webhookId) => (await redis.get(keyFor(webhookId))) !== null,
+    markDelivered: async (webhookId) => {
+      await redis.set(keyFor(webhookId), '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
+    },
+  };
+}
 
 /**
  * Parses the `envelope` field out of a raw XREADGROUP field array (as
@@ -120,18 +157,21 @@ export interface NotifyDeps extends SenderDeps {
  * Processes one stream entry: crash-safe, at-least-once delivery.
  *
  * Order matters for the no-loss/no-duplicate guarantee: the dedup key is
- * only SET *after* `deliverEnvelope` returns successfully, and XACK only
- * happens after that SET. If the process is killed at any point before the
- * XACK, the entry stays in the consumer group's pending list and is
- * redelivered on restart — at worst re-sending an embed that was in flight
- * when the kill happened (at-least-once), never silently dropping it. A
- * pre-existing dedup key (set by an earlier, already-acknowledged delivery
- * of the same `event_id`) short-circuits straight to XACK without invoking
- * `deliverEnvelope` at all, so a completed send is never re-posted.
+ * only SET *after* `deliverEnvelope` reports every webhook delivered, and
+ * XACK only happens after that SET. If the process is killed at any point
+ * before the XACK, the entry stays in the consumer group's pending list and
+ * is redelivered on restart — at worst re-sending an embed that was in
+ * flight when the kill happened (at-least-once). A pre-existing dedup key
+ * (set by an earlier, already-acknowledged delivery of the same `event_id`)
+ * short-circuits straight to XACK without invoking `deliverEnvelope` at all,
+ * so a completed send is never re-posted.
  *
- * An event type with no Discord mapping is acked straight away without a
- * dedup key: nothing is sent for it, so a redelivery is harmless, and writing
- * a 24-hour key for every such event only grows the keyspace (#883).
+ * A delivery that failed for any webhook (network error, 5xx, exhausted 429
+ * retries) is *not* acknowledged: the entry stays pending and the reclaim
+ * sweep retries it, skipping webhooks already marked in the per-webhook
+ * ledger. After `MAX_DELIVERY_ATTEMPTS` failed attempts the entry is
+ * acknowledged with an error log so one permanently broken webhook cannot
+ * pin it in the pending list forever.
  */
 async function processEntry(
   deps: NotifyDeps,
@@ -161,10 +201,33 @@ async function processEntry(
     return;
   }
 
-  const result = await deliverEnvelope(deps, envelope);
+  const result = await deliverEnvelope(
+    deps,
+    envelope,
+    redisDeliveryLedger(redis, group, envelope.event_id),
+  );
   onDelivery?.(result);
+
+  const attemptsKey = deliveryAttemptsKey(group, envelope.event_id);
+  if (result.failed > 0) {
+    const attempts = await redis.incr(attemptsKey);
+    await redis.expire(attemptsKey, DEDUP_TTL_SECONDS);
+    if (attempts < MAX_DELIVERY_ATTEMPTS) {
+      log.warn(
+        { stream, id, eventId: envelope.event_id, failed: result.failed, attempts },
+        'discord delivery failed; entry left pending for a retry',
+      );
+      return;
+    }
+    log.error(
+      { stream, id, eventId: envelope.event_id, failed: result.failed, attempts },
+      'discord delivery still failing after every retry; acknowledging the entry',
+    );
+  }
+
   await redis.set(dedupKey, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
   await redis.xack(stream, group, id);
+  await redis.del(attemptsKey);
 }
 
 /**
@@ -173,6 +236,10 @@ async function processEntry(
  * delivered to — and processes each exactly like a freshly-read entry. Used
  * both as a boot-time sweep (picks up anything orphaned by a prior crash)
  * and periodically during the loop (catches a consumer that dies mid-run).
+ *
+ * @returns `false` when Redis answered `NOGROUP` (the stream key was deleted
+ *   and recreated, so the group is gone and must be created again), `true`
+ *   otherwise.
  */
 async function reclaimPendingEntries(
   deps: NotifyDeps,
@@ -182,7 +249,7 @@ async function reclaimPendingEntries(
   minIdleMs: number,
   batchSize: number,
   onDelivery?: (result: DeliveryResult) => void,
-): Promise<void> {
+): Promise<boolean> {
   const { redis, log } = deps;
   let claimed: [string, string[]][];
   try {
@@ -198,10 +265,9 @@ async function reclaimPendingEntries(
     claimed = result?.[1] ?? [];
   } catch (err) {
     const message = (err as Error).message;
-    if (!message.includes('NOGROUP')) {
-      log.warn({ stream, err: message }, 'xautoclaim failed');
-    }
-    return;
+    if (message.includes('NOGROUP')) return false;
+    log.warn({ stream, err: message }, 'xautoclaim failed');
+    return true;
   }
   for (const [id, fields] of claimed) {
     try {
@@ -213,6 +279,7 @@ async function reclaimPendingEntries(
       );
     }
   }
+  return true;
 }
 
 export interface RunNotifyLoopOpts extends NotifyDeps {
@@ -324,7 +391,7 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
     if (now() >= nextReclaimAt) {
       nextReclaimAt = now() + reclaimIntervalMs;
       for (const stream of readable) {
-        await reclaimPendingEntries(
+        const groupExists = await reclaimPendingEntries(
           opts,
           stream,
           group,
@@ -333,6 +400,7 @@ export async function runNotifyLoop(opts: RunNotifyLoopOpts): Promise<void> {
           reclaimBatchSize,
           onDelivery,
         );
+        if (!groupExists) groupsCreated.delete(stream);
       }
     }
 

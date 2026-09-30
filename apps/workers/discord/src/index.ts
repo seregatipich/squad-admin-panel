@@ -33,22 +33,19 @@ const log = pino(
  *   The slash-command *invocations* land on the API
  *   (`apps/api/src/routes/discord-interactions.ts`), not here.
  *
+ * The notify and role-sync loops each block in `XREADGROUP … BLOCK` and so
+ * each get their own `redis.duplicate()` connection; the heartbeat and the
+ * status-channel loop share the main one and never queue behind a blocked
+ * read. Any loop that settles (returns or throws) before shutdown ends the
+ * process with exit code 1: a dead loop behind a live heartbeat would look
+ * healthy forever, while an exit lets compose restart the worker.
+ *
  * `DATABASE_URL` and `APP_ENCRYPTION_KEY` are required to actually decrypt
  * webhook URLs and deliver anything; without either, the worker stays idle
  * (heartbeat only) rather than crash-looping, mirroring the `worker-stats`
  * degraded-idle guard — this keeps the existing `contract.test.ts` (which
  * only sets `REDIS_URL`) green.
  */
-/**
- * Every loop contains its own failures, so a rejected loop is a bug. Exit
- * rather than keep a heartbeat that reports a worker which stopped doing its
- * job; the container restart policy brings it back (#1292).
- */
-function exitOnLoopCrash(loop: string, err: unknown): never {
-  log.fatal({ err: (err as Error).message, loop }, 'loop crashed; exiting');
-  process.exit(1);
-}
-
 async function main() {
   const redisUrl = process.env.REDIS_URL;
   const redis = redisUrl
@@ -60,6 +57,42 @@ async function main() {
   const counters: DeliveryResult = { sent: 0, failed: 0, rateLimited: 0 };
   const stopSignal = new AbortController();
   let stopped = false;
+  const loopConnections: Redis[] = [];
+
+  /** Abortable wait: shutdown ends it at once instead of waiting out a retry delay. */
+  const interruptibleSleep = (ms: number): Promise<void> =>
+    sleep(ms, undefined, { signal: stopSignal.signal }).catch(() => undefined);
+
+  /** A dedicated connection for one blocking consumer loop, closed on shutdown. */
+  const loopConnection = (client: Redis, name: string): Redis => {
+    const connection = client.duplicate();
+    connection.on('error', (err: Error) =>
+      log.warn({ err: err.message, loop: name }, 'redis error (will retry)'),
+    );
+    loopConnections.push(connection);
+    return connection;
+  };
+
+  /**
+   * Exits the process when `loop` settles before shutdown was requested. The
+   * loops are meant to run until `stopped`; one that returns or throws early
+   * is dead, and the heartbeat alone would keep reporting the worker healthy.
+   */
+  const superviseLoop = (name: string, loop: Promise<void>): Promise<void> =>
+    loop.then(
+      () => {
+        if (stopped) return;
+        log.fatal({ loop: name }, 'loop exited unexpectedly; exiting so the worker restarts');
+        process.exit(1);
+      },
+      (err: unknown) => {
+        log.fatal(
+          { loop: name, err: (err as Error).message },
+          stopped ? 'loop failed during shutdown' : 'loop crashed; exiting so the worker restarts',
+        );
+        if (!stopped) process.exit(1);
+      },
+    );
   let notifyLoop: Promise<void> = Promise.resolve();
   let roleSyncLoop: Promise<void> = Promise.resolve();
   let statusChannelLoop: Promise<void> = Promise.resolve();
@@ -80,7 +113,7 @@ async function main() {
       db: createDatabaseClient(databaseUrl),
       encryptionKey,
       fetchImpl: fetch,
-      sleep,
+      sleep: interruptibleSleep,
       log,
       // Reuses the API's existing PANEL_PUBLIC_URL (apps/api/src/config.ts) rather
       // than introducing a second panel-base-URL env var.
@@ -91,17 +124,20 @@ async function main() {
     const reclaimMinIdleMs = process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS
       ? Number(process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS)
       : undefined;
-    notifyLoop = runNotifyLoop({
-      ...deps,
-      redis,
-      reclaimMinIdleMs,
-      shouldStop: () => stopped,
-      onDelivery: (result) => {
-        counters.sent += result.sent;
-        counters.failed += result.failed;
-        counters.rateLimited += result.rateLimited;
-      },
-    }).catch((err) => exitOnLoopCrash('notify', err));
+    notifyLoop = superviseLoop(
+      'notify',
+      runNotifyLoop({
+        ...deps,
+        redis: loopConnection(redis, 'notify'),
+        reclaimMinIdleMs,
+        shouldStop: () => stopped,
+        onDelivery: (result) => {
+          counters.sent += result.sent;
+          counters.failed += result.failed;
+          counters.rateLimited += result.rateLimited;
+        },
+      }),
+    );
 
     // DISCORD-5 (#152): the role-sync loop shares this worker's DB/Redis/key
     // rather than getting its own service — it needs the same bot credentials
@@ -111,16 +147,19 @@ async function main() {
     const reconcileIntervalMs = process.env.DISCORD_ROLE_SYNC_RECONCILE_MS
       ? Number(process.env.DISCORD_ROLE_SYNC_RECONCILE_MS)
       : DEFAULT_ROLE_SYNC_RECONCILE_MS;
-    roleSyncLoop = runRoleSyncLoop({
-      redis,
-      db: deps.db,
-      encryptionKey,
-      fetchImpl: fetch,
-      sleep,
-      log,
-      shouldStop: () => stopped,
-      reconcileIntervalMs,
-    }).catch((err) => exitOnLoopCrash('role-sync', err));
+    roleSyncLoop = superviseLoop(
+      'role-sync',
+      runRoleSyncLoop({
+        redis: loopConnection(redis, 'role-sync'),
+        db: deps.db,
+        encryptionKey,
+        fetchImpl: fetch,
+        sleep: interruptibleSleep,
+        log,
+        shouldStop: () => stopped,
+        reconcileIntervalMs,
+      }),
+    );
 
     // DISCORD-6 (#153): the status-channel tick and the one-off slash-command
     // registration ride in this same process for the same reason as the role
@@ -128,19 +167,22 @@ async function main() {
     const statusChannelTickMs = process.env.DISCORD_STATUS_CHANNEL_MS
       ? Number(process.env.DISCORD_STATUS_CHANNEL_MS)
       : DEFAULT_STATUS_CHANNEL_TICK_MS;
-    statusChannelLoop = runStatusChannelLoop({
-      db: deps.db,
-      redis,
-      encryptionKey,
-      fetchImpl: fetch,
-      // The tick interval is ten minutes; without an abortable wait a SIGTERM
-      // arriving just after a tick would hold shutdown open for that long.
-      sleep: (ms) => sleep(ms, undefined, { signal: stopSignal.signal }).catch(() => undefined),
-      log,
-      shouldStop: () => stopped,
-      tickIntervalMs: statusChannelTickMs,
-      applicationId: process.env.DISCORD_APPLICATION_ID ?? null,
-    }).catch((err) => exitOnLoopCrash('status-channel', err));
+    statusChannelLoop = superviseLoop(
+      'status-channel',
+      runStatusChannelLoop({
+        db: deps.db,
+        redis,
+        encryptionKey,
+        fetchImpl: fetch,
+        // The tick interval is ten minutes; without an abortable wait a SIGTERM
+        // arriving just after a tick would hold shutdown open for that long.
+        sleep: interruptibleSleep,
+        log,
+        shouldStop: () => stopped,
+        tickIntervalMs: statusChannelTickMs,
+        applicationId: process.env.DISCORD_APPLICATION_ID ?? null,
+      }),
+    );
   } else {
     log.info(
       'worker-discord idle — DATABASE_URL/APP_ENCRYPTION_KEY unset, notify, role-sync and status-channel loops disabled',
@@ -164,6 +206,7 @@ async function main() {
     log.info({ sig }, 'shutdown');
     stopHeartbeat();
     await Promise.all([notifyLoop, roleSyncLoop, statusChannelLoop]);
+    await Promise.all(loopConnections.map((c) => c.quit().catch(() => undefined)));
     await redis?.quit().catch(() => undefined);
     process.exit(0);
   };

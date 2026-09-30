@@ -16,6 +16,35 @@
 - #883: the notify loop discovers streams (`SCAN events:server:*`) and runs the `XAUTOCLAIM` sweep every 30 s instead of on every poll, and no longer writes a 24-hour dedup key for event types Discord never renders.
 - #1292: a failing `XGROUP CREATE` (e.g. `LOADING` after a Redis restart) no longer ends the notify or role-sync loop — it is retried, and a `NOGROUP` read error re-creates the group; if a loop still rejects, the worker exits 1 instead of heartbeating as healthy. The Redis client now waits for the ready check. New notify groups start at `0`, so events published before a stream was discovered are delivered.
 
+## 2026-09-28 — reliability fixes (#62)
+
+### Fixed
+
+- Notify no longer acknowledges an entry whose delivery failed for any webhook:
+  the entry stays pending and is retried by the reclaim sweep (up to
+  `MAX_DELIVERY_ATTEMPTS` = 10), and a per-webhook ledger
+  (`dedup:<group>:<event_id>:<webhook_id>`) keeps a retry from re-posting to
+  webhooks that already got the embed. `deliverEnvelope` takes an optional
+  `WebhookDeliveryLedger`.
+- A `NOGROUP` answer (stream deleted and recreated) now evicts the
+  consumer-group cache so the group is recreated instead of stalling every
+  stream; group creation failures in both consumers are retried inside the
+  loop instead of ending it.
+- A loop that returns or throws before shutdown now exits the process with
+  code 1 instead of leaving a dead loop behind a green heartbeat.
+- Notify and role sync each use their own Redis connection
+  (`redis.duplicate()`), so one loop's blocking `XREADGROUP` no longer delays
+  the other loop's commands or the heartbeat.
+- Webhook POSTs time out after 10 s (`DEFAULT_WEBHOOK_TIMEOUT_MS`), a 429
+  asking to wait longer than 60 s (`MAX_RETRY_AFTER_MS`) fails fast, and the
+  retry sleep is interrupted by shutdown.
+- `fetchGuildMemberRoles` retries a 429 after `Retry-After` and reports
+  `rate_limited` when the retries run out, instead of `Discord вернул 429`.
+- `reconcileLinkedPlayers` loads mappings and link/role rows once per sweep
+  (two queries instead of three per player), accepts `{ shouldStop }` to stop
+  between players, and full-reconcile requests read in one batch are
+  coalesced into a single sweep.
+
 ## 2026-07-29 — docs reconciliation (#216)
 
 ### Changed
