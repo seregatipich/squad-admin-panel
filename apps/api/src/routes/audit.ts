@@ -102,14 +102,14 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
             await tx.execute(sql`SET LOCAL "TimeZone" = 'UTC'`);
             let cursor = '0';
             for (;;) {
-              const rows = (await tx.execute(sql`
+              const rows = await tx.execute<AuditChainRow>(sql`
                 SELECT ${sql.raw(AUDIT_CHAIN_COLUMNS_SQL)}
                 FROM audit_log
                 WHERE audit_log.id > ${cursor}::bigint
                 -- Qualified: a bare id would sort by the id::text output column.
                 ORDER BY audit_log.id ASC
                 LIMIT ${AUDIT_VERIFY_BATCH_SIZE}
-              `)) as unknown as AuditChainRow[];
+              `);
               const last = rows.at(-1);
               if (!last || !verifier.feed(rows)) return;
               cursor = last.id;
