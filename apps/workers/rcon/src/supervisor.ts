@@ -12,7 +12,6 @@ import {
 import type { Diag } from '@squad/diag';
 import type { RconRefreshScope } from '@squad/shared-config';
 import {
-  CONSUMER_GROUP,
   type EventEnvelope,
   SQUAD_CROWNS_TTL_SECONDS,
   STREAM_NAME,
@@ -235,6 +234,8 @@ class PerServerSupervisor {
    * roster refresh waiting behind a full poll would fire late and pointlessly.
    */
   private pollInFlight = false;
+  /** A full poll tick arrived while a lighter refresh held the client. */
+  private fullPollPending = false;
   /**
    * Last known connected-state fields. The roster, info and full-poll paths
    * each refresh a slice of them; every status write carries the whole set so
@@ -457,19 +458,20 @@ class PerServerSupervisor {
   private async resolveLayerIsSeed(layerName: string | null): Promise<boolean | null> {
     if (!layerName) return null;
     if (this.layerIsSeedCache.has(layerName)) return this.layerIsSeedCache.get(layerName) ?? null;
-    let result: boolean | null = null;
     try {
       const rows = await this.opts.db
         .select({ isSeed: layers.isSeed })
         .from(layers)
         .where(eq(layers.name, layerName))
         .limit(1);
-      result = rows[0]?.isSeed ?? null;
+      const result = rows[0]?.isSeed ?? null;
+      this.layerIsSeedCache.set(layerName, result);
+      return result;
     } catch {
-      result = null;
+      // Not cached: a transient database error must not pin this layer to the
+      // name-based fallback until the supervisor restarts.
+      return null;
     }
-    this.layerIsSeedCache.set(layerName, result);
-    return result;
   }
 
   private async writeSeedingState(state: SeedingState): Promise<void> {
@@ -1136,6 +1138,7 @@ class PerServerSupervisor {
       );
     } finally {
       this.pollInFlight = false;
+      this.resumeDeferredPoll();
     }
   }
 
@@ -1181,181 +1184,201 @@ class PerServerSupervisor {
       );
     } finally {
       this.pollInFlight = false;
+      this.resumeDeferredPoll();
     }
+  }
+
+  private resumeDeferredPoll(): void {
+    if (this.fullPollPending && !this.stopped) void this.runFullPoll();
   }
 
   private schedulePoll(): void {
     const interval = this.opts.pollIntervalMs ?? 30_000;
-    this.pollTimer = setInterval(async () => {
-      if (!this.client || this.pollInFlight) return;
-      this.pollInFlight = true;
-      try {
-        const start = Date.now();
-        const rawPlayers = await this.client.exec('ListPlayers');
-        const rawSquads = await this.client.exec('ListSquads');
-        const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
-        const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
-        const players = parseListPlayers(rawPlayers);
-        const squads = parseListSquads(rawSquads);
-        const info = rawInfo ? parseServerInfo(rawInfo) : null;
-        const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
-        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
-        const pollAt = new Date();
-        await accruePlayerKitTime(
-          this.opts.db,
-          players,
-          this.lastKitAccrualAt,
-          pollAt,
-          this.target.serverId,
-          this.opts.pollIntervalMs ?? 30_000,
-        );
-        this.lastKitAccrualAt = pollAt;
-        this.consecutivePollFails = 0;
-        const polledAt = pollAt.toISOString();
-        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
-        this.rosterFirstSeen = firstSeen;
-        await this.reconcileSessions(players, firstSeen, pollAt);
-        this.lastSuccessfulPollAt = pollAt;
-        await this.writeRoster(entries, polledAt);
-        await this.writeSquads(squads, polledAt);
-        await this.trackSquads(squads, players, polledAt);
-        const pollMs = Date.now() - start;
-        this.opts.log.info(
-          {
-            serverId: this.target.serverId,
-            ms: pollMs,
-            n: players.length,
-            squads: squads.length,
-          },
-          'poll listplayers',
-        );
-        await this.emitEvent('rcon.players_polled', {
-          players: players
-            .filter((p) => p.steam_id64 !== null)
-            .map((p) => ({
-              steam_id64: p.steam_id64,
-              eos_id: p.eos_id,
-              name: p.name,
-              team_id: p.team_id,
-              squad_id: p.squad_id,
-              is_leader: p.is_leader ?? false,
-              role: p.role ?? undefined,
-            })),
-          polled_at: polledAt,
-          latency_ms: Date.now() - start,
-        });
-        await this.writeStatus('connected', {
-          player_count: players.length,
-          last_poll_at: new Date().toISOString(),
-          tickrate_rt: info?.tickrate ?? undefined,
-          current_map: info?.map_name ?? undefined,
-          next_level: nextMap?.level ?? undefined,
-          next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
-          game_mode: info?.game_mode ?? undefined,
-          squad_count: squads.length,
-          // DISCORD-6 (#153): the Discord status channel renders
-          // {players}x{queue}, and this cache is its only source for the queue —
-          // ShowServerInfo already parses PublicQueue_I, it just was not stored.
-          public_queue: info?.public_queue ?? undefined,
-        });
+    this.pollTimer = setInterval(() => void this.runFullPoll(), interval);
+  }
 
-        if (typeof info?.tickrate === 'number') {
-          const configured = this.target.tickrate ?? 50;
-          const threshold = configured * 0.8;
-          if (info.tickrate < threshold) {
-            this.consecutiveLowTick++;
-            if (this.consecutiveLowTick >= 3) {
-              this.opts.log.warn(
-                {
-                  serverId: this.target.serverId,
-                  tickrate: info.tickrate,
-                  threshold,
-                  configured,
-                  consecutive_low: this.consecutiveLowTick,
-                },
-                'performance degraded: tickrate below threshold',
-              );
-              await this.emitEvent('performance.degraded', {
+  /**
+   * One full poll: RCON snapshot, player upsert, kit-time accrual, sessions,
+   * seeding, then an A2S probe. When a roster or info refresh holds the client
+   * the poll is not dropped: it is remembered in `fullPollPending` and started
+   * as soon as that refresh finishes ({@link resumeDeferredPoll}). Skipping it
+   * would postpone kit-time accrual, sessions and seeding by a whole interval
+   * and make the next accrual look like a missed poll.
+   */
+  private async runFullPoll(): Promise<void> {
+    if (!this.client) return;
+    if (this.pollInFlight) {
+      this.fullPollPending = true;
+      return;
+    }
+    this.fullPollPending = false;
+    this.pollInFlight = true;
+    try {
+      const start = Date.now();
+      const rawPlayers = await this.client.exec('ListPlayers');
+      const rawSquads = await this.client.exec('ListSquads');
+      const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
+      const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
+      const players = parseListPlayers(rawPlayers);
+      const squads = parseListSquads(rawSquads);
+      const info = rawInfo ? parseServerInfo(rawInfo) : null;
+      const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
+      await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
+      const pollAt = new Date();
+      await accruePlayerKitTime(
+        this.opts.db,
+        players,
+        this.lastKitAccrualAt,
+        pollAt,
+        this.target.serverId,
+        this.opts.pollIntervalMs ?? 30_000,
+      );
+      this.lastKitAccrualAt = pollAt;
+      this.consecutivePollFails = 0;
+      const polledAt = pollAt.toISOString();
+      const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+      this.rosterFirstSeen = firstSeen;
+      await this.reconcileSessions(players, firstSeen, pollAt);
+      this.lastSuccessfulPollAt = pollAt;
+      await this.writeRoster(entries, polledAt);
+      await this.writeSquads(squads, polledAt);
+      await this.trackSquads(squads, players, polledAt);
+      const pollMs = Date.now() - start;
+      this.opts.log.info(
+        {
+          serverId: this.target.serverId,
+          ms: pollMs,
+          n: players.length,
+          squads: squads.length,
+        },
+        'poll listplayers',
+      );
+      await this.emitEvent('rcon.players_polled', {
+        players: players
+          .filter((p) => p.steam_id64 !== null)
+          .map((p) => ({
+            steam_id64: p.steam_id64,
+            eos_id: p.eos_id,
+            name: p.name,
+            team_id: p.team_id,
+            squad_id: p.squad_id,
+            is_leader: p.is_leader ?? false,
+            role: p.role ?? undefined,
+          })),
+        polled_at: polledAt,
+        latency_ms: Date.now() - start,
+      });
+      await this.writeStatus('connected', {
+        player_count: players.length,
+        last_poll_at: new Date().toISOString(),
+        tickrate_rt: info?.tickrate ?? undefined,
+        current_map: info?.map_name ?? undefined,
+        next_level: nextMap?.level ?? undefined,
+        next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
+        game_mode: info?.game_mode ?? undefined,
+        squad_count: squads.length,
+        // DISCORD-6 (#153): the Discord status channel renders
+        // {players}x{queue}, and this cache is its only source for the queue —
+        // ShowServerInfo already parses PublicQueue_I, it just was not stored.
+        public_queue: info?.public_queue ?? undefined,
+      });
+
+      if (typeof info?.tickrate === 'number') {
+        const configured = this.target.tickrate ?? 50;
+        const threshold = configured * 0.8;
+        if (info.tickrate < threshold) {
+          this.consecutiveLowTick++;
+          if (this.consecutiveLowTick >= 3) {
+            this.opts.log.warn(
+              {
+                serverId: this.target.serverId,
                 tickrate: info.tickrate,
                 threshold,
                 configured,
                 consecutive_low: this.consecutiveLowTick,
-              });
-            }
-          } else {
-            this.consecutiveLowTick = 0;
+              },
+              'performance degraded: tickrate below threshold',
+            );
+            await this.emitEvent('performance.degraded', {
+              tickrate: info.tickrate,
+              threshold,
+              configured,
+              consecutive_low: this.consecutiveLowTick,
+            });
           }
+        } else {
+          this.consecutiveLowTick = 0;
         }
-
-        await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
-      } catch (err) {
-        this.consecutivePollFails += 1;
-        const reason = (err as Error).message;
-        this.opts.log.warn(
-          { err: reason, serverId: this.target.serverId, fails: this.consecutivePollFails },
-          'ListPlayers poll failed',
-        );
-        await this.writeStatus('connecting', {
-          reason: 'poll-failed',
-          last_error: reason,
-          consecutive_fails: this.consecutivePollFails,
-        });
-        if (this.consecutivePollFails >= 3) {
-          this.opts.log.warn(
-            { serverId: this.target.serverId },
-            'tearing down rcon client after 3 consecutive poll failures',
-          );
-          this.consecutivePollFails = 0;
-          await this.client?.close().catch(() => undefined);
-          this.client = undefined;
-          this.onDisconnect?.();
-        }
-      } finally {
-        // The A2S probe below needs no RCON client, so the roster refresh may
-        // resume as soon as the RCON part of the tick is done.
-        this.pollInFlight = false;
       }
 
-      // A2S query — best-effort, does not affect RCON polling
-      try {
-        const a2sStart = Date.now();
-        const a2sResult = await queryA2S(this.target.host, this.target.queryPort, 2000);
-        const a2sKey = `a2s:status:${this.target.serverId}`;
-        if (a2sResult) {
+      await this.tickSeeding(players.length, info?.map_name ?? null, polledAt);
+    } catch (err) {
+      this.consecutivePollFails += 1;
+      const reason = (err as Error).message;
+      this.opts.log.warn(
+        { err: reason, serverId: this.target.serverId, fails: this.consecutivePollFails },
+        'ListPlayers poll failed',
+      );
+      await this.writeStatus('connecting', {
+        reason: 'poll-failed',
+        last_error: reason,
+        consecutive_fails: this.consecutivePollFails,
+      });
+      if (this.consecutivePollFails >= 3) {
+        this.opts.log.warn(
+          { serverId: this.target.serverId },
+          'tearing down rcon client after 3 consecutive poll failures',
+        );
+        this.consecutivePollFails = 0;
+        await this.client?.close().catch(() => undefined);
+        this.client = undefined;
+        this.onDisconnect?.();
+      }
+    } finally {
+      // The A2S probe below needs no RCON client, so the roster refresh may
+      // resume as soon as the RCON part of the tick is done.
+      this.pollInFlight = false;
+    }
+
+    // A2S query — best-effort, does not affect RCON polling
+    try {
+      const a2sStart = Date.now();
+      const a2sResult = await queryA2S(this.target.host, this.target.queryPort, 2000);
+      const a2sKey = `a2s:status:${this.target.serverId}`;
+      if (a2sResult) {
+        await this.opts.redis.set(
+          a2sKey,
+          JSON.stringify({
+            visible: a2sResult.visible,
+            server_name: a2sResult.serverName,
+            map: a2sResult.map,
+            players: a2sResult.players,
+            max_players: a2sResult.maxPlayers,
+            latency_ms: Date.now() - a2sStart,
+            queried_at: new Date().toISOString(),
+          }),
+          'EX',
+          90,
+        );
+        this.consecutiveA2SFails = 0;
+      } else {
+        this.consecutiveA2SFails++;
+        if (this.consecutiveA2SFails >= 3) {
           await this.opts.redis.set(
             a2sKey,
             JSON.stringify({
-              visible: a2sResult.visible,
-              server_name: a2sResult.serverName,
-              map: a2sResult.map,
-              players: a2sResult.players,
-              max_players: a2sResult.maxPlayers,
-              latency_ms: Date.now() - a2sStart,
+              visible: false,
+              reason: 'timeout',
               queried_at: new Date().toISOString(),
             }),
             'EX',
             90,
           );
-          this.consecutiveA2SFails = 0;
-        } else {
-          this.consecutiveA2SFails++;
-          if (this.consecutiveA2SFails >= 3) {
-            await this.opts.redis.set(
-              a2sKey,
-              JSON.stringify({
-                visible: false,
-                reason: 'timeout',
-                queried_at: new Date().toISOString(),
-              }),
-              'EX',
-              90,
-            );
-          }
         }
-      } catch {
-        // A2S is best-effort; don't disrupt RCON polling
       }
-    }, interval);
+    } catch {
+      // A2S is best-effort; don't disrupt RCON polling
+    }
   }
 
   /**
@@ -1463,6 +1486,3 @@ class PerServerSupervisor {
     }
   }
 }
-
-// Declare the group constant is referenced so the tree-shaker doesn't drop it.
-export const _consumerGroup = CONSUMER_GROUP;
