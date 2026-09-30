@@ -248,6 +248,8 @@ class PerServerSupervisor {
   private connectedStatus: ConnectedStatus = {};
   /** Signature of the last `rcon:status:changed` publish; see {@link PUBLISHED_STATUS_FIELDS}. */
   private lastPublishedStatus: string | null = null;
+  /** Signature of the last `rcon.roster` composition actually published; see {@link writeRoster}. */
+  private lastPublishedRoster: string | null = null;
   private backoffMs: number;
   private onDisconnect?: () => void;
   /** Serialises chat ingestion for this server; see {@link ingestBroadcast}. */
@@ -420,6 +422,21 @@ class PerServerSupervisor {
     } catch {
       // roster cache is telemetry; the live event below still fans out
     }
+    // `scheduleRosterRefresh` calls this on every tick (every
+    // rosterIntervalMs, default 2s) even when nobody joined, left, or moved
+    // squads. Publishing unconditionally turned every open server page into
+    // an effectively-2s poll dressed up as an event: each `rcon.roster`
+    // fires a full GET /roster (Postgres join) on the client. Compare a
+    // signature of the fields the roster view actually renders and skip the
+    // publish when nothing changed — mirrors `writeStatus`'s
+    // `lastPublishedStatus` guard above.
+    const signature = JSON.stringify(
+      entries
+        .map((e) => [e.rcon_id, e.eos_id, e.name, e.team_id, e.squad_id, e.is_leader, e.role])
+        .sort((a, b) => (a[0] as number) - (b[0] as number)),
+    );
+    if (signature === this.lastPublishedRoster) return;
+    this.lastPublishedRoster = null;
     try {
       await this.opts.redis.publish(
         'live-bus',
@@ -433,6 +450,9 @@ class PerServerSupervisor {
           },
         }),
       );
+      // Remembered only once delivered, so a failed publish is retried by
+      // the next tick even when the composition didn't change again.
+      this.lastPublishedRoster = signature;
     } catch {
       // best-effort fan-out; the SET above is the source of truth
     }

@@ -27,11 +27,16 @@ export function ChatPanel({
   );
   useLiveSubscription('chat.message', onChat);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll follows message count
+  // Depends on the last message's id, not messages.length: once the buffer
+  // hits CHAT_LOG_CAP (chat-log.ts), appendChatMessage slices it back down to
+  // the same length on every new message, so a length-only dependency would
+  // stop firing and the panel would appear frozen on an active server.
+  const lastMessageId = messages.at(-1)?.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll follows the last message id, not its own use inside the effect
   useEffect(() => {
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [messages.length]);
+  }, [lastMessageId]);
 
   const connected = state === 'open';
 

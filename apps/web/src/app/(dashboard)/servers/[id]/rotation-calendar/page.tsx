@@ -343,7 +343,11 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                 {dayScheduled.map((entry) => (
                   <div
                     key={entry.id}
-                    className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-accent-ink"
+                    className={`rounded-ctl border px-1.5 py-1 text-2xs ${
+                      entry.enabled
+                        ? 'border-accent/40 bg-accent-dim text-accent-ink'
+                        : 'border-line bg-raised/60 text-ink-3 opacity-70'
+                    }`}
                   >
                     <span className={`block ${CHIP_LABEL}`}>
                       {entry.enabled ? 'Запланировано' : 'Выключено'}

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Suspense } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
@@ -11,7 +11,15 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/components/AdminsCfgDriftBanner', () => ({ AdminsCfgDriftBanner: () => null }));
 vi.mock('@/components/BroadcastComposer', () => ({ BroadcastComposer: () => null }));
-vi.mock('@/components/LogConsole', () => ({ LogConsole: () => null }));
+const logConsoleProps: { current: { lines: unknown[]; live?: boolean } | null } = {
+  current: null,
+};
+vi.mock('@/components/LogConsole', () => ({
+  LogConsole: (props: { lines: unknown[]; live?: boolean }) => {
+    logConsoleProps.current = props;
+    return null;
+  },
+}));
 vi.mock('@/components/ServerLogFiles', () => ({ ServerLogFiles: () => null }));
 vi.mock('./ChatPanel', () => ({ ChatPanel: () => null }));
 vi.mock('./live-players', () => ({
@@ -348,5 +356,227 @@ describe('ServerDetailPage — живой лог контейнера (#1239)', 
     expect(wsCtor).toHaveBeenCalledWith(
       expect.stringContaining(`/api/v1/servers/${SERVER_ID}/logs/ws`),
     );
+  });
+});
+
+class FakeLogSocket {
+  static instances: FakeLogSocket[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readyState = FakeLogSocket.CONNECTING;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: { code?: number; reason?: string; wasClean?: boolean }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  url: string;
+  constructor(url: string) {
+    this.url = url;
+    FakeLogSocket.instances.push(this);
+  }
+  close() {
+    this.readyState = FakeLogSocket.CLOSED;
+  }
+  simulateOpen() {
+    this.readyState = FakeLogSocket.OPEN;
+    this.onopen?.();
+  }
+  simulateMessage(data: unknown) {
+    this.onmessage?.({ data: JSON.stringify(data) });
+  }
+}
+
+describe('ServerDetailPage — поток журнала контейнера', () => {
+  beforeEach(() => {
+    FakeLogSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeLogSocket);
+  });
+
+  it('очищает буфер строк при каждом (пере)подключении вместо повтора бэкфилла (#631)', async () => {
+    stubServerFetch('running');
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByRole('region', { name: 'Игроки онлайн' });
+
+    const first = FakeLogSocket.instances[0];
+    if (!first) throw new Error('no WebSocket instance opened');
+    await act(async () => {
+      first.simulateOpen();
+      first.simulateMessage({ ts: '2026-01-01T00:00:00Z', message: 'line-1' });
+      first.simulateMessage({ ts: '2026-01-01T00:00:01Z', message: 'line-2' });
+    });
+    expect(logConsoleProps.current?.lines).toHaveLength(2);
+
+    // A reconnect always re-backfills the last 200 lines server-side; the
+    // client buffer must reset to empty rather than append on top of what
+    // is already there, or every reconnect would duplicate up to 200 lines.
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        first.onclose?.({ code: 1006, wasClean: false });
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const second = FakeLogSocket.instances[1];
+    if (!second) throw new Error('no reconnect WebSocket opened');
+    await act(async () => {
+      second.simulateOpen();
+    });
+    expect(logConsoleProps.current?.lines).toHaveLength(0);
+
+    await act(async () => {
+      second.simulateMessage({ ts: '2026-01-01T00:00:02Z', message: 'line-1-again' });
+    });
+    expect(logConsoleProps.current?.lines).toHaveLength(1);
+  });
+
+  it('игнорирует события устаревшего сокета вместо дублирования строк и лишнего переподключения (#632)', async () => {
+    stubServerFetch('running');
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+    await screen.findByRole('region', { name: 'Игроки онлайн' });
+
+    const stale = FakeLogSocket.instances[0];
+    if (!stale) throw new Error('no WebSocket instance opened');
+    await act(async () => {
+      stale.simulateOpen();
+    });
+    // A stale-but-not-yet-closed socket (CLOSING) must not block a forced
+    // reconnect from replacing it — the visibilitychange/online handlers
+    // rely on that to recover a socket the browser is silently dropping.
+    stale.readyState = FakeLogSocket.CLOSING;
+    const staleOnClose = stale.onclose;
+    const staleOnMessage = stale.onmessage;
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    const fresh = FakeLogSocket.instances[1];
+    if (!fresh) throw new Error('forced reconnect did not open a new socket');
+    await act(async () => {
+      fresh.simulateOpen();
+    });
+    expect(logConsoleProps.current?.live).toBe(true);
+
+    // The stale socket's own handlers, captured before the switch, must be
+    // no-ops now that `wsRef.current` points at `fresh` — otherwise its
+    // eventual onclose would flip `live` back off and schedule a second,
+    // redundant reconnect, and its onmessage would keep appending duplicate
+    // lines from a connection the operator can no longer see.
+    await act(async () => {
+      staleOnMessage?.({ data: JSON.stringify({ message: 'from stale socket' }) });
+      staleOnClose?.({ code: 1000, wasClean: true });
+    });
+    expect(logConsoleProps.current?.live).toBe(true);
+    expect(logConsoleProps.current?.lines).toHaveLength(0);
+    expect(FakeLogSocket.instances).toHaveLength(2);
+  });
+});
+
+describe('ServerDetailPage — опрос состояния сервера (#633)', () => {
+  function serverFetches(fetchMock: ReturnType<typeof stubServerFetch>): number {
+    return fetchMock.mock.calls.filter(([url]) => url === `/api/v1/servers/${SERVER_ID}`).length;
+  }
+
+  it('не опрашивает /servers/:id, пока вкладка скрыта', async () => {
+    const fetchMock = stubServerFetch('running');
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(
+          <Suspense fallback={null}>
+            <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+          </Suspense>,
+        );
+      });
+      const before = serverFetches(fetchMock);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      // Three POLL_INTERVAL_MS ticks elapsed with the tab hidden: none of
+      // them should have reached the network.
+      expect(serverFetches(fetchMock)).toBe(before);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(serverFetches(fetchMock)).toBeGreaterThan(before);
+    } finally {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      vi.useRealTimers();
+    }
+  });
+
+  it('не запускает новый опрос поверх ещё не завершившегося запроса', async () => {
+    let resolveSecond: (() => void) | null = () => undefined;
+    let calls = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/me') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ squad_permissions: [], permissions: [] }),
+        } as Response);
+      }
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => serverResponseFixture('running'),
+        } as Response);
+      }
+      // The second tick's request never resolves within this test, modeling
+      // a slow docker-stats call the poller must not pile another request
+      // behind.
+      return new Promise<Response>((resolve) => {
+        resolveSecond = () =>
+          resolve({ ok: true, json: async () => serverResponseFixture('running') } as Response);
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(
+          <Suspense fallback={null}>
+            <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+          </Suspense>,
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(calls).toBe(2);
+
+      // A further two ticks must not start a third request while the second
+      // is still in flight.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(calls).toBe(2);
+
+      resolveSecond?.();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

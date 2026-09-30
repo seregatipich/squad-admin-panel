@@ -55,7 +55,12 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function makePollingRconServer(): Promise<{ server: Server; port: number; commands: string[] }> {
+function makePollingRconServer(): Promise<{
+  server: Server;
+  port: number;
+  commands: string[];
+  responses: Record<string, string>;
+}> {
   const commands: string[] = [];
   const responses: Record<string, string> = {
     ListPlayers:
@@ -102,7 +107,7 @@ function makePollingRconServer(): Promise<{ server: Server; port: number; comman
     });
     server.listen(0, '127.0.0.1', () => {
       const addr = server.address() as AddressInfo;
-      resolve({ server, port: addr.port, commands });
+      resolve({ server, port: addr.port, commands, responses });
     });
   });
 }
@@ -238,21 +243,23 @@ describe('RconSupervisor roster refresh', () => {
 
       const deadline = Date.now() + 3000;
       let rosterWrites = 0;
-      let rosterEvents = 0;
-      while (Date.now() < deadline && (rosterWrites < 2 || rosterEvents < 2)) {
+      while (Date.now() < deadline && rosterWrites < 2) {
         await sleep(25);
         rosterWrites = redis.set.mock.calls.filter(
           ([key]) => key === 'rcon:roster:srv-roster',
-        ).length;
-        rosterEvents = redis.publish.mock.calls.filter(
-          ([channel, payload]) =>
-            channel === 'live-bus' && String(payload).includes('"rcon.roster"'),
         ).length;
       }
 
       // Несколько обновлений за три секунды — это и есть «без задержек».
       expect(rosterWrites).toBeGreaterThanOrEqual(2);
-      expect(rosterEvents).toBeGreaterThanOrEqual(2);
+      // The fixture's ListPlayers response never changes between polls, so
+      // the composition-dedup guard (#615) must have suppressed every
+      // publish after the first — otherwise every open server page would be
+      // an effectively-2s poll dressed up as an event.
+      const rosterEvents = redis.publish.mock.calls.filter(
+        ([channel, payload]) => channel === 'live-bus' && String(payload).includes('"rcon.roster"'),
+      ).length;
+      expect(rosterEvents).toBe(1);
       expect(
         redis.set.mock.calls.filter(([key]) => key === 'rcon:squads:srv-roster').length,
       ).toBeGreaterThanOrEqual(2);
@@ -264,6 +271,64 @@ describe('RconSupervisor roster refresh', () => {
       expect(commands).toEqual(expect.arrayContaining(['ListPlayers', 'ListSquads']));
       const rosterReads = commands.filter((c) => c === 'ListPlayers').length;
       expect(commands.filter((c) => c === 'ShowServerInfo').length).toBeLessThan(rosterReads);
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 5000);
+
+  it('publishes rcon.roster again once the composition actually changes (#615)', async () => {
+    const { server, port, responses } = await makePollingRconServer();
+    const redis = makeRedis() as unknown as {
+      set: ReturnType<typeof vi.fn>;
+      publish: ReturnType<typeof vi.fn>;
+    };
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 600_000,
+      rosterIntervalMs: 25,
+      infoIntervalMs: 600_000,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-roster-change',
+      port,
+      queryPort: port + 1000,
+    };
+
+    function rosterEventCount(): number {
+      return redis.publish.mock.calls.filter(
+        ([channel, payload]) => channel === 'live-bus' && String(payload).includes('"rcon.roster"'),
+      ).length;
+    }
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+
+      // Several polls of an empty roster: exactly one publish, same as the
+      // dedup test above.
+      const emptyDeadline = Date.now() + 1500;
+      while (Date.now() < emptyDeadline && rosterEventCount() < 1) await sleep(25);
+      await sleep(150);
+      expect(rosterEventCount()).toBe(1);
+
+      // A player joins — the fixture's next ListPlayers response reflects
+      // it, and this must be published even though the interval and every
+      // other field stayed the same.
+      responses.ListPlayers =
+        '----- Active Players -----\n' +
+        'ID: 0 | Online IDs: EOS: abcdef0123456789abcdef0123456789 steam: 76561198012345678 | Name: Alpha | Team ID: 1 | Squad ID: 2 | Is Leader: True | Role: USA_Rifleman_01\n' +
+        '----- Recently Disconnected Players [Max of 15] -----';
+
+      const joinDeadline = Date.now() + 1500;
+      while (Date.now() < joinDeadline && rosterEventCount() < 2) await sleep(25);
+      expect(rosterEventCount()).toBe(2);
+
+      // Composition unchanged again — no further publishes accumulate.
+      await sleep(150);
+      expect(rosterEventCount()).toBe(2);
     } finally {
       await supervisor.stop();
       await closeServer(server);

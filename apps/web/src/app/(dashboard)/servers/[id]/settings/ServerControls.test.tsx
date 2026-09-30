@@ -210,3 +210,35 @@ describe('ServerControls', () => {
     expect(screen.queryByRole('button', { name: /Опасная зона/ })).not.toBeInTheDocument();
   });
 });
+
+describe('ServerControls — опрос статуса (#641)', () => {
+  function getCalls(fetchMock: ReturnType<typeof stubFetch>): number {
+    return fetchMock.mock.calls.filter((call) => call[0] === `/api/v1/servers/${SERVER_ID}`).length;
+  }
+
+  it('не опрашивает /servers/:id, пока вкладка скрыта, и возобновляет при её появлении', async () => {
+    const fetchMock = stubFetch('stopped');
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(<ServerControls serverId={SERVER_ID} />);
+      });
+      const before = getCalls(fetchMock);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      expect(getCalls(fetchMock)).toBe(before);
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getCalls(fetchMock)).toBeGreaterThan(before);
+    } finally {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      vi.useRealTimers();
+    }
+  });
+});

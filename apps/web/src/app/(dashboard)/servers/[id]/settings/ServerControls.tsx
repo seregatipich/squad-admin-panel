@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import {
@@ -45,8 +45,14 @@ export function ServerControls({ serverId }: { serverId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateRunning, setUpdateRunning] = useState(false);
+  // Guards against overlapping requests to the same expensive route
+  // (containerInspect + docker stats via the privileged bridge) piling up
+  // behind a slow response (#641).
+  const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     try {
       const r = await fetch(`/api/v1/servers/${serverId}`, {
         credentials: 'include',
@@ -61,12 +67,21 @@ export function ServerControls({ serverId }: { serverId: string }) {
       });
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
+      refreshInFlightRef.current = false;
     }
   }, [serverId]);
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
+    // `server.status` already pushes every status change live (below); this
+    // poll is only a backstop, so it can skip entirely while the tab is
+    // hidden instead of hammering the bridge/docker daemon for a screen no
+    // one is watching (#641).
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      void refresh();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(t);
   }, [refresh]);
 
