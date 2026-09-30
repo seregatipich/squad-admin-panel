@@ -57,6 +57,18 @@ describe('MarkTypesPage', () => {
   );
 
   it(
+    'leaves the content width to the settings layout instead of nesting a wide container (#715)',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch());
+      const { container } = render(<MarkTypesPage />);
+      await screen.findByText('ghost_peek');
+
+      expect(container.querySelector('.max-w-6xl')).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows the empty state and hides mutating controls without role:edit',
     async () => {
       vi.stubGlobal('fetch', mockFetch({ permissions: [], types: [] }));

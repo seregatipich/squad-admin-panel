@@ -417,12 +417,23 @@ describe('ошибки API на русском (#712)', () => {
 
 describe('опрос настроек (#708)', () => {
   it('stops polling after a 403', async () => {
-    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
-    vi.stubGlobal('fetch', mockFetch({ settingsStatus: 403 }));
-    render(<DiscordIntegrationPage />);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = mockFetch({ settingsStatus: 403 });
+      vi.stubGlobal('fetch', fetchMock);
+      render(<DiscordIntegrationPage />);
 
-    await waitFor(() => expect(clearIntervalSpy).toHaveBeenCalled());
-    clearIntervalSpy.mockRestore();
+      expect(await screen.findByText(/Недостаточно прав/)).toBeInTheDocument();
+      const callsAfterForbidden = fetchMock.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+      });
+
+      expect(fetchMock.mock.calls.length).toBe(callsAfterForbidden);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
