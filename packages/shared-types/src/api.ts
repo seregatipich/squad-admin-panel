@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isRestrictedNetworkHost } from './network-host.js';
 
 export const uuidString = z.string().uuid();
 
@@ -92,13 +93,34 @@ export type ServerCreateInput = z.infer<typeof serverCreateInput>;
 export const serverRuntime = z.enum(['container', 'external']);
 export type ServerRuntime = z.infer<typeof serverRuntime>;
 
-/** Hostname or IP literal the panel dials for RCON/A2S — no scheme, no port, no spaces. */
+/**
+ * Hostname or IP literal the panel dials for RCON/A2S/SSH — no scheme, no
+ * port, no spaces, and never the panel host itself (loopback, link-local,
+ * single-label service names; see {@link isRestrictedNetworkHost}, #30).
+ */
 export const rconHostString = z
   .string()
   .trim()
   .min(1)
   .max(253)
-  .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal');
+  .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal')
+  .refine((host) => !isRestrictedNetworkHost(host), {
+    message: 'host must not be a loopback, link-local or internal address',
+  });
+
+/**
+ * An RCON password as stored in the target's `Rcon.cfg`. It is sent verbatim
+ * as the body of the SERVERDATA_AUTH packet, so control characters are
+ * refused: CR/LF/NUL let a password smuggle line-protocol commands into
+ * whatever service the host/port really points at (#30, finding #333).
+ */
+export const rconPasswordString = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((password) => ![...password].some((c) => c < ' ' || c === '\u007f'), {
+    message: 'rcon_password must not contain control characters',
+  });
 
 /**
  * Body of `POST /api/v1/servers/external` — registers an already-running
@@ -114,7 +136,7 @@ export const externalServerCreateInput = z
     description: z.string().max(500).nullable().optional(),
     rcon_host: rconHostString,
     rcon_port: z.number().int().min(1).max(65_535),
-    rcon_password: z.string().min(1).max(200),
+    rcon_password: rconPasswordString,
     query_port: z.number().int().min(1).max(65_535),
     game_port: z.number().int().min(1).max(65_535).default(7787),
     max_players: z.number().int().min(1).max(100).default(100),
@@ -131,7 +153,7 @@ export const externalServerConnectionUpdate = z
   .object({
     rcon_host: rconHostString.optional(),
     rcon_port: z.number().int().min(1).max(65_535).optional(),
-    rcon_password: z.string().min(1).max(200).optional(),
+    rcon_password: rconPasswordString.optional(),
     query_port: z.number().int().min(1).max(65_535).optional(),
     game_port: z.number().int().min(1).max(65_535).optional(),
     max_players: z.number().int().min(1).max(100).optional(),

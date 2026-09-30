@@ -95,6 +95,11 @@ export interface Target {
   seedLiveAt?: number;
   seedHysteresis?: number;
   password: string;
+  /**
+   * The host is operator-supplied (an external server), so the client must
+   * refuse loopback/link-local addresses — see `RconClientOptions`.
+   */
+  refuseRestrictedAddresses?: boolean;
 }
 
 export interface SupervisorOptions {
@@ -855,6 +860,7 @@ class PerServerSupervisor {
           host: this.target.host,
           port: this.target.port,
           password: this.target.password,
+          refuseRestrictedAddresses: this.target.refuseRestrictedAddresses,
           log: this.opts.log.child({ serverId: this.target.serverId }),
           onDisconnect: (reason) => {
             this.opts.log.warn(

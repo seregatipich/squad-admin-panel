@@ -12,7 +12,12 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
-import { invalidateAllPermissionCaches, invalidatePermissionCacheForRole } from '../lib/rbac.js';
+import {
+  buildRolePermissionContext,
+  invalidateAllPermissionCaches,
+  invalidatePermissionCacheForRole,
+} from '../lib/rbac.js';
+import { checkGrantsWithinActor, checkRoleWithinActor } from '../lib/role-hierarchy.js';
 
 const colorSchema = z.string().refine(isRoleColor, { message: 'invalid color' });
 /** Role names become Admins.cfg group names verbatim, so they must not alter its syntax (#11). */
@@ -147,6 +152,33 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         return { error: dep };
       }
       const id = uuidv7();
+      const proposed = buildRolePermissionContext(
+        id,
+        {
+          name: req.body.name,
+          isSystemRole: false,
+          panelAccess: req.body.panel_access,
+          canViewIps: req.body.can_view_ips,
+          canAssignRoles: req.body.can_assign_roles,
+          canEditRoles: req.body.can_edit_roles,
+          canManageIssues: req.body.can_manage_issues,
+          canManageBanSources: req.body.can_manage_ban_sources,
+          canManageIntegrations: req.body.can_manage_integrations,
+          canManageClans: req.body.can_manage_clans,
+          canManageEconomy: req.body.can_manage_economy,
+          canManageMedia: false,
+          canHandleReports: req.body.can_handle_reports,
+          // Column default for a new role (`roles.combat_view`).
+          combatView: true,
+          squadPermissions: req.body.squad_permissions,
+        },
+        [],
+      );
+      const hierarchyRefusal = checkGrantsWithinActor(req.user, proposed);
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       try {
         await app.db.transaction(async (tx) => {
           await tx.insert(roles).values({
@@ -216,6 +248,47 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       if (roleRow.isSystemRole && roleRow.name === 'Owner') {
         reply.code(400);
         return { error: 'owner_role_immutable' };
+      }
+      if (req.user && !req.user.permissions.isOwner && req.user.permissions.roleId === roleRow.id) {
+        reply.code(403);
+        return { error: 'cannot_edit_own_role' };
+      }
+      const currentRefusal = await checkRoleWithinActor(app.db, req.user, roleRow.id);
+      if (currentRefusal) {
+        reply.code(403);
+        return currentRefusal;
+      }
+      const currentSquad = await app.db
+        .select({ key: roleSquadPermissions.squadPermissionKey })
+        .from(roleSquadPermissions)
+        .where(eq(roleSquadPermissions.roleId, roleRow.id));
+      const explicit = await app.db
+        .select({ key: rolePermissions.permissionKey })
+        .from(rolePermissions)
+        .where(eq(rolePermissions.roleId, roleRow.id));
+      const proposed = buildRolePermissionContext(
+        roleRow.id,
+        {
+          ...roleRow,
+          name: req.body.name ?? roleRow.name,
+          panelAccess: req.body.panel_access ?? roleRow.panelAccess,
+          canViewIps: req.body.can_view_ips ?? roleRow.canViewIps,
+          canAssignRoles: req.body.can_assign_roles ?? roleRow.canAssignRoles,
+          canEditRoles: req.body.can_edit_roles ?? roleRow.canEditRoles,
+          canManageIssues: req.body.can_manage_issues ?? roleRow.canManageIssues,
+          canManageBanSources: req.body.can_manage_ban_sources ?? roleRow.canManageBanSources,
+          canManageIntegrations: req.body.can_manage_integrations ?? roleRow.canManageIntegrations,
+          canManageClans: req.body.can_manage_clans ?? roleRow.canManageClans,
+          canManageEconomy: req.body.can_manage_economy ?? roleRow.canManageEconomy,
+          canHandleReports: req.body.can_handle_reports ?? roleRow.canHandleReports,
+          squadPermissions: req.body.squad_permissions ?? currentSquad.map((entry) => entry.key),
+        },
+        explicit.map((entry) => entry.key),
+      );
+      const proposedRefusal = checkGrantsWithinActor(req.user, proposed);
+      if (proposedRefusal) {
+        reply.code(403);
+        return proposedRefusal;
       }
       const merged = {
         panel_access: req.body.panel_access ?? roleRow.panelAccess,
@@ -311,6 +384,13 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'owner_role_immutable' };
       }
+      // Deleting a role strips it from every holder, so a role above the
+      // actor is as off-limits here as it is to editing.
+      const hierarchyRefusal = await checkRoleWithinActor(app.db, req.user, deleteTarget.id);
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       // A VIP tier maps to an RBAC role via vip_tiers.role_id (ON DELETE
       // RESTRICT, migration 0035). Reject before any cache churn or delete work
       // so a referenced role returns a clean 409 rather than a raw FK-violation
@@ -360,4 +440,3 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
 };
 
 export default rolesRoutes;
-void rolePermissions;

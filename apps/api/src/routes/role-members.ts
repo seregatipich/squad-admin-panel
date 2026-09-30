@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { checkRoleAssignment } from '../lib/role-hierarchy.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const STEAM_ID64_RE = /^\d{17}$/;
@@ -87,6 +88,18 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
       .limit(1);
     return rows[0]?.id ?? null;
+  }
+
+  /**
+   * The subset of `playerIds` that currently hold `roleId` — the players a
+   * bulk remove/move scoped to `roleId = :id` would actually change.
+   */
+  async function membersOf(roleId: string, playerIds: readonly string[]): Promise<string[]> {
+    const rows = await app.db
+      .select({ id: players.id })
+      .from(players)
+      .where(and(eq(players.roleId, roleId), inArray(players.id, [...playerIds])));
+    return rows.map((row) => row.id);
   }
 
   fast.get(
@@ -192,6 +205,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: role.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
@@ -235,6 +256,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       // biome-ignore lint/style/noNonNullAssertion: length-checked above
       const r = role[0]!;
       const playerId = req.params.playerId;
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: [playerId],
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       if (r.isSystemRole && r.name === 'Owner') {
         const membership = await app.db
           .select({ id: players.id })
@@ -384,6 +413,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(422);
         return { error: 'validation_failed', errors, imported: 0 };
       }
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: assignments.map((a) => a.playerId),
+        newRoleId: role.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       await app.db.transaction(async (tx) => {
         for (const a of assignments) {
           await tx
@@ -480,6 +517,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       // biome-ignore lint/style/noNonNullAssertion: length-checked above
       const r = role[0]!;
       const playerIds = [...new Set(req.body.player_ids)];
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: await membersOf(r.id, playerIds),
+        newRoleId: null,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
 
       if (r.isSystemRole && r.name === 'Owner') {
         const totalRows = await app.db
@@ -569,6 +614,14 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const playerIds = [...new Set(req.body.player_ids)];
+      const hierarchyRefusal = await checkRoleAssignment(app.db, req.user, {
+        playerIds: await membersOf(src.id, playerIds),
+        newRoleId: targetRole.id,
+      });
+      if (hierarchyRefusal) {
+        reply.code(403);
+        return hierarchyRefusal;
+      }
       if (src.isSystemRole && src.name === 'Owner') {
         const totalRows = await app.db
           .select({ c: sql<number>`count(*)::int` })

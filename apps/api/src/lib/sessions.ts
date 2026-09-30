@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { type SessionScope, sessions } from '@squad/db/schema';
 import { and, eq, gt, lt } from 'drizzle-orm';
@@ -18,6 +18,23 @@ export interface SessionRecord {
 
 const REDIS_PREFIX = 'session:';
 const REDIS_TTL_SECONDS = 600;
+
+/**
+ * Key that authenticates this process's session cache entries (#30, finding
+ * #1254). Redis is reachable by every local process and by the RNSquadJS
+ * sidecar, so an unauthenticated `session:<id>` entry would let anyone who
+ * can write Redis mint a session for any player. Each entry carries an
+ * HMAC over its session id and contents under this key; an entry that fails
+ * the check is treated as a cache miss and the session is re-read from
+ * Postgres, which stays the only source of truth. The key never leaves the
+ * process, so entries written by an earlier process (before a restart) are
+ * simply re-read once from the database.
+ */
+const CACHE_MAC_KEY = randomBytes(32);
+
+function cacheMac(tokenId: string, payload: string): Buffer {
+  return createHmac('sha256', CACHE_MAC_KEY).update(tokenId).update('\n').update(payload).digest();
+}
 
 /**
  * Minimal live-bus surface needed to push a forced logout. `app.liveBus`
@@ -204,26 +221,37 @@ export async function touchSession(input: TouchSessionInput): Promise<boolean> {
 }
 
 async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
+  const payload = JSON.stringify({
+    playerId: record.playerId,
+    expiresAt: record.expiresAt.toISOString(),
+    lastActivityAt: record.lastActivityAt.toISOString(),
+    ip: record.ip,
+    userAgent: record.userAgent,
+    scope: record.scope,
+  });
   await redis.set(
     `${REDIS_PREFIX}${record.id}`,
-    JSON.stringify({
-      playerId: record.playerId,
-      expiresAt: record.expiresAt.toISOString(),
-      lastActivityAt: record.lastActivityAt.toISOString(),
-      ip: record.ip,
-      userAgent: record.userAgent,
-      scope: record.scope,
-    }),
+    JSON.stringify({ payload, mac: cacheMac(record.id, payload).toString('base64url') }),
     'EX',
     REDIS_TTL_SECONDS,
   );
 }
 
+/**
+ * Reads a session from the Redis cache, or `null` on a miss — including any
+ * entry whose HMAC does not verify (forged, tampered, legacy-format, or
+ * written by another process), so the caller falls back to Postgres.
+ */
 async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | null> {
   const raw = await redis.get(`${REDIS_PREFIX}${tokenId}`);
   if (!raw) return null;
   try {
-    const obj = JSON.parse(raw) as {
+    const envelope = JSON.parse(raw) as { payload?: unknown; mac?: unknown };
+    if (typeof envelope.payload !== 'string' || typeof envelope.mac !== 'string') return null;
+    const expected = cacheMac(tokenId, envelope.payload);
+    const actual = Buffer.from(envelope.mac, 'base64url');
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const obj = JSON.parse(envelope.payload) as {
       playerId: string;
       expiresAt: string;
       lastActivityAt: string;

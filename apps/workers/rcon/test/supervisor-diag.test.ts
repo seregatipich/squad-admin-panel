@@ -231,3 +231,50 @@ describe('RconSupervisor connect lifecycle diag emits', () => {
     await new Promise<void>((r) => server.close(() => r()));
   }, 10_000);
 });
+
+describe('RconSupervisor external-server address guard (#30, finding #333)', () => {
+  it('never dials a loopback host for a target flagged as operator-supplied', async () => {
+    const { server, port } = await fakeRconServer({ acceptAuth: true });
+    let accepted = 0;
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    const diag = makeDiag();
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: makeLogger(),
+      diag,
+      initialBackoffMs: 60_000,
+      maxBackoffMs: 60_000,
+      pollIntervalMs: 60_000,
+    });
+
+    await supervisor.reconcile([
+      {
+        serverId: 'srv-external-loopback',
+        host: '127.0.0.1',
+        port,
+        password: 'pw',
+        refuseRestrictedAddresses: true,
+      },
+    ]);
+
+    const deadline = Date.now() + 5_000;
+    let disconnected: DiagEvent | undefined;
+    while (Date.now() < deadline && !disconnected) {
+      await sleep(20);
+      disconnected = diag.emit.mock.calls
+        .map((c) => c[0] as DiagEvent)
+        .find((e) => e.kind === 'rcon.disconnected');
+    }
+
+    expect(disconnected?.payload).toMatchObject({
+      reason: expect.stringMatching(/restricted address/),
+    });
+    expect(accepted).toBe(0);
+
+    await supervisor.stop();
+    await new Promise<void>((r) => server.close(() => r()));
+  }, 10_000);
+});

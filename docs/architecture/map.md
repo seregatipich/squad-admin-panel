@@ -785,7 +785,7 @@ Seven paths are reachable without a session, plus two implicit ones. What protec
 
 | Path | Module | Protection |
 |---|---|---|
-| `GET /api/v1/public/stats`, `/public/stats.csv` | `public-stats.ts:87,103` | **Global limiter only** — no `config.rateLimit`. Payload is PII-free by construction (no player or server identifiers) |
+| `GET /api/v1/public/stats`, `/public/stats.csv` | `public-stats.ts` | `config.rateLimit` 30/min per IP on each route; payload cached in Redis for 300 s per hour-aligned window (#30). Payload is PII-free by construction (no player or server identifiers) |
 | `GET /api/v1/public/clans`, `/public/clans/:id` | `public-clans.ts:55,78` | `rateLimit { max: 60, '1 minute' }` |
 | `GET /api/v1/public/banlist` | `public-banlist.ts:104` | 30/min + `banlist:read` scope + the `banlist_publication_settings` master switch (404 when off) + ETag/304. Never emits IPs or admin notes |
 | `GET /api/v1/public/whitelist/settings` | `whitelist-applications.ts:183` | 60/min |
@@ -1261,7 +1261,7 @@ The house pattern is **write-time materialisation into ordinary aggregate tables
 
 `worker-stats` is the reconcile guard over mode 3 and **writes nothing by design** — rebuilding would erase multi-year dossier history once `combat_events` partitions age out (`stats/src/index.ts:12-17`), so its drift checks are deliberately lower-bound (`s.kills < e.kills`) rather than equality. It has no compose service, so the guard is not deployed.
 
-Caching sits *in front of* the materialised tables: `/api/v1/leaderboards` uses a 60 s Redis TTL and the aggregator actively `SCAN`s and `DEL`s `leaderboard:*` after each recompute. Two exceptions compute **on read**: `/api/v1/analytics/dashboard` and `/api/v1/public/stats` aggregate live over `matches`/`player_sessions`/`player_daily_presence` with a `generate_series` peak-by-hour sampler and no cache at all, and the DOSSIER-4 combat trend aggregates live over `match_players ⋈ matches` behind a 60 s cache.
+Caching sits *in front of* the materialised tables: `/api/v1/leaderboards` uses a 60 s Redis TTL and the aggregator actively `SCAN`s and `DEL`s `leaderboard:*` after each recompute. Two exceptions compute **on read**: `/api/v1/analytics/dashboard` aggregates live over `matches`/`player_sessions`/`player_daily_presence` with no cache at all (`/api/v1/public/stats` runs the same aggregates behind a 300 s Redis cache keyed by the hour-aligned window, #30), and the DOSSIER-4 combat trend aggregates live over `match_players ⋈ matches` behind a 60 s cache.
 
 Three consistency notes that matter operationally: the 15-minute leaderboard tick reads a `seed_seconds` column the 1-hour presence tick rewrites, so a tick landing between presence stages materialises a stale figure; combat reaches the leaderboard via `match_players` but reaches the dossier via `combat_events`, so `player_stat_periods.kills` and `player_weapon_stats.kills` are two independent read models from two independent sources with no guarantee of agreement; and `bonus_points` on the leaderboard is `k × seconds` with **no `/3600`**, while the ledger writes `round(k × seconds / 3600)` — the two economy numbers are ~3600× apart. `'season'` is a legal `period_type` in the schema and both enums, but `periodStartFor` throws for it and no worker ever writes one, so the season leaderboard is permanently empty.
 

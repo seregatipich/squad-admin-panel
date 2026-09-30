@@ -50,15 +50,8 @@ export async function seedOwner(steamId64?: string): Promise<{ uid: string; toke
   runSql(
     `INSERT INTO sessions (id, player_id, expires_at, last_activity_at) VALUES ('${tokenId}', '${playerId}', '${expiresAt}', now())`,
   );
-
-  const sessionJson = JSON.stringify({
-    playerId,
-    expiresAt,
-    lastActivityAt: new Date().toISOString(),
-    ip: null,
-    userAgent: null,
-  });
-  redisCmd(['SET', `session:${tokenId}`, sessionJson, 'EX', '86400']);
+  // No Redis cache entry: the API authenticates its own cache entries (#30)
+  // and loads this session from the row above on first use.
 
   return { uid: sid, token };
 }
