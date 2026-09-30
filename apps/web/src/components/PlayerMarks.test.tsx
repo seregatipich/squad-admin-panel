@@ -88,8 +88,8 @@ describe('PlayerMarks', () => {
         2,
       ),
     );
-    // The reference list is loaded once, not on every marks reload.
-    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/mark-types')).toHaveLength(1);
+    // Types and marks share one reload, so a failed reference-list load is retried with it.
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/mark-types')).toHaveLength(2);
   });
 
   it('does not show the marks of the previous player when its late answer arrives', async () => {
