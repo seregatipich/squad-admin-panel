@@ -2,19 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   auditEntry,
   bridgeStatus,
+  externalConnectionResponse,
   externalServerConnectionUpdate,
   externalServerCreateInput,
   hostInfo,
   hostMetrics,
   logSourceStatusKey,
   logSourceUpsertInput,
+  logSourceView,
   paginated,
   playerRow,
   remoteLogPath,
+  seedingSettingsResponse,
   serverCreateInput,
+  serverDetailResponse,
   serverRow,
   serverRuntime,
+  serverSettingsView,
   serverStatus,
+  sidecarIntegrationResponse,
   uuidString,
 } from '../src/api.js';
 
@@ -634,5 +640,83 @@ describe('logSourceUpsertInput / remoteLogPath', () => {
 
   it('derives the status key from the server id', () => {
     expect(logSourceStatusKey('srv-1')).toBe('log-source:status:srv-1');
+  });
+});
+
+describe('server settings page response schemas (#86 finding 656)', () => {
+  const settings = {
+    server_id: 's',
+    game_port: 7787,
+    query_port: 27165,
+    beacon_port: 15000,
+    rcon_port: 21114,
+    max_players: 80,
+    tickrate: 50,
+    multihome: null,
+    seed_live_at: 60,
+    seed_hysteresis: 5,
+    chat_commands_enabled: true,
+    rules_text: null,
+  };
+
+  it('parses a server detail, strips unknown fields and defaults archive_logs_to_backup', () => {
+    const parsed = serverDetailResponse.parse({
+      server: { status: 'running', display_name: 'A', secret: 'x' },
+      settings,
+    });
+    expect(parsed.settings?.archive_logs_to_backup).toBe(false);
+    expect(parsed.server).not.toHaveProperty('secret');
+  });
+
+  it('accepts null settings but rejects a missing server or a mistyped port', () => {
+    expect(
+      serverDetailResponse.safeParse({ server: { status: 's', display_name: 'A' }, settings: null })
+        .success,
+    ).toBe(true);
+    expect(serverDetailResponse.safeParse({ settings }).success).toBe(false);
+    expect(serverSettingsView.safeParse({ ...settings, game_port: '7787' }).success).toBe(false);
+  });
+
+  it('parses log-source views for the configured and unconfigured cases', () => {
+    expect(logSourceView.safeParse({ configured: false, status: null }).success).toBe(true);
+    expect(
+      logSourceView.safeParse({
+        configured: true,
+        ssh_port: 22,
+        status: { state: 'connected', ts: 't', last_line_at: null },
+      }).success,
+    ).toBe(true);
+    expect(logSourceView.safeParse({ configured: true }).success).toBe(false);
+    expect(
+      logSourceView.safeParse({ configured: true, status: { state: 'weird', ts: 't' } }).success,
+    ).toBe(false);
+  });
+
+  it('validates the connection, seeding and sidecar responses', () => {
+    expect(
+      externalConnectionResponse.safeParse({
+        rcon_host: null,
+        rcon_port: 1,
+        query_port: null,
+        game_port: null,
+      }).success,
+    ).toBe(true);
+    expect(seedingSettingsResponse.safeParse({ seed_live_at: 1 }).success).toBe(false);
+    expect(
+      sidecarIntegrationResponse.safeParse({
+        server_id: 's',
+        mode: 'legacy',
+        cutover: false,
+        status: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      sidecarIntegrationResponse.safeParse({
+        server_id: 's',
+        mode: 'bogus',
+        cutover: false,
+        status: null,
+      }).success,
+    ).toBe(false);
   });
 });
