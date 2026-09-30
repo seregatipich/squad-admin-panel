@@ -642,6 +642,9 @@ function WhitelistQuickAction({
 
 const ROLE_ACTION_ERROR_TEXT: Record<string, string> = {
   owner_assignment_forbidden: 'Нельзя выдать роль Owner через UI.',
+  cannot_change_own_role: 'Нельзя менять собственную роль.',
+  role_exceeds_actor_permissions: 'Эта роль шире ваших прав — выдать её нельзя.',
+  target_outranks_actor: 'У игрока права выше ваших — менять его роль нельзя.',
   cannot_remove_last_owner:
     'Это последний Owner панели — сначала назначьте другого Owner, прежде чем снимать роль.',
   forbidden: 'Недостаточно прав для этого действия.',

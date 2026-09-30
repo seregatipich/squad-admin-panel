@@ -196,9 +196,9 @@ describe('POST /api/v1/depot/update background orchestration', () => {
       stoppedNames.push(name);
       return { status: 'ok' };
     };
-    h.bridge.containerStart = async ({ name }) => {
-      startedNames.push(name);
-      return { status: 'ok' };
+    h.bridge.containerRun = async ({ server_id }) => {
+      startedNames.push(`squad-${server_id}`);
+      return { status: 'started', container_id: 'fresh' };
     };
     // Make fileRead return a valid manifest so build_id gets stored
     h.bridge.fileRead = async () => ({
@@ -245,9 +245,9 @@ describe('POST /api/v1/depot/update background orchestration', () => {
     const cookie = await loginAsOwner(h);
 
     const startedNames: string[] = [];
-    h.bridge.containerStart = async ({ name }) => {
-      startedNames.push(name);
-      return { status: 'ok' };
+    h.bridge.containerRun = async ({ server_id }) => {
+      startedNames.push(`squad-${server_id}`);
+      return { status: 'started', container_id: 'fresh' };
     };
     h.bridge.depotUpdate = async () => {
       throw new Error('steamcmd failed');
@@ -339,6 +339,44 @@ describe('POST /api/v1/depot/update background orchestration', () => {
   });
 });
 
+describe('POST /api/v1/depot/update restart uses current settings (#30 #320)', () => {
+  it('recreates the container from server_settings instead of starting the old one', async () => {
+    const id = await seedRunning(h);
+    const cookie = await loginAsOwner(h);
+    const calls: string[] = [];
+    let ranGamePort: unknown;
+    h.bridge.containerStop = async () => ({ status: 'ok' });
+    h.bridge.containerStart = async ({ name }) => {
+      calls.push(`start:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRm = async ({ name }) => {
+      calls.push(`rm:${name}`);
+      return { status: 'ok' };
+    };
+    h.bridge.containerRun = async (params) => {
+      calls.push(`run:${params.server_id}`);
+      ranGamePort = params.game_port;
+      return { status: 'started', container_id: 'fresh' };
+    };
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/depot/update',
+      headers: { cookie },
+      payload: { server_ids: [id] },
+    });
+    await waitForDepotUpdate();
+
+    const [settings] = await h.db
+      .select({ gamePort: serverSettings.gamePort })
+      .from(serverSettings)
+      .where(eq(serverSettings.serverId, id));
+    expect(calls).toEqual([`rm:squad-${id}`, `run:${id}`]);
+    expect(ranGamePort).toBe(settings?.gamePort);
+  });
+});
+
 describe('POST /api/v1/depot/update with servers that are not running (#135)', () => {
   it('neither stops nor restarts a server the operator left stopped', async () => {
     const running = await seedRunning(h);
@@ -347,18 +385,13 @@ describe('POST /api/v1/depot/update with servers that are not running (#135)', (
 
     const stoppedNames: string[] = [];
     const startedNames: string[] = [];
-    const ranContainers: string[] = [];
     h.bridge.containerStop = async ({ name }) => {
       stoppedNames.push(name);
       return { status: 'ok' };
     };
-    h.bridge.containerStart = async ({ name }) => {
-      startedNames.push(name);
-      return { status: 'ok' };
-    };
     h.bridge.containerRun = async ({ server_id }) => {
-      ranContainers.push(String(server_id));
-      return { status: 'started', container_id: 'x' };
+      startedNames.push(`squad-${server_id}`);
+      return { status: 'started', container_id: 'fresh' };
     };
 
     const res = await h.app.inject({
@@ -378,7 +411,6 @@ describe('POST /api/v1/depot/update with servers that are not running (#135)', (
 
     expect(stoppedNames).toEqual([`squad-${running}`]);
     expect(startedNames).toEqual([`squad-${running}`]);
-    expect(ranContainers).toEqual([]);
     const [row] = await h.db
       .select({ status: servers.status })
       .from(servers)

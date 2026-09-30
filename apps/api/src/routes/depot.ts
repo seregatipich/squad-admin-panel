@@ -1,10 +1,5 @@
 import { serverSettings, servers } from '@squad/db/schema';
-import {
-  DEPOT_VOLUME_NAME,
-  PANEL_CONFIGS_ROOT,
-  PANEL_SAVED_ROOT,
-  SERVER_IMAGE,
-} from '@squad/shared-config';
+import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -14,6 +9,7 @@ import {
   publishDepotProgressDone,
   publishDepotProgressLine,
 } from '../lib/depot-progress.js';
+import { runFreshServerContainer } from '../lib/server-container.js';
 import { sendUnlessStalled } from '../lib/ws-send.js';
 import {
   createStreamLimiter,
@@ -195,8 +191,8 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         }
 
         /**
-         * Restart each stopped server via containerStart, falling back to
-         * containerRun. A server is marked `starting` only once one of them
+         * Restart each stopped server by recreating its container from the
+         * current server_settings. A server is marked `starting` only once one of them
          * actually launched it; otherwise it stays `stopped` and the failure
          * is reported (#143).
          */
@@ -215,29 +211,16 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
                   'failed to publish restart progress line',
                 );
               });
-              try {
-                await app.bridge.containerStart({ name: `squad-${sid}` });
-              } catch (startError) {
-                // containerStart failed — container might have been removed; try containerRun.
-                const settings = await app.db.query.serverSettings.findFirst({
-                  where: eq(serverSettings.serverId, sid),
-                });
-                if (!settings) throw startError;
-                await app.bridge.containerRun({
-                  server_id: sid,
-                  image: SERVER_IMAGE,
-                  game_port: settings.gamePort,
-                  query_port: settings.queryPort,
-                  beacon_port: settings.beaconPort,
-                  rcon_port: settings.rconPort,
-                  max_players: settings.maxPlayers,
-                  tickrate: settings.tickrate,
-                  multihome: settings.multihome,
-                  configs_host: `${PANEL_CONFIGS_ROOT}/${sid}/ServerConfig`,
-                  saved_host: `${PANEL_SAVED_ROOT}/${sid}`,
-                  depot_volume: DEPOT_VOLUME_NAME,
-                });
-              }
+              const settings = await app.db.query.serverSettings.findFirst({
+                where: eq(serverSettings.serverId, sid),
+              });
+              if (!settings) throw new Error('server settings not found');
+              const existing = await app.bridge
+                .containerInspect({ name: `squad-${sid}` })
+                .catch(() => null);
+              // Recreated from the current settings: a plain `containerStart`
+              // would keep the ports and slots the container was created with (#320).
+              await runFreshServerContainer(app.bridge, sid, settings, existing !== null);
               await app.db
                 .update(servers)
                 .set({ status: 'starting', updatedAt: new Date() })
