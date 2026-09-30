@@ -177,4 +177,50 @@ describe('UsersPage role removal', () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it('offers «Снять» on an Owner row and leaves the last-Owner rule to the server', async () => {
+    const { roleDeletes } = stubFetch(
+      [
+        userRow({
+          role: { id: 'role-owner', name: 'Owner', color: 'red', is_system_role: true },
+        }),
+      ],
+      ['user:manage_roles'],
+    );
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+
+    await waitFor(() => expect(roleDeletes).toEqual(['/api/v1/players/player-alpha/role']));
+  });
+
+  it('shows a Russian message for an unknown removal failure, not the raw code', async () => {
+    stubFetch([userRow()], ['user:manage_roles'], { status: 500, body: { error: 'boom' } });
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+
+    expect(await screen.findByText('Сервер вернул ошибку (код 500).')).toBeInTheDocument();
+    expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
+  });
+});
+
+describe('UsersPage filters', () => {
+  it('loads /me and /roles once, not on every filter change', async () => {
+    stubFetch([userRow()], ['user:manage_roles']);
+    render(<UsersPage />);
+    await screen.findByText('Связанный');
+
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'abc' } });
+    fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Enter' });
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('q=abc'))).toBe(true),
+    );
+
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.startsWith('/api/v1/me'))).toHaveLength(1);
+    expect(urls.filter((url) => url.startsWith('/api/v1/roles'))).toHaveLength(1);
+  });
 });
