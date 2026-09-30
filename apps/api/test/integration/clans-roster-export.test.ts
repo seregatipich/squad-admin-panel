@@ -18,6 +18,7 @@ let nobodyCookie: string;
 let clanId: string;
 let leaderPlayerId: string;
 let memberPlayerId: string;
+let formulaPlayerId: string;
 
 async function makeCookieFor(playerId: string): Promise<string> {
   invalidateAllPermissionCaches();
@@ -46,6 +47,16 @@ beforeAll(async () => {
   if (!member) throw new Error('member: insert returned no row');
   memberPlayerId = member.id;
 
+  const [formulaMember] = await h.db
+    .insert(players)
+    .values({
+      steamId64: testSteamId(895004),
+      canonicalName: '=HYPERLINK("http://x.invalid","a")',
+      canonicalNameNormalized: 'hyperlink formula',
+    })
+    .returning({ id: players.id });
+  formulaPlayerId = formulaMember.id;
+
   clanId = uuidv7();
   await h.db.insert(clans).values({
     id: clanId,
@@ -56,6 +67,7 @@ beforeAll(async () => {
   await h.db.insert(clanMembers).values([
     { clanId, playerId: leaderPlayerId, memberRole: 'leader', hasPriority: true },
     { clanId, playerId: memberPlayerId, memberRole: 'member', hasPriority: false },
+    { clanId, playerId: formulaPlayerId, memberRole: 'member', hasPriority: false },
   ]);
 
   const nobodyRoleId = uuidv7();
@@ -153,12 +165,24 @@ describeIfDb('GET /api/v1/clans/:id/roster/export', () => {
     expect(lines[0]).toBe(
       'canonical_name,steam_id64,member_role,has_priority,joined_at,last_seen_at',
     );
-    // header + 2 members
-    expect(lines).toHaveLength(3);
+    // header + 3 members
+    expect(lines).toHaveLength(4);
     expect(lines.some((line) => line.includes('leader'))).toBe(true);
     expect(lines.some((line) => line.includes('member'))).toBe(true);
     // the member's canonical name contains a comma and a quote — must be
     // RFC 4180 escaped as a single quoted field.
     expect(lines.some((line) => line.startsWith('"Экспорт, ""Тест"""'))).toBe(true);
+  });
+
+  it('neutralises a spreadsheet formula in a player nickname (audit #137)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/roster/export`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.trim().split('\r\n');
+    expect(lines.some((line) => line.startsWith(`"'=HYPERLINK(`))).toBe(true);
+    expect(lines.some((line) => line.startsWith('=') || line.startsWith('"='))).toBe(false);
   });
 });
