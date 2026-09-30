@@ -1,4 +1,5 @@
 import { createDecipheriv } from 'node:crypto';
+import { z } from 'zod';
 
 /**
  * Local subset of `apps/api/src/lib/crypto.ts`'s AES-256-GCM envelope,
@@ -6,13 +7,15 @@ import { createDecipheriv } from 'node:crypto';
  * (same convention as `apps/workers/rcon/src/index.ts`). Only decryption is
  * needed: the API is the only writer of `ssh_private_key_encrypted`.
  */
-export interface EncryptedBlob {
-  v: 1;
-  kv: number;
-  iv: string;
-  tag: string;
-  ct: string;
-}
+const encryptedBlobSchema = z.object({
+  v: z.literal(1),
+  kv: z.number(),
+  iv: z.string(),
+  tag: z.string(),
+  ct: z.string(),
+});
+
+export type EncryptedBlob = z.infer<typeof encryptedBlobSchema>;
 
 const ALGO = 'aes-256-gcm';
 const AUTH_TAG_BYTES = 16;
@@ -26,9 +29,21 @@ export function loadEncryptionKey(base64: string): Buffer {
   return raw;
 }
 
-/** Parses the raw `bytea` column value into the JSON-encoded encrypted blob it stores. */
+/**
+ * Parses the raw `bytea` column value into the JSON-encoded encrypted blob it stores.
+ *
+ * @throws Error when the value is not JSON or does not have the blob shape.
+ */
 export function deserialize(buf: Buffer): EncryptedBlob {
-  return JSON.parse(buf.toString('utf-8')) as EncryptedBlob;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(buf.toString('utf-8'));
+  } catch {
+    throw new Error('encrypted blob is not valid JSON');
+  }
+  const parsed = encryptedBlobSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('encrypted blob has an unexpected format');
+  return parsed.data;
 }
 
 export function decrypt(key: Buffer, blob: EncryptedBlob): string {

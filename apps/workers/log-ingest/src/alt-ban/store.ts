@@ -16,11 +16,15 @@ import { v7 as uuidv7 } from 'uuid';
 import { persistEventEnvelope } from '../event-store.js';
 import { publish } from '../publish.js';
 
+/** Minimum gap between two evasion signals raised for one connecting player. */
+export const ALT_BAN_EVASION_COOLDOWN_SECONDS = 600;
+
 export type AltBanConnectOutcome =
   | { outcome: 'ignored' }
   | { outcome: 'player_not_found' }
   | { outcome: 'no_confirmed_alt'; connectingPlayerId: string }
   | { outcome: 'no_active_ban'; connectingPlayerId: string }
+  | { outcome: 'cooldown'; connectingPlayerId: string }
   | {
       outcome: 'detected';
       connectingPlayerId: string;
@@ -44,7 +48,9 @@ async function findConnectingPlayerId(
 /**
  * Detects a confirmed alt joining while a linked account has an unreverted,
  * unexpired local ban, persists the ALT-7 domain event, and raises configured
- * AUTO-3 alerts through the shared emitter.
+ * AUTO-3 alerts through the shared emitter. A player reconnecting within
+ * {@link ALT_BAN_EVASION_COOLDOWN_SECONDS} of the last signal is not signalled
+ * again (`SET NX EX` on `altban:cooldown:<player>`).
  */
 export async function handleAltBanConnect(
   db: DatabaseClient,
@@ -80,6 +86,15 @@ export async function handleAltBanConnect(
   if (bannedPlayerIds.length === 0) {
     return { outcome: 'no_active_ban', connectingPlayerId };
   }
+
+  const claimed = await redis.set(
+    `altban:cooldown:${connectingPlayerId}`,
+    '1',
+    'EX',
+    ALT_BAN_EVASION_COOLDOWN_SECONDS,
+    'NX',
+  );
+  if (!claimed) return { outcome: 'cooldown', connectingPlayerId };
 
   const signalEventId = uuidv7();
   const signalPayload: AltBanEvasionSuspectedPayload = {

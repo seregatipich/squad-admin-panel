@@ -48,7 +48,7 @@ Written as `SET … EX 86400 NX` before each `XADD`. If the key already exists t
 | `admin_login_new_ip` | `player.connected` of a player whose unexpired role has `panel_access` (or the system Owner role) from an IP missing from `player_ip_history` | evaluated **before** the identity handler records the IP |
 | `custom` | an event whose type equals `eventKind` | every match, or once per `threshold` matches when a threshold is set (the counter restarts after each firing) |
 
-`custom` rules only see the event kinds this parser emits (`server.ready`, `server.stopped`, `server.crashed`, `player.connected`, `player.disconnected`, `match.started`, `match.ended`, `rcon.connected`). Kinds raised elsewhere — `bansync.failed`, `externalban.matched`, `alt.ban_evasion_suspected`, `reports.spam_flagged`, seed notifications — keep being written by their own producers.
+`custom` rules only see the event kinds this parser emits (`server.ready`, `server.stopped`, `server.crashed`, `player.connected`, `player.disconnected`, `match.started`, `match.ended`, `rcon.admin_command`). Kinds raised elsewhere — `bansync.failed`, `externalban.matched`, `alt.ban_evasion_suspected`, `reports.spam_flagged`, seed notifications — keep being written by their own producers.
 
 Each firing is delivered through `src/alerts/sink.ts` (no transport is configured in any deployment yet, so `delivered` stays `false`), inserted into `alert_events`, and announced as an `alert.triggered` live-bus frame whose `data` is `{ event_kind: <rule type>, rule_id, rule_name, severity, server_id }` — never the payload, which holds an IP for `admin_login_new_ip`. `GET /api/v1/alerts` strips `payload.ip` for callers without `player:view_ips`.
 

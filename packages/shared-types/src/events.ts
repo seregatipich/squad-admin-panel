@@ -33,6 +33,7 @@ export const EVENT_TYPES = [
   'match.ended',
 
   'rcon.connected',
+  'rcon.admin_command',
   'rcon.disconnected',
   'rcon.players_polled',
 

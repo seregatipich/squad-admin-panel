@@ -1,12 +1,4 @@
-import {
-  auditLog,
-  bannedNameRules,
-  type DatabaseClient,
-  moderationActions,
-  playerNameHistory,
-  players,
-} from '@squad/db';
-import { normalizePlayerName } from '@squad/shared-config';
+import { bannedNameRules, type DatabaseClient, moderationActions, players } from '@squad/db';
 import type { BannedNameAction, BannedNameMatchType } from '@squad/shared-config/banned-names';
 import {
   type EventEnvelope,
@@ -17,6 +9,7 @@ import { eq, or, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { persistEventEnvelope } from '../event-store.js';
+import { createPlayerWithHistory } from '../player-identity/create-player.js';
 import { publish } from '../publish.js';
 import type { BannedNameRuleCache } from './rules-cache.js';
 
@@ -103,42 +96,13 @@ async function createPlayer(
   db: DatabaseClient,
   identity: { eosId: string | null; steamId64: string | null; name: string },
 ): Promise<string | null> {
-  const normalized = normalizePlayerName(identity.name);
-  const playerId = uuidv7();
-  try {
-    await db.insert(players).values({
-      id: playerId,
-      steamId64: identity.steamId64 ? BigInt(identity.steamId64) : null,
-      eosId: identity.eosId,
-      canonicalName: identity.name,
-      canonicalNameNormalized: normalized,
-    });
-    await db.insert(playerNameHistory).values({
-      playerId,
-      name: identity.name,
-      nameNormalized: normalized,
-    });
-    await db.insert(auditLog).values({
-      actorKind: 'system',
-      actorSystemLabel: 'banname-worker',
-      actionType: 'player.created',
-      targetType: 'player',
-      targetId: playerId,
-      context: {
-        eos_id: identity.eosId,
-        steam_id64: identity.steamId64,
-        canonical_name: identity.name,
-      },
-      rowHash: Buffer.from([]),
-    });
-    return playerId;
-  } catch {
-    const existing = await resolveByIdentity(db, {
-      eosId: identity.eosId,
-      steamId64: identity.steamId64,
-    });
-    return existing?.id ?? null;
-  }
+  const created = await createPlayerWithHistory(db, identity, 'banname-worker');
+  if (created) return created;
+  const existing = await resolveByIdentity(db, {
+    eosId: identity.eosId,
+    steamId64: identity.steamId64,
+  });
+  return existing?.id ?? null;
 }
 
 async function resolveOrCreatePlayer(

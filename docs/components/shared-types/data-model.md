@@ -41,6 +41,7 @@ Validated with `eventEnvelope` (Zod, `.strict()`).
 | `player.name_changed` | `worker-log-ingest` / `worker-rcon` | players-projector (`player_name_history`) |
 | `match.started` / `match.ended` | `worker-log-ingest` | future stats projector |
 | `rcon.connected` / `rcon.disconnected` | `worker-rcon` | UI health card |
+| `rcon.admin_command` | `worker-log-ingest` | Events journal (admin command seen in SquadGame.log) |
 | `rcon.players_polled` | `worker-rcon` | players-projector |
 | `squad.created` / `squad.leader_changed` / `squad.disbanded` | `worker-rcon` (squad history; also inserted into `events`) | events journal, per-player lookups by `actor_id` |
 | `bridge.connected` / `bridge.disconnected` | `api` (bridge plugin) | UI health card |

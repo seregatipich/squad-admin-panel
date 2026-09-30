@@ -32,9 +32,11 @@ export interface ParsedChat {
   message: string;
 }
 
-const CHAT_CATEGORIES = new Set(['LogSquad', 'LogChat']);
+/** Log categories a chat line can appear under; shared with the `!report` parser. */
+export const CHAT_CATEGORIES = new Set(['LogSquad', 'LogChat']);
 
-const CHAT_MESSAGE =
+/** Grammar of a `ChatMessage:` log line; shared with the `!report` parser so the two cannot drift. */
+export const CHAT_MESSAGE =
   /^ChatMessage:\s*(?<sender>.+?)\s*:\s*(?<channel>ChatAll|ChatTeam|ChatSquad|ChatAdmin)\s*:\s*(?<text>.*)$/;
 
 const SENDER_IDS =

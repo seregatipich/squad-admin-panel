@@ -43,6 +43,27 @@ describe('LogIngestor vehicle wiring', () => {
     expect(combat[0].attackerVehicle).toBeNull();
   });
 
+  it.each([
+    [
+      'the player disconnects',
+      `[2026.07.05-12.19.30:000][0]LogNet: UChannel::Close: Sending CloseBunch UniqueId: EOS:${ALICE_EOS}|STEAM:${ALICE_STEAM}`,
+    ],
+    [
+      'a new game starts',
+      '[2026.07.05-12.19.30:000][0]LogWorld: Bringing World /Game/Maps/Harju/Gameplay_Layers/Harju_RAAS_v1 up for play',
+    ],
+    [
+      'the server exits',
+      '[2026.07.05-12.19.30:000][0]LogCore: FUnixPlatformMisc::RequestExit(bForce=false, ReturnCode=143)',
+    ],
+  ])('forgets the occupied vehicle when %s (#937)', (_name, resetLine) => {
+    const { ingestor, combat } = harness();
+    ingestor.ingest(POSSESS_VEHICLE);
+    ingestor.ingest(resetLine);
+    ingestor.ingest(TURRET_KILL);
+    expect(combat[0].attackerVehicle).toBeNull();
+  });
+
   it('emits a vehicle_destroyed command carrying the raw victim asset + attacker vehicle', () => {
     const { ingestor, vehicle } = harness();
     ingestor.ingest(POSSESS_VEHICLE);

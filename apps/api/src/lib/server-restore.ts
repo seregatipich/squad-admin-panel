@@ -3,7 +3,7 @@ import type { BridgeClient } from '@squad/bridge-client';
 import { type DatabaseClient, withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, asc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, type SQL, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -139,10 +139,4 @@ export async function restoreConfigsFromArchive(
     }
   }
   return result;
-}
-
-export async function getArchivedServer(db: DatabaseClient, id: string) {
-  return db.query.servers.findFirst({
-    where: and(eq(servers.id, id), isNotNull(servers.deletedAt)),
-  });
 }

@@ -55,7 +55,7 @@ Unit tests for the `LogIngestor` player connect/disconnect flow.
 | `player.connected` when EOS follows join in window | Correlation within 2500 ms window emits event with steam_id64 |
 | No `player.connected` after correlation window expires | Late EOS line (> window ms) produces no event |
 | `player.disconnected` with steam_id64 | Disconnect line extracts correct steam_id64 |
-| `rcon.connected` on ADMIN COMMAND line | `LogSquad: ADMIN COMMAND: ListPlayers from RCON` |
+| `rcon.admin_command` on ADMIN COMMAND line | `LogSquad: ADMIN COMMAND: ListPlayers from RCON` |
 | Empty list for unrecognised lines | Unknown category/message produces no events |
 
 ### `manager.test.ts`
