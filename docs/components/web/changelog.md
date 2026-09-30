@@ -790,3 +790,11 @@ The Статус header's client-side online sort, the `только онлай�
 - `/logs` page: live log stream with `LogList` component.
 - `LogList` component: source/level/server/text filters, pause, cursor-based polling, export.
 - `LogoutButton` component in the dashboard sidebar.
+
+## 2026-09-30 — Доработка компонентов web (#89)
+
+### Changed
+
+- Баннер дрейфа Admins.cfg показывает кнопки синхронизации только с правом `admin_group:edit` (#765, #766).
+- График метрик размещает точки по времени: пропуски в данных видны как разрывы (#786).
+- `formatDurationRu` и `formatHours` вынесены в `apps/web/src/lib/format.ts` (#1350).

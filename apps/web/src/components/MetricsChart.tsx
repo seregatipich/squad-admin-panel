@@ -58,7 +58,14 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
   const yMax = maxY === undefined ? dataMax * 1.1 || 1 : Math.max(maxY, dataMax);
   const yMin = 0;
 
-  const xScale = (i: number) => PAD.left + (i / (points.length - 1 || 1)) * INNER_W;
+  // Scale X by timestamp so missing samples show as a gap instead of being squeezed together.
+  const times = points.map((p) => new Date(p.timestamp).getTime());
+  const firstTime = times[0] ?? 0;
+  const timeSpan = (times[times.length - 1] ?? 0) - firstTime;
+  const xScale = (i: number) => {
+    if (timeSpan > 0) return PAD.left + (((times[i] ?? 0) - firstTime) / timeSpan) * INNER_W;
+    return PAD.left + (i / (points.length - 1 || 1)) * INNER_W;
+  };
   const yScale = (v: number) => PAD.top + INNER_H - ((v - yMin) / (yMax - yMin)) * INNER_H;
 
   const pathD = points
