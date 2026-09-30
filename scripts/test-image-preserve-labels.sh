@@ -35,11 +35,15 @@ assert present "SystemPrune still filters on label!=panel.preserve=true" "$got"
 # --- every Dockerfile for a `--pull never` image carries the label ------------
 # Keep this list in sync with the images DockerRunner launches with
 # `--pull never`: squad-server (squad-server.Dockerfile), depot-init
-# (depot-init.Dockerfile) and the rnsquadjs sidecar (docker/rnsquadjs.Dockerfile).
+# (depot-init.Dockerfile), the rnsquadjs sidecar (docker/rnsquadjs.Dockerfile)
+# and the restic backup image (docker/restic.Dockerfile, run by the bridge
+# backup RPCs). The api/web/worker images are deliberately not labelled; see
+# "Rollback" in docs/operations/deployment.md.
 for dockerfile in \
   docker/squad-server.Dockerfile \
   docker/depot-init.Dockerfile \
-  docker/rnsquadjs.Dockerfile
+  docker/rnsquadjs.Dockerfile \
+  docker/restic.Dockerfile
 do
   got=absent
   grep -Eq 'LABEL[[:space:]].*panel\.preserve=true' "$SRC/$dockerfile" && got=present

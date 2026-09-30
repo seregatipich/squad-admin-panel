@@ -132,6 +132,12 @@ running it twice returns to where you started. The compose file, the Caddyfile
 and the schema stay those of the synced tree, and the next push to `dev`
 replaces the rollback.
 
+Residual risk: a host-side `system prune -a` (the bridge `SystemPrune` RPC) also
+removes the previous release's `api`/`web`/`workers` images, because only the
+locally built `--pull never` images carry `panel.preserve=true`. Rollback
+still works, since those images stay in GHCR and `deploy-stand.sh` re-pulls
+them, but it needs registry access from the host.
+
 Only when a migration itself destroyed data, restore the dump taken before it
 (this overwrites the whole database; stop the api and workers first):
 
@@ -351,7 +357,7 @@ cd squad-admin-panel
 cp .env.example .env
 # Fill APP_DOMAIN, PANEL_PUBLIC_URL, POSTGRES_PASSWORD,
 # APP_ENCRYPTION_KEY and SESSION_SECRET
-# Generate secrets: openssl rand -base64 32
+# Generate secrets: openssl rand -base64 32 (POSTGRES_PASSWORD must be URL-safe: openssl rand -base64 24 | tr -d '/+=' | head -c 32)
 # Save APP_ENCRYPTION_KEY offline — losing it makes RCON passwords unrecoverable.
 
 sudo ./scripts/install-host-bridge.sh

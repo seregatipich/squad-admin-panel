@@ -18,7 +18,8 @@ cp .env.example .env
 # PANEL_PUBLIC_URL must be the full public URL (e.g. https://squad-panel.example.com).
 # It is required for Steam OpenID return_to host-binding.
 # Generate secrets:
-#   openssl rand -base64 32
+#   openssl rand -base64 32                                # APP_ENCRYPTION_KEY, SESSION_SECRET
+#   openssl rand -base64 24 | tr -d '/+=' | head -c 32   # POSTGRES_PASSWORD (must be URL-safe)
 # Save APP_ENCRYPTION_KEY OFFLINE — losing it makes encrypted secrets unrecoverable.
 # STEAM_API_KEY is optional; without it player names fall back to "Player <last 4 of SteamID>".
 

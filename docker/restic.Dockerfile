@@ -5,4 +5,5 @@
 # RDB. The base image is Alpine 3.22, so these packages resolve from the main
 # repo. See docker/compose.yml `backup` service and scripts/restore.sh.
 FROM mazzolino/restic:latest
+LABEL panel.preserve=true panel.kind=restic
 RUN apk add --no-cache postgresql16-client redis

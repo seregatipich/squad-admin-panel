@@ -11,7 +11,7 @@
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
 | `DUCKDNS_TOKEN` | only for the stand host | — | caddy (the stand host) | DuckDNS API token for DNS-01 TLS (`docker/compose.stand.yml` / `docker/Caddyfile.stand`) when port 80 is not forwarded. | yes |
-| `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
+| `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role.  Generate with `openssl rand -base64 24 | tr -d '/+=' | head -c 32` (URL-safe: it is embedded unescaped in `DATABASE_URL`). | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
 | `BALANCER_WEBHOOK_SECRET` | no | — | api | Enables the signed team-balancer endpoint the SquadJS exporter pushes dry-run proposal snapshots to. Leave unset to disable the endpoint (it then returns 503). | yes |
@@ -43,7 +43,8 @@
 ## Generating secrets
 
 ```bash
-openssl rand -base64 32     # POSTGRES_PASSWORD, SESSION_SECRET
+openssl rand -base64 24 | tr -d '/+=' | head -c 32   # POSTGRES_PASSWORD (URL-safe: used unescaped in DATABASE_URL)
+openssl rand -base64 32     # SESSION_SECRET
 openssl rand -base64 32     # APP_ENCRYPTION_KEY (then save offline)
 ```
 
