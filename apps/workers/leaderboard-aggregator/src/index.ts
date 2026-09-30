@@ -53,17 +53,40 @@ export async function invalidateLeaderboardCache(redis: Redis): Promise<number> 
   return removed;
 }
 
+const ALLTIME_RECOMPUTE_INTERVAL_MS = 60 * 60 * 1000;
+
+/** When the unbounded `alltime` period was last rebuilt successfully. */
+export interface AlltimeRecomputeState {
+  lastRecomputedAtMs: number | null;
+}
+
 export interface LeaderboardTickDeps {
   sql: postgres.Sql;
   diag: Diag;
   invalidateCache?: () => Promise<number>;
   now?: Date;
+  /**
+   * Throttles the `alltime` period to one rebuild per hour (#1108): it scans
+   * the whole history of `player_daily_presence` and `match_players` and
+   * rewrites every row, which is wasteful every 15 minutes. Without it the
+   * period is rebuilt on every tick.
+   */
+  alltimeState?: AlltimeRecomputeState;
 }
+
+const processAlltimeState: AlltimeRecomputeState = { lastRecomputedAtMs: null };
 
 export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): Promise<void> {
   const { sql, diag } = deps;
   const now = deps.now ?? new Date();
-  const periods: RecomputePeriodInput[] = periodsToRecompute(now);
+  const { alltimeState } = deps;
+  const alltimeDue =
+    !alltimeState ||
+    alltimeState.lastRecomputedAtMs === null ||
+    now.getTime() - alltimeState.lastRecomputedAtMs >= ALLTIME_RECOMPUTE_INTERVAL_MS;
+  const periods: RecomputePeriodInput[] = periodsToRecompute(now).filter(
+    (period) => alltimeDue || period.periodType !== 'alltime',
+  );
 
   // LEAD-7 (#178): the tick's third responsibility — materialise the running
   // season. `periodsToRecompute` is pure and cannot emit a season descriptor,
@@ -96,6 +119,9 @@ export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): P
 
   try {
     const rows = await recomputeLeaderboardPeriods(sql, periods);
+    if (alltimeState && periods.some((period) => period.periodType === 'alltime')) {
+      alltimeState.lastRecomputedAtMs = now.getTime();
+    }
 
     // ECON-5 (#165): the tick's second responsibility — rebuild the rolling
     // 30-day bonus accrual window. Its failure must not kill the tick, so it
@@ -235,7 +261,12 @@ async function main() {
 
   await runStartupBackfill({ sql, diag }, resolveBackfillMonths());
 
-  await runLeaderboardAggregatorTick({ sql, diag, invalidateCache });
+  await runLeaderboardAggregatorTick({
+    sql,
+    diag,
+    invalidateCache,
+    alltimeState: processAlltimeState,
+  });
   await shutdown.markReady();
   if (shutdown.isShutdownRequested()) return;
   // A tick can outlast the interval on a large database; skipping the overlap
@@ -247,7 +278,7 @@ async function main() {
       return;
     }
     tickInProgress = true;
-    runLeaderboardAggregatorTick({ sql, diag, invalidateCache })
+    runLeaderboardAggregatorTick({ sql, diag, invalidateCache, alltimeState: processAlltimeState })
       .catch((err) => log.error({ err: (err as Error).message }, 'leaderboard tick failed'))
       .finally(() => {
         tickInProgress = false;
