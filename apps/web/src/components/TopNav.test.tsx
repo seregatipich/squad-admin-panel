@@ -100,7 +100,7 @@ describe('TopNav', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.click(trigger);
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
 
