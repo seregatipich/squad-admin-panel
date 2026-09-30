@@ -1,5 +1,5 @@
+import { fetchSteamOwnedGames, SQUAD_APP_ID } from '@squad/steam-api';
 import { describe, expect, it, vi } from 'vitest';
-import { fetchSteamOwnedGames, SQUAD_APP_ID } from '../src/lib/steam-owned-games.js';
 
 const fakeRedis = () => {
   const store = new Map<string, string>();

@@ -135,7 +135,7 @@ describe('postgres health-check emits diag events', () => {
     (app as unknown as { redis: unknown }).redis = fakeRedis;
     (app as unknown as { db: { execute: (q: unknown) => Promise<unknown> } }).db = stub;
 
-    return { app } as BuiltApp;
+    return { app } as unknown as BuiltApp;
   }
 
   it('emits pg.ping.fail when SELECT 1 throws, then pg.ping.ok on recovery', async () => {

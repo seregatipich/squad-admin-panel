@@ -107,9 +107,7 @@ const integrationsGeoipRoutes: FastifyPluginAsync = async (app) => {
       const enabled =
         req.body.enabled !== undefined ? req.body.enabled : (existing?.enabled ?? false);
       let licenseKeyEncrypted: Buffer | null =
-        existing?.licenseKeyEncrypted != null
-          ? Buffer.from(existing.licenseKeyEncrypted as unknown as Buffer)
-          : null;
+        existing?.licenseKeyEncrypted != null ? Buffer.from(existing.licenseKeyEncrypted) : null;
       if (req.body.license_key === null) {
         licenseKeyEncrypted = null;
       } else if (typeof req.body.license_key === 'string') {

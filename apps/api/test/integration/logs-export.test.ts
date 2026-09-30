@@ -35,16 +35,8 @@ beforeAll(async () => {
   serverIdAlpha = uuidv7();
   await h.db.insert(serversTable).values({
     id: serverIdAlpha,
-    // `orgId` is neither an `IntegrationHarness['seed']` field nor a
-    // `servers` column (drizzle's insert builder only reads keys that match
-    // a real column, so this one is silently ignored either way); there is
-    // no definedness invariant to assert, so cast instead of `!`.
-    orgId: h.seed.orgId as string | undefined,
     displayName: 'Alpha',
     slug: 'alpha',
-    gamePort: 7787,
-    queryPort: 27165,
-    rconPort: 21114,
     status: 'stopped',
   });
 });
@@ -76,9 +68,7 @@ describe('GET /api/v1/logs/export', () => {
     const v = packHostMetrics({
       cpu_percent: 50,
       ram_used_bytes: 1,
-      ram_total_bytes: 2,
       disk_used_bytes: 1,
-      disk_total_bytes: 2,
       net_rx_bytes_per_sec: 0,
       net_tx_bytes_per_sec: 0,
       load_avg_1m: 0,

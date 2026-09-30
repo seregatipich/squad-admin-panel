@@ -3,7 +3,11 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui';
 
-export type SteamFriendCheckReason = 'private_profile' | 'no_steam_id' | 'api_key_missing';
+export type SteamFriendCheckReason =
+  | 'private_profile'
+  | 'steam_unavailable'
+  | 'no_steam_id'
+  | 'api_key_missing';
 
 export interface SteamFriendCheckResult {
   in_friend: boolean | null;
@@ -15,6 +19,7 @@ function resultLabel(result: SteamFriendCheckResult): string {
   if (result.in_friend === true) return 'В друзьях';
   if (result.in_friend === false) return 'Не найдено в друзьях';
   if (result.reason === 'private_profile') return 'Профиль скрыт';
+  if (result.reason === 'steam_unavailable') return 'Steam не отвечает — повторите позже';
   if (result.reason === 'no_steam_id') return 'Нет Steam ID';
   if (result.reason === 'api_key_missing')
     return 'Недоступно: Steam API не настроен — добавьте API key';

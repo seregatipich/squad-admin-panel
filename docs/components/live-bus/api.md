@@ -26,7 +26,6 @@ Plus any `LiveEvent`:
 {"type": "rcon.status",       "ts": "...", "data": {"server_id": "uuid", "state": "connected|connecting|disconnected", "player_count": 42}}
 {"type": "server.events.appended", "ts": "...", "data": {"server_id": "uuid|null", "kinds": ["player.connected"]}}
 {"type": "bridge.connection", "ts": "...", "data": {"state": "up|down", "down_for_s": 12}}
-{"type": "worker.heartbeat",  "ts": "...", "data": {"worker": "rcon",   "healthy": true}}
 ```
 
 #### Client → server frames
@@ -60,7 +59,7 @@ Provided by `apps/api/src/plugins/live-bus.ts`.
 
 ### `app.liveBus.publish(event: LiveEvent): void`
 
-- Emits `event` to every in-process subscriber synchronously.
+- Emits `event` to every in-process subscriber synchronously. Each subscriber runs inside its own `try/catch`: one that throws is logged (`live-bus: subscriber threw`) and neither stops delivery to the others nor propagates into `publish()`.
 - Fires Redis `PUBLISH live-bus <json>` in the background; failures are logged and swallowed (UI subscribers in this process still receive the event).
 - Returns immediately; never throws.
 
@@ -78,7 +77,6 @@ export type LiveEvent =
   | { type: 'server.restored';   ts: string; data: { old_server_id: string; new_server_id: string } }
   | { type: 'rcon.status';       ts: string; data: { server_id: string; state: string; player_count?: number } }
   | { type: 'bridge.connection'; ts: string; data: { state: 'up' | 'down'; down_for_s: number } }
-  | { type: 'worker.heartbeat';  ts: string; data: { worker: string; healthy: boolean } };
 ```
 
 ## Redis pub/sub channels

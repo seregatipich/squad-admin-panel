@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -10,7 +10,7 @@ import liveRoutes from '../src/routes/live.js';
 const MINTER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee01';
 const OTHER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee02';
 
-let app: ReturnType<typeof Fastify>;
+let app: FastifyInstance;
 let port: number;
 
 /** Opens a live socket authenticated as `playerId` and collects every frame it receives. */

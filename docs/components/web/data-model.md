@@ -196,7 +196,6 @@ type LiveEvent =
   | { type: 'server.restored';   ts: string; data: { old_server_id: string; new_server_id: string } }
   | { type: 'rcon.status';       ts: string; data: { server_id: string; state: string; player_count?: number } }
   | { type: 'bridge.connection'; ts: string; data: { state: 'up' | 'down'; down_for_s: number } }
-  | { type: 'worker.heartbeat';  ts: string; data: { worker: string; healthy: boolean } };
 
 type LiveBusState = 'connecting' | 'open' | 'closed';
 type BridgeState = 'up' | 'down' | 'unknown';

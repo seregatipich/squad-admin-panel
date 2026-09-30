@@ -225,7 +225,7 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
       moderation_total: 1,
       last_moderation_type: 'warn',
     });
-    expect(new Date(body.rows[0].last_moderation_at as string).getTime()).not.toBeNaN();
+    expect(new Date(body.rows[0]?.last_moderation_at as string).getTime()).not.toBeNaN();
     expect(body.rows[1]).toMatchObject({
       player_id: charlie,
       current_name: 'Charlie TK',

@@ -173,9 +173,7 @@ describe('GET /api/v1/depot', () => {
 
 describe('POST /api/v1/depot/update', () => {
   it('Owner starts a depot update and gets status=started with audit row', async () => {
-    let _depotCalled = false;
     h.bridge.depotUpdate = async (_onStream) => {
-      _depotCalled = true;
       return { exit_code: 0 };
     };
 
@@ -308,7 +306,11 @@ describe('POST /api/v1/depot/update', () => {
 
   it('reports depot:last_update=failed when a SteamCMD progress line silently fails to persist', async () => {
     h.bridge.depotUpdate = async (onStream) => {
-      onStream({ stream: 'stdout', data: 'Update state (0x5) verifying install…' });
+      onStream({
+        id: 'depot-progress',
+        stream: 'stdout',
+        data: 'Update state (0x5) verifying install…',
+      });
       return { exit_code: 0 };
     };
     const xaddSpy = vi.spyOn(h.redis, 'xadd').mockRejectedValueOnce(new Error('redis unavailable'));

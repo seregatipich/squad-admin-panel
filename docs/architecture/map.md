@@ -364,13 +364,11 @@ Shutdown is entirely `app.close()`-driven. There is no `@fastify/graceful-shutdo
 
 Required with no default: `DATABASE_URL`, `REDIS_URL`, `APP_ENCRYPTION_KEY` (`.min(32)`), `SESSION_SECRET` (`.min(32)`), `PANEL_PUBLIC_URL`. Notable defaults: `BRIDGE_SOCKET='/run/panel-host-bridge/bridge.sock'`, `SESSION_TTL_SECONDS=86400`, `SESSION_TOUCH_THROTTLE_SECONDS=60`, `MEDIA_STORAGE_DIR='./media'`. Integration secrets (`STEAM_API_KEY`, `DISCORD_CLIENT_ID/SECRET`, `BALANCER_WEBHOOK_SECRET`) are optional, so the API boots with those features silently inert.
 
-Three variables bypass the schema entirely and are read straight from `process.env`:
+`HOST_ORPHAN_SWEEP_INTERVAL_MS` (default 5 min) and `HOST_DOCKER_PRUNE_INTERVAL_MS` (default 24 h) are validated in the schema as whole numbers of at least 60 000 and passed to `plugins/orphan-sweep.ts` as options; a malformed value stops startup instead of arming a ~1 ms timer (#85). One variable still bypasses the schema and is read straight from `process.env`:
 
 | Variable | Read at | Consequence |
 |---|---|---|
-| `HOST_ORPHAN_SWEEP_INTERVAL_MS` | `plugins/orphan-sweep.ts:5` | `Number(undefined-ish)` → `NaN` silently disables/misconfigures the sweep timer |
-| `HOST_DOCKER_PRUNE_INTERVAL_MS` | `plugins/orphan-sweep.ts:6-8` | same |
-| `APP_VERSION` | `plugins/health.ts:9` | `/health` reports `'dev'` when unset |
+| `APP_VERSION` | `plugins/health.ts` | `/health` reports `'dev'` when unset |
 
 Note also that `APP_ENCRYPTION_KEY`'s `.min(32)` checks *string* length; the real 32-decoded-byte assertion is in `lib/crypto.ts:26`.
 
@@ -384,9 +382,7 @@ const app = Fastify({
   loggerInstance: logger,
   trustProxy: true,
   disableRequestLogging: false,
-  genReqId: (req) =>
-    (req.headers['x-request-id'] as string | undefined) ??
-    `req-${Math.random().toString(36).slice(2)}`,
+  genReqId: genRequestId, // plugins/request-context.ts: sanitised header or UUIDv7
 });
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
@@ -528,7 +524,7 @@ The net contract for a route author:
 | Transactions | nothing | explicit `app.db.transaction` boundaries |
 | Wiring | — | register in **both** `server.ts` and `test/integration/harness.ts` |
 
-There is one avoidable trap in the correlation story: `genReqId` produces `req.id` while `request-context.ts` independently produces `req.requestId`. The response header and pino lines carry `requestId`; the audit hook (`audit.ts:20`) and the 5xx diag emitter (`error-diag.ts:23`) record `req.id`. With no inbound header the two differ, so a log line and the diag event for the same request will not join. `RequestContext.userId`/`sessionId` (`logger.ts:6-11`) are seeded `undefined` and never written after auth resolves, so no log line ever carries a user id.
+`genReqId` is `genRequestId` from `request-context.ts`: the caller's `x-request-id` when it is at most 128 word/dash characters, otherwise a fresh UUIDv7. `request-context.ts` reuses that `req.id` as `req.requestId` and the response header, so the audit hook, the 5xx diag emitter, pino lines and queued events (e.g. the Admins.cfg force-sync `request_id`) share one id that never carries raw client input (#84). `RequestContext.userId`/`sessionId` (`logger.ts:6-11`) are seeded `undefined` and never written after auth resolves, so no log line ever carries a user id.
 
 ### 3.8 The canonical route module
 
@@ -615,7 +611,7 @@ Two testability hazards are worth flagging: `rbac.ts:32-33` holds module-level m
 
 ### 3.10 Two loose ends
 
-`@fastify/cors` is declared at `apps/api/package.json:22` and is **never imported or registered** anywhere in `apps/api/src` or `apps/api/test`. It is a dead dependency, and the absence is real: the API performs no cross-origin handling at all. That is currently benign because `apps/web` proxies same-origin, but the dependency reads like CORS is configured when it is not.
+The API performs no cross-origin handling at all; the unused `@fastify/cors` dependency was removed (#1285), so nothing suggests otherwise. That is currently benign because `apps/web` proxies same-origin.
 
 `apps/api/src/lib/reporter-stats.test.ts` is the only test file under `apps/api/src/` — the other 105 API test files live in `apps/api/test/`, including tests for sibling lib modules (`test/compare-online.test.ts`, `test/banlist-publish.unit.test.ts`). It is a pure unit test of `computeReporterVerdict` importing `'./reporter-stats.js'` and would work unchanged at `apps/api/test/reporter-stats.test.ts`. It still runs (`vitest.config.ts` excludes only `node_modules`, `dist`, `test/e2e`) and coverage compensates for it via `exclude: ['src/**/*.test.ts', …]` — a workaround that exists solely because of the one misplaced file. In the same vein, `lib/diag.ts` is an `fp(...)` Fastify plugin filed under `lib/` while all 16 other plugins live in `plugins/`, and it carries its own `declare module 'fastify'` augmentation there.
 
@@ -1535,7 +1531,7 @@ Coverage is strong where it exists: 1 572 test lines against 858 source lines, d
 
 ### 7.8 Degraded mode in the API
 
-`apps/api/src/plugins/bridge.ts` decorates one shared `app.bridge` plus a `app.makeBridgeClient()` factory, forwarding all four client events into the diagnostics bus including an RTT SLO (`RTT_OUTLIER_THRESHOLD_MS = 50` → `bridge.rtt.outlier`).
+`apps/api/src/plugins/bridge.ts` decorates one shared `app.bridge` plus a `app.makeBridgeClient()` factory, forwarding all four client events into the diagnostics bus including an RTT SLO on `ping` calls (`RTT_OUTLIER_THRESHOLD_MS = 50` → `bridge.rtt.outlier`, throttled to one per 60 s).
 
 `apps/api/src/plugins/bridge-heartbeat.ts` pings every `HEARTBEAT_INTERVAL_MS = 5_000` behind an `inFlight` guard and publishes **edge-triggered** `bridge.connection` live-bus events (`{state:'up'|'down', down_for_s}`) only on transitions. Because the client reconnects lazily, this heartbeat *is* the reconnect driver after a bridge restart.
 
@@ -2020,7 +2016,7 @@ sequenceDiagram
   A-->>B: 302 / + __Host-sid   (or 302 /no-access)
 ```
 
-The callback runs five ordered rejections before it will look at a player: cookie-nonce ≠ query-nonce → `400 nonce_mismatch`; Redis nonce GET+DEL miss → `400 nonce_expired`; `openid.return_to` failing a prefix check against `PANEL_PUBLIC_URL` → `400 return_to_mismatch`; `verifyWithSteam` not returning `is_valid:true`, or a `claimed_id` failing the strict `^https://steamcommunity.com/openid/id/\d{17}$` parse (`steam-openid.ts:24-31`); and finally replay defence, `SET steam-response-nonce:<openid.response_nonce> NX EX 3600` → `400 replay_detected`. Profile enrichment (`lib/steam-profile.ts`, Redis-cached 1 h) is non-fatal and falls back to `Player <last4>`. The post-login redirect target is the hardcoded `/`, so there is no open-redirect parameter to abuse.
+The callback runs five ordered rejections before it will look at a player: cookie-nonce ≠ query-nonce → `400 nonce_mismatch`; Redis nonce GET+DEL miss → `400 nonce_expired`; `openid.return_to` failing a prefix check against `PANEL_PUBLIC_URL` → `400 return_to_mismatch`; `verifyWithSteam` not returning `is_valid:true`, or a `claimed_id` failing the strict `^https://steamcommunity.com/openid/id/\d{17}$` parse (`steam-openid.ts:24-31`); and finally replay defence, `SET steam-response-nonce:<openid.response_nonce> NX EX 3600` → `400 replay_detected`. Profile enrichment (`fetchSteamProfile` from `@squad/steam-api`, Redis-cached 1 h) is non-fatal and falls back to `Player <last4>`. The post-login redirect target is the hardcoded `/`, so there is no open-redirect parameter to abuse.
 
 Two outcomes then remain. `claimFirstOwner` (`apps/api/src/lib/first-owner.ts:14`) opens a transaction, takes `pg_advisory_xact_lock(hashtext('panel_first_owner'))` to serialize concurrent first logins, short-circuits on `panel_meta.first_owner_claimed`, resolves the system `Owner` role by name, and — only if no player already holds it — assigns `players.role_id` and flips the flag. It returns `'claimed' | 'already_claimed' | 'no_owner_role'`; the caller 500s with `owner_role_missing` when roles were never seeded. On success it best-effort writes a sentinel through the Go bridge (`fileAtomicWrite` to `/var/lib/squad-panel/.first-owner-claimed`) and swallows failure — the DB is the source of truth. `POST /api/v1/setup/complete` is Owner-only and 410s once done, while `GET /api/v1/setup/status` is deliberately public. After the claim, `loadUserPermissions` runs: if `panelAccess` is false the user is 302'd to `/no-access?...&reason=no_role|role_no_access` and **no session is created at all**.
 
@@ -2155,7 +2151,7 @@ The genuine surface was `ban_sources.url`, once declared as bare `z.string().url
 
 #### Rate limiting, cookies, CSRF, CORS
 
-The global limiter is `max: 1200, timeWindow: '1 minute', keyGenerator: (req) => \`${req.ip}:${req.user?.playerId ?? ''}\`` (`server.ts:160-164`). The key genuinely is `(IP, playerId)` for authenticated traffic: `@fastify/rate-limit` attaches its handler *per route* via `onRoute` into `routeOptions.onRequest`, and Fastify runs all instance-level `onRequest` hooks — including `authPlugin`'s, which is `fp`-wrapped onto the root instance — before a route's own `onRequest` array. So `req.user` is populated when `keyGenerator` executes. Anonymous traffic collapses to a shared per-IP bucket. Two real weaknesses: no `redis` option is passed, so counters live in the in-memory `LocalStore` per API process and horizontal scaling multiplies the ceiling; and `docs/architecture/security.md:45` claims 300/min keyed on `steamId64` with a static-asset bypass — 4× off, wrong identity (it is `players.id`), and no `allowList` exists. Per-route overrides on 7 routes inherit the global keyGenerator: Steam login 30/min, callback 10/min, public banlist 30, public clans 60, whitelist submit 5/hour. `trustProxy: true` is set (`server.ts:144`) with **no trusted-proxy list**, so a spoofed `X-Forwarded-For` shapes `req.ip`, the limiter key, and audit `actor_ip`.
+The global limiter is `max: 1200, timeWindow: '1 minute', keyGenerator: (req) => \`${req.ip}:${req.user?.playerId ?? ''}\`` (`server.ts:160-164`). The key genuinely is `(IP, playerId)` for authenticated traffic: `@fastify/rate-limit` attaches its handler *per route* via `onRoute` into `routeOptions.onRequest`, and Fastify runs all instance-level `onRequest` hooks — including `authPlugin`'s, which is `fp`-wrapped onto the root instance — before a route's own `onRequest` array. So `req.user` is populated when `keyGenerator` executes — but a request the auth hook rejects with 401 never reaches that limiter. `src/plugins/rate-limit.ts` therefore also adds an instance-level `onRequest` hook ahead of `authPlugin` that counts every request per IP (3000/min) via `createRateLimit` and answers 429 before any session or token lookup (#1234). Two real weaknesses: no `redis` option is passed, so counters live in the in-memory `LocalStore` per API process and horizontal scaling multiplies the ceiling; and `docs/architecture/security.md:45` claims 300/min keyed on `steamId64` with a static-asset bypass — 4× off, wrong identity (it is `players.id`), and no `allowList` exists. Per-route overrides on 7 routes inherit the global keyGenerator: Steam login 30/min, callback 10/min, public banlist 30, public clans 60, whitelist submit 5/hour. `trustProxy: true` is set (`server.ts:144`) with **no trusted-proxy list**, so a spoofed `X-Forwarded-For` shapes `req.ip`, the limiter key, and audit `actor_ip`.
 
 Cookie flags are consistent at every set site (`plugins/auth.ts:60-66`, `routes/auth-steam.ts:154-160`). `secure` is hardcoded at every set site (the unread `COOKIE_SECURE` variable was removed, #66). **CORS is absent**: `@fastify/cors` is a declared dependency (`apps/api/package.json:22`) and is never registered, so no `Access-Control-Allow-Origin` is ever emitted. **CSRF** is guarded by `plugins/csrf.ts` (#66) on top of `SameSite=lax` and the `__Host-` prefix: every state-changing request and every WebSocket handshake that carries `__Host-sid` must send an `Origin` equal to `PANEL_PUBLIC_URL`'s origin or naming the request's own `Host`, or — without `Origin` — `Sec-Fetch-Site: same-origin`; anything else (a sibling subdomain included, which `SameSite=lax` treats as same-site) gets `403 cross_site_request_forbidden`. Requests with neither header (non-browser clients) and requests without the cookie (API tokens, HMAC webhooks) are not affected. `@fastify/helmet` is registered with default options (`server.ts:158`), so CSP/HSTS/nosniff cover **API JSON only**; `apps/web/next.config.mjs` defines no `headers()` and Caddy adds none, so the HTML pages ship with no CSP. On the web tier, `apps/web/src/middleware.ts` explicitly declines to authorize (citing CVE-2025-29927) and only redirects cookie-less requests; the real gate is `requireSession()` in `(dashboard)/layout.tsx`, deduped via `react.cache()` (`apps/web/src/lib/dal.ts:20-36`), calling `/api/v1/me`.
 
@@ -2288,10 +2284,8 @@ The no-Prometheus decision has one loose end worth knowing: `apps/api/package.js
 |---|---|---|---|
 | `http_requests_total` | Counter | route, method, status | `onResponse`, metrics.ts:50 |
 | `http_request_duration_seconds` | Histogram (`.005…10`) | route, method, status | `onResponse`, metrics.ts:51 |
-| `events_consumer_total` | Counter | group, outcome | **never** |
-| `bridge_calls_total` | Counter | method, outcome | **never** |
 
-`consumerEvents` and `bridgeCalls` are registered and decorated onto `app.metrics` but incremented at zero call sites — they export as a constant `0`. Route cardinality is bounded because the label is `req.routeOptions?.url` (the parameterised template), with `req.url` only as fallback.
+The never-incremented `events_consumer_total` and `bridge_calls_total` counters were removed (#87); bridge health is reported through the `bridge.*` diagnostic events instead. Route cardinality is bounded because the label is `req.routeOptions?.url` (the parameterised template), with `req.url` only as fallback.
 
 ### 11.3 Health and readiness
 
@@ -2367,7 +2361,7 @@ if (budgetExceeded) {
 
 Crash detection runs on every successful inspect — including running → running, the usual case after Docker's `unless-stopped` policy restarts a crashed container between ticks (#37) — and compares Docker's `restart_count` against a `knownRestartCounts` baseline (`detectCrash`, :58 — the first observation returns `null` to avoid a false crash on boot). Crashes go into a Redis sorted set `crashes:<serverId>` scored by timestamp and trimmed to 24h; ≥3 within 5 minutes flips the row to `failed` with `source: 'crash_loop'`. A `stop:requested:<serverId>` fence (TTL 5min, set by `POST /stop`) distinguishes operator stops from crashes; if reading the fence throws, the code fails toward "unexpected" and says so.
 
-`apps/api/src/plugins/orphan-sweep.ts` runs `cleanupOrphans` every `HOST_ORPHAN_SWEEP_INTERVAL_MS ?? 5min` and `docker system prune -af` via `fireAutoPrune` every `HOST_DOCKER_PRUNE_INTERVAL_MS ?? 24h`, both gated behind a `BOOT_DELAY_MS = 30_000` so the bridge socket is warm. Failures are caught and downgraded to `log.warn` (:42-44); the sweep emits no diag events at all.
+`apps/api/src/plugins/orphan-sweep.ts` runs `cleanupOrphans` every `HOST_ORPHAN_SWEEP_INTERVAL_MS` (default 5 min) and `docker system prune -af` via `fireAutoPrune` every `HOST_DOCKER_PRUNE_INTERVAL_MS` (default 24 h), both validated in `AppConfig`, both gated behind a `BOOT_DELAY_MS = 30_000` so the bridge socket is warm. Failures are caught and downgraded to `log.warn` (:42-44); the sweep emits no diag events at all.
 
 ### 11.7 The `servers.status` state machine
 
@@ -2430,7 +2424,7 @@ There is **no circuit breaker anywhere**. The closest analogues are the reconcil
 | **Postgres down** | `pg.ping.fail` every 30s — these *do* reach Redis and survive. `/ready` → 503. `diag-flush` throws, sleeps 1s, retries forever; entries stay unACKed and replay safely on recovery thanks to `ON CONFLICT DO NOTHING`. But `diag:queue` fills to `MAXLEN ~ 100_000` and then evicts the oldest — **silent diagnostic loss with no counter and no alert**. Reconciler ticks throw, `consecutive_tick_errors` climbs, `/api/v1/health/reconciler` reports `healthy: false`. |
 | **Game server unreachable** | RCON supervisor enters exponential backoff (1s → 60s cap, `supervisor.ts:565`), deliberately reporting `'connecting'` rather than `'disconnected'` so the UI doesn't flap; emits `rcon.disconnected` / `rcon.reconnect_attempt` / `rcon.auth_failed`. A2S probes resolve `null` on timeout instead of throwing. `metrics-sampler` skips the server. Container-level death is caught separately by the reconciler within ~4s. |
 | **Worker dies** | Its heartbeat key expires after 30s; it vanishes from `/api/v1/health/workers` (dead ≡ absent, not `down`). If it is one of the six in `KNOWN_WORKERS`, `worker.heartbeat_lost` fires 30–60s later; otherwise **nothing signals the loss**. Redis-stream consumers other than `diag-flush` reclaim its pending entries via `XAUTOCLAIM`; `diag-flush`'s pending entries are orphaned permanently. Compose `restart: unless-stopped` brings the container back. |
-| **Parser misses a log line** | No signal. The log-ingest pipeline emits no counter for unmatched lines and `events_consumer_total` is never incremented, so a regex that stops matching a Squad build degrades aggregates silently. The only visible symptom is downstream: flat leaderboards, missing rounds. |
+| **Parser misses a log line** | No signal. The log-ingest pipeline emits no counter for unmatched lines and no counter tracks consumed events, so a regex that stops matching a Squad build degrades aggregates silently. The only visible symptom is downstream: flat leaderboards, missing rounds. |
 
 ### 11.9 Notification channels that terminate in a database row
 

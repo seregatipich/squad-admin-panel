@@ -236,9 +236,7 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
       const enabled =
         req.body.enabled !== undefined ? req.body.enabled : (existing?.enabled ?? false);
       let botTokenEncrypted: Buffer | null =
-        existing?.botTokenEncrypted != null
-          ? Buffer.from(existing.botTokenEncrypted as unknown as Buffer)
-          : null;
+        existing?.botTokenEncrypted != null ? Buffer.from(existing.botTokenEncrypted) : null;
       if (req.body.bot_token === null) {
         botTokenEncrypted = null;
       } else if (typeof req.body.bot_token === 'string') {

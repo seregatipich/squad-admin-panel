@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import type { BridgeClient } from '@squad/bridge-client';
 import { players } from '@squad/db/schema';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -38,7 +39,7 @@ async function buildBareApp(harness: IntegrationHarness) {
   const app = Fastify({ logger: false });
   app.decorate('db', harness.db);
   app.decorate('redis', harness.redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   app.decorate('config', {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',

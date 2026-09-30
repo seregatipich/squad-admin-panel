@@ -227,6 +227,7 @@ describe('mint-owner-session operator command', () => {
       WHERE p.steam_id64 = ${NEW_PLAYER_STEAM_ID}
         AND s.id = ${tokenId(rawToken)}
     `;
+    if (!row) throw new Error('recovered owner session row is missing');
 
     expect(row).toMatchObject({
       steam_id64: NEW_PLAYER_STEAM_ID,
@@ -262,13 +263,13 @@ describe('mint-owner-session operator command', () => {
           SELECT count(*)::int
           FROM audit_log
           WHERE action_type = 'owner.session.recovery'
-            AND target_id = ${row?.player_id}
+            AND target_id = ${row.player_id}
         ) AS audit_count,
         (
           SELECT octet_length(row_hash)::int
           FROM audit_log
           WHERE action_type = 'owner.session.recovery'
-            AND target_id = ${row?.player_id}
+            AND target_id = ${row.player_id}
           ORDER BY id DESC
           LIMIT 1
         ) AS audit_hash_bytes

@@ -306,7 +306,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         .limit(req.query.limit);
       const items = rows.map((r) => ({
         id: r.id,
-        sha256: hex(r.sha256 as unknown as Buffer),
+        sha256: hex(r.sha256),
         parent_version_id: r.parent_version_id,
         author_player_id: r.author_player_id ?? null,
         author_canonical_name: r.author_canonical_name ?? r.author_label ?? 'system',
@@ -346,7 +346,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       return {
         id: row.id,
         content: maskConfigSecrets(req.params.name, row.content),
-        sha256: hex(row.sha256 as unknown as Buffer),
+        sha256: hex(row.sha256),
         author_player_id: row.authorPlayerId ?? null,
         message: row.message,
         created_at: row.createdAt,
@@ -677,7 +677,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'file_not_found', detail: (err as Error).message };
       }
       const tip = await readTipVersion(app, req.params.id, req.params.name);
-      if (tip && Buffer.from(tip.sha as unknown as Buffer).equals(sha256(disk))) {
+      if (tip && Buffer.from(tip.sha).equals(sha256(disk))) {
         reply.code(409);
         return { error: 'no_drift' };
       }
@@ -725,7 +725,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         const { content } = await app.bridge.fileRead({
           path: configPath(req.params.id, req.params.name as AllowedConfigFile),
         });
-        diskInSync = sha256(content).equals(Buffer.from(tip.sha as unknown as Buffer));
+        diskInSync = sha256(content).equals(Buffer.from(tip.sha));
       } catch {
         diskInSync = false;
       }
@@ -790,7 +790,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         }
         const password = decryptString(
           app.encryptionKey,
-          deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+          deserialize(Buffer.from(creds.rconPasswordEncrypted)),
         );
         content = rewriteRconCfg(content, { port: creds.rconPort, password });
       } else if (req.params.name === 'Server.cfg') {
@@ -852,7 +852,7 @@ async function readTipVersion(
     .orderBy(desc(configVersions.createdAt))
     .limit(1);
   const row = rows[0];
-  return row ? { id: row.id, content: row.content, sha: row.sha as unknown as Buffer } : null;
+  return row ? { id: row.id, content: row.content, sha: row.sha } : null;
 }
 
 function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
@@ -999,7 +999,7 @@ async function persistVersion(
     .limit(1);
   const prevRow = prev[0];
   const newSha = sha256(diskContent);
-  if (prevRow && Buffer.from(prevRow.sha as unknown as Buffer).equals(newSha)) {
+  if (prevRow && Buffer.from(prevRow.sha).equals(newSha)) {
     // History is unchanged, so we insert no new `config_versions` row. But the
     // file on disk may have drifted out-of-band (e.g. hand-edited over SSH)
     // while the DB tip stayed put. A "revert" to the tip must still converge
@@ -1119,7 +1119,7 @@ export async function reloadServerConfig(
   try {
     const password = decryptString(
       app.encryptionKey,
-      deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+      deserialize(Buffer.from(creds.rconPasswordEncrypted)),
     );
     const response = await rconSendOnce({
       host: resolveRconHost(creds.rconHost),

@@ -51,9 +51,11 @@ afterAll(async () => {
   await app.close();
 });
 
-async function connect(): Promise<{ ws: WebSocket; received: LiveEvent[] }> {
+type ChatFrame = Extract<LiveEvent, { type: 'chat.message' }>;
+
+async function connect(): Promise<{ ws: WebSocket; received: ChatFrame[] }> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
-  const received: LiveEvent[] = [];
+  const received: ChatFrame[] = [];
   ws.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as LiveEvent;
     if (frame.type === 'chat.message') received.push(frame);

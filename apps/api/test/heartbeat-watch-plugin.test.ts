@@ -7,7 +7,7 @@ import { heartbeatWatchPlugin } from '../src/plugins/heartbeat-watch.js';
 function buildApp(pttlFn: (...args: unknown[]) => Promise<number>) {
   const diagEvents: Array<{ kind: string; severity: string; message: string }> = [];
   const app = Fastify();
-  app.decorate('redis', { pttl: pttlFn });
+  app.decorate('redis', { pttl: pttlFn } as never);
   app.decorate('diag', {
     emit: vi.fn(async (ev: { kind: string; severity: string; message: string }) => {
       diagEvents.push(ev);
@@ -58,7 +58,7 @@ describe('heartbeat-watch plugin', () => {
     await app.heartbeatWatchTick();
     const lostEvents = diagEvents.filter((e) => e.kind === 'worker.heartbeat_lost');
     expect(lostEvents.length).toBeGreaterThan(0);
-    expect(lostEvents[0].severity).toBe('error');
+    expect(lostEvents[0]?.severity).toBe('error');
   });
 
   it('emits heartbeat_recovered when worker comes back', async () => {
@@ -71,7 +71,7 @@ describe('heartbeat-watch plugin', () => {
     await app.heartbeatWatchTick();
     const recovered = diagEvents.filter((e) => e.kind === 'worker.heartbeat_recovered');
     expect(recovered.length).toBeGreaterThan(0);
-    expect(recovered[0].severity).toBe('info');
+    expect(recovered[0]?.severity).toBe('info');
   });
 
   it('does not re-emit heartbeat_lost for already-reported workers', async () => {

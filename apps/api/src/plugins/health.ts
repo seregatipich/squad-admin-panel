@@ -2,7 +2,44 @@ import { HEARTBEAT_PREFIX, type HeartbeatPayload } from '@squad/shared-config';
 import { sql } from 'drizzle-orm';
 import fp from 'fastify-plugin';
 
-export default fp(async (app) => {
+/** Default upper bound for each `/ready` dependency probe. */
+export const READY_CHECK_TIMEOUT_MS = 3_000;
+
+export interface HealthPluginOptions {
+  /** Per-check timeout for `/ready`; defaults to {@link READY_CHECK_TIMEOUT_MS}. */
+  readyCheckTimeoutMs?: number;
+}
+
+type CheckResult = 'ok' | 'fail';
+
+export default fp<HealthPluginOptions>(async (app, opts) => {
+  const readyCheckTimeoutMs = opts.readyCheckTimeoutMs ?? READY_CHECK_TIMEOUT_MS;
+
+  /**
+   * Runs one dependency probe bounded by the timeout. `/ready` is public, so
+   * the caller only learns `ok`/`fail`; the reason (connection errors, the
+   * bridge socket path, …) goes to the log, never into the response (#70).
+   */
+  const probe = async (name: string, check: () => Promise<boolean>): Promise<CheckResult> => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`timed out after ${readyCheckTimeoutMs}ms`)),
+        readyCheckTimeoutMs,
+      );
+    });
+    try {
+      if (await Promise.race([check(), timeout])) return 'ok';
+      app.log.warn({ check: name }, 'readiness check returned an unhealthy answer');
+      return 'fail';
+    } catch (err) {
+      app.log.warn({ check: name, err: (err as Error).message }, 'readiness check failed');
+      return 'fail';
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   app.get(
     '/health',
     { config: { public: true, audit: false }, schema: { hide: true } },
@@ -20,23 +57,15 @@ export default fp(async (app) => {
     '/ready',
     { config: { public: true, audit: false }, schema: { hide: true } },
     async (_req, reply) => {
-      const probes: Record<string, () => Promise<boolean>> = {
-        postgres: async () => {
+      const [postgres, redis, bridge] = await Promise.all([
+        probe('postgres', async () => {
           await app.db.execute(sql`SELECT 1`);
           return true;
-        },
-        redis: async () => (await app.redis.ping()) === 'PONG',
-        bridge: async () => (await app.bridge.ping()).pong,
-      };
-      const checks: Record<string, 'ok' | 'fail'> = {};
-      for (const [name, probe] of Object.entries(probes)) {
-        try {
-          checks[name] = (await probe()) ? 'ok' : 'fail';
-        } catch (err) {
-          app.log.warn({ err, check: name }, 'readiness check failed');
-          checks[name] = 'fail';
-        }
-      }
+        }),
+        probe('redis', async () => (await app.redis.ping()) === 'PONG'),
+        probe('bridge', async () => (await app.bridge.ping()).pong === true),
+      ]);
+      const checks = { postgres, redis, bridge };
       const ok = Object.values(checks).every((v) => v === 'ok');
       return reply.code(ok ? 200 : 503).send({ status: ok ? 'ok' : 'degraded', checks });
     },

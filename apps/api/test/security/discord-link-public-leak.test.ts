@@ -57,6 +57,7 @@ describeIfDb('public surfaces never expose the Discord link (DISCORD-4)', () => 
         canonicalNameNormalized: 'связанный игрок',
       })
       .returning({ id: players.id });
+    if (!linked) throw new Error('linked: insert returned no row');
     linkedPlayerId = linked.id;
 
     await h.db.insert(playerDiscordLinks).values({

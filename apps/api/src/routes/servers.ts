@@ -762,7 +762,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           try {
             const password = decryptString(
               app.encryptionKey,
-              deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+              deserialize(Buffer.from(creds.rconPasswordEncrypted)),
             );
             const target = {
               host: resolveRconHost(creds.rconHost),
@@ -1221,6 +1221,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           },
           row.id,
         );
+        app.installProgress.reset(row.id);
         app.liveBus.publish({
           type: 'server.deleted',
           ts: new Date().toISOString(),

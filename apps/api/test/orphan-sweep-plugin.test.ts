@@ -98,4 +98,27 @@ describe('orphan-sweep plugin', () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(cleanupOrphans).not.toHaveBeenCalled();
   });
+
+  it('uses the configured intervals passed as plugin options (#85)', async () => {
+    const custom = Fastify();
+    custom.decorate('db', {} as never);
+    custom.decorate('bridge', { ping } as never);
+    await custom.register(orphanSweepPlugin, {
+      sweepIntervalMs: 2 * 60_000,
+      dockerPruneIntervalMs: 60 * 60_000,
+    });
+    await custom.ready();
+    try {
+      await app.close();
+      await vi.advanceTimersByTimeAsync(30_001);
+      vi.mocked(cleanupOrphans).mockClear();
+      vi.mocked(fireAutoPrune).mockClear();
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(cleanupOrphans).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(58 * 60_000);
+      expect(fireAutoPrune).toHaveBeenCalledTimes(1);
+    } finally {
+      await custom.close();
+    }
+  });
 });

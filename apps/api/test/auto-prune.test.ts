@@ -82,7 +82,10 @@ describe('fireAutoPrune', () => {
     const { app, valuesStub } = makeApp({});
     fireAutoPrune(app, 'server-delete', 'test-player-001', '10.0.0.2');
     await drainAsync();
-    const call = valuesStub.mock.calls[0]?.[0] as Record<string, unknown>;
+    const call = (valuesStub.mock.calls[0] as unknown[] | undefined)?.[0] as Record<
+      string,
+      unknown
+    >;
     expect(call.actorKind).toBe('steam');
     expect(call.actorPlayerId).toBe('test-player-001');
   });
@@ -91,7 +94,10 @@ describe('fireAutoPrune', () => {
     const { app, valuesStub } = makeApp({});
     fireAutoPrune(app, 'server-delete', null, null);
     await drainAsync();
-    const call = valuesStub.mock.calls[0]?.[0] as Record<string, unknown>;
+    const call = (valuesStub.mock.calls[0] as unknown[] | undefined)?.[0] as Record<
+      string,
+      unknown
+    >;
     expect(call.actorKind).toBe('system');
     expect(call.actorSystemLabel).toBe('auto-prune');
   });

@@ -12,8 +12,6 @@ export interface MetricsContext {
   registry: Registry;
   httpRequests: Counter<string>;
   httpDuration: Histogram<string>;
-  consumerEvents: Counter<string>;
-  bridgeCalls: Counter<string>;
 }
 
 export default fp(async (app) => {
@@ -33,20 +31,7 @@ export default fp(async (app) => {
     buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
     registers: [registry],
   });
-  const consumerEvents = new Counter({
-    name: 'events_consumer_total',
-    help: 'Events consumed by worker group and outcome',
-    labelNames: ['group', 'outcome'],
-    registers: [registry],
-  });
-  const bridgeCalls = new Counter({
-    name: 'bridge_calls_total',
-    help: 'Calls to panel-host-bridge by method and outcome',
-    labelNames: ['method', 'outcome'],
-    registers: [registry],
-  });
-
-  const ctx: MetricsContext = { registry, httpRequests, httpDuration, consumerEvents, bridgeCalls };
+  const ctx: MetricsContext = { registry, httpRequests, httpDuration };
 
   app.decorate('metrics', ctx);
 

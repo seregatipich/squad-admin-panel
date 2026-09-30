@@ -1,5 +1,5 @@
 import type { Diag, DiagEvent } from '@squad/diag';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import diagPlugin from '../src/lib/diag.js';
 import errorDiagPlugin from '../src/plugins/error-diag.js';
@@ -80,7 +80,7 @@ describe('http error diag emits', () => {
     app.route({
       method: 'GET',
       url: '/__test/forbidden',
-      handler: async (_req, reply) => {
+      handler: async (_req: FastifyRequest, reply: FastifyReply) => {
         return reply.code(403).send({ error: 'forbidden' });
       },
     });

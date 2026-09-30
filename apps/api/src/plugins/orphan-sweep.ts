@@ -2,11 +2,16 @@ import fp from 'fastify-plugin';
 import { fireAutoPrune } from '../lib/auto-prune.js';
 import { cleanupOrphans } from '../lib/cleanup-orphans.js';
 
-const SWEEP_INTERVAL_MS = Number(process.env.HOST_ORPHAN_SWEEP_INTERVAL_MS ?? 5 * 60_000);
-const DOCKER_PRUNE_INTERVAL_MS = Number(
-  process.env.HOST_DOCKER_PRUNE_INTERVAL_MS ?? 24 * 60 * 60_000,
-);
+const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_DOCKER_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
 const BOOT_DELAY_MS = 30_000;
+
+export interface OrphanSweepOptions {
+  /** Orphan-sweep period; `HOST_ORPHAN_SWEEP_INTERVAL_MS`, validated in `AppConfig`. */
+  sweepIntervalMs?: number;
+  /** Docker prune period; `HOST_DOCKER_PRUNE_INTERVAL_MS`, validated in `AppConfig`. */
+  dockerPruneIntervalMs?: number;
+}
 
 /**
  * Periodically removes host directories whose UUID is no longer in the
@@ -16,7 +21,9 @@ const BOOT_DELAY_MS = 30_000;
  * cannot broaden the blast radius. The prune is skipped (warn log, no
  * audit row) on ticks where the bridge does not answer a ping.
  */
-export default fp(async (app) => {
+export default fp<OrphanSweepOptions>(async (app, opts) => {
+  const sweepIntervalMs = opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
+  const dockerPruneIntervalMs = opts.dockerPruneIntervalMs ?? DEFAULT_DOCKER_PRUNE_INTERVAL_MS;
   let orphanTimer: NodeJS.Timeout | null = null;
   let pruneTimer: NodeJS.Timeout | null = null;
 
@@ -73,8 +80,8 @@ export default fp(async (app) => {
   const bootTimer = setTimeout(() => {
     void runOrphanSweep();
     void runDockerPrune();
-    orphanTimer = setInterval(() => void runOrphanSweep(), SWEEP_INTERVAL_MS);
-    pruneTimer = setInterval(() => void runDockerPrune(), DOCKER_PRUNE_INTERVAL_MS);
+    orphanTimer = setInterval(() => void runOrphanSweep(), sweepIntervalMs);
+    pruneTimer = setInterval(() => void runDockerPrune(), dockerPruneIntervalMs);
   }, BOOT_DELAY_MS);
 
   app.addHook('onClose', async () => {

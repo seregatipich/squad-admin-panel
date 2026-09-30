@@ -218,7 +218,7 @@ async function runInstall(
 
   const rconPassword = decryptString(
     app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    deserialize(Buffer.from(creds.rconPasswordEncrypted)),
   );
   const seedT0 = Date.now();
   const { seededCount } = await seedConfigs(
@@ -451,7 +451,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
           : { error: 'server_not_installable', status: current.status };
       }
       // #292: a retry must not replay the previous attempt's terminal line.
-      app.installProgress.clear(id);
+      app.installProgress.reset(id);
       const actor = req.user
         ? { kind: 'steam' as const, playerId: req.user.playerId, tokenId: null }
         : { kind: 'system' as const, label: 'http-anonymous' };

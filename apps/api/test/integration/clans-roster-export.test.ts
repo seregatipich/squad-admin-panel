@@ -42,6 +42,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'экспорт тест',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
   memberPlayerId = member.id;
 
   clanId = uuidv7();
@@ -73,6 +74,7 @@ beforeAll(async () => {
       roleId: nobodyRoleId,
     })
     .returning({ id: players.id });
+  if (!nobody) throw new Error('nobody: insert returned no row');
   nobodyCookie = await makeCookieFor(nobody.id);
 }, 60_000);
 

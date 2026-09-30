@@ -69,12 +69,7 @@ async function publishStatus(
     checked_at: new Date().toISOString(),
   };
   try {
-    await redis.set(
-      DISCORD_ROLE_SYNC_STATUS_KEY,
-      JSON.stringify(status),
-      'EX' as never,
-      STATUS_TTL_SECONDS as never,
-    );
+    await redis.set(DISCORD_ROLE_SYNC_STATUS_KEY, JSON.stringify(status), 'EX', STATUS_TTL_SECONDS);
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'discord role-sync status publish failed');
   }

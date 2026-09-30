@@ -233,6 +233,30 @@
 - `config.audit` мутирующего маршрута — `{ action, resource }`, `'manual'` (обработчик сам вызывает `writeAuditEntry`) или `false` только для allowlist машинных интеграций; `audit-coverage.test.ts` проверяет все маршруты из `registerRoutes()`. Маршруты `issues.ts` получили `config.audit`.
 - Удалены неиспользуемые `COOKIE_SECURE` (строка `false` разбиралась как `true`) и `GLITCHTIP_DSN`, клиент `app.rcon`, реэкспорт `lib/rcon-host.ts`, `ensureAdminsCfgSyncGroup`, `readSentinelHint`; `rotation-segment.ts` использует общие функции из `@squad/shared-config/admins-config`.
 
+## 2026-09-28 — Аудит плагинов API (#67)
+
+### Fixed
+
+- Сессия, продлённая в Postgres, больше не удаляется из-за устаревшего `expiresAt` в Redis-кэше: `resolveSession` перечитывает строку, а продление сбрасывает кэш. `revokeAllForPlayer` удаляет сессии одним `DELETE … RETURNING`, поэтому сессия параллельного входа не остаётся в кэше.
+- Проверка друзей Steam кэширует `private_profile` только когда закрыты оба списка (401), читает список второго игрока, если первый закрыт, а сбой, таймаут (5 с) или не-JSON ответ Steam отдаёт как `reason: 'steam_unavailable'` без кэширования. Проверка OpenID при входе ограничена 10 с.
+- `DELETE /api/v1/servers/:id` пишет в `errors[]` причины неудачи удаления sidecar-контейнера (`sidecar_rm`) и его каталога с RCON-паролем (`sidecar_dir_delete`).
+- Реконсилер больше не записывает PID в `servers.container_id`; `servers_in_transient` в `/api/v1/health/reconciler` считает строки в `starting`/`stopping`, а `stuck_servers` не включает внешние серверы.
+- `/ready` отдаёт по каждой проверке только `ok`/`fail` (причина — в логе API), каждая проверка ограничена 3 с.
+- Анонимные запросы и запросы с поддельными учётными данными ограничиваются по IP (3000/мин) до обращения к Redis/Postgres.
+- `GET /api/v1/admins-cfg/drift` и `/drift/all` показывают `unknown` для повреждённого статуса вместо 500; `/drift/all` читает статусы одним `MGET`. `x-request-id` очищается в `genReqId`, событие принудительной синхронизации несёт тот же id, что и ответ.
+- Буфер прогресса установки сбрасывается при новой установке и удалении сервера и очищается через 15 минут после завершения.
+- Кадры live-bus из Redis проверяются схемой, битые отбрасываются; исключение в одном подписчике не мешает остальным. Живая лента событий повторяет неудавшийся `LISTEN` с экспоненциальной задержкой. Пул Postgres закрывается при остановке API.
+- `bridge.rtt.outlier` учитывает только `ping`, содержит `method` и выдаётся не чаще раза в минуту.
+- `HOST_ORPHAN_SWEEP_INTERVAL_MS` и `HOST_DOCKER_PRUNE_INTERVAL_MS` проверяются при старте (целое ≥ 60000, пусто — значение по умолчанию).
+
+### Removed
+
+- Неиспользуемые зависимости `@fastify/cors`, `@node-rs/argon2`, `@oslojs/*`, `arctic`, `@types/diff`; метрики `events_consumer_total` и `bridge_calls_total`, которые никогда не увеличивались; вариант `worker.heartbeat` в `LiveEvent`; `vitest.security.config.ts`; прокладки `lib/steam-{bans,profile,owned-games}.ts`.
+
+### Changed
+
+- `fastify` обновлён до 5.12.5. `pnpm --filter @squad/api typecheck` теперь проверяет и `test/` (`tsconfig.test.json`).
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

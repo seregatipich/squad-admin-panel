@@ -28,6 +28,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'лидервиджета',
     })
     .returning({ id: players.id });
+  if (!leader) throw new Error('leader: insert returned no row');
   leaderPlayerId = leader.id;
 
   const [member] = await h.db
@@ -38,6 +39,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'членклана',
     })
     .returning({ id: players.id });
+  if (!member) throw new Error('member: insert returned no row');
   memberPlayerId = member.id;
 
   const [clanless] = await h.db
@@ -48,6 +50,7 @@ beforeAll(async () => {
       canonicalNameNormalized: 'безклана',
     })
     .returning({ id: players.id });
+  if (!clanless) throw new Error('clanless: insert returned no row');
   clanlessPlayerId = clanless.id;
 
   clanId = uuidv7();

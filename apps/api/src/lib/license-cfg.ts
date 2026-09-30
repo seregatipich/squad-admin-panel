@@ -51,7 +51,7 @@ export async function syncLicenseCfg(
   if (creds?.licenseKeyEncrypted) {
     const licenseKey = decryptString(
       app.encryptionKey,
-      deserialize(Buffer.from(creds.licenseKeyEncrypted as unknown as Buffer)),
+      deserialize(Buffer.from(creds.licenseKeyEncrypted)),
     );
     const licenseId = creds.licenseId ?? '';
     if (CONTROL_CHARACTER.test(licenseId) || CONTROL_CHARACTER.test(licenseKey)) {
@@ -79,7 +79,7 @@ export async function syncLicenseCfg(
     .limit(1);
   const prevRow = prev[0];
   const maskedSha = createHash('sha256').update(masked).digest();
-  if (prevRow && Buffer.from(prevRow.sha as unknown as Buffer).equals(maskedSha)) {
+  if (prevRow && Buffer.from(prevRow.sha).equals(maskedSha)) {
     return; // unchanged (e.g. repeated id-only save) — don't pollute history
   }
   await app.db.insert(configVersions).values({

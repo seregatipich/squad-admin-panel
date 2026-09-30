@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fp from 'fastify-plugin';
+import { z } from 'zod';
 
 export type LiveEvent =
   | {
@@ -69,11 +70,6 @@ export type LiveEvent =
       type: 'bridge.connection';
       ts: string;
       data: { state: 'up' | 'down'; down_for_s: number };
-    }
-  | {
-      type: 'worker.heartbeat';
-      ts: string;
-      data: { worker: string; healthy: boolean };
     }
   | {
       type: 'note.created';
@@ -359,7 +355,6 @@ export const LIVE_EVENT_AUDIENCE = {
   'rcon.roster': 'server',
   'server.seeding': 'server',
   'bridge.connection': 'server',
-  'worker.heartbeat': 'server',
   'note.created': 'server',
   'mark_type.changed': 'server',
   'session.revoked': 'server',
@@ -402,6 +397,21 @@ function toLiveFrame(frame: unknown): (LiveEvent & { _origin?: string }) | null 
 const LIVE_BUS_CHANNEL = 'live-bus';
 const RCON_STATUS_CHANNEL = 'rcon:status:changed';
 
+/** Shape of an `rcon:status:changed` message; checked rather than cast (#1301). */
+const rconStatusMessage = z.object({
+  server_id: z.string().min(1),
+  state: z.string().min(1),
+  player_count: z.number().optional(),
+});
+
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 export default fp(async (app) => {
   const emitter = new EventEmitter();
   emitter.setMaxListeners(1024);
@@ -428,47 +438,32 @@ export default fp(async (app) => {
     });
     subscriber.on('message', (channel: string, raw: string) => {
       if (channel === LIVE_BUS_CHANNEL) {
-        try {
-          const parsed: unknown = JSON.parse(raw);
-          const frame = toLiveFrame(parsed);
-          if (!frame) {
-            const type = (parsed as { type?: unknown } | null)?.type;
-            const key = typeof type === 'string' ? type : '<malformed>';
-            if (!droppedFrameTypes.has(key)) {
-              droppedFrameTypes.add(key);
-              app.log.warn(
-                { type: key, raw: raw.slice(0, 200) },
-                'live-bus: dropping frame that is not a known LiveEvent (logged once per type)',
-              );
-            }
-            return;
+        const parsed = parseJson(raw);
+        const frame = toLiveFrame(parsed);
+        if (!frame) {
+          const type = (parsed as { type?: unknown } | null | undefined)?.type;
+          const key = typeof type === 'string' ? type : '<malformed>';
+          if (!droppedFrameTypes.has(key)) {
+            droppedFrameTypes.add(key);
+            app.log.warn(
+              { type: key, raw: raw.slice(0, 200) },
+              'live-bus: dropping frame that is not a known LiveEvent (logged once per type)',
+            );
           }
-          const { _origin, ...evt } = frame;
-          if (_origin === instanceId) return;
-          emitter.emit('event', evt as LiveEvent);
-        } catch (err) {
-          app.log.warn(
-            { err: (err as Error).message, raw: raw.slice(0, 200) },
-            'live-bus: bad redis message',
-          );
+          return;
         }
+        const { _origin, ...evt } = frame;
+        if (_origin === instanceId) return;
+        localEmit(evt as LiveEvent);
         return;
       }
       if (channel === RCON_STATUS_CHANNEL) {
-        try {
-          const data = JSON.parse(raw) as {
-            server_id: string;
-            state: string;
-            player_count?: number;
-          };
-          emitter.emit('event', {
-            type: 'rcon.status',
-            ts: new Date().toISOString(),
-            data,
-          } satisfies LiveEvent);
-        } catch (err) {
-          app.log.warn({ err: (err as Error).message }, 'live-bus: bad rcon status message');
+        const data = rconStatusMessage.safeParse(parseJson(raw));
+        if (!data.success) {
+          app.log.warn({ raw: raw.slice(0, 200) }, 'live-bus: dropped malformed rcon status');
+          return;
         }
+        localEmit({ type: 'rcon.status', ts: new Date().toISOString(), data: data.data });
       }
     });
     try {
@@ -494,7 +489,19 @@ export default fp(async (app) => {
       }
     },
     subscribe(cb) {
-      const handler = (event: LiveEvent) => cb(event);
+      // EventEmitter delivers synchronously and stops at the first throw, so an
+      // unguarded subscriber would starve the ones after it and, on a local
+      // publish, fail the route that already committed its change.
+      const handler = (event: LiveEvent) => {
+        try {
+          cb(event);
+        } catch (err) {
+          app.log.error(
+            { err: (err as Error).message, type: event.type },
+            'live-bus: subscriber threw',
+          );
+        }
+      };
       emitter.on('event', handler);
       return () => emitter.off('event', handler);
     },

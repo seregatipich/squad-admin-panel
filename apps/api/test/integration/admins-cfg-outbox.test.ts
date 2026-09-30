@@ -175,10 +175,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('retries after a crash following XADD with the same stable _outbox_id', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id: outboxId }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('relay-crash') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const outboxId = inserted.id;
 
     let crash = true;
     const crashingRedis: OutboxRelayRedis = {
@@ -262,10 +264,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('keeps a row pending when XADD returns no stream id', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('null-stream-id') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const id = inserted.id;
     const redis: OutboxRelayRedis = { xadd: async () => null };
 
     await expect(
@@ -282,10 +286,12 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
   it('bounds a stalled XADD and leaves the row pending for retry', async () => {
     const [serverId] = await activeServerIds();
     if (!serverId) throw new Error('expected an active server');
-    const [{ id }] = await h.db
+    const [inserted] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId, payload: makeEvent('relay-timeout') })
       .returning({ id: adminsCfgSyncOutbox.id });
+    if (!inserted) throw new Error('outbox insert returned no row');
+    const id = inserted.id;
     const stalledRedis: OutboxRelayRedis = {
       xadd: () => new Promise(() => undefined),
     };
@@ -328,7 +334,7 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
       stream,
       '>',
     );
-    expect(read?.[0]?.[1]).toHaveLength(1);
+    expect((read as [string, unknown[]][] | null)?.[0]?.[1]).toHaveLength(1);
   });
 
   it('does not trim unconsumed entries when a pending batch exceeds the old stream cap', async () => {

@@ -75,7 +75,12 @@ export interface BridgeClientEvents {
   connected: [info: BridgeClientConnectedInfo];
   disconnected: [reason: BridgeClientDisconnectReason];
   'rpc-error': [info: BridgeClientRpcErrorInfo];
-  rtt: [rttMs: number];
+  /**
+   * Wall-clock time from dispatch to the response of a successful call, and
+   * the method it belongs to. For long-running methods this is the operation's
+   * duration, not transport latency — filter on `method` for a network RTT.
+   */
+  rtt: [rttMs: number, method: BridgeRequest['method']];
 }
 
 type EventArgs<Events, E extends keyof Events> = Events[E] extends unknown[] ? Events[E] : never;
@@ -498,7 +503,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
           });
         }
       }
-      this.safeEmit('rtt', rttMs);
+      this.safeEmit('rtt', rttMs, p.method);
       p.resolve(obj.result);
     } else {
       const err = obj.error ?? { code: 'internal', message: 'no error object' };

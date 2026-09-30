@@ -117,7 +117,8 @@ vi.mock('../src/lib/steam-openid.js', () => ({
   verifyWithSteam: vi.fn(),
 }));
 
-vi.mock('../src/lib/steam-profile.js', () => ({
+vi.mock('@squad/steam-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@squad/steam-api')>()),
   fetchSteamProfile: vi.fn(),
 }));
 

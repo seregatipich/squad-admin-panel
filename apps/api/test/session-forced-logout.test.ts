@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
+import type { BridgeClient } from '@squad/bridge-client';
 import * as schema from '@squad/db/schema';
 import {
   playerApiTokens,
@@ -41,7 +42,7 @@ async function buildApp(opts: { dbUrl: string; revalidateIntervalMs?: number }) 
   const redis = new Redis(TEST_REDIS_URL);
   app.decorate('db', db);
   app.decorate('redis', redis);
-  app.decorate('bridge', makeFakeBridge());
+  app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
     STEAM_API_KEY: '',
@@ -295,11 +296,12 @@ function combatEvent(): LiveEvent {
   };
 }
 
-function heartbeatMarker(worker: string): LiveEvent {
+/** A frame every socket receives, used to prove earlier frames were filtered. */
+function deliveryMarker(serverId: string): LiveEvent {
   return {
-    type: 'worker.heartbeat',
+    type: 'rcon.status',
     ts: new Date().toISOString(),
-    data: { worker, healthy: true },
+    data: { server_id: serverId, state: 'connected' },
   };
 }
 
@@ -481,10 +483,10 @@ describe('server-side close of live sockets on revocation (#12)', () => {
       await new Promise((r) => setTimeout(r, 500));
 
       h.app.liveBus.publish(combatEvent());
-      h.app.liveBus.publish(heartbeatMarker('ws-revocation-marker'));
+      h.app.liveBus.publish(deliveryMarker('ws-revocation-marker'));
       await waitFor(() =>
         sock.frames.some(
-          (f) => f.type === 'worker.heartbeat' && f.data.worker === 'ws-revocation-marker',
+          (f) => f.type === 'rcon.status' && f.data.server_id === 'ws-revocation-marker',
         ),
       );
       expect(combatFrames()).toBe(1);

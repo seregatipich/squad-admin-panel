@@ -153,8 +153,8 @@ describe('softDeleteServer (orchestrator)', () => {
     });
     expect(result.sidecar_dirs_removed).toBe(true);
     expect(ufwRule).toHaveBeenCalledTimes(4);
-    for (const call of ufwRule.mock.calls) {
-      expect(call[0].action).toBe('remove');
+    for (const call of ufwRule.mock.calls as unknown as Array<[{ action: string }]>) {
+      expect(call[0]?.action).toBe('remove');
     }
 
     const backupRows = await h.db
@@ -439,6 +439,52 @@ describe('softDeleteServer (orchestrator)', () => {
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('records why the sidecar container and config dir could not be removed (#58)', async () => {
+    const seeded = await seedServer(h, { slug: 'sidecar-fail' });
+    for (const file of ALLOWED_CONFIG_FILES) {
+      h.bridge.files.set(
+        `/var/lib/squad-panel/configs/${seeded.id}/ServerConfig/${file}`,
+        Buffer.from('key=v\n', 'utf-8'),
+      );
+    }
+
+    const bridge = {
+      ...h.bridge,
+      directoryDelete: vi.fn(async ({ path }: { path: string }) => {
+        if (path.includes('/rnsquadjs/')) throw new Error('EACCES: permission denied');
+        return { removed: true };
+      }),
+      ufwRule: vi.fn(async () => ({ output: '', status: 'ok' })),
+      containerStop: vi.fn(async () => ({ status: 'ok' })),
+      containerRm: vi.fn(async ({ name }: { name: string }) => {
+        if (name.startsWith('rnsquadjs-')) throw new Error('bridge transport closed');
+        return { status: 'ok' };
+      }),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId as string,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+      },
+      seeded.id,
+    );
+
+    expect(result.sidecar_dirs_removed).toBe(false);
+    expect(result.errors).toContainEqual({
+      phase: 'sidecar_dir_delete',
+      error: 'EACCES: permission denied',
+    });
+    expect(result.errors).toContainEqual({
+      phase: 'sidecar_rm',
+      error: 'bridge transport closed',
+    });
   });
 
   it('treats container_stop "no such container" as success (idempotent)', async () => {

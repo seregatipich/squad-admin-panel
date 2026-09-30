@@ -446,10 +446,7 @@ async function main() {
         );
       for (const r of sshRows) {
         try {
-          const privateKey = decrypt(
-            encryptionKey,
-            deserialize(Buffer.from(r.blob as unknown as Buffer)),
-          );
+          const privateKey = decrypt(encryptionKey, deserialize(Buffer.from(r.blob)));
           wanted.push({
             serverId: r.id,
             beaconPort: r.beaconPort,

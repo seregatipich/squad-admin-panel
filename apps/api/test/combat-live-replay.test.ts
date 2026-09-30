@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -7,7 +7,7 @@ import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import liveRoutes from '../src/routes/live.js';
 
-let app: ReturnType<typeof Fastify>;
+let app: FastifyInstance;
 let port: number;
 
 const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
@@ -62,11 +62,13 @@ afterAll(async () => {
   await app.close();
 });
 
-async function connect(combatView?: boolean): Promise<{ ws: WebSocket; received: LiveEvent[] }> {
+type CombatFrame = Extract<LiveEvent, { type: 'combat.event' }>;
+
+async function connect(combatView?: boolean): Promise<{ ws: WebSocket; received: CombatFrame[] }> {
   const headers =
     combatView === undefined ? undefined : { [COMBAT_VIEW_HEADER]: String(combatView) };
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`, { headers });
-  const received: LiveEvent[] = [];
+  const received: CombatFrame[] = [];
   ws.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as LiveEvent;
     if (frame.type === 'combat.event') received.push(frame);
