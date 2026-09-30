@@ -17,19 +17,10 @@ vi.mock('pino', () => {
   return { default: vi.fn(() => logger) };
 });
 
-import { type ArchiverRunDeps, runArchiverCycle } from '../src/index.js';
+import * as archiver from '../src/index.js';
 
 describe('audit-archiver index', () => {
-  it('exports runArchiverCycle', () => {
-    expect(runArchiverCycle).toBeDefined();
-    expect(typeof runArchiverCycle).toBe('function');
-  });
-
-  it('runArchiverCycle emits diag event', async () => {
-    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
-    await runArchiverCycle({ diag } as ArchiverRunDeps);
-    expect(diag.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'audit_archiver.run_ok' }),
-    );
+  it('does not export a cycle that would report archiver success', () => {
+    expect(Object.keys(archiver)).not.toContain('runArchiverCycle');
   });
 });

@@ -5,7 +5,9 @@ import pino from 'pino';
 const log = pino({ level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-backup' } });
 
 async function main() {
-  log.info('worker-backup idle — deferred to later phase');
+  log.info(
+    'worker-backup placeholder idle — not deployed; backups run in the restic compose service (profile backup)',
+  );
   const redisUrl = process.env.REDIS_URL;
   const redis = redisUrl
     ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })

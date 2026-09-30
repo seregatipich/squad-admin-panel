@@ -1,5 +1,7 @@
-export const DEFAULT_FETCH_TIMEOUT_MS = Number(process.env.BAN_SYNC_FETCH_TIMEOUT_MS ?? 30_000);
-export const DEFAULT_MAX_BYTES = Number(process.env.BAN_SYNC_MAX_BYTES ?? 20 * 1024 * 1024);
+import { positiveIntEnv } from './env.js';
+
+export const DEFAULT_FETCH_TIMEOUT_MS = positiveIntEnv('BAN_SYNC_FETCH_TIMEOUT_MS', 30_000);
+export const DEFAULT_MAX_BYTES = positiveIntEnv('BAN_SYNC_MAX_BYTES', 20 * 1024 * 1024);
 
 export type FetchSourceErrorReason = 'timeout' | 'http_status' | 'size_limit_exceeded' | 'network';
 

@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { positiveIntEnv } from './env.js';
 import { createClanPriorityExpiryDeps, runClanPriorityExpiryTick } from './tick.js';
 
 const log = pino({
@@ -15,7 +16,7 @@ const log = pino({
   base: { service: 'worker-clan-priority-expirer' },
 });
 
-const TICK_INTERVAL_MS = Number(process.env.CLAN_PRIORITY_EXPIRER_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = positiveIntEnv('CLAN_PRIORITY_EXPIRER_INTERVAL_MS', 60_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -46,9 +47,21 @@ async function main() {
   });
   const runtimeDeps = createClanPriorityExpiryDeps(db);
 
+  // A tick can outlast the interval; overlapping passes could expire the same
+  // clan twice and duplicate its audit and sync side effects.
+  let tickInFlight = false;
   async function tick(): Promise<void> {
-    const result = await runClanPriorityExpiryTick({ ...runtimeDeps, diag });
-    log.info(result, 'clan-priority-expirer tick');
+    if (tickInFlight) {
+      log.warn('previous clan-priority-expirer tick still running; skipping');
+      return;
+    }
+    tickInFlight = true;
+    try {
+      const result = await runClanPriorityExpiryTick({ ...runtimeDeps, diag });
+      log.info(result, 'clan-priority-expirer tick');
+    } finally {
+      tickInFlight = false;
+    }
   }
 
   let interval: NodeJS.Timeout | null = null;

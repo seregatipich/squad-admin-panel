@@ -128,3 +128,50 @@ describe('parseBanList', () => {
     expect(records).toHaveLength(1);
   });
 });
+
+describe('adapter hardening', () => {
+  it('reads the BattleMetrics nickname from the name identifier by default', () => {
+    const text = JSON.stringify({
+      data: [
+        {
+          attributes: {
+            identifiers: [
+              { type: 'steamID', identifier: '76561198000000010' },
+              { type: 'name', identifier: 'Griefer' },
+            ],
+          },
+        },
+      ],
+    });
+    expect(parseBattlemetrics(text).records[0]?.nickname).toBe('Griefer');
+  });
+
+  it('skips numeric timestamps outside the Date range instead of emitting Invalid Date', () => {
+    const json = JSON.stringify([{ steam_id64: '76561198000000010', expires_at: 1e300 }]);
+    expect(parseJsonGeneric(json).records[0]?.expiresAt).toBeNull();
+    const bm = JSON.stringify({
+      data: [
+        {
+          attributes: {
+            identifiers: [{ type: 'steamID', identifier: '76561198000000010' }],
+            timestamp: 1e300,
+          },
+        },
+      ],
+    });
+    expect(parseBattlemetrics(bm).records[0]?.issuedAt).toBeNull();
+    const csv = 'steam,exp\n76561198000000010,99999999999999';
+    const parsed = parseCsv(csv, { csv: { columns: { steam_id64: 'steam', expires_at: 'exp' } } });
+    expect(parsed.records[0]?.expiresAt).toBeNull();
+  });
+
+  it('rejects malformed parser_config with a descriptive error', () => {
+    expect(() => parseJsonGeneric('[]', { list_path: 5 })).toThrow(/list_path must be a string/);
+    expect(() => parseBattlemetrics('{}', { fields: { reason: 7 } })).toThrow(
+      /fields\.reason must be a string/,
+    );
+    expect(() => parseJsonGeneric('[]', { fields: 'reason' })).toThrow(/fields must be an object/);
+    expect(() => parseCsv('a', { csv: { delimiter: '||' } })).toThrow(/single character/);
+    expect(() => parseCsv('a', { csv: { has_header: 'yes' } })).toThrow(/has_header/);
+  });
+});

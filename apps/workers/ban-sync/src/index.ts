@@ -10,6 +10,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { positiveIntEnv } from './env.js';
 import { createSyncSourceDeps, syncSource } from './sync-source.js';
 import type { DueSource } from './tick.js';
 import { type BackoffMap, createTickDeps, runBanSyncTick } from './tick.js';
@@ -22,7 +23,7 @@ const log = pino({
 const MANUAL_STREAM = 'bansync:manual';
 const MANUAL_GROUP = 'ban-sync';
 
-const TICK_INTERVAL_MS = Number(process.env.BAN_SYNC_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = positiveIntEnv('BAN_SYNC_INTERVAL_MS', 60_000);
 const MANUAL_BLOCK_MS = 5_000;
 
 function requiredEnv(name: string): string {
@@ -154,9 +155,13 @@ async function main() {
   }
 
   await ensureManualGroup(redis);
-  const consumerName = `ban-sync-${process.pid}`;
+  // One worker instance owns the queue, so the consumer name is stable across
+  // restarts: jobs a crashed run read but never acked stay in this consumer's
+  // pending list, and are re-read from it before new jobs (`>`).
+  const consumerName = 'ban-sync';
 
   async function processManualQueue(): Promise<void> {
+    let readFrom: '0' | '>' = '0';
     while (!stopped) {
       let result: [string, [string, string[]][]][] | null = null;
       try {
@@ -168,7 +173,7 @@ async function main() {
           MANUAL_BLOCK_MS,
           'STREAMS',
           MANUAL_STREAM,
-          '>',
+          readFrom,
         )) as [string, [string, string[]][]][] | null;
       } catch (err) {
         // Shutdown closed the connection under the blocked read.
@@ -178,6 +183,10 @@ async function main() {
         continue;
       }
       if (!result) continue;
+      if (readFrom === '0' && result.every(([, entries]) => entries.length === 0)) {
+        readFrom = '>';
+        continue;
+      }
 
       for (const [, entries] of result) {
         for (const [entryId, fields] of entries) {

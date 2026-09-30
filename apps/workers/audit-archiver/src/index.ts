@@ -11,38 +11,14 @@ const log = pino({
 });
 
 const COMPONENT = 'worker-audit-archiver';
-const RUN_INTERVAL_MS = 60 * 60 * 1000;
-
-export interface ArchiverRunDeps {
-  diag: Diag;
-}
-
-export async function runArchiverCycle(deps: ArchiverRunDeps): Promise<void> {
-  try {
-    await Promise.resolve();
-    await deps.diag.emit({
-      component: COMPONENT,
-      kind: 'audit_archiver.run_ok',
-      severity: 'info',
-      message: 'archiver cycle ok (P0 stub)',
-      payload: {},
-    });
-  } catch (err) {
-    await deps.diag.emit({
-      component: COMPONENT,
-      kind: 'audit_archiver.run_failed',
-      severity: 'error',
-      message: `archiver cycle failed: ${(err as Error).message}`,
-      payload: { err: (err as Error).message },
-    });
-  }
-}
 
 /**
  * Phase 0 stub. The archiver will export a verified hash-chain snapshot
  * of audit_log to restic on a daily schedule in Phase 1. For P0 it still
  * publishes a heartbeat so the panel's system-status card can see that
- * the worker is alive, not just its container running.
+ * the worker is alive, not just its container running. It deliberately
+ * emits no "run ok" diagnostics: nothing is archived yet, so reporting a
+ * successful cycle would be a false signal.
  */
 async function main() {
   const redisUrl = process.env.REDIS_URL;
@@ -62,11 +38,9 @@ async function main() {
 
   log.info('worker-audit-archiver idle — Phase 1 functionality deferred');
 
-  let interval: NodeJS.Timeout | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
       await diag.emit({
         component: COMPONENT,
         kind: 'audit_archiver.stopped',
@@ -87,12 +61,7 @@ async function main() {
     message: 'audit-archiver started',
     payload: { pid: process.pid },
   });
-  await runArchiverCycle({ diag });
   await shutdown.markReady();
-  if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(() => {
-    void runArchiverCycle({ diag });
-  }, RUN_INTERVAL_MS);
 }
 
 function isMainEntrypoint(): boolean {

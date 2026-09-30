@@ -186,10 +186,22 @@ export function createSyncSourceDeps(
   return {
     decryptAuthHeader: (blob) => decrypt(key, deserialize(blob)),
     fetchBanList: (url, authHeader) => fetchBanList(url, authHeader),
-    loadExistingBans: async (sourceId) => {
-      const rows = await db.select().from(externalBans).where(eq(externalBans.sourceId, sourceId));
-      return rows as unknown as ExistingBanRow[];
-    },
+    loadExistingBans: (sourceId): Promise<ExistingBanRow[]> =>
+      db
+        .select({
+          id: externalBans.id,
+          steamId64: externalBans.steamId64,
+          eosId: externalBans.eosId,
+          nickname: externalBans.nickname,
+          reason: externalBans.reason,
+          adminName: externalBans.adminName,
+          issuedAt: externalBans.issuedAt,
+          expiresAt: externalBans.expiresAt,
+          raw: externalBans.raw,
+          revokedAt: externalBans.revokedAt,
+        })
+        .from(externalBans)
+        .where(eq(externalBans.sourceId, sourceId)),
     applyMergePlan: (sourceId, plan) => applyMergePlan(db, sourceId, plan),
     updateSourceOk: async (sourceId, patch) => {
       await db
@@ -217,7 +229,7 @@ export function createSyncSourceDeps(
     persistAndPublish: (envelope) => persistAndPublish(db, redis, envelope),
     onSyncComplete: () => redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY).then(() => undefined),
     raiseFailureAlert: (source, errorText, consecutiveFailures) =>
-      raiseBanSyncFailureAlert(db, redis, source, errorText, consecutiveFailures),
+      raiseBanSyncFailureAlert(db, source, errorText, consecutiveFailures),
     diag,
   };
 }
