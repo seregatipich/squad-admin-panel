@@ -363,3 +363,30 @@ export async function computeAltCandidates(
     })
     .sort((a, b) => b.score - a.score || a.player_id.localeCompare(b.player_id));
 }
+
+/**
+ * The evidence a `player_links` row stores for a pair (#461): the ALT-1 score,
+ * confidence and signals the server computes at decision time, so a decision
+ * stays auditable after the candidate later scores differently and no client
+ * can store fabricated evidence. `null` when `otherPlayerId` is not an ALT-1
+ * candidate of `target` (a link recorded without any shared IP).
+ *
+ * @param db - Database client.
+ * @param target - The player the link is created from.
+ * @param otherPlayerId - The other end of the link.
+ */
+export async function altEvidenceSnapshot(
+  db: DatabaseClient,
+  target: AltCandidateTarget,
+  otherPlayerId: string,
+): Promise<Record<string, unknown> | null> {
+  const candidates = await computeAltCandidates(db, target);
+  const candidate = candidates.find((entry) => entry.player_id === otherPlayerId);
+  if (!candidate) return null;
+  return {
+    score: candidate.score,
+    confidence: candidate.confidence,
+    shared_ip_count: candidate.shared_ip_count,
+    signals: candidate.signals,
+  };
+}

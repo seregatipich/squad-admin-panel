@@ -93,6 +93,29 @@ export type LiveEvent =
       };
     }
   | {
+      /** A note was edited; carries the whole edited note (#449). */
+      type: 'note.updated';
+      ts: string;
+      data: {
+        player_id: string;
+        note: {
+          id: string;
+          player_id: string;
+          author: { id: string; name: string; role_color: string | null };
+          body: string;
+          created_at: string;
+          updated_at: string | null;
+          edited: boolean;
+        };
+      };
+    }
+  | {
+      /** A note was (soft-)deleted (#449). */
+      type: 'note.deleted';
+      ts: string;
+      data: { player_id: string; note_id: string };
+    }
+  | {
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
@@ -362,6 +385,8 @@ export const LIVE_EVENT_AUDIENCE = {
   'bridge.connection': 'server',
   'worker.heartbeat': 'server',
   'note.created': 'server',
+  'note.updated': 'server',
+  'note.deleted': 'server',
   'mark_type.changed': 'server',
   'session.revoked': 'server',
   'issue.created': 'server',

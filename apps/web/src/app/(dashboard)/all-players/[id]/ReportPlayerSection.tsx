@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import {
   Button,
   FieldRow,
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui';
 import {
   buildReportPayload,
+  mapReportError,
   mapUploadError,
   REPORT_BODY_MAX,
   REPORT_EVIDENCE_MAX,
@@ -54,10 +55,25 @@ function evidenceLabelFromMedia(media: MediaResponse): string {
  * links) reusing the MOD-3 media library. Hidden entirely for viewers who
  * lack the `server:view` permission needed to populate the server select
  * (POST /api/v1/reports itself only requires `panel_access`).
+ *
+ * The server list is fetched when the modal first opens, not with the card
+ * (#465); a failure there is shown in the modal with «Повторить» and never
+ * hides the button. Evidence uploaded in this modal belongs to the report
+ * being written: removing it, or closing the modal without sending, deletes
+ * it from the media library again (#464). Rejections are shown in Russian
+ * (#466).
  */
-export function ReportPlayerSection({ playerId }: { playerId: string }) {
-  const [servers, setServers] = useState<ServerOption[]>([]);
-  const [hidden, setHidden] = useState(false);
+export function ReportPlayerSection({
+  playerId,
+  canViewServers,
+}: {
+  playerId: string;
+  /** Whether the viewer holds `server:view`, which `GET /api/v1/servers` requires. */
+  canViewServers: boolean;
+}) {
+  const [servers, setServers] = useState<ServerOption[] | null>(null);
+  const [serversLoading, setServersLoading] = useState(false);
+  const [serversError, setServersError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [serverId, setServerId] = useState('');
   const [body, setBody] = useState('');
@@ -73,39 +89,56 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
   const bodyTextareaId = useId();
   const urlInputId = useId();
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => {
-        if (res.status === 401 || res.status === 403) {
-          setHidden(true);
-          return null;
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ServersResponse>;
-      })
-      .then((data) => {
-        if (cancelled || !data) return;
-        setServers(data.items);
-      })
-      .catch(() => {
-        if (!cancelled) setHidden(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  if (!canViewServers) return null;
 
-  if (hidden) return null;
+  async function loadServers() {
+    setServersLoading(true);
+    setServersError(null);
+    try {
+      const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('Нет доступа к списку серверов');
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ServersResponse;
+      setServers(data.items);
+      setServerId((current) => current || (data.items[0]?.id ?? ''));
+    } catch (e) {
+      setServersError((e as Error).message);
+    } finally {
+      setServersLoading(false);
+    }
+  }
 
   function openModal() {
-    setServerId(servers[0]?.id ?? '');
+    setServerId(servers?.[0]?.id ?? '');
     setBody('');
     setAttached([]);
     setEvidenceUrl('');
     setError(null);
     setSuccess(null);
     setModalOpen(true);
+    if (servers === null) void loadServers();
+  }
+
+  /**
+   * Deletes media uploaded for this report from the library. Best effort: a
+   * failure leaves an orphaned file, which is no worse than before and must
+   * not block closing the modal.
+   */
+  function discardMedia(ids: string[]) {
+    for (const id of ids) {
+      void fetch(`/api/v1/media/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      }).catch(() => undefined);
+    }
+  }
+
+  function closeWithoutSending() {
+    discardMedia(attached.map((item) => item.id));
+    setAttached([]);
+    setModalOpen(false);
   }
 
   async function uploadFile(file: File) {
@@ -171,6 +204,7 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
   }
 
   function removeAttached(id: string) {
+    discardMedia([id]);
     setAttached((prev) => prev.filter((item) => item.id !== id));
   }
 
@@ -194,8 +228,9 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
       });
       if (!res.ok) {
         const errBody = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+        throw new Error(mapReportError(res.status, errBody.error));
       }
+      setAttached([]);
       setModalOpen(false);
       setSuccess('Жалоба отправлена');
     } catch (e) {
@@ -225,13 +260,13 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
 
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={closeWithoutSending}
         title="Пожаловаться на игрока"
         closeLabel="Закрыть"
         dismissible={!submitting}
         footer={
           <>
-            <Button variant="secondary" onClick={() => setModalOpen(false)} disabled={submitting}>
+            <Button variant="secondary" onClick={closeWithoutSending} disabled={submitting}>
               Отмена
             </Button>
             <Button
@@ -246,6 +281,19 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
         }
       >
         <div className="space-y-4">
+          {serversError ? (
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить список серверов"
+              description={serversError}
+              action={
+                <Button size="sm" loading={serversLoading} onClick={() => void loadServers()}>
+                  Повторить
+                </Button>
+              }
+            />
+          ) : null}
+
           <FieldRow label="Сервер" htmlFor={serverSelectId}>
             <Select
               id={serverSelectId}
@@ -253,7 +301,7 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
               onChange={(e) => setServerId(e.target.value)}
             >
               <option value="">Выберите сервер</option>
-              {servers.map((s) => (
+              {(servers ?? []).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.display_name ?? s.slug ?? s.id.slice(0, 8)}
                 </option>

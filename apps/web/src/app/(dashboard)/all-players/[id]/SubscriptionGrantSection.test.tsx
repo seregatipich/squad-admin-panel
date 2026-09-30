@@ -153,7 +153,8 @@ describe('SubscriptionGrantSection', () => {
   );
 
   it(
-    'surfaces the API error code on a rejected grant',
+    // Regression (#460): the raw machine code used to be shown verbatim.
+    'translates the API error code of a rejected grant into Russian',
     async () => {
       stubApi([
         {
@@ -167,7 +168,8 @@ describe('SubscriptionGrantSection', () => {
 
       fireEvent.click(await screen.findByRole('button', { name: 'Выдать подписку' }));
 
-      await screen.findByText('already_subscribed');
+      await screen.findByText('У игрока уже есть активная VIP-подписка.');
+      expect(screen.queryByText('already_subscribed')).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -200,7 +202,48 @@ describe('SubscriptionGrantSection', () => {
       stubApi([{ match: '/subscriptions', status: 500 }]);
       render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await screen.findByText('HTTP 500');
+      // Regression (#460): a failed read used to be titled «Подписка не выдана».
+      await screen.findByText('Не удалось загрузить подписки');
+      expect(screen.getByText('HTTP 500')).toBeInTheDocument();
+      expect(screen.queryByText('Подписка не выдана')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'retries a failed load and clears the stale error',
+    async () => {
+      let failing = true;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.includes('/bonus-shop/tiers')) {
+            return Promise.resolve(new Response(JSON.stringify(SHOP_TIERS), { status: 200 }));
+          }
+          if (failing) return Promise.resolve(new Response(null, { status: 500 }));
+          return Promise.resolve(new Response(JSON.stringify({ rows: [] }), { status: 200 }));
+        }),
+      );
+      render(<SubscriptionGrantSection playerId="player-1" />);
+
+      await screen.findByText('Не удалось загрузить подписки');
+      failing = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+      await screen.findByText('Подписок нет');
+      expect(screen.queryByText('Не удалось загрузить подписки')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'explains a failed tier request instead of silently dropping the grant control',
+    async () => {
+      stubApi([{ match: '/bonus-shop/tiers', status: 500 }]);
+      render(<SubscriptionGrantSection playerId="player-1" />);
+
+      await screen.findByText('Не удалось загрузить тарифы');
+      expect(screen.queryByRole('button', { name: 'Выдать подписку' })).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

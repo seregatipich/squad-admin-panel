@@ -20,12 +20,12 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   type BanStatusLike,
   banStatusBadge,
   buildApiQuery,
   buildQueryString,
-  formatDate,
   identityLabel,
   parseFilters,
   trustLevelLabel,
@@ -307,8 +307,8 @@ export function ExternalBansBrowser() {
                               </Badge>
                             </div>
                             <span className="text-ink-3">
-                              {formatDate(ban.issued_at)}
-                              {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
+                              {formatDateTimeRu(ban.issued_at)}
+                              {ban.expires_at ? ` → ${formatDateTimeRu(ban.expires_at)}` : ''}
                             </span>
                           </div>
                           {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}

@@ -22,6 +22,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -32,7 +33,6 @@ import {
   type ChatMsg,
   type ChatPage,
   EMPTY_CHAT_FILTERS,
-  formatChatTs,
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
@@ -358,7 +358,7 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
               {messages.map((message) => (
                 <TableRow key={message.id}>
                   <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
-                    {formatChatTs(message.sentAt)}
+                    {formatDateTimeRu(message.sentAt, message.sentAt)}
                   </Td>
                   <Td className="text-ink-2">{serverName(message.serverId)}</Td>
                   <Td>

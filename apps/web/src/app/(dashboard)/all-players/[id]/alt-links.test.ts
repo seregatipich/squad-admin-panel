@@ -111,32 +111,20 @@ describe('formatRejectedMark', () => {
 });
 
 describe('buildLinkPayload', () => {
-  it('embeds the candidate score/confidence/shared_ip_count snapshot', () => {
-    const candidate = makeCandidate();
-    const payload = buildLinkPayload('other-1', 'alt', 'confirmed', '', candidate);
+  // Regression (#461): the browser used to author the «audit» snapshot.
+  it('sends the decision only, leaving the evidence to the server', () => {
+    const payload = buildLinkPayload('other-1', 'alt', 'confirmed', '');
 
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
       other_player_id: 'other-1',
       link_type: 'alt',
       status: 'confirmed',
     });
-    expect(payload.note).toBeUndefined();
-    expect(payload.evidence_snapshot).toMatchObject({
-      score: 75,
-      confidence: 'high',
-      shared_ip_count: 2,
-      shared_names: ['ghost'],
-    });
+    expect(payload).not.toHaveProperty('evidence_snapshot');
   });
 
   it('trims and includes a non-empty note', () => {
-    const payload = buildLinkPayload(
-      'other-1',
-      'family_share',
-      'rejected',
-      '  test note  ',
-      makeCandidate(),
-    );
+    const payload = buildLinkPayload('other-1', 'family_share', 'rejected', '  test note  ');
     expect(payload.note).toBe('test note');
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   destinationLabel,
   destinationsForKind,
+  hasPendingPublication,
   isPublishable,
   type MediaPublication,
   occupiedDestinations,
@@ -43,6 +44,29 @@ describe('destinationLabel', () => {
 describe('publicationsUrl', () => {
   it('builds the per-media publications endpoint', () => {
     expect(publicationsUrl('abc')).toBe('/api/v1/media/abc/publications');
+  });
+});
+
+describe('publicationsUrl encoding', () => {
+  it('encodes the media id path segment (#472)', () => {
+    expect(publicationsUrl('../x')).toBe('/api/v1/media/..%2Fx/publications');
+  });
+});
+
+describe('hasPendingPublication', () => {
+  it('is true while a destination is queued or uploading', () => {
+    expect(hasPendingPublication([publication({ status: 'queued' })])).toBe(true);
+    expect(hasPendingPublication([publication({ status: 'uploading' })])).toBe(true);
+  });
+
+  it('is false once every destination has settled', () => {
+    expect(hasPendingPublication([])).toBe(false);
+    expect(
+      hasPendingPublication([
+        publication({ status: 'published' }),
+        publication({ id: 'pub-2', destination: 'youtube', status: 'failed' }),
+      ]),
+    ).toBe(false);
   });
 });
 

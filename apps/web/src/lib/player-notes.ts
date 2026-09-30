@@ -1,4 +1,36 @@
+import { isArrayOf, isFiniteNumber, isNullableString, isRecord } from './json-guards';
 import type { PlayerNote } from './live-bus';
+
+/** One page of `GET /api/v1/players/:playerId/notes`. */
+export interface NotesPage {
+  items: PlayerNote[];
+  next_cursor: string | null;
+  total: number;
+}
+
+function isPlayerNote(value: unknown): value is PlayerNote {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.player_id === 'string' &&
+    isRecord(value.author) &&
+    typeof value.author.id === 'string' &&
+    typeof value.author.name === 'string' &&
+    isNullableString(value.author.role_color) &&
+    typeof value.body === 'string' &&
+    typeof value.created_at === 'string' &&
+    isNullableString(value.updated_at) &&
+    typeof value.edited === 'boolean'
+  );
+}
+
+/** Validates a decoded notes page, returning `null` on any shape mismatch (#456). */
+export function parseNotesPage(json: unknown): NotesPage | null {
+  if (!isRecord(json)) return null;
+  if (!isArrayOf(json.items, isPlayerNote)) return null;
+  if (!isNullableString(json.next_cursor) || !isFiniteNumber(json.total)) return null;
+  return { items: json.items, next_cursor: json.next_cursor, total: json.total };
+}
 
 export function prependNote(notes: PlayerNote[], incoming: PlayerNote): PlayerNote[] {
   if (notes.some((note) => note.id === incoming.id)) return notes;

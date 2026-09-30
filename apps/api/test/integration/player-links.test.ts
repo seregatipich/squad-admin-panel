@@ -4,10 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
-import {
-  EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH,
-  PLAYER_LINKS_LIMIT,
-} from '../../src/routes/player-links.js';
+import { PLAYER_LINKS_LIMIT } from '../../src/routes/player-links.js';
 import { withFailingAuditInsert } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -264,7 +261,66 @@ describe('POST /api/v1/players/:playerId/links', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('writes an audit_log entry with the evidence_snapshot hash, not its body, on create (#70)', async () => {
+  // Regression (#461): the «audit» snapshot was whatever the browser sent,
+  // so a forged score or confidence was stored as evidence. The audit entry
+  // carries the snapshot's hash, not its body (#70).
+  it('stores the ALT-1 evidence computed by the server, ignoring a client-sent snapshot', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.20' },
+      { playerId: idB, ip: '203.0.113.20' },
+    ]);
+    const cookie = await loginAsOwner(h);
+
+    const candidates = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    const engine = (
+      candidates.json() as {
+        candidates: Array<{ player_id: string; score: number; confidence: string }>;
+      }
+    ).candidates.find((c) => c.player_id === idB);
+    expect(engine).toBeDefined();
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${idA}/links`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        other_player_id: idB,
+        link_type: 'alt',
+        evidence_snapshot: { score: 999, confidence: 'high', shared_ip_count: 50, forged: 'x' },
+      }),
+    });
+    expect(created.statusCode).toBe(201);
+    const linkId = (created.json() as { id: string }).id;
+
+    const [row] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    const stored = row?.evidenceSnapshot as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      score: engine?.score,
+      confidence: engine?.confidence,
+      shared_ip_count: 1,
+    });
+    expect(stored).not.toHaveProperty('forged');
+    expect(stored).not.toHaveProperty('shared_names');
+    expect(stored.signals).toMatchObject({ shared_ips: { value: 1 } });
+
+    const auditRows = await h.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]?.beforeSnapshot).toBeNull();
+    const expectedHash = createHash('sha256').update(JSON.stringify(stored)).digest('hex');
+    expect(auditRows[0]?.afterSnapshot).toMatchObject({ evidenceSnapshotSha256: expectedHash });
+    expect(auditRows[0]?.afterSnapshot).not.toHaveProperty('evidenceSnapshot');
+  });
+
+  it('stores no evidence for a pair the ALT-1 engine does not list', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
     const cookie = await loginAsOwner(h);
@@ -276,42 +332,14 @@ describe('POST /api/v1/players/:playerId/links', () => {
       payload: JSON.stringify({
         other_player_id: idB,
         link_type: 'alt',
-        evidence_snapshot: { score: 75, confidence: 'high', shared_ip_count: 2 },
+        evidence_snapshot: { blob: 'x'.repeat(100_000) },
       }),
     });
     expect(created.statusCode).toBe(201);
     const linkId = (created.json() as { id: string }).id;
 
-    const auditRows = await h.db
-      .select()
-      .from(auditLog)
-      .where(and(eq(auditLog.targetType, 'player_link'), eq(auditLog.targetId, linkId)));
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0]?.beforeSnapshot).toBeNull();
-    const [stored] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
-    expect(stored?.evidenceSnapshot).toEqual({ score: 75, confidence: 'high', shared_ip_count: 2 });
-    const expectedHash = createHash('sha256')
-      .update(JSON.stringify(stored?.evidenceSnapshot))
-      .digest('hex');
-    expect(auditRows[0]?.afterSnapshot).toMatchObject({ evidenceSnapshotSha256: expectedHash });
-    expect(auditRows[0]?.afterSnapshot).not.toHaveProperty('evidenceSnapshot');
-  });
-
-  it('rejects an evidence_snapshot above the size cap with 400 (#70)', async () => {
-    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
-    const cookie = await loginAsOwner(h);
-    const res = await h.app.inject({
-      method: 'POST',
-      url: `/api/v1/players/${idA}/links`,
-      headers: { cookie, 'content-type': 'application/json' },
-      payload: JSON.stringify({
-        other_player_id: idB,
-        link_type: 'alt',
-        evidence_snapshot: { blob: 'x'.repeat(EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH) },
-      }),
-    });
-    expect(res.statusCode).toBe(400);
+    const [row] = await h.db.select().from(playerLinks).where(eq(playerLinks.id, linkId));
+    expect(row?.evidenceSnapshot).toBeNull();
   });
 });
 

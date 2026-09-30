@@ -41,8 +41,6 @@ export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 export const WEEK_DAYS = 7;
 
-export const BONUS_FORMULA_LABEL = 'online + 2×boost';
-
 export const MODE_LABELS: Record<SessionMode, string> = {
   online: 'Онлайн',
   boost: 'Буст',
@@ -56,12 +54,6 @@ export const MODE_HEX: Record<SessionMode, string> = {
   queue: '#409cff',
   seed: '#bf5af2',
 };
-
-export function bonusValueSeconds(
-  totals: Pick<PresenceTotals, 'online_seconds' | 'boost_seconds' | 'queue_seconds'>,
-): number {
-  return totals.online_seconds + 2 * totals.boost_seconds;
-}
 
 export function utcDayKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);

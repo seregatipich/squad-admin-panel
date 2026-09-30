@@ -48,6 +48,7 @@ import {
   isRoleExpirySoon,
   toRoleExpiryDateValue,
 } from '@/lib/role-expiry';
+import { isUuid } from '@/lib/uuid';
 import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
@@ -151,6 +152,10 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   // status after the other one changes it (#477).
   const [roleRefreshKey, setRoleRefreshKey] = useState(0);
   const onRoleChanged = useCallback(() => setRoleRefreshKey((key) => key + 1), []);
+  const [evidenceRefreshKey, setEvidenceRefreshKey] = useState(0);
+  // The route segment arrives URL-decoded and every section builds API paths
+  // from it; anything but a UUID is refused before a single request (#472).
+  const validPlayerId = isUuid(playerId);
   const [eosCopied, setEosCopied] = useState(false);
 
   useEffect(() => {
@@ -165,6 +170,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
    * два запроса.
    */
   const load = useCallback(() => {
+    if (!validPlayerId) return;
     setErr(null);
     fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -174,11 +180,24 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setMe(j as Me | null))
       .catch(() => {});
-  }, [playerId]);
+  }, [playerId, validPlayerId]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  if (!validPlayerId) {
+    return (
+      <PageContainer width="wide">
+        <PageHeader {...BACK_TO_LIST} title="Карточка игрока" />
+        <InlineBanner
+          tone="crit"
+          title="Некорректный идентификатор игрока"
+          description="Ссылка повреждена: откройте игрока из списка."
+        />
+      </PageContainer>
+    );
+  }
 
   if (err) {
     return (
@@ -215,6 +234,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
   const canManageEconomy = me?.can_manage_economy ?? false;
+  const canViewServers = me?.permissions.includes('server:view') ?? false;
 
   async function copyEosId() {
     if (!player.eos_id) return;
@@ -281,7 +301,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         onRoleChanged={onRoleChanged}
       />
 
-      <ReportPlayerSection playerId={playerId} />
+      <ReportPlayerSection playerId={playerId} canViewServers={canViewServers} />
 
       <GroupedList title="Профиль">
         <GroupedRow
@@ -362,10 +382,14 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <ReportsSection playerId={playerId} />
 
-      <ModerationHistorySection playerId={playerId} viewerPlayerId={me?.player_id ?? null} />
+      <ModerationHistorySection
+        playerId={playerId}
+        viewerPlayerId={me?.player_id ?? null}
+        onEvidenceDetached={() => setEvidenceRefreshKey((key) => key + 1)}
+      />
       <IssueLinksSection playerId={playerId} />
 
-      <EvidenceSection playerId={playerId} />
+      <EvidenceSection playerId={playerId} refreshKey={evidenceRefreshKey} />
 
       <ExternalBansSection playerId={playerId} canBan={canBan} />
 

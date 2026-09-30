@@ -39,7 +39,9 @@ function evidence(overrides: Record<string, unknown> = {}) {
 }
 
 function stubFetch(body: unknown, status = 200) {
-  const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(body), { status })));
+  const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status })),
+  );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -59,10 +61,44 @@ describe('ModerationHistorySection', () => {
     await screen.findByText('Бан');
     expect(screen.getByRole('heading', { name: 'История модерации' })).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
     expect(screen.getByText('aimbot')).toBeInTheDocument();
     expect(screen.getByText(/Модератор Вася/)).toBeInTheDocument();
     expect(screen.getByText(/Main #1/)).toBeInTheDocument();
     expect(screen.getByText(/27\.07\.2026/)).toBeInTheDocument();
+  });
+
+  // Regression (#441): the section used to fetch only the API's first page
+  // (50 rows) and present its length as the whole history.
+  it('pages through the history with the cursor of the last row shown', async () => {
+    const firstPage = Array.from({ length: 51 }, (_, index) =>
+      action({ id: `action-${index + 1}`, reason: `reason-${index + 1}` }),
+    );
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('cursor=')
+        ? { actions: [action({ id: 'action-51', reason: 'reason-51' })] }
+        : { actions: firstPage };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
+    await screen.findByText('reason-50');
+    expect(screen.queryByText('reason-51')).not.toBeInTheDocument();
+    expect(screen.getByText('50+')).toBeInTheDocument();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      '/api/v1/players/player-1/moderation-actions?limit=51',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }));
+
+    await screen.findByText('reason-51');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      '/api/v1/players/player-1/moderation-actions?limit=51&cursor=action-50',
+    );
+    expect(screen.getByText('51')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
   });
 
   it('shows the empty state when the player has no moderation actions', async () => {
@@ -167,6 +203,22 @@ describe('ModerationHistorySection', () => {
     expect(screen.queryByRole('button', { name: 'Открепить' })).not.toBeInTheDocument();
   });
 
+  // Regression (#446): one click used to fire the DELETE with no confirmation.
+  it('asks for confirmation and sends nothing when the operator backs out', async () => {
+    const fetchMock = stubFetch({
+      actions: [action({ evidence: [evidence()], evidence_count: 1 })],
+    });
+
+    render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Открепить' }));
+
+    await screen.findByRole('heading', { name: 'Открепить доказательство?' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Отмена' })[0] as HTMLElement);
+
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    expect(screen.getByText('Аимбот на записи')).toBeInTheDocument();
+  });
+
   it('detaches your own evidence link and drops it from the list', async () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'DELETE') {
@@ -183,11 +235,21 @@ describe('ModerationHistorySection', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
+    const onEvidenceDetached = vi.fn();
+    render(
+      <ModerationHistorySection
+        playerId="player-1"
+        viewerPlayerId={VIEWER_ID}
+        onEvidenceDetached={onEvidenceDetached}
+      />,
+    );
     const button = await screen.findByRole('button', { name: 'Открепить' });
     fireEvent.click(button);
+    fireEvent.click(await screen.findByRole('button', { name: 'Открепить доказательство' }));
 
     await waitFor(() => expect(screen.queryByText('Аимбот на записи')).not.toBeInTheDocument());
+    // Regression (#446): the evidence section must learn about the detach.
+    expect(onEvidenceDetached).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/media/media-1/links?entity_type=moderation_action&entity_id=action-1',
       expect.objectContaining({ method: 'DELETE' }),
@@ -216,6 +278,7 @@ describe('ModerationHistorySection', () => {
 
     render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Открепить' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Открепить доказательство' }));
 
     await screen.findByText('Недостаточно прав, чтобы открепить это доказательство.');
     expect(screen.getByText('Аимбот на записи')).toBeInTheDocument();

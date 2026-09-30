@@ -28,7 +28,7 @@ import {
   parseLinksResponse,
   splitCandidates,
 } from './alt-links';
-import { SteamFriendCheck, type SteamFriendCheckResult } from './SteamFriendCheck';
+import { SteamFriendCheck } from './SteamFriendCheck';
 
 const CONFIDENCE_LABELS_RU: Record<AltCandidate['confidence'], string> = {
   high: 'высокая',
@@ -68,7 +68,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
   const [candidates, setCandidates] = useState<AltCandidate[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [savingCandidate, setSavingCandidate] = useState<string | null>(null);
-  const [friendResults, setFriendResults] = useState<Record<string, SteamFriendCheckResult>>({});
 
   const load = useCallback(
     async (force = false) => {
@@ -125,13 +124,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
             other_player_id: candidate.player_id,
             link_type: status === 'confirmed' ? 'alt' : 'unrelated',
             status,
-            evidence_snapshot: {
-              score: candidate.score,
-              confidence: candidate.confidence,
-              shared_ip_count: candidate.shared_ip_count,
-              signals: candidate.signals,
-              steam_friend: friendResults[candidate.player_id] ?? null,
-            },
           }),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -142,7 +134,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
         setSavingCandidate(null);
       }
     },
-    [friendResults, load, playerId],
+    [load, playerId],
   );
 
   if (hidden) return null;
@@ -272,12 +264,6 @@ export function AltsSection({ playerId }: { playerId: string }) {
                                 <SteamFriendCheck
                                   playerId={playerId}
                                   otherPlayerId={candidate.player_id}
-                                  onResult={(result) =>
-                                    setFriendResults((current) => ({
-                                      ...current,
-                                      [candidate.player_id]: result,
-                                    }))
-                                  }
                                 />
                               )}
                             </Td>

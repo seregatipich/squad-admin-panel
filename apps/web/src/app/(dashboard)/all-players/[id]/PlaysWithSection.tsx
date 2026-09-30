@@ -18,31 +18,28 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { type CoplayPartner, coplayUrl, parseCoplayPartners } from './coplay';
 import { fmtDuration } from './presence';
 
-interface CoplayPartner {
-  player_id: string;
-  player_name: string | null;
-  overlap_seconds: number;
-  shared_session_count: number;
-}
-
-interface CoplayResponse {
-  partners: CoplayPartner[];
-}
-
-/** ALT-6 co-play card block, gated by the existing panel_access API route. */
+/**
+ * ALT-6 co-play card block, gated by the existing panel_access API route.
+ * Asks the API for exactly the partners it lists and no per-server split
+ * (#453), validates the body (#456) and retries through the load effect (#451).
+ */
 export function PlaysWithSection({ playerId }: { playerId: string }) {
   const [partners, setPartners] = useState<CoplayPartner[] | null>(null);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setError(null);
-    fetch(`/api/v1/players/${playerId}/coplay`, {
+    fetch(coplayUrl(playerId), {
       credentials: 'include',
       cache: 'no-store',
+      signal: controller.signal,
     })
       .then(async (response) => {
         if (response.status === 401 || response.status === 403) {
@@ -50,20 +47,24 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
           return null;
         }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as CoplayResponse;
+        const parsed = parseCoplayPartners(await response.json());
+        if (!parsed) throw new Error('Некорректный ответ сервера');
+        return parsed;
       })
       .then((body) => {
-        if (!cancelled && body) setPartners(body.partners.slice(0, 10));
+        if (!cancelled && body) setPartners(body);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError((err as Error).message);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   if (hidden) return null;
 
@@ -84,7 +85,7 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
             title="Не удалось загрузить напарников"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
                 Повторить
               </Button>
             }

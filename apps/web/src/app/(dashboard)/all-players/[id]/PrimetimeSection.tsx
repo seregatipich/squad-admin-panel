@@ -4,24 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Badge, Button, InlineBanner, Skeleton } from '@/components/ui';
 import { fmtDuration, MODE_HEX } from './presence';
-
-interface PrimetimeRange {
-  label: string;
-  start_minutes: number;
-  end_minutes: number;
-  start_hour: number;
-  end_hour: number;
-}
-
-interface PrimetimeResponse {
-  window: { from: string; to: string; days: number };
-  timezone: string | null;
-  offset_minutes: number;
-  total_seconds: number;
-  histogram: number[];
-  rolling_average: number[];
-  primetime: PrimetimeRange | null;
-}
+import {
+  type PrimetimeRange,
+  type PrimetimeResponse,
+  parsePrimetime,
+  primetimeUrl,
+} from './primetime';
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 /** Столбцы — обычные часы, пик — те же цвета, что у режимов присутствия. */
@@ -43,19 +31,39 @@ function isPeakHour(hour: number, range: PrimetimeRange | null): boolean {
   return hour >= start || hour <= end;
 }
 
+function hourLabel(hour: number, seconds: number): string {
+  return `${String(hour).padStart(2, '0')}:00 — ${fmtDuration(seconds)}`;
+}
+
+/**
+ * «Праймтайм» block: when in the day the player usually plays.
+ *
+ * The body is validated before rendering (#456), and a retry re-runs the
+ * load effect (#451). Each hour is a labelled `role="img"` bar, not a button:
+ * it has no action, and the hover caption is a pointer convenience on top of
+ * labels a screen reader already announces (#458).
+ */
 export function PrimetimeSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<PrimetimeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoverHour, setHoverHour] = useState<number | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/primetime`, { credentials: 'include', cache: 'no-store' })
+    fetch(primetimeUrl(playerId), {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: PrimetimeResponse) => {
+      .then((json: unknown) => {
+        const body = parsePrimetime(json);
+        if (!body) throw new Error('Некорректный ответ сервера');
         if (!cancelled) setData(body);
       })
       .catch((e) => {
@@ -66,10 +74,12 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   const maxSeconds = useMemo(() => (data ? Math.max(1, ...data.histogram) : 1), [data]);
 
@@ -80,7 +90,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
         title="Не удалось загрузить праймтайм"
         description={error}
         action={
-          <Button size="sm" onClick={() => load()}>
+          <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
             Повторить
           </Button>
         }
@@ -127,16 +137,14 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
           const heightPct = (seconds / maxSeconds) * 100;
           const peak = isPeakHour(hour, range);
           return (
-            <button
-              type="button"
+            <div
               key={hour}
-              onMouseEnter={() => setHoverHour(hour)}
-              onMouseLeave={() => setHoverHour(null)}
-              onFocus={() => setHoverHour(hour)}
-              onBlur={() => setHoverHour(null)}
-              title={`${String(hour).padStart(2, '0')}:00 — ${fmtDuration(seconds)}`}
-              aria-label={`${String(hour).padStart(2, '0')}:00 — ${fmtDuration(seconds)}`}
-              className="flex flex-1 items-end self-stretch rounded-sm bg-transparent"
+              role="img"
+              onPointerEnter={() => setHoverHour(hour)}
+              onPointerLeave={() => setHoverHour(null)}
+              title={hourLabel(hour, seconds)}
+              aria-label={hourLabel(hour, seconds)}
+              className="flex flex-1 items-end self-stretch rounded-sm"
             >
               <span
                 className="w-full rounded-sm transition-opacity"
@@ -146,7 +154,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
                   opacity: hoverHour === null || hoverHour === hour ? 0.9 : 0.45,
                 }}
               />
-            </button>
+            </div>
           );
         })}
       </div>

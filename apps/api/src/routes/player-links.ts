@@ -11,6 +11,7 @@ import { desc, eq, inArray, or } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { altEvidenceSnapshot } from '../lib/alt-candidates.js';
 import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
 
 /**
@@ -22,24 +23,14 @@ export const PLAYER_LINKS_LIMIT = 500;
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const linkIdParams = z.object({ linkId: z.string().uuid() });
 
-/**
- * Largest serialized `evidence_snapshot` accepted, in UTF-16 code units of its
- * JSON. The web client sends an alt candidate's score and signals (a few KiB);
- * the cap stops the free-form JSONB from being used to bloat the table.
- */
-export const EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH = 16_384;
-
 const createBody = z.object({
   other_player_id: z.string().uuid(),
   link_type: z.enum(PLAYER_LINK_TYPES),
   status: z.enum(PLAYER_LINK_STATUSES).default('confirmed'),
   note: z.string().trim().max(2000).optional(),
-  evidence_snapshot: z
-    .record(z.string(), z.unknown())
-    .refine((value) => JSON.stringify(value).length <= EVIDENCE_SNAPSHOT_MAX_JSON_LENGTH, {
-      message: 'evidence_snapshot_too_large',
-    })
-    .optional(),
+  // A client-sent `evidence_snapshot` is no longer read (#461): unknown keys
+  // are stripped, so older clients keep working while the stored evidence is
+  // always the server's own ALT-1 computation.
 });
 
 const patchBody = z
@@ -118,6 +109,10 @@ async function auditMutation(
  * flipping a verdict is a PATCH `status` update, so the decision history
  * (and its `audit_log` trail) is never lost. All three routes are gated on
  * the fine `player:view_ips` permission, same as the candidate engine.
+ *
+ * `evidence_snapshot` is computed here, from the ALT-1 engine's output for the
+ * pair at decision time (`altEvidenceSnapshot`), never taken from the request
+ * body — otherwise any link creator could store fabricated «evidence» (#461).
  */
 const playerLinksRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -164,13 +159,7 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const { playerId } = req.params;
-      const {
-        other_player_id: otherPlayerId,
-        link_type,
-        status,
-        note,
-        evidence_snapshot,
-      } = req.body;
+      const { other_player_id: otherPlayerId, link_type, status, note } = req.body;
 
       if (otherPlayerId === playerId) {
         reply.code(400);
@@ -186,6 +175,17 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'player_not_found' };
       }
 
+      const evidenceSnapshot = await altEvidenceSnapshot(
+        app.db,
+        {
+          id: playerId,
+          steamId64: summaries.get(playerId)?.steam_id64
+            ? BigInt(summaries.get(playerId)?.steam_id64 as string)
+            : null,
+        },
+        otherPlayerId,
+      );
+
       const [playerAId, playerBId] =
         playerId < otherPlayerId ? [playerId, otherPlayerId] : [otherPlayerId, playerId];
 
@@ -198,7 +198,7 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
             linkType: link_type,
             status,
             note: note ?? null,
-            evidenceSnapshot: evidence_snapshot ?? null,
+            evidenceSnapshot,
             createdBy: actorId,
           })
           .onConflictDoNothing({ target: [playerLinks.playerAId, playerLinks.playerBId] })

@@ -59,3 +59,45 @@ export function formatRelativeTime(sampledAt: string | Date, now: Date = new Dat
   if (diffHr < 24) return `${diffHr}h ago`;
   return '> 1d ago';
 }
+
+const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Converts an `<input type="date">` value into the ISO bound of that day in
+ * the browser's time zone — the zone every panel timestamp is rendered in, so
+ * a filter "с 01.09" keeps exactly the rows the table labels 01.09 (#462).
+ *
+ * @param value `YYYY-MM-DD` as produced by a date input; empty means no bound.
+ * @param endOfDay `true` for the inclusive upper bound (23:59:59.999 local).
+ * @returns The bound as a UTC ISO string, or `null` for an empty/invalid value.
+ */
+export function dateInputToIso(value: string, endOfDay: boolean): string | null {
+  const match = DATE_INPUT_PATTERN.exec(value);
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+  const bound = endOfDay
+    ? new Date(year, month, day, 23, 59, 59, 999)
+    : new Date(year, month, day, 0, 0, 0, 0);
+  if (Number.isNaN(bound.getTime()) || bound.getMonth() !== month) return null;
+  return bound.toISOString();
+}
+
+/**
+ * The panel's single `ru-RU` date-time format (`09.07.2026, 13:05`), rendered
+ * in the browser's zone.
+ *
+ * @param iso ISO timestamp; `null`, `undefined` or an unparsable value yields `fallback`.
+ * @param fallback What to show when there is no valid timestamp; defaults to an em dash.
+ */
+export function formatDateTimeRu(iso: string | null | undefined, fallback = '—'): string {
+  if (!iso) return fallback;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}

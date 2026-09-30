@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCombatLogTeamkillHref,
+  buildPlayerTeamkillApiPath,
   buildTeamkillSummaryApiQuery,
   formatModerationSummary,
   formatTeamkillDate,
   parseTeamkillFilters,
+  parseTeamkillPlayerResponse,
   teamkillSortLabel,
 } from './helpers';
 
@@ -105,5 +107,56 @@ describe('teamkill moderation helpers', () => {
         }),
       ).toBe('Бан · —, всего 1');
     });
+  });
+});
+
+describe('parseTeamkillPlayerResponse', () => {
+  const stats = {
+    player_id: 'p-1',
+    current_name: 'Nick',
+    steam_id64: null,
+    eos_id: null,
+    tk_total: 3,
+    tk_7d: 1,
+    tk_30d: 2,
+    victim_of_tk_total: 0,
+    last_tk_at: null,
+    moderation_total: 0,
+    last_moderation_at: null,
+    last_moderation_type: null,
+  };
+  const event = {
+    id: 1,
+    server_id: 's-1',
+    match_id: null,
+    weapon: 'M4',
+    occurred_at: '2026-07-01T10:00:00.000Z',
+    role: 'attacker',
+    attacker: { player_id: 'p-1', current_name: 'Nick' },
+    victim: null,
+  };
+
+  it('accepts a well-formed body', () => {
+    const body = { stats, recent: [event] };
+    expect(parseTeamkillPlayerResponse(body)).toEqual(body);
+  });
+
+  // Regression (#456): the body was cast with `as` and a drifted field
+  // crashed the render instead of showing an error.
+  it('rejects malformed stats or events', () => {
+    expect(
+      parseTeamkillPlayerResponse({ stats: { ...stats, tk_7d: null }, recent: [] }),
+    ).toBeNull();
+    expect(
+      parseTeamkillPlayerResponse({ stats, recent: [{ ...event, role: 'bystander' }] }),
+    ).toBeNull();
+    expect(parseTeamkillPlayerResponse({ stats })).toBeNull();
+    expect(parseTeamkillPlayerResponse(null)).toBeNull();
+  });
+});
+
+describe('buildPlayerTeamkillApiPath', () => {
+  it('encodes the player id (#472)', () => {
+    expect(buildPlayerTeamkillApiPath('../x')).toBe('/api/v1/players/..%2Fx/teamkills');
   });
 });

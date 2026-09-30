@@ -1,7 +1,6 @@
 export {
   type BanStatusLike,
   banStatusBadge,
-  formatDate,
   trustLevelLabel,
 } from '../all-players/[id]/external-bans';
 

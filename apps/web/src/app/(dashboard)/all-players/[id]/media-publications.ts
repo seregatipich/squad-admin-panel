@@ -32,7 +32,24 @@ export function destinationLabel(destination: MediaPublicationDestination): stri
 }
 
 export function publicationsUrl(mediaId: string): string {
-  return `/api/v1/media/${mediaId}/publications`;
+  return `/api/v1/media/${encodeURIComponent(mediaId)}/publications`;
+}
+
+/** How often a card re-reads a publication that is still queued or uploading. */
+export const PUBLICATION_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Upper bound on status re-reads per mount (40 × 15 s = 10 minutes): a job
+ * parked on a YouTube quota window can stay queued for hours, and an open tab
+ * must not poll it forever. A reload starts a fresh budget.
+ */
+export const PUBLICATION_POLL_LIMIT = 40;
+
+/** Whether any destination is still on its way — the only case worth polling. */
+export function hasPendingPublication(publications: readonly MediaPublication[]): boolean {
+  return publications.some(
+    (publication) => publication.status === 'queued' || publication.status === 'uploading',
+  );
 }
 
 export function publicationUrl(mediaId: string, destination: MediaPublicationDestination): string {

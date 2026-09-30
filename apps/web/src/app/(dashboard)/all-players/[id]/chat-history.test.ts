@@ -4,9 +4,7 @@ import {
   buildChatQuery,
   type ChatFilters,
   type ChatMsg,
-  dateInputToIso,
   EMPTY_CHAT_FILTERS,
-  formatChatTs,
   liveToChatMsg,
   matchesFilters,
   mergeChatPage,
@@ -69,8 +67,8 @@ describe('buildChatQuery', () => {
     expect(params.get('scope')).toBe('admin');
     expect(params.get('source')).toBe('panel');
     expect(params.get('text')).toBe('flank');
-    expect(params.get('from')).toBe('2026-07-01T00:00:00.000Z');
-    expect(params.get('to')).toBe('2026-07-02T23:59:59.999Z');
+    expect(params.get('from')).toBe(new Date(2026, 6, 1, 0, 0, 0, 0).toISOString());
+    expect(params.get('to')).toBe(new Date(2026, 6, 2, 23, 59, 59, 999).toISOString());
   });
 
   it('omits whitespace-only text', () => {
@@ -92,21 +90,6 @@ describe('thirtyDayCountQuery', () => {
     expect(params.get('playerId')).toBe(PLAYER);
     expect(params.get('from')).toBe('2026-07-01T00:00:00.000Z');
     expect(params.has('to')).toBe(false);
-  });
-});
-
-describe('dateInputToIso', () => {
-  it('returns null for an empty value', () => {
-    expect(dateInputToIso('', false)).toBeNull();
-  });
-
-  it('maps to start or end of the UTC day', () => {
-    expect(dateInputToIso('2026-07-01', false)).toBe('2026-07-01T00:00:00.000Z');
-    expect(dateInputToIso('2026-07-01', true)).toBe('2026-07-01T23:59:59.999Z');
-  });
-
-  it('returns null for a malformed value', () => {
-    expect(dateInputToIso('not-a-date', false)).toBeNull();
   });
 });
 
@@ -213,10 +196,5 @@ describe('labels and formatting', () => {
     expect(scopeLabel('unknown')).toBe('unknown');
     expect(sourceLabel('panel')).toBe('Панель');
     expect(sourceLabel('rcon')).toBe('Игра (RCON)');
-  });
-
-  it('formats a timestamp and falls back on garbage input', () => {
-    expect(formatChatTs('nonsense')).toBe('nonsense');
-    expect(formatChatTs('2026-07-01T12:00:00.000Z')).toContain('2026');
   });
 });

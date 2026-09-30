@@ -14,6 +14,10 @@ const DAY_MS = 86_400_000;
 const TOP_PARTNERS_LIMIT = 20;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
+const coplayQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(TOP_PARTNERS_LIMIT).default(TOP_PARTNERS_LIMIT),
+  include: z.literal('by_server').optional(),
+});
 
 interface TotalsRow {
   partner_id: string;
@@ -33,22 +37,28 @@ interface ServerRow {
 
 /**
  * Co-play graph routes (ALT-3). Serves the "часто играет с" list for a player:
- * the top {@link TOP_PARTNERS_LIMIT} co-play partners over the rolling
- * {@link COPLAY_WINDOW_DAYS}-day window, aggregated across all servers with a
- * per-server breakdown, filtered by the configurable noise-floor thresholds.
- * Gated on `panel_access` — IP data is never involved.
+ * the top `?limit` (default and maximum {@link TOP_PARTNERS_LIMIT}) co-play
+ * partners over the rolling {@link COPLAY_WINDOW_DAYS}-day window, aggregated
+ * across all servers and filtered by the configurable noise-floor thresholds.
+ * The per-server breakdown (`by_server` on each partner) is a second aggregate
+ * and is computed only for `?include=by_server` (#453). Gated on
+ * `panel_access` — IP data is never involved.
  */
 const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   fast.get(
     '/api/v1/players/:playerId/coplay',
-    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: coplayQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
       const { playerId } = req.params;
+      const { limit, include } = req.query;
 
       const [settings] = await app.db
         .select({
@@ -91,15 +101,18 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
         HAVING SUM(w.shared_session_count) >= ${minShared}
            AND SUM(w.overlap_seconds) >= ${minOverlap}
         ORDER BY SUM(w.overlap_seconds) DESC, w.partner_id
-        LIMIT ${TOP_PARTNERS_LIMIT}
+        LIMIT ${limit}
       `)) as unknown as TotalsRow[];
 
       const topPartnerIds = totals.map((row) => row.partner_id);
+      const withServers = include === 'by_server';
 
-      // Only the top partners' rows are aggregated per server; the database
-      // never groups the long tail that the response would drop anyway.
-      const perServer = topPartnerIds.length
-        ? ((await app.db.execute(sql`
+      // Only the top partners' rows are aggregated per server, and only when
+      // the caller asked for the breakdown (#453); the database never groups
+      // the long tail that the response would drop anyway.
+      const perServer =
+        withServers && topPartnerIds.length
+          ? ((await app.db.execute(sql`
             WITH windowed AS (
               SELECT
                 CASE WHEN pc.player_a_id = ${playerId} THEN pc.player_b_id ELSE pc.player_a_id END
@@ -128,7 +141,7 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
             GROUP BY w.partner_id, w.server_id, s.display_name, s.slug
             ORDER BY SUM(w.overlap_seconds) DESC
           `)) as unknown as ServerRow[])
-        : [];
+          : [];
 
       const byPartner = new Map<
         string,
@@ -160,7 +173,7 @@ const playerCoplayRoutes: FastifyPluginAsync = async (app) => {
           player_name: row.partner_name,
           overlap_seconds: Number(row.overlap_seconds),
           shared_session_count: Number(row.shared_session_count),
-          by_server: byPartner.get(row.partner_id) ?? [],
+          ...(withServers ? { by_server: byPartner.get(row.partner_id) ?? [] } : {}),
         })),
       };
     },

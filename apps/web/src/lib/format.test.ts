@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dateInputToIso,
   formatBytes,
   formatBytesPerSec,
+  formatDateTimeRu,
   formatPercent,
   formatRelativeTime,
   formatUptime,
@@ -134,5 +136,47 @@ describe('formatRelativeTime', () => {
 
   it('returns em-dash on invalid date', () => {
     expect(formatRelativeTime('not-a-date', now)).toBe('—');
+  });
+});
+
+describe('formatDateTimeRu', () => {
+  it('renders the fallback for null, undefined and an unparsable value', () => {
+    expect(formatDateTimeRu(null)).toBe('—');
+    expect(formatDateTimeRu(undefined)).toBe('—');
+    expect(formatDateTimeRu('not-a-date')).toBe('—');
+    expect(formatDateTimeRu('not-a-date', 'not-a-date')).toBe('not-a-date');
+  });
+
+  it('formats a valid timestamp as ru-RU day, month, year, hour and minute', () => {
+    const iso = '2026-07-09T10:05:00.000Z';
+    expect(formatDateTimeRu(iso)).toBe(
+      new Date(iso).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    );
+  });
+});
+
+describe('dateInputToIso', () => {
+  it('returns null for an empty or unparsable value', () => {
+    expect(dateInputToIso('', false)).toBeNull();
+    expect(dateInputToIso('not-a-date', true)).toBeNull();
+  });
+
+  // Regression (#462, #474): the bounds used to be UTC midnight, while every
+  // timestamp in the panel is rendered in the browser's zone. The expectation
+  // is built with the local-time Date constructor, so it holds in any TZ —
+  // run with `TZ=Europe/Moscow` to see the old UTC bounds fail it.
+  it('builds the bounds of the picked day in the browser time zone', () => {
+    expect(dateInputToIso('2026-07-01', false)).toBe(
+      new Date(2026, 6, 1, 0, 0, 0, 0).toISOString(),
+    );
+    expect(dateInputToIso('2026-07-01', true)).toBe(
+      new Date(2026, 6, 1, 23, 59, 59, 999).toISOString(),
+    );
   });
 });

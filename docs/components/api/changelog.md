@@ -376,6 +376,17 @@
 - `POST`/`PUT /api/v1/roles`: повторяющиеся ключи `squad_permissions` схлопываются, а `409 role_name_taken` возвращается только при конфликте имени. `PUT` ставит синхронизацию Admins.cfg в очередь, только если изменились имя или `squad_permissions`.
 - `PATCH /api/v1/seasons/:id` отвечает `422 season_finalized`, если сезон финализировали параллельно, и не переоткрывает его.
 - `POST /api/v1/servers/archive/:id/restore` отвечает `409 slug_in_use`, а не `500`, если slug заняли параллельно. `POST /api/v1/servers/:id/restore-configs` отклоняет внешний сервер (`409 external_server`).
+## 2026-09-28 — Карточка игрока: доказательства, заметки, напарники, связи (#81)
+
+### Security
+
+- `POST /api/v1/players/:playerId/links` больше не принимает `evidence_snapshot` от клиента: поле игнорируется, а в `player_links.evidence_snapshot` записывается снимок, который сервер сам вычисляет движком ALT-1 для пары в момент решения (`score`, `confidence`, `shared_ip_count`, `signals`), или `null`, если пара не является кандидатом (#461). Движок вынесен в `src/lib/alt-candidates.ts` и общий для `GET /alt-candidates` и создания связи.
+
+### Changed
+
+- `GET /api/v1/players/:playerId/media` добавляет к каждому элементу `publications[]` (строки `media_publications`), а к ответу — `can_manage_media` вызывающего; `GET /api/v1/media/:id/publications` тоже отдаёт `can_manage_media` (#440, #444).
+- `GET /api/v1/players/:playerId/coplay` принимает `?limit=1..20` (по умолчанию 20) и считает разбивку по серверам (`by_server`) только для `?include=by_server`; без него поля `by_server` в ответе нет (#453).
+- `PATCH /api/v1/notes/:noteId` и `DELETE /api/v1/notes/:noteId` публикуют live-события `note.updated` (`{ player_id, note }`) и `note.deleted` (`{ player_id, note_id }`) (#449).
 
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 

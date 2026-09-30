@@ -306,6 +306,32 @@ describe('player notes', () => {
       expect((auditRows[0]?.afterSnapshot as { body: string }).body).toBe('after edit');
     });
 
+    // Regression (#449): edits never reached the other open cards.
+    it('publishes a note.updated live event with the edited note', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'live before');
+      const received: LiveEvent[] = [];
+      const unsub = h.app.liveBus.subscribe((event) => received.push(event));
+      try {
+        const res = await h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+          payload: { body: 'live after' },
+        });
+        expect(res.statusCode).toBe(200);
+        const evt = received.find((e) => e.type === 'note.updated');
+        expect(evt).toMatchObject({
+          type: 'note.updated',
+          data: {
+            player_id: subjectId,
+            note: { id: created.id, body: 'live after', edited: true },
+          },
+        });
+      } finally {
+        unsub();
+      }
+    });
+
     it('403 when a different admin (no can_edit_roles) edits', async () => {
       const authorId = await seedPlayer(h, 'Admin', 'AuthorAdmin');
       const authorCookie = await loginAs(h, authorId);
@@ -379,6 +405,28 @@ describe('player notes', () => {
       expect(
         (auditRows[0]?.afterSnapshot as { deleted_at: string | null }).deleted_at,
       ).not.toBeNull();
+    });
+
+    // Regression (#449): deletions never reached the other open cards.
+    it('publishes a note.deleted live event', async () => {
+      const created = await createNote(h, ownerCookie, subjectId, 'live delete');
+      const received: LiveEvent[] = [];
+      const unsub = h.app.liveBus.subscribe((event) => received.push(event));
+      try {
+        const res = await h.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/notes/${created.id}`,
+          headers: { cookie: ownerCookie },
+        });
+        expect(res.statusCode).toBe(200);
+        const evt = received.find((e) => e.type === 'note.deleted');
+        expect(evt).toMatchObject({
+          type: 'note.deleted',
+          data: { player_id: subjectId, note_id: created.id },
+        });
+      } finally {
+        unsub();
+      }
     });
 
     it('allows an owner (can_edit_roles) to delete another admin note', async () => {

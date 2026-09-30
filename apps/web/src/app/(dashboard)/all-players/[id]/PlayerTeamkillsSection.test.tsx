@@ -62,8 +62,31 @@ describe('PlayerTeamkillsSection moderation metric', () => {
 
       await screen.findByText('Модерация');
       expect(
-        screen.getByText(`Последнее: warn · ${formatTeamkillDate('2026-07-12T13:00:00.000Z')}`),
+        screen.getByText(
+          `Последнее: Предупреждение · ${formatTeamkillDate('2026-07-12T13:00:00.000Z')}`,
+        ),
       ).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('PlayerTeamkillsSection response handling', () => {
+  // Regression (#456): the body was cast with `as`.
+  it(
+    'reports a malformed body as an error instead of crashing',
+    async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ stats: null, recent: [] }), { status: 200 }),
+          ),
+        ),
+      );
+      render(<PlayerTeamkillsSection playerId="player-alpha" />);
+
+      expect(await screen.findByText('Не удалось загрузить тимкиллы')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

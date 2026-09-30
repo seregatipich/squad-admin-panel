@@ -1,3 +1,5 @@
+import { isNullableString } from '@/lib/json-guards';
+
 /** Shape returned by `GET /api/v1/players/:playerId/discord` (DISCORD-4, #151). */
 export interface DiscordLinkResponse {
   linked: boolean;
@@ -13,16 +15,12 @@ export const DISCORD_OAUTH_LOGIN_URL = '/api/v1/auth/discord/login';
 export const SELF_UNLINK_URL = '/api/v1/players/me/discord/link';
 
 export function buildDiscordLinkUrl(playerId: string): string {
-  return `/api/v1/players/${playerId}/discord`;
+  return `/api/v1/players/${encodeURIComponent(playerId)}/discord`;
 }
 
 /** Forced unlink of somebody else's link; the API gates it on `can_assign_roles`. */
 export function buildForceUnlinkUrl(playerId: string): string {
-  return `/api/v1/players/${playerId}/discord/link`;
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
+  return `/api/v1/players/${encodeURIComponent(playerId)}/discord/link`;
 }
 
 /**

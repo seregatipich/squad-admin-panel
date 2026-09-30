@@ -28,55 +28,22 @@ export interface ModerationHistoryAction {
   evidence_count: number;
 }
 
+/** Page size of the player-card moderation history; the API allows up to 200. */
+export const MODERATION_HISTORY_PAGE_SIZE = 50;
+
 /**
- * `moderation_actions.action_type` is free text with no CHECK constraint —
- * these are the values actually written today (the panel's own warn/kick/ban/
- * unban, plus the banname, external-ban and clan-guard workers). Anything else
- * falls through to the raw value rather than being hidden behind a placeholder.
+ * One page of `GET /api/v1/players/:playerId/moderation-actions`.
+ *
+ * The API has no total and no next-cursor field, so the card asks for one row
+ * more than it shows: the extra row only proves another page exists (#441).
+ *
+ * @param playerId Player UUID; encoded, since it comes from the route segment.
+ * @param cursor Id of the last row already shown, or `null` for the first page.
  */
-const ACTION_LABELS: Record<string, string> = {
-  warn: 'Предупреждение',
-  kick: 'Кик',
-  ban: 'Бан',
-  unban: 'Разбан',
-  name_kick: 'Кик за ник',
-  external_ban_kick: 'Кик по внешнему бану',
-  'external_ban.local_ban': 'Локальный бан по внешнему',
-  clan_tag_protection: 'Защита клан-тега',
-};
-
-const NEUTRAL_BADGE = 'bg-neutral-800 text-neutral-300 border border-neutral-700';
-
-const ACTION_BADGE_CLASSES: Record<string, string> = {
-  warn: 'bg-amber-950/50 text-amber-300 border border-amber-900',
-  kick: 'bg-orange-950/50 text-orange-300 border border-orange-900',
-  ban: 'bg-red-950/50 text-red-300 border border-red-900',
-  unban: 'bg-emerald-950/50 text-emerald-300 border border-emerald-900',
-  name_kick: 'bg-orange-950/50 text-orange-300 border border-orange-900',
-  external_ban_kick: 'bg-orange-950/50 text-orange-300 border border-orange-900',
-  'external_ban.local_ban': 'bg-red-950/50 text-red-300 border border-red-900',
-  clan_tag_protection: 'bg-sky-950/50 text-sky-300 border border-sky-900',
-};
-
-export function moderationActionLabel(actionType: string): string {
-  return ACTION_LABELS[actionType] ?? actionType;
-}
-
-export function moderationActionBadgeClass(actionType: string): string {
-  return ACTION_BADGE_CLASSES[actionType] ?? NEUTRAL_BADGE;
-}
-
-export function formatModerationDate(iso: string | null): string {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+export function moderationActionsUrl(playerId: string, cursor: string | null): string {
+  const params = new URLSearchParams({ limit: String(MODERATION_HISTORY_PAGE_SIZE + 1) });
+  if (cursor) params.set('cursor', cursor);
+  return `/api/v1/players/${encodeURIComponent(playerId)}/moderation-actions?${params.toString()}`;
 }
 
 /** Renders the action's author — a panel user's name, or the worker's system label. */
@@ -90,11 +57,12 @@ export function evidenceLabel(item: ModerationEvidence): string {
 }
 
 export function mediaStreamUrl(mediaId: string): string {
-  return `/api/v1/media/${mediaId}/stream`;
+  return `/api/v1/media/${encodeURIComponent(mediaId)}/stream`;
 }
 
 export function detachEvidenceUrl(mediaId: string, actionId: string): string {
-  return `/api/v1/media/${mediaId}/links?entity_type=moderation_action&entity_id=${actionId}`;
+  const params = new URLSearchParams({ entity_type: 'moderation_action', entity_id: actionId });
+  return `/api/v1/media/${encodeURIComponent(mediaId)}/links?${params.toString()}`;
 }
 
 /**

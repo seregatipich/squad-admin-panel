@@ -6,6 +6,7 @@ import {
   CHART_BORDER,
   CHART_FRAME,
   CHART_GRID,
+  CHART_HOVER,
   CHART_SERIES,
   CHART_SURFACE,
   CHART_TOOLTIP_STYLE,
@@ -32,6 +33,7 @@ describe('палитра графиков', () => {
     ['CHART_FRAME', CHART_FRAME, 'line-2'],
     ['CHART_SURFACE', CHART_SURFACE, 'surface'],
     ['CHART_BORDER', CHART_BORDER, 'line'],
+    ['CHART_HOVER', CHART_HOVER, 'ink'],
   ])('%s совпадает с токеном темы', (_name, value, tokenName) => {
     expect(value.toLowerCase()).toBe(token(tokenName));
   });

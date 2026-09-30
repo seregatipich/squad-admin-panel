@@ -99,4 +99,30 @@ describe('PlaysWithSection', () => {
     expect(screen.getByText('HTTP 503')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
+
+  // Regression (#453): the card fetched twenty partners plus the per-server
+  // split, then showed ten.
+  it('asks for exactly the ten partners it shows', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve(new Response(JSON.stringify({ partners: [] }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PlaysWithSection playerId="player-1" />);
+
+    await screen.findByText('Постоянных напарников нет');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/players/player-1/coplay?limit=10');
+  });
+
+  // Regression (#456): the body was cast with `as`.
+  it('reports a malformed body as an error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ partners: 'x' }), { status: 200 })),
+      ),
+    );
+    render(<PlaysWithSection playerId="player-1" />);
+
+    expect(await screen.findByText('Не удалось загрузить напарников')).toBeInTheDocument();
+  });
 });

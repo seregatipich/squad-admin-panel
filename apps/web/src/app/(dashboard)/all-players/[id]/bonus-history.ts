@@ -1,3 +1,5 @@
+import { dateInputToIso } from '@/lib/format';
+
 export const BONUS_TYPE_OPTIONS = [
   { value: 'earn_online', label: 'Онлайн' },
   { value: 'earn_boost', label: 'Буст' },
@@ -10,10 +12,18 @@ export type BonusType = (typeof BONUS_TYPE_OPTIONS)[number]['value'];
 
 const TYPE_LABELS = new Map(BONUS_TYPE_OPTIONS.map((option) => [option.value, option.label]));
 
+/**
+ * `bonus_transactions.reference_type` values written today: the daily accrual
+ * (`daily_presence`), the ECON-6 shop (`purchase`), VIP subscriptions — the
+ * first charge from the API and each renewal from worker-role-expirer
+ * (`vip_subscription`, #463) — and manual adjustments. An unknown value falls
+ * through to the raw code rather than being hidden.
+ */
 const REFERENCE_LABELS: Record<string, string> = {
   daily_presence: 'Начисление за день',
   manual: 'Ручная корректировка',
   purchase: 'Покупка привилегии',
+  vip_subscription: 'VIP-подписка',
 };
 
 const PAGE_SIZE = 50;
@@ -45,14 +55,6 @@ export interface BonusTransaction {
 export interface BonusPage {
   items: BonusTransaction[];
   next_cursor: number | null;
-}
-
-export function dateInputToIso(value: string, endOfDay: boolean): string | null {
-  if (!value) return null;
-  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
-  const parsed = new Date(`${value}${suffix}`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString();
 }
 
 export function buildBonusQuery(
@@ -129,18 +131,6 @@ export function formatAmount(amount: number): string {
   return amount > 0 ? `+${amount}` : String(amount);
 }
 
-export function formatBonusTs(iso: string): string {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 /** Purchasable tier as served by `GET /api/v1/bonus-shop/tiers` (ECON-6). */
 export interface ShopTier {
   id: string;
@@ -167,9 +157,15 @@ const PURCHASE_ERROR_TEXT: Record<string, string> = {
   role_permanent: 'У игрока бессрочная роль — покупка не требуется.',
   role_conflict: 'У игрока уже есть другая роль. Сначала снимите её.',
   player_not_found: 'Игрок не найден.',
+  already_subscribed: 'У игрока уже есть активная VIP-подписка.',
+  subscription_not_found: 'Подписка не найдена — обновите список.',
   forbidden: 'Недостаточно прав: нужны can_manage_economy и can_assign_roles.',
 };
 
+/**
+ * Russian text for an error code of the bonus-shop purchase and the VIP
+ * subscription grant routes, which share the tier/ledger guards.
+ */
 export function purchaseErrorText(code: string): string {
   return PURCHASE_ERROR_TEXT[code] ?? `Ошибка: ${code}`;
 }

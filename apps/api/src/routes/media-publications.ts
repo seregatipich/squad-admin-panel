@@ -26,9 +26,9 @@ const publicationParams = z.object({
 
 /**
  * Mutation gate for everything in this module. `can_manage_media` is a boolean
- * role flag, and `GET /api/v1/me` deliberately does not expose it — the UI
- * hides these controls by observing a 403, so this must answer with the stable
- * `required` code the front end keys off.
+ * role flag that `GET /api/v1/me` does not expose; the read routes report it
+ * to the caller as `can_manage_media` instead (#440), and a mutation refused
+ * here answers with the stable `required` code.
  */
 function manageMediaGuard(
   req: FastifyRequest,
@@ -43,7 +43,7 @@ function manageMediaGuard(
   return null;
 }
 
-function serializeMediaPublication(
+export function serializeMediaPublication(
   row: typeof mediaPublications.$inferSelect,
 ): MediaPublicationResponse {
   return {
@@ -178,7 +178,13 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         .from(mediaPublications)
         .where(eq(mediaPublications.mediaId, media.id))
         .orderBy(asc(mediaPublications.destination));
-      return { items: rows.map(serializeMediaPublication) };
+      // Readable by every panel user, but only a `can_manage_media` holder
+      // may queue or cancel: the flag lets the UI offer «Опубликовать» only
+      // to them instead of failing on submit (#440).
+      return {
+        items: rows.map(serializeMediaPublication),
+        can_manage_media: req.user?.permissions.canManageMedia ?? false,
+      };
     },
   );
 

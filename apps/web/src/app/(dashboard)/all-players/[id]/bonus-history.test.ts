@@ -4,7 +4,6 @@ import {
   type BonusTransaction,
   buildBonusQuery,
   canAfford,
-  dateInputToIso,
   EMPTY_BONUS_FILTERS,
   formatAmount,
   isCredit,
@@ -45,8 +44,8 @@ describe('buildBonusQuery', () => {
     const q = buildBonusQuery(filters({ type: 'adjust', from: '2026-06-01', to: '2026-06-30' }));
     const params = new URLSearchParams(q.slice(1));
     expect(params.get('type')).toBe('adjust');
-    expect(params.get('from')).toBe('2026-06-01T00:00:00.000Z');
-    expect(params.get('to')).toBe('2026-06-30T23:59:59.999Z');
+    expect(params.get('from')).toBe(new Date(2026, 5, 1, 0, 0, 0, 0).toISOString());
+    expect(params.get('to')).toBe(new Date(2026, 5, 30, 23, 59, 59, 999).toISOString());
   });
 
   it('appends the before cursor when provided', () => {
@@ -58,17 +57,6 @@ describe('buildBonusQuery', () => {
     expect(
       new URLSearchParams(buildBonusQuery(EMPTY_BONUS_FILTERS, null).slice(1)).has('before'),
     ).toBe(false);
-  });
-});
-
-describe('dateInputToIso', () => {
-  it('returns null for empty input', () => {
-    expect(dateInputToIso('', false)).toBeNull();
-  });
-
-  it('maps to start or end of day', () => {
-    expect(dateInputToIso('2026-07-01', false)).toBe('2026-07-01T00:00:00.000Z');
-    expect(dateInputToIso('2026-07-01', true)).toBe('2026-07-01T23:59:59.999Z');
   });
 });
 
@@ -114,6 +102,14 @@ describe('labels and formatting', () => {
   it('formats the source with a reference id', () => {
     expect(sourceLabel({ reference_type: 'daily_presence', reference_id: '2026-07-01' })).toBe(
       'Начисление за день · 2026-07-01',
+    );
+  });
+
+  // Regression (#463): VIP-subscription charges (API purchase and the
+  // role-expirer renewal) used to show the raw `vip_subscription` code.
+  it('labels a VIP-subscription charge in Russian', () => {
+    expect(sourceLabel({ reference_type: 'vip_subscription', reference_id: 'sub-1' })).toBe(
+      'VIP-подписка · sub-1',
     );
   });
 

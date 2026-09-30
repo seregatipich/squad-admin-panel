@@ -2,17 +2,39 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui';
+import { isRecord } from '@/lib/json-guards';
 
-export type SteamFriendCheckReason =
-  | 'private_profile'
-  | 'steam_unavailable'
-  | 'no_steam_id'
-  | 'api_key_missing';
+const STEAM_FRIEND_CHECK_REASONS = [
+  'private_profile',
+  'steam_unavailable',
+  'no_steam_id',
+  'api_key_missing',
+] as const;
+
+export type SteamFriendCheckReason = (typeof STEAM_FRIEND_CHECK_REASONS)[number];
 
 export interface SteamFriendCheckResult {
   in_friend: boolean | null;
   reason: SteamFriendCheckReason | null;
   cached: boolean;
+}
+
+function isReason(value: unknown): value is SteamFriendCheckReason {
+  return (STEAM_FRIEND_CHECK_REASONS as readonly unknown[]).includes(value);
+}
+
+/**
+ * Validates a decoded `steam-friend-check` body, returning `null` for any
+ * shape mismatch so an unexpected answer is reported as an error rather than
+ * silently shown as «Проверка недоступна» (#467).
+ */
+export function parseSteamFriendCheck(json: unknown): SteamFriendCheckResult | null {
+  if (!isRecord(json)) return null;
+  const { in_friend: inFriend, reason, cached } = json;
+  if (inFriend !== null && typeof inFriend !== 'boolean') return null;
+  if (reason !== null && !isReason(reason)) return null;
+  if (typeof cached !== 'boolean') return null;
+  return { in_friend: inFriend, reason, cached };
 }
 
 function resultLabel(result: SteamFriendCheckResult): string {
@@ -26,7 +48,11 @@ function resultLabel(result: SteamFriendCheckResult): string {
   return 'Проверка недоступна';
 }
 
-/** Checks whether two player accounts are Steam friends when the API is configured. */
+/**
+ * Checks whether two player accounts are Steam friends when the API is
+ * configured. A failed check offers «Повторить» and a shown result
+ * «Перепроверить», so neither state is final until a reload (#467).
+ */
 export function SteamFriendCheck({
   playerId,
   otherPlayerId,
@@ -45,14 +71,16 @@ export function SteamFriendCheck({
     setError(null);
     try {
       const response = await fetch(
-        `/api/v1/players/${playerId}/steam-friend-check?other=${encodeURIComponent(otherPlayerId)}`,
+        `/api/v1/players/${encodeURIComponent(playerId)}/steam-friend-check?other=${encodeURIComponent(otherPlayerId)}`,
         { credentials: 'include', cache: 'no-store' },
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const nextResult = (await response.json()) as SteamFriendCheckResult;
+      const nextResult = parseSteamFriendCheck(await response.json());
+      if (!nextResult) throw new Error('некорректный ответ сервера');
       setResult(nextResult);
       onResult?.(nextResult);
     } catch (err) {
+      setResult(null);
       setError((err as Error).message);
     } finally {
       setLoading(false);
@@ -60,14 +88,26 @@ export function SteamFriendCheck({
   }
 
   if (error) {
-    return <output className="text-xs text-crit">Ошибка Steam: {error}</output>;
+    return (
+      <span className="inline-flex items-center gap-2">
+        <output className="text-xs text-crit">Ошибка Steam: {error}</output>
+        <Button size="sm" variant="plain" loading={loading} onClick={() => void checkFriends()}>
+          Повторить
+        </Button>
+      </span>
+    );
   }
 
   if (result) {
     return (
-      <output className="text-xs text-ink-2" title={result.cached ? 'Кэш 24 ч' : undefined}>
-        Steam: {resultLabel(result)}
-      </output>
+      <span className="inline-flex items-center gap-2">
+        <output className="text-xs text-ink-2" title={result.cached ? 'Кэш 24 ч' : undefined}>
+          Steam: {resultLabel(result)}
+        </output>
+        <Button size="sm" variant="plain" loading={loading} onClick={() => void checkFriends()}>
+          Перепроверить
+        </Button>
+      </span>
     );
   }
 

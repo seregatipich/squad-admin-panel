@@ -328,6 +328,26 @@ describe('GET /api/v1/media/:id/publications', () => {
     expect(items[0]).toMatchObject({ destination: 'telegram', status: 'queued' });
   });
 
+  // Regression (#440): the publish control could not tell a reader from a
+  // manager, so it offered «Опубликовать» to everyone and failed on submit.
+  it('tells the caller whether it may publish', async () => {
+    const mediaId = await insertStoredMedia();
+
+    const asPlain = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/media/${mediaId}/publications`,
+      headers: { cookie: plainCookie },
+    });
+    const asOwner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/media/${mediaId}/publications`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(asPlain.json()).toMatchObject({ can_manage_media: false });
+    expect(asOwner.json()).toMatchObject({ can_manage_media: true });
+  });
+
   it('surfaces a retrying quota-blocked publication as still queued with a future schedule', async () => {
     const mediaId = await insertStoredMedia();
     await h.app.inject({

@@ -112,6 +112,69 @@ afterEach(() => {
 });
 
 describe('EvidenceSection', () => {
+  // Regression (#444): each file's publish control used to fetch its own
+  // publications; the listing now embeds them.
+  it('renders every publish control from the listing alone', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            can_manage_media: true,
+            items: [
+              {
+                ...EVIDENCE_RESPONSE.items[0],
+                publications: [
+                  {
+                    id: 'pub-1',
+                    media_id: 'media-1',
+                    destination: 'telegram',
+                    status: 'published',
+                    external_id: '42',
+                    external_url: 'https://t.me/c/1/42',
+                    error: null,
+                    attempts: 1,
+                    next_attempt_at: null,
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<EvidenceSection playerId="player-1" />);
+
+    await screen.findByText('опубликовано');
+    expect(screen.getByRole('button', { name: 'Опубликовать' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([LIST_URL]);
+  });
+
+  // Regression (#440): no publish action for a viewer without can_manage_media.
+  it('offers no publish action when the listing says the viewer cannot manage media', async () => {
+    stubFetch(listOnly({ ...EVIDENCE_RESPONSE, can_manage_media: false }));
+
+    render(<EvidenceSection playerId="player-1" />);
+
+    await screen.findByText('Аимбот на записи');
+    expect(screen.queryByRole('button', { name: 'Опубликовать' })).not.toBeInTheDocument();
+  });
+
+  // Regression (#446): a detach in «История модерации» must reach this list.
+  it('reloads the list when the page bumps refreshKey', async () => {
+    const fetchMock = stubListAndPublications();
+
+    const { rerender } = render(<EvidenceSection playerId="player-1" refreshKey={0} />);
+    await screen.findByText('Аимбот на записи');
+    const loadsBefore = listLoads(fetchMock);
+
+    rerender(<EvidenceSection playerId="player-1" refreshKey={1} />);
+
+    await waitFor(() => expect(listLoads(fetchMock)).toBe(loadsBefore + 1));
+  });
+
   it('is a valid React component', () => {
     expect(EvidenceSection).toBeDefined();
     expect(typeof EvidenceSection).toBe('function');

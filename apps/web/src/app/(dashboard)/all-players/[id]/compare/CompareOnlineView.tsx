@@ -23,6 +23,7 @@ import {
   cellStyle,
   cellTitle,
   nextWeekEndDay,
+  parseCompareOnlineResponse,
   prevWeekEndDay,
   summaryLabel,
 } from './compare-online';
@@ -45,6 +46,15 @@ function dayRowLabel(dayKey: string): string {
   return `${weekday} ${dayKey.slice(5)}`;
 }
 
+/**
+ * Co-presence week grid of this player and a second one picked on the page.
+ *
+ * Every request goes through the effect, so the effect's cleanup aborts the
+ * previous one whenever the pair, the week or the retry counter changes —
+ * «Повторить» bumps that counter instead of calling the loader directly, so a
+ * late answer can never overwrite the current selection (#471). The body is
+ * validated and must be about the selected second player before it is drawn.
+ */
 export function CompareOnlineView({
   playerId,
   initialOther,
@@ -60,21 +70,25 @@ export function CompareOnlineView({
   const [loading, setLoading] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const otherId = other?.id ?? null;
 
   const load = useCallback(() => {
-    if (!other) {
+    if (!otherId) {
       setData(null);
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setHidden(false);
     setError(null);
     const from = utcDayKey(weekStartMsForEndDay(endDay));
-    const params = new URLSearchParams({ other: other.id, from, to: endDay });
-    fetch(`/api/v1/players/${playerId}/compare-online?${params.toString()}`, {
+    const params = new URLSearchParams({ other: otherId, from, to: endDay });
+    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/compare-online?${params.toString()}`, {
       credentials: 'include',
       cache: 'no-store',
+      signal: controller.signal,
     })
       .then(async (res) => {
         if (res.status === 401 || res.status === 403) {
@@ -85,7 +99,12 @@ export function CompareOnlineView({
           const body = (await res.json().catch(() => null)) as { error?: string } | null;
           throw new Error(body?.error ?? `HTTP ${res.status}`);
         }
-        return (await res.json()) as CompareOnlineResponse;
+        const body = parseCompareOnlineResponse(await res.json());
+        if (!body) throw new Error('Некорректный ответ сервера');
+        if (body.players[1].id !== otherId) {
+          throw new Error('Ответ относится к другому игроку');
+        }
+        return body;
       })
       .then((body) => {
         if (!cancelled && body) setData(body);
@@ -98,10 +117,14 @@ export function CompareOnlineView({
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [playerId, other, endDay]);
+  }, [playerId, otherId, endDay]);
 
-  useEffect(() => load(), [load]);
+  // `retryCount` is not read by the loader: bumping it only re-runs the effect,
+  // so a retry is aborted by the same cleanup as any other request.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   // Sync the picker label with the real canonical name once it's known — a
   // deep-linked `initialOther` id has no name until the first response.
@@ -176,7 +199,7 @@ export function CompareOnlineView({
             title="Не удалось сравнить онлайн"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
                 Повторить
               </Button>
             }

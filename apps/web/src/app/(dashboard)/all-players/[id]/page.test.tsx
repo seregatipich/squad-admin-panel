@@ -182,6 +182,22 @@ async function renderPage() {
 }
 
 describe('PlayerDetailPage', () => {
+  // Regression (#472): a decoded route id reached API paths unchecked.
+  it('refuses a route id that is not a UUID without calling the API', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <PlayerDetailPage params={Promise.resolve({ id: '../../api/v1/players/x?' })} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByText('Некорректный идентификатор игрока')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('is a valid React component', () => {
     expect(PlayerDetailPage).toBeDefined();
     expect(typeof PlayerDetailPage).toBe('function');

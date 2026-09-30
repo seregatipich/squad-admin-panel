@@ -262,9 +262,9 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           after: snapshot(updated),
           context: { requestId: req.id, method: req.method, url: req.url },
         });
-        return null;
+        return { playerId: existing.playerId, code: 200 } as const;
       });
-      if (outcome) {
+      if ('error' in outcome) {
         reply.code(outcome.code);
         return { error: outcome.error };
       }
@@ -275,7 +275,13 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      return toDto(row);
+      const dto = toDto(row);
+      app.liveBus.publish({
+        type: 'note.updated',
+        ts: new Date().toISOString(),
+        data: { player_id: outcome.playerId, note: dto },
+      });
+      return dto;
     },
   );
 
@@ -319,12 +325,18 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           after: snapshot(deleted),
           context: { requestId: req.id, method: req.method, url: req.url },
         });
-        return null;
+        return { playerId: existing.playerId, code: 200 } as const;
       });
-      if (outcome) {
+      if ('error' in outcome) {
         reply.code(outcome.code);
         return { error: outcome.error };
       }
+
+      app.liveBus.publish({
+        type: 'note.deleted',
+        ts: new Date().toISOString(),
+        data: { player_id: outcome.playerId, note_id: noteId },
+      });
       return { ok: true };
     },
   );

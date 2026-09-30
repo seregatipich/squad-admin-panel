@@ -55,6 +55,8 @@ const EVENT_DELIVERY: Record<LiveEvent['type'], 'broadcast' | 'opt_in'> = {
   'mark_type.changed': 'broadcast',
   'media.uploaded': 'broadcast',
   'note.created': 'broadcast',
+  'note.deleted': 'broadcast',
+  'note.updated': 'broadcast',
   'rcon.roster': 'opt_in',
   'rcon.status': 'broadcast',
   'report.created': 'broadcast',

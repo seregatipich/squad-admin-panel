@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
-import { AlertDialog, Badge, Button, ButtonLink } from '@/components/ui';
+import { AlertDialog, Badge, Button, ButtonLink, InlineBanner } from '@/components/ui';
 import { buildCheckUrl, type NickBanCheckResponse, ruleHref } from './nick-ban';
 
 /**
@@ -10,7 +10,10 @@ import { buildCheckUrl, type NickBanCheckResponse, ruleHref } from './nick-ban';
  * active `banned_name_rules` row and renders either a «Ник забанен» badge
  * (with a link to the rule and a «Разбанить ник» quick action) or a
  * «Забанить ник» button that opens the shared prefilled create modal.
- * Hidden entirely on 401/403 (viewers without panel access never see it).
+ * Hidden only on 401/403 (viewers without panel access never see it); any
+ * other failure keeps the block with «Повторить» (#450). Each check carries a
+ * sequence number and only the latest one may update the block, so a slow
+ * earlier answer cannot overwrite a newer re-check.
  */
 export function NickBanSection({
   nick,
@@ -26,18 +29,27 @@ export function NickBanSection({
   const [unbanOpen, setUnbanOpen] = useState(false);
   const [unbanning, setUnbanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const latestRequest = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++latestRequest.current;
+    const isCurrent = () => requestId === latestRequest.current;
+    setHidden(false);
     try {
       const res = await fetch(buildCheckUrl(nick), { credentials: 'include', cache: 'no-store' });
+      if (!isCurrent()) return;
       if (res.status === 401 || res.status === 403) {
         setHidden(true);
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setCheck((await res.json()) as NickBanCheckResponse);
-    } catch {
-      setHidden(true);
+      const body = (await res.json()) as NickBanCheckResponse;
+      if (!isCurrent()) return;
+      setCheck(body);
+      setLoadError(null);
+    } catch (err) {
+      if (isCurrent()) setLoadError((err as Error).message);
     }
   }, [nick]);
 
@@ -46,7 +58,24 @@ export function NickBanSection({
     void load();
   }, [load, refreshKey]);
 
-  if (hidden || !check) return null;
+  if (hidden) return null;
+
+  if (loadError && !check) {
+    return (
+      <InlineBanner
+        tone="warn"
+        title="Не удалось проверить ник"
+        description={loadError}
+        action={
+          <Button size="sm" onClick={() => void load()}>
+            Повторить
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (!check) return null;
 
   async function unban() {
     if (!check?.rule) return;
@@ -90,6 +119,14 @@ export function NickBanSection({
       ) : null}
 
       {error ? <p className="text-xs text-crit">{error}</p> : null}
+      {loadError ? (
+        <p className="flex items-center gap-2 text-xs text-warn">
+          Не удалось перепроверить ник: {loadError}
+          <Button size="sm" variant="plain" onClick={() => void load()}>
+            Повторить
+          </Button>
+        </p>
+      ) : null}
 
       <BannedNameRuleModal
         open={modalOpen}

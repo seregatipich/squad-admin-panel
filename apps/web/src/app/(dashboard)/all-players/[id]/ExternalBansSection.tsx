@@ -14,6 +14,7 @@ import {
   Skeleton,
   StatusBadge,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   ExternalBanLocalBanModal,
   type ExternalBanLocalBanTarget,
@@ -21,7 +22,6 @@ import {
 import {
   type BanStatusLike,
   banStatusBadge,
-  formatDate,
   foundBadgeLabel,
   type PlayerExternalBansResponse,
   trustLevelLabel,
@@ -176,8 +176,8 @@ export function ExternalBansSection({
                               {banStatusBadge(ban).label}
                             </Badge>
                             <span className="text-ink-3">
-                              {formatDate(ban.issued_at)}
-                              {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
+                              {formatDateTimeRu(ban.issued_at)}
+                              {ban.expires_at ? ` → ${formatDateTimeRu(ban.expires_at)}` : ''}
                             </span>
                           </div>
                           {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}

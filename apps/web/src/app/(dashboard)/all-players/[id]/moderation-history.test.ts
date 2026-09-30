@@ -5,55 +5,28 @@ import {
   canDetachEvidence,
   detachEvidenceUrl,
   evidenceLabel,
-  formatModerationDate,
+  MODERATION_HISTORY_PAGE_SIZE,
   mediaStreamUrl,
-  moderationActionBadgeClass,
-  moderationActionLabel,
+  moderationActionsUrl,
 } from './moderation-history';
 
-describe('moderationActionLabel', () => {
-  it('translates the panel-issued action types', () => {
-    expect(moderationActionLabel('warn')).toBe('Предупреждение');
-    expect(moderationActionLabel('kick')).toBe('Кик');
-    expect(moderationActionLabel('ban')).toBe('Бан');
-    expect(moderationActionLabel('unban')).toBe('Разбан');
-  });
-
-  it('translates the worker-issued action types', () => {
-    expect(moderationActionLabel('name_kick')).toBe('Кик за ник');
-    expect(moderationActionLabel('external_ban_kick')).toBe('Кик по внешнему бану');
-    expect(moderationActionLabel('external_ban.local_ban')).toBe('Локальный бан по внешнему');
-    expect(moderationActionLabel('clan_tag_protection')).toBe('Защита клан-тега');
-  });
-
-  it('falls back to the raw action type for an unknown value', () => {
-    expect(moderationActionLabel('teleport_abuse')).toBe('teleport_abuse');
-  });
-});
-
-describe('moderationActionBadgeClass', () => {
-  it('gives bans and kicks distinct badge classes', () => {
-    expect(moderationActionBadgeClass('ban')).not.toBe(moderationActionBadgeClass('kick'));
-  });
-
-  it('falls back to the neutral badge class for an unknown action type', () => {
-    expect(moderationActionBadgeClass('teleport_abuse')).toBe(
-      moderationActionBadgeClass('__definitely_unknown__'),
+describe('moderationActionsUrl', () => {
+  it('asks for one row more than a page so the card knows whether more exist (#441)', () => {
+    expect(moderationActionsUrl('player-1', null)).toBe(
+      `/api/v1/players/player-1/moderation-actions?limit=${MODERATION_HISTORY_PAGE_SIZE + 1}`,
     );
   });
-});
 
-describe('formatModerationDate', () => {
-  it('renders an ISO timestamp in ru-RU', () => {
-    expect(formatModerationDate('2026-07-27T10:00:00.000Z')).toMatch(/\d{2}\.\d{2}\.\d{4}/);
+  it('passes the cursor of the last row shown', () => {
+    expect(moderationActionsUrl('player-1', 'action-9')).toBe(
+      `/api/v1/players/player-1/moderation-actions?limit=${MODERATION_HISTORY_PAGE_SIZE + 1}&cursor=action-9`,
+    );
   });
 
-  it('returns an em dash for null', () => {
-    expect(formatModerationDate(null)).toBe('—');
-  });
-
-  it('returns an em dash for an unparseable value', () => {
-    expect(formatModerationDate('not-a-date')).toBe('—');
+  it('encodes a route segment so it cannot climb out of the player path (#472)', () => {
+    expect(moderationActionsUrl('../../admin?', null)).toBe(
+      `/api/v1/players/..%2F..%2Fadmin%3F/moderation-actions?limit=${MODERATION_HISTORY_PAGE_SIZE + 1}`,
+    );
   });
 });
 
@@ -103,12 +76,22 @@ describe('mediaStreamUrl', () => {
   it('points at the Range-streaming media route', () => {
     expect(mediaStreamUrl('media-1')).toBe('/api/v1/media/media-1/stream');
   });
+
+  it('encodes the media id path segment (#472)', () => {
+    expect(mediaStreamUrl('../x')).toBe('/api/v1/media/..%2Fx/stream');
+  });
 });
 
 describe('detachEvidenceUrl', () => {
   it('addresses the media_links row by media id plus the moderation-action entity', () => {
     expect(detachEvidenceUrl('media-1', 'action-1')).toBe(
       '/api/v1/media/media-1/links?entity_type=moderation_action&entity_id=action-1',
+    );
+  });
+
+  it('encodes both ids so neither can rewrite the path or the query (#472)', () => {
+    expect(detachEvidenceUrl('../m', 'a&entity_type=player')).toBe(
+      '/api/v1/media/..%2Fm/links?entity_type=moderation_action&entity_id=a%26entity_type%3Dplayer',
     );
   });
 });

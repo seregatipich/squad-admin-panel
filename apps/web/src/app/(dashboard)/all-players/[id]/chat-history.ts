@@ -1,3 +1,4 @@
+import { dateInputToIso } from '@/lib/format';
 import type { ChatMessage as LiveChatMessage } from '@/lib/live-bus';
 
 export const CHAT_SCOPE_OPTIONS = [
@@ -70,14 +71,6 @@ export interface ChatMsg {
 export interface ChatPage {
   items: ChatMsg[];
   next_cursor: string | null;
-}
-
-export function dateInputToIso(value: string, endOfDay: boolean): string | null {
-  if (!value) return null;
-  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
-  const parsed = new Date(`${value}${suffix}`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString();
 }
 
 export function buildChatQuery(
@@ -168,16 +161,4 @@ export function scopeLabel(scope: string): string {
 
 export function sourceLabel(source: string): string {
   return SOURCE_LABELS.get(source as (typeof CHAT_SOURCE_OPTIONS)[number]['value']) ?? source;
-}
-
-export function formatChatTs(iso: string): string {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }

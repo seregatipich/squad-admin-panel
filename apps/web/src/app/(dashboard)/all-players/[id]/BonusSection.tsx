@@ -24,6 +24,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { formatDateTimeRu } from '@/lib/format';
 import {
   BONUS_TYPE_OPTIONS,
   type BonusFilters,
@@ -33,7 +34,6 @@ import {
   canAfford,
   EMPTY_BONUS_FILTERS,
   formatAmount,
-  formatBonusTs,
   isCredit,
   matchesFilters,
   mergeBonusPage,
@@ -321,7 +321,7 @@ export function BonusSection({
               {transactions.map((tx) => (
                 <TableRow key={tx.id}>
                   <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
-                    {formatBonusTs(tx.created_at)}
+                    {formatDateTimeRu(tx.created_at, tx.created_at)}
                   </Td>
                   <Td>
                     <Badge size="sm">{typeLabel(tx.type)}</Badge>

@@ -24,7 +24,6 @@ import {
 import { PresenceChart } from './PresenceChart';
 import { PrimetimeSection } from './PrimetimeSection';
 import {
-  BONUS_FORMULA_LABEL,
   buildWeekGrid,
   cellBackground,
   cellTitle,
@@ -49,17 +48,31 @@ const TABS = [
   { value: 'servers', label: 'По серверам' },
 ];
 
+/**
+ * «Присутствие» card: daily chart, primetime, time totals and the week
+ * calendar / per-server split. «Повторить» re-runs the load effect (#451).
+ *
+ * «Взвешенное время» is `bonus.value_seconds` from the API — playtime
+ * weighted by its formula, not the economy balance that «Бонусы» shows — so
+ * the tile says so and quotes the formula the server actually used (#452).
+ */
 export function PresenceSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<PresenceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('calendar');
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/presence`, { credentials: 'include', cache: 'no-store' })
+    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/presence`, {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((body: PresenceResponse) => {
         if (!cancelled) setData(body);
@@ -72,10 +85,12 @@ export function PresenceSection({ playerId }: { playerId: string }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   const grid = useMemo(() => {
     if (!data) return null;
@@ -98,7 +113,7 @@ export function PresenceSection({ playerId }: { playerId: string }) {
             title="Не удалось загрузить присутствие"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
                 Повторить
               </Button>
             }
@@ -119,9 +134,9 @@ export function PresenceSection({ playerId }: { playerId: string }) {
                 hint={`${data.totals.seed_seconds.toLocaleString('ru-RU')} сек сид-времени`}
               />
               <StatTile
-                label="Бонусы"
+                label="Взвешенное время"
                 value={fmtDuration(data.bonus.value_seconds)}
-                hint={`Формула по умолчанию: ${BONUS_FORMULA_LABEL}`}
+                hint={`Не баланс бонусов: ${data.bonus.formula}`}
               />
             </CardGrid>
 

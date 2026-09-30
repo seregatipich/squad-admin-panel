@@ -18,6 +18,7 @@ import { useIntlLocale } from '@/i18n/LocaleProvider';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { MediaPublishControl } from './MediaPublishControl';
+import type { MediaPublication } from './media-publications';
 
 interface EvidenceLink {
   id: string;
@@ -39,11 +40,18 @@ interface EvidenceMedia {
 interface EvidenceItem {
   link: EvidenceLink;
   media: EvidenceMedia;
+  /** The file's publications, embedded so the card needs no per-file request (#444). */
+  publications: MediaPublication[];
 }
 
 interface EvidenceListResponse {
-  items: EvidenceItem[];
+  items: Array<Omit<EvidenceItem, 'publications'> & { publications?: MediaPublication[] }>;
+  /** The viewer's `can_manage_media` flag, which gates «Опубликовать» (#440). */
+  can_manage_media?: boolean;
 }
+
+/** One shared empty list, so a file without publications keeps a stable prop. */
+const NO_PUBLICATIONS: MediaPublication[] = [];
 
 interface MintedUploadLink {
   upload_url: string;
@@ -70,10 +78,23 @@ function evidenceLabel(media: EvidenceMedia): string {
  * through such a link are labelled as anonymous, and the `media.uploaded` live
  * event — which the API delivers only to the admin who minted the link —
  * refreshes the list in place.
+ *
+ * Each file's publications and the viewer's `can_manage_media` flag come with
+ * the listing and are handed to {@link MediaPublishControl} (#440, #444).
+ * `refreshKey` lets the page reload the list after a change made elsewhere on
+ * the card — a detach in «История модерации» (#446).
  */
-export function EvidenceSection({ playerId }: { playerId: string }) {
+export function EvidenceSection({
+  playerId,
+  refreshKey = 0,
+}: {
+  playerId: string;
+  /** Bump to reload the list; `0` (the default) never triggers a reload. */
+  refreshKey?: number;
+}) {
   const locale = useIntlLocale();
   const [items, setItems] = useState<EvidenceItem[] | null>(null);
+  const [canManageMedia, setCanManageMedia] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +104,7 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/media`, {
+      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/media`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -93,7 +114,10 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as EvidenceListResponse;
-      setItems(body.items);
+      setItems(
+        body.items.map((item) => ({ ...item, publications: item.publications ?? NO_PUBLICATIONS })),
+      );
+      setCanManageMedia(body.can_manage_media ?? false);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -108,6 +132,10 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
     setError(null);
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (refreshKey > 0) void load();
+  }, [refreshKey, load]);
 
   const onUploaded = useCallback(
     (event: Extract<LiveEvent, { type: 'media.uploaded' }>) => {
@@ -204,7 +232,7 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
           />
         ) : (
           <ul className="space-y-3">
-            {items.map(({ link, media }) => (
+            {items.map(({ link, media, publications }) => (
               <li key={link.id} className="rounded-ctl border border-line p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[13px] text-ink">{evidenceLabel(media)}</span>
@@ -242,7 +270,12 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
                     className="mt-2 max-h-64 w-full rounded-ctl"
                   />
                 )}
-                <MediaPublishControl mediaId={media.id} mediaKind={media.kind} />
+                <MediaPublishControl
+                  mediaId={media.id}
+                  mediaKind={media.kind}
+                  initialPublications={publications}
+                  canManage={canManageMedia}
+                />
               </li>
             ))}
           </ul>

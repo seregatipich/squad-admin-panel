@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mediaFiles, mediaLinks, moderationActions, players, roles } from '@squad/db/schema';
+import {
+  mediaFiles,
+  mediaLinks,
+  mediaPublications,
+  moderationActions,
+  players,
+  roles,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -317,6 +324,55 @@ describe('GET evidence listing', () => {
     expect(actionMedia.statusCode).toBe(200);
     const actionItems = actionMedia.json().items as Array<{ media: { id: string } }>;
     expect(actionItems.some((it) => it.media.id === mediaId)).toBe(true);
+  });
+
+  // Regression (#444, #440): the card fetched publications once per evidence
+  // item and could not tell who may publish; both now ride on this listing.
+  it('embeds each file publications and the caller can_manage_media flag', async () => {
+    const targetPlayerId = await insertPlayer({
+      steamId64: testSteamId(978017),
+      canonicalName: 'MediaLinksTarget8',
+    });
+    const mediaId = await insertMediaFile(h.seed.ownerPlayerId ?? null);
+    await h.db.insert(mediaPublications).values({
+      id: randomUUID(),
+      mediaId,
+      destination: 'telegram',
+      status: 'queued',
+    });
+    const attach = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/media/${mediaId}/links`,
+      headers: { cookie: ownerCookie },
+      payload: { entity_type: 'player', entity_id: targetPlayerId },
+    });
+    expect(attach.statusCode).toBe(201);
+
+    const asOwner = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}/media`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(asOwner.statusCode).toBe(200);
+    const body = asOwner.json() as {
+      can_manage_media: boolean;
+      items: Array<{ media: { id: string }; publications: Array<Record<string, unknown>> }>;
+    };
+    expect(body.can_manage_media).toBe(true);
+    const item = body.items.find((it) => it.media.id === mediaId);
+    expect(item?.publications).toHaveLength(1);
+    expect(item?.publications[0]).toMatchObject({
+      media_id: mediaId,
+      destination: 'telegram',
+      status: 'queued',
+    });
+
+    const asLinker = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}/media`,
+      headers: { cookie: linkerCookie },
+    });
+    expect(asLinker.json()).toMatchObject({ can_manage_media: false });
   });
 
   it('accumulates evidence for an EOS-only player without steam_id64', async () => {

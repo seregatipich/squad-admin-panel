@@ -14,21 +14,49 @@ import {
   StatTile,
   StatusBadge,
 } from '@/components/ui';
-import { type PlayerVoteStats, serialSkipperLabel } from './votes';
+import {
+  type PlayerVoteStats,
+  parsePlayerVoteStats,
+  serialSkipperLabel,
+  voteStatsUrl,
+} from './votes';
+
+/**
+ * «Голосования» player-card section: votes initiated / taken part in and the
+ * serial-skipper flag. Hides on 401/403 like its sibling sections, validates
+ * the body before rendering (#468) and retries through the load effect.
+ */
 
 export function VotesSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<PlayerVoteStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hidden, setHidden] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
+    setHidden(false);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/vote-stats`, { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: PlayerVoteStats) => {
-        if (!cancelled) setData(body);
+    fetch(voteStatsUrl(playerId), {
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (res.status === 401 || res.status === 403) {
+          if (!cancelled) setHidden(true);
+          return null;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = parsePlayerVoteStats(await res.json());
+        if (!body) throw new Error('Некорректный ответ сервера');
+        return body;
+      })
+      .then((body) => {
+        if (!cancelled && body) setData(body);
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
@@ -38,10 +66,14 @@ export function VotesSection({ playerId }: { playerId: string }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
+
+  if (hidden) return null;
 
   return (
     <Card padding="none" as="section">
@@ -65,7 +97,7 @@ export function VotesSection({ playerId }: { playerId: string }) {
             title="Не удалось загрузить голосования"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
                 Повторить
               </Button>
             }

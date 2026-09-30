@@ -139,22 +139,20 @@ export function parseCandidateResponse(json: unknown): CandidateResponse | null 
 
 /**
  * Builds the POST /players/:id/links request body for confirming/rejecting
- * a candidate, snapshotting the ALT-1 signals already fetched into
- * `evidence_snapshot` so the decision stays auditable even if the candidate
- * later scores differently (e.g. new IP history, tuned weights).
+ * a candidate. It carries no evidence: the API snapshots the ALT-1 signals
+ * for the pair itself at decision time, so the stored evidence cannot be
+ * whatever a browser chose to send (#461).
  */
 export function buildLinkPayload(
   otherPlayerId: string,
   linkType: PlayerLinkType,
   status: PlayerLinkStatus,
   note: string,
-  candidate: AltCandidate,
 ): {
   other_player_id: string;
   link_type: PlayerLinkType;
   status: PlayerLinkStatus;
   note?: string;
-  evidence_snapshot: Record<string, unknown>;
 } {
   const trimmedNote = note.trim();
   return {
@@ -162,12 +160,5 @@ export function buildLinkPayload(
     link_type: linkType,
     status,
     ...(trimmedNote ? { note: trimmedNote } : {}),
-    evidence_snapshot: {
-      score: candidate.score,
-      confidence: candidate.confidence,
-      shared_ip_count: candidate.shared_ip_count,
-      shared_names: candidate.signals.shared_names.value,
-      signals: candidate.signals,
-    },
   };
 }

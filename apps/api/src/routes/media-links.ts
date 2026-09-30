@@ -4,6 +4,7 @@ import {
   matches,
   mediaFiles,
   mediaLinks,
+  mediaPublications,
   moderationActions,
   players,
 } from '@squad/db/schema';
@@ -11,10 +12,11 @@ import {
   type MediaLinkEntityType,
   type MediaLinkedFileResponse,
   type MediaLinkResponse,
+  type MediaPublicationResponse,
   mediaLinkAttachInput,
   mediaLinkDetachQuery,
 } from '@squad/shared-types';
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -23,6 +25,7 @@ import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile, serializeMediaFile } from './media.js';
+import { serializeMediaPublication } from './media-publications.js';
 
 /**
  * Most evidence items `GET /api/v1/players/:playerId/media` returns, newest
@@ -114,6 +117,30 @@ async function loadLinkedFiles(
     items.push({ link: serializeMediaLink(link), media: serializeMediaFile(media) });
   }
   return items;
+}
+
+/**
+ * Loads the `media_publications` rows of a set of media files in one query,
+ * grouped by media id, so a listing can embed them instead of the UI fetching
+ * each file's publications separately (#444).
+ */
+async function loadPublicationsByMedia(
+  db: DatabaseClient,
+  mediaIds: string[],
+): Promise<Map<string, MediaPublicationResponse[]>> {
+  const byMedia = new Map<string, MediaPublicationResponse[]>();
+  if (mediaIds.length === 0) return byMedia;
+  const rows = await db
+    .select()
+    .from(mediaPublications)
+    .where(inArray(mediaPublications.mediaId, mediaIds))
+    .orderBy(asc(mediaPublications.destination));
+  for (const row of rows) {
+    const list = byMedia.get(row.mediaId) ?? [];
+    list.push(serializeMediaPublication(row));
+    byMedia.set(row.mediaId, list);
+  }
+  return byMedia;
 }
 
 const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
@@ -288,11 +315,21 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
         )
         .orderBy(desc(mediaLinks.createdAt), desc(mediaLinks.id))
         .limit(PLAYER_MEDIA_LIMIT);
-      const items: MediaLinkedFileResponse[] = rows.map((row) => ({
-        link: serializeMediaLink(row.link),
-        media: serializeMediaFile(row.media),
-      }));
-      return { items };
+      const publications = await loadPublicationsByMedia(
+        app.db,
+        Array.from(new Set(rows.map((row) => row.media.id))),
+      );
+      // Publications and the caller's `can_manage_media` ride along so the
+      // player card renders every publish control from this one response
+      // (#444) and offers «Опубликовать» only to a manager (#440).
+      return {
+        items: rows.map((row) => ({
+          link: serializeMediaLink(row.link),
+          media: serializeMediaFile(row.media),
+          publications: publications.get(row.media.id) ?? [],
+        })),
+        can_manage_media: req.user?.permissions.canManageMedia ?? false,
+      };
     },
   );
 

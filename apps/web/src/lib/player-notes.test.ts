@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { PlayerNote } from './live-bus';
-import { formatRelativeNote, prependNote, removeNote, replaceNote } from './player-notes';
+import {
+  formatRelativeNote,
+  parseNotesPage,
+  prependNote,
+  removeNote,
+  replaceNote,
+} from './player-notes';
 
 function note(id: string, body = 'x'): PlayerNote {
   return {
@@ -63,5 +69,20 @@ describe('formatRelativeNote', () => {
 
   it('returns empty string for an invalid date', () => {
     expect(formatRelativeNote('not-a-date', base)).toBe('');
+  });
+});
+
+describe('parseNotesPage', () => {
+  it('accepts a well-formed page', () => {
+    const body = { items: [note('n1')], next_cursor: null, total: 1 };
+    expect(parseNotesPage(body)).toEqual(body);
+  });
+
+  // Regression (#456): the page was cast with `as`.
+  it('rejects a page with malformed notes, cursor or total', () => {
+    expect(parseNotesPage({ items: [{ id: 'n1' }], next_cursor: null, total: 1 })).toBeNull();
+    expect(parseNotesPage({ items: [], next_cursor: 5, total: 0 })).toBeNull();
+    expect(parseNotesPage({ items: [], next_cursor: null, total: '0' })).toBeNull();
+    expect(parseNotesPage(null)).toBeNull();
   });
 });

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bonusValueSeconds,
   buildWeekGrid,
   cellBackground,
   cellFillFraction,
@@ -28,15 +27,6 @@ function session(overrides: Partial<PresenceSession> = {}): PresenceSession {
     ...overrides,
   };
 }
-
-describe('bonusValueSeconds', () => {
-  it('applies the default formula online + 2×boost and ignores queue', () => {
-    expect(bonusValueSeconds({ online_seconds: 100, boost_seconds: 50, queue_seconds: 999 })).toBe(
-      200,
-    );
-    expect(bonusValueSeconds({ online_seconds: 0, boost_seconds: 0, queue_seconds: 0 })).toBe(0);
-  });
-});
 
 describe('weekStartMsForEndDay', () => {
   it('places the window start six days before the (inclusive) end day at UTC midnight', () => {

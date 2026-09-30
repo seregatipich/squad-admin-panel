@@ -18,31 +18,36 @@ import {
 import {
   buildCombatLogTeamkillHref,
   buildPlayerTeamkillApiPath,
+  formatLastModeration,
   formatTeamkillCount,
   formatTeamkillDate,
+  parseTeamkillPlayerResponse,
   type TeamkillPlayerEvent,
   type TeamkillPlayerResponse,
 } from '../../moderation/teamkills/helpers';
 
-function formatModerationSubline(stats: TeamkillPlayerResponse['stats']): string {
-  const type = stats.last_moderation_type ?? '—';
-  return `Последнее: ${type} · ${formatTeamkillDate(stats.last_moderation_at)}`;
-}
-
+/**
+ * «Тимкиллы» player-card block: counters, moderation summary and the latest
+ * events. The body is validated before rendering (#456) and a retry re-runs
+ * the load effect, whose cleanup aborts the previous request (#451).
+ */
 export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<TeamkillPlayerResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const load = useCallback(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setHidden(false);
     setError(null);
     fetch(buildPlayerTeamkillApiPath(playerId), {
       credentials: 'include',
       cache: 'no-store',
+      signal: controller.signal,
     })
       .then(async (res) => {
         if (res.status === 401 || res.status === 403) {
@@ -50,7 +55,9 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
           return null;
         }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as TeamkillPlayerResponse;
+        const body = parseTeamkillPlayerResponse(await res.json());
+        if (!body) throw new Error('Некорректный ответ сервера');
+        return body;
       })
       .then((body) => {
         if (!cancelled && body) setData(body);
@@ -63,10 +70,12 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [playerId]);
 
-  useEffect(() => load(), [load]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a re-run trigger
+  useEffect(() => load(), [load, retryCount]);
 
   if (hidden) return null;
 
@@ -91,7 +100,7 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
             title="Не удалось загрузить тимкиллы"
             description={error}
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button size="sm" onClick={() => setRetryCount((count) => count + 1)}>
                 Повторить
               </Button>
             }
@@ -117,7 +126,9 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
                 value={formatTeamkillCount(data.stats.moderation_total)}
                 tone={data.stats.moderation_total > 0 ? 'warn' : 'neutral'}
                 hint={
-                  data.stats.moderation_total > 0 ? formatModerationSubline(data.stats) : undefined
+                  data.stats.moderation_total > 0
+                    ? `Последнее: ${formatLastModeration(data.stats)}`
+                    : undefined
                 }
               />
             </CardGrid>

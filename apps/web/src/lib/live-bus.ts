@@ -58,6 +58,16 @@ export type LiveEvent =
       data: { player_id: string; note: PlayerNote };
     }
   | {
+      type: 'note.updated';
+      ts: string;
+      data: { player_id: string; note: PlayerNote };
+    }
+  | {
+      type: 'note.deleted';
+      ts: string;
+      data: { player_id: string; note_id: string };
+    }
+  | {
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
