@@ -174,8 +174,19 @@ export default fp(async (app) => {
         return;
       }
     }
+    for (const flag of req.routeOptions?.config?.roleFlags ?? []) {
+      if (!req.user.permissions[flag]) {
+        reply.code(403).send({ error: 'forbidden', required: toSnakeCase(flag) });
+        return;
+      }
+    }
   });
 });
+
+/** `canManageClans` → `can_manage_clans`: the spelling of role flags in the API. */
+function toSnakeCase(flag: string): string {
+  return flag.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
 
 async function touchApiTokenLastUsed(app: FastifyInstance, tokenId: string): Promise<void> {
   const lockKey = `api-token-touch:${tokenId}`;

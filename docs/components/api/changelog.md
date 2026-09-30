@@ -9,6 +9,8 @@
 - `GET /api/v1/moderation/teamkills`: сначала выбираются топ нарушителей, затем счётчики жертв и модерации берутся `LATERAL`-запросами по индексам; форма ответа прежняя (#355).
 - `PUT /api/v1/settings/economy`: `privilege_costs` (поле пока не читается ни API, ни воркерами) принимает не более 50 записей; ответ и формат не менялись (#349).
 
+- Новое поле маршрута `config.roleFlags` (`plugins/types.ts`): роль-флаги (`canManageClans`, `panelAccess`, …), которые глобальный хук `plugins/auth.ts` проверяет после `config.permissions`; отказ — `403 { error: 'forbidden', required: '<flag_в_snake_case>' }`. `GET`/`PATCH /api/v1/settings/clan-guard` переведены на него вместо локальных `panelGuard`/`manageGuard` и недостижимой проверки `actorId`; ответы прежние, для `GET` без `panel_access` добавлено `required: 'panel_access'`. Новые permission-ключи не заводились: флаги без ключа в каталоге по-прежнему не делегируются API-токенам (#351).
+
 ### Removed
 
 - Плагин `panelBridge` больше не поднимает в режиме `production` сокет `PANEL_BRIDGE_SOCKET`, исполнявший произвольные RCON-команды без аутентификации; потребителей у него не было, хелпер `sidecarSocketPath` удалён (#1347).

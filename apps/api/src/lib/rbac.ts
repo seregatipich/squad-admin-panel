@@ -30,6 +30,11 @@ export interface PermissionContext {
   isOwner: boolean;
 }
 
+/** Boolean capabilities of a {@link PermissionContext} that a route can require via `config.roleFlags`. */
+export type RoleFlagName = {
+  [K in keyof PermissionContext]: PermissionContext[K] extends boolean ? K : never;
+}[keyof PermissionContext];
+
 /**
  * Process-local permission cache keyed by player id. Entries live {@link TTL_MS};
  * changes made outside this process (workers editing `players.role_id`) are

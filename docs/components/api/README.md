@@ -5,7 +5,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 ## Responsibilities
 
 - Auth: Steam OpenID 2.0 (only login method). Cookie sessions keyed on `players.steam_id64`. Sliding TTL with throttled DB touch.
-- RBAC: every authed route declares its permissions in `config.permissions`. The `preHandler` hook returns 401/403 accordingly.
+- RBAC: every authed route declares its permissions in `config.permissions`. The `preHandler` hook returns 401/403 accordingly. Routes gated on a role flag that has no catalogue key declare `config.roleFlags` (e.g. `['canManageClans']`), enforced by the same hook with `403 { error: 'forbidden', required: 'can_manage_clans' }`.
 - Audit: every mutation route declares `config.audit`; audit rows are hash-chained and append-only (DB triggers reject `UPDATE`/`DELETE`).
 - Install orchestration: WebSocket flow under `POST /api/v1/servers/:id/install` that drives `bridge.depot_update` → `seedConfigs` → `bridge.ufw_rule` → `bridge.container_run`.
 - Status reconciliation: [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) polls `container_inspect` every 4 s.
