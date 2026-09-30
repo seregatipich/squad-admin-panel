@@ -230,6 +230,18 @@ describe('runMatch — real firing', () => {
     expect(draft.status).toBe('failed');
     expect(runs[0]?.actionResult).toMatchObject({ error: 'smtp down' });
   });
+
+  it('records failed with a string message when notify_admin throws a non-Error', async () => {
+    const { deps, runs } = makeDeps();
+    (deps.notifyAdmin as ReturnType<typeof vi.fn>).mockRejectedValueOnce('mail relay refused');
+    const draft = await runMatch(
+      deps,
+      match({ actionType: 'notify_admin', action: { message: 'x', channels: [] } }),
+      { dryRun: false },
+    );
+    expect(draft.status).toBe('failed');
+    expect(runs[0]?.actionResult).toMatchObject({ error: 'mail relay refused' });
+  });
 });
 
 describe('runMatch — dry-run guard', () => {
