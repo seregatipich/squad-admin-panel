@@ -78,3 +78,47 @@ describe('daysInWindow', () => {
     expect(daysInWindow('2026-07-06', '2026-07-04')).toEqual([]);
   });
 });
+
+describe('computeSeedSecondsByPlayerServer scaling', () => {
+  function bruteForce(intervals: SeedSessionInterval[], threshold: number): Map<string, number> {
+    const result = new Map<string, number>();
+    const boundaries = [...new Set(intervals.flatMap((i) => [i.startSec, i.endSec]))].sort(
+      (a, b) => a - b,
+    );
+    for (let i = 0; i < boundaries.length - 1; i += 1) {
+      const from = boundaries[i] as number;
+      const to = boundaries[i + 1] as number;
+      const active = intervals.filter((s) => s.startSec <= from && s.endSec >= to);
+      if (active.length === 0 || active.length >= threshold) continue;
+      for (const s of active) {
+        const key = `${s.playerId}|${s.serverId}`;
+        result.set(key, (result.get(key) ?? 0) + (to - from));
+      }
+    }
+    return result;
+  }
+
+  function pseudoRandomIntervals(count: number, span: number): SeedSessionInterval[] {
+    let state = 12345;
+    const next = (): number => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state / 2147483648;
+    };
+    return Array.from({ length: count }, (_, index) => {
+      const startSec = Math.floor(next() * span);
+      return interval(`p${index}`, SERVER_1, startSec, startSec + 1 + Math.floor(next() * 600));
+    });
+  }
+
+  it('matches a brute-force evaluation on overlapping sessions', () => {
+    const intervals = pseudoRandomIntervals(300, 5_000);
+    expect(computeSeedSecondsByPlayerServer(intervals, 8)).toEqual(bruteForce(intervals, 8));
+  });
+
+  it('handles tens of thousands of sessions on one server without quadratic blow-up', () => {
+    const intervals = pseudoRandomIntervals(40_000, 86_400);
+    const startedAt = performance.now();
+    computeSeedSecondsByPlayerServer(intervals, 40);
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+  });
+});

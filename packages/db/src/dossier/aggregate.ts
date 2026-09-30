@@ -374,7 +374,15 @@ async function countVehicleKillsDriftWindowed(
   return rows[0]?.n ?? 0;
 }
 
+/**
+ * Rebuilds the three aggregate tables from every retained `combat_events` row.
+ * SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE lock taken by the
+ * incremental UPSERTs, so the rebuild waits for in-flight ingest transactions
+ * and holds new ones off until it commits — no lost updates, no unique
+ * violations against a concurrent upsert.
+ */
 async function rebuildFromEvents(sql: postgres.TransactionSql): Promise<void> {
+  await sql`LOCK TABLE player_weapon_stats, player_vehicle_stats, player_vehicle_kills IN SHARE ROW EXCLUSIVE MODE`;
   await sql`DELETE FROM player_weapon_stats`;
   await sql`
     INSERT INTO player_weapon_stats
@@ -424,8 +432,9 @@ export interface ReconcileOptions {
    * When set, restrict drift detection to `combat_events` from the last N hours
    * (the nightly guard uses 48). Windowed detection is a lower-bound check that
    * flags only aggregates failing to reflect recent activity, so it never
-   * false-positives on aged-out partitions or normal cumulative history. Repair
-   * still rebuilds from all retained events and ignores this window.
+   * false-positives on aged-out partitions or normal cumulative history. It
+   * cannot be combined with `repair`: the rebuild covers all retained events and
+   * would wipe cumulative history that outlived its partitions.
    */
   windowHours?: number;
 }
@@ -449,6 +458,9 @@ export async function reconcileDossierAggregates(
   options: ReconcileOptions = {},
 ): Promise<ReconcileResult> {
   const { windowHours } = options;
+  if (options.repair && windowHours != null) {
+    throw new Error('reconcileDossierAggregates: repair cannot be combined with windowHours');
+  }
   const weaponStats =
     windowHours != null
       ? await countWeaponDriftWindowed(sql, windowHours)

@@ -272,6 +272,40 @@ describeIfDb('reconcileDossierAggregates', () => {
     expect(after.discrepancies.total).toBe(0);
   });
 
+  it('waits for in-flight ingest transactions instead of racing their upserts', async () => {
+    await insertCombatEvent(sql, death({ occurredAt: new Date(monthStart.getTime() + 1000) }));
+
+    let releaseIngest: () => void = () => {};
+    const ingestHeld = new Promise<void>((resolve) => {
+      releaseIngest = resolve;
+    });
+    let ingestStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      ingestStarted = resolve;
+    });
+    const ingesting = drzSql.begin(async (tx) => {
+      await applyCombatEventToDossier(
+        tx,
+        death({ weapon: 'BP_M4', occurredAt: new Date(monthStart.getTime() + 2000) }),
+      );
+      ingestStarted();
+      await ingestHeld;
+    });
+    await started;
+
+    let repaired = false;
+    const repairing = reconcileDossierAggregates(sql, { repair: true }).then((result) => {
+      repaired = result.repaired;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(repaired).toBe(false);
+
+    releaseIngest();
+    await ingesting;
+    await repairing;
+    expect(repaired).toBe(true);
+  });
+
   it('leaves aggregates untouched when an old combat_events partition is dropped', async () => {
     await ingest(death({ occurredAt: new Date(monthStart.getTime() + 1000) }));
     await ingest(death({ occurredAt: new Date(monthStart.getTime() + 2000) }));
@@ -347,7 +381,12 @@ describeIfDb('reconcileDossierAggregates — 48h window', () => {
     expect(report.discrepancies.weaponStats).toBeGreaterThan(0);
     expect(report.repaired).toBe(false);
 
-    const repair = await reconcileDossierAggregates(sql, { windowHours: 48, repair: true });
+    // A windowed drift check must never trigger the full-history rebuild.
+    await expect(
+      reconcileDossierAggregates(sql, { windowHours: 48, repair: true }),
+    ).rejects.toThrow(/windowHours/);
+
+    const repair = await reconcileDossierAggregates(sql, { repair: true });
     expect(repair.repaired).toBe(true);
 
     const [row] = await sql<{ kills: number }[]>`

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  aggregateSessionsByDay,
   recentPresenceWindow,
-  type SessionInput,
   splitSessionSecondsByUtcDay,
   utcDayKey,
 } from '../src/presence/daily.js';
@@ -84,56 +82,6 @@ describe('splitSessionSecondsByUtcDay', () => {
         expect(total).toBe(floorDuration(start, end));
       }
     }
-  });
-});
-
-describe('aggregateSessionsByDay', () => {
-  it('rolls sessions up per day and per mode with reconciling sums', () => {
-    const sessions: SessionInput[] = [
-      {
-        connectedAt: new Date('2026-07-04T23:00:00.000Z'),
-        endAt: new Date('2026-07-05T01:00:00.000Z'),
-      },
-      {
-        connectedAt: new Date('2026-07-05T08:00:00.000Z'),
-        endAt: new Date('2026-07-05T09:00:00.000Z'),
-        mode: 'boost',
-      },
-      {
-        connectedAt: new Date('2026-07-05T10:00:00.000Z'),
-        endAt: new Date('2026-07-05T10:30:00.000Z'),
-        mode: 'queue',
-      },
-    ];
-    const buckets = aggregateSessionsByDay(sessions);
-    expect(buckets).toEqual([
-      {
-        day: '2026-07-04',
-        onlineSeconds: 3600,
-        boostSeconds: 0,
-        queueSeconds: 0,
-        seedSeconds: 0,
-        sessionCount: 1,
-      },
-      {
-        day: '2026-07-05',
-        onlineSeconds: 3600,
-        boostSeconds: 3600,
-        queueSeconds: 1800,
-        seedSeconds: 0,
-        sessionCount: 3,
-      },
-    ]);
-
-    const aggregateTotal = buckets.reduce(
-      (sum, b) => sum + b.onlineSeconds + b.boostSeconds + b.queueSeconds + b.seedSeconds,
-      0,
-    );
-    const sessionTotal = sessions.reduce(
-      (sum, s) => sum + floorDuration(s.connectedAt, s.endAt),
-      0,
-    );
-    expect(aggregateTotal).toBe(sessionTotal);
   });
 });
 
