@@ -47,12 +47,13 @@ export function buildBansyncEnvelope(
  * `(event_id, occurred_at)` primary key, so a retried call is a no-op; no
  * `processed_events` row is written, see #62), then publishes it to
  * `events:global` (with producer-side dedup, mirroring
- * `log-ingest/src/publish.ts`) and to the `live-bus` pub/sub channel the admin
- * UI listens on.
+ * `log-ingest/src/publish.ts`). It is deliberately not published to the `live-bus`
+ * pub/sub channel: that channel is forwarded to every WebSocket viewer, while
+ * `bansync.*` payloads name ban sources and fetch errors and have no consumer.
  */
 export async function persistAndPublish(
   db: DatabaseClient,
-  redis: Pick<Redis, 'set' | 'xadd' | 'publish'>,
+  redis: Pick<Redis, 'set' | 'xadd'>,
   envelope: EventEnvelope,
 ): Promise<void> {
   await db
@@ -83,9 +84,4 @@ export async function persistAndPublish(
       JSON.stringify(envelope),
     );
   }
-
-  await redis.publish(
-    'live-bus',
-    JSON.stringify({ type: envelope.type, ts: envelope.ts, data: envelope.payload }),
-  );
 }
