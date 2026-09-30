@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -55,6 +56,11 @@ export const auditLog = pgTable(
     durationMs: integer('duration_ms'),
     prevHash: bytea('prev_hash'),
     rowHash: bytea('row_hash').notNull(),
+    /**
+     * Canonical-form version `row_hash` was computed with: 1 before migration
+     * 0132, 2 since. Always set by the `audit_log_append()` trigger.
+     */
+    hashVersion: smallint('hash_version').notNull().default(1),
   },
   (table) => ({
     createdAtIdx: index('audit_log_created_at_idx').on(table.createdAt),

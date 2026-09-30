@@ -66,6 +66,34 @@ Rollback: the previous release does not delete players or tokens, never sets `au
 
 ---
 
+## 2026-09-28
+
+Issue [#50](https://github.com/seregatipich/squad-admin-panel/issues/50).
+
+### Audit chain v2 and TRUNCATE guards (migration 0132)
+
+**Files:** `packages/db/drizzle/0132_audit_log_chain_v2.sql`, `packages/db/src/schema/audit-log.ts`, `apps/api/src/lib/audit-chain.ts`, `packages/db/test/audit-integrity.test.ts`
+
+`audit_log_append()` hashed only `action|target|context::text|created_at::text`, so actor, IP, snapshots and status code could be rewritten undetected, and `TRUNCATE audit_log` bypassed the row-level deny triggers (an empty chain verified as intact). New rows get `hash_version = 2` and a length-prefixed canonical form over every column with a UTC timestamp; BEFORE TRUNCATE statement triggers now refuse TRUNCATE on `audit_log` and `config_versions`. v1 rows still verify with the old form.
+
+
+
+### combat_events.match_uuid (migration 0131)
+
+**Files:** `packages/db/drizzle/0131_combat_events_match_uuid.sql`, `packages/db/sql/combat-events.sql`, `packages/db/src/schema/combat-events.ts`
+
+`match_id` was bigint while `matches.id` is uuid, so it was never written. `match_uuid` references `matches(id)`; `match_id` is deprecated and dropped in a later release.
+
+### Accrual runs serialized per day (no migration)
+
+**Files:** `packages/db/src/economy/accrual.ts`, `packages/db/test/economy-accrual.test.ts`
+
+`bonus_transactions_accrual_idempotency_idx` includes the partition key `created_at`, so it never rejects a duplicate. `accrueDailyBonuses` now takes a `bonus_accrual:<day>` transaction advisory lock instead of relying on the incidental row locks of the `seed_seconds` reset.
+
+### 0115 is not rollback-compatible (docs)
+
+`0115_remove_bss_integration` dropped columns the previous release still selects; see "Two-phase removal" in `docs/operations/migrations.md`.
+
 ## 2026-09-27
 
 ### Audit fixes from #36 (migrations 0119–0123)

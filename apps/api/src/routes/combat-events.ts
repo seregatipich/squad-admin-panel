@@ -21,7 +21,7 @@ const boolFlag = z.enum(['true', 'false']);
 const filterShape = {
   type: z.union([typeEnum, z.array(typeEnum)]).optional(),
   serverId: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
-  matchId: z.coerce.bigint().optional(),
+  matchId: z.string().uuid().optional(),
   attackerPlayerId: z.string().uuid().optional(),
   victimPlayerId: z.string().uuid().optional(),
   playerId: z.string().uuid().optional(),
@@ -110,7 +110,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
     const serverIds = asArray(query.serverId);
     if (serverIds.length > 0) clauses.push(inArray(combatEvents.serverId, serverIds));
 
-    if (query.matchId !== undefined) clauses.push(eq(combatEvents.matchId, query.matchId));
+    if (query.matchId !== undefined) clauses.push(eq(combatEvents.matchUuid, query.matchId));
     if (query.attackerPlayerId)
       clauses.push(eq(combatEvents.attackerPlayerId, query.attackerPlayerId));
     if (query.victimPlayerId) clauses.push(eq(combatEvents.victimPlayerId, query.victimPlayerId));
@@ -207,7 +207,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: combatEvents.id,
           eventType: combatEvents.eventType,
           serverId: combatEvents.serverId,
-          matchId: combatEvents.matchId,
+          matchId: combatEvents.matchUuid,
           weapon: combatEvents.weapon,
           damage: combatEvents.damage,
           attackerKit: combatEvents.attackerKit,
@@ -233,7 +233,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: Number(row.id),
           eventType: row.eventType,
           serverId: row.serverId,
-          matchId: row.matchId != null ? Number(row.matchId) : null,
+          matchId: row.matchId,
           weapon: row.weapon,
           damage: row.damage,
           attackerKit: row.attackerKit,
@@ -303,7 +303,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           id: combatEvents.id,
           eventType: combatEvents.eventType,
           serverId: combatEvents.serverId,
-          matchId: combatEvents.matchId,
+          matchId: combatEvents.matchUuid,
           occurredAt: combatEvents.occurredAt,
           attackerId: combatEvents.attackerPlayerId,
           attackerName: attacker.canonicalName,
@@ -359,7 +359,7 @@ interface CsvSourceRow {
   id: bigint;
   eventType: string;
   serverId: string;
-  matchId: bigint | null;
+  matchId: string | null;
   occurredAt: Date;
   attackerId: string | null;
   attackerName: string | null;
@@ -378,7 +378,7 @@ function csvRow(row: CsvSourceRow): string {
     Number(row.id),
     row.eventType,
     row.serverId,
-    row.matchId != null ? Number(row.matchId) : null,
+    row.matchId,
     row.occurredAt.toISOString(),
     row.attackerId,
     row.attackerName,

@@ -38,7 +38,9 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 
 ## `audit_log`
 
-Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash` and `row_hash` on every INSERT. UPDATE and DELETE raise `audit_log is append-only`.
+Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash`, `row_hash` and `hash_version` on every INSERT. UPDATE, DELETE and TRUNCATE (statement trigger `trg_audit_log_no_truncate`, since migration 0119) raise `audit_log is append-only`.
+
+Since migration 0132 (issue #50) rows are hashed with the **v2** canonical form: `'v2'` followed by every column (`id`, `created_at` rendered in UTC with microseconds, all actor columns, `action_type`, `target_*`, both snapshots, `context`, `status_code`, `duration_ms`), each as a `|<utf-8 byte length>:<::text value>` field (`|-` for NULL). Older rows keep `hash_version = 1` (`action_type|target_type|target_id|context::text|created_at::text`) and are still verified with that form; a v1 row after the first v2 row is a `hash_version` break. The verifier is `apps/api/src/lib/audit-chain.ts`.
 
 **Columns**
 
@@ -60,7 +62,8 @@ Immutable, hash-chained record of every state-mutating API action. The DB trigge
 | `status_code` | `integer` | YES | NULL | HTTP status code that the API returned |
 | `duration_ms` | `integer` | YES | NULL | Handler wall-clock time |
 | `prev_hash` | `bytea` | YES | NULL | SHA-256 of the previous row's `row_hash`; NULL on the first row |
-| `row_hash` | `bytea` | NO | — | `sha256(prev_hash ∥ canonical_json(row))` written by trigger |
+| `row_hash` | `bytea` | NO | — | `sha256(prev_hash ∥ canonical(row))` written by trigger (canonical form per `hash_version`) |
+| `hash_version` | `smallint` | NO | `1` | Canonical form of `row_hash`: `1` before migration 0132, `2` since; set by the trigger |
 
 **Indexes**
 
@@ -290,7 +293,7 @@ Monthly-partitioned table for Squad event envelopes produced by `worker-rcon` an
 
 ## `processed_events`
 
-Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group.
+Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group. Rows older than 30 days are deleted hourly by `worker-event-partition` (`pruneProcessedEvents`, issue #50).
 
 Retention: `worker-event-partition` deletes rows whose `processed_at` falls before the `events` retention cutoff (24 months, UTC month boundary), served by `processed_events_processed_at_idx` (migration 0119, which also dropped the never-queried `processed_events_group_idx`).
 

@@ -322,7 +322,8 @@ export interface CombatApiRow {
   id: number;
   eventType: string;
   serverId: string;
-  matchId: number | null;
+  /** `matches.id` (uuid) the event happened in; null when unknown. */
+  matchId: string | null;
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;

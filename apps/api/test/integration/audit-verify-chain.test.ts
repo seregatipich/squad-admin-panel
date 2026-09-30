@@ -71,6 +71,29 @@ async function overwriteContext(id: string, context: Record<string, unknown>): P
   }
 }
 
+/**
+ * Rewrites columns of a stored row with the append-only deny trigger off.
+ * `assignments` is trusted test SQL (column = literal pairs).
+ */
+async function overwriteColumns(id: string, assignments: string): Promise<void> {
+  await h.db.execute(sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_upd`);
+  try {
+    await h.db.execute(sql`UPDATE audit_log SET ${sql.raw(assignments)} WHERE id = ${id}::bigint`);
+  } finally {
+    await h.db.execute(sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_upd`);
+  }
+}
+
+async function verifyChain(): Promise<VerifyResult> {
+  const res = await h.app.inject({
+    method: 'GET',
+    url: '/api/v1/audit/verify-chain',
+    headers: { cookie },
+  });
+  expect(res.statusCode).toBe(200);
+  return res.json() as VerifyResult;
+}
+
 describe('GET /api/v1/audit/verify-chain', () => {
   it('stays intact when a row is written from a session with another TimeZone and DateStyle', async () => {
     await h.db.transaction(async (tx) => {
@@ -250,6 +273,35 @@ describe('GET /api/v1/audit/verify-chain', () => {
     });
     expect(again.statusCode).toBe(200);
     expect(await h.redis.get(AUDIT_VERIFY_LOCK_KEY)).toBeNull();
+  });
+
+  // Issue #50 (#1251/#1064): the v1 canonical form ignored the actor and the
+  // snapshots, so rewriting who did something went unnoticed.
+  it('detects a rewritten actor label on a stored row', async () => {
+    const id = await insertAuditRow('action.actor', 'server', 'srv-actor', { seq: 'actor' });
+    await overwriteColumns(id, "actor_system_label = 'someone-else'");
+    try {
+      const body = await verifyChain();
+      expect(body.ok).toBe(false);
+      expect(body.broken_at).toBe(id);
+      expect(body.reason).toBe('row_hash');
+    } finally {
+      await overwriteColumns(id, "actor_system_label = 'test-verify-chain'");
+    }
+  });
+
+  it('detects a rewritten after_snapshot on a stored row', async () => {
+    const id = await insertAuditRow('action.snapshot', 'server', 'srv-snap', { seq: 'snap' });
+    await overwriteColumns(id, `after_snapshot = '{"forged": true}'::jsonb`);
+    try {
+      const body = await verifyChain();
+      expect(body.ok).toBe(false);
+      expect(body.broken_at).toBe(id);
+      expect(body.reason).toBe('row_hash');
+    } finally {
+      await overwriteColumns(id, 'after_snapshot = NULL');
+    }
+    expect((await verifyChain()).ok).toBe(true);
   });
 });
 

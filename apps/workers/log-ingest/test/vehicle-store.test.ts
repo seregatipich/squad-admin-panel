@@ -2,11 +2,12 @@ import {
   combatEvents,
   createDatabaseClient,
   events,
+  matches,
   players,
   playerVehicleKills,
   servers,
 } from '@squad/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleVehicle, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
@@ -136,6 +137,34 @@ describe('handleVehicle', () => {
     expect(second.eventId).toBe(first.eventId);
     const rows = await eventsOfKind('vehicle_destroyed');
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('handleVehicle match association', () => {
+  // Issue #50 (#1073): the combat_events row must reference the open match.
+  it('stores the open match on the combat_events row', async () => {
+    const matchId = uuidv7();
+    await db.insert(matches).values({
+      id: matchId,
+      serverId: SERVER_ID,
+      startedAt: new Date('2020-01-01T00:00:00.000Z'),
+      endedAt: null,
+    });
+    try {
+      const result = await handleVehicle(
+        db,
+        makeRedis(),
+        command(VEHICLE_KILL, 'BP_BRDM2_Woodland'),
+      );
+      expect(result.matchId).toBe(matchId);
+      const typed = (await db.execute(
+        sql`SELECT match_uuid::text AS match_uuid FROM combat_events WHERE server_id = ${SERVER_ID}`,
+      )) as unknown as Array<{ match_uuid: string | null }>;
+      expect(typed.map((r) => r.match_uuid)).toEqual([matchId]);
+    } finally {
+      await db.delete(combatEvents).where(eq(combatEvents.serverId, SERVER_ID));
+      await db.delete(matches).where(eq(matches.id, matchId));
+    }
   });
 });
 

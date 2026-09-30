@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS combat_events (
     CHECK (event_type IN ('death','damage','wound','revive','vehicle_destroyed'))
 ) PARTITION BY RANGE (occurred_at);
 
+-- Issue #50: matches.id is a uuid, so match_id (bigint, never written) cannot
+-- reference it; match_uuid is the real link (migration 0131).
+ALTER TABLE combat_events
+  ADD COLUMN IF NOT EXISTS match_uuid uuid REFERENCES matches(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS combat_events_match_uuid_occurred_idx
+  ON combat_events (match_uuid, occurred_at DESC)
+  WHERE match_uuid IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS combat_events_server_occurred_idx
   ON combat_events (server_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS combat_events_attacker_occurred_idx

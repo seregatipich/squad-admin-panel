@@ -386,7 +386,7 @@ The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel
 ### Consequences
 
 - Steam Web API key (`STEAM_API_KEY`) is optional. Without it, persona is `Player <last 4 of steam_id64>`; the player can update their canonical name when they next play on a server (RCON ListPlayers updates).
-- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`.
+- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`. *Superseded for new rows by migration 0119 (issue #50): the v2 form hashes every column, actor fields included; v1 rows keep verifying with the old form.*
 - e2e tests cannot fully exercise the OpenID 2.0 verifier without a real Steam account; they verify post-login state via `PANEL_TEST_COOKIE` env. The cookie-supply pattern is documented in `docs/components/api/testing.md`.
 
 ### Alternatives considered

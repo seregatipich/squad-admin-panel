@@ -11,6 +11,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { matches } from './matches.js';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -31,7 +32,14 @@ export const combatEvents = pgTable(
     serverId: uuid('server_id')
       .notNull()
       .references(() => servers.id, { onDelete: 'cascade' }),
+    /**
+     * @deprecated Never written: matches are keyed by uuid, so this bigint
+     * column can hold no match (issue #50). Use `matchUuid`; the column is
+     * dropped once no deployed release reads it.
+     */
     matchId: bigint('match_id', { mode: 'bigint' }),
+    /** The match the event happened in (migration 0131); NULL for older rows. */
+    matchUuid: uuid('match_uuid').references(() => matches.id, { onDelete: 'set null' }),
     attackerPlayerId: uuid('attacker_player_id').references(() => players.id, {
       onDelete: 'set null',
     }),

@@ -82,7 +82,7 @@ interface CombatRow {
   id: number;
   eventType: string;
   serverId: string;
-  matchId: number | null;
+  matchId: string | null;
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;
@@ -111,6 +111,7 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
   let sniper: string;
   let target: string;
   let medic: string;
+  let matchB: string;
 
   beforeAll(async () => {
     h = await buildIntegrationApp({
@@ -157,12 +158,23 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
         ('revive', ${serverB}::uuid, 9001, ${medic}::uuid, ${target}::uuid,
          NULL, NULL, 'Medic', false, ${BASE.toISOString()}::timestamptz + interval '3 hour')
     `);
+
+    // Issue #50 (#1073): combat rows reference matches(id) by uuid.
+    matchB = uuidv7();
+    await h.db.execute(sql`
+      INSERT INTO matches (id, server_id, started_at)
+      VALUES (${matchB}::uuid, ${serverB}::uuid, ${BASE.toISOString()}::timestamptz)
+    `);
+    await h.db.execute(sql`
+      UPDATE combat_events SET match_uuid = ${matchB}::uuid WHERE server_id = ${serverB}::uuid
+    `);
   });
 
   afterAll(async () => {
     await h.db.execute(
       sql`DELETE FROM combat_events WHERE server_id IN (${serverA}::uuid, ${serverB}::uuid)`,
     );
+    await h.db.execute(sql`DELETE FROM matches WHERE id = ${matchB}::uuid`);
     await h.cleanup();
   });
 
@@ -223,6 +235,37 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
     expect(body.rows.every((r) => r.weapon === 'SVD Dragunov')).toBe(true);
     expect(body.rows.every((r) => r.serverId === serverB)).toBe(true);
     expect(body.approxTotal).toBe(2);
+  });
+
+  it('filters by match uuid and returns it on every row', async () => {
+    const body = await list(`?matchId=${matchB}`);
+    expect(body.rows).toHaveLength(3);
+    expect(body.rows.every((r) => r.matchId === matchB)).toBe(true);
+    expect(body.approxTotal).toBe(3);
+
+    const unrelated = await list(`?serverId=${serverA}&limit=1`);
+    expect(unrelated.rows[0]?.matchId).toBeNull();
+  });
+
+  it('exports the match uuid in the CSV match_id column', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/combat-events/export?matchId=${matchB}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const lines = res.payload.trim().split('\r\n').slice(1);
+    expect(lines).toHaveLength(3);
+    expect(lines.every((line) => line.split(',')[3] === matchB)).toBe(true);
+  });
+
+  it('rejects a non-uuid matchId', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/combat-events?matchId=4200',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('filters teamkills only', async () => {

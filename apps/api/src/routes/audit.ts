@@ -4,7 +4,11 @@ import { desc, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type AuditChainRow, AuditChainVerifier } from '../lib/audit-chain.js';
+import {
+  AUDIT_CHAIN_COLUMNS_SQL,
+  type AuditChainRow,
+  AuditChainVerifier,
+} from '../lib/audit-chain.js';
 
 /** Redis key that serialises `GET /api/v1/audit/verify-chain` runs. */
 export const AUDIT_VERIFY_LOCK_KEY = 'audit:verify-chain:lock';
@@ -99,15 +103,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
             let cursor = '0';
             for (;;) {
               const rows = (await tx.execute(sql`
-                SELECT
-                  id::text AS id,
-                  action_type,
-                  target_type,
-                  target_id,
-                  context::text AS context_text,
-                  created_at::text AS created_at,
-                  encode(prev_hash, 'hex') AS prev_hash_hex,
-                  encode(row_hash, 'hex') AS row_hash_hex
+                SELECT ${sql.raw(AUDIT_CHAIN_COLUMNS_SQL)}
                 FROM audit_log
                 WHERE audit_log.id > ${cursor}::bigint
                 -- Qualified: a bare id would sort by the id::text output column.

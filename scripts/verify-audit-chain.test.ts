@@ -184,13 +184,19 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
       `;
       assert.deepEqual(
         triggers.map((trigger) => trigger.name),
-        ['trg_audit_log_ins', 'trg_audit_log_no_del', 'trg_audit_log_no_upd'],
+        [
+          'trg_audit_log_ins',
+          'trg_audit_log_no_del',
+          'trg_audit_log_no_truncate',
+          'trg_audit_log_no_upd',
+        ],
       );
       await insertTwoRows(fixture.sql);
       await assert.rejects(
         fixture.sql`UPDATE audit_log SET action_type = 'tampered' WHERE id = 1`,
         /audit_log is append-only/,
       );
+      await assert.rejects(fixture.sql`TRUNCATE audit_log`, /audit_log is append-only/);
       const result = runCli(fixture.url);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, 'ok: audit chain intact (2 rows)\n');

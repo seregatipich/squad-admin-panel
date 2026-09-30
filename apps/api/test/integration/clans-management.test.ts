@@ -1,9 +1,13 @@
-import { createHash } from 'node:crypto';
 import { clanMembers, clans, players, roles } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  AUDIT_CHAIN_COLUMNS_SQL,
+  type AuditChainRow,
+  verifyAuditChain,
+} from '../../src/lib/audit-chain.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -839,46 +843,12 @@ describeIfDb('POST /api/v1/clans/:id/members on a clan created through the API',
 
 describeIfDb('audit_log hash-chain integrity after clan mutations', () => {
   it('links every audit row and verifies each row hash', async () => {
-    const rows = (await h.db.execute(sql`
-      SELECT
-        action_type,
-        target_type,
-        target_id,
-        context::text AS context_text,
-        created_at::text AS created_at_text,
-        encode(prev_hash, 'hex') AS prev_hash_hex,
-        encode(row_hash, 'hex') AS row_hash_hex
-      FROM audit_log
-      ORDER BY id ASC
-    `)) as unknown as Array<{
-      action_type: string;
-      target_type: string | null;
-      target_id: string | null;
-      context_text: string;
-      created_at_text: string;
-      prev_hash_hex: string | null;
-      row_hash_hex: string;
-    }>;
+    const rows = (await h.db.execute(
+      sql.raw(`SELECT ${AUDIT_CHAIN_COLUMNS_SQL} FROM audit_log ORDER BY audit_log.id ASC`),
+    )) as unknown as AuditChainRow[];
 
     expect(rows.length).toBeGreaterThan(0);
-
-    let prevHex: string | null = null;
-    for (const row of rows) {
-      expect(row.prev_hash_hex).toBe(prevHex);
-      const prev = prevHex ? Buffer.from(prevHex, 'hex') : Buffer.alloc(0);
-      const canonical = [
-        row.action_type,
-        row.target_type ?? '',
-        row.target_id ?? '',
-        row.context_text,
-        row.created_at_text,
-      ].join('|');
-      const expected = createHash('sha256')
-        .update(Buffer.concat([prev, Buffer.from(canonical, 'utf-8')]))
-        .digest('hex');
-      expect(row.row_hash_hex).toBe(expected);
-      prevHex = row.row_hash_hex;
-    }
+    expect(verifyAuditChain(rows)).toMatchObject({ ok: true, checked: rows.length });
 
     const clanActions = rows.map((r) => r.action_type).filter((a) => a.startsWith('clan.'));
     expect(clanActions).toContain('clan.create');

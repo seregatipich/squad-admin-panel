@@ -253,6 +253,17 @@ production он обязан быть HTTPS-origin (`https://<APP_DOMAIN>`); и�
 `BSS_*` и `VIP_LIFECYCLE_*`, а из Actions secrets — `BSS_SSO_SHARED_SECRET` и
 `PANEL_READ_API_TOKEN`: их больше ничто не читает.
 
+**Откат через 0115 невозможен (#50).** Миграция удалила столбцы и таблицу в том
+же выпуске (коммит `10134844`), где их убрали из схемы Drizzle, а не выпуском
+позже. Любой выпуск до `10134844` выбирает `players.role_lifecycle_event_id` и
+`panel_meta.vip_lifecycle_strict` в каждом `SELECT` по этим таблицам, поэтому
+после `rollback-stand.sh` или `deploy.yml -f sha=<старый sha>` на такой выпуск
+почти каждый запрос API падает с `column … does not exist`. Не откатывайтесь
+ниже `10134844`. Если это всё же нужно, сначала восстановите дамп, снятый
+деплоем перед 0115 (см. «Only when a migration itself destroyed data» выше):
+он же единственный источник истории `vip_lifecycle_events`, которую 0115
+удалила без архива.
+
 ## CI/CD runners
 
 Everything runs on GitHub-hosted VMs; there is no self-hosted runner:

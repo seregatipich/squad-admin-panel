@@ -349,9 +349,8 @@ export async function handleCombat(
   // DOSSIER-2 (#189): the events envelope, the typed combat_events row and the
   // dossier aggregate fold commit atomically. The fold runs only when the events
   // insert actually inserted (onConflictDoNothing returns [] on replay), so a
-  // redelivered line never double-counts. match_id stays NULL: combat_events keys
-  // matches by bigint while log-ingest resolves a uuid (a COMBAT-2/DOSSIER-1
-  // schema gap, out of scope here); the aggregates and reconcile ignore it.
+  // redelivered line never double-counts. The resolved match goes to
+  // combat_events.match_uuid; the legacy bigint match_id is never written.
   let wasInserted = false;
   await db.transaction(async (tx) => {
     const inserted = await tx
@@ -376,7 +375,7 @@ export async function handleCombat(
     await tx.insert(combatEvents).values({
       eventType,
       serverId: command.serverId,
-      matchId: null,
+      matchUuid: matchId,
       attackerPlayerId,
       victimPlayerId,
       victimVehicle: null,
@@ -503,7 +502,7 @@ export async function handleVehicle(
     await tx.insert(combatEvents).values({
       eventType,
       serverId: command.serverId,
-      matchId: null,
+      matchUuid: matchId,
       attackerPlayerId,
       victimPlayerId: null,
       victimVehicle: command.victimVehicle,

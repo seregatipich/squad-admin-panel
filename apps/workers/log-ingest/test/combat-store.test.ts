@@ -8,7 +8,7 @@ import {
   playerWeaponStats,
   servers,
 } from '@squad/db';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleCombat, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
@@ -294,6 +294,11 @@ describe('handleCombat match association and dedup', () => {
     const rows = await eventsOfKind('combat_death');
     expect(rows[0].correlationId).toBe(matchId);
     expect((rows[0].payload as Record<string, unknown>).match_id).toBe(matchId);
+    // Issue #50 (#1073): the typed combat_events row carries the match too.
+    const typed = (await db.execute(
+      sql`SELECT match_uuid::text AS match_uuid FROM combat_events WHERE server_id = ${SERVER_ID}`,
+    )) as unknown as Array<{ match_uuid: string | null }>;
+    expect(typed.map((r) => r.match_uuid)).toEqual([matchId]);
   });
 
   it('leaves match_id null when no match brackets the event', async () => {

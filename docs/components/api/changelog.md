@@ -388,6 +388,13 @@
 - `GET /api/v1/players/:playerId/coplay` принимает `?limit=1..20` (по умолчанию 20) и считает разбивку по серверам (`by_server`) только для `?include=by_server`; без него поля `by_server` в ответе нет (#453).
 - `PATCH /api/v1/notes/:noteId` и `DELETE /api/v1/notes/:noteId` публикуют live-события `note.updated` (`{ player_id, note }`) и `note.deleted` (`{ player_id, note_id }`) (#449).
 
+## 2026-09-28 — Боевые события привязаны к матчу, проверка цепочки аудита v2 (#50)
+
+### Changed
+
+- `GET /api/v1/combat-events` и `/export`: фильтр `matchId` теперь uuid матча (`matches.id`), а не bigint; нечисловой uuid → 400. Поле `matchId` в строках и колонка `match_id` в CSV содержат uuid матча (раньше всегда `null`, потому что `combat_events.match_id` имел тип bigint и никогда не заполнялся). Данные берутся из новой колонки `combat_events.match_uuid` (миграция 0131); старые строки остаются без матча.
+- `GET /api/v1/audit/verify-chain` проверяет строки v2 (миграция 0132): хэш покрывает все колонки, включая актора, IP, снапшоты и код ответа. Новое значение `reason: "hash_version"` означает неизвестную версию формы или строку v1 после строки v2.
+
 ## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
 
 ### Security

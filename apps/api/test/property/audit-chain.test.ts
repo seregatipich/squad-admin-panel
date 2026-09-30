@@ -4,24 +4,33 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { createIsolatedSchema, runMigrations } from '../integration/harness.js';
 
-function computeRowHash(
-  prevHashHex: string | null,
-  row: {
-    actionType: string;
-    targetType: string | null;
-    targetId: string | null;
-    contextText: string;
-    createdAt: string;
-  },
-): string {
+/**
+ * Independent reference of the v2 canonical form hashed by `audit_log_append()`
+ * (migration 0119): `'v2'` + every column as a `|<bytes>:<value>` field, `|-`
+ * for NULL.
+ */
+function computeRowHash(prevHashHex: string | null, row: RawRow): string {
   const prev = prevHashHex ? Buffer.from(prevHashHex, 'hex') : Buffer.alloc(0);
-  const canonical = [
-    row.actionType,
-    row.targetType ?? '',
-    row.targetId ?? '',
-    row.contextText,
-    row.createdAt,
-  ].join('|');
+  const field = (v: string | null) => (v === null ? '|-' : `|${Buffer.byteLength(v)}:${v}`);
+  const canonical = `v2${[
+    row.id,
+    row.created_at_utc,
+    row.actor_kind,
+    row.actor_player_id,
+    row.actor_token_id,
+    row.actor_system_label,
+    row.actor_ip,
+    row.action_type,
+    row.target_type,
+    row.target_id,
+    row.before_snapshot_text,
+    row.after_snapshot_text,
+    row.context_text,
+    row.status_code_text,
+    row.duration_ms_text,
+  ]
+    .map(field)
+    .join('')}`;
   return createHash('sha256')
     .update(Buffer.concat([prev, Buffer.from(canonical, 'utf-8')]))
     .digest('hex');
@@ -50,11 +59,21 @@ const auditRowGen = fc.record({
 
 type RawRow = {
   id: string;
+  hash_version: number;
   action_type: string;
   target_type: string | null;
   target_id: string | null;
   context_text: string;
-  created_at: string;
+  created_at_utc: string;
+  actor_kind: string;
+  actor_player_id: string | null;
+  actor_token_id: string | null;
+  actor_system_label: string | null;
+  actor_ip: string | null;
+  before_snapshot_text: string | null;
+  after_snapshot_text: string | null;
+  status_code_text: string | null;
+  duration_ms_text: string | null;
   prev_hash_hex: string | null;
   row_hash_hex: string;
 };
@@ -101,11 +120,21 @@ describe('audit chain integrity', () => {
       const raw = await sql<RawRow[]>`
         SELECT
           id::text,
+          hash_version::int AS hash_version,
           action_type,
           target_type,
           target_id,
           context::text AS context_text,
-          created_at::text,
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_utc,
+          actor_kind,
+          actor_player_id::text AS actor_player_id,
+          actor_token_id::text AS actor_token_id,
+          actor_system_label,
+          actor_ip::text AS actor_ip,
+          before_snapshot::text AS before_snapshot_text,
+          after_snapshot::text AS after_snapshot_text,
+          status_code::text AS status_code_text,
+          duration_ms::text AS duration_ms_text,
           encode(prev_hash, 'hex') AS prev_hash_hex,
           encode(row_hash, 'hex') AS row_hash_hex
         FROM audit_log
@@ -139,13 +168,8 @@ describe('audit chain integrity', () => {
 
         expect(row.prev_hash_hex).toBe(expectedPrevHash);
 
-        const computedHash = computeRowHash(expectedPrevHash, {
-          actionType: row.action_type,
-          targetType: row.target_type,
-          targetId: row.target_id,
-          contextText: row.context_text,
-          createdAt: row.created_at,
-        });
+        expect(row.hash_version).toBe(2);
+        const computedHash = computeRowHash(expectedPrevHash, row);
 
         expect(row.row_hash_hex).toBe(computedHash);
       }
