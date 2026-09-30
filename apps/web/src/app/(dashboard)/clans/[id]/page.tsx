@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
-  type BadgeTone,
   Button,
   Card,
   CardHeader,
@@ -23,8 +22,9 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { formatMatchDuration } from '@/lib/format';
-import type { MeResponse, BadgeTone as PriorityTone, ServerOption } from '../helpers';
+import type { MeResponse, ServerOption } from '../helpers';
 import { priorityBadge } from '../helpers';
+import { PRIORITY_TONE } from '../priority-tone';
 import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
 import RosterPanel from './RosterPanel';
@@ -42,13 +42,6 @@ interface ClanDetail {
   priority_expires_at: string | null;
   primary_server_id: string | null;
 }
-
-/** Тон срока приоритета из `helpers.ts` в тонах дизайн-системы. */
-const PRIORITY_TONE: Record<PriorityTone, BadgeTone> = {
-  neutral: 'neutral',
-  danger: 'crit',
-  warning: 'warn',
-};
 
 // Путь клана в URL решает роутер, но `clanId` подставляется прямо в путь
 // fetch-запросов всех панелей ниже (`/api/v1/clans/${clanId}/...`). Без этой
