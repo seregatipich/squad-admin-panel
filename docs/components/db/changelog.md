@@ -6,6 +6,43 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
+### Пересчёт рейтингов обновляет строки на месте (#78, 1140)
+
+**Files:** `packages/db/src/leaderboard/aggregate.ts`, `packages/db/test/leaderboard-aggregate.test.ts`
+
+- `recomputeLeaderboardPeriod` вместо `DELETE` всего периода и `INSERT` заново делает одним оператором `INSERT … ON CONFLICT ON CONSTRAINT player_stat_periods_identity DO UPDATE … WHERE <значения изменились>` и удаляет только исчезнувшие строки. Строки без изменений не перезаписываются, их 12 индексов не трогаются, мёртвые кортежи не копятся. Возвращаемое значение по-прежнему число строк периода.
+- Индексы метрик `player_stat_periods_*_idx` оставлены: все десять метрик доступны как `metric` в `GET /api/v1/leaderboards`, и каждый индекс обслуживает сортировку окна `row_number()`. Удаление без данных `pg_stat_user_indexes` с боевой БД ухудшило бы запросы.
+
+### Заметки игрока переживают удаление автора (migration 0137, #78, 1137)
+
+**Files:** `packages/db/drizzle/0137_player_notes_author_set_null.sql`, `packages/db/src/schema/player-notes.ts`, `apps/api/test/notes-deleted-author.test.ts`
+
+- `player_notes.author_id` стал nullable, FK `player_notes_author_id_players_id_fk` пересоздан с `ON DELETE SET NULL` (было `CASCADE`: удаление игрока-автора стирало все его заметки о других игроках).
+- Совместимо с предыдущим релизом: ослабляется ограничение, данные не меняются; внутренние join'ы прежних маршрутов просто пропускают заметку без автора.
+
+### Схема TS приведена к фактическому DDL, jsonb типизированы (#78, 1123, 1126, 1127)
+
+**Files:** `packages/db/src/schema/{events,combat-events,players,vip-tiers,seasons,servers,discord,external-ban-sources}.ts`, `packages/db/test/schema-ddl-parity.test.ts`
+
+- Объявлены индексы `events_seeding_kind_occurred_idx` (без `INCLUDE`, его drizzle не выражает), `combat_events_match_uuid_occurred_idx`, `players_bonus_balance_desc_idx`, `vip_tiers_role_id_idx`, `vip_tiers_purchasable_idx`, `seasons_start_day_key` и CHECK-и `vip_tiers_*` и `discord_message_templates_event_type_chk`/`_locale_chk`; `servers_status_enum` переименован в фактическое имя `servers_status_check`. DDL не менялся.
+- `schema-ddl-parity.test.ts` сверяет мигрированную БД (`pg_indexes`, `pg_constraint`) с объявлениями в схеме в обе стороны; оставшиеся необъявленные CHECK-и перечислены в тесте явным списком.
+- `discord_message_templates.template` типизирован как `DiscordEmbedTemplate`, `external_ban_sources.parser_config` как `Record<string, unknown>`: касты `as` у потребителей убраны.
+- `discord_message_templates.locale` остаётся описательной меткой языка текста шаблона, а не ключом выбора: `event_type` уникален, один шаблон на событие. Мультиязычность потребовала бы ослабить уникальность до `(event_type, locale)`, что ломает однострочные выборки предыдущего релиза; решение отложено до двухрелизной миграции.
+
+### Заполнение combat_events.match_uuid для старых событий (migration 0138, #50 / #1073)
+
+**Files:** `packages/db/drizzle/0138_combat_events_match_uuid_backfill.sql`, `packages/db/test/combat-events-match-backfill.migration.test.ts`
+
+Одноразовый идемпотентный UPDATE: события до 0131 получают `match_uuid` матча того же сервера, покрывающего `occurred_at` (как `resolveMatchId` в log-ingest). Затрагиваются только строки с `match_uuid IS NULL` внутри известного матча; остальные остаются NULL. Bigint `match_id` не трогается (в нём никогда не было данных) и удаляется отдельным релизом, когда его не читает ни один выпуск. Совместимо с откатом.
+
+### GeoIP: разрешение IP подключений в log-ingest (без миграции, #51)
+
+**Files:** `packages/db/src/geoip/mmdb.ts`, `apps/workers/log-ingest/src/{index,player-identity/store}.ts`, `docker/compose{,.stand}.yml`
+
+- `maxmind` объявлен зависимостью `@squad/db`, `createMmdbLookup` использует статический импорт (раньше динамический `import(name)` молча возвращал `null`).
+- `worker-log-ingest` открывает GeoLite2-City из `GEOIP_DB_PATH` при старте и передаёт `geo` в `recordIpObservation`; без файла поля остаются `NULL`, как и раньше. Каталог с базой монтируется read-only (`GEOIP_DB_DIR`, по умолчанию `/var/lib/squad-panel/geoip`).
+- Автоматическая загрузка по ключу из `geoip_settings` по-прежнему не подключена.
+
 ### Неиспользуемые индексы и один open-снимок балансировщика (migration 0136, #78)
 
 **Files:** `packages/db/drizzle/0136_index_cleanup_balancer_open_key.sql`, `packages/db/src/schema/{balancer-proposals,external-ban-sources,media-upload-tokens,reporter-stats,sessions,diagnostic-events}.ts`, `packages/db/test/index-cleanup.migration.test.ts`

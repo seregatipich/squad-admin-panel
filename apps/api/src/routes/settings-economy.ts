@@ -18,6 +18,7 @@ const SEED_THRESHOLD_MAX = 100;
 const SEED_REWARD_THRESHOLD_HOURS_MAX = 720;
 const PRIVILEGE_DAYS_MAX = 3650;
 const PRIVILEGE_PRICE_MAX = 100_000_000;
+const PRIVILEGE_COSTS_MAX_ENTRIES = 50;
 const VIP_EXPIRY_WINDOW_DAYS_MIN = 1;
 const VIP_EXPIRY_WINDOW_DAYS_MAX = 90;
 const VIP_EXPIRY_WINDOWS_MAX_COUNT = 10;
@@ -40,7 +41,14 @@ const privilegeCost = z.object({
   days: z.number().int().min(1).max(PRIVILEGE_DAYS_MAX),
   price: z.number().int().min(0).max(PRIVILEGE_PRICE_MAX),
 });
-const privilegeCosts = z.record(z.string().min(1).max(64), privilegeCost);
+// No API, worker or web screen reads this catalog yet (#349), so the field is
+// kept for response compatibility but bounded: an unbounded record would bloat
+// the row and every audit snapshot up to the 1 MB body limit.
+const privilegeCosts = z
+  .record(z.string().min(1).max(64), privilegeCost)
+  .refine((catalog) => Object.keys(catalog).length <= PRIVILEGE_COSTS_MAX_ENTRIES, {
+    message: 'too_many_privilege_costs',
+  });
 
 const putBody = z
   .object({

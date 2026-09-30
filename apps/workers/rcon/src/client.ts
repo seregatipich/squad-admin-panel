@@ -1,6 +1,6 @@
 import { type LookupAddress, lookup } from 'node:dns';
 import { createConnection, isIP, type LookupFunction, type Socket } from 'node:net';
-import { isRestrictedNetworkHost } from '@squad/shared-types';
+import { type HostCidr, isPrivateHostAllowed, isRestrictedNetworkHost } from '@squad/shared-types';
 import type { Logger } from 'pino';
 import {
   encodePacket,
@@ -31,6 +31,13 @@ export interface RconClientOptions {
    */
   refuseRestrictedAddresses?: boolean;
   /**
+   * Private LAN ranges an external server may live in
+   * (`EXTERNAL_HOST_PRIVATE_ALLOWLIST`, finding #333). Applies only together
+   * with `refuseRestrictedAddresses`, to the literal host and to every
+   * resolved address. `undefined`/`null` leaves every private range reachable.
+   */
+  privateHostAllowlist?: readonly HostCidr[] | null;
+  /**
    * Called with the raw body of every unsolicited broadcast packet Squad
    * pushes (chat, admin camera, squad creation, kicks). Interleaved with
    * command responses, so it must not block; exceptions are logged and
@@ -41,31 +48,47 @@ export interface RconClientOptions {
 
 /**
  * `dns.lookup` that fails with an error instead of returning an address the
- * panel must not dial. Handles both the single-address and the `all: true`
+ * panel must not dial: a restricted one, or a private one outside
+ * `privateHostAllowlist`. Handles both the single-address and the `all: true`
  * (happy-eyeballs) callback shapes `net.connect` may ask for.
  */
-const restrictedAddressLookup: LookupFunction = (hostname, options, callback) => {
-  lookup(hostname, options, (err, address, family) => {
-    if (err) {
-      callback(err, address, family);
-      return;
-    }
-    const addresses = Array.isArray(address)
-      ? (address as LookupAddress[]).map((entry) => entry.address)
-      : [address];
-    if (addresses.some((candidate) => isRestrictedNetworkHost(candidate))) {
-      callback(
-        Object.assign(new Error(`rcon host ${hostname} resolves to a restricted address`), {
-          code: 'ERESTRICTED',
-        }),
-        address,
-        family,
-      );
-      return;
-    }
-    callback(null, address, family);
-  });
-};
+function makeRestrictedAddressLookup(
+  privateHostAllowlist: readonly HostCidr[] | null,
+): LookupFunction {
+  return (hostname, options, callback) => {
+    lookup(hostname, options, (err, address, family) => {
+      if (err) {
+        callback(err, address, family);
+        return;
+      }
+      const addresses = Array.isArray(address)
+        ? (address as LookupAddress[]).map((entry) => entry.address)
+        : [address];
+      if (addresses.some((candidate) => isRestrictedNetworkHost(candidate))) {
+        callback(
+          Object.assign(new Error(`rcon host ${hostname} resolves to a restricted address`), {
+            code: 'ERESTRICTED',
+          }),
+          address,
+          family,
+        );
+        return;
+      }
+      if (addresses.some((candidate) => !isPrivateHostAllowed(candidate, privateHostAllowlist))) {
+        callback(
+          Object.assign(
+            new Error(`rcon host ${hostname} resolves to a private address outside the allowlist`),
+            { code: 'ERESTRICTED' },
+          ),
+          address,
+          family,
+        );
+        return;
+      }
+      callback(null, address, family);
+    });
+  };
+}
 
 interface PendingCommand {
   id: number;
@@ -106,11 +129,15 @@ export class RconClient {
     if (refuse && isIP(this.opts.host) !== 0 && isRestrictedNetworkHost(this.opts.host)) {
       throw new Error(`rcon host ${this.opts.host} is a restricted address`);
     }
+    const privateHostAllowlist = this.opts.privateHostAllowlist ?? null;
+    if (refuse && !isPrivateHostAllowed(this.opts.host, privateHostAllowlist)) {
+      throw new Error(`rcon host ${this.opts.host} is a private address outside the allowlist`);
+    }
     await new Promise<void>((resolve, reject) => {
       const sock = createConnection({
         host: this.opts.host,
         port: this.opts.port,
-        ...(refuse ? { lookup: restrictedAddressLookup } : {}),
+        ...(refuse ? { lookup: makeRestrictedAddressLookup(privateHostAllowlist) } : {}),
       });
       const timeout = setTimeout(() => {
         sock.destroy();

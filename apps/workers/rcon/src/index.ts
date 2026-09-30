@@ -9,6 +9,7 @@ import {
   resolveRconHost,
   startHeartbeat,
 } from '@squad/shared-config';
+import { type HostCidr, parsePrivateHostAllowlist } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
@@ -67,6 +68,13 @@ async function main() {
   const key = Buffer.from(requiredEnv('APP_ENCRYPTION_KEY'), 'base64');
   if (key.byteLength !== 32) {
     log.fatal('APP_ENCRYPTION_KEY must decode to 32 bytes');
+    process.exit(1);
+  }
+  let privateHostAllowlist: HostCidr[] | null;
+  try {
+    privateHostAllowlist = parsePrivateHostAllowlist(process.env.EXTERNAL_HOST_PRIVATE_ALLOWLIST);
+  } catch (err) {
+    log.fatal({ err: (err as Error).message }, 'EXTERNAL_HOST_PRIVATE_ALLOWLIST is invalid');
     process.exit(1);
   }
 
@@ -128,6 +136,7 @@ async function main() {
           seedHysteresis: row.seedHysteresis ?? undefined,
           password: decrypt(key, Buffer.from(row.blob)),
           refuseRestrictedAddresses: row.runtime === 'external',
+          privateHostAllowlist,
         });
       } catch (err) {
         log.error(

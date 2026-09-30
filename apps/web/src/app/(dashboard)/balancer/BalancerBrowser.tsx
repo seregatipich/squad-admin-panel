@@ -333,7 +333,7 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
     const isVeto = decision === 'veto';
     const comment = vetoReason.trim();
     if (isVeto && !comment) {
-      setFailure(DECISION_ERROR_MESSAGES.veto_reason_required);
+      setFailure(DECISION_ERROR_MESSAGES.veto_reason_required ?? null);
       return;
     }
     try {

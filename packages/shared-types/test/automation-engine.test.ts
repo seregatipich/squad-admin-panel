@@ -299,6 +299,48 @@ describe('evaluate — scoping & guards', () => {
     ).toHaveLength(0);
   });
 
+  it.each(['chat_keyword', 'player_count', 'time_of_day', 'player_flag'] as const)(
+    'drops a %s rule whose condition config is empty',
+    (conditionType) => {
+      expect(
+        evaluate(trigger({ chatMessage: 'hello' }), [rule({ conditionType, condition: {} })]),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('matches a kick rule and carries its reason', () => {
+    const matches = evaluate(trigger({ chatMessage: 'hello' }), [
+      rule({ actionType: 'kick', action: { reason: 'spam' } }),
+    ]);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ actionType: 'kick', action: { reason: 'spam' } });
+  });
+
+  it.each(['rcon_command', 'kick', 'warn', 'notify_admin'] as const)(
+    'drops a %s rule whose action config is empty',
+    (actionType) => {
+      expect(
+        evaluate(trigger({ chatMessage: 'hello' }), [rule({ actionType, action: {} })]),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('matches a rule of every action type with a valid action', () => {
+    const actions = {
+      rcon_command: { command: 'AdminEndMatch' },
+      kick: { reason: 'spam' },
+      warn: { message: 'hi' },
+      notify_admin: { message: 'look' },
+    } as const;
+    for (const [actionType, action] of Object.entries(actions)) {
+      const matches = evaluate(trigger({ chatMessage: 'hello' }), [
+        rule({ actionType: actionType as keyof typeof actions, action }),
+      ]);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({ actionType, action });
+    }
+  });
+
   it('carries the player ref onto the match', () => {
     const player = { playerId: 'p1', steamId64: '76561190000000001', eosId: null, name: 'Alice' };
     const matches = evaluate(trigger({ chatMessage: 'hello', player }), [rule({})]);

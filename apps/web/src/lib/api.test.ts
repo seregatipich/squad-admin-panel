@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { API_TIMEOUT_MS, ApiError, apiFetch } from './api';
+import { API_TIMEOUT_MS, ApiError, ApiResponseError, apiFetch } from './api';
 
 const originalEnv = process.env.API_URL;
 
@@ -43,7 +43,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/servers');
 
-    const calledUrl: string = mockFetch.mock.calls[0][0];
+    const calledUrl: string = mockFetch.mock.calls[0]![0];
     expect(calledUrl).toMatch(/\/api\/v1\/servers$/);
   });
 
@@ -56,7 +56,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/me');
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('accept')).toBe('application/json');
   });
 
@@ -84,7 +84,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/me', { cookie: '__Host-sid=abc123' });
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('cookie')).toBe('__Host-sid=abc123');
   });
 
@@ -148,7 +148,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/v1/servers', { method: 'POST', body: JSON.stringify({ name: 'test' }) });
 
-    const passedHeaders: Headers = mockFetch.mock.calls[0][1].headers;
+    const passedHeaders: Headers = mockFetch.mock.calls[0]![1].headers;
     expect(passedHeaders.get('content-type')).toBe('application/json');
   });
   it('rejects with an ApiError that carries the HTTP status', async () => {
@@ -175,7 +175,7 @@ describe('apiFetch', () => {
       await apiFetch('/api/v1/me');
 
       expect(timeout).toHaveBeenCalledWith(API_TIMEOUT_MS);
-      expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+      expect(mockFetch.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal);
     });
 
     it('fails fast when the API does not answer in time', async () => {
@@ -203,7 +203,7 @@ describe('apiFetch', () => {
       await apiFetch('/api/v1/me', { signal: controller.signal });
 
       expect(timeout).not.toHaveBeenCalled();
-      expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+      expect(mockFetch.mock.calls[0]![1].signal).toBe(controller.signal);
     });
   });
 });
@@ -215,5 +215,52 @@ describe('apiFetch errors', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(404);
     expect((error as ApiError).message).toBe('API /api/v1/x 404: nope');
+  });
+});
+
+describe('apiFetch response validation (#819)', () => {
+  const requireName = (body: unknown): { name: string } => {
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      typeof (body as { name?: unknown }).name !== 'string'
+    ) {
+      throw new Error('name must be a string');
+    }
+    return body as { name: string };
+  };
+
+  it('returns the body the parse check accepted', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ name: 'a' })));
+    await expect(apiFetch('/api/v1/x', { parse: requireName })).resolves.toEqual({ name: 'a' });
+  });
+
+  it('rejects a body that fails the parse check with ApiResponseError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ other: 1 })));
+    const error = await apiFetch('/api/v1/x', { parse: requireName }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiResponseError);
+    expect((error as Error).message).toBe(
+      'API /api/v1/x returned an unexpected body: name must be a string',
+    );
+  });
+
+  it('reports a non-JSON 2xx body as ApiResponseError instead of a SyntaxError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 200 })));
+    await expect(apiFetch('/api/v1/x')).rejects.toBeInstanceOf(ApiResponseError);
+  });
+
+  it('answers a 204 with undefined and hands undefined to parse', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(apiFetch('/api/v1/x')).resolves.toBeUndefined();
+    await expect(apiFetch('/api/v1/x', { parse: requireName })).rejects.toBeInstanceOf(
+      ApiResponseError,
+    );
+  });
+
+  it('does not pass parse to fetch', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(Response.json({ name: 'a' }));
+    vi.stubGlobal('fetch', mockFetch);
+    await apiFetch('/api/v1/x', { parse: requireName });
+    expect(mockFetch.mock.calls[0]?.[1]).not.toHaveProperty('parse');
   });
 });

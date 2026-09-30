@@ -5,6 +5,7 @@ import {
   isNullableNumber,
   isNullableString,
   isRecord,
+  parseSetupStatus,
 } from './json-guards';
 
 describe('json guards', () => {
@@ -35,5 +36,15 @@ describe('json guards', () => {
     expect(isArrayOf([1, 2], isFiniteNumber)).toBe(true);
     expect(isArrayOf([1, '2'], isFiniteNumber)).toBe(false);
     expect(isArrayOf(null, isFiniteNumber)).toBe(false);
+  });
+});
+
+describe('parseSetupStatus (#819)', () => {
+  it('accepts a body with a boolean setup_completed', () => {
+    expect(parseSetupStatus({ setup_completed: false })).toEqual({ setup_completed: false });
+  });
+
+  it.each([null, [], {}, { setup_completed: 'true' }])('rejects %j', (body) => {
+    expect(() => parseSetupStatus(body)).toThrow(TypeError);
   });
 });

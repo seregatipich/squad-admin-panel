@@ -4,7 +4,7 @@
 
 1. Start pino logger.
 2. Connect to Redis if `REDIS_URL` is set.
-3. Publish heartbeat (`worker:heartbeat:audit-archiver`, status `"idle (P1)"`).
+3. Publish heartbeat (`worker:heartbeat:audit-archiver`, status `"архивация не реализована (P1)"`).
 4. Wait indefinitely; respond to `SIGTERM`/`SIGINT` by stopping heartbeat, closing Redis, and exiting 0.
 
 ## Planned Phase 1 flow

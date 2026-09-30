@@ -224,13 +224,13 @@ describe('TopNav', () => {
     const items = screen.getAllByRole('menuitem');
     expect(items[0]).toHaveFocus();
 
-    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    fireEvent.keyDown(items[0]!, { key: 'ArrowDown' });
     expect(items[1]).toHaveFocus();
 
-    fireEvent.keyDown(items[1], { key: 'Home' });
+    fireEvent.keyDown(items[1]!, { key: 'Home' });
     expect(items[0]).toHaveFocus();
 
-    fireEvent.keyDown(items[0], { key: 'Escape' });
+    fireEvent.keyDown(items[0]!, { key: 'Escape' });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
   });

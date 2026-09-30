@@ -25,7 +25,6 @@ describe('panelBridge player lookup (#33)', () => {
     const state = {
       id: 'lookup-server-1',
       listener: new EventEmitter(),
-      execute: vi.fn(async () => ''),
       logger: { log: vi.fn() },
       players: undefined as
         | Array<{ name: string; eosID: string; steamID: string; teamID: string }>

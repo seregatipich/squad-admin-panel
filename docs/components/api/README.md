@@ -5,7 +5,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 ## Responsibilities
 
 - Auth: Steam OpenID 2.0 (only login method). Cookie sessions keyed on `players.steam_id64`. Sliding TTL with throttled DB touch.
-- RBAC: every authed route declares its permissions in `config.permissions`. The `preHandler` hook returns 401/403 accordingly.
+- RBAC: every authed route declares its permissions in `config.permissions`. The `preHandler` hook returns 401/403 accordingly. Routes gated on a role flag that has no catalogue key declare `config.roleFlags` (e.g. `['canManageClans']`), enforced by the same hook with `403 { error: 'forbidden', required: 'can_manage_clans' }`.
 - Audit: every mutation route declares `config.audit`; audit rows are hash-chained and append-only (DB triggers reject `UPDATE`/`DELETE`).
 - Install orchestration: WebSocket flow under `POST /api/v1/servers/:id/install` that drives `bridge.depot_update` → `seedConfigs` → `bridge.ufw_rule` → `bridge.container_run`.
 - Status reconciliation: [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) polls `container_inspect` every 4 s.
@@ -26,11 +26,11 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 
 ## Dependencies
 
-- Fastify 5.2 + `fastify-type-provider-zod` 4 + Zod 3.24
+- Fastify 5.12 + `fastify-type-provider-zod` 4 + Zod 3.25 (the provider stays on 4.x: 5+ require Zod 4, a workspace-wide schema migration tracked separately)
 - `@fastify/cookie/helmet/multipart/rate-limit/websocket/swagger(-ui)`
 - Auth: Steam OpenID 2.0 implemented in `src/lib/steam-openid.ts` with `node:crypto` (no auth library)
-- Logs/metrics: `pino` 9, `prom-client` 15
-- Redis: `ioredis` 5; HTTP egress: `undici` 8
+- Logs/metrics: `pino` 10, `@prometheus-io/client` 0.16
+- Redis: `ioredis` 6; HTTP egress: `undici` 8
 - DB: `drizzle-orm` 0.45 via `@squad/db`
 
 ## Components that depend on it

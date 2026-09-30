@@ -9,11 +9,8 @@ import { TopNav } from '@/components/TopNav';
 import { ToastRegion } from '@/components/ui/ToastRegion';
 import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
+import { parseSetupStatus } from '@/lib/json-guards';
 import { NAV_GROUPS } from '@/lib/nav';
-
-interface SetupStatus {
-  setup_completed: boolean;
-}
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const me = await requireSession();
@@ -40,7 +37,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // through.
   let setupCompleted = true;
   try {
-    setupCompleted = (await apiFetch<SetupStatus>('/api/v1/setup/status')).setup_completed;
+    setupCompleted = (await apiFetch('/api/v1/setup/status', { parse: parseSetupStatus }))
+      .setup_completed;
   } catch {
     // if the endpoint fails, let the user through
   }

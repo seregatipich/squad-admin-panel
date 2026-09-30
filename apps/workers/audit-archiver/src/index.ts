@@ -13,6 +13,13 @@ const log = pino({
 const COMPONENT = 'worker-audit-archiver';
 
 /**
+ * Heartbeat status shown on the panel's system-status card. Says outright that
+ * nothing is archived, so a live heartbeat is not mistaken for a working
+ * audit-retention pipeline.
+ */
+export const AUDIT_ARCHIVER_HEARTBEAT_STATUS = 'архивация не реализована (P1)';
+
+/**
  * Phase 0 stub. The archiver will export a verified hash-chain snapshot
  * of audit_log to restic on a daily schedule in Phase 1. For P0 it still
  * publishes a heartbeat so the panel's system-status card can see that
@@ -29,7 +36,7 @@ async function main() {
     ? startHeartbeat({
         redis,
         name: 'audit-archiver',
-        statusFn: () => 'idle (P1)',
+        statusFn: () => AUDIT_ARCHIVER_HEARTBEAT_STATUS,
         onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
       })
     : () => {};

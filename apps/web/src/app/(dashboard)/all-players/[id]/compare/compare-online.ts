@@ -136,11 +136,10 @@ function clampToRange(
 function mergeIntervals(intervals: readonly RawInterval[]): RawInterval[] {
   if (intervals.length === 0) return [];
   const sorted = [...intervals].sort((a, b) => a.startMs - b.startMs);
-  const merged: RawInterval[] = [{ ...sorted[0] }];
-  for (let i = 1; i < sorted.length; i++) {
-    const current = sorted[i];
-    const last = merged[merged.length - 1];
-    if (current.startMs <= last.endMs) {
+  const merged: RawInterval[] = [];
+  for (const current of sorted) {
+    const last = merged.at(-1);
+    if (last && current.startMs <= last.endMs) {
       last.endMs = Math.max(last.endMs, current.endMs);
     } else {
       merged.push({ ...current });
@@ -154,11 +153,11 @@ function overlapSecondsBetween(a: readonly RawInterval[], b: readonly RawInterva
   let total = 0;
   let i = 0;
   let j = 0;
-  while (i < a.length && j < b.length) {
-    const start = Math.max(a[i].startMs, b[j].startMs);
-    const end = Math.min(a[i].endMs, b[j].endMs);
+  for (let left = a[i], right = b[j]; left && right; left = a[i], right = b[j]) {
+    const start = Math.max(left.startMs, right.startMs);
+    const end = Math.min(left.endMs, right.endMs);
     if (start < end) total += (end - start) / 1000;
-    if (a[i].endMs < b[j].endMs) i++;
+    if (left.endMs < right.endMs) i++;
     else j++;
   }
   return total;

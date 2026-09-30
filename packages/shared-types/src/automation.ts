@@ -169,32 +169,59 @@ export type NotifyAdminAction = z.infer<typeof notifyAdminActionSchema>;
 // Discriminated parsers
 // ---------------------------------------------------------------------------
 
-const CONDITION_SCHEMAS: Record<AutomationConditionType, z.ZodTypeAny> = {
+/** Parsed config shape per `condition_type`; the parser below returns the entry for its `type`. */
+export interface AutomationConditionConfigs {
+  chat_keyword: ChatKeywordCondition;
+  player_count: PlayerCountCondition;
+  time_of_day: TimeOfDayCondition;
+  player_flag: PlayerFlagCondition;
+}
+
+/** Parsed config shape per `action_type`; the parser below returns the entry for its `type`. */
+export interface AutomationActionConfigs {
+  rcon_command: RconCommandAction;
+  kick: KickAction;
+  warn: WarnAction;
+  notify_admin: NotifyAdminAction;
+}
+
+// Typing each table entry with its config shape makes swapping two keys a compile error.
+const CONDITION_SCHEMAS: {
+  [T in AutomationConditionType]: z.ZodType<AutomationConditionConfigs[T], z.ZodTypeDef, unknown>;
+} = {
   chat_keyword: chatKeywordConditionSchema,
   player_count: playerCountConditionSchema,
   time_of_day: timeOfDayConditionSchema,
   player_flag: playerFlagConditionSchema,
 };
 
-const ACTION_SCHEMAS: Record<AutomationActionType, z.ZodTypeAny> = {
+const ACTION_SCHEMAS: {
+  [T in AutomationActionType]: z.ZodType<AutomationActionConfigs[T], z.ZodTypeDef, unknown>;
+} = {
   rcon_command: rconCommandActionSchema,
   kick: kickActionSchema,
   warn: warnActionSchema,
   notify_admin: notifyAdminActionSchema,
 };
 
-/** Validates a raw `condition` jsonb against the schema for its `condition_type`. */
-export function parseAutomationCondition(
-  type: AutomationConditionType,
+/**
+ * Validates a raw `condition` jsonb against the schema for its `condition_type`.
+ * The parsed data is typed by `type`, so callers that narrow `type` need no casts.
+ */
+export function parseAutomationCondition<T extends AutomationConditionType>(
+  type: T,
   raw: unknown,
-): z.SafeParseReturnType<unknown, unknown> {
+): z.SafeParseReturnType<unknown, AutomationConditionConfigs[T]> {
   return CONDITION_SCHEMAS[type].safeParse(raw);
 }
 
-/** Validates a raw `action` jsonb against the schema for its `action_type`. */
-export function parseAutomationAction(
-  type: AutomationActionType,
+/**
+ * Validates a raw `action` jsonb against the schema for its `action_type`.
+ * The parsed data is typed by `type`, so callers that narrow `type` need no casts.
+ */
+export function parseAutomationAction<T extends AutomationActionType>(
+  type: T,
   raw: unknown,
-): z.SafeParseReturnType<unknown, unknown> {
+): z.SafeParseReturnType<unknown, AutomationActionConfigs[T]> {
   return ACTION_SCHEMAS[type].safeParse(raw);
 }

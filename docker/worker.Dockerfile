@@ -73,6 +73,9 @@ COPY --from=builder /out /app
 ARG WORKER=
 ENV WORKER=$WORKER
 WORKDIR /app
+# GeoLite2 database written by worker-log-ingest (GEOIP_DATA_DIR); owned by the
+# unprivileged user so a named volume mounted here is writable.
+RUN mkdir -p /var/lib/panel-geoip && chown node /var/lib/panel-geoip
 # Unprivileged by default (#47). Compose overrides the user only where a
 # worker needs it: the panel GID for the bridge socket, root for host files.
 USER node

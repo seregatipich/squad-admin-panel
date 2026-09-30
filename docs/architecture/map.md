@@ -237,7 +237,6 @@ graph TB
   RCON -->|"Valve RCON TCP<br/>127.0.0.1:rcon_port"| SQ
   API -->|"unix: bridge.sock"| BRIDGE
   WB -->|"unix: bridge.sock"| BRIDGE
-  API -.->|"HTTP over unix<br/>/run/squad-panel/rnsquadjs/&lt;id&gt;/sock/rcon.sock"| RN
   BRIDGE --> DOCK
   DOCK --> SQ & RN & DEP
   BK --> PG & RD
@@ -273,7 +272,6 @@ graph LR
   B -->|"① HTTPS only, ports 80/443.<br/>Caddy path-splits /api/* → api.<br/>Every /api/v1 request passes the single<br/>global <b>onRequest</b> RBAC hook<br/>(apps/api/src/plugins/auth.ts)"| C
   A -->|"② unix socket bridge.sock, 0660 root:panel.<br/>SO_PEERCRED primary-GID check<br/>(apps/bridge/internal/auth/peer.go:35).<br/>30 whitelisted RPC methods,<br/>every path/image/volume arg allowlisted"| G
   G -->|"③ /run/docker.sock — bridge only.<br/>No container mounts it.<br/>container_run restricted to<br/>squad-server:latest + depot-init"| S
-  S -.->|"④ sidecar rcon.sock,<br/>bind-mounted back into api"| A
 ```
 
 Crossing ② is the design's centre of gravity. The socket is `SocketMode=0660 SocketUser=root SocketGroup=panel PassCredentials=yes` (`apps/bridge/deploy/panel-host-bridge.socket`), and `ResolvePeer` reads `SO_PEERCRED` and compares the **primary GID** against the `panel` group. That is why every bridge-attached compose service carries the same four-line comment and `user: "0:${PANEL_GID:-987}"` rather than `group_add`:
@@ -756,7 +754,7 @@ Thirteen modules. There is **no generic key/value settings table**: each group g
 | `settings-alt-detection.ts` / `settings-coplay.ts` | weights, thresholds, `POST/DELETE …/ignored-ips` | alt-detection: GET `player:view_ips`, writes `player:manage_alt_detection` (needs `can_view_ips` + `can_edit_roles`, #43); coplay: `player:view_ips` (its PUT too, despite involving no IPs) | Singleton upsert + imperative audit with before/after |
 | `settings-economy.ts` / `settings-clan-guard.ts` / `settings-chat-flags.ts` | economy coefficients, kill-switch, chat-flag rule CRUD + reindex | **split guard** in economy (`canManageEconomy` vs `canEditRoles` per field group); `canManageClans`; `canEditRoles` | Reindex re-scans N days of chat and rewrites flags |
 | `integrations-discord.ts` | integration singleton, webhook CRUD + `/test`, template CRUD/reset/preview | `integration:manage` | Encrypts bot token and webhook URL at rest; URLs validated against a strict `discord.com/api/webhooks/...` host allowlist (`lib/discord.ts:2-3`); `/test` hand-rolls a 5 s `fetch` instead of reusing the worker sender |
-| `integrations-geoip.ts` | MaxMind account/license/enable | `integration:manage` | `db_present` is permanently `false` — `packages/db/src/geoip/` has no caller in `apps/` |
+| `integrations-geoip.ts` | MaxMind account/license/enable | `integration:manage` | `the log-ingest worker resolves connect IPs through `createMmdbLookup` (optional `GEOIP_DB_PATH`); the DB refresh (`refreshGeoLite2Db`) is still not scheduled |
 | `alert-rules.ts` / `automation-rules.ts` | rule CRUD, `POST /automation-rules/:id/dry-run` | alert rules: `panelAccess` read, `role:edit` write; automation rules: `trigger:view` read, `trigger:edit` + the action's own `mod:*`/Squad right write; `config.audit` hook | Two *separate* engines: alert rules are a free-form `config: z.record(z.unknown())`, automation rules a typed condition/action pair shared with the worker. Dry-run **inserts an `automation_runs` row** even on no-match |
 | `media.ts` | `POST /media`, `/media/link`, `GET /media/:id[/stream]`, `DELETE` | `panelAccess`; delete = owner else `canManageMedia` | Local filesystem, no object store; 2 GiB cap, magic-byte validation, SHA-256 dedup **after** the write (two rows may share one `storage_path`) |
 | `audit.ts` / `logs.ts` | `GET /audit`, `GET /audit/verify-chain`, `GET /logs[/export]` | `audit:view`, `host:view`, `host:metrics` | `verify-chain` reads `audit_log` in keyset pages of 5 000 from one read-only REPEATABLE READ snapshot with `TimeZone = UTC`, yields between pages and runs one at a time (Redis lock `audit:verify-chain:lock`, `409 verify_in_progress`) — #36; it used to be one unbounded `SELECT … ORDER BY id ASC` |
@@ -1255,7 +1253,7 @@ All five analytics workers are plain `setInterval` processes whose `index.ts` is
 
 The house pattern is **write-time materialisation into ordinary aggregate tables — explicitly not materialised views** (`packages/db/src/schema/player-bonus-accruals.ts:5-9`). Three distinct update modes coexist:
 
-1. **Delete-then-insert in one transaction** — `recomputeLeaderboardPeriod` rebuilds a fixed 7-descriptor set each tick (today, yesterday, this/last ISO week, this/last month, `alltime` pinned to `1970-01-01`). Each result is emitted twice, once per `server_id` and once as a cross-server rollup with `server_id = NULL`, which is why `player_stat_periods_identity` is declared `.nullsNotDistinct()`. Because `alltime`'s day range is `null`, both filters collapse to empty SQL and the whole of `player_daily_presence`/`matches` is rescanned **every 15 minutes**.
+1. **In-place upsert in one statement** (was delete-then-insert until #78/1140: rows whose numbers did not change are no longer rewritten, rows that vanished are deleted) — `recomputeLeaderboardPeriod` rebuilds a fixed 7-descriptor set each tick (today, yesterday, this/last ISO week, this/last month, `alltime` pinned to `1970-01-01`). Each result is emitted twice, once per `server_id` and once as a cross-server rollup with `server_id = NULL`, which is why `player_stat_periods_identity` is declared `.nullsNotDistinct()`. Because `alltime`'s day range is `null`, both filters collapse to empty SQL and the whole of `player_daily_presence`/`matches` is rescanned **every 15 minutes**.
 2. **Windowed delete-then-insert** — `presence-daily` recomputes over a 2-day `yesterday..today` window in three stages: explode `player_sessions` into per-UTC-day segments, self-join for co-play (`sa.player_id < sb.player_id`), then `runEconomyAccrual`. Stage 3 reconstructs seeding windows from `events` and **overwrites `player_daily_presence.seed_seconds` that stage 1 just wrote** from `player_sessions.mode = 'seed'` — two definitions of the same column, 20 lines apart.
 3. **Fully incremental in-transaction upsert** — the dossier tables only. `worker-log-ingest` calls `applyCombatEventToDossier(tx, …)` on the same transaction that inserts the `combat_events` row, gated on `if (!wasInserted) return;` because the upsert is `kills = kills + 1` with no event-id dedup of its own.
 
@@ -1313,7 +1311,6 @@ Mode is one env var, `PANEL_BRIDGE_MODE`, defaulting to **shadow**:
 | Status key | `rnsquadjs:status:<id>:shadow` | `rnsquadjs:status:<id>` |
 | Stream cap | `XADD MAXLEN ~ 10000` (`EVENT_STREAM_MAXLEN`) | same, matching log-ingest |
 | Types published | all 17 mapped | only 4 (`PRODUCTION_TYPES`) |
-| Unix-socket RCON server | not started | `/run/panelBridge/rcon.sock` |
 
 The shadow key still matches the `events:server:*` SCAN pattern, so `worker-automation` and `worker-discord` accept only keys matching `/^events:server:[^:]+$/` in `discoverEventStreams`; a shadow copy is never consumed as a live stream (#16).
 

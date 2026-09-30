@@ -13,8 +13,8 @@ import { createSession } from '../../src/lib/sessions.js';
 import authPlugin, { SESSION_COOKIE } from '../../src/plugins/auth.js';
 import authRoutes from '../../src/routes/auth.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from '../integration/harness.js';
+import { hostRedisUrl } from '../integration/isolated-db.js';
 
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
 const SESSION_SECRET = 'a'.repeat(48);
 
 async function buildApp(opts: { dbUrl: string }) {
@@ -24,7 +24,7 @@ async function buildApp(opts: { dbUrl: string }) {
   const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('bridge', makeFakeBridge() as unknown as BridgeClient);

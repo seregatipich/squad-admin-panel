@@ -1,6 +1,6 @@
 # Monitoring
 
-The panel's observability surface is intentionally minimal: two capped Redis Streams for logs and metrics, heartbeat keys for worker liveness, and the audit log for security forensics. There is no Prometheus exporter, no Grafana, and no external metrics push. (The API process does keep an in-process `prom-client` registry at `GET /metrics`, labelled by route template only; it requires the `host:metrics` permission and is not routed by Caddy, so it is reachable only from inside the compose network or with an operator session.) See [architectural decision 2026-04-25 (panel observability)](../architecture/decisions.md) for the rationale.
+The panel's observability surface is intentionally minimal: two capped Redis Streams for logs and metrics, heartbeat keys for worker liveness, and the audit log for security forensics. There is no Prometheus exporter, no Grafana, and no external metrics push. (The API process does keep an in-process `@prometheus-io/client` registry at `GET /metrics`, labelled by route template only; it requires the `host:metrics` permission and is not routed by Caddy, so it is reachable only from inside the compose network or with an operator session.) See [architectural decision 2026-04-25 (panel observability)](../architecture/decisions.md) for the rationale.
 
 ## Panel logs
 
@@ -98,7 +98,7 @@ The dashboard reads the same checks (without the reason for a failure) from the 
 `audit_log` is the security-grade append-only record of all state-mutating API calls. It is hash-chained: each row's `row_hash = sha256(prev_hash || canonical_json(row))`.
 
 - **UI**: `/audit` page — shows actor (Steam display name or "system"), action, resource, timestamp.
-- **Integrity check**: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm verify:audit-chain` — walks all rows, exits non-zero on the first broken link.
+- **Integrity check**: `DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm verify:audit-chain` — walks all rows, exits non-zero on the first broken link. Record the chain head outside the database (`AUDIT_CHAIN_PRINT_HEAD=1`) and pass it back as `AUDIT_CHAIN_ANCHOR=<id>:<row_hash>` to also detect a truncated tail (see [migrations.md](./migrations.md#audit-chain-integrity)).
 
 Do not use `audit_log` for diagnostic log noise. It covers only POST/PUT/PATCH/DELETE operations that mutate state. Read-only routes set `config.audit: false`.
 

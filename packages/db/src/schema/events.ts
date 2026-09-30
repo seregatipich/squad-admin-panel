@@ -34,6 +34,11 @@ export const events = pgTable(
     kindOccurredIdx: index('events_kind_occurred_idx')
       .on(table.kind, table.occurredAt)
       .where(sql`kind IN ('player.connected','player.disconnected','rcon.players_polled')`),
+    // Partial index for the seeding lookups. `INCLUDE (server_id)` from
+    // 0127_events_indexes.sql cannot be expressed by drizzle-orm's index builder.
+    seedingKindOccurredIdx: index('events_seeding_kind_occurred_idx')
+      .on(table.kind, table.occurredAt.desc())
+      .where(sql`kind IN ('server.seeding_started', 'server.seeding_ended')`),
     occurredAtEventIdIdx: index('events_occurred_at_event_id_idx').on(
       table.occurredAt.desc(),
       table.eventId.desc(),

@@ -1,5 +1,10 @@
 'use client';
 
+import {
+  type AppealItem,
+  appealErrorResponseSchema,
+  appealListResponseSchema,
+} from '@squad/shared-types';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -36,36 +41,6 @@ import {
   STATUS_LABELS,
   totalPages,
 } from './helpers';
-
-interface AppealItem {
-  id: string;
-  number: number;
-  status: AppealStatus;
-  steam_id64: string;
-  body: string;
-  contact: string | null;
-  decision_note: string | null;
-  internal_note: string | null;
-  created_at: string;
-  updated_at: string;
-  decided_at: string | null;
-  player: { id: string; name: string | null; steam_id64: string | null } | null;
-  moderation_action: {
-    id: string;
-    action_type: string | null;
-    reason: string | null;
-    created_at: string;
-    ban_length: string | null;
-  } | null;
-  handler: { id: string; name: string | null } | null;
-}
-
-interface AppealListResponse {
-  items: AppealItem[];
-  total: number;
-  page: number;
-  page_size: number;
-}
 
 const ACTION_LABELS: Record<AppealStatus, string> = {
   pending: 'В очередь',
@@ -184,7 +159,9 @@ export function AppealsBrowser() {
           return;
         }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as AppealListResponse;
+        const parsed = appealListResponseSchema.safeParse(await res.json());
+        if (!parsed.success) throw new Error('Неожиданный формат ответа сервера');
+        const data = parsed.data;
         setForbidden(false);
         // A decision made on the last remaining item of a page (or a status
         // filter shrinking the list) can leave `filterPage` past the new last
@@ -232,8 +209,8 @@ export function AppealsBrowser() {
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setError(decideErrorText(data.error, res.status));
+        const parsed = appealErrorResponseSchema.safeParse(await res.json().catch(() => null));
+        setError(decideErrorText(parsed.success ? parsed.data.error : undefined, res.status));
         return;
       }
       await load({ silent: true });

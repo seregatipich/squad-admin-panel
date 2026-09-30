@@ -13,6 +13,7 @@ import authPlugin, { SESSION_COOKIE } from '../src/plugins/auth.js';
 import liveBusPlugin from '../src/plugins/live-bus.js';
 import authRoutes from '../src/routes/auth.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
+import { hostRedisUrl } from './integration/isolated-db.js';
 
 // Regression tests for #32 (findings #1025, #1032, #1263): anything that can
 // reach Redis (a host-network game server, mod or sidecar) could write
@@ -21,8 +22,6 @@ import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integrati
 // database. A cache entry must now carry a MAC the attacker cannot compute;
 // one without it is ignored and the session is resolved from Postgres.
 
-const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
-
 async function buildApp(dbUrl: string) {
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
@@ -30,7 +29,7 @@ async function buildApp(dbUrl: string) {
   const sql = postgres(dbUrl, { max: 4, onnotice: () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: integration test
   const db = drizzle(sql, { schema }) as any;
-  const redis = new Redis(TEST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('bridge', makeFakeBridge() as never);

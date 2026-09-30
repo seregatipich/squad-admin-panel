@@ -35,7 +35,7 @@ describe('log-ingest alert wiring (#19)', () => {
   it('evaluates a connect before the identity handler records the new IP', () => {
     const body = onLineBody();
     const alertCall = body.indexOf('handleAlertEvent(');
-    const identityCall = body.indexOf('handlePlayerConnected(db, e)');
+    const identityCall = body.indexOf('handlePlayerConnected(db, e');
     expect(alertCall).toBeGreaterThan(-1);
     expect(identityCall).toBeGreaterThan(alertCall);
   });

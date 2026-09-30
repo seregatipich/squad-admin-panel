@@ -5,7 +5,6 @@ describe('shared-types index re-exports', () => {
   it('re-exports api schemas', () => {
     expect(typeof root.serverCreateInput.safeParse).toBe('function');
     expect(typeof root.uuidString.safeParse).toBe('function');
-    expect(typeof root.paginated).toBe('function');
   });
 
   it('re-exports event schemas and helpers', () => {

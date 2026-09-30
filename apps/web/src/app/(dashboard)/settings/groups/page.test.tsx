@@ -554,7 +554,7 @@ describe('role deletion — confirmation with a typed challenge', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Удалить роль' });
     await act(async () => {
-      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
     });
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

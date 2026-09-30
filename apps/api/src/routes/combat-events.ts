@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream';
 import { COMBAT_EVENT_TYPES, combatEvents, players } from '@squad/db/schema';
-import { and, desc, eq, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -29,15 +29,24 @@ const filterShape = {
   victimName: z.string().trim().min(1).max(128).optional(),
   weapon: z.string().trim().min(1).max(128).optional(),
   teamkillsOnly: boolFlag.optional(),
+  /** `true` drops teamkill events (the "kills" view; teamkills have their own). */
+  excludeTeamkills: boolFlag.optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 };
 
 const filterSchema = z.object(filterShape);
 
+/**
+ * `sort=time` (default) pages newest first. `sort=damage` orders by damage in
+ * `dir` (default `desc`) with the event id as tiebreaker, over events that
+ * carry a damage value only, and pages with a (damage, id) keyset cursor.
+ */
 const listQuery = filterSchema.extend({
   limit: z.coerce.number().int().min(1).max(LIMIT_MAX).default(LIMIT_DEFAULT),
   cursor: z.string().min(1).optional(),
+  sort: z.enum(['time', 'damage']).default('time'),
+  dir: z.enum(['asc', 'desc']).default('desc'),
 });
 
 const exportQuery = filterSchema.extend({ format: z.literal('csv').default('csv') });
@@ -67,6 +76,25 @@ function decodeCursor(raw: string): { occurredAt: Date; id: bigint } | null {
   }
 }
 
+const DAMAGE_CURSOR_PREFIX = 'damage:';
+
+function encodeDamageCursor(damage: string, id: bigint): string {
+  return Buffer.from(`${DAMAGE_CURSOR_PREFIX}${damage}~${id.toString()}`).toString('base64url');
+}
+
+function decodeDamageCursor(raw: string): { damage: string; id: bigint } | null {
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    if (!decoded.startsWith(DAMAGE_CURSOR_PREFIX)) return null;
+    const sep = decoded.lastIndexOf('~');
+    const damage = decoded.slice(DAMAGE_CURSOR_PREFIX.length, sep);
+    if (sep < 0 || !/^-?\d+(\.\d+)?$/.test(damage)) return null;
+    return { damage, id: BigInt(decoded.slice(sep + 1)) };
+  } catch {
+    return null;
+  }
+}
+
 function combatGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
     reply.code(401);
@@ -91,6 +119,7 @@ function hasActiveFilters(query: FilterQuery): boolean {
     query.victimName !== undefined ||
     query.weapon !== undefined ||
     query.teamkillsOnly === 'true' ||
+    query.excludeTeamkills === 'true' ||
     query.from !== undefined ||
     query.to !== undefined
   );
@@ -141,6 +170,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (query.teamkillsOnly === 'true') clauses.push(eq(combatEvents.isTeamkill, true));
+    if (query.excludeTeamkills === 'true') clauses.push(eq(combatEvents.isTeamkill, false));
     if (query.from) clauses.push(gte(combatEvents.occurredAt, query.from));
     if (query.to) clauses.push(lte(combatEvents.occurredAt, query.to));
 
@@ -187,18 +217,34 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
 
       const baseWhere = clauses.length > 0 ? and(...clauses) : undefined;
 
+      const damageSort = query.sort === 'damage';
       const pageClauses = [...clauses];
+      if (damageSort) pageClauses.push(sql`${combatEvents.damage} IS NOT NULL`);
       if (query.cursor) {
-        const cursor = decodeCursor(query.cursor);
-        if (!cursor) {
-          reply.code(400);
-          return { error: 'invalid_cursor' };
+        if (damageSort) {
+          const cursor = decodeDamageCursor(query.cursor);
+          if (!cursor) {
+            reply.code(400);
+            return { error: 'invalid_cursor' };
+          }
+          const cursorId = cursor.id.toString();
+          pageClauses.push(
+            query.dir === 'desc'
+              ? sql`(${combatEvents.damage} < ${cursor.damage}::numeric OR (${combatEvents.damage} = ${cursor.damage}::numeric AND ${combatEvents.id} < ${cursorId}::bigint))`
+              : sql`(${combatEvents.damage} > ${cursor.damage}::numeric OR (${combatEvents.damage} = ${cursor.damage}::numeric AND ${combatEvents.id} > ${cursorId}::bigint))`,
+          );
+        } else {
+          const cursor = decodeCursor(query.cursor);
+          if (!cursor) {
+            reply.code(400);
+            return { error: 'invalid_cursor' };
+          }
+          const cursorAt = cursor.occurredAt.toISOString();
+          const cursorId = cursor.id.toString();
+          pageClauses.push(
+            sql`(${combatEvents.occurredAt} < ${cursorAt}::timestamptz OR (${combatEvents.occurredAt} = ${cursorAt}::timestamptz AND ${combatEvents.id} < ${cursorId}::bigint))`,
+          );
         }
-        const cursorAt = cursor.occurredAt.toISOString();
-        const cursorId = cursor.id.toString();
-        pageClauses.push(
-          sql`(${combatEvents.occurredAt} < ${cursorAt}::timestamptz OR (${combatEvents.occurredAt} = ${cursorAt}::timestamptz AND ${combatEvents.id} < ${cursorId}::bigint))`,
-        );
       }
 
       const pageWhere = pageClauses.length > 0 ? and(...pageClauses) : undefined;
@@ -224,7 +270,13 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
         .leftJoin(attacker, eq(attacker.id, combatEvents.attackerPlayerId))
         .leftJoin(victim, eq(victim.id, combatEvents.victimPlayerId))
         .where(pageWhere)
-        .orderBy(desc(combatEvents.occurredAt), desc(combatEvents.id))
+        .orderBy(
+          ...(damageSort
+            ? query.dir === 'desc'
+              ? [desc(combatEvents.damage), desc(combatEvents.id)]
+              : [asc(combatEvents.damage), asc(combatEvents.id)]
+            : [desc(combatEvents.occurredAt), desc(combatEvents.id)]),
+        )
         .limit(query.limit);
 
       const last = rows.length === query.limit ? rows[rows.length - 1] : null;
@@ -246,7 +298,11 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
             : null,
           victim: row.victimId ? { player_id: row.victimId, current_name: row.victimName } : null,
         })),
-        nextCursor: last ? encodeCursor(last.occurredAt, last.id) : null,
+        nextCursor: last
+          ? damageSort
+            ? encodeDamageCursor(String(last.damage), last.id)
+            : encodeCursor(last.occurredAt, last.id)
+          : null,
         // The count is the same for every page of one filter set, so it is
         // computed for the first page only; cursor pages answer null and the
         // client keeps the first page's value (#144).

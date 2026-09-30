@@ -232,7 +232,7 @@ describe('MapWidget', () => {
       expect(confirmDialog).not.toBeNull();
       await act(async () => {
         fireEvent.click(
-          within(confirmDialog as HTMLElement).getAllByRole('button', { name: 'Отмена' })[0],
+          within(confirmDialog as HTMLElement).getAllByRole('button', { name: 'Отмена' })[0]!,
         );
       });
 

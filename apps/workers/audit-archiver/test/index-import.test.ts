@@ -23,4 +23,8 @@ describe('audit-archiver index', () => {
   it('does not export a cycle that would report archiver success', () => {
     expect(Object.keys(archiver)).not.toContain('runArchiverCycle');
   });
+
+  it('advertises in the heartbeat that archival is not implemented', () => {
+    expect(archiver.AUDIT_ARCHIVER_HEARTBEAT_STATUS).toBe('архивация не реализована (P1)');
+  });
 });

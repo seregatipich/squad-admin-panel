@@ -1,3 +1,7 @@
+import { type DateRange, resolveDateRange as resolveDateRangeShared } from '@/lib/date-range';
+
+export type { DateRange };
+
 export const PAGE_LIMIT = 100;
 
 export const COMBAT_FACETS = [
@@ -42,11 +46,15 @@ export function facetLabel(facet: CombatFacet): string {
 export interface FacetApiParams {
   type?: CombatEventType[];
   teamkillsOnly?: boolean;
+  excludeTeamkills?: boolean;
 }
 
 export function facetToApiParams(facet: CombatFacet): FacetApiParams {
   switch (facet) {
+    // Убийства — это смерти без тимкиллов (у них свой фасет); «Смерти» —
+    // все смерти, включая тимкиллы. Так два переключателя не дублируют друг друга.
     case 'kills':
+      return { type: ['death'], excludeTeamkills: true };
     case 'deaths':
       return { type: ['death'] };
     case 'wounds':
@@ -189,71 +197,8 @@ export function hasActiveFilters(filters: CombatFilters): boolean {
   );
 }
 
-function startOfDay(reference: Date): Date {
-  const day = new Date(reference);
-  day.setHours(0, 0, 0, 0);
-  return day;
-}
-
-function endOfDay(reference: Date): Date {
-  const day = new Date(reference);
-  day.setHours(23, 59, 59, 999);
-  return day;
-}
-
-function addDays(reference: Date, amount: number): Date {
-  const shifted = new Date(reference);
-  shifted.setDate(shifted.getDate() + amount);
-  return shifted;
-}
-
-function parseDateInput(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
-  const parsed = new Date(year, month - 1, day);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-export interface DateRange {
-  dateFrom?: Date;
-  dateTo?: Date;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export function resolveDateRange(filters: CombatFilters, now: Date = new Date()): DateRange {
-  switch (filters.preset) {
-    case 'today':
-      return { dateFrom: startOfDay(now), dateTo: now };
-    case 'yesterday': {
-      const from = addDays(startOfDay(now), -1);
-      return { dateFrom: from, dateTo: endOfDay(from) };
-    }
-    case '24h':
-      return { dateFrom: new Date(now.getTime() - DAY_MS), dateTo: now };
-    case 'week':
-      return { dateFrom: addDays(startOfDay(now), -6), dateTo: now };
-    case 'month': {
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { dateFrom: from, dateTo: now };
-    }
-    case '30days':
-      return { dateFrom: new Date(now.getTime() - 30 * DAY_MS), dateTo: now };
-    case '60days':
-      return { dateFrom: new Date(now.getTime() - 60 * DAY_MS), dateTo: now };
-    case '90days':
-      return { dateFrom: new Date(now.getTime() - 90 * DAY_MS), dateTo: now };
-    case 'custom': {
-      const range: DateRange = {};
-      const from = parseDateInput(filters.from);
-      const to = parseDateInput(filters.to);
-      if (from) range.dateFrom = startOfDay(from);
-      if (to) range.dateTo = endOfDay(to);
-      return range;
-    }
-    default:
-      return {};
-  }
+  return resolveDateRangeShared(filters, now);
 }
 
 export interface ApiQueryOptions {
@@ -261,6 +206,8 @@ export interface ApiQueryOptions {
   cursor?: string | null;
   limit?: number;
   lockedServerId?: string;
+  /** Sorts the whole result set by damage on the server instead of by time. */
+  damageSort?: SortDir;
 }
 
 function appendFilterParams(
@@ -272,6 +219,7 @@ function appendFilterParams(
   const facetParams = facetToApiParams(filters.facet);
   for (const type of facetParams.type ?? []) params.append('type', type);
   if (facetParams.teamkillsOnly) params.set('teamkillsOnly', 'true');
+  if (facetParams.excludeTeamkills) params.set('excludeTeamkills', 'true');
 
   if (lockedServerId) {
     params.append('serverId', lockedServerId);
@@ -301,6 +249,10 @@ export function buildListApiQuery(filters: CombatFilters, options: ApiQueryOptio
   const params = new URLSearchParams();
   appendFilterParams(params, filters, options.lockedServerId, now);
   params.set('limit', String(options.limit ?? PAGE_LIMIT));
+  if (options.damageSort) {
+    params.set('sort', 'damage');
+    params.set('dir', options.damageSort);
+  }
   if (options.cursor) params.set('cursor', options.cursor);
   return params.toString();
 }
@@ -487,6 +439,7 @@ export function matchesLiveFilters(
     return false;
   }
   if (facetParams.teamkillsOnly && !row.isTeamkill) return false;
+  if (facetParams.excludeTeamkills && row.isTeamkill) return false;
 
   if (lockedServerId) {
     if (row.serverId !== lockedServerId) return false;

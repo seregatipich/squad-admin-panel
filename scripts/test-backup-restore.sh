@@ -177,25 +177,46 @@ docker run -d --name "$PG2" --network "$NET" --network-alias postgres \
 PG2_VOL="$(docker inspect "$PG2" --format '{{(index .Mounts 0).Name}}')"
 wait_pg "$PG2"
 
-step "Restoring Postgres from the latest snapshot"
-tool 'rm -rf /restore/* ; restic restore latest --target /restore
-test -f /restore/data/postgres/admin.dump || { echo missing-dump >&2; exit 1; }
-PGPASSWORD=admin pg_restore --single-transaction --exit-on-error --clean --if-exists -h postgres -U admin -d admin /restore/data/postgres/admin.dump
-cp /restore/data/redis/dump.rdb /data/redis/dump.rdb' || fail "postgres restore failed"
+# restore.sh is the source of truth for the restore steps: the staging, pg_restore
+# and RDB->AOF scripts are extracted from it verbatim and run here, so a change
+# to any of them is exercised by this test instead of drifting in a copy.
+# Each script is the single-quoted body that follows a `-T <service> ... -c '`
+# line in restore.sh and ends at the next line holding only a closing quote.
+restore_script() {
+  local script
+  script="$(awk -v svc="$1" '
+    !grab && $0 ~ ("-T " svc "( sh)? -c .$") { grab = 1; next }
+    grab && /^.$/ { exit }
+    grab' scripts/restore.sh)"
+  [ -n "$script" ] || fail "could not extract the $1 script from scripts/restore.sh"
+  printf '%s' "$script"
+}
+STAGE_SCRIPT="$(restore_script backup)"
+[[ "$STAGE_SCRIPT" == *'restic restore "$RESTORE_SNAPSHOT"'* ]] || fail "staging script not found in scripts/restore.sh"
+PG_RESTORE_SCRIPT="$(awk '
+  /-T backup -c .$/ { block++; grab = block == 2; next }
+  grab && /^.$/ { exit }
+  grab' scripts/restore.sh)"
+[[ "$PG_RESTORE_SCRIPT" == *"pg_restore --single-transaction"* ]] || fail "pg_restore script not found in scripts/restore.sh"
+REDIS_CONVERT="$(restore_script redis)"
+[[ "$REDIS_CONVERT" == *"redis-server --dir /data"* ]] || fail "could not extract the Redis conversion script from scripts/restore.sh"
+
+step "Staging the dumps from the latest snapshot (restore.sh staging script)"
+tool "export RESTORE_SNAPSHOT=latest; ${STAGE_SCRIPT}" || fail "staging the dumps failed"
+[ -s "$TMP/dump/restore/admin.dump" ] || fail "staging left no admin.dump"
+[ -s "$TMP/dump/restore/dump.rdb" ] || fail "staging left no dump.rdb"
+ok "admin.dump and dump.rdb staged under restore/"
+
+step "Restoring Postgres (restore.sh pg_restore script)"
+tool "$PG_RESTORE_SCRIPT" || fail "postgres restore failed"
 ok "pg_restore --single-transaction --clean --if-exists completed"
 
-step "Converting restored RDB to an AOF (redis runs --appendonly yes)"
-mkdir -p "$TMP/redis-stage"
-cp "$TMP/dump/redis/dump.rdb" "$TMP/redis-stage/dump.rdb"
+step "Converting the staged RDB to an AOF (restore.sh Redis script)"
 # The restored redis boots with --appendonly yes, which loads the AOF and would
-# ignore a bare dump.rdb. Boot a one-off server with AOF off to load the RDB,
-# then CONFIG SET appendonly yes so it rewrites the dataset into a fresh AOF.
-# The conversion script is taken verbatim from scripts/restore.sh, so this run
-# proves the exact bounded load/rewrite the restore ships. As in restore.sh, the
-# redis volume is /data and the staged dump is mounted read-only at /restore.
-REDIS_CONVERT="$(awk '/-T redis sh -c .$/{grab=1; next} grab && /^.$/{exit} grab' scripts/restore.sh)"
-[[ "$REDIS_CONVERT" == *"redis-server --dir /data"* ]] || fail "could not extract the Redis conversion script from scripts/restore.sh"
-docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" -v "$TMP/redis-stage:/restore:ro" \
+# ignore a bare dump.rdb, so restore.sh loads the RDB into a one-off server with
+# AOF off and rewrites it. As in restore.sh, the redis volume is /data and the
+# staged dump is mounted read-only at /restore; no password is configured here.
+docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" -v "$TMP/dump/restore:/restore:ro" \
   -e REDIS_READY_ATTEMPTS=600 -e REDIS_REWRITE_ATTEMPTS=2000 "$RD_IMG" -c "$REDIS_CONVERT" \
   || fail "RDB->AOF conversion failed"
 ok "AOF rebuilt from restored RDB"
@@ -218,6 +239,7 @@ got_rd="$(docker exec "$RD2" redis-cli get "$REDIS_KEY" 2>/dev/null)"
 ok "redis canary key restored"
 
 step "Asserting the LOG-3 archived log survived the snapshot + restore"
+tool 'restic restore latest --target /restore --include /data/log-archive' || fail "restoring the archived log failed"
 log3_restored="$TMP/restore/data/log-archive/${LOG3_SERVER_ID}/${LOG3_LOG_NAME}"
 [ -f "$log3_restored" ] || fail "archived log missing after restore ($log3_restored)"
 got_log3="$(tr -d '[:space:]' < "$log3_restored")"

@@ -30,8 +30,15 @@ function databaseUrl(database: string): string {
   return url.toString();
 }
 
-function runCli(databaseUrl: string | undefined, batchSize?: number): CliResult {
+function runCli(
+  databaseUrl: string | undefined,
+  batchSize?: number,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const env = { ...process.env };
+  delete env.AUDIT_CHAIN_ANCHOR;
+  delete env.AUDIT_CHAIN_PRINT_HEAD;
+  Object.assign(env, extraEnv);
   if (databaseUrl === undefined) delete env.DATABASE_URL;
   else env.DATABASE_URL = databaseUrl;
   delete env.TEST_DATABASE_URL;
@@ -354,6 +361,52 @@ describe('verify-audit-chain CLI with migrated database', { skip: !DATABASE_URL 
       assert.equal(result.stdout, '');
       assert.match(result.stderr, /^Chain break at id=5: row_hash mismatch/m);
       assert.match(result.stderr, /^ {2}verified 4 row\(s\) before the break$/m);
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  it('prints the chain head on request and accepts it later as an external anchor (#1064)', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 3);
+      const printed = runCli(fixture.url, undefined, { AUDIT_CHAIN_PRINT_HEAD: '1' });
+      assert.equal(printed.status, 0, printed.stderr);
+      const head = /^head: (\d+:[0-9a-f]{64})$/m.exec(printed.stdout)?.[1];
+      assert.ok(head, `no head line in:\n${printed.stdout}`);
+
+      await insertRows(fixture.sql, 2);
+      const anchored = runCli(fixture.url, undefined, { AUDIT_CHAIN_ANCHOR: head });
+      assert.equal(anchored.status, 0, anchored.stderr);
+      assert.match(anchored.stdout, /^ok: audit chain intact \(5 rows\)/);
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  it('fails with exit 1 when the anchored tail was truncated (#1064)', async () => {
+    const fixture = await auditDatabase();
+    try {
+      await insertRows(fixture.sql, 3);
+      const printed = runCli(fixture.url, undefined, { AUDIT_CHAIN_PRINT_HEAD: '1' });
+      const head = /^head: (\d+:[0-9a-f]{64})$/m.exec(printed.stdout)?.[1] as string;
+      await fixture.sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_del`;
+      await fixture.sql`DELETE FROM audit_log WHERE id = (SELECT max(id) FROM audit_log)`;
+
+      const result = runCli(fixture.url, undefined, { AUDIT_CHAIN_ANCHOR: head });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Chain break at id=3: anchor mismatch/);
+    } finally {
+      await fixture.sql.end({ timeout: 5 });
+    }
+  });
+
+  it('rejects a malformed AUDIT_CHAIN_ANCHOR with exit 2 (#1064)', async () => {
+    const fixture = await auditDatabase();
+    try {
+      const result = runCli(fixture.url, undefined, { AUDIT_CHAIN_ANCHOR: 'nonsense' });
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /AUDIT_CHAIN_ANCHOR must be <id>:<64 hex chars>/);
     } finally {
       await fixture.sql.end({ timeout: 5 });
     }

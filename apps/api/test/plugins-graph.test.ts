@@ -63,7 +63,7 @@ vi.mock('postgres', () => ({
   default: vi.fn(() => Object.assign(vi.fn(), { end: vi.fn() })),
 }));
 
-vi.mock('prom-client', () => ({
+vi.mock('@prometheus-io/client', () => ({
   Registry: class {},
   Counter: class {
     inc() {}

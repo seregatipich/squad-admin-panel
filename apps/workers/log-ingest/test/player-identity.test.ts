@@ -277,6 +277,41 @@ describe('handlePlayerConnected', () => {
     );
   });
 
+  it('resolves geo through the injected lookup for new and existing players', async () => {
+    const geo = {
+      countryCode: 'DE',
+      countryName: 'Germany',
+      region: 'Berlin',
+      city: 'Berlin',
+      timezoneOffset: 'Europe/Berlin',
+      latitude: 52.5,
+      longitude: 13.4,
+    };
+    const geoLookup = { lookup: vi.fn(() => geo) };
+    await handlePlayerConnected(
+      makeDb({ existing: [] }),
+      connectEvent({ ip: '203.0.113.7' }),
+      geoLookup,
+    );
+    const existing: ExistingRow = {
+      id: uuidv7(),
+      steamId64: null,
+      canonicalName: 'Current',
+      eosId: EOS_A,
+      steamEosConflict: false,
+    };
+    await handlePlayerConnected(
+      makeDb({ existing: [existing] }),
+      connectEvent({ ip: '203.0.113.7' }),
+      geoLookup,
+    );
+    expect(geoLookup.lookup).toHaveBeenCalledTimes(2);
+    expect(recordIpObservation).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(recordIpObservation).mock.calls) {
+      expect(call[1]).toMatchObject({ ip: '203.0.113.7', geo });
+    }
+  });
+
   it('does not record an IP observation when the payload ip is null', async () => {
     const db = makeDb({ existing: [] });
     await handlePlayerConnected(db, connectEvent({ ip: null }));

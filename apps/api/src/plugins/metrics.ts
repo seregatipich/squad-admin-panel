@@ -1,5 +1,5 @@
+import { Counter, collectDefaultMetrics, Histogram, Registry } from '@prometheus-io/client';
 import fp from 'fastify-plugin';
-import { Counter, collectDefaultMetrics, Histogram, Registry } from 'prom-client';
 
 /**
  * `route` label recorded for a request that matched no registered route

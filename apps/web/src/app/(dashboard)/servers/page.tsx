@@ -135,8 +135,9 @@ export default function ServersPage() {
       if (!prev) return prev;
       const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
       if (idx < 0) return prev;
-      const items = prev.items.slice();
-      items[idx] = { ...items[idx], status: event.data.status };
+      const items = prev.items.map((server, index) =>
+        index === idx ? { ...server, status: event.data.status } : server,
+      );
       return { ...prev, items };
     });
   }, []);
@@ -158,13 +159,16 @@ export default function ServersPage() {
         if (!prev) return prev;
         const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
         if (idx < 0) return prev;
-        const items = prev.items.slice();
-        items[idx] = {
-          ...items[idx],
-          rcon_state: event.data.state,
-          player_count:
-            event.data.player_count != null ? event.data.player_count : items[idx].player_count,
-        };
+        const items = prev.items.map((server, index) =>
+          index === idx
+            ? {
+                ...server,
+                rcon_state: event.data.state,
+                player_count:
+                  event.data.player_count != null ? event.data.player_count : server.player_count,
+              }
+            : server,
+        );
         return { ...prev, items };
       });
     },
@@ -187,17 +191,20 @@ export default function ServersPage() {
         if (!prev) return prev;
         const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
         if (idx < 0) return prev;
-        const items = prev.items.slice();
-        items[idx] = {
-          ...items[idx],
-          seeding: {
-            state: event.data.state,
-            current_players: event.data.current_players,
-            live_at: event.data.live_at,
-            progress_pct: event.data.progress_pct,
-            started_at: event.data.started_at,
-          },
-        };
+        const items = prev.items.map((server, index) =>
+          index === idx
+            ? {
+                ...server,
+                seeding: {
+                  state: event.data.state,
+                  current_players: event.data.current_players,
+                  live_at: event.data.live_at,
+                  progress_pct: event.data.progress_pct,
+                  started_at: event.data.started_at,
+                },
+              }
+            : server,
+        );
         return { ...prev, items };
       });
     },

@@ -12,11 +12,11 @@ describe('player_notes schema', () => {
     expect(getTableName(playerNotes)).toBe('player_notes');
   });
 
-  it('requires id, player_id, author_id and body', () => {
+  it('requires id, player_id and body, and keeps a note whose author was deleted (#1137)', () => {
     const cols = getTableColumns(playerNotes);
     expect(cols.id.notNull).toBe(true);
     expect(cols.playerId.notNull).toBe(true);
-    expect(cols.authorId.notNull).toBe(true);
+    expect(cols.authorId.notNull).toBe(false);
     expect(cols.body.notNull).toBe(true);
     expect(cols.createdAt.notNull).toBe(true);
   });

@@ -83,6 +83,8 @@ function describeRoleError(code: string | undefined, status: number): string {
 export function UsersBrowser() {
   const locale = useIntlLocale();
   const [users, setUsers] = useState<UserRow[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
   const [roleOptions, setRoleOptions] = useState<RoleOption[] | null>(null);
   const [showAssign, setShowAssign] = useState(false);
@@ -97,28 +99,44 @@ export function UsersBrowser() {
   // Bumped by every list request: an older response must not overwrite a newer one.
   const listGeneration = useRef(0);
 
-  const load = useCallback(async () => {
-    listGeneration.current += 1;
-    const generation = listGeneration.current;
-    try {
-      const url = new URL('/api/v1/users', window.location.origin);
-      if (q.trim()) url.searchParams.set('q', q.trim());
-      if (filterRoleId) url.searchParams.set('role_id', filterRoleId);
-      const path = url.toString().replace(window.location.origin, '');
-      const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
-      if (generation !== listGeneration.current) return;
-      if (r.ok) {
-        setUsers((await r.json()) as UserRow[]);
-        setLoadError(null);
-      } else {
-        setLoadError(`Не удалось загрузить список пользователей: ${r.status}`);
+  // `cursor` is set only by "Показать ещё": the page is then appended to the list.
+  const load = useCallback(
+    async (cursor?: string) => {
+      listGeneration.current += 1;
+      const generation = listGeneration.current;
+      try {
+        const url = new URL('/api/v1/users', window.location.origin);
+        if (q.trim()) url.searchParams.set('q', q.trim());
+        if (filterRoleId) url.searchParams.set('role_id', filterRoleId);
+        if (cursor) url.searchParams.set('cursor', cursor);
+        const path = url.toString().replace(window.location.origin, '');
+        const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
+        if (generation !== listGeneration.current) return;
+        if (r.ok) {
+          const page = (await r.json()) as UserRow[];
+          if (generation !== listGeneration.current) return;
+          setUsers((previous) => (cursor && previous ? [...previous, ...page] : page));
+          setNextCursor(r.headers.get('x-next-cursor'));
+          setLoadError(null);
+        } else {
+          setLoadError(`Не удалось загрузить список пользователей: ${r.status}`);
+        }
+      } catch (e) {
+        if (generation === listGeneration.current) {
+          setLoadError(`Ошибка сети: ${(e as Error).message}`);
+        }
+      } finally {
+        if (generation === listGeneration.current) setLoadingMore(false);
       }
-    } catch (e) {
-      if (generation === listGeneration.current) {
-        setLoadError(`Ошибка сети: ${(e as Error).message}`);
-      }
-    }
-  }, [q, filterRoleId]);
+    },
+    [q, filterRoleId],
+  );
+
+  function loadMore() {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    void load(nextCursor);
+  }
 
   useEffect(() => {
     void load();
@@ -337,6 +355,13 @@ export function UsersBrowser() {
             </TableBody>
           </Table>
         )}
+        {nextCursor ? (
+          <div className="flex justify-center border-t border-line p-3">
+            <Button onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? 'Загрузка…' : 'Показать ещё'}
+            </Button>
+          </div>
+        ) : null}
       </Card>
 
       {/* Снятие роли обратимо — её выдают заново тем же диалогом, — поэтому

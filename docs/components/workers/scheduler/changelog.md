@@ -1,5 +1,24 @@
 # Changelog — worker-scheduler
 
+## 2026-09-30 — season finalisation recomputes the slice first
+
+### Fixed
+
+- [#78](https://github.com/seregatipich/squad-admin-panel/issues/78) (finding 1110):
+  `seasons.ends_at` is now one thing everywhere, an **exclusive instant**
+  (the UI already labels it "не включительно"). `loadActiveSeasonTarget`
+  derives `toDay` from `ends_at - 1 ms`, so a midnight `ends_at` no longer
+  counts a day the season is already frozen for. The finalizer waits
+  `SEASON_FINALIZE_GRACE_MS` (15 min) after `ends_at` so presence-daily can
+  close the last day, then runs `recomputeSeasonSlice` once more before
+  flipping `finalized`; a failed recompute leaves the season active and
+  retried. Tests: `test/season-finalize-tick.test.ts`,
+  `test/audit-and-finalize.integration.test.ts`,
+  `packages/db/test/seasons.test.ts`. Decision: exclusive instant rather than
+  inclusive day, because the scheduler, the `seasons_bounds_chk` constraint
+  and the UI label already treat it that way; an inclusive day would need a
+  stored-data migration.
+
 ## 2026-09-27 — ticks no longer overlap
 
 ### Fixed

@@ -1,6 +1,9 @@
+import { seedingSettingsResponse } from '@squad/shared-types';
 import { describe, expect, it } from 'vitest';
 import {
   licenseRestartRequired,
+  readErrorMessage,
+  readJson,
   sidecarEngineLabel,
   sidecarModeLabel,
   sidecarStatusPill,
@@ -72,5 +75,34 @@ describe('sidecarEngineLabel', () => {
 
   it('reports no sidecar in legacy mode', () => {
     expect(sidecarEngineLabel('legacy')).toBe('Не запущен');
+  });
+});
+
+describe('readErrorMessage', () => {
+  it('prefers message, then error, then the HTTP status', async () => {
+    const json = (body: unknown, status: number) => new Response(JSON.stringify(body), { status });
+    expect(await readErrorMessage(json({ message: 'м', error: 'e' }, 422))).toBe('м');
+    expect(await readErrorMessage(json({ error: 'forbidden' }, 403))).toBe('forbidden');
+    expect(await readErrorMessage(new Response('<html>', { status: 502 }))).toBe('HTTP 502');
+  });
+});
+
+describe('readJson', () => {
+  it('returns the parsed body when it matches the schema', async () => {
+    const res = new Response(JSON.stringify({ seed_live_at: 60, seed_hysteresis: 5, extra: 1 }));
+    expect(await readJson(res, seedingSettingsResponse, 'пороги')).toEqual({
+      seed_live_at: 60,
+      seed_hysteresis: 5,
+    });
+  });
+
+  it('throws a Russian error naming the payload when the body drifts or is not JSON', async () => {
+    const drifted = new Response(JSON.stringify({ seed_live_at: '60' }));
+    await expect(readJson(drifted, seedingSettingsResponse, 'пороги')).rejects.toThrow(
+      'Неожиданный ответ сервера: пороги',
+    );
+    await expect(readJson(new Response('oops'), seedingSettingsResponse, 'пороги')).rejects.toThrow(
+      'Неожиданный ответ сервера: пороги',
+    );
   });
 });

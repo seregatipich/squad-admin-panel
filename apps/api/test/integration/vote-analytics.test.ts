@@ -127,6 +127,7 @@ interface VotePayload {
   }>;
   by_hour: Array<{ hour: number; count: number }>;
   serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
+  serial_skipper_window_days: number;
 }
 
 beforeAll(async () => {
@@ -368,6 +369,43 @@ describeIfDb('GET /api/v1/analytics/votes', () => {
     expect(body.serial_skippers).toEqual([
       { player_id: skipper, nickname: 'Skipper', skip_count: 5 },
     ]);
+  });
+
+  it('counts serial skippers over the rolling card window, not the whole selected window (#368)', async () => {
+    const slow = await seedPlayer(830030, 'SlowSkipper');
+    const burst = await seedPlayer(830031, 'BurstSkipper');
+    const day = 86_400_000;
+    const windowEnd = Date.parse('2026-07-31T00:00:00.000Z');
+    // Five skips spread over 26 days: never five inside any 7-day stretch.
+    for (const daysBeforeEnd of [29, 22, 15, 8, 3]) {
+      await seedVote({
+        serverId: SERVER_B,
+        startedAt: new Date(windowEnd - daysBeforeEnd * day).toISOString(),
+        initiatorPlayerId: slow,
+        voteType: 'map_skip',
+        result: 'failed',
+        mapCurrent: 'Logar',
+      });
+    }
+    // Five skips inside the trailing 7 days of the same 30-day window.
+    for (const daysBeforeEnd of [6, 5, 4, 2, 1]) {
+      await seedVote({
+        serverId: SERVER_B,
+        startedAt: new Date(windowEnd - daysBeforeEnd * day).toISOString(),
+        initiatorPlayerId: burst,
+        voteType: 'map_skip',
+        result: 'failed',
+        mapCurrent: 'Logar',
+      });
+    }
+
+    const res = await fetchVotes('?from=2026-07-01T00:00:00.000Z&to=2026-07-31T00:00:00.000Z');
+    const body = res.json() as VotePayload;
+
+    expect(body.serial_skippers).toEqual([
+      { player_id: burst, nickname: 'BurstSkipper', skip_count: 5 },
+    ]);
+    expect(body.serial_skipper_window_days).toBe(7);
   });
 
   it('filters every metric by server_id', async () => {

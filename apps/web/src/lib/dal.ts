@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { cache } from 'react';
 import { ApiError, apiFetch } from './api';
+import { isArrayOf, isRecord } from './json-guards';
 
 export const SESSION_COOKIE = '__Host-sid';
 
@@ -15,6 +16,26 @@ export interface Me {
   squad_permissions: string[];
   /** ECON-5 (#165): economy module flag; gates economy-only nav items. */
   economy_enabled?: boolean;
+}
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+
+/**
+ * Checks the `GET /api/v1/me` body: the layout and pages dereference
+ * `permissions` at once, so a drifted or proxy-substituted body must fail here
+ * as an {@link ApiResponseError} instead of a `TypeError` mid-render.
+ *
+ * @param body Decoded JSON response.
+ * @returns The body, typed as {@link Me}.
+ * @throws {TypeError} A field the panel relies on is missing or has the wrong type.
+ */
+export function parseMe(body: unknown): Me {
+  if (!isRecord(body)) throw new TypeError('body must be an object');
+  if (typeof body.player_id !== 'string') throw new TypeError('player_id must be a string');
+  if (!isArrayOf(body.permissions, isString)) {
+    throw new TypeError('permissions must be an array of strings');
+  }
+  return body as unknown as Me;
 }
 
 /**
@@ -34,6 +55,7 @@ export const getSession = cache(async (): Promise<Me | null> => {
   try {
     return await apiFetch<Me>('/api/v1/me', {
       cookie: `${SESSION_COOKIE}=${token}`,
+      parse: parseMe,
     });
   } catch (error) {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return null;

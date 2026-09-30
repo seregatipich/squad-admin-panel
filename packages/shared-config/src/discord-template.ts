@@ -83,6 +83,38 @@ export interface DiscordEmbedTemplate {
   fields: DiscordEmbedField[];
 }
 
+function isEmbedField(value: unknown): value is DiscordEmbedField {
+  if (typeof value !== 'object' || value === null) return false;
+  const field = value as Record<string, unknown>;
+  return (
+    typeof field.name === 'string' &&
+    typeof field.value === 'string' &&
+    typeof field.inline === 'boolean'
+  );
+}
+
+/**
+ * Structural check of a value read from the `template` jsonb column, for
+ * consumers that cannot run the API's zod schema (workers share no code). It
+ * verifies the shape the renderer relies on, not Discord's length limits —
+ * {@link renderDiscordTemplate} truncates those itself.
+ *
+ * @param value - Untrusted value, typically `discord_message_templates.template`.
+ * @returns `true` when `value` can be passed to {@link renderDiscordTemplate}.
+ */
+export function isDiscordEmbedTemplate(value: unknown): value is DiscordEmbedTemplate {
+  if (typeof value !== 'object' || value === null) return false;
+  const template = value as Record<string, unknown>;
+  return (
+    typeof template.title === 'string' &&
+    typeof template.description === 'string' &&
+    typeof template.color === 'number' &&
+    (template.url === undefined || template.url === null || typeof template.url === 'string') &&
+    Array.isArray(template.fields) &&
+    template.fields.every(isEmbedField)
+  );
+}
+
 /** Values substituted for placeholders. Missing keys render empty. */
 export type DiscordTemplateContext = Partial<Record<string, string>>;
 

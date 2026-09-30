@@ -370,7 +370,9 @@ describe('RosterPanel', () => {
   it('renders the empty roster state without crashing', () => {
     const html = renderToStaticMarkup(<RosterPanel clanId="clan-1" />);
     expect(html).toContain('Ростер');
-    expect(html).toContain('Загружаем ростер');
+    // #817: the loading announcement is filled in after mount, so the
+    // server-rendered markup carries the empty live region.
+    expect(html).toContain('<span role="status" class="sr-only"></span>');
   });
 });
 
@@ -469,6 +471,16 @@ describe('RosterPanel (rendered)', () => {
     render(<RosterPanel clanId="clan-1" />);
 
     expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
+  });
+
+  it('uses the canManageClans prop instead of fetching /me (#522)', async () => {
+    const fetchMock = mockFetch({ priorityOk: true });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<RosterPanel clanId="clan-1" canManageClans={true} />);
+
+    expect(await screen.findByRole('button', { name: 'Добавить участника' })).toBeInTheDocument();
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls).not.toContain('/api/v1/me');
   });
 
   it('renders a CSV export link pointing at the roster export endpoint', async () => {
@@ -639,7 +651,7 @@ describe('RosterPanel — подтверждение удаления', () => {
     // Отказаться можно и крестиком, и кнопкой подвала — у обоих доступное имя
     // «Отмена», поэтому запрос делается внутри самого диалога и берёт первый.
     const dialog = await screen.findByRole('dialog', { name: 'Удалить участника?' });
-    await user.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+    await user.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]!);
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Удалить участника?' })).not.toBeInTheDocument();

@@ -1,4 +1,15 @@
-import { boolean, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { roles } from './roles.js';
 
 /**
@@ -35,6 +46,22 @@ export const vipTiers = pgTable(
   },
   (table) => ({
     nameKey: uniqueIndex('vip_tiers_name_key').on(table.name),
+    roleIdIdx: index('vip_tiers_role_id_idx').on(table.roleId),
+    purchasableIdx: index('vip_tiers_purchasable_idx')
+      .on(table.isActive)
+      .where(sql`price_bonuses IS NOT NULL`),
+    defaultDaysPositiveChk: check(
+      'vip_tiers_default_days_positive',
+      sql`default_days IS NULL OR default_days > 0`,
+    ),
+    priceBonusesNonnegChk: check(
+      'vip_tiers_price_bonuses_nonneg_chk',
+      sql`price_bonuses IS NULL OR price_bonuses >= 0`,
+    ),
+    priceRequiresDaysChk: check(
+      'vip_tiers_price_requires_days_chk',
+      sql`price_bonuses IS NULL OR default_days IS NOT NULL`,
+    ),
   }),
 );
 

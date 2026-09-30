@@ -29,6 +29,7 @@ import {
   Th,
 } from '@/components/ui';
 import { announcesMatchBoundary } from '@/lib/live-bus';
+import { errorMessage } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendMatchPage,
@@ -45,7 +46,6 @@ import {
   liveDurationSeconds,
   type MatchFilters,
   type MatchListItem,
-  type MatchListResponse,
   type MatchListScrollSnapshot,
   mergeMatchPage,
   nextSort,
@@ -63,10 +63,7 @@ import {
   teamPillTone,
   winnerLabel,
 } from './helpers';
-
-interface ServersResponse {
-  items: Array<{ id: string; display_name: string | null; slug: string | null }>;
-}
+import { parseMatchCount, parseMatchListResponse, parseServerOptions } from './response-parsers';
 
 /**
  * Исход команды подкрашивает бейдж с тикетами. Цвет здесь только ускоряет
@@ -164,7 +161,7 @@ export function MatchesBrowser() {
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as MatchListResponse;
+        return parseMatchListResponse(await res.json());
       })
       .then((data) => {
         if (!current()) return;
@@ -172,7 +169,7 @@ export function MatchesBrowser() {
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (current()) setError((err as Error).message);
+        if (current()) setError(errorMessage(err));
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -193,13 +190,13 @@ export function MatchesBrowser() {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
+      .then(async (res) => (res.ok ? parseMatchCount(await res.json()) : null))
       .then((data) => {
         // A failed count request leaves `total` at `null` ("…") rather than
         // folding into 0 — a real 0 and "unknown" are different facts, and
         // showing "всего: 0" for a request that never actually counted
         // anything is misleading.
-        if (!cancelled && data) setTotal(data.total);
+        if (!cancelled && data !== null) setTotal(data);
       })
       .catch(() => {});
     return () => {
@@ -210,16 +207,10 @@ export function MatchesBrowser() {
   useEffect(() => {
     let cancelled = false;
     fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
+      .then(async (res) => (res.ok ? parseServerOptions(await res.json()) : []))
       .then((data) => {
         if (cancelled) return;
-        setFetchedServers(
-          data.items.map((entry) => ({
-            id: entry.id,
-            display_name: entry.display_name,
-            slug: entry.slug,
-          })),
-        );
+        setFetchedServers(data);
       })
       .catch(() => {});
     return () => {
@@ -244,7 +235,7 @@ export function MatchesBrowser() {
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as MatchListResponse;
+      const data = parseMatchListResponse(await res.json());
       // filters/sort changed (a new first page started) while this request
       // was in flight: its cursor and rows belong to the superseded query
       // and must not be spliced onto the list loadFirstPage already replaced
@@ -254,7 +245,7 @@ export function MatchesBrowser() {
       setNextCursor(data.next_cursor);
     } catch (err) {
       if (listRequestRef.current !== requestId) return;
-      setError((err as Error).message);
+      setError(errorMessage(err));
     } finally {
       if (listRequestRef.current === requestId) setLoadingMore(false);
     }
@@ -316,7 +307,7 @@ export function MatchesBrowser() {
       credentials: 'include',
       cache: 'no-store',
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as MatchListResponse) : null))
+      .then(async (res) => (res.ok ? parseMatchListResponse(await res.json()) : null))
       .then((data) => {
         if (!data) return;
         // filters/sort changed while this refresh was in flight: it must not

@@ -139,6 +139,10 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const listRequestRef = useRef(0);
 
   const damageVisible = showsDamageColumn(filters.facet);
+  // The API orders the whole result set by damage, so the header sorts the
+  // true top rather than only the pages loaded so far; live rows are merged in
+  // client-side below.
+  const serverDamageSort = damageVisible ? damageSort : undefined;
 
   const serverNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -179,7 +183,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     setError(null);
     setApproxTotal(null);
     fetch(
-      `/api/v1/combat-events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`,
+      `/api/v1/combat-events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId, damageSort: serverDamageSort })}`,
       {
         credentials: 'include',
         cache: 'no-store',
@@ -208,7 +212,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
       .finally(() => {
         if (current()) setLoading(false);
       });
-  }, [filters, lockedServerId]);
+  }, [filters, lockedServerId, serverDamageSort]);
 
   useEffect(() => {
     loadFirstPage();
@@ -228,7 +232,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     setLoadingMore(true);
     try {
       const res = await fetch(
-        `/api/v1/combat-events?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT, lockedServerId })}`,
+        `/api/v1/combat-events?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT, lockedServerId, damageSort: serverDamageSort })}`,
         { credentials: 'include', cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -243,7 +247,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     } finally {
       if (current()) setLoadingMore(false);
     }
-  }, [filters, nextCursor, loadingMore, lockedServerId]);
+  }, [filters, nextCursor, loadingMore, lockedServerId, serverDamageSort]);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

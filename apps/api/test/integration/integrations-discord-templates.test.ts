@@ -241,7 +241,8 @@ describeIfDb('Discord templates — edit, render, reset', () => {
   it('serves the code default when the stored template no longer matches the embed schema', async () => {
     await h.db
       .update(discordMessageTemplates)
-      .set({ template: { title: 42, fields: 'not-an-array' } })
+      // Deliberately corrupt: the column is typed, the row on disk may not be.
+      .set({ template: { title: 42, fields: 'not-an-array' } as unknown as DiscordEmbedTemplate })
       .where(eq(discordMessageTemplates.eventType, 'kick'));
     try {
       const res = await h.app.inject({

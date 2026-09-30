@@ -873,6 +873,8 @@ Singleton row (`id = 00000000-0000-0000-0000-0000006e01ff`, `GEOIP_SETTINGS_SING
 | `multi_country_threshold` | `integer` | NO | `3` | Geo-anomaly threshold |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 
+**Resolving connect IPs.** The log-ingest worker opens the GeoLite2 City database at `GEOIP_DB_PATH` once at start (`createMmdbLookup`, `maxmind` package) and stores the country/city of each `player.connected` IP in `player_ip_history`; without the file the geo fields stay `NULL`. docker compose bind-mounts `${GEOIP_DB_DIR:-/var/lib/squad-panel/geoip}` read-only at `/geoip`, so place `GeoLite2-City.mmdb` there (restart the worker after replacing it). Scheduled download with the key stored above is not wired: `refreshGeoLite2Db` and `shouldRefreshGeoIpDb` remain unused by any worker.
+
 `refreshGeoLite2Db` (`packages/db/src/geoip/refresh.ts`) returns one of `skipped_no_key` (account id or license key missing), `download_failed` (non-2xx HTTP status), `archive_too_large` (the archive exceeds `GEOIP_MAX_ARCHIVE_BYTES`, 200 MiB, by `Content-Length` or after buffering) or `ok`. The request aborts after `GEOIP_DOWNLOAD_TIMEOUT_MS` (30 s).
 
 ## Balancer tables (GAME-2)

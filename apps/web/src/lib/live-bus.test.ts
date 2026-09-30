@@ -104,7 +104,7 @@ describe('getLiveBus in a browser', () => {
     unsubscribe();
 
     vi.advanceTimersByTime(10_000);
-    expect(FakeWebSocket.instances[0].readyState).not.toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).not.toBe(3);
     expect(bus.state()).not.toBe('closed');
     release();
   });
@@ -112,7 +112,7 @@ describe('getLiveBus in a browser', () => {
   it('reconnects after a drop when only a retain holder is left', async () => {
     const bus = await freshBus();
     const release = bus.retain();
-    FakeWebSocket.instances[0].onclose?.();
+    FakeWebSocket.instances[0]!.onclose?.();
 
     vi.advanceTimersByTime(2_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
@@ -126,7 +126,7 @@ describe('getLiveBus in a browser', () => {
     first();
     first();
     vi.advanceTimersByTime(10_000);
-    expect(FakeWebSocket.instances[0].readyState).not.toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).not.toBe(3);
     second();
   });
 
@@ -134,19 +134,52 @@ describe('getLiveBus in a browser', () => {
     const bus = await freshBus();
     bus.retain()();
     vi.advanceTimersByTime(5_000);
-    expect(FakeWebSocket.instances[0].readyState).toBe(3);
+    expect(FakeWebSocket.instances[0]!.readyState).toBe(3);
   });
 
   it('spreads reconnects with jitter within the backoff step', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const bus = await freshBus();
     const release = bus.retain();
-    FakeWebSocket.instances[0].onclose?.();
+    FakeWebSocket.instances[0]!.onclose?.();
 
     vi.advanceTimersByTime(499);
     expect(FakeWebSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(1);
     expect(FakeWebSocket.instances).toHaveLength(2);
     release();
+  });
+
+  describe('frame validation (#830)', () => {
+    async function received(frames: unknown[]) {
+      const bus = await freshBus();
+      const events: unknown[] = [];
+      bus.subscribe((event) => events.push(event));
+      const socket = FakeWebSocket.instances[0];
+      for (const frame of frames) socket?.onmessage?.({ data: JSON.stringify(frame) });
+      return events;
+    }
+
+    const ts = '2026-01-01T00:00:00.000Z';
+
+    it('delivers a well-formed frame to subscribers', async () => {
+      const frame = { type: 'server.deleted', ts, data: { server_id: 's1' } };
+      expect(await received([frame])).toEqual([frame]);
+    });
+
+    it.each([
+      ['no data', { type: 'bridge.connection', ts }],
+      ['null data', { type: 'bridge.connection', ts, data: null }],
+      ['array data', { type: 'bridge.connection', ts, data: [] }],
+      ['string data', { type: 'bridge.connection', ts, data: 'up' }],
+      ['non-string ts', { type: 'bridge.connection', ts: 1, data: { state: 'up' } }],
+    ])('drops a frame with %s instead of handing it to subscribers', async (_label, frame) => {
+      expect(await received([frame])).toEqual([]);
+    });
+
+    it('keeps delivering after a bridge.connection frame without data', async () => {
+      const good = { type: 'server.deleted', ts, data: { server_id: 's1' } };
+      expect(await received([{ type: 'bridge.connection', ts }, good])).toEqual([good]);
+    });
   });
 });

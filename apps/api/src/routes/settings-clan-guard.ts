@@ -4,11 +4,11 @@ import {
   clanGuardSettings,
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { writeAuditEntry } from '../lib/audit.js';
-import { panelGuard } from '../lib/panel-guard.js';
+import { requestUser } from '../lib/request-user.js';
 
 const SINGLETON_ID = 1;
 const GRACE_PERIOD_MAX_SECONDS = 3600;
@@ -34,21 +34,6 @@ interface ClanGuardSettingsView {
   updated_by_player_id: string | null;
 }
 
-function manageGuard(
-  req: FastifyRequest,
-  reply: FastifyReply,
-): { error: string; required?: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.canManageClans) {
-    reply.code(403);
-    return { error: 'forbidden', required: 'can_manage_clans' };
-  }
-  return null;
-}
-
 function serialize(row: ClanGuardSettingsRow | null): ClanGuardSettingsView {
   if (!row) {
     return { ...DEFAULT_SETTINGS, updated_at: null, updated_by_player_id: null };
@@ -63,8 +48,9 @@ function serialize(row: ClanGuardSettingsRow | null): ClanGuardSettingsView {
 
 /**
  * Global kill-switch + grace-period settings for the clan-tag-protection
- * guard (CLAN-5). Read is available to any authenticated panel user; writes
- * require `canManageClans`. The clan-guard worker reads this singleton row
+ * guard (CLAN-5). Read is available to any panel user (`roleFlags:
+ * ['panelAccess']`); writes require `canManageClans`. Both are declared on the
+ * route and enforced by the global hook in `plugins/auth.ts`. The clan-guard worker reads this singleton row
  * every tick and skips entirely when `enabled` is false.
  */
 const settingsClanGuardRoutes: FastifyPluginAsync = async (app) => {
@@ -79,23 +65,20 @@ const settingsClanGuardRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
-  fast.get('/api/v1/settings/clan-guard', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    return serialize(await loadSettings());
-  });
+  fast.get(
+    '/api/v1/settings/clan-guard',
+    { config: { audit: false, roleFlags: ['panelAccess'] } },
+    async () => serialize(await loadSettings()),
+  );
 
   fast.patch(
     '/api/v1/settings/clan-guard',
-    { schema: { body: patchBody }, config: { audit: 'manual' } },
-    async (req, reply) => {
-      const denied = manageGuard(req, reply);
-      if (denied) return denied;
-      const actorId = req.user?.playerId;
-      if (!actorId) {
-        reply.code(401);
-        return { error: 'unauthenticated' };
-      }
+    {
+      schema: { body: patchBody },
+      config: { audit: 'manual', roleFlags: ['canManageClans'] },
+    },
+    async (req) => {
+      const actorId = requestUser(req).playerId;
 
       const before = serialize(await loadSettings());
       const body = req.body;

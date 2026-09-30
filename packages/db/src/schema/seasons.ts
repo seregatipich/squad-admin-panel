@@ -43,6 +43,10 @@ export const seasons = pgTable(
   (table) => ({
     nameKey: uniqueIndex('seasons_name_key').on(table.name),
     oneActiveIdx: uniqueIndex('seasons_one_active').on(sql`(status)`).where(sql`status = 'active'`),
+    // One season may start per UTC day (0124_seasons_start_day_unique.sql).
+    startDayKey: uniqueIndex('seasons_start_day_key').on(
+      sql`((${table.startsAt} AT TIME ZONE 'UTC')::date)`,
+    ),
     statusIdx: index('seasons_status_idx').on(table.status, table.startsAt),
     boundsCheck: check('seasons_bounds_chk', sql`ends_at > starts_at`),
     statusCheck: check('seasons_status_chk', sql`status IN ('upcoming', 'active', 'closed')`),

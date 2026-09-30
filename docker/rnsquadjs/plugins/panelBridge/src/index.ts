@@ -2,13 +2,11 @@ import type { EventEmitter } from 'node:events';
 import { Redis } from 'ioredis';
 import { isPublishablePayload, type KnownPlayer, mapEvent, type PlayerLookup } from './eventMap';
 import { Heartbeat } from './heartbeat';
-import { RconUnixServer } from './rconUnixServer';
 import { type Mode, type RconStatus, RedisPublisher } from './redisPublisher';
 
 export interface PanelBridgeContext {
   serverId: string;
   emitter: EventEmitter;
-  rconExec: (method: string, args: unknown[]) => Promise<string>;
   onStatus: (cb: (state: 'connected' | 'disconnected') => void) => (() => void) | void;
   /**
    * Looks up an online player in RNSquadJS's `state.players` by lower-case
@@ -146,30 +144,6 @@ export async function startPanelBridge(
     publishStatus(lastStatus);
   }, STATUS_REFRESH_MS);
 
-  let rconServer: RconUnixServer | undefined;
-  if (mode === 'production') {
-    rconServer = new RconUnixServer(
-      process.env.PANEL_BRIDGE_SOCKET ?? '/run/panelBridge/rcon.sock',
-      ctx.rconExec,
-    );
-    try {
-      await rconServer.listen();
-    } catch (err) {
-      // Undo everything set up above (event/status subscriptions, the Redis
-      // connection) so a bind failure (EACCES/EADDRINUSE) doesn't leave a
-      // half-started bridge publishing to the live stream with no heartbeat
-      // and no working rcon channel — the caller's catch (panelBridge.ts)
-      // only removes the activeBridges entry, it doesn't unwind this.
-      for (const [evt, handler] of eventHandlers) {
-        ctx.emitter.off(evt, handler);
-      }
-      eventHandlers.length = 0;
-      unsubscribeStatus?.();
-      await redis.quit().catch(() => {});
-      throw err;
-    }
-  }
-
   heartbeat.start();
 
   return {
@@ -182,7 +156,6 @@ export async function startPanelBridge(
       unsubscribeStatus?.();
       clearInterval(statusRefresh);
       heartbeat.stop();
-      await rconServer?.close();
       await redis.quit();
     },
   };

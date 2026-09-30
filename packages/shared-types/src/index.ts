@@ -1,9 +1,11 @@
 export * from './api.js';
+export * from './appeals.js';
 export * from './automation.js';
 export * from './automation-actions.js';
 export * from './automation-engine.js';
 export * from './balancer.js';
 export * from './cron5.js';
+export * from './economy.js';
 export * from './events.js';
 export * from './external-bans.js';
 export * from './media.js';
@@ -12,3 +14,4 @@ export * from './plugins.js';
 export * from './rcon-commands.js';
 export * from './squad-crowns.js';
 export * from './url.js';
+export * from './vote-analytics.js';

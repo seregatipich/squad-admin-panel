@@ -7,6 +7,7 @@ import {
   type DiscordEmbedTemplate,
   defaultDiscordTemplate,
   escapeDiscordMarkdown,
+  isDiscordEmbedTemplate,
   renderDiscordTemplate,
 } from '../src/discord-template.js';
 
@@ -236,5 +237,35 @@ describe('DEFAULT_DISCORD_TEMPLATES', () => {
   it('is resolvable by event type', () => {
     expect(defaultDiscordTemplate('ban_issued')?.template.title).toBe('Player banned');
     expect(defaultDiscordTemplate('not_real')).toBeUndefined();
+  });
+});
+
+describe('isDiscordEmbedTemplate (#1126)', () => {
+  it('accepts every built-in default template', () => {
+    for (const { template } of Object.values(DEFAULT_DISCORD_TEMPLATES)) {
+      expect(isDiscordEmbedTemplate(template)).toBe(true);
+    }
+  });
+
+  it('accepts a template whose url is absent or null', () => {
+    const { url: _url, ...withoutUrl } = banTemplate;
+    expect(isDiscordEmbedTemplate(withoutUrl)).toBe(true);
+    expect(isDiscordEmbedTemplate({ ...banTemplate, url: null })).toBe(true);
+  });
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['an empty object', {}],
+    ['a non-string title', { ...banTemplate, title: 1 }],
+    ['a non-string description', { ...banTemplate, description: null }],
+    ['a non-numeric color', { ...banTemplate, color: '#fff' }],
+    ['fields that are not an array', { ...banTemplate, fields: 'x' }],
+    ['a malformed field', { ...banTemplate, fields: [{ name: 'a', value: 1, inline: true }] }],
+    ['a non-string url', { ...banTemplate, url: 5 }],
+    ['a null field', { ...banTemplate, fields: [null] }],
+    ['a non-object field', { ...banTemplate, fields: ['name'] }],
+  ])('rejects %s', (_label, value) => {
+    expect(isDiscordEmbedTemplate(value)).toBe(false);
   });
 });

@@ -3,56 +3,6 @@ import { isRestrictedNetworkHost } from './network-host.js';
 
 export const uuidString = z.string().uuid();
 
-export const hostInfo = z
-  .object({
-    hostname: z.string(),
-    os_name: z.string(),
-    os_version: z.string(),
-    kernel: z.string(),
-    arch: z.string(),
-    cpu_model: z.string(),
-    cpu_cores: z.number().int().positive(),
-    ram_total_bytes: z.number().int().nonnegative(),
-  })
-  .strict();
-export type HostInfo = z.infer<typeof hostInfo>;
-
-export const hostMetrics = z
-  .object({
-    cpu_percent: z.number().min(0).max(100),
-    ram_used_bytes: z.number().int().nonnegative(),
-    ram_total_bytes: z.number().int().positive(),
-    disk_used_bytes: z.number().int().nonnegative(),
-    disk_total_bytes: z.number().int().positive(),
-    net_rx_bytes_per_sec: z.number().nonnegative(),
-    net_tx_bytes_per_sec: z.number().nonnegative(),
-    sampled_at: z.string().datetime(),
-  })
-  .strict();
-export type HostMetrics = z.infer<typeof hostMetrics>;
-
-export const bridgeStatus = z
-  .object({
-    connected: z.boolean(),
-    version: z.string().nullable(),
-    uptime_seconds: z.number().int().nonnegative().nullable(),
-    last_error: z.string().nullable(),
-  })
-  .strict();
-export type BridgeStatus = z.infer<typeof bridgeStatus>;
-
-export const serverStatus = z.enum([
-  'pending',
-  'installing',
-  'ready',
-  'starting',
-  'running',
-  'stopping',
-  'stopped',
-  'failed',
-]);
-export type ServerStatus = z.infer<typeof serverStatus>;
-
 export const serverCreateInput = z
   .object({
     display_name: z
@@ -239,57 +189,6 @@ export function logSourceStatusKey(serverId: string): string {
   return `log-source:status:${serverId}`;
 }
 
-export const serverRow = z
-  .object({
-    id: uuidString,
-    display_name: z.string(),
-    slug: z.string(),
-    description: z.string().nullable(),
-    status: serverStatus,
-    tags: z.array(z.string()).default([]),
-    game_port: z.number().int(),
-    query_port: z.number().int(),
-    beacon_port: z.number().int(),
-    rcon_port: z.number().int(),
-    max_players: z.number().int(),
-    tickrate: z.number().int(),
-    multihome: z.string(),
-    created_at: z.string().datetime(),
-    updated_at: z.string().datetime(),
-  })
-  .strict();
-export type ServerRow = z.infer<typeof serverRow>;
-
-export const playerRow = z
-  .object({
-    steam_id64: z.string().regex(/^\d{17}$/),
-    canonical_name: z.string(),
-    eos_id: z.string().nullable(),
-    first_seen_at: z.string().datetime(),
-    last_seen_at: z.string().datetime(),
-    total_time_played_seconds: z.number().int().nonnegative(),
-    is_online: z.boolean().optional(),
-  })
-  .strict();
-export type PlayerRow = z.infer<typeof playerRow>;
-
-export const auditEntry = z
-  .object({
-    id: z.string(),
-    created_at: z.string().datetime(),
-    actor_user_id: uuidString.nullable(),
-    actor_display_name: z.string().nullable(),
-    actor_ip: z.string().nullable(),
-    actor_kind: z.enum(['user', 'system', 'external']),
-    action_type: z.string(),
-    target_type: z.string().nullable(),
-    target_id: z.string().nullable(),
-    status_code: z.number().int().nullable(),
-    duration_ms: z.number().int().nullable(),
-  })
-  .strict();
-export type AuditEntry = z.infer<typeof auditEntry>;
-
 export const layerTeamInfo = z
   .object({
     faction: z.string(),
@@ -332,25 +231,29 @@ export const layerListQuery = z
   .strict();
 export type LayerListQuery = z.infer<typeof layerListQuery>;
 
-export const paginated = <T extends z.ZodTypeAny>(item: T) =>
-  z
-    .object({
-      items: z.array(item),
-      total: z.number().int().nonnegative(),
-      page: z.number().int().positive(),
-      page_size: z.number().int().positive(),
-    })
-    .strict();
-
 export {
   type A2SStatus,
   a2sStatus,
   type CrashEntry,
   crashEntry,
+  type ExternalConnectionResponse,
+  externalConnectionResponse,
+  type LogSourceView,
+  logSourceView,
   type MetricsPoint,
+  meSquadPermissionsResponse,
   metricsPoint,
+  type SeedingSettingsResponse,
+  type ServerDetailResponse,
+  type ServerLicenseState,
   type ServerPatch,
   type ServerSettingsUpdate,
+  type ServerSettingsView,
+  seedingSettingsResponse,
+  serverDetailResponse,
+  serverLicenseState,
   serverPatch,
   serverSettingsUpdate,
+  serverSettingsView,
+  sidecarIntegrationResponse,
 } from './server-settings.js';

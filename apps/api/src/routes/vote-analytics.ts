@@ -1,3 +1,4 @@
+import type { VoteAnalytics } from '@squad/shared-types';
 import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -45,38 +46,7 @@ function passRate(passed: number, total: number): number {
   return Math.round((passed / total) * 1000) / 10;
 }
 
-interface VoteAnalyticsPayload {
-  server_id: string | null;
-  from: string;
-  to: string;
-  summary: {
-    total_votes: number;
-    passed: number;
-    failed: number;
-    cancelled: number;
-    pass_rate: number;
-  };
-  pass_rate_by_server: Array<{
-    server_id: string;
-    server_name: string | null;
-    total: number;
-    passed: number;
-    pass_rate: number;
-  }>;
-  pass_rate_by_map: Array<{ map: string; total: number; passed: number; pass_rate: number }>;
-  trend: Array<{ day: string; count: number }>;
-  top_initiators: Array<{
-    player_id: string;
-    nickname: string | null;
-    initiated: number;
-    passed: number;
-    success_ratio: number;
-  }>;
-  by_hour: Array<{ hour: number; count: number }>;
-  serial_skippers: Array<{ player_id: string; nickname: string | null; skip_count: number }>;
-}
-
-function toCsv(payload: VoteAnalyticsPayload): string {
+function toCsv(payload: VoteAnalytics): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
     lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
@@ -121,6 +91,12 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       const fromIso = from.toISOString();
       const toIso = to.toISOString();
       const limit = req.query.limit;
+
+      // Same rule as the player card: the threshold applies to the trailing
+      // SERIAL_SKIPPER_WINDOW_DAYS ending at `to`, clamped to a shorter selected window.
+      const skipperWindowStartIso = new Date(
+        Math.max(from.getTime(), to.getTime() - SERIAL_SKIPPER_WINDOW_DAYS * DAY_MS),
+      ).toISOString();
 
       const voteFilter = sql`v.started_at >= ${fromIso}::timestamptz
         AND v.started_at < ${toIso}::timestamptz
@@ -216,11 +192,13 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         FROM game_votes v
         JOIN players p ON p.id = v.initiator_player_id
         WHERE ${voteFilter}
+          AND v.started_at >= ${skipperWindowStartIso}::timestamptz
           AND v.vote_type = 'map_skip'
           AND v.initiator_player_id IS NOT NULL
         GROUP BY v.initiator_player_id, p.canonical_name
         HAVING count(*) >= ${SERIAL_SKIPPER_THRESHOLD}
         ORDER BY skip_count DESC, nickname ASC
+        LIMIT ${RANK_LIMIT_MAX}
       `),
       ]);
 
@@ -231,7 +209,7 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       const hourMap = new Map<number, number>();
       for (const row of hourRows) hourMap.set(Number(row.hour), Number(row.count));
 
-      const payload: VoteAnalyticsPayload = {
+      const payload: VoteAnalytics = {
         server_id: serverId,
         from: fromIso,
         to: toIso,
@@ -279,6 +257,7 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
           nickname: row.nickname,
           skip_count: Number(row.skip_count),
         })),
+        serial_skipper_window_days: SERIAL_SKIPPER_WINDOW_DAYS,
       };
 
       if (req.query.format === 'csv') {

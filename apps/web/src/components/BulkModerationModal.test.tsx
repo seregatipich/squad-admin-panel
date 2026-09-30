@@ -136,9 +136,9 @@ describe('BulkModerationModal', () => {
           applied: 2,
           failed: 1,
           results: [
-            { player_id: TARGETS[0].playerId, status: 'applied' },
-            { player_id: TARGETS[1].playerId, status: 'applied' },
-            { player_id: TARGETS[2].playerId, status: 'failed', error: 'target_offline' },
+            { player_id: TARGETS[0]!.playerId, status: 'applied' },
+            { player_id: TARGETS[1]!.playerId, status: 'applied' },
+            { player_id: TARGETS[2]!.playerId, status: 'failed', error: 'target_offline' },
           ],
         }),
       ),
@@ -169,7 +169,7 @@ describe('BulkModerationModal', () => {
     expect(screen.getByText(/Игрок не в сети/)).toBeInTheDocument();
     await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
 
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/v1/moderation-actions/bulk');
     expect(JSON.parse(init.body as string)).toEqual({
       server_id: 'srv-1',
@@ -273,9 +273,9 @@ describe('BulkModerationModal', () => {
             applied: 2,
             failed: 1,
             results: [
-              { player_id: TARGETS[0].playerId, status: 'applied' },
-              { player_id: TARGETS[1].playerId, status: 'applied' },
-              { player_id: TARGETS[2].playerId, status: 'failed', error: 'rcon_failed' },
+              { player_id: TARGETS[0]!.playerId, status: 'applied' },
+              { player_id: TARGETS[1]!.playerId, status: 'applied' },
+              { player_id: TARGETS[2]!.playerId, status: 'failed', error: 'rcon_failed' },
             ],
           }),
         ),
@@ -422,7 +422,7 @@ describe('BulkModerationModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as Record<string, unknown>;
     expect(body.action_type).toBe('ban');
     expect(body.ban_length).toBe('1d');
   });
@@ -455,7 +455,7 @@ describe('BulkModerationModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as Record<string, unknown>;
     expect(body.action_type).toBe('warn');
   });
 });

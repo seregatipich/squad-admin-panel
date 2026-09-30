@@ -1,3 +1,4 @@
+import { parsePrivateHostAllowlist } from '@squad/shared-types';
 import { z } from 'zod';
 
 /**
@@ -53,6 +54,22 @@ const envSchema = z
     DISCORD_CLIENT_SECRET: z.string().optional(),
     DISCORD_PUBLIC_KEY: z.string().optional(),
     BALANCER_WEBHOOK_SECRET: optionalSecret(32),
+    // Private-LAN allowlist for external-server RCON hosts (audit #333). Blank or
+    // unset keeps every private range reachable; `none` or a CIDR list narrows it.
+    EXTERNAL_HOST_PRIVATE_ALLOWLIST: z
+      .string()
+      .optional()
+      .refine(
+        (value) => {
+          try {
+            parsePrivateHostAllowlist(value);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { message: 'must be blank, "none", or comma-separated IPv4/IPv6 addresses or CIDRs' },
+      ),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     MEDIA_STORAGE_DIR: z.string().default('./media'),
     HOST_ORPHAN_SWEEP_INTERVAL_MS: hostIntervalMs(5 * 60_000),

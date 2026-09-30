@@ -49,9 +49,25 @@ function makeRow(overrides: Partial<CombatApiRow> = {}): CombatApiRow {
 }
 
 describe('facetToApiParams', () => {
-  it('maps kill and death facets to the death event type', () => {
-    expect(facetToApiParams('kills')).toEqual({ type: ['death'] });
+  it('maps deaths to every death event and kills to deaths without teamkills (#537)', () => {
+    expect(facetToApiParams('kills')).toEqual({ type: ['death'], excludeTeamkills: true });
     expect(facetToApiParams('deaths')).toEqual({ type: ['death'] });
+  });
+
+  it('sends excludeTeamkills for the kills facet and drops live teamkill rows from it', () => {
+    const now = new Date('2026-07-05T12:00:00.000Z');
+    const killsFilters = { ...defaultFilters(), facet: 'kills' as const };
+    expect(params(buildListApiQuery(killsFilters, { now })).get('excludeTeamkills')).toBe('true');
+    expect(
+      params(buildListApiQuery({ ...killsFilters, facet: 'deaths' }, { now })).get(
+        'excludeTeamkills',
+      ),
+    ).toBeNull();
+    const teamkillDeath = makeRow({ eventType: 'death', isTeamkill: true });
+    expect(matchesLiveFilters(teamkillDeath, killsFilters, undefined)).toBe(false);
+    expect(matchesLiveFilters(teamkillDeath, { ...killsFilters, facet: 'deaths' }, undefined)).toBe(
+      true,
+    );
   });
 
   it('maps wound, revive and damage facets to their event type', () => {
@@ -169,6 +185,17 @@ describe('buildListApiQuery', () => {
     expect(parsed.getAll('type')).toEqual(['death']);
     expect(parsed.get('limit')).toBe('100');
     expect(parsed.get('cursor')).toBeNull();
+  });
+
+  it('asks the API to sort globally by damage when a damage direction is given (#532)', () => {
+    const qs = buildListApiQuery(
+      { ...defaultFilters(), facet: 'damage' },
+      { now, damageSort: 'asc' },
+    );
+    const parsed = params(qs);
+    expect(parsed.get('sort')).toBe('damage');
+    expect(parsed.get('dir')).toBe('asc');
+    expect(params(buildListApiQuery(defaultFilters(), { now })).get('sort')).toBeNull();
   });
 
   it('sends teamkillsOnly and no type filter for the teamkills facet', () => {

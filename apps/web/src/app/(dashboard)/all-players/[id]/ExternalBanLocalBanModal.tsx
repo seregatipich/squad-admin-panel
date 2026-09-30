@@ -37,7 +37,8 @@ function describeLocalBanError(
 ): string {
   if (status === 400) return body?.message ?? 'Некорректные данные формы.';
   const code = body?.error;
-  if (code && code in LOCAL_BAN_ERROR_MESSAGES_RU) return LOCAL_BAN_ERROR_MESSAGES_RU[code];
+  const message = code ? LOCAL_BAN_ERROR_MESSAGES_RU[code] : undefined;
+  if (message) return message;
   return `Ошибка сервера (HTTP ${status}).`;
 }
 

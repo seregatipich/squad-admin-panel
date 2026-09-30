@@ -20,6 +20,13 @@ export interface SeasonFinalizeTickDeps {
   now?: Date;
   loadActiveSeasons(): Promise<ActiveSeason[]>;
   /**
+   * Recomputes the season's materialised leaderboard slice one last time, so
+   * data written after the aggregator's final tick (the last day's presence)
+   * lands in the frozen totals (#1110). A failure aborts that season's
+   * finalisation and is retried on the next tick.
+   */
+  recomputeSeason(seasonId: string): Promise<void>;
+  /**
    * Sets `status = 'closed'` and `finalized = true` for the season and appends
    * its audit row in one transaction: the season never reappears in
    * `loadActiveSeasons` once closed, so a separate audit write that failed
@@ -35,13 +42,23 @@ export interface SeasonFinalizeTickResult {
   failed: number;
 }
 
-/** A season is due for finalisation once the clock reaches its `ends_at`. */
+/**
+ * How long after `ends_at` a season waits before it is frozen, so
+ * presence-daily (one aggregation interval) has closed the season's last day.
+ */
+export const SEASON_FINALIZE_GRACE_MS = 15 * 60 * 1000;
+
+/**
+ * A season has ended once the clock reaches its `ends_at`, an exclusive
+ * instant: the season's last day is the UTC day of `ends_at - 1 ms`.
+ */
 export function isSeasonExpired(season: ActiveSeason, now: Date): boolean {
   return season.endsAt.getTime() <= now.getTime();
 }
 
 /**
- * Closes and freezes every active season whose `ends_at` has passed
+ * Closes and freezes every active season whose `ends_at` passed at least
+ * {@link SEASON_FINALIZE_GRACE_MS} ago, after one last recompute of its slice
  * (LEAD-7, #178, the AUTO-2 half).
  *
  * Finalisation is what stops the leaderboard aggregator from recomputing a
@@ -64,8 +81,10 @@ export async function runSeasonFinalizeTick(
   try {
     for (const season of await deps.loadActiveSeasons()) {
       if (!isSeasonExpired(season, now)) continue;
+      if (now.getTime() < season.endsAt.getTime() + SEASON_FINALIZE_GRACE_MS) continue;
 
       try {
+        await deps.recomputeSeason(season.id);
         await deps.finalizeSeason(season.id, {
           actor: { kind: 'system', label: 'season-finalizer' },
           actionType: 'season.finalize',

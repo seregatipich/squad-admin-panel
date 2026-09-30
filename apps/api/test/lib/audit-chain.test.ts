@@ -251,3 +251,53 @@ describe('AuditChainVerifier (#36 finding 17)', () => {
     });
   });
 });
+
+describe('AuditChainVerifier external anchor (#1064)', () => {
+  it('reports the head of an intact chain', () => {
+    const rows = buildChain(4);
+    const verifier = new AuditChainVerifier();
+    verifier.feed(rows);
+    expect(verifier.head).toEqual({ id: '4', rowHashHex: rows[3]?.row_hash_hex });
+  });
+
+  it('reports no head for an empty chain', () => {
+    expect(new AuditChainVerifier().head).toBeNull();
+  });
+
+  it('accepts a chain that still contains the anchored row unchanged', () => {
+    const rows = buildChain(5);
+    const anchor = { id: '3', rowHashHex: rows[2]?.row_hash_hex as string };
+    const verifier = new AuditChainVerifier({ anchor });
+    verifier.feed(rows);
+    expect(verifier.result()).toMatchObject({ ok: true, brokenAt: null, reason: null });
+  });
+
+  it('detects a truncated tail: the anchored row is missing', () => {
+    const rows = buildChain(5);
+    const anchor = { id: '5', rowHashHex: rows[4]?.row_hash_hex as string };
+    const verifier = new AuditChainVerifier({ anchor });
+    verifier.feed(rows.slice(0, 3));
+    expect(verifier.result()).toMatchObject({ ok: false, brokenAt: '5', reason: 'anchor' });
+  });
+
+  it('detects a fully rewritten chain whose anchored row hash differs', () => {
+    const rows = buildChain(5);
+    const anchor = { id: '2', rowHashHex: 'ab'.repeat(32) };
+    const verifier = new AuditChainVerifier({ anchor });
+    verifier.feed(rows);
+    expect(verifier.result()).toMatchObject({ ok: false, brokenAt: '2', reason: 'anchor' });
+  });
+
+  it('detects a missing anchor on an empty chain', () => {
+    const verifier = new AuditChainVerifier({ anchor: { id: '1', rowHashHex: 'ab'.repeat(32) } });
+    expect(verifier.result()).toMatchObject({ ok: false, brokenAt: '1', reason: 'anchor' });
+  });
+
+  it('keeps the chain break when both the chain and the anchor fail', () => {
+    const rows = buildChain(3);
+    (rows[1] as AuditChainRow).context_text = '{"seq": 99}';
+    const verifier = new AuditChainVerifier({ anchor: { id: '3', rowHashHex: 'ab'.repeat(32) } });
+    verifier.feed(rows);
+    expect(verifier.result()).toMatchObject({ ok: false, brokenAt: '2', reason: 'row_hash' });
+  });
+});

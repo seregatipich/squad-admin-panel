@@ -1,5 +1,11 @@
 import type { BridgeClient } from '@squad/bridge-client';
-import { type DatabaseClient, events, notifySeedSubscribers } from '@squad/db';
+import {
+  type DatabaseClient,
+  events,
+  loadSeasonTarget,
+  notifySeedSubscribers,
+  recomputeLeaderboardPeriod,
+} from '@squad/db';
 import {
   auditLog,
   chatMessages,
@@ -773,6 +779,21 @@ export async function loadActiveSeasons(db: DatabaseClient): Promise<ActiveSeaso
  * one transaction, so none of the three can happen without the others. `loadActiveSeasonTarget` in @squad/db skips
  * finalized rows, which is what stops the aggregator recomputing it.
  */
+/**
+ * Rebuilds the season's `player_stat_periods` slice from its current window,
+ * the same computation the leaderboard aggregator runs each tick (#1110).
+ * A season that no longer exists is a no-op: finalizing it then matches no row.
+ */
+export async function recomputeSeasonSlice(db: DatabaseClient, seasonId: string): Promise<void> {
+  const target = await loadSeasonTarget(db.$client, seasonId);
+  if (!target) return;
+  await recomputeLeaderboardPeriod(db.$client, {
+    periodType: target.periodType,
+    periodStart: target.periodStart,
+    range: target.range,
+  });
+}
+
 export async function finalizeSeason(
   db: DatabaseClient,
   seasonId: string,
@@ -806,6 +827,7 @@ export function createSeasonFinalizeDeps(
 ): Omit<SeasonFinalizeTickDeps, 'now' | 'diag'> {
   return {
     loadActiveSeasons: () => loadActiveSeasons(db),
+    recomputeSeason: (seasonId) => recomputeSeasonSlice(db, seasonId),
     finalizeSeason: (seasonId, audit) => finalizeSeason(db, seasonId, audit),
     invalidateLeaderboardCache: () => invalidateLeaderboardCache(redis),
   };

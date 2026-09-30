@@ -1,5 +1,14 @@
 # Changelog — worker-audit-archiver
 
+## 2026-09-30 — honest heartbeat status (#92)
+
+### Changed
+
+- The heartbeat status is now `архивация не реализована (P1)` instead of `idle (P1)`, so the
+  panel's system-status card no longer shows the stub as a healthy archiver. The service stays
+  in the compose files: the dashboard and `heartbeat-watch` expect its heartbeat, and removing
+  it is a separate product decision.
+
 ## 2026-09-30 — the stub no longer reports successful archive cycles (#92)
 
 ### Removed

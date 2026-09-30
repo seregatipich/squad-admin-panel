@@ -42,7 +42,8 @@ interface VerifyResult {
   ok: boolean;
   checked: number;
   broken_at: string | null;
-  reason: 'prev_hash' | 'row_hash' | null;
+  reason: 'prev_hash' | 'row_hash' | 'anchor' | null;
+  head: { id: string; row_hash: string } | null;
 }
 
 beforeAll(async () => {
@@ -302,6 +303,58 @@ describe('GET /api/v1/audit/verify-chain', () => {
       await overwriteColumns(id, 'after_snapshot = NULL');
     }
     expect((await verifyChain()).ok).toBe(true);
+  });
+
+  describe('external anchor (#1064)', () => {
+    async function verifyAgainst(query: string) {
+      return h.app.inject({
+        method: 'GET',
+        url: `/api/v1/audit/verify-chain${query}`,
+        headers: { cookie },
+      });
+    }
+
+    it('reports the chain head, and accepts it as an anchor later', async () => {
+      const id = await insertAuditRow('action.anchor.head', null, null, { seq: 'head' });
+      const { head } = await verifyChain();
+      expect(head?.id).toBe(id);
+      expect(head?.row_hash).toMatch(/^[0-9a-f]{64}$/);
+
+      await insertAuditRow('action.anchor.after', null, null, { seq: 'after' });
+      const res = await verifyAgainst(`?anchor_id=${id}&anchor_hash=${head?.row_hash}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, broken_at: null, reason: null });
+    });
+
+    it('rejects an anchor that names only one of id and hash', async () => {
+      expect((await verifyAgainst('?anchor_id=1')).statusCode).toBe(400);
+      expect((await verifyAgainst(`?anchor_hash=${'a'.repeat(64)}`)).statusCode).toBe(400);
+      expect((await verifyAgainst('?anchor_id=1&anchor_hash=zz')).statusCode).toBe(400);
+    });
+
+    it('detects an anchored row whose hash differs', async () => {
+      const id = await insertAuditRow('action.anchor.forged', null, null, { seq: 'forged' });
+      const res = await verifyAgainst(`?anchor_id=${id}&anchor_hash=${'0'.repeat(64)}`);
+      expect(res.json()).toMatchObject({ ok: false, broken_at: id, reason: 'anchor' });
+    });
+
+    it('detects a truncated tail that leaves the remaining chain self-consistent', async () => {
+      await insertAuditRow('action.anchor.kept', null, null, { seq: 'kept' });
+      const tailId = await insertAuditRow('action.anchor.tail', null, null, { seq: 'tail' });
+      const { head } = await verifyChain();
+      expect(head?.id).toBe(tailId);
+
+      await h.db.execute(sql`ALTER TABLE audit_log DISABLE TRIGGER trg_audit_log_no_del`);
+      try {
+        await h.db.execute(sql`DELETE FROM audit_log WHERE id = ${tailId}::bigint`);
+      } finally {
+        await h.db.execute(sql`ALTER TABLE audit_log ENABLE TRIGGER trg_audit_log_no_del`);
+      }
+
+      expect((await verifyChain()).ok).toBe(true);
+      const res = await verifyAgainst(`?anchor_id=${tailId}&anchor_hash=${head?.row_hash}`);
+      expect(res.json()).toMatchObject({ ok: false, broken_at: tailId, reason: 'anchor' });
+    });
   });
 });
 

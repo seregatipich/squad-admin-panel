@@ -136,6 +136,13 @@ Squad emits up to three separate log lines for a player join:
 
 If the EOS line arrives more than 2500 ms after `Join succeeded`, the join is dropped. This is intentional to avoid spurious connections. If no `AddClientConnection` line correlates before `Join succeeded`, `ip` is `null`.
 
+## GeoIP (country and city of connect IPs)
+
+`GeoIpProvider` (`src/geoip/provider.ts`) follows the singleton `geoip_settings` row the API writes (`/api/v1/integrations/geoip`). Nothing happens until GeoIP is `enabled` and an account id and license key are stored.
+
+- **Refresh** (startup, then hourly): when the database is missing or older than 7 days, `refreshGeoLite2Db` downloads GeoLite2-City with HTTP Basic credentials (license key decrypted with `APP_ENCRYPTION_KEY`), `extractMmdbFromTarGz` pulls the `.mmdb` out of the archive, it is written atomically to `GEOIP_DATA_DIR`, and `geoip_settings.db_path` / `last_refreshed_at` are updated. Failures are logged as warnings and retried at the next hourly check.
+- **Lookup**: on `player.connected`, `handlePlayerConnected` resolves the IP through `createMmdbLookup(db_path)` (the `maxmind` package of `@squad/db`; the settings row is re-read every 60 s) and stores country, region, city, time zone and coordinates in `player_ip_history` via `recordIpObservation`. Without a database the IP is stored with empty geo fields, which a later observation backfills.
+
 ## Graceful shutdown (SIGTERM / SIGINT)
 
 1. Stop heartbeat.

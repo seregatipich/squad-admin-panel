@@ -123,6 +123,7 @@ services:
       # disabled (503), which is the safe default for a deployment with no
       # SquadJS exporter wired up.
       BALANCER_WEBHOOK_SECRET: ${BALANCER_WEBHOOK_SECRET:-}
+      EXTERNAL_HOST_PRIVATE_ALLOWLIST: ${EXTERNAL_HOST_PRIVATE_ALLOWLIST:-}
       # VIDEO-1/VIDEO-4: uploaded media lives here, on a persistent volume shared
       # with worker-media-publisher. Both containers have different WORKDIRs, so
       # the relative default (./media) would resolve to two different, ephemeral
@@ -187,6 +188,9 @@ services:
       # Decrypts the SSH private key of external servers' log sources
       # (server_log_sources); without it only panel-hosted containers are tailed.
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      # Optional GeoLite2 City database resolving player connect IPs to a
+      # country/city; absent file = geo fields stay NULL.
+      GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
     # this MUST be `user: "<uid>:<panel-gid>"`, never `group_add: [<panel-gid>]`,
     # otherwise every RPC fails with `rejected untrusted peer`. The uid is the
@@ -195,6 +199,9 @@ services:
     user: "1000:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
+      - ${GEOIP_DB_DIR:-/var/lib/squad-panel/geoip}:/geoip:ro
+      # GeoLite2 database downloaded once GeoIP is enabled in the panel.
+      - geoip_data:/var/lib/panel-geoip
     depends_on:
       postgres:
         condition: service_healthy
@@ -256,6 +263,7 @@ services:
       PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       RCON_ROSTER_INTERVAL_MS: ${RCON_ROSTER_INTERVAL_MS:-2000}
       RCON_INFO_INTERVAL_MS: ${RCON_INFO_INTERVAL_MS:-5000}
+      EXTERNAL_HOST_PRIVATE_ALLOWLIST: ${EXTERNAL_HOST_PRIVATE_ALLOWLIST:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -725,6 +733,7 @@ services:
     logging: *default-logging
 
 volumes:
+  geoip_data:
   media_data:
     driver: local
     driver_opts:

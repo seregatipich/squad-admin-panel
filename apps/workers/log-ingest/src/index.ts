@@ -1,6 +1,12 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { ChatFlagDetector, handleChat, PlayerIdCache } from '@squad/chat-ingest';
-import { createDatabaseClient, serverLogSources, serverSettings, servers } from '@squad/db';
+import {
+  createDatabaseClient,
+  createMmdbLookup,
+  serverLogSources,
+  serverSettings,
+  servers,
+} from '@squad/db';
 import { createDiag } from '@squad/diag';
 import {
   createGracefulShutdownController,
@@ -25,6 +31,7 @@ import { dropCutoverServers } from './cutover.js';
 import { persistEventEnvelope } from './event-store.js';
 import { ExternalBanCache } from './external-ban/cache.js';
 import { handleExternalBanConnect } from './external-ban/store.js';
+import { GeoIpProvider } from './geoip/provider.js';
 import { TailManager, type TailWanted } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
@@ -38,6 +45,9 @@ import { tailSshLog } from './ssh-tail.js';
 import { tailContainerLogs } from './tail.js';
 import { handleVipExpiryWarnConnect } from './vip-expiry/warn.js';
 import { handleVote } from './vote/store.js';
+
+/** How often the GeoIP refresh is re-evaluated; the database itself is only re-downloaded weekly. */
+const GEOIP_REFRESH_CHECK_MS = 60 * 60 * 1000;
 
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
@@ -81,6 +91,22 @@ async function main() {
   } else {
     log.warn('APP_ENCRYPTION_KEY is not set — SSH log sources of external servers are disabled');
   }
+  // GeoIP (#64 finding 1341): country/city for recorded connect IPs. The
+  // database is downloaded here, the one worker that has the encryption key
+  // and records the IPs, into a volume-backed directory; nothing happens until
+  // an operator enables GeoIP and stores MaxMind credentials in the panel.
+  const geoIp = new GeoIpProvider({
+    db,
+    encryptionKey,
+    dataDir: process.env.GEOIP_DATA_DIR ?? '/var/lib/panel-geoip',
+    onError: (message, meta) => log.warn(meta, message),
+  });
+  const refreshGeoIp = () =>
+    geoIp.refreshIfDue().then((refreshed) => {
+      if (refreshed) log.info('geoip database refreshed');
+    });
+  void refreshGeoIp();
+  const geoIpRefreshTimer = setInterval(() => void refreshGeoIp(), GEOIP_REFRESH_CHECK_MS);
   const stopLogRetentionSweep = scheduleLogRetentionSweep({
     bridge,
     diag,
@@ -96,6 +122,17 @@ async function main() {
       return rows.map((r) => r.id);
     },
   });
+
+  // Optional GeoLite2 City database (bind-mounted by the operator, see
+  // docs/components/db/data-model.md#geoip_settings). Without it connect IPs
+  // are stored with NULL geo fields, as before.
+  const geoLookup = await createMmdbLookup(process.env.GEOIP_DB_PATH);
+  if (process.env.GEOIP_DB_PATH && !geoLookup) {
+    log.info(
+      { path: process.env.GEOIP_DB_PATH },
+      'GeoLite2 database not found or unreadable — geo lookup disabled',
+    );
+  }
 
   const seedThreshold =
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
@@ -262,7 +299,7 @@ async function main() {
           // it — otherwise a first-time connector is invisible to
           // alt/external-ban enforcement until the next RCON poll.
           alerts
-            .then(() => handlePlayerConnected(db, e))
+            .then(async () => handlePlayerConnected(db, e, (await geoIp.getLookup()) ?? geoLookup))
             .catch((err) =>
               log.error({ err: (err as Error).message }, 'player identity handling failed'),
             )
@@ -502,6 +539,7 @@ async function main() {
       log.info({ sig }, 'shutdown');
       stopHeartbeat();
       stopLogRetentionSweep();
+      clearInterval(geoIpRefreshTimer);
       if (interval) clearInterval(interval);
       manager.stopAll();
       await redis.quit().catch(() => undefined);

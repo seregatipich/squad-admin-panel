@@ -123,7 +123,7 @@ export function BulkModerationModal({
   const [reason, setReason] = useState('');
   // Never fall back to '0' (permanent): the fallback only applies when no
   // ban is offered, and it must not become the harshest option by accident.
-  const defaultBanLength = banLengths[0]?.value ?? BAN_LENGTHS[0].value;
+  const defaultBanLength = banLengths[0]?.value ?? BAN_LENGTHS[0]?.value ?? '';
   const [banLength, setBanLength] = useState(defaultBanLength);
   const [challenge, setChallenge] = useState('');
   const [busy, setBusy] = useState(false);

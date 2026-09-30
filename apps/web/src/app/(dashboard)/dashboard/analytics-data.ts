@@ -1,3 +1,9 @@
+import {
+  ANALYTICS_WINDOW_PRESETS,
+  analyticsWindowRange,
+  buildAnalyticsWindowQuery,
+} from '@/lib/analytics-window';
+
 export interface DashboardAnalytics {
   server_id: string | null;
   from: string;
@@ -22,11 +28,7 @@ export interface DashboardAnalytics {
 
 export type OutcomeKey = 'team1' | 'team2' | 'draw' | 'unknown';
 
-export const WINDOW_PRESETS = [
-  { days: 7, label: '7 дней' },
-  { days: 30, label: '30 дней' },
-  { days: 90, label: '90 дней' },
-] as const;
+export const WINDOW_PRESETS = ANALYTICS_WINDOW_PRESETS;
 
 const OUTCOME_LABELS: Record<OutcomeKey, string> = {
   team1: 'Команда 1',
@@ -66,23 +68,5 @@ export function outcomeSegments(outcomes: DashboardAnalytics['match_outcomes']):
 
 export { formatDurationRu, formatHours } from '@/lib/format';
 
-export function buildAnalyticsQuery(params: {
-  serverId?: string | null;
-  from?: string;
-  to?: string;
-  format?: 'json' | 'csv';
-}): string {
-  const query = new URLSearchParams();
-  if (params.serverId) query.set('server_id', params.serverId);
-  if (params.from) query.set('from', params.from);
-  if (params.to) query.set('to', params.to);
-  if (params.format) query.set('format', params.format);
-  const suffix = query.toString();
-  return suffix ? `?${suffix}` : '';
-}
-
-export function windowRange(days: number, now: Date = new Date()): { from: string; to: string } {
-  const to = now;
-  const from = new Date(to.getTime() - days * 86_400_000);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
+export const buildAnalyticsQuery = buildAnalyticsWindowQuery;
+export const windowRange = analyticsWindowRange;

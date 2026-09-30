@@ -1,9 +1,11 @@
 import {
   auditLog,
   type DatabaseClient,
+  type GeoLookup,
   playerNameHistory,
   players,
   recordIpObservation,
+  resolveGeo,
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { EventEnvelope, PlayerConnectedPayload } from '@squad/shared-types';
@@ -101,6 +103,7 @@ async function applyToExisting(
   row: IdentityRow,
   payload: PlayerConnectedPayload,
   steamId64: bigint | null,
+  geoLookup: GeoLookup | null,
 ): Promise<PlayerConnectedOutcome> {
   const now = new Date();
   const updates: Record<string, unknown> = { lastSeenAt: now, updatedAt: now };
@@ -182,7 +185,11 @@ async function applyToExisting(
   });
 
   if (payload.ip) {
-    await recordIpObservation(db, { playerId: row.id, ip: payload.ip });
+    await recordIpObservation(db, {
+      playerId: row.id,
+      ip: payload.ip,
+      geo: resolveGeo(geoLookup, payload.ip),
+    });
   }
 
   return { outcome: 'updated', playerId: row.id, nameChanged, steamLinked, conflict };
@@ -196,10 +203,15 @@ async function applyToExisting(
  * onto a single row via the partial-unique `players_eos_id_unique_idx`.
  *
  * Session creation is out of scope (PRES-1/#48); this only maintains identity.
+ *
+ * @param geoLookup - GeoLite2 reader used to resolve the connect IP's country
+ *   and city for `player_ip_history`; `null` (no database configured) records
+ *   the IP with NULL geo fields.
  */
 export async function handlePlayerConnected(
   db: DatabaseClient,
   event: EventEnvelope,
+  geoLookup: GeoLookup | null = null,
 ): Promise<PlayerConnectedOutcome> {
   if (event.type !== 'player.connected') return { outcome: 'ignored' };
   const payload = event.payload as PlayerConnectedPayload;
@@ -208,7 +220,7 @@ export async function handlePlayerConnected(
 
   const existing = await lookupIdentity(db, payload.eos_id, steamId64);
   if (existing) {
-    return applyToExisting(db, existing, payload, steamId64);
+    return applyToExisting(db, existing, payload, steamId64, geoLookup);
   }
 
   const playerId = uuidv7();
@@ -246,11 +258,15 @@ export async function handlePlayerConnected(
     // constraint we do not own, so there is nothing safe to do.
     const raced = await lookupIdentity(db, payload.eos_id, steamId64);
     if (!raced) return { outcome: 'ignored' };
-    return applyToExisting(db, raced, payload, steamId64);
+    return applyToExisting(db, raced, payload, steamId64, geoLookup);
   }
 
   if (payload.ip) {
-    await recordIpObservation(db, { playerId, ip: payload.ip });
+    await recordIpObservation(db, {
+      playerId,
+      ip: payload.ip,
+      geo: resolveGeo(geoLookup, payload.ip),
+    });
   }
 
   return { outcome: 'created', playerId };

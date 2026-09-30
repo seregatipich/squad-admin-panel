@@ -94,3 +94,39 @@ export function sidecarStatusPill(status: SidecarStatus | null): {
     ? { text: 'RCON подключён', tone: 'green' }
     : { text: 'RCON отключён', tone: 'amber' };
 }
+
+/** The part of a zod schema `readJson` needs, so the web app need not depend on zod itself. */
+interface ResponseSchema<T> {
+  safeParse(data: unknown): { success: true; data: T } | { success: false };
+}
+
+/**
+ * Builds the operator-facing message of a failed API response.
+ *
+ * @param res - Non-2xx response.
+ * @returns The body's `message`, else its `error`, else `HTTP <status>`.
+ */
+export async function readErrorMessage(res: Response): Promise<string> {
+  const body = await res.json().catch(() => ({}));
+  return body.message ?? body.error ?? `HTTP ${res.status}`;
+}
+
+/**
+ * Decodes a response body and checks it against a schema from `@squad/shared-types`.
+ *
+ * @param res - 2xx response whose body is JSON.
+ * @param schema - Schema the body must satisfy.
+ * @param what - Russian name of the payload for the error text.
+ * @returns The parsed body.
+ * @throws Error when the body is not JSON or does not match the schema, so a
+ *   drifted API contract shows up as a readable error instead of a TypeError.
+ */
+export async function readJson<T>(
+  res: Response,
+  schema: ResponseSchema<T>,
+  what: string,
+): Promise<T> {
+  const parsed = schema.safeParse(await res.json().catch(() => undefined));
+  if (!parsed.success) throw new Error(`Неожиданный ответ сервера: ${what}`);
+  return parsed.data;
+}
