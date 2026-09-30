@@ -12,13 +12,20 @@ const BAN_SOURCE_FORMATS = ['squad_bans_cfg', 'battlemetrics_json', 'json_generi
 const TRUST_LEVELS = ['trusted', 'normal', 'low'] as const;
 const ON_MATCH_ACTIONS = ['none', 'alert', 'kick'] as const;
 
+/** A link rendered as an `href` in the panel: only http(s) schemes are allowed. */
+const httpUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => /^https?:$/.test(new URL(value).protocol), 'must be an http(s) URL');
+
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
   url: z.string().url().max(2048),
   format: z.enum(BAN_SOURCE_FORMATS),
   trust_level: z.enum(TRUST_LEVELS).default('normal'),
   on_match: z.enum(ON_MATCH_ACTIONS).default('alert'),
-  discord_url: z.string().url().max(2048).nullable().optional(),
+  discord_url: httpUrl.nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().default(true),
   poll_interval_minutes: z.number().int().min(15).max(10080).default(60),
@@ -31,7 +38,7 @@ const updateBody = z.object({
   format: z.enum(BAN_SOURCE_FORMATS).optional(),
   trust_level: z.enum(TRUST_LEVELS).optional(),
   on_match: z.enum(ON_MATCH_ACTIONS).optional(),
-  discord_url: z.string().url().max(2048).nullable().optional(),
+  discord_url: httpUrl.nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().optional(),
   poll_interval_minutes: z.number().int().min(15).max(10080).optional(),

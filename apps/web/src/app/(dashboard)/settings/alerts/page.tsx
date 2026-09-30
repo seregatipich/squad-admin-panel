@@ -206,7 +206,7 @@ export default function AlertsPage() {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.error ?? res.status));
+        throw new Error(String(body.message ?? body.error ?? res.status));
       }
       setForm({ ...EMPTY_FORM });
       await refresh();

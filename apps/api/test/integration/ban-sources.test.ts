@@ -143,6 +143,21 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.on_match).toBe('alert');
   });
 
+  it('rejects a non-http(s) discord_url on create and update with 400', async () => {
+    for (const discordUrl of ['javascript:alert(1)', 'data:text/html,x', 'ftp://example.com/x']) {
+      const { statusCode } = await createSource(managerCookie, { discord_url: discordUrl });
+      expect(statusCode).toBe(400);
+    }
+    const { body } = await createSource(managerCookie);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${body.id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ discord_url: 'javascript:alert(1)' }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('rejects kick for a non-trusted source with 422', async () => {
     const { statusCode, body } = await createSource(managerCookie, {
       trust_level: 'normal',
